@@ -12,7 +12,7 @@ def success_response(
     status_code: int = 200,
 ) -> JSONResponse:
     body = ApiResponse(code=status_code, message=message, data=data, meta=meta)
-    return JSONResponse(content=body.model_dump(), status_code=status_code)
+    return JSONResponse(content=body.model_dump(mode="json"), status_code=status_code)
 
 
 def error_response(
