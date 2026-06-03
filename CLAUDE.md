@@ -4,6 +4,7 @@
 后端为独立的 Python FastAPI 服务，地址见 .env.local 的 API_BASE_URL。
 UI或组件样式务必遵守：@DESIGN.md
 你使用的技术和函数调用的方式可能有些过时，请使用context7获取最新技术文档。
+使用antd组件和配置时，使用context7查询最新参数文档。
 
 ## 技术栈
 
