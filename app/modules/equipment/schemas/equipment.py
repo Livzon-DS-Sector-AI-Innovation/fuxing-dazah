@@ -122,6 +122,10 @@ class EquipmentCreate(BaseModel):
     production_date: date | None = Field(default=None, description="出厂日期")
     commissioning_date: date | None = Field(default=None, description="投用日期")
     description: str | None = Field(default=None, description="设备描述")
+    warranty_expire_date: date | None = Field(default=None, description="保修到期日")
+    asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
+    depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
+    technical_params: dict | None = Field(default=None, description="技术参数")
 
 
 class EquipmentUpdate(BaseModel):
@@ -148,6 +152,10 @@ class EquipmentUpdate(BaseModel):
     production_date: date | None = Field(default=None, description="出厂日期")
     commissioning_date: date | None = Field(default=None, description="投用日期")
     description: str | None = Field(default=None, description="设备描述")
+    warranty_expire_date: date | None = Field(default=None, description="保修到期日")
+    asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
+    depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
+    technical_params: dict | None = Field(default=None, description="技术参数")
 
 
 class EquipmentResponse(BaseModel):
@@ -166,6 +174,10 @@ class EquipmentResponse(BaseModel):
     production_date: date | None
     commissioning_date: date | None
     description: str | None
+    warranty_expire_date: date | None
+    asset_value: float | None
+    depreciation_years: int | None
+    technical_params: dict | None
     created_at: datetime
     updated_at: datetime
     created_by: uuid.UUID | None
