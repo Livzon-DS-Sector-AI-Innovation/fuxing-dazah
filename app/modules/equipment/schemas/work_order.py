@@ -23,9 +23,15 @@ class WorkOrderCreate(BaseModel):
     fault_cause_id: uuid.UUID | None = Field(default=None, description="故障原因ID")
     fault_action_id: uuid.UUID | None = Field(default=None, description="维修措施ID")
     fault_description: str | None = Field(default=None, description="故障详细描述")
-    maintenance_plan_id: uuid.UUID | None = Field(default=None, description="关联维护计划ID")
-    planned_start_date: date | None = Field(default=None, description="计划执行日期")
-    checklist_template_id: uuid.UUID | None = Field(default=None, description="关联巡检模板ID")
+    maintenance_plan_id: uuid.UUID | None = Field(
+        default=None, description="关联维护计划ID"
+    )
+    planned_start_date: date | None = Field(
+        default=None, description="计划执行日期"
+    )
+    checklist_template_id: uuid.UUID | None = Field(
+        default=None, description="关联巡检模板ID"
+    )
 
 
 class WorkOrderAssign(BaseModel):

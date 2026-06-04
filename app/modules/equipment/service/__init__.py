@@ -40,6 +40,25 @@ from app.modules.equipment.service.failure_code import (
     get_failure_codes,
     update_failure_code,
 )
+from app.modules.equipment.service.inspection_template import (
+    add_template_item,
+    complete_inspection,
+    create_inspection_template,
+    delete_inspection_template,
+    delete_template_item,
+    get_inspection_template_by_id,
+    get_inspection_templates,
+    update_inspection_template,
+    update_template_item,
+)
+from app.modules.equipment.service.maintenance_plan import (
+    create_maintenance_plan,
+    delete_maintenance_plan,
+    get_maintenance_plan_by_id,
+    get_maintenance_plans,
+    get_overdue_maintenance_plans,
+    update_maintenance_plan,
+)
 from app.modules.equipment.service.spare_part import (
     adjust_stock,
     create_spare_part,
@@ -99,11 +118,27 @@ __all__ = [
     "update_location",
     # failure code
     "FailureCodeModel",
+    "add_template_item",
+    "complete_inspection",
     "create_failure_code",
+    "create_inspection_template",
     "delete_failure_code",
+    "delete_inspection_template",
+    "delete_template_item",
     "get_failure_code_by_id",
     "get_failure_codes",
+    "get_inspection_template_by_id",
+    "get_inspection_templates",
     "update_failure_code",
+    "update_inspection_template",
+    "update_template_item",
+    # maintenance plan
+    "create_maintenance_plan",
+    "delete_maintenance_plan",
+    "get_maintenance_plan_by_id",
+    "get_maintenance_plans",
+    "get_overdue_maintenance_plans",
+    "update_maintenance_plan",
     # spare part
     "adjust_stock",
     "create_spare_part",

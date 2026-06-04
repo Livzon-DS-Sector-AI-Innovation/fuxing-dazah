@@ -1,9 +1,26 @@
 """设备模块 API 路由入口."""
 
-from app.modules.equipment.api.calibration import router as calibration_router
-from app.modules.equipment.api.equipment import router as equipment_router
-from app.modules.equipment.api.failure_codes import router as failure_codes_router
-from app.modules.equipment.api.work_orders import router as work_orders_router
+from app.modules.equipment.api.calibration import (
+    router as calibration_router,
+)
+from app.modules.equipment.api.equipment import (
+    router as equipment_router,
+)
+from app.modules.equipment.api.failure_codes import (
+    router as failure_codes_router,
+)
+from app.modules.equipment.api.inspection_templates import (
+    router as inspection_templates_router,
+)
+from app.modules.equipment.api.maintenance_plans import (
+    router as maintenance_plans_router,
+)
+from app.modules.equipment.api.spare_parts import (
+    router as spare_parts_router,
+)
+from app.modules.equipment.api.work_orders import (
+    router as work_orders_router,
+)
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 
@@ -13,6 +30,22 @@ router = create_module_router(MODULES_BY_CODE["equipment"])
 router.include_router(equipment_router)
 
 # 维护模块路由
-router.include_router(failure_codes_router, prefix="/maintenance/failure-codes")
-router.include_router(work_orders_router, prefix="/maintenance/work-orders")
-router.include_router(calibration_router, prefix="/maintenance/calibration")
+router.include_router(
+    failure_codes_router, prefix="/maintenance/failure-codes"
+)
+router.include_router(
+    work_orders_router, prefix="/maintenance/work-orders"
+)
+router.include_router(
+    calibration_router, prefix="/maintenance/calibration"
+)
+router.include_router(
+    spare_parts_router, prefix="/maintenance/spare-parts"
+)
+router.include_router(
+    maintenance_plans_router, prefix="/maintenance/plans"
+)
+router.include_router(
+    inspection_templates_router,
+    prefix="/maintenance/inspection-templates",
+)

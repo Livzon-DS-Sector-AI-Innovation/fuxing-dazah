@@ -31,6 +31,25 @@ from app.modules.equipment.schemas.failure_code import (
     FailureCodeType,
     FailureCodeUpdate,
 )
+from app.modules.equipment.schemas.inspection_template import (
+    InspectionCompleteRequest,
+    InspectionRecordItem,
+    InspectionRecordResponse,
+    InspectionTemplateCreate,
+    InspectionTemplateItemCreate,
+    InspectionTemplateItemResponse,
+    InspectionTemplateItemUpdate,
+    InspectionTemplateResponse,
+    InspectionTemplateUpdate,
+)
+from app.modules.equipment.schemas.maintenance_plan import (
+    FrequencyUnit,
+    MaintenancePlanCreate,
+    MaintenancePlanResponse,
+    MaintenancePlanStatus,
+    MaintenancePlanType,
+    MaintenancePlanUpdate,
+)
 from app.modules.equipment.schemas.spare_part import (
     EquipmentSparePartCreate,
     EquipmentSparePartResponse,
@@ -78,6 +97,23 @@ __all__ = [
     "FailureCodeCreate",
     "FailureCodeUpdate",
     "FailureCodeResponse",
+    # inspection template
+    "InspectionCompleteRequest",
+    "InspectionRecordItem",
+    "InspectionRecordResponse",
+    "InspectionTemplateCreate",
+    "InspectionTemplateUpdate",
+    "InspectionTemplateResponse",
+    "InspectionTemplateItemCreate",
+    "InspectionTemplateItemUpdate",
+    "InspectionTemplateItemResponse",
+    # maintenance plan
+    "MaintenancePlanType",
+    "FrequencyUnit",
+    "MaintenancePlanStatus",
+    "MaintenancePlanCreate",
+    "MaintenancePlanUpdate",
+    "MaintenancePlanResponse",
     # work order
     "WorkOrderType",
     "WorkOrderPriority",
