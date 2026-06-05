@@ -26,5 +26,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+uploads
 
 docs/superpowers

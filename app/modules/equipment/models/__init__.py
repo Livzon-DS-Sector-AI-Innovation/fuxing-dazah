@@ -26,7 +26,9 @@ from app.modules.equipment.models.spare_part import (
     SparePartStock,
     SparePartTransaction,
 )
+from app.modules.equipment.models.maintenance_config import MaintenanceConfig
 from app.modules.equipment.models.work_order import WorkOrder
+from app.modules.equipment.models.work_order_image import WorkOrderImage
 
 __all__ = [
     "CalibrationPlan",
@@ -45,5 +47,7 @@ __all__ = [
     "SparePart",
     "SparePartStock",
     "SparePartTransaction",
+    "MaintenanceConfig",
     "WorkOrder",
+    "WorkOrderImage",
 ]

@@ -19,6 +19,7 @@ from app.modules.equipment.schemas import (
     WorkOrderCreate,
     WorkOrderResponse,
     WorkOrderStatistics,
+    WorkOrderUpdate,
     WorkOrderVerify,
 )
 
@@ -28,6 +29,26 @@ def _require_user(current_user: CurrentUser) -> uuid.UUID:
     if not current_user:
         raise AppException(message="需要登录才能执行此操作", status_code=401)
     return current_user.id
+
+
+def _to_response(wo) -> WorkOrderResponse:
+    """将 ORM WorkOrder 转为响应对象，填充关联名称"""
+    resp = WorkOrderResponse.model_validate(wo)
+    if wo.reporter:
+        resp.reporter_name = wo.reporter.name
+    if wo.assignee:
+        resp.assignee_name = wo.assignee.name
+    if wo.equipment:
+        resp.equipment_name = wo.equipment.name
+        resp.equipment_no = wo.equipment.equipment_no
+    if wo.fault_symptom:
+        resp.symptom_name = wo.fault_symptom.name
+    if wo.fault_cause:
+        resp.cause_name = wo.fault_cause.name
+    if wo.fault_action:
+        resp.action_name = wo.fault_action.name
+    return resp
+
 
 router = APIRouter()
 
@@ -40,7 +61,17 @@ async def create_work_order(
 ) -> JSONResponse:
     reporter_id = _require_user(current_user)
     wo = await service.create_work_order(db, data, reporter_id)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
+
+
+@router.put("/{work_order_id}", summary="更新工单")
+async def update_work_order(
+    work_order_id: uuid.UUID,
+    data: WorkOrderUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    wo = await service.update_work_order(db, work_order_id, data)
+    return success_response(data=_to_response(wo))
 
 
 @router.get("/", summary="工单列表")
@@ -59,7 +90,7 @@ async def list_work_orders(
         page=page, page_size=page_size,
     )
     return paginated_response(
-        data=[WorkOrderResponse.model_validate(wo) for wo in work_orders],
+        data=[_to_response(wo) for wo in work_orders],
         page=page, page_size=page_size, total=total,
     )
 
@@ -78,7 +109,7 @@ async def get_work_order(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     wo = await service.get_work_order_by_id(db, work_order_id)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.put("/{work_order_id}/assign", summary="指派维修人")
@@ -89,7 +120,7 @@ async def assign_work_order(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     wo = await service.assign_work_order(db, work_order_id, data.assignee_id)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.put("/{work_order_id}/start", summary="开始维修")
@@ -99,7 +130,7 @@ async def start_work_order(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     wo = await service.start_work_order(db, work_order_id)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.put("/{work_order_id}/complete", summary="提交完成")
@@ -110,7 +141,7 @@ async def complete_work_order(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     wo = await service.complete_work_order(db, work_order_id, data)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.put("/{work_order_id}/verify", summary="验收")
@@ -122,7 +153,7 @@ async def verify_work_order(
 ) -> JSONResponse:
     verifier_id = _require_user(current_user)
     wo = await service.verify_work_order(db, work_order_id, verifier_id, data)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.put("/{work_order_id}/close", summary="关闭工单")
@@ -132,7 +163,7 @@ async def close_work_order(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     wo = await service.close_work_order(db, work_order_id)
-    return success_response(data=WorkOrderResponse.model_validate(wo))
+    return success_response(data=_to_response(wo))
 
 
 @router.post("/{work_order_id}/materials", summary="领料")

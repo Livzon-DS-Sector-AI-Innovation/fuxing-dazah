@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 # ==================== 维修工单 ====================
 WorkOrderType = Literal["故障维修", "计划维护", "巡检", "校准"]
 WorkOrderPriority = Literal["紧急", "高", "中", "低"]
-WorkOrderStatus = Literal["待处理", "已指派", "维修中", "待验收", "已完成", "已关闭"]
+WorkOrderStatus = Literal["待处理", "待执行", "已指派", "维修中", "执行中", "待验收", "已完成", "已关闭"]
 VerificationResult = Literal["合格", "不合格"]
 
 
@@ -32,6 +32,20 @@ class WorkOrderCreate(BaseModel):
     checklist_template_id: uuid.UUID | None = Field(
         default=None, description="关联巡检模板ID"
     )
+
+
+class WorkOrderUpdate(BaseModel):
+    """更新工单请求"""
+
+    equipment_id: uuid.UUID | None = Field(default=None, description="设备ID")
+    order_type: WorkOrderType | None = Field(default=None, description="工单类型")
+    priority: WorkOrderPriority | None = Field(default=None, description="优先级")
+    status: WorkOrderStatus | None = Field(default=None, description="工单状态")
+    fault_symptom_id: uuid.UUID | None = Field(default=None, description="故障现象ID")
+    fault_cause_id: uuid.UUID | None = Field(default=None, description="故障原因ID")
+    fault_action_id: uuid.UUID | None = Field(default=None, description="维修措施ID")
+    fault_description: str | None = Field(default=None, description="故障详细描述")
+    planned_start_date: date | None = Field(default=None, description="计划执行日期")
 
 
 class WorkOrderAssign(BaseModel):
@@ -88,8 +102,22 @@ class WorkOrderResponse(BaseModel):
     updated_at: datetime
     created_by: uuid.UUID | None
     updated_by: uuid.UUID | None
+    equipment_name: str | None = None
+    equipment_no: str | None = None
+    reporter_name: str | None = None
+    assignee_name: str | None = None
+    verifier_name: str | None = None
+    symptom_name: str | None = None
+    cause_name: str | None = None
+    action_name: str | None = None
+    images: list["WorkOrderImageResponse"] | None = None
 
     model_config = {"from_attributes": True}
+
+
+from app.modules.equipment.schemas.work_order_image import WorkOrderImageResponse
+
+WorkOrderResponse.model_rebuild()
 
 
 class WorkOrderStatistics(BaseModel):

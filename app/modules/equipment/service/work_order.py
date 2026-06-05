@@ -13,6 +13,7 @@ from app.modules.equipment.models import WorkOrder
 from app.modules.equipment.schemas import (
     WorkOrderComplete,
     WorkOrderCreate,
+    WorkOrderUpdate,
     WorkOrderVerify,
 )
 
@@ -132,6 +133,26 @@ async def create_work_order(
             raise AppException(message="工单号生成失败，请重试")
 
     raise AppException(message="工单号生成失败，请重试")
+
+
+async def update_work_order(
+    db: AsyncSession,
+    work_order_id: uuid.UUID,
+    data: WorkOrderUpdate,
+) -> WorkOrder:
+    """更新工单信息"""
+    wo = await _get_work_order(db, work_order_id)
+
+    update_data = data.model_dump(exclude_unset=True)
+    if not update_data:
+        raise AppException(message="没有需要更新的字段")
+
+    for field, value in update_data.items():
+        setattr(wo, field, value)
+
+    await db.flush()
+    await db.refresh(wo)
+    return wo
 
 
 async def assign_work_order(
@@ -277,6 +298,27 @@ async def get_work_order_by_id(
 ) -> WorkOrder:
     """获取工单"""
     return await _get_work_order(db, work_order_id)
+
+
+async def claim_work_order(
+    db: AsyncSession,
+    work_order_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> WorkOrder:
+    """维修人员自主抢单"""
+    wo = await _get_work_order(db, work_order_id)
+
+    if wo.status != "待处理":
+        raise AppException(message="该工单已不可抢单")
+    if wo.assignee_id is not None:
+        raise AppException(message="该工单已被其他人接单")
+
+    wo.assignee_id = user_id
+    wo.assigned_at = datetime.now(UTC)
+    wo.status = "已指派"
+    await db.flush()
+    await db.refresh(wo)
+    return wo
 
 
 async def consume_materials(

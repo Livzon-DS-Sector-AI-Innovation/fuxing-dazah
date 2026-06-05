@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 EquipmentStatus = Literal["在用", "备用", "维修中", "停用", "报废"]
+EquipmentImportance = Literal["高", "中", "低"]
 
 
 # ==================== 设备分类 ====================
@@ -122,6 +123,7 @@ class EquipmentCreate(BaseModel):
     production_date: date | None = Field(default=None, description="出厂日期")
     commissioning_date: date | None = Field(default=None, description="投用日期")
     description: str | None = Field(default=None, description="设备描述")
+    importance: EquipmentImportance = Field(default="低", description="设备重要性：高/中/低")
     warranty_expire_date: date | None = Field(default=None, description="保修到期日")
     asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
     depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
@@ -152,6 +154,7 @@ class EquipmentUpdate(BaseModel):
     production_date: date | None = Field(default=None, description="出厂日期")
     commissioning_date: date | None = Field(default=None, description="投用日期")
     description: str | None = Field(default=None, description="设备描述")
+    importance: EquipmentImportance | None = Field(default=None, description="设备重要性：高/中/低")
     warranty_expire_date: date | None = Field(default=None, description="保修到期日")
     asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
     depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
@@ -174,6 +177,7 @@ class EquipmentResponse(BaseModel):
     production_date: date | None
     commissioning_date: date | None
     description: str | None
+    importance: str
     warranty_expire_date: date | None
     asset_value: float | None
     depreciation_years: int | None

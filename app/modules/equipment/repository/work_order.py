@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modules.equipment.models import WorkOrder
 
@@ -27,7 +28,16 @@ async def get_work_order_by_id(
 ) -> WorkOrder | None:
     """根据ID获取工单"""
     result = await db.execute(
-        select(WorkOrder).where(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+        )
+        .where(
             WorkOrder.id == work_order_id,
             WorkOrder.is_deleted == False,  # noqa: E712
         )
@@ -78,7 +88,18 @@ async def get_work_orders(
     page_size: int = 20,
 ) -> tuple[list[WorkOrder], int]:
     """获取工单列表"""
-    query = select(WorkOrder).where(WorkOrder.is_deleted == False)  # noqa: E712
+    query = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+        )
+        .where(WorkOrder.is_deleted == False)  # noqa: E712
+    )
 
     if status:
         query = query.where(WorkOrder.status == status)

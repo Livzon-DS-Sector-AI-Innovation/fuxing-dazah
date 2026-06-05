@@ -243,6 +243,42 @@ async def delete_location(
     return True
 
 
+async def _get_category_child_ids(
+    db: AsyncSession,
+    parent_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """递归收集指定分类及其所有子孙分类的ID"""
+    result = await db.execute(
+        select(EquipmentCategory.id).where(
+            EquipmentCategory.parent_id == parent_id,
+            EquipmentCategory.is_deleted == False,  # noqa: E712
+        )
+    )
+    child_ids = list(result.scalars().all())
+    all_ids: list[uuid.UUID] = [parent_id]
+    for child_id in child_ids:
+        all_ids.extend(await _get_category_child_ids(db, child_id))
+    return all_ids
+
+
+async def _get_location_child_ids(
+    db: AsyncSession,
+    parent_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """递归收集指定位置及其所有子孙位置的ID"""
+    result = await db.execute(
+        select(Location.id).where(
+            Location.parent_id == parent_id,
+            Location.is_deleted == False,  # noqa: E712
+        )
+    )
+    child_ids = list(result.scalars().all())
+    all_ids: list[uuid.UUID] = [parent_id]
+    for child_id in child_ids:
+        all_ids.extend(await _get_location_child_ids(db, child_id))
+    return all_ids
+
+
 # ==================== 设备管理 ====================
 async def create_equipment(
     db: AsyncSession,
@@ -296,9 +332,11 @@ async def get_equipments(
     query = select(Equipment).where(Equipment.is_deleted == False)  # noqa: E712
 
     if category_id:
-        query = query.where(Equipment.category_id == category_id)
+        category_ids = await _get_category_child_ids(db, category_id)
+        query = query.where(Equipment.category_id.in_(category_ids))
     if location_id:
-        query = query.where(Equipment.location_id == location_id)
+        location_ids = await _get_location_child_ids(db, location_id)
+        query = query.where(Equipment.location_id.in_(location_ids))
     if status:
         query = query.where(Equipment.status == status)
     if keyword:

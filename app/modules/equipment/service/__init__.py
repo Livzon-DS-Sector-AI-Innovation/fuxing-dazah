@@ -59,6 +59,10 @@ from app.modules.equipment.service.maintenance_plan import (
     get_overdue_maintenance_plans,
     update_maintenance_plan,
 )
+from app.modules.equipment.service.maintenance_config import (
+    get_claim_timeout_config,
+    update_claim_timeout_config,
+)
 from app.modules.equipment.service.spare_part import (
     adjust_stock,
     create_spare_part,
@@ -73,6 +77,7 @@ from app.modules.equipment.service.spare_part import (
 )
 from app.modules.equipment.service.work_order import (
     assign_work_order,
+    claim_work_order,
     close_work_order,
     complete_work_order,
     consume_materials,
@@ -82,7 +87,13 @@ from app.modules.equipment.service.work_order import (
     get_work_order_statistics,
     get_work_orders,
     start_work_order,
+    update_work_order,
     verify_work_order,
+)
+from app.modules.equipment.service.work_order_image import (
+    delete_image as delete_work_order_image,
+    get_images as get_work_order_images,
+    upload_images,
 )
 
 __all__ = [
@@ -152,6 +163,7 @@ __all__ = [
     "update_spare_part",
     # work order
     "assign_work_order",
+    "claim_work_order",
     "close_work_order",
     "complete_work_order",
     "consume_materials",
@@ -161,5 +173,13 @@ __all__ = [
     "get_work_order_statistics",
     "get_work_orders",
     "start_work_order",
+    "update_work_order",
     "verify_work_order",
+    # maintenance config
+    "get_claim_timeout_config",
+    "update_claim_timeout_config",
+    # work order image
+    "upload_images",
+    "get_work_order_images",
+    "delete_work_order_image",
 ]

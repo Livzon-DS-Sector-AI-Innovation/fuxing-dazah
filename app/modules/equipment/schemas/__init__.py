@@ -16,6 +16,7 @@ from app.modules.equipment.schemas.equipment import (
     EquipmentCategoryTree,
     EquipmentCategoryUpdate,
     EquipmentCreate,
+    EquipmentImportance,
     EquipmentResponse,
     EquipmentStatistics,
     EquipmentStatus,
@@ -61,6 +62,13 @@ from app.modules.equipment.schemas.spare_part import (
     StockResponse,
     StockWarningResponse,
 )
+from app.modules.equipment.schemas.maintenance_config import (
+    ClaimTimeoutConfig,
+    ClaimTimeoutUpdateRequest,
+)
+from app.modules.equipment.schemas.work_order_image import (
+    WorkOrderImageResponse,
+)
 from app.modules.equipment.schemas.work_order import (
     MaterialConsumeItem,
     MaterialConsumeRequest,
@@ -69,6 +77,7 @@ from app.modules.equipment.schemas.work_order import (
     WorkOrderAssign,
     WorkOrderComplete,
     WorkOrderCreate,
+    WorkOrderUpdate,
     WorkOrderPriority,
     WorkOrderResponse,
     WorkOrderStatistics,
@@ -120,6 +129,7 @@ __all__ = [
     "WorkOrderStatus",
     "VerificationResult",
     "WorkOrderCreate",
+    "WorkOrderUpdate",
     "WorkOrderAssign",
     "WorkOrderComplete",
     "WorkOrderVerify",
@@ -148,4 +158,9 @@ __all__ = [
     "StockWarningResponse",
     "EquipmentSparePartCreate",
     "EquipmentSparePartResponse",
+    # maintenance config
+    "ClaimTimeoutConfig",
+    "ClaimTimeoutUpdateRequest",
+    # work order image
+    "WorkOrderImageResponse",
 ]

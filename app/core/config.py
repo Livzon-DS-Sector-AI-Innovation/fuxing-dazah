@@ -8,6 +8,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # App
@@ -24,6 +25,23 @@ class Settings(BaseSettings):
 
     # Audit
     AUDIT_RETENTION_DAYS: int = 7
+
+    # Feishu SSO
+    FEISHU_APP_ID: str = ""
+    FEISHU_APP_SECRET: str = ""
+    FEISHU_REDIRECT_URI: str = "http://localhost:8000/api/v1/identity/auth/callback"
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # Feishu 设备部
+    FEISHU_EQUIPMENT_DEPT_ID: str = ""
+    FEISHU_EQUIPMENT_CHAT_ID: str = ""
+
+    # Upload
+    UPLOAD_DIR: str = "./uploads"
+    MAX_UPLOAD_SIZE_MB: int = 10
+
+    # JWT
+    JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 
     # API
     API_V1_PREFIX: str = "/api/v1"

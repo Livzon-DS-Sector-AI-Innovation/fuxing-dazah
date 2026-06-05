@@ -20,4 +20,8 @@ class User(BaseModel):
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     feishu_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     feishu_open_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    feishu_department_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="飞书部门ID"
+    )
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

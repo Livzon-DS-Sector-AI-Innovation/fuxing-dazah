@@ -81,6 +81,10 @@ from app.modules.equipment.repository.spare_part import (
     update_spare_part,
     update_stock_qty,
 )
+from app.modules.equipment.repository.maintenance_config import (
+    get_configs,
+    upsert_configs,
+)
 from app.modules.equipment.repository.work_order import (
     count_open_work_orders_by_equipment,
     create_material_consumption,
@@ -90,6 +94,12 @@ from app.modules.equipment.repository.work_order import (
     get_work_order_by_id,
     get_work_order_statistics,
     get_work_orders,
+)
+from app.modules.equipment.repository.work_order_image import (
+    create_image,
+    delete_image,
+    get_image_by_id,
+    get_images_by_work_order,
 )
 
 __all__ = [
@@ -173,4 +183,12 @@ __all__ = [
     "update_maintenance_plan",
     "update_template_item",
     "delete_template_item",
+    # maintenance config
+    "get_configs",
+    "upsert_configs",
+    # work order image
+    "create_image",
+    "delete_image",
+    "get_image_by_id",
+    "get_images_by_work_order",
 ]

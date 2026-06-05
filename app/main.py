@@ -2,6 +2,8 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import asyncio
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,8 +28,29 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
+
+    from app.platform.integrations.feishu.sync import (
+        contact_sync_loop,
+        refresh_contact_cache,
+        stop_sync_flag,
+        stop_timeout_flag,
+        timeout_scan_loop,
+    )
+
+    asyncio.ensure_future(refresh_contact_cache())
+
+    sync_task = asyncio.ensure_future(contact_sync_loop())
+    timeout_task = asyncio.ensure_future(timeout_scan_loop())
+
+    logger.info("Background tasks started")
+
     yield
-    logger.info("Shutting down %s", settings.APP_NAME)
+
+    stop_sync_flag.set()
+    stop_timeout_flag.set()
+    sync_task.cancel()
+    timeout_task.cancel()
+    logger.info("Background tasks stopped")
 
 
 app = FastAPI(

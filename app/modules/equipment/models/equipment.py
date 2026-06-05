@@ -105,6 +105,10 @@ class Equipment(BaseModel):
             "status IN ('在用', '备用', '维修中', '停用', '报废')",
             name="ck_equipments_status",
         ),
+        CheckConstraint(
+            "importance IN ('高', '中', '低')",
+            name="ck_equipments_importance",
+        ),
         {"schema": "equipment"},
     )
 
@@ -147,6 +151,11 @@ class Equipment(BaseModel):
     )
     description: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="设备描述"
+    )
+    importance: Mapped[str] = mapped_column(
+        String(10),
+        default="低",
+        comment="设备重要性：高/中/低",
     )
     warranty_expire_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="保修到期日"
