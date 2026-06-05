@@ -25,6 +25,8 @@ import {
   DeleteOutlined,
   CheckCircleOutlined,
   SendOutlined,
+  SafetyCertificateOutlined,
+  AuditOutlined,
 } from '@ant-design/icons'
 import { useSafetyStore } from '@/stores/safety'
 import {
@@ -34,11 +36,13 @@ import {
   submitCheck,
   reviewCheck,
   deleteCheck,
+  confirmCheck,
 } from '@/actions/safety'
 import type {
   SafetyCheck,
   SafetyCheckFormData,
   CheckType,
+  ConfirmCheckRequest,
 } from '@/types/safety'
 import {
   CheckType as CheckTypeEnum,
@@ -226,6 +230,21 @@ export default function SafetyCheckPage() {
     })
   }
 
+  const handleConfirm = async (id: string, role: ConfirmCheckRequest['role']) => {
+    try {
+      const response = await confirmCheck(id, { role })
+      if (response.code === 200) {
+        const roleLabel = role === 'inspector' ? '检查人员' : '安全办'
+        message.success(`${roleLabel}确认成功`)
+        updateCheckInStore(id, response.data)
+      } else {
+        message.error(response.message || '确认失败')
+      }
+    } catch {
+      message.error('确认失败')
+    }
+  }
+
   const columns: ColumnsType<SafetyCheck> = [
     {
       title: '检查编号',
@@ -290,6 +309,28 @@ export default function SafetyCheckPage() {
       },
     },
     {
+      title: '检查人确认',
+      dataIndex: 'inspector_confirmed',
+      key: 'inspector_confirmed',
+      width: 110,
+      render: (confirmed: boolean) => (
+        <Tag color={confirmed ? 'success' : 'default'}>
+          {confirmed ? '已确认' : '未确认'}
+        </Tag>
+      ),
+    },
+    {
+      title: '安全办确认',
+      dataIndex: 'safety_officer_confirmed',
+      key: 'safety_officer_confirmed',
+      width: 110,
+      render: (confirmed: boolean) => (
+        <Tag color={confirmed ? 'success' : 'default'}>
+          {confirmed ? '已确认' : '未确认'}
+        </Tag>
+      ),
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
@@ -301,10 +342,10 @@ export default function SafetyCheckPage() {
     {
       title: '操作',
       key: 'action',
-      width: 240,
+      width: 320,
       fixed: 'right',
       render: (_, record) => (
-        <Space size="small">
+        <Space size="small" wrap>
           {record.status === 'draft' && (
             <>
               <Button
@@ -333,6 +374,26 @@ export default function SafetyCheckPage() {
               onClick={() => handleReview(record.id)}
             >
               审核
+            </Button>
+          )}
+          {record.status === 'reviewed' && !record.inspector_confirmed && (
+            <Button
+              type="link"
+              size="small"
+              icon={<SafetyCertificateOutlined />}
+              onClick={() => handleConfirm(record.id, 'inspector')}
+            >
+              检查人确认
+            </Button>
+          )}
+          {record.status === 'reviewed' && record.inspector_confirmed && !record.safety_officer_confirmed && (
+            <Button
+              type="link"
+              size="small"
+              icon={<AuditOutlined />}
+              onClick={() => handleConfirm(record.id, 'safety_officer')}
+            >
+              安全办确认
             </Button>
           )}
           <Button

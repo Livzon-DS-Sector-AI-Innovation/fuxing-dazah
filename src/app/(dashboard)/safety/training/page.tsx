@@ -43,6 +43,8 @@ import {
   createTrainingRecord,
   updateTrainingRecord,
   deleteTrainingRecord,
+  getTrainingCertificates,
+  getExpiringCertificates,
 } from '@/actions/safety'
 import type {
   SafetyTraining,
@@ -56,6 +58,8 @@ import {
   TRAINING_TYPE_OPTIONS,
   TRAINING_MODE_OPTIONS,
   TRAINING_STATUS_OPTIONS,
+  TRAINING_LEVEL_OPTIONS,
+  CERTIFICATE_STATUS_OPTIONS,
 } from '@/types/safety'
 import dayjs from 'dayjs'
 
@@ -81,6 +85,16 @@ export default function TrainingPage() {
   const [editingRecordItem, setEditingRecordItem] = useState<TrainingRecord | null>(null)
   const [batchRecordVisible, setBatchRecordVisible] = useState(false)
   const [batchRecordForm] = Form.useForm()
+
+  // Certificate tab state
+  const [activeTab, setActiveTab] = useState('training')
+  const [certificates, setCertificates] = useState<TrainingRecord[]>([])
+  const [certTotal, setCertTotal] = useState(0)
+  const [certPage, setCertPage] = useState(1)
+  const [certPageSize, setCertPageSize] = useState(20)
+  const [certLoading, setCertLoading] = useState(false)
+  const [certStatusFilter, setCertStatusFilter] = useState<string | undefined>()
+  const [certKeyword, setCertKeyword] = useState('')
 
   const {
     trainings,
@@ -218,6 +232,26 @@ export default function TrainingPage() {
     }
   }
 
+  const certColumns: ColumnsType<TrainingRecord> = [
+    { title: '员工姓名', dataIndex: 'employee_name', key: 'employee_name', width: 100 },
+    { title: '部门', dataIndex: 'department', key: 'department', width: 100 },
+    { title: '岗位', dataIndex: 'position', key: 'position', width: 100 },
+    { title: '证书编号', dataIndex: 'certificate_no', key: 'certificate_no', width: 140 },
+    {
+      title: '证书有效期', dataIndex: 'certificate_expiry', key: 'certificate_expiry', width: 120,
+      render: (d: string) => d ? dayjs(d).format('YYYY-MM-DD') : '-',
+    },
+    {
+      title: '证书状态', dataIndex: 'certificate_status', key: 'certificate_status', width: 100,
+      render: (s: string) => {
+        const opt = CERTIFICATE_STATUS_OPTIONS.find(o => o.value === s)
+        return <Tag color={opt?.color}>{opt?.label || s || '-'}</Tag>
+      },
+    },
+    { title: '成绩', dataIndex: 'score', key: 'score', width: 70, render: (v: number) => v != null ? `${v}分` : '-' },
+    { title: '培训', dataIndex: 'training_id', key: 'training_id', width: 80, render: () => '-' },
+  ]
+
   // ============ Training Record Operations ============
 
   const loadRecords = async (trainingId: string) => {
@@ -233,6 +267,32 @@ export default function TrainingPage() {
       setRecordsLoading(false)
     }
   }
+
+  const loadCertificates = async () => {
+    setCertLoading(true)
+    try {
+      const response = await getTrainingCertificates({
+        page: certPage, page_size: certPageSize,
+        certificate_status: certStatusFilter,
+        keyword: certKeyword || undefined,
+      })
+      if (response.code === 200) {
+        setCertificates(response.data || [])
+        setCertTotal(response.meta?.total || 0)
+      }
+    } catch {
+      message.error('加载证书列表失败')
+    } finally {
+      setCertLoading(false)
+    }
+  }
+
+  // Load certificates when tab switches or filters change
+  useEffect(() => {
+    if (activeTab === 'certificate') {
+      loadCertificates()
+    }
+  }, [activeTab, certPage, certPageSize, certStatusFilter])
 
   const handleManageRecords = (record: SafetyTraining) => {
     setCurrentTrainingId(record.id)
@@ -250,7 +310,10 @@ export default function TrainingPage() {
 
   const handleEditRecord = (record: TrainingRecord) => {
     setEditingRecordItem(record)
-    recordForm.setFieldsValue(record)
+    recordForm.setFieldsValue({
+      ...record,
+      certificate_expiry: record.certificate_expiry ? dayjs(record.certificate_expiry) : undefined,
+    })
     setBatchRecordVisible(false)
   }
 
@@ -278,9 +341,14 @@ export default function TrainingPage() {
     if (!currentTrainingId) return
     try {
       const values = await recordForm.validateFields()
+      const payload = {
+        ...values,
+        certificate_expiry: values.certificate_expiry
+          ? values.certificate_expiry.toISOString() : undefined,
+      }
 
       if (editingRecordItem) {
-        const response = await updateTrainingRecord(editingRecordItem.id, values)
+        const response = await updateTrainingRecord(editingRecordItem.id, payload)
         if (response.code === 200) {
           message.success('更新成功')
           loadRecords(currentTrainingId)
@@ -290,7 +358,7 @@ export default function TrainingPage() {
           message.error(response.message || '更新失败')
         }
       } else {
-        const response = await createTrainingRecord(currentTrainingId, values as TrainingRecordFormData)
+        const response = await createTrainingRecord(currentTrainingId, payload as TrainingRecordFormData)
         if (response.code === 200) {
           message.success('添加成功')
           loadRecords(currentTrainingId)
@@ -464,43 +532,56 @@ export default function TrainingPage() {
       title: '员工姓名',
       dataIndex: 'employee_name',
       key: 'employee_name',
-      width: 120,
+      width: 100,
     },
     {
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 120,
+      width: 100,
+    },
+    {
+      title: '岗位',
+      dataIndex: 'position',
+      key: 'position',
+      width: 100,
     },
     {
       title: '出席',
       dataIndex: 'attendance',
       key: 'attendance',
-      width: 80,
+      width: 70,
       render: (val: boolean) => val ? <Tag color="success">是</Tag> : <Tag color="error">否</Tag>,
     },
     {
       title: '考核成绩',
       dataIndex: 'score',
       key: 'score',
-      width: 100,
+      width: 90,
       render: (val: number) => val !== undefined && val !== null ? `${val}分` : '-',
     },
     {
       title: '合格',
       dataIndex: 'passed',
       key: 'passed',
-      width: 80,
+      width: 70,
       render: (val: boolean | null) => {
         if (val === null || val === undefined) return '-'
         return val ? <Tag color="success">是</Tag> : <Tag color="error">否</Tag>
       },
     },
     {
+      title: '证书编号',
+      dataIndex: 'certificate_no',
+      key: 'certificate_no',
+      width: 130,
+      ellipsis: true,
+    },
+    {
       title: '备注',
       dataIndex: 'notes',
       key: 'notes',
-      width: 150,
+      width: 120,
       ellipsis: true,
     },
     {
@@ -522,76 +603,133 @@ export default function TrainingPage() {
 
   return (
     <div className="p-6">
-      <Card
-        title="安全培训"
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-            新建培训
-          </Button>
-        }
-      >
-        <Row gutter={16} className="mb-4">
-          <Col span={5}>
-            <Input
-              placeholder="搜索培训名称"
-              prefix={<SearchOutlined />}
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              onPressEnter={handleSearch}
-            />
-          </Col>
-          <Col span={4}>
-            <Select
-              placeholder="培训类型"
-              allowClear
-              value={typeFilter}
-              onChange={(value) => {
-                setTypeFilter(value)
-                setTrainingQueryParams({ page: 1 })
-              }}
-              style={{ width: '100%' }}
-              options={TRAINING_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            />
-          </Col>
-          <Col span={4}>
-            <Select
-              placeholder="状态"
-              allowClear
-              value={statusFilter}
-              onChange={(value) => {
-                setStatusFilter(value)
-                setTrainingQueryParams({ page: 1 })
-              }}
-              style={{ width: '100%' }}
-              options={TRAINING_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-            />
-          </Col>
-          <Col span={3}>
-            <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
-              查询
-            </Button>
-          </Col>
-        </Row>
+      <Tabs activeKey={activeTab} onChange={setActiveTab} items={[
+        {
+          key: 'training',
+          label: '培训计划',
+          children: (
+            <Card
+              extra={
+                <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+                  新建培训
+                </Button>
+              }
+            >
+              <Row gutter={16} className="mb-4">
+                <Col span={5}>
+                  <Input
+                    placeholder="搜索培训名称"
+                    prefix={<SearchOutlined />}
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    onPressEnter={handleSearch}
+                  />
+                </Col>
+                <Col span={4}>
+                  <Select
+                    placeholder="培训类型"
+                    allowClear
+                    value={typeFilter}
+                    onChange={(value) => {
+                      setTypeFilter(value)
+                      setTrainingQueryParams({ page: 1 })
+                    }}
+                    style={{ width: '100%' }}
+                    options={TRAINING_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
+                </Col>
+                <Col span={4}>
+                  <Select
+                    placeholder="状态"
+                    allowClear
+                    value={statusFilter}
+                    onChange={(value) => {
+                      setStatusFilter(value)
+                      setTrainingQueryParams({ page: 1 })
+                    }}
+                    style={{ width: '100%' }}
+                    options={TRAINING_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
+                </Col>
+                <Col span={3}>
+                  <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
+                    查询
+                  </Button>
+                </Col>
+              </Row>
 
-        <Table
-          columns={columns}
-          dataSource={trainings}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1400 }}
-          pagination={{
-            current: trainingQueryParams.page,
-            pageSize: trainingQueryParams.page_size,
-            total: trainingTotal,
-            showSizeChanger: true,
-            showQuickJumper: true,
-            showTotal: (total) => `共 ${total} 条`,
-            onChange: (page, pageSize) => {
-              setTrainingQueryParams({ page, page_size: pageSize })
-            },
-          }}
-        />
-      </Card>
+              <Table
+                columns={columns}
+                dataSource={trainings}
+                rowKey="id"
+                loading={loading}
+                scroll={{ x: 1400 }}
+                pagination={{
+                  current: trainingQueryParams.page,
+                  pageSize: trainingQueryParams.page_size,
+                  total: trainingTotal,
+                  showSizeChanger: true,
+                  showQuickJumper: true,
+                  showTotal: (total) => `共 ${total} 条`,
+                  onChange: (page, pageSize) => {
+                    setTrainingQueryParams({ page, page_size: pageSize })
+                  },
+                }}
+              />
+            </Card>
+          ),
+        },
+        {
+          key: 'certificate',
+          label: '证书管理',
+          children: (
+            <Card>
+              <Row gutter={16} className="mb-4">
+                <Col span={5}>
+                  <Input
+                    placeholder="搜索姓名/证书编号"
+                    prefix={<SearchOutlined />}
+                    value={certKeyword}
+                    onChange={(e) => setCertKeyword(e.target.value)}
+                    onPressEnter={() => { setCertPage(1); loadCertificates() }}
+                  />
+                </Col>
+                <Col span={4}>
+                  <Select
+                    placeholder="证书状态"
+                    allowClear
+                    value={certStatusFilter}
+                    onChange={(v) => { setCertStatusFilter(v); setCertPage(1) }}
+                    style={{ width: '100%' }}
+                    options={CERTIFICATE_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
+                </Col>
+                <Col span={3}>
+                  <Button type="primary" icon={<SearchOutlined />} onClick={() => { setCertPage(1); loadCertificates() }}>
+                    查询
+                  </Button>
+                </Col>
+              </Row>
+
+              <Table
+                columns={certColumns}
+                dataSource={certificates}
+                rowKey="id"
+                loading={certLoading}
+                scroll={{ x: 900 }}
+                pagination={{
+                  current: certPage,
+                  pageSize: certPageSize,
+                  total: certTotal,
+                  showSizeChanger: true,
+                  showTotal: (total) => `共 ${total} 条`,
+                  onChange: (page, pageSize) => { setCertPage(page); setCertPageSize(pageSize) },
+                }}
+              />
+            </Card>
+          ),
+        },
+      ]} />
 
       {/* Create/Edit Training Modal */}
       <Modal
@@ -606,7 +744,7 @@ export default function TrainingPage() {
         <Form
           form={editingRecord ? editForm : form}
           layout="vertical"
-          initialValues={editingRecord || { training_type: 'annual', training_mode: 'offline' }}
+          initialValues={editingRecord || { training_type: 'annual', training_mode: 'offline', training_level: 'dept', exam_passing_score: 60 }}
         >
           <Row gutter={16}>
             <Col span={12}>
@@ -648,8 +786,20 @@ export default function TrainingPage() {
               </Form.Item>
             </Col>
             <Col span={8}>
+              <Form.Item name="training_level" label="培训级别">
+                <Select options={TRAINING_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={8}>
               <Form.Item name="duration_hours" label="培训时长(小时)">
                 <InputNumber min={0} step={0.5} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="exam_passing_score" label="及格分数线">
+                <InputNumber min={0} max={100} step={1} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
           </Row>
@@ -735,19 +885,34 @@ export default function TrainingPage() {
                 label="姓名"
                 rules={[{ required: true, message: '请输入姓名' }]}
               >
-                <Input placeholder="员工姓名" style={{ width: 120 }} />
+                <Input placeholder="员工姓名" style={{ width: 100 }} />
               </Form.Item>
               <Form.Item name="department" label="部门">
-                <Input placeholder="部门" style={{ width: 120 }} />
+                <Input placeholder="部门" style={{ width: 100 }} />
+              </Form.Item>
+              <Form.Item name="position" label="岗位">
+                <Input placeholder="岗位" style={{ width: 100 }} />
               </Form.Item>
               <Form.Item name="attendance" label="出席" valuePropName="checked">
                 <Switch checkedChildren="是" unCheckedChildren="否" />
               </Form.Item>
               <Form.Item name="score" label="成绩">
-                <InputNumber min={0} max={100} style={{ width: 80 }} />
+                <InputNumber min={0} max={100} style={{ width: 70 }} />
               </Form.Item>
               <Form.Item name="passed" label="合格" valuePropName="checked">
                 <Switch checkedChildren="是" unCheckedChildren="否" />
+              </Form.Item>
+            </Form>
+            <Form
+              form={recordForm}
+              layout="inline"
+              className="mt-2"
+            >
+              <Form.Item name="certificate_no" label="证书编号">
+                <Input placeholder="证书编号" style={{ width: 140 }} />
+              </Form.Item>
+              <Form.Item name="certificate_expiry" label="证书有效期">
+                <DatePicker style={{ width: 140 }} placeholder="选择日期" />
               </Form.Item>
               <Form.Item name="notes" label="备注">
                 <Input placeholder="备注" style={{ width: 150 }} />

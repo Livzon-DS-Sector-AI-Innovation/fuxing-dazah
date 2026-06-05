@@ -36,6 +36,8 @@ import {
   updateAccident,
   investigateAccident,
   resolveAccident,
+  startCapa,
+  verifyCapa,
   closeAccident,
   deleteAccident,
 } from '@/actions/safety'
@@ -49,10 +51,11 @@ import {
   ACCIDENT_TYPE_OPTIONS,
   ACCIDENT_LEVEL_OPTIONS,
   ACCIDENT_STATUS_OPTIONS,
+  INJURY_SEVERITY_OPTIONS,
 } from '@/types/safety'
 import dayjs from 'dayjs'
 
-const { Text, TextArea } = Typography
+const { Text } = Typography
 
 export default function AccidentPage() {
   const [form] = Form.useForm()
@@ -60,13 +63,18 @@ export default function AccidentPage() {
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [resolveModalVisible, setResolveModalVisible] = useState(false)
+  const [capaModalVisible, setCapaModalVisible] = useState(false)
   const [currentAccidentId, setCurrentAccidentId] = useState<string | null>(null)
   const [resolveForm] = Form.useForm()
+  const [capaForm] = Form.useForm()
   const [editingRecord, setEditingRecord] = useState<Accident | null>(null)
   const [searchText, setSearchText] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [levelFilter, setLevelFilter] = useState<string | undefined>()
+  const [deptFilter, setDeptFilter] = useState<string | undefined>()
+  const [dateFromFilter, setDateFromFilter] = useState<string | undefined>()
+  const [dateToFilter, setDateToFilter] = useState<string | undefined>()
 
   const {
     accidents,
@@ -88,6 +96,10 @@ export default function AccidentPage() {
         status: statusFilter,
         accident_type: typeFilter,
         accident_level: levelFilter,
+        department: deptFilter,
+        date_from: dateFromFilter,
+        date_to: dateToFilter,
+        keyword: searchText || undefined,
       })
       if (response.code === 200) {
         setAccidents(response.data)
@@ -222,6 +234,47 @@ export default function AccidentPage() {
     }
   }
 
+  const handleStartCapa = (id: string) => {
+    setCurrentAccidentId(id)
+    capaForm.resetFields()
+    setCapaModalVisible(true)
+  }
+
+  const handleCapaSubmit = async () => {
+    if (!currentAccidentId) return
+    try {
+      const values = await capaForm.validateFields()
+      const response = await startCapa(
+        currentAccidentId,
+        values.corrective_action_deadline.toISOString(),
+        values.corrective_action_responsible,
+      )
+      if (response.code === 200) {
+        message.success('CAPA已启动')
+        updateAccidentInStore(currentAccidentId, response.data)
+        setCapaModalVisible(false)
+      } else {
+        message.error(response.message || '操作失败')
+      }
+    } catch {
+      console.error('表单验证失败')
+    }
+  }
+
+  const handleVerifyCapa = async (id: string) => {
+    try {
+      const response = await verifyCapa(id)
+      if (response.code === 200) {
+        message.success('CAPA已验证，事故已关闭')
+        updateAccidentInStore(id, response.data)
+      } else {
+        message.error(response.message || '操作失败')
+      }
+    } catch {
+      message.error('操作失败')
+    }
+  }
+
   const handleClose = async (id: string) => {
     Modal.confirm({
       title: '确认关闭',
@@ -289,6 +342,12 @@ export default function AccidentPage() {
       ellipsis: true,
     },
     {
+      title: '部门',
+      dataIndex: 'department',
+      key: 'department',
+      width: 100,
+    },
+    {
       title: '事故描述',
       dataIndex: 'description',
       key: 'description',
@@ -342,17 +401,37 @@ export default function AccidentPage() {
               icon={<CheckCircleOutlined />}
               onClick={() => handleResolve(record.id)}
             >
-              处理
+              完成调查
             </Button>
           )}
-          {record.status === 'resolved' && (
+          {record.status === 'investigated' && (
+            <>
+              <Button
+                type="link"
+                size="small"
+                icon={<AuditOutlined />}
+                onClick={() => handleStartCapa(record.id)}
+              >
+                启动CAPA
+              </Button>
+              <Button
+                type="link"
+                size="small"
+                icon={<CloseCircleOutlined />}
+                onClick={() => handleClose(record.id)}
+              >
+                直接关闭
+              </Button>
+            </>
+          )}
+          {record.status === 'capa_in_progress' && (
             <Button
               type="link"
               size="small"
-              icon={<CloseCircleOutlined />}
-              onClick={() => handleClose(record.id)}
+              icon={<CheckCircleOutlined />}
+              onClick={() => handleVerifyCapa(record.id)}
             >
-              关闭
+              验证CAPA
             </Button>
           )}
           <Button
@@ -508,7 +587,7 @@ export default function AccidentPage() {
             </Col>
           </Row>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item
                 name="happened_at"
                 label="发生时间"
@@ -517,21 +596,31 @@ export default function AccidentPage() {
                 <DatePicker showTime style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="location" label="发生地点">
                 <Input placeholder="请输入发生地点" />
               </Form.Item>
             </Col>
+            <Col span={8}>
+              <Form.Item name="department" label="发生部门">
+                <Input placeholder="请输入发生部门" />
+              </Form.Item>
+            </Col>
           </Row>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="casualties" label="伤亡情况">
                 <Input placeholder="如：无、1人轻伤等" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="property_damage" label="财产损失(元)">
                 <InputNumber min={0} style={{ width: '100%' }} placeholder="请输入财产损失" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="loss_work_days" label="损失工作日">
+                <InputNumber min={0} style={{ width: '100%' }} placeholder="请输入损失工作日" />
               </Form.Item>
             </Col>
           </Row>
@@ -601,6 +690,40 @@ export default function AccidentPage() {
           </Form.Item>
           <Form.Item name="corrective_actions" label="纠正预防措施">
             <Input.TextArea rows={3} placeholder="请描述纠正和预防措施" />
+          </Form.Item>
+          <Form.Item name="investigation_method" label="调查方法">
+            <Input placeholder="5-Why / FTA / Event Tree / BowTie 等" />
+          </Form.Item>
+          <Form.Item name="investigation_findings" label="调查发现">
+            <Input.TextArea rows={3} placeholder="请填写调查发现" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* CAPA Modal */}
+      <Modal
+        title="启动CAPA"
+        open={capaModalVisible}
+        onOk={handleCapaSubmit}
+        onCancel={() => setCapaModalVisible(false)}
+        width={500}
+        okText="确认启动"
+        cancelText="取消"
+      >
+        <Form form={capaForm} layout="vertical">
+          <Form.Item
+            name="corrective_action_deadline"
+            label="CAPA截止日期"
+            rules={[{ required: true, message: '请选择截止日期' }]}
+          >
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name="corrective_action_responsible"
+            label="CAPA责任人"
+            rules={[{ required: true, message: '请输入责任人' }]}
+          >
+            <Input placeholder="请输入CAPA责任人" />
           </Form.Item>
         </Form>
       </Modal>

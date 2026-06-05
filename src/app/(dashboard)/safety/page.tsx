@@ -7,7 +7,6 @@ import {
   Row,
   Col,
   Statistic,
-  Tag,
   Typography,
   Space,
   Spin,
@@ -15,65 +14,104 @@ import {
 import {
   SafetyOutlined,
   WarningOutlined,
-  AlertOutlined,
-  BookOutlined,
+  RobotOutlined,
+  FileTextOutlined,
   ArrowRightOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
+  SettingOutlined,
+  SafetyCertificateOutlined,
+  BookOutlined,
+  AlertOutlined,
+  SwapOutlined,
+  HeartOutlined,
 } from '@ant-design/icons'
-import { getChecks, getHazards, getAccidents, getTrainings } from '@/actions/safety'
+import { getHazards, getHazardIdentifications, getRegulations } from '@/actions/safety'
 
 const { Title, Text } = Typography
 
 interface DashboardStats {
-  totalChecks: number
-  pendingChecks: number
   openHazards: number
   overdueHazards: number
-  recentAccidents: number
-  upcomingTrainings: number
+  totalIdentifications: number
+  pendingIdentifications: number
+  totalRegulations: number
 }
 
 const menuItems = [
   {
-    key: '/safety/check',
-    title: '安全检查',
-    description: '日常/专项安全检查记录管理',
-    icon: <SafetyOutlined />,
-    color: '#1aae39',
+    key: '/safety/ai-workflow-config',
+    title: 'AI工作流配置',
+    description: 'AI工作流管道配置、提示词管理、API接口统一设置',
+    icon: <SettingOutlined />,
+    color: '#1677ff',
+  },
+  {
+    key: '/safety/ehs-change',
+    title: 'EHS变更管理',
+    description: '工艺技术、设备设施、管理变更的全生命周期管理（MOC）',
+    icon: <SwapOutlined />,
+    color: '#13c2c2',
+  },
+  {
+    key: '/safety/occupational-health',
+    title: '职业健康管理',
+    description: '职业病危害因素监测、职业健康体检、异常处置与合规跟踪',
+    icon: <HeartOutlined />,
+    color: '#722ed1',
   },
   {
     key: '/safety/hazard',
-    title: '隐患排查',
-    description: '隐患上报、整改跟踪、闭环验证',
+    title: '隐患排查治理',
+    description: '隐患上报、排查整改、闭环验证全流程管理',
     icon: <WarningOutlined />,
     color: '#dd5b00',
   },
   {
-    key: '/safety/accident',
-    title: '事故管理',
-    description: '事故报告、调查处理、统计分析',
+    key: '/safety/hazard-identification',
+    title: '危险源辨识',
+    description: 'AI辅助危险源辨识、LEC风险评价、修订联动',
+    icon: <RobotOutlined />,
+    color: '#5645d4',
+  },
+  {
+    key: '/safety/regulation',
+    title: '安全操规管理',
+    description: '安全操作规程文档管理与修订流程',
+    icon: <FileTextOutlined />,
+    color: '#1aae39',
+  },
+  {
+    key: '/safety/special-ops',
+    title: '特殊作业管理',
+    description: '八大特殊作业票管理、人员资质证书与有效期跟踪',
+    icon: <SafetyCertificateOutlined />,
+    color: '#eb2f96',
+  },
+  {
+    key: '/safety/risk-reporting',
+    title: '风险作业报备',
+    description: '八大特殊作业报备审批、每日风险作业报备管理',
     icon: <AlertOutlined />,
     color: '#e03131',
   },
   {
-    key: '/safety/training',
-    title: '安全培训',
-    description: '培训计划、签到记录、考核管理',
+    key: '/safety/knowledge-base',
+    title: '安全知识库',
+    description: '法律法规、标准规范、管理制度、事故案例、SDS等知识文档',
     icon: <BookOutlined />,
-    color: '#5645d4',
+    color: '#2f54eb',
   },
 ]
 
 export default function SafetyDashboard() {
   const router = useRouter()
   const [stats, setStats] = useState<DashboardStats>({
-    totalChecks: 0,
-    pendingChecks: 0,
     openHazards: 0,
     overdueHazards: 0,
-    recentAccidents: 0,
-    upcomingTrainings: 0,
+    totalIdentifications: 0,
+    pendingIdentifications: 0,
+    totalRegulations: 0,
   })
   const [loading, setLoading] = useState(true)
 
@@ -83,29 +121,30 @@ export default function SafetyDashboard() {
 
   const loadDashboardData = async () => {
     try {
-      const [checksRes, hazardsRes, accidentsRes, trainingsRes] = await Promise.all([
-        getChecks({ page_size: 100 }),
-        getHazards({ page_size: 100 }),
-        getAccidents({ page_size: 100 }),
-        getTrainings({ page_size: 100 }),
+      const [hazardsRes, identificationsRes, regulationsRes] = await Promise.all([
+        getHazards({ page_size: 200 }),
+        getHazardIdentifications({ page_size: 200 }),
+        getRegulations({ page_size: 200 }),
       ])
 
-      const checks = checksRes.data || []
       const hazards = hazardsRes.data || []
-      const accidents = accidentsRes.data || []
-      const trainings = trainingsRes.data || []
+      const identifications = identificationsRes.data || []
+      const regulations = regulationsRes.data || []
 
       const now = new Date()
 
       setStats({
-        totalChecks: checks.length,
-        pendingChecks: checks.filter((c: { status: string }) => c.status === 'submitted').length,
         openHazards: hazards.filter((h: { status: string }) => h.status === 'open').length,
-        overdueHazards: hazards.filter((h: { deadline?: string; rectification_status: string }) =>
-          h.deadline && new Date(h.deadline) < now && h.rectification_status !== 'verified'
+        overdueHazards: hazards.filter(
+          (h: { deadline?: string; rectification_status: string }) =>
+            h.deadline && new Date(h.deadline) < now && h.rectification_status !== 'verified'
         ).length,
-        recentAccidents: accidents.filter((a: { status: string }) => a.status !== 'closed').length,
-        upcomingTrainings: trainings.filter((t: { status: string }) => t.status === 'draft' || t.status === 'in_progress').length,
+        totalIdentifications: identifications.length,
+        pendingIdentifications: identifications.filter(
+          (i: { overall_status: string }) =>
+            i.overall_status === 'draft' || i.overall_status === 'in_progress'
+        ).length,
+        totalRegulations: regulations.length,
       })
     } catch (error) {
       console.error('Failed to load safety dashboard data:', error)
@@ -117,7 +156,7 @@ export default function SafetyDashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <Title level={4} className="mb-1">安全管理概览</Title>
+        <Title level={4} className="mb-1">安全管理总览</Title>
         <Text type="secondary">实时监控安全管理状态，保障安全生产</Text>
       </div>
 
@@ -129,45 +168,36 @@ export default function SafetyDashboard() {
         <>
           {/* Statistics Cards */}
           <Row gutter={16}>
-            <Col span={4}>
+            <Col span={5}>
               <Card variant="borderless" className="shadow-sm">
                 <Statistic
-                  title="安全检查"
-                  value={stats.totalChecks}
-                  suffix={`/${stats.pendingChecks} 待审`}
-                  valueStyle={{ color: '#1aae39' }}
-                  prefix={<SafetyOutlined />}
+                  title="待处理隐患"
+                  value={stats.openHazards}
+                  suffix={stats.overdueHazards > 0 ? `${stats.overdueHazards} 逾期` : ''}
+                  styles={{ content: { color: stats.overdueHazards > 0 ? '#e03131' : '#dd5b00' } }}
+                  prefix={<WarningOutlined />}
                 />
               </Card>
             </Col>
             <Col span={5}>
               <Card variant="borderless" className="shadow-sm">
                 <Statistic
-                  title="待处理隐患"
-                  value={stats.openHazards}
-                  suffix={stats.overdueHazards > 0 ? `/${stats.overdueHazards} 逾期` : ''}
-                  valueStyle={{ color: stats.overdueHazards > 0 ? '#e03131' : '#dd5b00' }}
-                  prefix={<WarningOutlined />}
+                  title="危险源辨识"
+                  value={stats.totalIdentifications}
+                  suffix={stats.pendingIdentifications > 0 ? `${stats.pendingIdentifications} 进行中` : ''}
+                  styles={{ content: { color: '#5645d4' } }}
+                  prefix={<RobotOutlined />}
                 />
               </Card>
             </Col>
-            <Col span={4}>
+            <Col span={5}>
               <Card variant="borderless" className="shadow-sm">
                 <Statistic
-                  title="未关闭事故"
-                  value={stats.recentAccidents}
-                  valueStyle={{ color: '#e03131' }}
-                  prefix={<AlertOutlined />}
-                />
-              </Card>
-            </Col>
-            <Col span={4}>
-              <Card variant="borderless" className="shadow-sm">
-                <Statistic
-                  title="待办培训"
-                  value={stats.upcomingTrainings}
-                  valueStyle={{ color: '#5645d4' }}
-                  prefix={<BookOutlined />}
+                  title="安全操规"
+                  value={stats.totalRegulations}
+                  suffix="份"
+                  styles={{ content: { color: '#1aae39' } }}
+                  prefix={<FileTextOutlined />}
                 />
               </Card>
             </Col>
@@ -218,31 +248,35 @@ export default function SafetyDashboard() {
                 <Row gutter={16}>
                   <Col span={8}>
                     <Space>
-                      <CheckCircleOutlined style={{ color: stats.pendingChecks === 0 ? '#1aae39' : '#dd5b00' }} />
-                      <Text>
-                        {stats.pendingChecks === 0
-                          ? '所有检查已审核完成'
-                          : `${stats.pendingChecks} 个安全检查待审核`}
-                      </Text>
-                    </Space>
-                  </Col>
-                  <Col span={8}>
-                    <Space>
-                      <ExclamationCircleOutlined style={{ color: stats.overdueHazards > 0 ? '#e03131' : '#1aae39' }} />
+                      <ExclamationCircleOutlined
+                        style={{ color: stats.overdueHazards > 0 ? '#e03131' : '#1aae39' }}
+                      />
                       <Text>
                         {stats.overdueHazards > 0
-                          ? `${stats.overdueHazards} 个隐患已逾期未整改`
+                          ? `${stats.overdueHazards} 个隐患已逾期未整改，请及时处理`
                           : '暂无逾期隐患'}
                       </Text>
                     </Space>
                   </Col>
                   <Col span={8}>
                     <Space>
-                      <BookOutlined style={{ color: stats.upcomingTrainings > 0 ? '#5645d4' : '#1aae39' }} />
+                      <RobotOutlined
+                        style={{ color: stats.pendingIdentifications > 0 ? '#5645d4' : '#1aae39' }}
+                      />
                       <Text>
-                        {stats.upcomingTrainings > 0
-                          ? `${stats.upcomingTrainings} 个培训待完成`
-                          : '暂无待办培训'}
+                        {stats.pendingIdentifications > 0
+                          ? `${stats.pendingIdentifications} 个危险源辨识进行中`
+                          : '危险源辨识全部完成'}
+                      </Text>
+                    </Space>
+                  </Col>
+                  <Col span={8}>
+                    <Space>
+                      <CheckCircleOutlined style={{ color: '#1aae39' }} />
+                      <Text>
+                        {stats.totalRegulations > 0
+                          ? `共 ${stats.totalRegulations} 份安全操规已录入系统`
+                          : '暂无安全操规，请尽快录入'}
                       </Text>
                     </Space>
                   </Col>
