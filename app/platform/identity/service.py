@@ -1,4 +1,6 @@
 import datetime
+import json
+import logging
 
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +9,8 @@ from app.core.config import Settings
 from app.platform.identity.models import User
 from app.platform.identity.repository import UserRepository
 from app.platform.integrations.feishu.client import FeishuClient
+
+logger = logging.getLogger(__name__)
 
 
 class IdentityService:
@@ -24,13 +28,13 @@ class IdentityService:
         return self._feishu.build_authorize_url(state)
 
     async def handle_callback(
-        self, session: AsyncSession, code: str
+        self, session: AsyncSession, code: str,
     ) -> str:
-        """Exchange code for user info, upsert user, return JWT."""
+        """Exchange code → upsert user → enrich department/position → return JWT."""
         resp = await self._feishu.exchange_code(code)
         if not resp.success():
             raise RuntimeError(
-                f"Feishu token exchange failed: code={resp.code}, msg={resp.msg}"
+                f"Feishu token exchange failed: code={resp.code}, msg={resp.msg}",
             )
 
         body = resp.data
@@ -58,6 +62,33 @@ class IdentityService:
             user.mobile = getattr(body, "mobile", None) or user.mobile
             user.avatar_url = getattr(body, "avatar_url", None) or user.avatar_url
 
+        # ── 补全部门/职位信息 ──
+        if feishu_user_id and (
+            not user.department or not user.position or not user.feishu_department_ids
+        ):
+            try:
+                from app.platform.integrations.feishu.contact import get_user_detail
+
+                detail = await get_user_detail(feishu_user_id, user_id_type="user_id")
+                if detail:
+                    if detail.get("department_ids"):
+                        user.feishu_department_ids = json.dumps(
+                            detail["department_ids"], ensure_ascii=False,
+                        )
+                    if detail.get("positions"):
+                        major = next(
+                            (p for p in detail["positions"] if p.get("is_major")),
+                            None,
+                        )
+                        if major:
+                            if major.get("position_name"):
+                                user.position = major["position_name"]
+                    elif detail.get("job_title"):
+                        user.position = detail["job_title"]
+            except Exception:
+                logger.exception("Failed to enrich user detail for %s", feishu_user_id)
+
+        await session.flush()
         return self._generate_jwt(user)
 
     def _generate_jwt(self, user: User) -> str:

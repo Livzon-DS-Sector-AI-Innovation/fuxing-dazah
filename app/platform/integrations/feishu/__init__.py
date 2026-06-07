@@ -1,4 +1,4 @@
-"""Feishu SSO, approval, IM and callback integrations."""
+"""Feishu SSO, contact, message and callback integrations."""
 
 from app.platform.integrations.feishu.client import FeishuClient
 

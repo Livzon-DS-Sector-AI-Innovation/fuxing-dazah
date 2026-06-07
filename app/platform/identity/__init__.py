@@ -1,3 +1,3 @@
-from app.platform.identity.models import User
+from app.platform.identity.models import Department, User
 
-__all__ = ["User"]
+__all__ = ["Department", "User"]

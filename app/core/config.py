@@ -29,15 +29,19 @@ class Settings(BaseSettings):
     # Audit
     AUDIT_RETENTION_DAYS: int = 7
 
-    # Feishu SSO
+    # Feishu SSO — 全部从 .env 读取，不设默认值，避免部署时漏配
     FEISHU_APP_ID: str = ""
     FEISHU_APP_SECRET: str = ""
-    FEISHU_REDIRECT_URI: str = "http://localhost:8000/api/v1/identity/auth/callback"
-    FRONTEND_URL: str = "http://localhost:3000"
+    FEISHU_REDIRECT_URI: str = ""
+    FRONTEND_URL: str = ""
 
     # Feishu 设备部
     FEISHU_EQUIPMENT_DEPT_ID: str = ""
     FEISHU_EQUIPMENT_CHAT_ID: str = ""
+
+    # Feishu 组织架构同步
+    FEISHU_SYNC_ROOT_DEPT_ID: str = ""   # 部门同步的根部门 ID（API 触发）
+    FEISHU_SYNC_MEMBER_DEPT_ID: str = ""  # 成员同步的目标部门 ID（每日 00:00）
 
     # Upload
     UPLOAD_DIR: str = "./uploads"
@@ -60,7 +64,28 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
 
+    def check(self) -> None:
+        """启动时校验关键配置，避免漏配导致运行时异常。"""
+        missing: list[str] = []
+        if not self.SECRET_KEY:
+            missing.append("SECRET_KEY")
+        if not self.FEISHU_APP_ID:
+            missing.append("FEISHU_APP_ID")
+        if not self.FEISHU_APP_SECRET:
+            missing.append("FEISHU_APP_SECRET")
+        if not self.FEISHU_REDIRECT_URI:
+            missing.append("FEISHU_REDIRECT_URI")
+        if not self.FRONTEND_URL:
+            missing.append("FRONTEND_URL")
+        if missing:
+            raise RuntimeError(
+                "以下 .env 配置项缺失或无效，请检查:\n  "
+                + "\n  ".join(missing),
+            )
+
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    settings.check()
+    return settings

@@ -18,6 +18,7 @@ dependencies = [
     "pg8000>=1.31.5",
     "lark-oapi>=1.6.8",
     "pyjwt[crypto]>=2.10.0",
+    "tqdm>=4.68.1",
 ]
 
 [project.optional-dependencies]

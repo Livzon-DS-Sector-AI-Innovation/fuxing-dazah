@@ -23,7 +23,8 @@ async def _get_feishu_client():
 
 
 async def _get_tenant_token(client) -> str:
-    import lark_oapi as lark
+    import json as _json
+
     from lark_oapi.api.auth.v3 import (
         InternalTenantAccessTokenRequest,
         InternalTenantAccessTokenRequestBody,
@@ -39,10 +40,15 @@ async def _get_tenant_token(client) -> str:
         )
         .build()
     )
-    resp = await client.auth.v3.internal_tenant_access_token.acreate(req)
+    resp = await client.auth.v3.tenant_access_token.ainternal(req)
     if not resp.success():
-        raise RuntimeError(f"Failed to get tenant token: {resp.msg}")
-    return resp.data.tenant_access_token
+        raise RuntimeError(
+            f"Failed to get tenant token: code={resp.code}, msg={resp.msg}",
+        )
+    if resp.raw and resp.raw.content:
+        data = _json.loads(resp.raw.content.decode("utf-8"))
+        return data.get("tenant_access_token", "")
+    raise RuntimeError("Empty tenant token response")
 
 
 async def send_group_card(
@@ -56,7 +62,6 @@ async def send_group_card(
         client = await _get_feishu_client()
         token = await _get_tenant_token(client)
 
-        import lark_oapi as lark
         from lark_oapi.api.im.v1 import (
             CreateMessageRequest,
             CreateMessageRequestBody,
