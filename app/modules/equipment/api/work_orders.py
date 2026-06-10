@@ -50,6 +50,8 @@ def _to_response(wo) -> WorkOrderResponse:
         resp.reporter_name = wo.reporter.name
     if wo.assignee:
         resp.assignee_name = wo.assignee.name
+    if wo.responsible_person:
+        resp.responsible_person_name = wo.responsible_person.name
     if wo.equipment:
         resp.equipment_name = wo.equipment.name
         resp.equipment_no = wo.equipment.equipment_no

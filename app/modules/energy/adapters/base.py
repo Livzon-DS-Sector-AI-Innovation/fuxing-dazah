@@ -27,6 +27,7 @@ class BasePlatformAdapter(ABC):
     """三方平台适配器抽象基类"""
 
     platform_code: str
+    platform_name: str = ""
 
     @abstractmethod
     async def fetch_energy_data(

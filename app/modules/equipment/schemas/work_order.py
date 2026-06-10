@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # ==================== 维修工单 ====================
-WorkOrderType = Literal["故障维修", "计划维护", "巡检", "校准"]
+WorkOrderType = Literal["故障维修", "计划维护", "巡检", "校准", "异常处理", "日常维护"]
 WorkOrderPriority = Literal["紧急", "高", "中", "低"]
 WorkOrderStatus = Literal["待处理", "执行中", "待验收", "已完成", "已关闭"]
 VerificationResult = Literal["合格", "不合格"]
@@ -32,6 +32,9 @@ class WorkOrderCreate(BaseModel):
     checklist_template_id: uuid.UUID | None = Field(
         default=None, description="关联巡检模板ID"
     )
+    responsible_person_id: uuid.UUID | None = Field(
+        default=None, description="责任人ID"
+    )
 
 
 class WorkOrderUpdate(BaseModel):
@@ -46,6 +49,9 @@ class WorkOrderUpdate(BaseModel):
     fault_action_id: uuid.UUID | None = Field(default=None, description="维修措施ID")
     fault_description: str | None = Field(default=None, description="故障详细描述")
     planned_start_date: date | None = Field(default=None, description="计划执行日期")
+    responsible_person_id: uuid.UUID | None = Field(
+        default=None, description="责任人ID"
+    )
 
 
 class WorkOrderAssign(BaseModel):
@@ -106,6 +112,8 @@ class WorkOrderResponse(BaseModel):
     equipment_no: str | None = None
     reporter_name: str | None = None
     assignee_name: str | None = None
+    responsible_person_id: uuid.UUID | None = None
+    responsible_person_name: str | None = None
     verifier_name: str | None = None
     symptom_name: str | None = None
     cause_name: str | None = None

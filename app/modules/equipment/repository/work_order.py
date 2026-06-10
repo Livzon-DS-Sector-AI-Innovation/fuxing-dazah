@@ -32,6 +32,7 @@ async def get_work_order_by_id(
         .options(
             selectinload(WorkOrder.reporter),
             selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
             selectinload(WorkOrder.equipment),
             selectinload(WorkOrder.fault_symptom),
             selectinload(WorkOrder.fault_cause),
@@ -94,6 +95,7 @@ async def get_work_orders(
         .options(
             selectinload(WorkOrder.reporter),
             selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
             selectinload(WorkOrder.equipment),
             selectinload(WorkOrder.fault_symptom),
             selectinload(WorkOrder.fault_cause),

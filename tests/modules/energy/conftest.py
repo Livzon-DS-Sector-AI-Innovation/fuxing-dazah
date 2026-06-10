@@ -6,7 +6,7 @@ import pytest
 @pytest.fixture
 def sample_device_config_data():
     return {
-        "platform_code": "platform_a",
+        "platform_code": "zhiheng",
         "platform_device_code": "WD-001",
         "device_name": "1号水表",
         "energy_type": "water",

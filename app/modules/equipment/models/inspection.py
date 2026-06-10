@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from app.modules.equipment.models.inspection_template import (
         InspectionTemplate,
     )
+    from app.platform.identity.models import User
 
 
 class InspectionRoute(BaseModel):
@@ -124,7 +125,7 @@ class InspectionTask(BaseModel):
             name="ck_inspection_tasks_status",
         ),
         CheckConstraint(
-            "plan_type IN ('日常巡检', '周巡检', '月巡检', '专项巡检')",
+            "plan_type IN ('线路巡检', '设备巡检')",
             name="ck_inspection_tasks_plan_type",
         ),
         CheckConstraint(
@@ -156,8 +157,8 @@ class InspectionTask(BaseModel):
     )
     plan_type: Mapped[str] = mapped_column(
         String(20),
-        default="专项巡检",
-        comment="巡检类型：日常巡检/周巡检/月巡检/专项巡检",
+        default="设备巡检",
+        comment="巡检类型：线路巡检/设备巡检",
     )
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("identity.users.id"),
@@ -185,6 +186,9 @@ class InspectionTask(BaseModel):
     closure_remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="关闭备注"
     )
+    route_summary: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="线路巡检现场描述"
+    )
 
     # 关系
     route: Mapped[InspectionRoute | None] = relationship(
@@ -195,6 +199,9 @@ class InspectionTask(BaseModel):
     )
     template: Mapped[InspectionTemplate] = relationship(
         "InspectionTemplate", foreign_keys=[template_id]
+    )
+    assignee: Mapped[User | None] = relationship(
+        "User", foreign_keys=[assigned_to]
     )
 
 
@@ -208,9 +215,10 @@ class InspectionPhoto(BaseModel):
         ForeignKey("equipment.inspection_tasks.id"),
         comment="巡检任务ID",
     )
-    equipment_id: Mapped[uuid.UUID] = mapped_column(
+    equipment_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("equipment.equipments.id"),
-        comment="设备ID",
+        nullable=True,
+        comment="设备ID（线路巡检时可为空）",
     )
     file_name: Mapped[str] = mapped_column(
         String(255), comment="原始文件名"

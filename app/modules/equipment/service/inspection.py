@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, date, datetime
 
 from fastapi import UploadFile
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -122,10 +122,26 @@ def _validate_transition(current: str, target: str) -> None:
 async def create_task(
     db: AsyncSession, data: dict
 ) -> InspectionTask:
+    plan_type = data.get("plan_type", "设备巡检")
     has_route = data.get("route_id")
     has_equipment = data.get("equipment_id") or data.get("equipment_ids")
-    if not has_route and not has_equipment:
-        raise AppException(message="路线ID和设备（至少一个）至少需要提供一项")
+
+    if plan_type == "线路巡检":
+        if not has_route:
+            raise AppException(message="线路巡检必须选择巡检路线")
+        # 线路巡检时，如果未提供模板，则从路线的默认模板获取
+        if not data.get("template_id"):
+            route = await get_route_by_id(db, data["route_id"])
+            if route.template_id:
+                data["template_id"] = str(route.template_id)
+            else:
+                raise AppException(message="所选路线未配置默认检查模板，请手动选择模板")
+    else:
+        # 设备巡检：至少需要提供一个设备
+        if not has_equipment:
+            raise AppException(message="设备巡检至少需要选择一台设备")
+        if not data.get("template_id"):
+            raise AppException(message="设备巡检必须选择检查模板")
 
     # JSON 列无法直接序列化 UUID 对象，需提前转为字符串
     if data.get("equipment_ids"):
@@ -185,6 +201,7 @@ async def _refetch_task(db: AsyncSession, task_id: uuid.UUID) -> InspectionTask:
             selectinload(InspectionTask.route).selectinload(IRoute.equipments_rel),
             selectinload(InspectionTask.equipment),
             selectinload(InspectionTask.template),
+            selectinload(InspectionTask.assignee),
         )
         .where(InspectionTask.id == task_id)
     )
@@ -199,7 +216,16 @@ async def start_task(
     task.status = "执行中"
     task.started_at = datetime.now(UTC)
     await db.flush()
-    return await _refetch_task(db, task_id)
+    refreshed = await _refetch_task(db, task_id)
+
+    # 发送飞书通知（非关键路径，失败不影响主流程）
+    from app.modules.equipment.service.inspection_notification import (
+        send_inspection_start_notification,
+    )
+
+    await send_inspection_start_notification(refreshed, db)
+
+    return refreshed
 
 
 async def complete_task(
@@ -208,9 +234,35 @@ async def complete_task(
     task = await _get_task(db, task_id)
     _validate_transition(task.status, "已完成")
 
+    if task.plan_type == "线路巡检":
+        raise AppException(
+            message="线路巡检任务请使用线路巡检提交接口完成"
+        )
+
     records = await repo.get_records_by_task(db, task_id)
     has_abnormal = any(r.result == "异常" for r in records)
     task.overall_result = "异常" if has_abnormal else "正常"
+    task.status = "已完成"
+    task.completed_at = datetime.now(UTC)
+    await db.flush()
+    return await _refetch_task(db, task_id)
+
+
+async def submit_route_check(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    overall_result: str,
+    route_summary: str | None = None,
+) -> InspectionTask:
+    """线路巡检提交：设置总体结果和现场描述，完成任务"""
+    task = await _get_task(db, task_id)
+    if task.status != "执行中":
+        raise AppException(message="任务未在'执行中'状态，不能提交")
+    if task.plan_type != "线路巡检":
+        raise AppException(message="仅线路巡检任务支持此操作")
+
+    task.overall_result = overall_result
+    task.route_summary = route_summary
     task.status = "已完成"
     task.completed_at = datetime.now(UTC)
     await db.flush()
@@ -253,14 +305,16 @@ async def submit_equipment_check(
 async def upload_photo(
     db: AsyncSession,
     task_id: uuid.UUID,
-    equipment_id: uuid.UUID,
-    file: UploadFile,
+    equipment_id: uuid.UUID | None = None,
+    file: UploadFile | None = None,
 ) -> InspectionPhoto:
     task = await _get_task(db, task_id)
     if task.status != "执行中":
         raise AppException(
             message="任务未在'执行中'状态，不能上传照片"
         )
+    if file is None:
+        raise AppException(message="请提供照片文件")
 
     filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = os.path.normpath(os.path.join(_UPLOAD_DIR, filename))
@@ -273,7 +327,7 @@ async def upload_photo(
 
     photo_data = {
         "task_id": str(task_id),
-        "equipment_id": str(equipment_id),
+        "equipment_id": str(equipment_id) if equipment_id else None,
         "file_name": file.filename or "unknown",
         "file_path": file_path,
         "file_size": len(content),
@@ -322,7 +376,14 @@ async def get_history(
     if date_to:
         conditions.append(ITask.planned_date <= date_to)
     if equipment_id:
-        conditions.append(ITask.equipment_id == equipment_id)
+        conditions.append(
+            or_(
+                ITask.equipment_id == equipment_id,
+                cast(ITask.equipment_ids, String).like(
+                    f'%"{equipment_id}"%'
+                ),
+            )
+        )
     if route_id:
         conditions.append(ITask.route_id == route_id)
     if result:
@@ -337,6 +398,7 @@ async def get_history(
             selectinload(ITask.route).selectinload(InspectionRoute.equipments_rel),
             selectinload(ITask.equipment),
             selectinload(ITask.template),
+            selectinload(ITask.assignee),
         )
         .where(and_(*conditions))
         .order_by(ITask.planned_date.desc(), ITask.created_at.desc())

@@ -7,6 +7,7 @@ from app.modules.equipment.models.calibration import (
 from app.modules.equipment.models.equipment import (
     Equipment,
     EquipmentCategory,
+    EquipmentCategoryLink,
     Location,
 )
 from app.modules.equipment.models.failure_code import (
@@ -27,6 +28,12 @@ from app.modules.equipment.models.inspection_template import (
 )
 from app.modules.equipment.models.maintenance_config import MaintenanceConfig
 from app.modules.equipment.models.maintenance_plan import MaintenancePlan
+from app.modules.equipment.models.personnel import (
+    EquipmentPersonnel,
+    EquipmentPersonnelCategory,
+    EquipmentPersonnelRole,
+    EquipmentRole,
+)
 from app.modules.equipment.models.spare_part import (
     EquipmentSparePart,
     SparePart,
@@ -41,6 +48,11 @@ __all__ = [
     "CalibrationRecord",
     "Equipment",
     "EquipmentCategory",
+    "EquipmentCategoryLink",
+    "EquipmentPersonnel",
+    "EquipmentPersonnelCategory",
+    "EquipmentPersonnelRole",
+    "EquipmentRole",
     "FailureAction",
     "FailureCause",
     "FailureSymptom",

@@ -19,6 +19,7 @@ from app.modules.equipment.service.equipment import (
     delete_equipment_category,
     delete_location,
     generate_equipment_no,
+    get_departments_for_select,
     get_equipment_by_id,
     get_equipment_categories,
     get_equipment_category_by_id,
@@ -76,6 +77,7 @@ from app.modules.equipment.service.inspection import (
 from app.modules.equipment.service.inspection import (
     upload_photo as upload_inspection_photo,
 )
+from app.modules.equipment.service.ai import analyze_inspection_photo
 from app.modules.equipment.service.inspection_template import (
     add_template_item,
     complete_inspection,
@@ -98,6 +100,24 @@ from app.modules.equipment.service.maintenance_plan import (
     get_maintenance_plans,
     get_overdue_maintenance_plans,
     update_maintenance_plan,
+)
+from app.modules.equipment.service.personnel import (
+    add_personnel,
+    assign_roles,
+    create_role,
+    delete_personnel,
+    delete_role,
+    get_candidates,
+    get_personnel,
+    get_personnel_by_id,
+    get_role,
+    get_role_by_code,
+    list_personnel,
+    list_roles,
+    refresh_feishu,
+    update_categories,
+    update_personnel,
+    update_role,
 )
 from app.modules.equipment.service.spare_part import (
     adjust_stock,
@@ -137,6 +157,8 @@ from app.modules.equipment.service.work_order_image import (
 )
 
 __all__ = [
+    # ai
+    "analyze_inspection_photo",
     # calibration
     "create_calibration_plan",
     "create_calibration_record",
@@ -155,6 +177,7 @@ __all__ = [
     "delete_equipment_category",
     "delete_location",
     "generate_equipment_no",
+    "get_departments_for_select",
     "get_equipment_by_id",
     "get_equipment_categories",
     "get_equipment_category_by_id",
@@ -222,4 +245,21 @@ __all__ = [
     "upload_images",
     "get_work_order_images",
     "delete_work_order_image",
+    # personnel
+    "add_personnel",
+    "assign_roles",
+    "create_role",
+    "delete_personnel",
+    "delete_role",
+    "get_candidates",
+    "get_personnel",
+    "get_personnel_by_id",
+    "get_role",
+    "get_role_by_code",
+    "list_personnel",
+    "list_roles",
+    "refresh_feishu",
+    "update_categories",
+    "update_personnel",
+    "update_role",
 ]

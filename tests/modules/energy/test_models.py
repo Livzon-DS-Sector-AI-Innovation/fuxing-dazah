@@ -12,7 +12,7 @@ from app.modules.energy.models import (
 class TestEnergyDeviceConfig:
     def test_create_instance(self, sample_device_config_data):
         config = EnergyDeviceConfig(**sample_device_config_data)
-        assert config.platform_code == "platform_a"
+        assert config.platform_code == "zhiheng"
         assert config.platform_device_code == "WD-001"
         assert config.energy_type == "water"
         assert config.is_enabled is True
@@ -38,8 +38,8 @@ class TestEnergyData:
 class TestEnums:
     def test_energy_type_values(self):
         assert EnergyType.ELECTRICITY.value == "electricity"
-        assert EnergyType.STEAM.value == "steam"
         assert EnergyType.WATER.value == "water"
+        assert EnergyType.GAS.value == "gas"
 
     def test_monitor_level_values(self):
         assert MonitorLevel.NORMAL.value == "normal"

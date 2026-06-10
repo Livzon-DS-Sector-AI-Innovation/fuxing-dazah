@@ -3,7 +3,7 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -75,6 +75,7 @@ async def get_routes(
 
     stmt = (
         select(InspectionRoute)
+        .options(selectinload(InspectionRoute.equipments_rel))
         .where(and_(*conditions))
         .order_by(InspectionRoute.created_at.desc())
         .offset((page - 1) * page_size)
@@ -121,24 +122,44 @@ async def delete_route(db: AsyncSession, route_id: uuid.UUID) -> bool:
 async def set_route_equipments(
     db: AsyncSession, route_id: uuid.UUID, items: list[dict]
 ) -> list[InspectionRouteEquipment]:
+    # 获取当前活跃记录
     old_result = await db.execute(
         select(InspectionRouteEquipment).where(
             InspectionRouteEquipment.route_id == route_id,
             InspectionRouteEquipment.is_deleted == False,  # noqa: E712
         )
     )
-    for o in old_result.scalars().all():
-        o.is_deleted = True
+    old_records = list(old_result.scalars().all())
+    old_ids = {r.equipment_id for r in old_records}
+    old_by_id = {r.equipment_id: r for r in old_records}
 
-    result = []
+    new_ids = {item["equipment_id"] for item in items}
+
+    # 删除：旧有但新 items 中没有的记录
+    to_delete_ids = old_ids - new_ids
+    for r in old_records:
+        if r.equipment_id in to_delete_ids:
+            r.is_deleted = True
+
+    # 新增：新 items 中有但旧记录中没有的设备
+    to_add_ids = new_ids - old_ids
+    result: list[InspectionRouteEquipment] = []
     for item in items:
-        re_ = InspectionRouteEquipment(
-            route_id=route_id,
-            equipment_id=item["equipment_id"],
-            sort_order=item.get("sort_order", 0),
-        )
-        db.add(re_)
-        result.append(re_)
+        if item["equipment_id"] in to_add_ids:
+            re_ = InspectionRouteEquipment(
+                route_id=route_id,
+                equipment_id=item["equipment_id"],
+                sort_order=item.get("sort_order", 0),
+            )
+            db.add(re_)
+            result.append(re_)
+        else:
+            # 已存在：更新 sort_order
+            existing = old_by_id.get(item["equipment_id"])
+            if existing:
+                existing.sort_order = item.get("sort_order", existing.sort_order)
+                result.append(existing)
+
     await db.flush()
     return result
 
@@ -186,6 +207,7 @@ async def create_task(
             selectinload(InspectionTask.route).selectinload(InspectionRoute.equipments_rel),
             selectinload(InspectionTask.equipment),
             selectinload(InspectionTask.template),
+            selectinload(InspectionTask.assignee),
         )
         .where(InspectionTask.id == task.id)
     )
@@ -201,6 +223,7 @@ async def get_task_by_id(
             selectinload(InspectionTask.route).selectinload(InspectionRoute.equipments_rel),
             selectinload(InspectionTask.equipment),
             selectinload(InspectionTask.template),
+            selectinload(InspectionTask.assignee),
         )
         .where(
             InspectionTask.id == task_id,
@@ -230,7 +253,14 @@ async def get_tasks(
     if assigned_to:
         conditions.append(InspectionTask.assigned_to == assigned_to)
     if equipment_id:
-        conditions.append(InspectionTask.equipment_id == equipment_id)
+        conditions.append(
+            or_(
+                InspectionTask.equipment_id == equipment_id,
+                cast(InspectionTask.equipment_ids, String).like(
+                    f'%"{equipment_id}"%'
+                ),
+            )
+        )
     if planned_date_from:
         conditions.append(InspectionTask.planned_date >= planned_date_from)
     if planned_date_to:
@@ -247,6 +277,7 @@ async def get_tasks(
             selectinload(InspectionTask.route).selectinload(InspectionRoute.equipments_rel),
             selectinload(InspectionTask.equipment),
             selectinload(InspectionTask.template),
+            selectinload(InspectionTask.assignee),
         )
         .where(and_(*conditions))
         .order_by(
@@ -305,6 +336,9 @@ async def get_records_by_task(
 async def create_photo(
     db: AsyncSession, data: dict
 ) -> InspectionPhoto:
+    # equipment_id 为 None 时（线路巡检照片）不传入构造
+    if data.get("equipment_id") is None:
+        data = {k: v for k, v in data.items() if k != "equipment_id" or v is not None}
     photo = InspectionPhoto(**data)
     db.add(photo)
     await db.flush()

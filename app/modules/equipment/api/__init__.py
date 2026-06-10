@@ -22,6 +22,7 @@ from app.modules.equipment.api.maintainers import router as maintainers_router
 from app.modules.equipment.api.maintenance_plans import (
     router as maintenance_plans_router,
 )
+from app.modules.equipment.api.personnel import router as personnel_router
 from app.modules.equipment.api.spare_parts import (
     router as spare_parts_router,
 )
@@ -60,5 +61,6 @@ router.include_router(images_router, prefix="/maintenance/work-orders")
 router.include_router(claim_router, prefix="/maintenance/work-orders")
 router.include_router(config_router, prefix="/maintenance/config")
 router.include_router(maintainers_router, prefix="/maintenance/staff")
+router.include_router(personnel_router, prefix="/personnel")
 # 巡检模块路由（独立于维修工单）
 router.include_router(inspection_router, prefix="/inspection")

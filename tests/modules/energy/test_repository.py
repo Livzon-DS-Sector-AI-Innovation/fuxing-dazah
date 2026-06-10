@@ -11,7 +11,7 @@ from app.modules.energy import repository as repo
 async def test_create_and_get_device_config(db_session, sample_device_config_data):
     created = await repo.create_device_config(db_session, sample_device_config_data)
     assert created.id is not None
-    assert created.platform_code == "platform_a"
+    assert created.platform_code == "zhiheng"
 
     fetched = await repo.get_device_config_by_id(db_session, created.id)
     assert fetched is not None
@@ -56,10 +56,10 @@ async def test_soft_delete_device_config(db_session, sample_device_config_data):
 @pytest.mark.asyncio
 async def test_exists_device_config(db_session, sample_device_config_data):
     await repo.create_device_config(db_session, sample_device_config_data)
-    exists = await repo.exists_device_config(db_session, "platform_a", "WD-001")
+    exists = await repo.exists_device_config(db_session, "zhiheng", "WD-001")
     assert exists is True
 
-    not_exists = await repo.exists_device_config(db_session, "platform_a", "WD-999")
+    not_exists = await repo.exists_device_config(db_session, "zhiheng", "WD-999")
     assert not_exists is False
 
 
@@ -67,7 +67,7 @@ async def test_exists_device_config(db_session, sample_device_config_data):
 async def test_exists_device_config_exclude_id(db_session, sample_device_config_data):
     created = await repo.create_device_config(db_session, sample_device_config_data)
     exists = await repo.exists_device_config(
-        db_session, "platform_a", "WD-001", exclude_id=created.id
+        db_session, "zhiheng", "WD-001", exclude_id=created.id
     )
     assert exists is False
 
@@ -105,6 +105,6 @@ async def test_get_enabled_devices_by_platform(db_session, sample_device_config_
     }
     await repo.create_device_config(db_session, disabled)
 
-    devices = await repo.get_enabled_devices_by_platform(db_session, "platform_a")
+    devices = await repo.get_enabled_devices_by_platform(db_session, "zhiheng")
     assert len(devices) == 1
     assert devices[0].is_enabled is True

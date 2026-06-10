@@ -105,7 +105,12 @@ class EquipmentCreate(BaseModel):
     """创建设备请求"""
 
     name: str = Field(..., min_length=1, max_length=200, description="设备名称")
-    category_id: uuid.UUID = Field(..., description="设备分类ID")
+    equipment_no: str = Field(
+        ..., min_length=1, max_length=50, description="设备编号（手动输入，需唯一）"
+    )
+    category_ids: list[uuid.UUID] = Field(
+        ..., min_length=1, description="设备分类ID列表（支持多分类）"
+    )
     location_id: uuid.UUID = Field(..., description="设备位置ID")
     status: EquipmentStatus = Field(
         default="在用", description="设备状态：在用/备用/维修中/停用/报废"
@@ -128,6 +133,9 @@ class EquipmentCreate(BaseModel):
     asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
     depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
     technical_params: dict | None = Field(default=None, description="技术参数")
+    department_id: uuid.UUID | None = Field(
+        default=None, description="归属部门ID，逻辑引用 identity.departments.id"
+    )
 
 
 class EquipmentUpdate(BaseModel):
@@ -136,7 +144,9 @@ class EquipmentUpdate(BaseModel):
     name: str | None = Field(
         default=None, min_length=1, max_length=200, description="设备名称"
     )
-    category_id: uuid.UUID | None = Field(default=None, description="设备分类ID")
+    category_ids: list[uuid.UUID] | None = Field(
+        default=None, min_length=1, description="设备分类ID列表（支持多分类）"
+    )
     location_id: uuid.UUID | None = Field(default=None, description="设备位置ID")
     status: EquipmentStatus | None = Field(
         default=None, description="设备状态：在用/备用/维修中/停用/报废"
@@ -159,6 +169,9 @@ class EquipmentUpdate(BaseModel):
     asset_value: float | None = Field(default=None, ge=0, description="资产原值（元）")
     depreciation_years: int | None = Field(default=None, ge=1, description="折旧年限")
     technical_params: dict | None = Field(default=None, description="技术参数")
+    department_id: uuid.UUID | None = Field(
+        default=None, description="归属部门ID，逻辑引用 identity.departments.id"
+    )
 
 
 class EquipmentResponse(BaseModel):
@@ -167,7 +180,8 @@ class EquipmentResponse(BaseModel):
     id: uuid.UUID
     equipment_no: str
     name: str
-    category_id: uuid.UUID
+    category_ids: list[uuid.UUID] = Field(default_factory=list)
+    category_names: str | None = None
     location_id: uuid.UUID
     status: EquipmentStatus
     model: str | None
@@ -182,6 +196,9 @@ class EquipmentResponse(BaseModel):
     asset_value: float | None
     depreciation_years: int | None
     technical_params: dict | None
+    department_id: uuid.UUID | None = None
+    department_name: str | None = None
+    responsible_person_name: str | None = None
     created_at: datetime
     updated_at: datetime
     created_by: uuid.UUID | None

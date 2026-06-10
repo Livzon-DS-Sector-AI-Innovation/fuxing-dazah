@@ -21,6 +21,13 @@ logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+
+# 抑制第三方库的 DEBUG 日志噪音
+logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +35,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
+    from app.modules.energy.scheduler import (
+        energy_collection_loop,
+        stop_energy_collection_flag,
+    )
     from app.platform.integrations.feishu.sync import (
         member_sync_loop,
         stop_member_sync_flag,
@@ -37,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     member_task = asyncio.ensure_future(member_sync_loop())
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
+    energy_task = asyncio.ensure_future(energy_collection_loop())
 
     logger.info("Background tasks started")
 
@@ -44,8 +56,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stop_member_sync_flag.set()
     stop_timeout_flag.set()
+    stop_energy_collection_flag.set()
     member_task.cancel()
     timeout_task.cancel()
+    energy_task.cancel()
     logger.info("Background tasks stopped")
 
 

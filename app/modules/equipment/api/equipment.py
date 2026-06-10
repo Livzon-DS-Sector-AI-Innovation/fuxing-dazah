@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser
 from app.core.response import paginated_response, success_response
+from app.modules.equipment import repository as repo
 from app.modules.equipment import service
 from app.modules.equipment.schemas import (
     EquipmentCategoryCreate,
@@ -26,6 +27,21 @@ from app.modules.equipment.schemas import (
 )
 
 router = APIRouter()
+
+
+async def _equipment_to_response(equipment, db=None) -> EquipmentResponse:
+    """将 ORM Equipment 转为响应对象，填充多分类信息及部门信息"""
+    resp = EquipmentResponse.model_validate(equipment)
+    links = getattr(equipment, "category_links", []) or []
+    resp.category_ids = [link.category_id for link in links if not link.is_deleted]
+    names = [link.category.name for link in links if not link.is_deleted and link.category]
+    resp.category_names = "、".join(names) if names else None
+    if equipment.department_id and db:
+        dept_info = await repo.get_department_info(db, equipment.department_id)
+        if dept_info:
+            resp.department_name = dept_info["name"]
+            resp.responsible_person_name = dept_info["leader_name"]
+    return resp
 
 
 # ==================== 设备分类 ====================
@@ -154,6 +170,16 @@ async def delete_location(
     return success_response(message="删除成功")
 
 
+# ==================== 部门列表（供设备表单下拉使用） ====================
+@router.get("/departments", summary="获取部门列表（供设备表单下拉使用）")
+async def get_departments_list(
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """获取可选部门列表，含部门名称和负责人姓名"""
+    departments = await service.get_departments_for_select(db)
+    return success_response(data=departments)
+
+
 # ==================== 设备管理 ====================
 @router.post("/equipments", summary="创建设备")
 async def create_equipment(
@@ -163,13 +189,14 @@ async def create_equipment(
 ) -> JSONResponse:
     """创建设备"""
     equipment = await service.create_equipment(db, data)
-    return success_response(data=EquipmentResponse.model_validate(equipment))
+    return success_response(data=await _equipment_to_response(equipment, db))
 
 
 @router.get("/equipments", summary="获取设备列表")
 async def get_equipments(
     category_id: uuid.UUID | None = Query(None, description="设备分类ID"),
     location_id: uuid.UUID | None = Query(None, description="设备位置ID"),
+    department_id: uuid.UUID | None = Query(None, description="归属部门ID"),
     status: str | None = Query(None, description="设备状态"),
     keyword: str | None = Query(None, description="关键词搜索"),
     page: int = Query(1, ge=1, description="页码"),
@@ -178,10 +205,13 @@ async def get_equipments(
 ) -> JSONResponse:
     """获取设备列表"""
     equipments, total = await service.get_equipments(
-        db, category_id, location_id, status, keyword, page, page_size
+        db, category_id, location_id, department_id, status, keyword, page, page_size
     )
+    equipment_responses = []
+    for e in equipments:
+        equipment_responses.append(await _equipment_to_response(e, db))
     return paginated_response(
-        data=[EquipmentResponse.model_validate(e) for e in equipments],
+        data=equipment_responses,
         page=page,
         page_size=page_size,
         total=total,
@@ -204,7 +234,7 @@ async def get_equipment(
 ) -> JSONResponse:
     """获取设备详情"""
     equipment = await service.get_equipment_by_id(db, equipment_id)
-    return success_response(data=EquipmentResponse.model_validate(equipment))
+    return success_response(data=await _equipment_to_response(equipment, db))
 
 
 @router.put("/equipments/{equipment_id}", summary="更新设备")
@@ -216,7 +246,7 @@ async def update_equipment(
 ) -> JSONResponse:
     """更新设备"""
     equipment = await service.update_equipment(db, equipment_id, data)
-    return success_response(data=EquipmentResponse.model_validate(equipment))
+    return success_response(data=await _equipment_to_response(equipment, db))
 
 
 @router.delete("/equipments/{equipment_id}", summary="删除设备")

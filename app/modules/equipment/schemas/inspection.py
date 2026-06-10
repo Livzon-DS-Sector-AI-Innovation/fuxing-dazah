@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 # ── 枚举 ──
 InspectionPeriodType = Literal["每日", "每周", "每月", "专项"]
 InspectionTaskStatus = Literal["待执行", "执行中", "已完成", "已关闭"]
-InspectionPlanType = Literal["日常巡检", "周巡检", "月巡检", "专项巡检"]
+InspectionPlanType = Literal["线路巡检", "设备巡检"]
 InspectionOverallResult = Literal["正常", "异常"]
 CheckResult = Literal["正常", "异常", "跳过"]
 
@@ -108,9 +108,11 @@ class InspectionTaskCreate(BaseModel):
     equipment_ids: list[uuid.UUID] | None = Field(
         default=None, min_length=1, description="设备ID列表（多设备模式）"
     )
-    template_id: uuid.UUID = Field(..., description="检查模板ID")
+    template_id: uuid.UUID | None = Field(
+        default=None, description="检查模板ID（线路巡检时可选，从路线默认模板获取）"
+    )
     plan_type: InspectionPlanType = Field(
-        default="专项巡检", description="巡检类型"
+        default="设备巡检", description="巡检类型"
     )
     assigned_to: uuid.UUID | None = Field(
         default=None, description="巡检人员ID"
@@ -149,6 +151,7 @@ class InspectionTaskResponse(BaseModel):
     completed_at: datetime | None
     closed_at: datetime | None
     closure_remark: str | None
+    route_summary: str | None = None
     created_at: datetime
     updated_at: datetime
     route_name: str | None = None
@@ -199,18 +202,59 @@ class InspectionRecordResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ═══════════ 线路巡检提交 ═══════════
+class RouteCheckSubmit(BaseModel):
+    """线路巡检提交请求"""
+
+    overall_result: InspectionOverallResult = Field(
+        ..., description="总体结果：正常/异常"
+    )
+    route_summary: str | None = Field(
+        default=None, description="现场描述"
+    )
+
+
 # ═══════════ 巡检照片 ═══════════
 class InspectionPhotoResponse(BaseModel):
     """巡检照片响应"""
 
     id: uuid.UUID
     task_id: uuid.UUID
-    equipment_id: uuid.UUID
+    equipment_id: uuid.UUID | None = None
     file_name: str
     file_size: int | None
     uploaded_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ═══════════ AI 分析 ═══════════
+class InspectionAIAnalyzeRequest(BaseModel):
+    """AI 分析请求"""
+
+    image_base64: str = Field(..., description="图片的 base64 编码")
+    image_mime_type: str = Field(
+        default="image/jpeg", description="图片 MIME 类型"
+    )
+
+
+class InspectionAIItemResult(BaseModel):
+    """单检查项 AI 分析结果"""
+
+    template_item_id: uuid.UUID = Field(..., description="检查项ID")
+    item_name: str = Field(..., description="检查项名称")
+    expected_result: str | None = Field(default=None, description="预期结果")
+    result: str = Field(..., description="结果：正常/异常/跳过")
+    actual_value: str | None = Field(default=None, description="实际值")
+    remark: str | None = Field(default=None, description="备注")
+
+
+class InspectionAIAnalyzeResponse(BaseModel):
+    """AI 分析响应"""
+
+    items: list[InspectionAIItemResult] = Field(
+        default_factory=list, description="分析结果列表"
+    )
 
 
 # ═══════════ 历史详情 ═══════════

@@ -170,7 +170,7 @@ async def complete_work_order(
     """提交完成"""
     wo = await _get_work_order(db, work_order_id)
 
-    is_repair = wo.order_type in ("故障维修", "校准")
+    is_repair = wo.order_type in ("故障维修", "校准", "异常处理")
     target = "待验收" if is_repair else "已完成"
     _validate_transition(wo.status, target)
 
@@ -197,7 +197,7 @@ async def verify_work_order(
 ) -> WorkOrder:
     """验收工单"""
     wo = await _get_work_order(db, work_order_id)
-    if wo.order_type not in ("故障维修", "校准"):
+    if wo.order_type not in ("故障维修", "校准", "异常处理"):
         raise AppException(message=f"工单类型 '{wo.order_type}' 不支持验收")
 
     wo.verified_by = verifier_id

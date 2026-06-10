@@ -188,18 +188,22 @@ async def create_equipment(
     data: EquipmentCreate,
 ) -> Equipment:
     """创建设备"""
-    category = await get_equipment_category_by_id(db, data.category_id)
+    # 校验编号唯一性
+    existing = await repo.get_equipment_by_no(db, data.equipment_no)
+    if existing:
+        raise DuplicateException("设备编号", data.equipment_no)
+
+    # 验证所有分类
+    for cid in data.category_ids:
+        await get_equipment_category_by_id(db, cid)
     await get_location_by_id(db, data.location_id)
 
-    equipment_no = await generate_equipment_no(db, category.code)
-
     equipment_data = data.model_dump()
-    equipment_data["equipment_no"] = equipment_no
 
     try:
         return await repo.create_equipment(db, equipment_data)
     except IntegrityError:
-        raise DuplicateException("设备编号", equipment_no)
+        raise DuplicateException("设备编号", data.equipment_no)
 
 
 async def get_equipment_by_id(
@@ -217,6 +221,7 @@ async def get_equipments(
     db: AsyncSession,
     category_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
+    department_id: uuid.UUID | None = None,
     status: str | None = None,
     keyword: str | None = None,
     page: int = 1,
@@ -224,7 +229,7 @@ async def get_equipments(
 ) -> tuple[list[Equipment], int]:
     """获取设备列表"""
     return await repo.get_equipments(
-        db, category_id, location_id, status, keyword, page, page_size
+        db, category_id, location_id, department_id, status, keyword, page, page_size
     )
 
 
@@ -234,19 +239,16 @@ async def update_equipment(
     data: EquipmentUpdate,
 ) -> Equipment:
     """更新设备"""
-    equipment = await get_equipment_by_id(db, equipment_id)
+    await get_equipment_by_id(db, equipment_id)
 
-    if data.category_id is not None:
-        await get_equipment_category_by_id(db, data.category_id)
+    if data.category_ids is not None:
+        for cid in data.category_ids:
+            await get_equipment_category_by_id(db, cid)
     if data.location_id is not None:
         await get_location_by_id(db, data.location_id)
 
     update_data = data.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(equipment, key, value)
-    await db.flush()
-    await db.refresh(equipment)
-    return equipment
+    return await repo.update_equipment(db, equipment_id, update_data)
 
 
 async def delete_equipment(
@@ -263,3 +265,8 @@ async def delete_equipment(
 async def get_equipment_statistics(db: AsyncSession) -> dict[str, Any]:
     """获取设备统计"""
     return await repo.get_equipment_statistics(db)
+
+
+async def get_departments_for_select(db: AsyncSession) -> list[dict[str, Any]]:
+    """获取可选部门列表（含负责人），供下拉使用"""
+    return await repo.get_departments_for_select(db)

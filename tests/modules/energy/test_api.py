@@ -10,7 +10,7 @@ async def test_create_device_config_api(client, sample_device_config_data):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["data"]["platform_code"] == "platform_a"
+    assert data["data"]["platform_code"] == "zhiheng"
 
 
 @pytest.mark.asyncio
@@ -20,7 +20,7 @@ async def test_list_device_configs_api(client, sample_device_config_data):
     )
 
     response = await client.get(
-        "/api/v1/energy/devices?platform_code=platform_a"
+        "/api/v1/energy/devices?platform_code=zhiheng"
     )
     assert response.status_code == 200
     data = response.json()
@@ -72,7 +72,7 @@ async def test_delete_device_config_api(client, sample_device_config_data):
 async def test_trigger_collection_api(client):
     response = await client.post(
         "/api/v1/energy/collect/trigger",
-        json={"platform_code": "platform_a"},
+        json={"platform_code": "zhiheng"},
     )
     assert response.status_code == 200
 

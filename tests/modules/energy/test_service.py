@@ -17,7 +17,7 @@ from app.modules.energy.schemas import (
 async def test_create_device_config_service(db_session, sample_device_config_data):
     data = EnergyDeviceConfigCreate(**sample_device_config_data)
     obj = await service.create_device_config(db_session, data)
-    assert obj.platform_code == "platform_a"
+    assert obj.platform_code == "zhiheng"
 
 
 @pytest.mark.asyncio
@@ -57,10 +57,10 @@ async def test_delete_device_config_service(db_session, sample_device_config_dat
 
 @pytest.mark.asyncio
 async def test_trigger_collection_no_devices(db_session):
-    request = CollectTriggerRequest(platform_code="platform_a")
+    request = CollectTriggerRequest(platform_code="zhiheng")
     result = await service.trigger_collection(db_session, request)
-    assert result["platform_a"]["status"] == "success"
-    assert result["platform_a"]["device_count"] == 0
+    assert result["zhiheng"]["status"] == "success"
+    assert result["zhiheng"]["device_count"] == 0
 
 
 @pytest.mark.asyncio

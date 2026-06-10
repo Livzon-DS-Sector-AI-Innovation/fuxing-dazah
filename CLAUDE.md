@@ -118,6 +118,7 @@ uv run alembic downgrade -1
 - 不提交临时调试代码、`print` 或无用注释。
 - 中文业务名可以写在 API `summary`、`description` 和文档中；代码标识符使用英文。
 - **SQLAlchemy async 铁律：禁止 `db.refresh()`、禁止直接赋值未加载的 relationship。写操作后统一用 `select+selectinload` eager re-fetch 返回对象。**（不遵守会出 MissingGreenlet）
+- 设计数据库表时，不要用外键约束。
 
 ## AI 工作流程
 

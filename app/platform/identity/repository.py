@@ -9,7 +9,10 @@ class UserRepository:
         self, session: AsyncSession, open_id: str,
     ) -> User | None:
         result = await session.execute(
-            select(User).where(User.feishu_open_id == open_id),
+            select(User).where(
+                User.feishu_open_id == open_id,
+                User.is_deleted == False,  # noqa: E712
+            ),
         )
         return result.scalar_one_or_none()
 
@@ -17,7 +20,10 @@ class UserRepository:
         self, session: AsyncSession, user_id: str,
     ) -> User | None:
         result = await session.execute(
-            select(User).where(User.feishu_user_id == user_id),
+            select(User).where(
+                User.feishu_user_id == user_id,
+                User.is_deleted == False,  # noqa: E712
+            ),
         )
         return result.scalar_one_or_none()
 

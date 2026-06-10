@@ -9,6 +9,7 @@ class PlatformBAdapter(BasePlatformAdapter):
     """平台 B 适配器"""
 
     platform_code = "platform_b"
+    platform_name = "平台B（待接入）"
 
     async def fetch_energy_data(
         self,

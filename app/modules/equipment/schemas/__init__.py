@@ -35,6 +35,9 @@ from app.modules.equipment.schemas.failure_code import (
 from app.modules.equipment.schemas.inspection import (
     CheckResult,
     EquipmentCheckResult,
+    InspectionAIAnalyzeRequest,
+    InspectionAIAnalyzeResponse,
+    InspectionAIItemResult,
     InspectionOverallResult,
     InspectionPeriodType,
     InspectionPhotoResponse,
@@ -51,6 +54,7 @@ from app.modules.equipment.schemas.inspection import (
     InspectionTaskResponse,
     InspectionTaskStatus,
     InspectionTaskUpdate,
+    RouteCheckSubmit,
     RouteEquipmentResponse,
 )
 from app.modules.equipment.schemas.inspection_template import (
@@ -75,6 +79,23 @@ from app.modules.equipment.schemas.maintenance_plan import (
     MaintenancePlanStatus,
     MaintenancePlanType,
     MaintenancePlanUpdate,
+)
+from app.modules.equipment.schemas.personnel import (
+    CandidateResponse,
+    FeishuRefreshResult,
+    PersonnelAddRequest,
+    PersonnelAddResult,
+    PersonnelCategoryAssign,
+    PersonnelCategoryInfo,
+    PersonnelCategoryItem,
+    PersonnelListResponse,
+    PersonnelResponse,
+    PersonnelRoleAssign,
+    PersonnelRoleInfo,
+    PersonnelUpdate,
+    RoleCreate,
+    RoleResponse,
+    RoleUpdate,
 )
 from app.modules.equipment.schemas.spare_part import (
     EquipmentSparePartCreate,
@@ -127,6 +148,10 @@ __all__ = [
     "FailureCodeCreate",
     "FailureCodeUpdate",
     "FailureCodeResponse",
+    # inspection AI
+    "InspectionAIAnalyzeRequest",
+    "InspectionAIAnalyzeResponse",
+    "InspectionAIItemResult",
     # inspection template
     "InspectionCompleteRequest",
     "InspectionRecordItem",
@@ -182,6 +207,24 @@ __all__ = [
     # maintenance config
     "ClaimTimeoutConfig",
     "ClaimTimeoutUpdateRequest",
+    # inspection
+    "RouteCheckSubmit",
     # work order image
     "WorkOrderImageResponse",
+    # personnel
+    "CandidateResponse",
+    "FeishuRefreshResult",
+    "PersonnelAddRequest",
+    "PersonnelAddResult",
+    "PersonnelCategoryAssign",
+    "PersonnelCategoryInfo",
+    "PersonnelCategoryItem",
+    "PersonnelListResponse",
+    "PersonnelResponse",
+    "PersonnelRoleAssign",
+    "PersonnelRoleInfo",
+    "PersonnelUpdate",
+    "RoleCreate",
+    "RoleResponse",
+    "RoleUpdate",
 ]

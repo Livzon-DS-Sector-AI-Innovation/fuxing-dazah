@@ -14,6 +14,8 @@ from app.core.response import paginated_response, success_response
 from app.modules.equipment import repository as repo
 from app.modules.equipment.schemas.inspection import (
     EquipmentCheckResult,
+    InspectionAIAnalyzeRequest,
+    InspectionAIItemResult,
     InspectionPhotoResponse,
     InspectionRecordResponse,
     InspectionRouteCreate,
@@ -25,6 +27,7 @@ from app.modules.equipment.schemas.inspection import (
     InspectionTaskCreate,
     InspectionTaskDetailResponse,
     InspectionTaskResponse,
+    RouteCheckSubmit,
     RouteEquipmentResponse,
 )
 from app.modules.equipment.service import inspection as inspection_svc
@@ -125,8 +128,15 @@ async def list_routes(
         page=page,
         page_size=page_size,
     )
+    resp_list = []
+    for r in routes:
+        resp = InspectionRouteResponse.model_validate(r)
+        resp.equipment_count = (
+            len(r.equipments_rel) if r.equipments_rel else 0
+        )
+        resp_list.append(resp)
     return paginated_response(
-        data=[InspectionRouteResponse.model_validate(r) for r in routes],
+        data=resp_list,
         page=page,
         page_size=page_size,
         total=total,
@@ -281,6 +291,19 @@ async def complete_task(
     return success_response(data=_task_to_response(task))
 
 
+@router.post("/tasks/{task_id}/route-check", summary="提交线路巡检结果")
+async def submit_route_check(
+    task_id: uuid.UUID,
+    data: RouteCheckSubmit,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+) -> JSONResponse:
+    task = await inspection_svc.submit_route_check(
+        db, task_id, data.overall_result, data.route_summary
+    )
+    return success_response(data=_task_to_response(task))
+
+
 @router.put("/tasks/{task_id}/close", summary="关闭任务")
 async def close_task(
     task_id: uuid.UUID,
@@ -337,6 +360,25 @@ async def upload_equipment_photo(
     )
 
 
+@router.post(
+    "/tasks/{task_id}/photos",
+    summary="上传任务级照片（线路巡检用）",
+)
+async def upload_task_photo(
+    task_id: uuid.UUID,
+    file: UploadFile = File(..., description="照片文件"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+) -> JSONResponse:
+    _require_user(current_user)
+    photo = await inspection_svc.upload_photo(
+        db, task_id, equipment_id=None, file=file
+    )
+    return success_response(
+        data=InspectionPhotoResponse.model_validate(photo)
+    )
+
+
 @router.get("/tasks/{task_id}/photos", summary="获取任务所有照片")
 async def get_task_photos(
     task_id: uuid.UUID,
@@ -375,6 +417,41 @@ async def remove_photo(
     _require_user(current_user)
     await inspection_svc.delete_photo(db, photo_id)
     return success_response(message="照片已删除")
+
+
+# ═══════════ AI 分析 ═══════════
+@router.post(
+    "/tasks/{task_id}/equipments/{equipment_id}/ai-analyze",
+    summary="AI 分析巡检照片",
+)
+async def ai_analyze_photo(
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    data: InspectionAIAnalyzeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    from app.modules.equipment.service.ai import analyze_inspection_photo
+
+    results = await analyze_inspection_photo(
+        db=db,
+        task_id=task_id,
+        equipment_id=equipment_id,
+        image_base64=data.image_base64,
+        image_mime_type=data.image_mime_type,
+    )
+    return success_response(
+        data=[
+            InspectionAIItemResult(
+                template_item_id=uuid.UUID(r["template_item_id"]),
+                item_name=r["item_name"],
+                expected_result=r["expected_result"],
+                result=r["result"],
+                actual_value=r["actual_value"],
+                remark=r["remark"],
+            )
+            for r in results
+        ]
+    )
 
 
 # ═══════════ 历史 ═══════════
