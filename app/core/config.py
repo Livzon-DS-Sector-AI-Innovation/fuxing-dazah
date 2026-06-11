@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     FEISHU_SYNC_ROOT_DEPT_ID: str = ""   # 部门同步的根部门 ID（API 触发）
     FEISHU_SYNC_MEMBER_DEPT_ID: str = ""  # 成员同步的目标部门 ID（每日 00:00）
 
+    # Feishu WebSocket 长连接（接收消息/事件推送）
+    FEISHU_WS_ENABLED: bool = True
+
     # Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10

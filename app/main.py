@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
     energy_task = asyncio.ensure_future(energy_collection_loop())
 
+    # 飞书 WebSocket 长连接
+    if settings.FEISHU_WS_ENABLED:
+        from app.platform.integrations.feishu.event_handler import set_main_loop
+        from app.platform.integrations.feishu.ws_client import start_ws_client
+
+        set_main_loop(asyncio.get_running_loop())
+        start_ws_client()
+
     logger.info("Background tasks started")
 
     yield
@@ -60,6 +68,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     member_task.cancel()
     timeout_task.cancel()
     energy_task.cancel()
+
+    if settings.FEISHU_WS_ENABLED:
+        from app.platform.integrations.feishu.ws_client import stop_ws_client
+
+        stop_ws_client()
+
     logger.info("Background tasks stopped")
 
 
