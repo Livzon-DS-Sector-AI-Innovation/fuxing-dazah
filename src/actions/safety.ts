@@ -308,6 +308,17 @@ export async function uploadHazardPhoto(id: string, file: File) {
   return response.json()
 }
 
+export async function uploadRectificationPhoto(id: string, file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/hazards/${id}/upload-rectification-photo`,
+    { method: 'POST', body: formData }
+  )
+  revalidatePath('/safety/hazard')
+  return response.json()
+}
+
 export async function runHazardAI(hazardId: string, scriptNumber: number) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${hazardId}/ai/run/${scriptNumber}`,

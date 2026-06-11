@@ -231,7 +231,7 @@ export default function HazardAIResultPanel({
               <Tag>{CATEGORY_LABELS[hazard.hazard_category] || hazard.hazard_category}</Tag>
             ) : '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="重点缺陷">
+          <Descriptions.Item label="隐患重点">
             {hazard.key_defect || '-'}
           </Descriptions.Item>
           <Descriptions.Item label="隐患描述" span={2}>

@@ -25,7 +25,6 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   PlusOutlined,
   SearchOutlined,
-  PlayCircleOutlined,
   CheckCircleOutlined,
   SafetyCertificateOutlined,
   RobotOutlined,
@@ -42,7 +41,6 @@ import { useSafetyStore } from '@/stores/safety'
 import {
   getHazards,
   updateHazard,
-  startRectification,
   reviewHazardAI,
   runHazardAI,
   deleteHazards,
@@ -146,20 +144,6 @@ export default function HazardLedgerPage() {
   const handleSearch = () => {
     setHazardQueryParams({ page: 1 })
     loadData()
-  }
-
-  const handleStartRectification = async (id: string) => {
-    try {
-      const response = await startRectification(id)
-      if (response.code === 200) {
-        message.success('已开始整改')
-        updateHazardInStore(id, response.data)
-      } else {
-        message.error(response.message || '操作失败')
-      }
-    } catch {
-      message.error('操作失败')
-    }
   }
 
   // ── 整改回复 ──
@@ -339,20 +323,9 @@ export default function HazardLedgerPage() {
         </Button>
       )
     }
-    // 3. 整改状态机
-    if (record.rectification_status === 'pending' && record.status === 'open') {
-      return (
-        <Button
-          type="link"
-          size="small"
-          icon={<PlayCircleOutlined />}
-          onClick={() => handleStartRectification(record.id)}
-        >
-          开始整改
-        </Button>
-      )
-    }
-    if (record.rectification_status === 'in_progress') {
+    // 3. 整改状态机（pending 和 in_progress 均可直接整改回复）
+    if (record.rectification_status === 'pending' || record.rectification_status === 'in_progress') {
+      if (record.status !== 'open') return <Text type="secondary">-</Text>
       return (
         <Button
           type="link"
@@ -377,6 +350,7 @@ export default function HazardLedgerPage() {
       )
     }
     if (record.rectification_status === 'level1_approved') {
+      const nextLabel = record.hazard_level === 'general' ? '三级复核' : '二级复核'
       return (
         <Button
           type="link"
@@ -384,7 +358,7 @@ export default function HazardLedgerPage() {
           icon={<SafetyCertificateOutlined />}
           onClick={() => handleVerifyLevel(record)}
         >
-          二级复核
+          {nextLabel}
         </Button>
       )
     }
