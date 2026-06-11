@@ -36,11 +36,20 @@ async def _equipment_to_response(equipment, db=None) -> EquipmentResponse:
     resp.category_ids = [link.category_id for link in links if not link.is_deleted]
     names = [link.category.name for link in links if not link.is_deleted and link.category]
     resp.category_names = "、".join(names) if names else None
+    # 填充部门信息
     if equipment.department_id and db:
         dept_info = await repo.get_department_info(db, equipment.department_id)
         if dept_info:
             resp.department_name = dept_info["name"]
-            resp.responsible_person_name = dept_info["leader_name"]
+            # 负责人：优先用设备独立设置的 responsible_person_id；否则由部门负责人推导
+            if not equipment.responsible_person_id:
+                resp.responsible_person_name = dept_info["leader_name"]
+                resp.responsible_person_id = dept_info.get("leader_id")
+    # 负责人名称：如果独立设置了 responsible_person_id，从用户表查找
+    if equipment.responsible_person_id and db:
+        resp.responsible_person_name = await repo.get_user_name_by_id(
+            db, equipment.responsible_person_id
+        )
     return resp
 
 

@@ -196,6 +196,9 @@ class Equipment(BaseModel):
     department_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True, comment="归属部门ID，逻辑引用 identity.departments.id"
     )
+    responsible_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="负责人ID，逻辑引用 identity.users.id；未设置时由部门负责人推导"
+    )
 
     # 关系
     category_links: Mapped[list["EquipmentCategoryLink"]] = relationship(

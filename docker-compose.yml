@@ -31,6 +31,33 @@ services:
       sh -c "uv run alembic upgrade head &&
              uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
+  init:
+    profiles:
+      - init
+    build: .
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      DATABASE_URL: ${APP_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/dazah}
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./assets:/app/assets:ro
+    command: >
+      sh -c "
+        echo '=== 同步部门 ===' &&
+        uv run python -X utf8 scripts/tmp/sync_lizhu_departments.py &&
+        echo '=== 同步人员 ===' &&
+        uv run python -X utf8 scripts/tmp/sync_lizhu_members.py &&
+        echo '=== 导入设备 ===' &&
+        uv run python -X utf8 scripts/tmp/import_equipment.py &&
+        echo '=== 初始化完成 ==='
+      "
+
   db:
     image: postgres:17
     restart: unless-stopped

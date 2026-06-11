@@ -136,6 +136,9 @@ class EquipmentCreate(BaseModel):
     department_id: uuid.UUID | None = Field(
         default=None, description="归属部门ID，逻辑引用 identity.departments.id"
     )
+    responsible_person_id: uuid.UUID | None = Field(
+        default=None, description="负责人ID，逻辑引用 identity.users.id；未设置时由部门负责人推导"
+    )
 
 
 class EquipmentUpdate(BaseModel):
@@ -172,6 +175,9 @@ class EquipmentUpdate(BaseModel):
     department_id: uuid.UUID | None = Field(
         default=None, description="归属部门ID，逻辑引用 identity.departments.id"
     )
+    responsible_person_id: uuid.UUID | None = Field(
+        default=None, description="负责人ID，逻辑引用 identity.users.id；未设置时由部门负责人推导"
+    )
 
 
 class EquipmentResponse(BaseModel):
@@ -198,6 +204,7 @@ class EquipmentResponse(BaseModel):
     technical_params: dict | None
     department_id: uuid.UUID | None = None
     department_name: str | None = None
+    responsible_person_id: uuid.UUID | None = None
     responsible_person_name: str | None = None
     created_at: datetime
     updated_at: datetime
