@@ -330,12 +330,12 @@ async def _create_anomaly_work_order(
     if await repo.exists_unclosed_work_order(db, task.id, equipment_id):
         return None
 
-    # 获取部门负责人作为工单责任人
-    responsible_user_id: uuid.UUID | None = None
-    if equipment.department_id:
-        responsible_user_id = await repo.get_department_leader_user_id(
-            db, equipment.department_id
-        )
+    # 获取工单责任人：优先使用设备独立设置的负责人，否则由部门负责人推导
+    responsible_user_id: uuid.UUID | None = equipment.responsible_person_id
+    if not responsible_user_id and equipment.department_id:
+        dept_info = await repo.get_department_info(db, equipment.department_id)
+        if dept_info:
+            responsible_user_id = dept_info.get("leader_id")
 
     # 构建异常描述
     desc_parts: list[str] = []
