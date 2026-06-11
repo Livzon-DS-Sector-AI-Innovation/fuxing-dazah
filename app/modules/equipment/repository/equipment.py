@@ -619,3 +619,20 @@ async def get_department_info(
     if row is None:
         return None
     return dict(row._mapping)
+
+
+async def get_department_leader_user_id(
+    db: AsyncSession, department_id: uuid.UUID
+) -> uuid.UUID | None:
+    """获取部门负责人的 User.id（UUID），通过 feishu_open_id 关联"""
+    from app.platform.identity.models import Department, User
+
+    result = await db.execute(
+        select(User.id)
+        .join(Department, Department.leader_user_id == User.feishu_open_id)
+        .where(
+            Department.id == department_id,
+            Department.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()

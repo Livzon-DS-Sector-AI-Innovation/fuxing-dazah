@@ -191,3 +191,37 @@ async def get_material_consumptions(
         .order_by(SparePartTransaction.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def exists_unclosed_work_order(
+    db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
+) -> bool:
+    """检查某巡检任务+设备是否已有未关闭工单"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
+async def get_pending_work_orders_by_inspection_task(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[WorkOrder]:
+    """查询某巡检任务关联的未处理工单（状态非已完成/已关闭）"""
+    result = await db.execute(
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.equipment))
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at)
+    )
+    return list(result.scalars().all())
