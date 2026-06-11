@@ -36,16 +36,19 @@ def _require_user(current_user: CurrentUser) -> uuid.UUID:
 
 def _to_response(wo) -> WorkOrderResponse:
     """将 ORM WorkOrder 转为响应对象，填充关联名称"""
-    # 异步环境下写操作返回的对象未 eager load images 关系
-    # 提前检测并填充空列表，避免 model_validate 触发懒加载报 MissingGreenlet
+    # 异步环境下写操作返回的对象可能未 eager load images 关系
+    # 提前检测，直接跳过懒加载赋值，在 resp 上补充空列表
+    has_images = True
     try:
         insp = sa_inspect(wo)
         if insp.attrs.images.loaded_value is NO_VALUE:
-            wo.images = []
+            has_images = False
     except MissingGreenlet:
-        wo.images = []
+        has_images = False
 
     resp = WorkOrderResponse.model_validate(wo)
+    if not has_images:
+        resp.images = []
     if wo.reporter:
         resp.reporter_name = wo.reporter.name
     if wo.assignee:

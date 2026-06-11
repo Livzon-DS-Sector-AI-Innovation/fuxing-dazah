@@ -102,7 +102,8 @@ async def create_work_order(
             work_order = await repo.create_work_order(db, wo_data)
             # 设备状态改为维修中
             await _update_equipment_status(db, data.equipment_id, "维修中")
-            return work_order
+            # eager re-fetch，避免返回对象触发懒加载 MissingGreenlet
+            return await repo.get_work_order_by_id(db, work_order.id)
         except IntegrityError:
             if attempt < _MAX_RETRIES - 1:
                 await db.rollback()
