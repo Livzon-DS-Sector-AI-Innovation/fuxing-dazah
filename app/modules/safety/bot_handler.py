@@ -9,19 +9,20 @@
 
 import json
 import logging
-import uuid
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.modules.safety.models import HazardReport
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.feishu.notification import send_user_card
+from app.modules.safety.models import HazardReport
 
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+# UUID 已在 card value 中转为字符串，notification 层 _json_dumps 兜底
 
 # 临时缓存：open_id → {"image_path": str, "sender_name": str}
 _pending: dict[str, dict[str, str]] = {}
@@ -42,6 +43,7 @@ INSPECTION_CATEGORIES = [
 async def _download_message_resource(message_id: str, file_key: str, resource_type: str) -> bytes:
     """下载消息中的资源文件。"""
     import httpx
+
     from app.modules.safety.feishu.client import get_safety_feishu_client as get_client
     from app.modules.safety.feishu.client import get_safety_tenant_token as get_token
 
@@ -203,8 +205,12 @@ async def _send_form_card(open_id: str, image_saved: bool) -> None:
     card = _build_form_card(image_saved)
     card_json = json.dumps(card, ensure_ascii=False)
 
-    from app.modules.safety.feishu.client import get_safety_feishu_client, get_safety_tenant_token
     from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
+
+    from app.modules.safety.feishu.client import (
+        get_safety_feishu_client,
+        get_safety_tenant_token,
+    )
 
     client = await get_safety_feishu_client()
     token = await get_safety_tenant_token(client)
@@ -376,8 +382,13 @@ async def handle_card_action(event: dict) -> None:
     elif isinstance(action_value, str):
         act_type = action_value
 
+    if act_type == "approve_hazard":
+        hazard_id = action_value.get("hazard_id", 0) if isinstance(action_value, dict) else 0
+        open_message_id = event.get("context", {}).get("open_message_id", "")
+        return await _handle_approve(open_id, hazard_id, open_message_id)
+
     if act_type != "submit_hazard":
-        logger.info("卡片事件非 submit_hazard，忽略: act_type=%s", act_type)
+        logger.info("卡片事件未识别的 action，忽略: act_type=%s", act_type)
         return
 
     # 从缓存获取图片路径和发送者信息
@@ -407,7 +418,15 @@ async def handle_card_action(event: dict) -> None:
 
     if item:
         detail_url = f"{settings.FRONTEND_URL}/safety/hazard/{item.id}"
-        status = "已完成 AI 分析" if not item.ai_error_message else "AI 分析异常"
+
+        # 状态文案：AI 完成后为"待审核确认"，异常为"AI分析异常"，其他为"已登记"
+        if item.ai_error_message:
+            status_text = "AI 分析异常"
+        elif item.overall_status == "completed":
+            status_text = "待审核确认"
+        else:
+            status_text = "已登记"
+
         await send_user_card(
             open_id=open_id,
             title="✅ 隐患登记成功",
@@ -416,18 +435,29 @@ async def handle_card_action(event: dict) -> None:
                 f"**检查类别：** {inspection_category}\n"
                 f"**地点/部位：** {location}\n"
                 f"**责任部门：** {department}\n"
-                f"**描述：** {description}\n"
-                f"**状态：** {status}\n\n"
-                f"[📋 查看详情]({detail_url})"
+                f"**描述：** {item.description or description}\n"
+                f"**状态：** {status_text}"
             ),
             elements=[{
                 "tag": "action",
-                "actions": [{
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "📋 前往台账"},
-                    "type": "primary",
-                    "url": detail_url,
-                }],
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "📋 前往台账"},
+                        "type": "default",
+                        "url": detail_url,
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "✅ 审核通过"},
+                        "type": "primary",
+                        "value": {"action": "approve_hazard", "hazard_id": str(item.id)},
+                        "confirm": {
+                            "title": {"tag": "plain_text", "content": "确认审核"},
+                            "text": {"tag": "plain_text", "content": "确认审核通过？审核后隐患将正式进入整改流程。"},
+                        },
+                    },
+                ],
             }],
         )
     else:
@@ -436,6 +466,81 @@ async def handle_card_action(event: dict) -> None:
             title="❌ 登记失败",
             content="隐患创建失败，请重试或手动登记。",
         )
+
+
+async def _handle_approve(open_id: str, hazard_id: int, open_message_id: str = "") -> dict | None:
+    """处理审核通过操作：将隐患从 AI 审核阶段转入整改流程，返回更新后的卡片（通过 WebSocket 响应）。"""
+    if not hazard_id:
+        logger.warning("审核通过缺少 hazard_id")
+        await send_user_card(open_id=open_id, title="❌ 操作失败", content="缺少隐患 ID。")
+        return None
+
+    session = await _get_db_session()
+    try:
+        from app.modules.safety.service import SafetyService
+
+        service = SafetyService(session)
+        import uuid
+        hazard_uuid = uuid.UUID(str(hazard_id)) if not isinstance(hazard_id, uuid.UUID) else hazard_id
+        item = await service.review_hazard_ai_script(hazard_uuid, 0, "approved")
+        await session.commit()
+
+        if not item:
+            await send_user_card(open_id=open_id, title="❌ 操作失败",
+                                 content="隐患不存在或状态不允许审核。")
+            return None
+
+        logger.info("审核通过成功: hazard_id=%s hazard_no=%s open_id=%s",
+                     hazard_id, item.hazard_no, open_id)
+
+        detail_url = f"{settings.FRONTEND_URL}/safety/hazard/{item.id}"
+
+        # 返回更新后的卡片 → 由 event_client 通过 WebSocket 响应帧发回飞书
+        # 飞书 card.action.trigger 回调要求响应格式：{"card": {"type": "raw", "data": <card JSON>}}
+        updated_card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": "✅ 隐患登记成功"},
+                "template": "orange",
+            },
+            "elements": [
+                {"tag": "markdown", "content": (
+                    f"**隐患编号：** {item.hazard_no}\n"
+                    f"**检查类别：** {item.inspection_category or '-'}\n"
+                    f"**地点/部位：** {item.location or '-'}\n"
+                    f"**责任部门：** {item.department or '-'}\n"
+                    f"**描述：** {item.description or '-'}\n"
+                    f"**状态：** 已审核通过，进入整改流程"
+                )},
+                {"tag": "action", "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "📋 前往台账"},
+                        "type": "default",
+                        "url": detail_url,
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "✅ 已审核通过"},
+                        "type": "primary",
+                        "disabled": True,
+                    },
+                ]},
+            ],
+        }
+        return {
+            "toast": {"type": "success", "content": "审核通过，隐患已进入整改流程"},
+            "card": {"type": "raw", "data": updated_card},
+        }
+
+    except Exception:
+        logger.exception("审核通过失败: hazard_id=%s", hazard_id)
+        await session.rollback()
+        await send_user_card(open_id=open_id, title="❌ 操作失败",
+                             content="审核操作异常，请重试或在网页端操作。")
+        return None
+    finally:
+        await session.close()
 
 
 async def _handle_query(open_id: str, keyword: str) -> None:

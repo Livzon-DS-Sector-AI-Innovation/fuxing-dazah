@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import base64
 import json
 import logging
 import ssl
@@ -38,16 +39,19 @@ def on_event(event_type: str):
     return decorator
 
 
-async def _dispatch(event_type: str, event_data: dict[str, Any]) -> None:
-    """分发事件给注册的处理器。"""
+async def _dispatch(event_type: str, event_data: dict[str, Any]) -> Any:
+    """分发事件给注册的处理器，返回第一个处理器的返回值（用于 card.action.trigger 响应）。"""
     handlers = _handlers.get(event_type, [])
     if handlers:
         logger.info("分发安全飞书事件: type=%s", event_type)
+        result = None
         for handler in handlers:
             try:
-                await handler(event_data)
+                result = await handler(event_data)
             except Exception:
                 logger.exception("事件处理器异常: %s", handler.__name__)
+        return result
+    return None
 
 
 async def _get_ws_url() -> str | None:
@@ -131,10 +135,19 @@ async def start_ws() -> None:
                                 msg_type = None
 
                             if msg_type == MessageType.EVENT:
-                                # 事件帧 → 解析 JSON payload
+                                # 事件帧 → 解析 JSON payload 并发送响应
                                 event = json.loads(frame.payload.decode("utf-8"))
                                 logger.info("📨 安全飞书收到事件(完整): %s", json.dumps(event, ensure_ascii=False)[:800])
-                                await _dispatch_event(event)
+                                result = await _dispatch_event(event)
+
+                                # 发送 WebSocket 响应帧（否则飞书会超时）
+                                resp = {"code": 200}
+                                if result is not None:
+                                    resp["data"] = base64.b64encode(
+                                        json.dumps(result, ensure_ascii=False).encode("utf-8")
+                                    ).decode("utf-8")
+                                frame.payload = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+                                await ws.send(frame.SerializeToString())
                             else:
                                 logger.debug("安全飞书收到非事件帧: type=%s", msg_type)
                         except Exception as e:
@@ -166,8 +179,8 @@ async def start_ws() -> None:
     logger.info("安全飞书 WebSocket 客户端已停止")
 
 
-async def _dispatch_event(event: dict[str, Any]) -> None:
-    """解析并分发单个事件。"""
+async def _dispatch_event(event: dict[str, Any]) -> Any:
+    """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。"""
     # v2 格式: {"schema": "2.0", "header": {"event_type": "..."}, "event": {...}}
     header = event.get("header", {})
     event_type = header.get("event_type", "")
@@ -179,9 +192,10 @@ async def _dispatch_event(event: dict[str, Any]) -> None:
 
     if event_type:
         event_data = event.get("event", event)
-        await _dispatch(event_type, event_data)
+        return await _dispatch(event_type, event_data)
     else:
         logger.debug("安全飞书无法确定事件类型: %s", json.dumps(event, ensure_ascii=False)[:200])
+        return None
 
 
 async def stop_ws() -> None:
