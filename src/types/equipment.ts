@@ -80,6 +80,7 @@ export interface Equipment {
   updated_by: string | null
   department_id: string | null
   department_name: string | null
+  responsible_person_id: string | null
   responsible_person_name: string | null
   category?: EquipmentCategory
   location?: Location
@@ -100,6 +101,7 @@ export interface CreateEquipmentInput {
   commissioning_date?: string
   description?: string
   department_id?: string
+  responsible_person_id?: string
 }
 
 export interface UpdateEquipmentInput {
@@ -116,6 +118,7 @@ export interface UpdateEquipmentInput {
   commissioning_date?: string
   description?: string
   department_id?: string
+  responsible_person_id?: string | null
 }
 
 // 列表和筛选
@@ -236,7 +239,7 @@ export interface CreateWorkOrderInput {
   maintenance_plan_id?: string
   planned_start_date?: string
   checklist_template_id?: string
-  responsible_person_id?: string
+  responsible_person_id: string
 }
 
 export interface UpdateWorkOrderInput {
@@ -605,6 +608,7 @@ export interface InspectionTemplateListResponse {
 export interface InspectionRecordItem {
   item_id: string
   result: string
+  actual_value?: string
   remark?: string
 }
 
@@ -674,4 +678,5 @@ export interface DepartmentOption {
   name: string
   leader_name: string | null
   leader_user_id: string | null
+  leader_id: string | null
 }

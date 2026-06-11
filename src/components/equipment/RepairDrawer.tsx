@@ -6,7 +6,8 @@ import { PlusOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd/es/upload'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createWorkOrder, uploadWorkOrderImages } from '@/actions/equipment'
-import { CreateWorkOrderInput, FailureCode } from '@/types/equipment'
+import { CreateWorkOrderInput, FailureCode, Maintainer } from '@/types/equipment'
+import { fetchMaintainersClient } from '@/lib/api/equipment-client'
 
 const { TextArea } = Input
 
@@ -21,6 +22,7 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
   const [form] = Form.useForm()
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const [maintainers, setMaintainers] = useState<Maintainer[]>([])
   const { repairDrawerOpen, repairEquipmentId, closeRepairDrawer } = useEquipmentStore()
 
   const selectedEquipment = equipments.find(e => e.id === repairEquipmentId)
@@ -35,6 +37,7 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         priority: defaultPriority,
       })
       setFileList([])
+      fetchMaintainersClient().then(setMaintainers).catch(() => {})
     }
   }, [repairDrawerOpen, repairEquipmentId, form, selectedEquipment?.importance])
 
@@ -48,11 +51,17 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         priority: values.priority,
         fault_symptom_id: values.fault_symptom_id || undefined,
         fault_description: values.fault_description || undefined,
+        responsible_person_id: values.responsible_person_id,
       }
-      const result: any = await createWorkOrder(data)
-      const workOrderId = result?.id
+      const result = await createWorkOrder(data)
+      const workOrderId = (result as { id?: string } | null)?.id
 
-      if (workOrderId && fileList.length > 0) {
+      if (!workOrderId) {
+        message.error('工单创建失败，请稍后重试')
+        return
+      }
+
+      if (fileList.length > 0) {
         const formData = new FormData()
         fileList.forEach((file) => {
           if (file.originFileObj) {
@@ -120,6 +129,17 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         </Form.Item>
         <Form.Item name="fault_description" label="故障描述">
           <TextArea placeholder="请描述故障情况" rows={4} maxLength={500} showCount />
+        </Form.Item>
+        <Form.Item name="responsible_person_id" label="责任人" rules={[{ required: true, message: '请选择责任人' }]}>
+          <Select
+            placeholder="选择责任人"
+            showSearch
+            optionFilterProp="label"
+            options={maintainers.map((m) => ({
+              label: `${m.name} (${m.employee_no || '-'})`,
+              value: m.user_id,
+            }))}
+          />
         </Form.Item>
         <Form.Item label="故障图片">
           <Upload
