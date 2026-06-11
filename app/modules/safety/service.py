@@ -1,5 +1,6 @@
 """Safety business workflows."""
 
+import asyncio
 import logging
 import os
 import uuid
@@ -68,6 +69,8 @@ from app.platform.integrations.ai.prompts import (
     STANDALONE_WORKFLOW_CONFIG,
     build_prompt,
 )
+from app.modules.safety.feishu.notification import send_user_card
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +308,30 @@ class SafetyService:
             hazard_id, {"defect_photos": json.dumps(photos, ensure_ascii=False)}
         )
 
+    async def upload_rectification_photo(
+        self, hazard_id: uuid.UUID, file_path: str
+    ) -> HazardReport | None:
+        """保存整改后图片路径，追加到 rectification_photos JSON 数组"""
+        import json
+
+        hazard = await self.repo.get_hazard_by_id(hazard_id)
+        if not hazard:
+            return None
+        safe_path = file_path.replace("\\", "/")
+        try:
+            photos = json.loads(hazard.rectification_photos) if hazard.rectification_photos else []
+        except (json.JSONDecodeError, TypeError):
+            try:
+                photos = json.loads(hazard.rectification_photos.replace("\\", "/"))
+            except Exception:
+                photos = []
+        if not isinstance(photos, list):
+            photos = []
+        photos.append(safe_path)
+        return await self.repo.update_hazard(
+            hazard_id, {"rectification_photos": json.dumps(photos, ensure_ascii=False)}
+        )
+
     async def start_rectification(self, hazard_id: uuid.UUID) -> HazardReport | None:
         """开始整改"""
         hazard = await self.repo.get_hazard_by_id(hazard_id)
@@ -354,9 +381,9 @@ class SafetyService:
         user_id: uuid.UUID,
         user_name: str,
     ) -> HazardReport | None:
-        """整改回复：in_progress → replied"""
+        """整改回复：pending / in_progress → replied"""
         hazard = await self.repo.get_hazard_by_id(hazard_id)
-        if not hazard or hazard.rectification_status != "in_progress":
+        if not hazard or hazard.rectification_status not in ("pending", "in_progress"):
             return None
         update_data: dict[str, Any] = {
             "rectification_status": "replied",
@@ -367,7 +394,13 @@ class SafetyService:
         }
         if rectification_photos is not None:
             update_data["rectification_photos"] = rectification_photos
-        return await self.repo.update_hazard(hazard_id, update_data)
+        updated = await self.repo.update_hazard(hazard_id, update_data)
+
+        # 整改回复后，通知一级复核人
+        if updated:
+            asyncio.create_task(self._send_verify_notification(updated, 1))
+
+        return updated
 
     async def verify_level(
         self,
@@ -378,18 +411,31 @@ class SafetyService:
         user_id: uuid.UUID,
         user_name: str,
     ) -> HazardReport | None:
-        """三级复核：按级别审批或驳回"""
+        """三级复核：按级别审批或驳回。
+
+        一般隐患：仅需一级（部门负责人）+ 三级（隐患发现人），跳过二级。
+        较大/重大隐患：三级全流程。
+        """
         hazard = await self.repo.get_hazard_by_id(hazard_id)
         if not hazard:
             return None
+
+        # 判断是否一般隐患（可跳过二级复核）
+        is_general = hazard.hazard_level == "general"
 
         # 检查当前状态是否允许该级别复核
         if level == 1 and hazard.rectification_status != "replied":
             return None
         if level == 2 and hazard.verify_level_1_status != "approved":
             return None
-        if level == 3 and hazard.verify_level_2_status != "approved":
-            return None
+        if level == 3:
+            # 一般隐患：一级通过后可直接三级复核
+            if is_general:
+                if hazard.verify_level_1_status != "approved":
+                    return None
+            else:
+                if hazard.verify_level_2_status != "approved":
+                    return None
 
         now = datetime.now()
         if action == "rejected":
@@ -404,7 +450,20 @@ class SafetyService:
             return await self.repo.update_hazard(hazard_id, update_data)
 
         # action == "approved"
-        if level == 3:
+        if level == 1 and is_general:
+            # 一般隐患：一级通过后自动跳过二级，状态直接到 level2_approved
+            update_data: dict[str, Any] = {
+                "rectification_status": "level2_approved",
+                "verify_level_1_status": "approved",
+                "verify_level_1_by": user_id,
+                "verify_level_1_by_name": user_name,
+                "verify_level_1_at": now,
+                "verify_level_1_opinion": opinion,
+                "verify_level_2_status": "approved",
+                "verify_level_2_by_name": "（自动通过：一般隐患）",
+                "verify_level_2_at": now,
+            }
+        elif level == 3:
             update_data = {
                 "rectification_status": "closed",
                 "status": "closed",
@@ -424,7 +483,17 @@ class SafetyService:
                 f"verify_level_{level}_at": now,
                 f"verify_level_{level}_opinion": opinion,
             }
-        return await self.repo.update_hazard(hazard_id, update_data)
+        updated = await self.repo.update_hazard(hazard_id, update_data)
+
+        # 审核通过后，通知下一级复核人
+        if updated and action == "approved":
+            if level == 1 and is_general:
+                # 一般隐患：跳过二级，直接通知三级
+                asyncio.create_task(self._send_verify_notification(updated, 3))
+            elif level < 3:
+                asyncio.create_task(self._send_verify_notification(updated, level + 1))
+
+        return updated
 
     async def rework_rectification(
         self,
@@ -462,7 +531,13 @@ class SafetyService:
         }
         if rectification_photos is not None:
             update_data["rectification_photos"] = rectification_photos
-        return await self.repo.update_hazard(hazard_id, update_data)
+        updated = await self.repo.update_hazard(hazard_id, update_data)
+
+        # 重新整改后，通知一级复核人
+        if updated:
+            asyncio.create_task(self._send_verify_notification(updated, 1))
+
+        return updated
 
     async def delete_hazard(self, hazard_id: uuid.UUID) -> bool:
         """删除隐患"""
@@ -721,7 +796,111 @@ class SafetyService:
         else:
             return None
 
-        return await self.repo.update_hazard(hazard_id, update_data)
+        updated = await self.repo.update_hazard(hazard_id, update_data)
+
+        # 审核通过后，异步推送飞书通知
+        if action == "approved" and updated:
+            asyncio.create_task(self._send_hazard_notification(updated))
+
+        return updated
+
+    async def _send_hazard_notification(self, hazard: HazardReport) -> None:
+        """异步发送隐患整改通知到飞书（测试阶段：固定发送给许康福）。"""
+        try:
+            # 测试阶段：固定通知人 open_id（许康福）
+            target_open_id = "ou_5773c42e1fc7ce3e554b83242c87aa0b"
+
+            settings = get_settings()
+            detail_url = f"{settings.FRONTEND_URL}/safety/hazard/{hazard.id}"
+
+            # 隐患等级标签
+            level_labels = {"general": "一般隐患", "serious": "较大隐患", "major": "重大隐患"}
+            level_text = level_labels.get(hazard.hazard_level, hazard.hazard_level or "未分级")
+
+            # 整改期限
+            deadline_text = hazard.deadline.strftime("%Y-%m-%d") if hazard.deadline else "未设置"
+
+            content = (
+                f"**隐患编号：** {hazard.hazard_no or '-'}\n"
+                f"**隐患等级：** {level_text}\n"
+                f"**隐患描述：** {hazard.description or '-'}\n"
+                f"**地点/部位：** {hazard.location or '-'}\n"
+                f"**责任部门：** {hazard.department or '-'}\n"
+                f"**整改期限：** {deadline_text}"
+            )
+
+            elements = [
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "📋 前往整改"},
+                            "type": "primary",
+                            "url": detail_url,
+                        }
+                    ],
+                }
+            ]
+
+            success = await send_user_card(
+                open_id=target_open_id,
+                title="🔔 隐患整改通知",
+                content=content,
+                elements=elements,
+            )
+            if success:
+                logger.info("隐患整改通知已发送: hazard_no=%s, open_id=%s", hazard.hazard_no, target_open_id)
+            else:
+                logger.warning("隐患整改通知发送失败: hazard_no=%s", hazard.hazard_no)
+        except Exception as e:
+            logger.warning("隐患整改通知异常: %s", e)
+
+    async def _send_verify_notification(self, hazard: HazardReport, level: int) -> None:
+        """异步发送复核通知到飞书（测试阶段：固定发送给许康福）。"""
+        try:
+            target_open_id = "ou_5773c42e1fc7ce3e554b83242c87aa0b"
+
+            settings = get_settings()
+            detail_url = f"{settings.FRONTEND_URL}/safety/hazard/{hazard.id}"
+
+            level_labels = {1: "一级", 2: "二级", 3: "三级"}
+            level_text = level_labels.get(level, f"{level}级")
+
+            content = (
+                f"**隐患编号：** {hazard.hazard_no or '-'}\n"
+                f"**隐患描述：** {hazard.description or '-'}\n"
+                f"**地点/部位：** {hazard.location or '-'}\n"
+                f"**责任部门：** {hazard.department or '-'}\n"
+                f"**整改回复：** {hazard.rectification_reply or '-'}\n"
+            )
+
+            elements = [
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": f"📋 前往{level_text}复核"},
+                            "type": "primary",
+                            "url": detail_url,
+                        }
+                    ],
+                }
+            ]
+
+            success = await send_user_card(
+                open_id=target_open_id,
+                title=f"🔔 隐患{level_text}复核通知",
+                content=content,
+                elements=elements,
+            )
+            if success:
+                logger.info("复核通知已发送: hazard_no=%s, level=%s", hazard.hazard_no, level)
+            else:
+                logger.warning("复核通知发送失败: hazard_no=%s, level=%s", hazard.hazard_no, level)
+        except Exception as e:
+            logger.warning("复核通知异常: %s", e)
 
     # ── AI 输出字段约束（DB Enum 限制）──
     _VALID_HAZARD_TYPES = {"unsafe_condition", "unsafe_action", "management_defect", "environmental"}

@@ -1,7 +1,10 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+
+from fastapi.staticfiles import StaticFiles
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -51,13 +54,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
     energy_task = asyncio.ensure_future(energy_collection_loop())
 
-    # 飞书 WebSocket 长连接
+    # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
         from app.platform.integrations.feishu.event_handler import set_main_loop
         from app.platform.integrations.feishu.ws_client import start_ws_client
 
         set_main_loop(asyncio.get_running_loop())
         start_ws_client()
+
+    # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
+    import app.modules.safety.bot_handler as _  # noqa: F401 — 注册事件处理器
+    from app.modules.safety.feishu.event_client import start_ws, stop_ws
+
+    safety_ws_task = asyncio.create_task(start_ws())
 
     logger.info("Background tasks started")
 
@@ -66,10 +75,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     stop_member_sync_flag.set()
     stop_timeout_flag.set()
     stop_energy_collection_flag.set()
+
+    # 停止安全模块 WebSocket
+    await stop_ws()
+    safety_ws_task.cancel()
+
     member_task.cancel()
     timeout_task.cancel()
     energy_task.cancel()
 
+    # 停止平台级 WebSocket
     if settings.FEISHU_WS_ENABLED:
         from app.platform.integrations.feishu.ws_client import stop_ws_client
 
@@ -97,6 +112,11 @@ app.add_middleware(
 app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
+
+# 挂载静态文件目录（图片上传等）
+uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 
 @app.exception_handler(AppException)

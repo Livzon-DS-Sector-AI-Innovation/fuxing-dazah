@@ -338,6 +338,39 @@ async def upload_hazard_photo(
 
 
 @router.post(
+    "/hazards/{hazard_id}/upload-rectification-photo",
+    response_model=ApiResponse,
+    summary="上传整改图片",
+)
+async def upload_rectification_photo(
+    hazard_id: uuid.UUID,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """上传整改后图片，追加到 rectification_photos JSON 数组"""
+    import os
+
+    upload_dir = os.path.join("uploads", "safety", "hazard")
+    os.makedirs(upload_dir, exist_ok=True)
+
+    file_ext = os.path.splitext(file.filename or ".png")[1]
+    safe_name = f"rectification_{hazard_id}_{int(datetime.now().timestamp())}{file_ext}"
+    file_path = os.path.join(upload_dir, safe_name)
+
+    content = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(content)
+
+    service = SafetyService(db)
+    item = await service.upload_rectification_photo(hazard_id, file_path)
+    if not item:
+        return ApiResponse(code=404, message="隐患不存在")
+    await db.commit()
+    return ApiResponse(data=HazardReportResponse.model_validate(item))
+
+
+@router.post(
     "/hazards/{hazard_id}/rectification/start",
     response_model=ApiResponse,
     summary="开始整改",

@@ -182,8 +182,10 @@ class SafetyRepository:
         item = HazardReport(**data)
         self.session.add(item)
         await self.session.flush()
-        await self.session.refresh(item)
-        return item
+        # 用 select 替代 refresh（避免 async MissingGreenlet）
+        stmt = select(HazardReport).where(HazardReport.id == item.id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
 
     async def update_hazard(self, hazard_id: uuid.UUID, data: dict[str, Any]) -> HazardReport | None:
         """更新隐患"""
@@ -207,10 +209,9 @@ class SafetyRepository:
         return result.rowcount > 0
 
     async def count_hazards_today(self, date_prefix: str) -> int:
-        """统计指定日期前缀的隐患编号数量，用于自动生成序号。"""
+        """统计指定日期前缀的隐患编号数量（含软删除），用于自动生成序号。"""
         query = select(func.count(HazardReport.id)).where(
             HazardReport.hazard_no.like(f"HZ-{date_prefix}-%"),
-            HazardReport.is_deleted == False,
         )
         result = await self.session.execute(query)
         return result.scalar() or 0
