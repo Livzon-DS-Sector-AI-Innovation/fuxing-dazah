@@ -8,6 +8,7 @@ import logging
 import uuid
 from datetime import date as date_type
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,10 @@ from app.modules.equipment import repository as repo
 from app.modules.equipment.models.inspection import InspectionTask
 from app.platform.integrations.feishu.message import send_group_card
 from app.platform.integrations.feishu.notification import send_user_card
+
+if TYPE_CHECKING:
+    from app.modules.equipment.models.equipment import Equipment
+    from app.modules.equipment.models.work_order import WorkOrder
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -254,3 +259,67 @@ async def send_inspection_start_notification(
             "❌ send_inspection_start_notification FAILED for task %s: %s: %s",
             task.task_no, type(e).__name__, e,
         )
+
+
+async def send_work_order_notification(
+    work_order: "WorkOrder",
+    equipment: "Equipment",
+    task: InspectionTask,
+    responsible_open_id: str | None,
+) -> None:
+    """向工单负责人发送飞书异常工单通知。
+
+    非关键路径：发送失败只记日志，不影响主流程。
+
+    Args:
+        work_order: 新创建的工单
+        equipment: 关联设备
+        task: 来源巡检任务
+        responsible_open_id: 负责人的 feishu_open_id（可为 None）
+    """
+    if not responsible_open_id:
+        logger.info(
+            "Skipping work order notification: no responsible person open_id "
+            "(work_order_no=%s)",
+            work_order.work_order_no,
+        )
+        return
+
+    try:
+        title = f"⚠️ 异常处理工单通知 - {work_order.work_order_no}"
+        lines = [
+            f"**工单编号：**{work_order.work_order_no}",
+            f"**设备名称：**{equipment.name}",
+            f"**设备编号：**{equipment.equipment_no}",
+            f"**优先级：**{work_order.priority}",
+            f"**异常描述：**{work_order.fault_description or '-'}",
+            f"**来源巡检：**{task.task_no}",
+            "",
+            "请及时处理该工单。",
+        ]
+        content = "\n".join(lines)
+
+        ok = await send_user_card(
+            open_id=responsible_open_id,
+            title=title,
+            content=content,
+        )
+        if ok:
+            logger.info(
+                "✅ Work order notification sent to %s for %s",
+                responsible_open_id,
+                work_order.work_order_no,
+            )
+        else:
+            logger.error(
+                "❌ Failed to send work order notification for %s",
+                work_order.work_order_no,
+            )
+    except Exception as e:
+        logger.error(
+            "❌ send_work_order_notification FAILED for %s: %s: %s",
+            work_order.work_order_no,
+            type(e).__name__,
+            e,
+        )
+
