@@ -7,6 +7,7 @@ UI或组件样式务必遵守：@DESIGN.md
 使用antd组件和配置时，使用context7查询最新参数文档。
 
 ## 技术栈
+使用pnpm做包管理工具
 
 - Next.js 16 + React 19 + TypeScript + Tailwind CSS
 - 组件库：Ant Design V6（antd）

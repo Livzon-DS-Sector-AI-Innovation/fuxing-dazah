@@ -230,9 +230,43 @@ export const moduleMenus: ModuleMenu[] = [
     icon: "users",
     path: "/hr",
     children: [
-      { key: "profile", label: "员工档案", path: "/hr/profile" },
-      { key: "attendance", label: "考勤管理", path: "/hr/attendance" },
-      { key: "training", label: "培训管理", path: "/hr/training" },
+      {
+        key: "old-factory",
+        label: "老厂",
+        path: "/hr/departments",
+        children: [
+          { key: "departments", label: "部门管理", path: "/hr/departments" },
+          { key: "profile", label: "员工档案", path: "/hr/profile" },
+          { key: "onboarding", label: "入职台账", path: "/hr/onboarding" },
+          { key: "departure", label: "离职台账", path: "/hr/departure" },
+          { key: "offboarding", label: "离职管理", path: "/hr/offboarding" },
+          {
+            key: "training",
+            label: "培训管理",
+            path: "/hr/training",
+            children: [
+              { key: "onboarding-training", label: "新员工入职培训", path: "/hr/training/onboarding" },
+              { key: "training-notification", label: "培训通知", path: "/hr/training/notification" },
+              { key: "sign-in-sheet", label: "培训签到表", path: "/hr/training/sign-in" },
+              { key: "ai-exam", label: "AI 出题", path: "/hr/training/ai-exam" },
+              { key: "annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan" },
+              { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger" },
+            ],
+          },
+        ],
+      },
+      {
+        key: "new-factory",
+        label: "新厂",
+        path: "#",
+        children: [
+          { key: "new-departments", label: "部门管理", path: "/hr/new/departments" },
+          { key: "new-profile", label: "员工档案", path: "/hr/new/profile" },
+          { key: "new-onboarding", label: "入职台账", path: "/hr/new/onboarding" },
+          { key: "new-departure", label: "离职台账", path: "/hr/new/departure" },
+          { key: "new-offboarding", label: "离职管理", path: "/hr/new/offboarding" },
+        ],
+      },
     ],
   },
   {
