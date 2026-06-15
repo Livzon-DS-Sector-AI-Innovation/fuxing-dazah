@@ -225,3 +225,51 @@ async def get_pending_work_orders_by_inspection_task(
         .order_by(WorkOrder.created_at)
     )
     return list(result.scalars().all())
+
+
+async def get_user_work_orders(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[WorkOrder]:
+    """查询用户的未关闭工单（指派给我的 + 我是责任人的）"""
+    from sqlalchemy import or_
+
+    result = await db.execute(
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.equipment))
+        .where(
+            or_(
+                WorkOrder.assignee_id == user_id,
+                WorkOrder.responsible_person_id == user_id,
+            ),
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_work_order_by_no(
+    db: AsyncSession,
+    work_order_no: str,
+) -> WorkOrder | None:
+    """根据工单号精确查找工单"""
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.work_order_no == work_order_no,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()

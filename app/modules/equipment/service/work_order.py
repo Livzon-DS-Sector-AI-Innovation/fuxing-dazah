@@ -186,8 +186,38 @@ async def complete_work_order(
         wo.actual_duration = int(delta.total_seconds() / 60)
 
     await db.flush()
-    await db.refresh(wo)
-    return wo
+
+    # 计划维护工单完成时，联动更新维护计划日期
+    if wo.order_type == "计划维护" and wo.maintenance_plan_id:
+        await _update_maintenance_plan_on_completion(
+            db, wo.maintenance_plan_id
+        )
+
+    return await repo.get_work_order_by_id(db, wo.id)
+
+
+async def _update_maintenance_plan_on_completion(
+    db: AsyncSession,
+    maintenance_plan_id: uuid.UUID,
+) -> None:
+    """计划维护工单完成时，自动推进维护计划的日期。"""
+    from datetime import date as date_type
+
+    from app.modules.equipment.service.maintenance_plan import (
+        _calculate_next_maintenance_date,
+    )
+
+    plan = await repo.get_maintenance_plan_by_id(db, maintenance_plan_id)
+    if not plan:
+        return
+
+    today = date_type.today()
+    plan.last_maintenance_date = today
+    plan.next_maintenance_date = _calculate_next_maintenance_date(
+        today, plan.frequency, plan.frequency_unit
+    )
+    # last_generated_date 保持旧值，让 scheduler 下个周期自然触发
+    await db.flush()
 
 
 async def verify_work_order(

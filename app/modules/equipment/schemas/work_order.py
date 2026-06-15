@@ -86,7 +86,7 @@ class WorkOrderResponse(BaseModel):
     fault_cause_id: uuid.UUID | None
     fault_action_id: uuid.UUID | None
     fault_description: str | None
-    reporter_id: uuid.UUID
+    reporter_id: uuid.UUID | None
     assignee_id: uuid.UUID | None
     verified_by: uuid.UUID | None
     reported_at: datetime

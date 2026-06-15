@@ -1,9 +1,11 @@
 """Maintenance plan service: business logic for plans."""
 
+import logging
 import uuid
 from datetime import date as date_type
-from datetime import timedelta
+from datetime import datetime, timedelta
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException
@@ -13,6 +15,10 @@ from app.modules.equipment.schemas import (
     MaintenancePlanCreate,
     MaintenancePlanUpdate,
 )
+
+logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
 
 
 def _calculate_next_maintenance_date(
@@ -152,3 +158,122 @@ async def get_overdue_maintenance_plans(
     """查询到期/逾期的维护计划"""
     threshold = date_type.today() + timedelta(days=days)
     return await repo.get_maintenance_plans_due(db, threshold)
+
+
+async def generate_due_work_orders(
+    db: AsyncSession,
+) -> tuple[int, int]:
+    """扫描到期维护计划，自动创建"计划维护"工单。
+
+    Returns:
+        (created_count, skipped_count) 元组
+    """
+    today = date_type.today()
+
+    # 查询所有到期的启用计划
+    due_plans = await repo.get_maintenance_plans_due(db, today)
+
+    created_count = 0
+    skipped_count = 0
+
+    for plan in due_plans:
+        # 防重：last_generated_date >= next_maintenance_date 则跳过
+        if (
+            plan.last_generated_date is not None
+            and plan.next_maintenance_date is not None
+            and plan.last_generated_date >= plan.next_maintenance_date
+        ):
+            skipped_count += 1
+            continue
+
+        # 校验设备存在且状态有效
+        equipment = await repo.get_equipment_by_id(db, plan.equipment_id)
+        if not equipment:
+            logger.warning(
+                "维护计划 %s (%s) 的设备不存在或已删除，跳过",
+                plan.id,
+                plan.plan_name,
+            )
+            skipped_count += 1
+            continue
+
+        if equipment.status in ("停用", "报废"):
+            logger.info(
+                "维护计划 %s (%s) 的设备状态为 %s，跳过",
+                plan.id,
+                plan.plan_name,
+                equipment.status,
+            )
+            skipped_count += 1
+            continue
+
+        # 检查该计划是否已有未关闭工单（双重保险）
+        has_unclosed = await repo.exists_unclosed_work_order_for_plan(
+            db, plan.id
+        )
+        if has_unclosed:
+            logger.info(
+                "维护计划 %s (%s) 已有未关闭工单，跳过",
+                plan.id,
+                plan.plan_name,
+            )
+            skipped_count += 1
+            continue
+
+        # 生成工单（带重试，处理工单号并发冲突）
+        work_order_created = False
+        for attempt in range(_MAX_RETRIES):
+            wo_no = await _generate_work_order_no(db)
+            wo_data: dict[str, object] = {
+                "work_order_no": wo_no,
+                "equipment_id": plan.equipment_id,
+                "order_type": "计划维护",
+                "priority": "中",
+                "status": "待处理",
+                "reporter_id": None,  # 系统自动生成，无报修人
+                "maintenance_plan_id": plan.id,
+                "responsible_person_id": plan.responsible_person_id,
+                "planned_start_date": plan.next_maintenance_date,
+                "original_equipment_status": equipment.status,
+            }
+            try:
+                await repo.create_work_order(db, wo_data)
+                # 更新计划的 last_generated_date 防重
+                plan.last_generated_date = plan.next_maintenance_date
+                await db.flush()
+
+                created_count += 1
+                work_order_created = True
+                logger.info(
+                    "自动生成工单 %s (计划=%s, 设备=%s)",
+                    wo_no,
+                    plan.plan_name,
+                    equipment.name,
+                )
+                break
+            except IntegrityError:
+                if attempt < _MAX_RETRIES - 1:
+                    await db.rollback()
+                    continue
+                logger.error(
+                    "维护计划 %s 工单号生成失败（重试 %d 次后放弃）",
+                    plan.id,
+                    _MAX_RETRIES,
+                )
+
+        if not work_order_created:
+            skipped_count += 1
+
+    return created_count, skipped_count
+
+
+async def _generate_work_order_no(db: AsyncSession) -> str:
+    """生成工单号：WO-{yyyyMMdd}-{seq:04d}（scheduler 内部使用）"""
+    max_no = await repo.get_max_work_order_no(db)
+    today = datetime.now().strftime("%Y%m%d")
+    if max_no:
+        seq_str = max_no.split("-")[-1]
+        seq = int(seq_str) + 1
+    else:
+        seq = 1
+    return f"WO-{today}-{seq:04d}"

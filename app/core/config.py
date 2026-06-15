@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     # Energy
     ENERGY_AUTO_COLLECT_ENABLED: bool = False
 
+    # Maintenance Plan — 自动生成工单
+    MAINTENANCE_PLAN_AUTO_ENABLED: bool = True
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

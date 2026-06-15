@@ -110,3 +110,22 @@ async def get_maintenance_plans_due(
         .order_by(MaintenancePlan.next_maintenance_date)
     )
     return list(result.scalars().all())
+
+
+async def exists_unclosed_work_order_for_plan(
+    db: AsyncSession,
+    maintenance_plan_id: uuid.UUID,
+) -> bool:
+    """检查某维护计划是否已有未关闭的工单（防重复生成）"""
+    from app.modules.equipment.models.work_order import WorkOrder
+
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.maintenance_plan_id == maintenance_plan_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return (result.scalar() or 0) > 0

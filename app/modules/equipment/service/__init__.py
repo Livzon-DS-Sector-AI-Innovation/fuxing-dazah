@@ -96,6 +96,7 @@ from app.modules.equipment.service.maintenance_config import (
 from app.modules.equipment.service.maintenance_plan import (
     create_maintenance_plan,
     delete_maintenance_plan,
+    generate_due_work_orders,
     get_maintenance_plan_by_id,
     get_maintenance_plans,
     get_overdue_maintenance_plans,
@@ -209,6 +210,7 @@ __all__ = [
     # maintenance plan
     "create_maintenance_plan",
     "delete_maintenance_plan",
+    "generate_due_work_orders",
     "get_maintenance_plan_by_id",
     "get_maintenance_plans",
     "get_overdue_maintenance_plans",

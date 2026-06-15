@@ -18,19 +18,37 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Drop the singular column added by equipment migration
-    op.drop_column('users', 'feishu_department_id', schema='identity')
-    # Add the plural column (JSON array)
-    op.add_column(
-        'users',
-        sa.Column(
-            'feishu_department_ids',
-            sa.Text(),
-            nullable=True,
-            comment='飞书部门ID列表，JSON数组'
-        ),
-        schema='identity'
+    # Drop the singular column if it exists (may have been removed already)
+    conn = op.get_bind()
+    result = conn.execute(
+        sa.text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='identity' AND table_name='users' "
+            "AND column_name='feishu_department_id'"
+        )
     )
+    if result.fetchone():
+        op.drop_column('users', 'feishu_department_id', schema='identity')
+
+    # Add the plural column (JSON array) if not exists
+    result = conn.execute(
+        sa.text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='identity' AND table_name='users' "
+            "AND column_name='feishu_department_ids'"
+        )
+    )
+    if not result.fetchone():
+        op.add_column(
+            'users',
+            sa.Column(
+                'feishu_department_ids',
+                sa.Text(),
+                nullable=True,
+                comment='飞书部门ID列表，JSON数组'
+            ),
+            schema='identity'
+        )
 
 
 def downgrade() -> None:

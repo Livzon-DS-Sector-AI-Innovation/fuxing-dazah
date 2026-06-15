@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         energy_collection_loop,
         stop_energy_collection_flag,
     )
+    from app.modules.equipment.scheduler import (
+        maintenance_plan_loop,
+        stop_maintenance_plan_flag,
+    )
     from app.platform.integrations.feishu.sync import (
         member_sync_loop,
         stop_member_sync_flag,
@@ -52,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     member_task = asyncio.ensure_future(member_sync_loop())
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
     energy_task = asyncio.ensure_future(energy_collection_loop())
+    maintenance_plan_task = asyncio.ensure_future(maintenance_plan_loop())
 
     # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
@@ -89,6 +94,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     stop_member_sync_flag.set()
     stop_timeout_flag.set()
     stop_energy_collection_flag.set()
+    stop_maintenance_plan_flag.set()
 
     # 停止安全模块 WebSocket
     await stop_ws()
@@ -108,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     member_task.cancel()
     timeout_task.cancel()
     energy_task.cancel()
+    maintenance_plan_task.cancel()
 
     # 停止平台级飞书 WebSocket
     from app.platform.integrations.feishu.ws_client import stop_ws_client

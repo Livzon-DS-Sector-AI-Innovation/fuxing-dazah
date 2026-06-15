@@ -103,9 +103,10 @@ class WorkOrder(BaseModel):
     fault_description: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="故障描述"
     )
-    reporter_id: Mapped[uuid.UUID] = mapped_column(
+    reporter_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("identity.users.id"),
-        comment="报修人ID",
+        nullable=True,
+        comment="报修人ID，系统自动生成的工单可为空",
     )
     assignee_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("identity.users.id"),
@@ -202,7 +203,7 @@ class WorkOrder(BaseModel):
         "FailureAction",
         foreign_keys=[fault_action_id],
     )
-    reporter: Mapped[User] = relationship(
+    reporter: Mapped[User | None] = relationship(
         "User",
         foreign_keys=[reporter_id],
     )

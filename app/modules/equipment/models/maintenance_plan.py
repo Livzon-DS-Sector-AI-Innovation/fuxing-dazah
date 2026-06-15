@@ -83,6 +83,9 @@ class MaintenancePlan(BaseModel):
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
     )
+    last_generated_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="最后生成工单的周期日期，用于防重"
+    )
 
     # 关系
     equipment: Mapped[Equipment] = relationship(

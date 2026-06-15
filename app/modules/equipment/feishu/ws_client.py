@@ -312,6 +312,7 @@ async def _handle_message_event(event_data: dict) -> None:
         )
     elif msg_type == "text":
         await _handle_text_command(
+            user_id=user_id,
             open_id=open_id,
             chat_id=chat_id,
             chat_type=chat_type,
@@ -323,6 +324,7 @@ async def _handle_message_event(event_data: dict) -> None:
 
 async def _handle_text_command(
     *,
+    user_id: str,
     open_id: str,
     chat_id: str,
     chat_type: str,
@@ -367,21 +369,51 @@ async def _handle_text_command(
         if text in ("帮助", "help", "?", "？"):
             await send_user_card(
                 open_id=open_id,
-                title="🤖 巡检助手使用说明",
+                title="🤖 设备助手使用说明",
                 receive_id_type="open_id",
                 content=(
-                    "**发送巡检照片**\n"
-                    "直接拍照或发送图片给机器人，"
-                    "系统会自动识别并分析检查项。\n\n"
-                    "**确认结果**\n"
-                    "AI 分析完成后，回复「提交」保存结果，"
-                    "或发送文字修改内容。\n\n"
-                    "**注意事项**\n"
-                    "- 请先在系统中开始巡检任务（状态为「执行中」）\n"
-                    "- 照片应清晰拍摄设备仪表/标识\n"
-                    "- 每张照片会立即进行 AI 分析\n"
-                    "- 分析结果会回复到当前对话"
+                    "**巡检功能**\n"
+                    "直接发送巡检照片，系统自动 AI 分析。\n"
+                    "分析完成后回复「提交」保存结果。\n\n"
+                    "**工单功能**\n"
+                    "发送「工单」或「我的工单」查看您的工单列表\n"
+                    "发送「完成 工单号」提交完成执行中的工单\n"
+                    "发送「完成 工单号 描述」可同时填写维修过程\n\n"
+                    "**示例**\n"
+                    "`完成 WO-20260615-0001`\n"
+                    "`完成 WO-20260615-0001 更换了密封圈`"
                 ),
+            )
+        elif text in ("工单", "我的工单"):
+            from app.modules.equipment.service.work_order_feishu import (
+                list_user_work_orders,
+            )
+
+            await list_user_work_orders(user_id=user_id, open_id=open_id)
+        elif text.startswith("完成"):
+            rest = text[2:].strip()
+            if not rest:
+                await send_user_card(
+                    open_id=open_id,
+                    title="💡 提示",
+                    receive_id_type="open_id",
+                    content="请输入工单号，例如：`完成 WO-20260615-0001`",
+                )
+                return
+
+            parts = rest.split(" ", 1)
+            wo_no = parts[0]
+            detail = parts[1] if len(parts) > 1 else None
+
+            from app.modules.equipment.service.work_order_feishu import (
+                complete_work_order_by_no,
+            )
+
+            await complete_work_order_by_no(
+                user_id=user_id,
+                open_id=open_id,
+                work_order_no=wo_no,
+                repair_detail=detail,
             )
         else:
             await send_user_card(
@@ -389,8 +421,9 @@ async def _handle_text_command(
                 title="💡 提示",
                 receive_id_type="open_id",
                 content=(
-                    "请直接发送巡检照片，我会自动分析。\n"
-                    "发送 **帮助** 查看使用说明。"
+                    "发送巡检照片可直接 AI 分析。\n"
+                    "发送「工单」查看您的工单。\n"
+                    "发送「帮助」查看完整使用说明。"
                 ),
             )
 
