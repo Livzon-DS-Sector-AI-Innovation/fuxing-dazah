@@ -1,4 +1,4 @@
-// safety module TypeScript types
+﻿// safety module TypeScript types
 
 export interface ApiResponse<T = unknown> {
   code: number
@@ -1026,6 +1026,25 @@ export interface HazardIdentificationQueryParams {
   overall_status?: string
   ai_node_progress?: string
   keyword?: string
+  position?: string
+  risk_level?: string
+  date_from?: string
+  date_to?: string
+}
+
+export interface HazardIdentificationStats {
+  total_draft: number
+  total_in_progress: number
+  total_pending_review: number
+  total_completed: number
+}
+
+export interface HazardLedgerStats {
+  total: number
+  level_1: number
+  level_2: number
+  level_3: number
+  level_4: number
 }
 
 export const AI_NODE_PROGRESS_OPTIONS = [
@@ -1193,6 +1212,37 @@ export interface RegulationRevisionQueryParams {
 
 // ============ AI Workflow Config Types ============
 
+/** 调用文档附件项 */
+export interface ReferenceAttachment {
+  id: string
+  /** 附件类型: file（文件上传）/ knowledge（知识库引用） */
+  type: 'file' | 'knowledge'
+  /** 显示名称 */
+  name: string
+  /** 预览 URL（浏览器直接打开） */
+  url: string
+  /** 原始文件名（type=file 时） */
+  original_name?: string
+  /** 文件类型: pdf / docx / xlsx / txt / md */
+  file_type?: string
+  /** 文件大小（字节） */
+  file_size?: number
+  /** 后端转换后的 MD 文件路径（AI 读取用） */
+  markdown_path?: string
+  /** 知识库文章 ID（type=knowledge 时） */
+  knowledge_id?: string
+  /** 创建时间 ISO 字符串 */
+  created_at: string
+}
+
+/** 调用文档完整值 */
+export interface ReferenceDocsValue {
+  /** 自由文本（标准引用、Skill 说明等） */
+  text: string
+  /** 附件列表 */
+  attachments: ReferenceAttachment[]
+}
+
 /** AI 工作流步骤配置（4 字段结构化提示词） */
 export interface WorkflowStepItem {
   script_number: number
@@ -1201,10 +1251,11 @@ export interface WorkflowStepItem {
   input_info: string
   /** 工作规则 — 明确目的、要求和限制 */
   work_rules: string
-  /** 调用文档 — 关联的知识库、参考标准、Skill 等 */
-  reference_docs: string
-  /** 输出格式 — 按标准格式输出的规范 */
+  /** 调用文档 — 关联的知识库、参考标准、Skill 等（支持字符串或 {text, attachments} 对象） */
+  reference_docs: string | ReferenceDocsValue
+  /** 输出格式 — 期望 AI 输出的内容格式 */
   output_format: string
+  /** 预期输出键（后端预设，前端不展示） */
   expected_keys: string[]
   is_enabled: boolean
   description?: string
@@ -1279,12 +1330,12 @@ export const WORKFLOW_MENU_MAP: Record<string, MenuMapEntry> = {
   },
   'special-ops-critical': {
     group: '作业安全',
-    subgroup: '特殊作业报备',
-    path: '/safety/special-ops/report',
+    subgroup: '特殊作业管理',
+    path: '/safety/special-ops',
   },
   'special-ops-export': {
     group: '作业安全',
-    subgroup: '特殊作业台账',
+    subgroup: '特殊作业管理',
     path: '/safety/special-ops',
   },
   'hazard-identification-export': {
@@ -1590,8 +1641,13 @@ export interface SpecialOperationReportQueryParams {
   page_size?: number
   status?: string
   operation_type?: string
+  operation_level?: string
+  risk_level?: string
   department?: string
+  date_from?: string
+  date_to?: string
   keyword?: string
+  is_critical?: boolean
 }
 
 // ── 特殊作业台账 ──
@@ -2192,4 +2248,126 @@ export interface OhHealthExamQueryParams {
   exam_type?: string
   department?: string
   keyword?: string
+}
+
+// ============ Scheduled Tasks (定时任务) ============
+
+export enum TaskStatus {
+  RUNNING = 'running',
+  SUCCESS = 'success',
+  FAILURE = 'failure',
+}
+
+export const TASK_STATUS_OPTIONS = [
+  { value: TaskStatus.SUCCESS, label: '成功' },
+  { value: TaskStatus.FAILURE, label: '失败' },
+  { value: TaskStatus.RUNNING, label: '运行中' },
+]
+
+export enum HeaderColor {
+  BLUE = 'blue',
+  ORANGE = 'orange',
+  GREEN = 'green',
+  RED = 'red',
+  PURPLE = 'purple',
+}
+
+export const HEADER_COLOR_OPTIONS = [
+  { value: HeaderColor.BLUE, label: '蓝色', color: '#1677ff' },
+  { value: HeaderColor.ORANGE, label: '橙色', color: '#fa8c16' },
+  { value: HeaderColor.GREEN, label: '绿色', color: '#52c41a' },
+  { value: HeaderColor.RED, label: '红色', color: '#ff4d4f' },
+  { value: HeaderColor.PURPLE, label: '紫色', color: '#722ed1' },
+]
+
+export const CRON_PRESETS = [
+  { label: '每天上午9点', value: '0 9 * * *', desc: '每天上午 09:00' },
+  { label: '每天下午6点', value: '0 18 * * *', desc: '每天下午 18:00' },
+  { label: '每周一上午9点', value: '0 9 * * 1', desc: '每周一上午 09:00' },
+  { label: '每月1号上午9点', value: '0 9 1 * *', desc: '每月1号上午 09:00' },
+  { label: '每小时整点', value: '0 * * * *', desc: '每小时整点' },
+]
+
+export interface DataSourceItem {
+  key: string
+  label: string
+  enabled: boolean
+}
+
+export interface DataSourceOption {
+  key: string
+  label: string
+  description?: string
+  default_enabled: boolean
+}
+
+export interface ScheduledTask {
+  id: string
+  name: string
+  description?: string
+  cron_expression: string
+  cron_desc?: string
+  feishu_chat_id: string
+  feishu_chat_name?: string
+  header_color: string
+  data_sources: DataSourceItem[]
+  card_template?: string
+  is_enabled: boolean
+  last_run_at?: string
+  last_run_status?: string
+  last_error?: string
+  next_run_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ScheduledTaskLog {
+  id: string
+  task_id: string
+  started_at: string
+  completed_at?: string
+  status: string
+  data_snapshot?: Record<string, string>
+  card_content?: string
+  feishu_msg_id?: string
+  error_message?: string
+  duration_ms?: number
+  created_at: string
+}
+
+export interface ScheduledTaskFormData {
+  name: string
+  description?: string
+  cron_expression: string
+  cron_desc?: string
+  feishu_chat_id: string
+  feishu_chat_name?: string
+  header_color: HeaderColor
+  data_sources: DataSourceItem[]
+  card_template?: string
+  is_enabled: boolean
+}
+
+export interface ScheduledTaskQueryParams {
+  page?: number
+  page_size?: number
+  is_enabled?: boolean
+  search?: string
+}
+
+export interface CardPreviewRequest {
+  data_sources: DataSourceItem[]
+  card_template: string
+  header_color: HeaderColor
+}
+
+export interface CardPreviewResponse {
+  card_json: string
+  markdown_preview: string
+  variables: Record<string, string>
+}
+
+export interface FeishuChat {
+  chat_id: string
+  name: string
 }

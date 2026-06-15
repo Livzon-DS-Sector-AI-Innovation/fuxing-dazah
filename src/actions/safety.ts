@@ -52,6 +52,14 @@ import type {
   TrainingRecord,
   TrainingRecordFormData,
   ApiResponse,
+  ScheduledTask,
+  ScheduledTaskLog,
+  ScheduledTaskFormData,
+  ScheduledTaskQueryParams,
+  CardPreviewRequest,
+  CardPreviewResponse,
+  DataSourceOption,
+  FeishuChat,
 } from '@/types/safety'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002/api/v1'
@@ -696,10 +704,41 @@ export async function getHazardIdentifications(
   if (params.overall_status) searchParams.set('overall_status', params.overall_status)
   if (params.ai_node_progress) searchParams.set('ai_node_progress', params.ai_node_progress)
   if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.position) searchParams.set('position', params.position)
+  if (params.risk_level) searchParams.set('risk_level', params.risk_level)
+  if (params.date_from) searchParams.set('date_from', params.date_from)
+  if (params.date_to) searchParams.set('date_to', params.date_to)
 
   const queryString = searchParams.toString()
   const endpoint = `/safety/hazard-identifications${queryString ? `?${queryString}` : ''}`
   return fetchApi<import('@/types/safety').HazardIdentification[]>(endpoint)
+}
+
+export async function getHIStats() {
+  return fetchApi<import('@/types/safety').HazardIdentificationStats>(
+    '/safety/hazard-identifications/stats'
+  )
+}
+
+export async function getHILedgerStats(
+  params: {
+    department?: string
+    position?: string
+    risk_level?: string
+    date_from?: string
+    date_to?: string
+  } = {}
+) {
+  const searchParams = new URLSearchParams()
+  if (params.department) searchParams.set('department', params.department)
+  if (params.position) searchParams.set('position', params.position)
+  if (params.risk_level) searchParams.set('risk_level', params.risk_level)
+  if (params.date_from) searchParams.set('date_from', params.date_from)
+  if (params.date_to) searchParams.set('date_to', params.date_to)
+  const qs = searchParams.toString()
+  return fetchApi<import('@/types/safety').HazardLedgerStats>(
+    `/safety/hazard-identifications/ledger-stats${qs ? `?${qs}` : ''}`
+  )
 }
 
 export async function getHazardIdentification(id: string) {
@@ -825,6 +864,31 @@ export async function exportHazardLedgerPdf(
   const a = document.createElement('a')
   a.href = url
   a.download = `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.pdf`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+}
+
+export async function exportHazardLedgerExcel(
+  params: import('@/types/safety').HazardLedgerExportRequest
+) {
+  const response = await fetch(`${API_BASE}/safety/hazard-identifications/export-excel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`导出失败: ${response.status} ${errorText}`)
+  }
+
+  const blob = await response.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.xlsx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -1094,6 +1158,50 @@ export async function deleteAPICallConfig(id: string) {
   return response
 }
 
+// ============ AI Workflow Attachment Actions ============
+
+export async function uploadWorkflowAttachment(
+  file: File
+): Promise<ApiResponse<import('@/types/safety').ReferenceAttachment>> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const authHeaders = await getAuthHeaders()
+  const response = await fetch(`${API_BASE}/safety/ai-workflow-configs/attachments/upload`, {
+    method: 'POST',
+    headers: { ...authHeaders },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let errorMessage = `HTTP ${response.status}`
+    try {
+      const errorBody = await response.json()
+      if (errorBody.message) errorMessage = errorBody.message
+    } catch { /* ignore */ }
+    return { code: response.status, message: errorMessage } as ApiResponse<import('@/types/safety').ReferenceAttachment>
+  }
+
+  return response.json()
+}
+
+export async function deleteWorkflowAttachment(
+  attachmentId: string
+): Promise<ApiResponse<null>> {
+  return fetchApi<null>(`/safety/ai-workflow-configs/attachments/${attachmentId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function createKnowledgeAttachments(
+  knowledgeIds: string[]
+): Promise<ApiResponse<import('@/types/safety').ReferenceAttachment[]>> {
+  return fetchApi<import('@/types/safety').ReferenceAttachment[]>(
+    '/safety/ai-workflow-configs/attachments/from-knowledge',
+    { method: 'POST', body: JSON.stringify({ knowledge_ids: knowledgeIds }) }
+  )
+}
+
 // ============ SpecialOperationPersonnel Actions ============
 
 export async function getPersonnelList(params: SpecialOperationPersonnelQueryParams = {}) {
@@ -1301,8 +1409,13 @@ export async function getSpecialOperationReports(params?: SpecialOperationReport
     if (params.page_size) query.set('page_size', String(params.page_size))
     if (params.status) query.set('status', params.status)
     if (params.operation_type) query.set('operation_type', params.operation_type)
+    if (params.operation_level) query.set('operation_level', params.operation_level)
+    if (params.risk_level) query.set('risk_level', params.risk_level)
     if (params.department) query.set('department', params.department)
+    if (params.date_from) query.set('date_from', params.date_from)
+    if (params.date_to) query.set('date_to', params.date_to)
     if (params.keyword) query.set('keyword', params.keyword)
+    if (params.is_critical !== undefined) query.set('is_critical', String(params.is_critical))
   }
   const qs = query.toString()
   const response = await fetchApi<SpecialOperationReport[]>(`/safety/special-operation-reports${qs ? `?${qs}` : ''}`)
@@ -1320,7 +1433,8 @@ export async function createSpecialOperationReport(data: SpecialOperationReportF
     body: JSON.stringify(data),
   })
   revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops/report')
+  revalidatePath('/safety/special-ops')
+
   return response
 }
 
@@ -1330,37 +1444,39 @@ export async function updateSpecialOperationReport(id: string, data: Partial<Spe
     body: JSON.stringify(data),
   })
   revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops/report')
+  revalidatePath('/safety/special-ops')
+
   return response
 }
 
 export async function deleteSpecialOperationReport(id: string) {
   const response = await fetchApi<void>(`/safety/special-operation-reports/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/risk-reporting')
+
   return response
 }
 
 export async function submitSpecialOperationReport(id: string) {
   const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/submit`, { method: 'POST' })
   revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops/report')
   revalidatePath('/safety/special-ops')
+
   return response
 }
 
 export async function approveSpecialOperationReport(id: string) {
   const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/approve`, { method: 'POST' })
   revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops/report')
   revalidatePath('/safety/special-ops')
+
   return response
 }
 
 export async function rejectSpecialOperationReport(id: string, reason: string) {
   const response = await fetchApi<SpecialOperationReport>(`/safety/special-operation-reports/${id}/reject?reason=${encodeURIComponent(reason)}`, { method: 'POST' })
   revalidatePath('/safety/risk-reporting')
-  revalidatePath('/safety/special-ops/report')
   revalidatePath('/safety/special-ops')
+
   return response
 }
 
@@ -1370,7 +1486,7 @@ export async function setSpecialOperationReportCritical(id: string, is_critical:
     body: JSON.stringify({ is_critical, reason }),
   })
   revalidatePath('/safety/special-ops')
-  revalidatePath('/safety/special-ops/report')
+
   return response
 }
 
@@ -1842,5 +1958,81 @@ export async function addExamAbnormality(id: string, data: Record<string, unknow
 export async function updateExamAbnormalityStatus(id: string, index: number, status: string) {
   const res = await fetchApi<OhHealthExam>(`/safety/oh-health-exams/${id}/abnormality-records/${index}?status=${encodeURIComponent(status)}`, { method: 'PUT' })
   revalidatePath('/safety/occupational-health')
+  return res
+}
+
+// ============ Scheduled Tasks ============
+
+export async function getScheduledTasks(params: ScheduledTaskQueryParams = {}) {
+  const { page = 1, page_size = 20, is_enabled, search } = params
+  const qs = new URLSearchParams({ page: String(page), page_size: String(page_size) })
+  if (is_enabled !== undefined) qs.set('is_enabled', String(is_enabled))
+  if (search) qs.set('search', search)
+  const res = await fetchApi<ScheduledTask[]>(`/safety/scheduled-tasks?${qs.toString()}`)
+  return res
+}
+
+export async function getScheduledTask(id: string) {
+  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}`)
+  return res
+}
+
+export async function createScheduledTask(data: ScheduledTaskFormData) {
+  const res = await fetchApi<ScheduledTask>('/safety/scheduled-tasks', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/scheduled-tasks')
+  return res
+}
+
+export async function updateScheduledTask(id: string, data: Partial<ScheduledTaskFormData>) {
+  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/scheduled-tasks')
+  return res
+}
+
+export async function deleteScheduledTask(id: string) {
+  const res = await fetchApi<null>(`/safety/scheduled-tasks/${id}`, { method: 'DELETE' })
+  revalidatePath('/safety/scheduled-tasks')
+  return res
+}
+
+export async function toggleScheduledTask(id: string, enabled: boolean) {
+  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}/toggle?enabled=${enabled}`, { method: 'POST' })
+  revalidatePath('/safety/scheduled-tasks')
+  return res
+}
+
+export async function runScheduledTaskNow(id: string) {
+  const res = await fetchApi<ScheduledTaskLog>(`/safety/scheduled-tasks/${id}/run`, { method: 'POST' })
+  revalidatePath('/safety/scheduled-tasks')
+  return res
+}
+
+export async function getScheduledTaskLogs(taskId: string, page = 1, page_size = 20) {
+  const qs = new URLSearchParams({ page: String(page), page_size: String(page_size) })
+  const res = await fetchApi<ScheduledTaskLog[]>(`/safety/scheduled-tasks/${taskId}/logs?${qs.toString()}`)
+  return res
+}
+
+export async function getDataSourceOptions() {
+  const res = await fetchApi<DataSourceOption[]>('/safety/scheduled-tasks/data-source-options')
+  return res
+}
+
+export async function getFeishuChats() {
+  const res = await fetchApi<FeishuChat[]>('/safety/scheduled-tasks/feishu-chats')
+  return res
+}
+
+export async function previewCard(data: CardPreviewRequest) {
+  const res = await fetchApi<CardPreviewResponse>('/safety/scheduled-tasks/preview-card', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
   return res
 }

@@ -32,6 +32,13 @@ import type {
   DailyRiskReport,
   DailyRiskReportQueryParams,
   TrainingRecord,
+  ScheduledTask,
+  ScheduledTaskLog,
+  ScheduledTaskQueryParams,
+  DataSourceOption,
+  FeishuChat,
+  CardPreviewRequest,
+  CardPreviewResponse,
 } from '@/types/safety'
 
 // ============ Store State Types ============
@@ -148,6 +155,17 @@ interface SafetyState {
   ohHealthExamQueryParams: OhHealthExamQueryParams
   ohHealthExamTotal: number
   ohHealthExamLoading: boolean
+
+  // Scheduled Task state
+  scheduledTasks: ScheduledTask[]
+  currentScheduledTask: ScheduledTask | null
+  scheduledTaskQueryParams: ScheduledTaskQueryParams
+  scheduledTaskTotal: number
+  scheduledTaskLoading: boolean
+  scheduledTaskLogs: ScheduledTaskLog[]
+  scheduledTaskLogsLoading: boolean
+  dataSourceOptions: DataSourceOption[]
+  feishuChats: FeishuChat[]
 
   // Actions - Check
   setChecks: (checks: SafetyCheck[]) => void
@@ -309,6 +327,20 @@ interface SafetyState {
   updateOhHealthExam: (id: string, item: Partial<OhHealthExam>) => void
   removeOhHealthExam: (id: string) => void
 
+  // Actions - Scheduled Task
+  setScheduledTasks: (items: ScheduledTask[], total: number) => void
+  setCurrentScheduledTask: (item: ScheduledTask | null) => void
+  setScheduledTaskQueryParams: (params: Partial<ScheduledTaskQueryParams>) => void
+  setScheduledTaskTotal: (total: number) => void
+  setScheduledTaskLoading: (loading: boolean) => void
+  addScheduledTask: (item: ScheduledTask) => void
+  updateScheduledTask: (id: string, item: Partial<ScheduledTask>) => void
+  removeScheduledTask: (id: string) => void
+  setScheduledTaskLogs: (logs: ScheduledTaskLog[]) => void
+  setScheduledTaskLogsLoading: (loading: boolean) => void
+  setDataSourceOptions: (options: DataSourceOption[]) => void
+  setFeishuChats: (chats: FeishuChat[]) => void
+
   // Actions - Reset
   resetOhHazardMonitorState: () => void
   resetOhHealthExamState: () => void
@@ -457,6 +489,18 @@ const initialOhHealthExamState = {
   ohHealthExamLoading: false,
 }
 
+const initialScheduledTaskState = {
+  scheduledTasks: [] as ScheduledTask[],
+  currentScheduledTask: null as ScheduledTask | null,
+  scheduledTaskQueryParams: { page: 1, page_size: 20 } as ScheduledTaskQueryParams,
+  scheduledTaskTotal: 0,
+  scheduledTaskLoading: false,
+  scheduledTaskLogs: [] as ScheduledTaskLog[],
+  scheduledTaskLogsLoading: false,
+  dataSourceOptions: [] as DataSourceOption[],
+  feishuChats: [] as FeishuChat[],
+}
+
 export const useSafetyStore = create<SafetyState>((set) => ({
   // Initial states
   ...initialCheckState,
@@ -475,6 +519,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialEhsChangeState,
   ...initialOhHazardMonitorState,
   ...initialOhHealthExamState,
+  ...initialScheduledTaskState,
 
   // ============ Check Actions ============
   setChecks: (checks) => set({ checks }),
@@ -849,8 +894,33 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   removeOhHealthExam: (id) =>
     set((state) => ({
       ohHealthExams: state.ohHealthExams.filter((e) => e.id !== id),
-      currentOhHealthExam: state.currentOhHealthExam?.id === id ? null : state.currentOhHealthExam,
     })),
+
+  // Scheduled Task actions
+  setScheduledTasks: (items, total) => set({ scheduledTasks: items, scheduledTaskTotal: total }),
+  setCurrentScheduledTask: (item) => set({ currentScheduledTask: item }),
+  setScheduledTaskQueryParams: (params) =>
+    set((state) => ({ scheduledTaskQueryParams: { ...state.scheduledTaskQueryParams, ...params } })),
+  setScheduledTaskTotal: (total) => set({ scheduledTaskTotal: total }),
+  setScheduledTaskLoading: (loading) => set({ scheduledTaskLoading: loading }),
+  addScheduledTask: (item) =>
+    set((state) => ({ scheduledTasks: [item, ...state.scheduledTasks] })),
+  updateScheduledTask: (id, data) =>
+    set((state) => ({
+      scheduledTasks: state.scheduledTasks.map((t) => (t.id === id ? { ...t, ...data } : t)),
+      currentScheduledTask:
+        state.currentScheduledTask?.id === id
+          ? { ...state.currentScheduledTask, ...data }
+          : state.currentScheduledTask,
+    })),
+  removeScheduledTask: (id) =>
+    set((state) => ({
+      scheduledTasks: state.scheduledTasks.filter((t) => t.id !== id),
+    })),
+  setScheduledTaskLogs: (logs) => set({ scheduledTaskLogs: logs }),
+  setScheduledTaskLogsLoading: (loading) => set({ scheduledTaskLogsLoading: loading }),
+  setDataSourceOptions: (options) => set({ dataSourceOptions: options }),
+  setFeishuChats: (chats) => set({ feishuChats: chats }),
 
   // ============ Reset Actions ============
   resetCheckState: () => set(initialCheckState),
@@ -869,6 +939,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetEhsChangeState: () => set(initialEhsChangeState),
   resetOhHazardMonitorState: () => set(initialOhHazardMonitorState),
   resetOhHealthExamState: () => set(initialOhHealthExamState),
+  resetScheduledTaskState: () => set(initialScheduledTaskState),
 
   resetAll: () =>
     set({
@@ -888,5 +959,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialEhsChangeState,
       ...initialOhHazardMonitorState,
       ...initialOhHealthExamState,
+      ...initialScheduledTaskState,
     }),
 }))

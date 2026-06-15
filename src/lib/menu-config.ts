@@ -72,6 +72,7 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "ai-workflow", label: "AI工作流配置", path: "/safety/ai-workflow-config" },
           { key: "api-config", label: "API调用配置", path: "/safety/api-call-config" },
+          { key: "scheduled-tasks", label: "定时任务", path: "/safety/scheduled-tasks" },
         ],
       },
       // ── 作业安全 ──
@@ -80,8 +81,7 @@ export const moduleMenus: ModuleMenu[] = [
         label: "作业安全",
         path: "",
         children: [
-          { key: "special-ops-ledger", label: "特殊作业台账", path: "/safety/special-ops" },
-          { key: "special-ops-report", label: "特殊作业报备", path: "/safety/special-ops/report" },
+          { key: "special-ops-mgmt", label: "特殊作业管理", path: "/safety/special-ops" },
           { key: "daily-risk-report", label: "关键风险作业报备", path: "/safety/risk-reporting" },
         ],
       },
