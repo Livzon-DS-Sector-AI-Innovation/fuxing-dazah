@@ -14,8 +14,10 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# 加载 .env 文件（安全模块独立读取，不依赖全局 Settings）
-_env_path = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env"
+# 加载对应的 .env 文件（安全模块独立读取，不依赖全局 Settings）
+_env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
+_app_env = os.getenv("APP_ENV", "development")
+_env_path = _env_dir / f".env.{_app_env}"
 if _env_path.exists():
     load_dotenv(_env_path)
 

@@ -337,7 +337,8 @@ async def _handle_text_command(
     except (json.JSONDecodeError, TypeError):
         return
 
-    if " " in text:
+    # 群聊中 @机器人 时，文本前缀为 @mention（如 "@_user_1" 或 "@设备助手"），需要去掉
+    if text.startswith("@") and " " in text:
         text = text.split(" ", 1)[-1].strip()
 
     from app.modules.equipment.service.inspection_session import get_session

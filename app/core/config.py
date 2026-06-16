@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -6,9 +7,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # dazah-backend/
 
 
+def _get_env_file() -> str:
+    """根据 APP_ENV 选择对应的 .env 文件，默认为 development。"""
+    app_env = os.getenv("APP_ENV", "development")
+    env_file = str(_PROJECT_ROOT / f".env.{app_env}")
+    print(f"Loading environment variables from: {env_file}")
+    return env_file
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(_PROJECT_ROOT / ".env"),
+        env_file=_get_env_file(),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -45,6 +54,10 @@ class Settings(BaseSettings):
 
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
+
+    # Feishu 安全模块机器人（独立应用凭证）
+    SAFETY_FEISHU_APP_ID: str = ""
+    SAFETY_FEISHU_APP_SECRET: str = ""
 
     # Feishu 设备模块交互机器人（独立应用凭证）
     EQUIPMENT_FEISHU_APP_ID: str = ""

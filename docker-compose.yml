@@ -5,19 +5,7 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      APP_NAME: ${APP_NAME:-dazah-backend}
-      APP_ENV: ${APP_ENV:-development}
-      DEBUG: ${DEBUG:-true}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      DATABASE_URL: ${APP_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/dazah}
-      REDIS_URL: ${APP_REDIS_URL:-redis://redis:6379/0}
-      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-7}
-      FEISHU_APP_ID: ${FEISHU_APP_ID}
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
-      FEISHU_REDIRECT_URI: ${FEISHU_REDIRECT_URI}
-      FRONTEND_URL: ${FRONTEND_URL}
-      JWT_EXPIRE_SECONDS: ${JWT_EXPIRE_SECONDS:-86400}
+    env_file: .env.production
     depends_on:
       db:
         condition: service_healthy
@@ -35,12 +23,7 @@ services:
     profiles:
       - init
     build: .
-    environment:
-      APP_ENV: ${APP_ENV:-development}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      DATABASE_URL: ${APP_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/dazah}
-      FEISHU_APP_ID: ${FEISHU_APP_ID}
-      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+    env_file: .env.production
     depends_on:
       db:
         condition: service_healthy
