@@ -110,7 +110,7 @@ export async function createBatch(data: CreateBatchInput) {
 \`\`\`
 
 ## 提交代码
-使用git将代码push到远程仓库前，必须先build保证无任何错误。
+使用git将代码push到远程仓库前，必须先使用pnpm build命令保证无任何错误。
 
 ## 不允许修改的文件
 

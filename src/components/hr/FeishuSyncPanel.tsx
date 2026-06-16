@@ -15,6 +15,7 @@ interface SyncStatus {
 }
 
 export default function FeishuSyncPanel({ onSynced }: { onSynced?: () => void }) {
+  const { message } = App.useApp()
   const [status, setStatus] = useState<SyncStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
