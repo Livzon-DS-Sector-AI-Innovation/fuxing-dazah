@@ -59,12 +59,31 @@ export function CategoryDrawer({ onRefresh }: { onRefresh?: () => void }) {
     }
   }
 
-  const parentOptions = categories
-    .filter((cat) => cat.id !== editingCategory?.id)
-    .map((cat) => ({
-      label: cat.name,
-      value: cat.id,
-    }))
+  // 递归展平分类树，用缩进前缀区分层级
+  function flattenTree(
+    items: typeof categories,
+    excludeId?: string,
+    depth = 0,
+  ): { label: string; value: string }[] {
+    const result: { label: string; value: string }[] = []
+    for (const cat of items) {
+      if (cat.id === excludeId) {
+        // 编辑时排除自身（避免循环引用），但仍递归处理其子节点
+        if (cat.children?.length) {
+          result.push(...flattenTree(cat.children, excludeId, depth))
+        }
+        continue
+      }
+      const prefix = depth > 0 ? '  '.repeat(depth) + '└ ' : ''
+      result.push({ label: prefix + cat.name, value: cat.id })
+      if (cat.children?.length) {
+        result.push(...flattenTree(cat.children, excludeId, depth + 1))
+      }
+    }
+    return result
+  }
+
+  const parentOptions = flattenTree(categories, editingCategory?.id)
 
   return (
     <Drawer

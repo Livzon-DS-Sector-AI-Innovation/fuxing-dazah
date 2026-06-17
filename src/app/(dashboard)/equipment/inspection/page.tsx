@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { InspectionPage } from '@/components/equipment/inspection'
 import { fetchInspectionTemplates } from '@/lib/api/equipment'
 import { fetchEquipments, fetchCategories } from '@/lib/api/equipment'

@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { MaintenancePage } from '@/components/equipment'
 import {
   fetchEquipments, fetchWorkOrders, fetchWorkOrderStatistics, fetchFailureCodes,

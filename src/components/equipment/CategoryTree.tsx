@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { App, Button, Space, Popconfirm, Empty } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { EquipmentCategory } from '@/types/equipment'
@@ -10,6 +9,7 @@ import { deleteCategory } from '@/actions/equipment'
 
 interface CategoryTreeProps {
   categories: EquipmentCategory[]
+  onRefresh?: () => void
 }
 
 // ==================== 自定义树节点 ====================
@@ -182,8 +182,7 @@ function TreeNode({
 
 // ==================== 分类树主组件 ====================
 
-export function CategoryTree({ categories }: CategoryTreeProps) {
-  const router = useRouter()
+export function CategoryTree({ categories, onRefresh }: CategoryTreeProps) {
   const { message } = App.useApp()
   const {
     selectedCategory,
@@ -195,7 +194,7 @@ export function CategoryTree({ categories }: CategoryTreeProps) {
     try {
       await deleteCategory(node.id)
       message.success('删除分类成功')
-      router.refresh()
+      onRefresh?.()
     } catch (error: any) {
       message.error(error?.message || '删除分类失败')
     }

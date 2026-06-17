@@ -154,12 +154,12 @@ export function EquipmentPage({
     {
       key: 'category',
       label: '分类',
-      children: <CategoryTree categories={categories} />,
+      children: <CategoryTree categories={categories} onRefresh={refreshCategoriesAndLocations} />,
     },
     {
       key: 'location',
       label: '位置',
-      children: <LocationTree locations={locations} />,
+      children: <LocationTree locations={locations} onRefresh={refreshCategoriesAndLocations} />,
     },
   ]
 

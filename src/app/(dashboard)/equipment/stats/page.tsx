@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { StatsDashboard } from '@/components/equipment'
 import {
   fetchEquipmentStatistics,

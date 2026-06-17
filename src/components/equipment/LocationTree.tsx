@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { App, Button, Space, Popconfirm, Empty } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { Location } from '@/types/equipment'
@@ -10,6 +9,7 @@ import { deleteLocation } from '@/actions/equipment'
 
 interface LocationTreeProps {
   locations: Location[]
+  onRefresh?: () => void
 }
 
 // ==================== 自定义树节点 ====================
@@ -182,8 +182,7 @@ function TreeNode({
 
 // ==================== 位置树主组件 ====================
 
-export function LocationTree({ locations }: LocationTreeProps) {
-  const router = useRouter()
+export function LocationTree({ locations, onRefresh }: LocationTreeProps) {
   const { message } = App.useApp()
   const {
     selectedLocation,
@@ -195,7 +194,7 @@ export function LocationTree({ locations }: LocationTreeProps) {
     try {
       await deleteLocation(node.id)
       message.success('删除位置成功')
-      router.refresh()
+      onRefresh?.()
     } catch (error: any) {
       message.error(error?.message || '删除位置失败')
     }

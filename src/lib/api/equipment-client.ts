@@ -68,7 +68,7 @@ export async function fetchEquipmentStatisticsClient(): Promise<EquipmentStatist
 
 // ==================== 故障代码 ====================
 export async function fetchCategoriesClient(): Promise<EquipmentCategory[]> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/categories`)
+  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/categories?tree=true`)
   if (!response.ok) {
     throw new Error(`请求失败: ${response.status} ${response.statusText}`)
   }
@@ -77,7 +77,7 @@ export async function fetchCategoriesClient(): Promise<EquipmentCategory[]> {
 }
 
 export async function fetchLocationsClient(): Promise<Location[]> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/locations`)
+  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/locations?tree=true`)
   if (!response.ok) {
     throw new Error(`请求失败: ${response.status} ${response.statusText}`)
   }

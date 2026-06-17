@@ -5,7 +5,7 @@ import {
   InspectionPhoto,
 } from '@/types/inspection'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 const INSPECTION_BASE = `${API_BASE_URL}/api/v1/equipment/inspection`
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {

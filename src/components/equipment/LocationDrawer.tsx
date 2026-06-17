@@ -58,12 +58,30 @@ export function LocationDrawer({ onRefresh }: { onRefresh?: () => void }) {
     }
   }
 
-  const parentOptions = locations
-    .filter((loc) => loc.id !== editingLocation?.id)
-    .map((loc) => ({
-      label: loc.name,
-      value: loc.id,
-    }))
+  // 递归展平位置树，用缩进前缀区分层级
+  function flattenTree(
+    items: typeof locations,
+    excludeId?: string,
+    depth = 0,
+  ): { label: string; value: string }[] {
+    const result: { label: string; value: string }[] = []
+    for (const loc of items) {
+      if (loc.id === excludeId) {
+        if (loc.children?.length) {
+          result.push(...flattenTree(loc.children, excludeId, depth))
+        }
+        continue
+      }
+      const prefix = depth > 0 ? '  '.repeat(depth) + '└ ' : ''
+      result.push({ label: prefix + loc.name, value: loc.id })
+      if (loc.children?.length) {
+        result.push(...flattenTree(loc.children, excludeId, depth + 1))
+      }
+    }
+    return result
+  }
+
+  const parentOptions = flattenTree(locations, editingLocation?.id)
 
   return (
     <Drawer
