@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo, useCallback, useState, useEffect, useRef, type CSSProperties } from 'react'
+import { useCallback, useState, useEffect, useRef, type CSSProperties } from 'react'
 import { App, Table, Space, Input, Select, Button } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, EyeOutlined } from '@ant-design/icons'
-import { Equipment, EquipmentStatus, EquipmentCategory, Location } from '@/types/equipment'
+import { Equipment, EquipmentStatus } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
 import { statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared-styles'
@@ -30,24 +30,11 @@ interface EquipmentTableProps {
   resetKey: number
 }
 
-function buildIdNameMap(items: EquipmentCategory[] | Location[]): Record<string, string> {
-  const map: Record<string, string> = {}
-  function traverse(nodes: EquipmentCategory[] | Location[]) {
-    for (const node of nodes) {
-      map[node.id] = node.name
-      if ('children' in node && node.children?.length) {
-        traverse(node.children as any)
-      }
-    }
-  }
-  traverse(items)
-  return map
-}
 
 export function EquipmentTable({ loading = false, onPageChange, resetKey }: EquipmentTableProps) {
   const { message, modal } = App.useApp()
   const {
-    equipments, categories, locations, total,
+    equipments, total,
     statusFilter, keyword,
     departments, departmentFilter, setDepartmentFilter,
     setStatusFilter, setKeyword,
@@ -85,8 +72,6 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
     return () => observer.disconnect()
   }, [])
 
-  const categoryNameMap = useMemo(() => buildIdNameMap(categories), [categories])
-  const locationNameMap = useMemo(() => buildIdNameMap(locations), [locations])
 
   const handleDelete = useCallback((record: Equipment) => {
     modal.confirm({
@@ -109,7 +94,7 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
     { title: '设备编号', dataIndex: 'equipment_no', key: 'equipment_no', width: 140, fixed: 'start' as const },
     { title: '设备名称', dataIndex: 'name', key: 'name', width: 180, fixed: 'start' as const, ellipsis: true },
     { title: '设备分类', dataIndex: 'category_names', key: 'category', width: 150, render: (n: string | null) => n || '-' },
-    { title: '设备位置', dataIndex: 'location_id', key: 'location', width: 120, render: (id: string) => locationNameMap[id] || '-' },
+    { title: '设备位置', dataIndex: 'location_name', key: 'location', width: 120, render: (n: string | null) => n || '-' },
     { title: '归属部门', dataIndex: 'department_name', key: 'department', width: 120,
       render: (v: string | null) => v || '-' },
     { title: '负责人', dataIndex: 'responsible_person_name', key: 'responsible', width: 100,
@@ -176,7 +161,7 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
       <EquipmentDetailDrawer
         open={detailOpen} equipment={detailEquipment}
         categoryName={detailEquipment?.category_names || ''}
-        locationName={detailEquipment ? locationNameMap[detailEquipment.location_id] || '' : ''}
+        locationName={detailEquipment?.location_name || ''}
         onClose={() => { setDetailOpen(false); setDetailEquipment(null) }}
       />
     </div>

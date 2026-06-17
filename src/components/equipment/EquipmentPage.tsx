@@ -7,7 +7,7 @@ import { MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined } from '@ant-desig
 import { EquipmentCategory, Location, Equipment, EquipmentStatistics } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { antdTheme } from '@/lib/antd-theme'
-import { fetchEquipmentsClient, fetchEquipmentStatisticsClient, fetchCategoriesClient, fetchLocationsClient } from '@/lib/api/equipment-client'
+import { fetchEquipmentsClient, fetchEquipmentStatisticsClient, fetchCategoriesClient, fetchLocationsClient, fetchDepartmentsClient } from '@/lib/api/equipment-client'
 import { StatsCards } from './StatsCards'
 import { EquipmentTable } from './EquipmentTable'
 import { CategoryTree } from './CategoryTree'
@@ -75,6 +75,32 @@ export function EquipmentPage({
   // 初始化部门列表（服务端数据）
   useEffect(() => {
     setDepartments(initialDepartments)
+  }, [])
+
+  // 客户端补偿加载：如果服务端初始数据为空（某个 API 失败导致），从客户端重新获取
+  useEffect(() => {
+    const loadMissing = async () => {
+      const tasks: Promise<void>[] = []
+      if (!categories.length) {
+        tasks.push(
+          fetchCategoriesClient().then(cats => { setCategories(cats) }).catch(e => { console.warn('客户端加载分类失败:', e) })
+        )
+      }
+      if (!locations.length) {
+        tasks.push(
+          fetchLocationsClient().then(locs => { setLocations(locs) }).catch(e => { console.warn('客户端加载位置失败:', e) })
+        )
+      }
+      if (!departments.length) {
+        tasks.push(
+          fetchDepartmentsClient().then(depts => { setDepartments(depts) }).catch(e => { console.warn('客户端加载部门失败:', e) })
+        )
+      }
+      if (tasks.length) {
+        await Promise.allSettled(tasks)
+      }
+    }
+    loadMissing()
   }, [])
 
   // 获取列表数据

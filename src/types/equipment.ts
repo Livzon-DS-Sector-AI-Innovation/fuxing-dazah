@@ -65,6 +65,7 @@ export interface Equipment {
   category_ids: string[]
   category_names?: string | null
   location_id: string
+  location_name?: string | null
   status: EquipmentStatus
   importance: EquipmentImportance
   model: string | null
