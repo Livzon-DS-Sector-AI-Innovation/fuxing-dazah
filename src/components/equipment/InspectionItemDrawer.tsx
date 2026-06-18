@@ -91,7 +91,7 @@ export function InspectionItemDrawer() {
     { title: '描述', dataIndex: 'item_description', width: 160, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
     { title: '预期结果', dataIndex: 'expected_result', width: 140, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
     { title: '检查方法', dataIndex: 'check_method', width: 120, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
-    { title: '操作', key: 'a', width: 110, fixed: 'end' as const,
+    { title: '操作', key: 'a', width: 120, fixed: 'end' as const,
       render: (_: unknown, r: InspectionTemplateItem) => (
         <div style={{ display: 'flex', gap: 10 }}>
           <span role="button" onClick={() => startEdit(r)} style={linkPrimary}><EditOutlined />编辑</span>
