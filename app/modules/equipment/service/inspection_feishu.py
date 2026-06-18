@@ -552,9 +552,25 @@ async def _cmd_submit(open_id: str, session: dict) -> None:
         session_after = await advance_to_next_equipment(open_id)
         if session_after is None:
             all_done = True
+            plan_type = session.get("plan_type", "")
             async with async_session_factory() as db:
-                completed = await complete_task(db, uuid.UUID(task_id))
+                if plan_type == "线路巡检":
+                    from app.modules.equipment.service.inspection import (
+                        submit_route_check,
+                    )
+                    from app.modules.equipment import repository as repo
+                    records_db = await repo.get_records_by_task(
+                        db, uuid.UUID(task_id),
+                    )
+                    has_abnormal = any(r.result == "异常" for r in records_db)
+                    completed_obj = await submit_route_check(
+                        db, uuid.UUID(task_id),
+                        overall_result="异常" if has_abnormal else "正常",
+                    )
+                else:
+                    completed_obj = await complete_task(db, uuid.UUID(task_id))
                 await db.commit()
+            completed = completed_obj
             await clear_session(open_id)
 
         if all_done:
@@ -647,9 +663,25 @@ async def _cmd_skip(open_id: str, session: dict) -> None:
         session_after = await advance_to_next_equipment(open_id)
         if session_after is None:
             all_done = True
+            plan_type = session.get("plan_type", "")
             async with async_session_factory() as db:
-                completed = await complete_task(db, uuid.UUID(task_id))
+                if plan_type == "线路巡检":
+                    from app.modules.equipment.service.inspection import (
+                        submit_route_check,
+                    )
+                    from app.modules.equipment import repository as repo
+                    records_db = await repo.get_records_by_task(
+                        db, uuid.UUID(task_id),
+                    )
+                    has_abnormal = any(r.result == "异常" for r in records_db)
+                    completed_obj = await submit_route_check(
+                        db, uuid.UUID(task_id),
+                        overall_result="异常" if has_abnormal else "正常",
+                    )
+                else:
+                    completed_obj = await complete_task(db, uuid.UUID(task_id))
                 await db.commit()
+            completed = completed_obj
             await clear_session(open_id)
 
         if all_done:
