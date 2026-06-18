@@ -3,13 +3,13 @@
 import { revalidatePath } from 'next/cache'
 import { getServerToken } from '@/lib/auth'
 import {
-  CreateInspectionRouteInput, UpdateInspectionRouteInput, RouteEquipmentItem,
+  CreateInspectionRouteInput, UpdateInspectionRouteInput,
   CreateInspectionTaskInput, EquipmentCheckResult,
   InspectionRecordItem, InspectionAIItemResult,
-  RouteCheckSubmitInput,
+  RouteCheckSubmitInput, RouteLocationItem,
 } from '@/types/inspection'
 
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 const BASE = `${API_BASE_URL}/api/v1/equipment/inspection`
 
 async function actionFetch<T>(url: string, options?: RequestInit): Promise<T | null> {
@@ -59,10 +59,10 @@ export async function deleteInspectionRoute(id: string) {
   return result
 }
 
-export async function setRouteEquipments(routeId: string, equipments: RouteEquipmentItem[]) {
-  const result = await actionFetch(`${BASE}/routes/${routeId}/equipments`, {
+export async function setRouteLocations(routeId: string, locations: RouteLocationItem[]) {
+  const result = await actionFetch(`${BASE}/routes/${routeId}/locations`, {
     method: 'POST',
-    body: JSON.stringify({ equipments }),
+    body: JSON.stringify({ locations }),
   })
   revalidate()
   return result

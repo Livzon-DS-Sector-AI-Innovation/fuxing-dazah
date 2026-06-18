@@ -2,7 +2,7 @@ import {
   InspectionRouteFilters, InspectionRouteListResponse, InspectionRoute, InspectionRouteDetail,
   InspectionTaskFilters, InspectionTaskListResponse, InspectionTask,
   InspectionHistoryFilters, InspectionHistoryListResponse, InspectionTaskDetail,
-  InspectionPhoto,
+  InspectionPhoto, RouteLocationsBatch, RouteLocation,
 } from '@/types/inspection'
 
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -24,7 +24,7 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 export async function fetchInspectionRoutes(filters: InspectionRouteFilters = {}): Promise<InspectionRouteListResponse> {
   const params = new URLSearchParams()
   if (filters.is_active !== undefined) params.append('is_active', filters.is_active.toString())
-  if (filters.area) params.append('area', filters.area)
+  if (filters.location_id) params.append('location_id', filters.location_id)
   if (filters.period_type) params.append('period_type', filters.period_type)
   if (filters.keyword) params.append('keyword', filters.keyword)
   if (filters.page) params.append('page', filters.page.toString())
@@ -70,8 +70,8 @@ export async function fetchInspectionTasks(filters: InspectionTaskFilters = {}):
   if (filters.route_id) params.append('route_id', filters.route_id)
   if (filters.assigned_to) params.append('assigned_to', filters.assigned_to)
   if (filters.equipment_id) params.append('equipment_id', filters.equipment_id)
-  if (filters.planned_date_from) params.append('planned_date_from', filters.planned_date_from)
-  if (filters.planned_date_to) params.append('planned_date_to', filters.planned_date_to)
+  if (filters.planned_time_from) params.append('planned_time_from', filters.planned_time_from)
+  if (filters.planned_time_to) params.append('planned_time_to', filters.planned_time_to)
   if (filters.page) params.append('page', filters.page.toString())
   if (filters.page_size) params.append('page_size', filters.page_size.toString())
   const qs = params.toString()
@@ -115,6 +115,22 @@ export async function fetchInspectionTaskPhotos(taskId: string): Promise<Inspect
 
 export function getInspectionPhotoUrl(photoId: string): string {
   return `${INSPECTION_BASE}/photos/${photoId}/file`
+}
+
+// ==================== 路线地点配置 ====================
+export async function fetchRouteLocations(routeId: string): Promise<InspectionRouteDetail> {
+  return apiFetch(`${INSPECTION_BASE}/routes/${routeId}`)
+}
+
+export async function setRouteLocations(routeId: string, data: RouteLocationsBatch): Promise<RouteLocation[]> {
+  const response = await fetch(`${INSPECTION_BASE}/routes/${routeId}/locations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!response.ok) throw new Error(`保存失败: ${response.status}`)
+  const result = await response.json()
+  return result.data || []
 }
 
 // ==================== 设备列表 ====================

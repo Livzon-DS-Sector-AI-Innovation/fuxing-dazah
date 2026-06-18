@@ -10,12 +10,11 @@ export interface InspectionRoute {
   id: string
   name: string
   description: string | null
-  area: string | null
   is_active: boolean
   period_type: InspectionPeriodType
   period_value: number | null
-  template_id: string | null
   equipment_count: number
+  location_count: number
   created_at: string
   updated_at: string
   created_by: string | null
@@ -23,34 +22,72 @@ export interface InspectionRoute {
 }
 
 export interface InspectionRouteDetail extends InspectionRoute {
-  equipments: RouteEquipment[]
+  locations: RouteLocation[]
 }
 
+export interface CreateInspectionRouteInput {
+  name: string
+  description?: string
+  period_type?: InspectionPeriodType
+  period_value?: number
+}
+
+export interface UpdateInspectionRouteInput {
+  name?: string
+  description?: string
+  is_active?: boolean
+  period_type?: InspectionPeriodType
+  period_value?: number
+}
+
+// ==================== 路线地点配置 ====================
+export interface RouteLocation {
+  id: string
+  location_id: string
+  location_name: string | null
+  sort_order: number
+  equipments: RouteLocationEquipment[]
+}
+
+export interface RouteLocationEquipment {
+  id: string
+  equipment_id: string
+  sort_order: number
+  equipment_name: string | null
+  equipment_no: string | null
+  templates: RouteEquipmentTemplate[]
+}
+
+export interface RouteEquipmentTemplate {
+  id: string
+  template_id: string
+  template_name: string | null
+}
+
+// 批量设置请求
+export interface RouteLocationsBatch {
+  locations: RouteLocationItem[]
+}
+
+export interface RouteLocationItem {
+  location_id: string
+  sort_order: number
+  equipments: RouteLocationEquipmentItem[]
+}
+
+export interface RouteLocationEquipmentItem {
+  equipment_id: string
+  sort_order: number
+  template_ids: string[]
+}
+
+// 保留旧类型兼容
 export interface RouteEquipment {
   id: string
   equipment_id: string
   sort_order: number
   equipment_name?: string
   equipment_no?: string
-}
-
-export interface CreateInspectionRouteInput {
-  name: string
-  description?: string
-  area?: string
-  period_type?: InspectionPeriodType
-  period_value?: number
-  template_id?: string
-}
-
-export interface UpdateInspectionRouteInput {
-  name?: string
-  description?: string
-  area?: string
-  is_active?: boolean
-  period_type?: InspectionPeriodType
-  period_value?: number
-  template_id?: string
 }
 
 export interface RouteEquipmentItem {
@@ -60,7 +97,7 @@ export interface RouteEquipmentItem {
 
 export interface InspectionRouteFilters {
   is_active?: boolean
-  area?: string
+  location_id?: string
   period_type?: InspectionPeriodType
   keyword?: string
   page?: number
@@ -81,10 +118,10 @@ export interface InspectionTask {
   route_id: string | null
   equipment_id: string | null
   equipment_ids: string[] | null
-  template_id: string
+  template_ids: string[] | null
   plan_type: InspectionPlanType
   assigned_to: string | null
-  planned_date: string
+  planned_time: string
   status: InspectionTaskStatus
   overall_result: InspectionOverallResult | null
   started_at: string | null
@@ -97,7 +134,6 @@ export interface InspectionTask {
   route_name?: string
   equipment_name?: string
   equipment_no?: string
-  template_name?: string
   assignee_name?: string
   equipment_count?: number
   completed_count?: number
@@ -109,10 +145,10 @@ export interface CreateInspectionTaskInput {
   route_id?: string
   equipment_id?: string
   equipment_ids?: string[]
-  template_id?: string
+  template_ids?: string[]
   plan_type?: InspectionPlanType
   assigned_to?: string
-  planned_date: string
+  planned_time: string
 }
 
 export interface InspectionTaskFilters {
@@ -121,8 +157,8 @@ export interface InspectionTaskFilters {
   route_id?: string
   assigned_to?: string
   equipment_id?: string
-  planned_date_from?: string
-  planned_date_to?: string
+  planned_time_from?: string
+  planned_time_to?: string
   page?: number
   page_size?: number
 }
@@ -158,6 +194,7 @@ export interface InspectionRecord {
   item_name?: string
   expected_result?: string
   created_at: string
+  route_location_id?: string | null
 }
 
 // ==================== 线路巡检提交 ====================

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import { App, Button, Space, Table, Tooltip } from 'antd'
 import { PlayCircleOutlined, CloseCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
@@ -12,7 +12,7 @@ import {
 } from '@/lib/api/inspection'
 import { statusPill, pillSuccess, pillError, pillTab, actionLink, linkSuccess, linkWarning, linkMuted } from '@/components/equipment/shared-styles'
 import type { InspectionTask, InspectionTaskStatus } from '@/types/inspection'
-import type { InspectionTemplate } from '@/types/equipment'
+import type { InspectionTemplate, InspectionTemplateItem } from '@/types/equipment'
 
 interface Props {
   templates: InspectionTemplate[]
@@ -33,8 +33,10 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
   const {
     tasks, tasksTotal, tasksPage, tasksPageSize, tasksLoading, tasksStatusFilter, tasksRefreshKey,
     setTasks, setTasksTotal, setTasksLoading, setTasksPage, setTasksPageSize, setTasksStatusFilter,
-    openTaskDrawer, setExecutingTask,
+    openTaskDrawer, setExecutingTask, triggerTasksRefresh,
   } = useInspectionStore()
+
+  const [startingIds, setStartingIds] = useState<Set<string>>(new Set())
 
   const loadTasks = useCallback(async () => {
     setTasksLoading(true)
@@ -58,11 +60,36 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
 
   const enterExecuteView = useCallback(async (record: InspectionTask) => {
     let routeDetail = null
+    const items: InspectionTemplateItem[] = []
+    const seen = new Set<string>()
+
     if (record.route_id) {
+      // 线路巡检：从路线地点→设备→模板绑定获取检查项
       try { routeDetail = await fetchInspectionRouteById(record.route_id) } catch { /* */ }
+      if (routeDetail?.locations) {
+        for (const loc of routeDetail.locations) {
+          for (const eq of (loc.equipments || [])) {
+            for (const rt of (eq.templates || [])) {
+              if (rt.template_id && !seen.has(rt.template_id)) {
+                seen.add(rt.template_id)
+                try {
+                  const tpl = await fetchInspectionTemplateByIdClient(rt.template_id)
+                  if (tpl?.items) items.push(...tpl.items)
+                } catch { /* */ }
+              }
+            }
+          }
+        }
+      }
+    } else if (record.template_ids) {
+      // 设备巡检：直接从 template_ids 获取
+      for (const tid of record.template_ids) {
+        try {
+          const tpl = await fetchInspectionTemplateByIdClient(tid)
+          if (tpl?.items) items.push(...tpl.items)
+        } catch { /* */ }
+      }
     }
-    const template = await fetchInspectionTemplateByIdClient(record.template_id)
-    const items = template.items || []
     const eqIds = record.equipment_ids || undefined
     const eqInfos = eqIds
       ? allEquipments.filter(e => eqIds.includes(e.id)).map(e => ({ id: e.id, name: e.name, no: e.equipment_no }))
@@ -74,23 +101,29 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
       completedIds = taskDetail.completed_equipment_ids || []
     } catch { /* 获取失败不阻塞 */ }
     setExecutingTask(
-      record.id, record.plan_type, routeDetail, items, template.name,
+      record.id, record.plan_type, routeDetail, items,
+      items.length > 0 ? '合并模板' : '检查模板',
       record.equipment_id, record.equipment_name, record.equipment_no,
       eqIds, eqInfos, completedIds,
     )
   }, [allEquipments, setExecutingTask])
 
   const handleStart = useCallback(async (record: InspectionTask) => {
+    if (startingIds.has(record.id)) return
+    setStartingIds(prev => new Set(prev).add(record.id))
     try {
       if (record.status === '待执行') {
         await startInspectionTask(record.id)
         message.success('已开始巡检')
+        triggerTasksRefresh()
       }
       await enterExecuteView(record)
     } catch (err: unknown) {
       message.error((err as Error).message || '操作失败')
+    } finally {
+      setStartingIds(prev => { const next = new Set(prev); next.delete(record.id); return next })
     }
-  }, [message, enterExecuteView])
+  }, [message, enterExecuteView, triggerTasksRefresh, startingIds])
 
   const handleClose = useCallback((record: InspectionTask) => {
     const isCancelling = record.status === '执行中'
@@ -170,10 +203,16 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
       render: (_: unknown, record: InspectionTask) => (
         <Space size={12}>
           {(record.status === '待执行' || record.status === '执行中') && (
-            <span role="button" onClick={() => handleStart(record)} style={record.status === '待执行' ? linkSuccess : linkWarning}>
-              <PlayCircleOutlined />
-              {record.status === '待执行' ? '开始' : '继续'}
-            </span>
+            startingIds.has(record.id) ? (
+              <span style={{ ...linkMuted, cursor: 'not-allowed' }}>
+                <PlayCircleOutlined />处理中...
+              </span>
+            ) : (
+              <span role="button" onClick={() => handleStart(record)} style={record.status === '待执行' ? linkSuccess : linkWarning}>
+                <PlayCircleOutlined />
+                {record.status === '待执行' ? '开始' : '继续'}
+              </span>
+            )
           )}
           {record.status === '执行中' && (
             <span role="button" onClick={() => handleClose(record)} style={linkMuted}>

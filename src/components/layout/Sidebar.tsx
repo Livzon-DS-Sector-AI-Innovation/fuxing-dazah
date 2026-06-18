@@ -143,7 +143,7 @@ export function Sidebar() {
 
       <div className="px-4 py-3 border-t border-[var(--color-hairline-soft)]">
         <p className="text-[12px] text-[var(--color-stone)]">
-          v0.1.0
+          v0.1.1
         </p>
       </div>
     </aside>

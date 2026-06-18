@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import type { User } from '@/types/user'
 
-const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 export async function getCurrentUser(): Promise<User | null> {
   const cookieStore = await cookies()

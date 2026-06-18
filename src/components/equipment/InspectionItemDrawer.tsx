@@ -1,128 +1,56 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { App, Drawer, Button, Space, Table, Form, Input, InputNumber, Typography, Empty, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined } from '@ant-design/icons'
+import { App, Drawer, Button, Table, Form, Input, InputNumber, Typography, Empty, Popconfirm } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined, OrderedListOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useEquipmentStore } from '@/stores/equipment'
-import {
-  createInspectionTemplateItem,
-  updateInspectionTemplateItem,
-  deleteInspectionTemplateItem,
-} from '@/actions/equipment'
+import { createInspectionTemplateItem, updateInspectionTemplateItem, deleteInspectionTemplateItem } from '@/actions/equipment'
 import { fetchInspectionTemplateByIdClient } from '@/lib/api/equipment-client'
 import { linkPrimary, linkDanger } from '@/components/equipment/shared-styles'
 import type { InspectionTemplateItem } from '@/types/equipment'
 
 const { Text } = Typography
+const C = { navy: '#0a1530', purple: '#5645d4', ink: '#1a1a1a', slate: '#5d5b54', stone: '#a4a097', hairline: '#e5e3df', hairlineSoft: '#ede9e4', surface: '#f6f5f4', surfaceSoft: '#fafaf9', canvas: '#ffffff' }
 
-interface ItemFormValues {
-  item_name: string
-  item_description: string
-  expected_result: string
-  check_method: string
-  sort_order: number
-}
+interface ItemFormValues { item_name: string; item_description: string; expected_result: string; check_method: string; sort_order: number }
 
-// ── 检查项表单（独立组件，仅在需要时挂载以避免 useForm 未连接 Form 的警告）──
-function InspectionItemForm({
-  mode,
-  templateId,
-  itemsCount,
-  initialValues,
-  onSuccess,
-  onCancel,
-}: {
-  mode: 'create' | string
-  templateId: string
-  itemsCount: number
-  initialValues?: ItemFormValues
-  onSuccess: () => void
-  onCancel: () => void
+function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCancel }: {
+  mode: 'create' | string; templateId: string; itemsCount: number; initialValues?: ItemFormValues; onSuccess: () => void; onCancel: () => void
 }) {
   const { message } = App.useApp()
   const [form] = Form.useForm<ItemFormValues>()
-  const [submitting, setSubmitting] = useState(false)
-
+  const [s, setS] = useState(false)
   useEffect(() => {
-    if (mode === 'create') {
-      form.resetFields()
-      form.setFieldsValue({
-        sort_order: itemsCount,
-        item_name: '',
-        item_description: '',
-        expected_result: '',
-        check_method: '',
-      })
-    } else if (initialValues) {
-      form.setFieldsValue(initialValues)
-    }
+    if (mode === 'create') { form.resetFields(); form.setFieldsValue({ sort_order: itemsCount, item_name: '', item_description: '', expected_result: '', check_method: '' }) }
+    else if (initialValues) form.setFieldsValue(initialValues)
   }, [mode, itemsCount, initialValues, form])
 
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      setSubmitting(true)
-      if (mode === 'create') {
-        await createInspectionTemplateItem(templateId, {
-          item_name: values.item_name,
-          item_description: values.item_description || undefined,
-          expected_result: values.expected_result || undefined,
-          check_method: values.check_method || undefined,
-          sort_order: values.sort_order,
-        })
-        message.success('检查项已添加')
-      } else {
-        await updateInspectionTemplateItem(mode, {
-          item_name: values.item_name,
-          item_description: values.item_description || undefined,
-          expected_result: values.expected_result || undefined,
-          check_method: values.check_method || undefined,
-          sort_order: values.sort_order,
-        })
-        message.success('检查项已更新')
-      }
+  const submit = async () => {
+    try { setS(true); const v = await form.validateFields()
+      if (mode === 'create') { await createInspectionTemplateItem(templateId, { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }); message.success('已添加') }
+      else { await updateInspectionTemplateItem(mode, { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }); message.success('已更新') }
       onSuccess()
-    } catch (err: unknown) {
-      if ((err as { errorFields?: unknown[] })?.errorFields) return
-      message.error((err as Error).message || '操作失败')
-    } finally {
-      setSubmitting(false)
-    }
+    } catch (e: unknown) { if ((e as { errorFields?: unknown[] })?.errorFields) return; message.error((e as Error).message || '操作失败') }
+    finally { setS(false) }
   }
 
   return (
-    <div style={{
-      marginBottom: 16, padding: 16,
-      background: '#fafaf9', borderRadius: 12,
-      border: '1px solid #e5e3df',
-    }}>
-      <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 12 }}>
-        {mode === 'create' ? '新增检查项' : '编辑检查项'}
-      </Text>
-      <Form form={form} layout="vertical">
+    <div style={{ marginBottom: 16, padding: 16, background: C.surfaceSoft, borderRadius: 10, border: `1px solid ${C.hairline}` }}>
+      <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 12, color: C.ink }}>{mode === 'create' ? '新增检查项' : '编辑检查项'}</Text>
+      <Form form={form} layout="vertical" requiredMark={false}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-          <Form.Item name="item_name" label="检查项名称" rules={[{ required: true, message: '请输入检查项名称' }]}>
-            <Input placeholder="如：温度检查" style={{ borderRadius: 8 }} />
-          </Form.Item>
-          <Form.Item name="sort_order" label="排序">
-            <InputNumber min={0} style={{ width: '100%', borderRadius: 8 }} placeholder="0" />
-          </Form.Item>
-          <Form.Item name="item_description" label="描述">
-            <Input placeholder="检查项描述" style={{ borderRadius: 8 }} />
-          </Form.Item>
-          <Form.Item name="expected_result" label="预期结果">
-            <Input placeholder="如：温度在20-30℃之间" style={{ borderRadius: 8 }} />
-          </Form.Item>
-          <Form.Item name="check_method" label="检查方法">
-            <Input placeholder="如：目视检查/仪表读数" style={{ borderRadius: 8 }} />
-          </Form.Item>
+          <Form.Item name="item_name" label="检查项名称" rules={[{ required: true, message: '请输入' }]}><Input placeholder="如：温度检查" style={{ borderRadius: 8 }} /></Form.Item>
+          <Form.Item name="sort_order" label="排序"><InputNumber min={0} style={{ width: '100%', borderRadius: 8 }} /></Form.Item>
+          <Form.Item name="item_description" label="描述"><Input placeholder="检查项描述" style={{ borderRadius: 8 }} /></Form.Item>
+          <Form.Item name="expected_result" label="预期结果"><Input placeholder="如：20-30℃之间" style={{ borderRadius: 8 }} /></Form.Item>
+          <Form.Item name="check_method" label="检查方法"><Input placeholder="如：目视/仪表读数" style={{ borderRadius: 8 }} /></Form.Item>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={onCancel} icon={<CloseOutlined />} style={{ borderRadius: 8 }}>取消</Button>
-          <Button type="primary" onClick={handleSubmit} loading={submitting} icon={<SaveOutlined />} style={{ borderRadius: 8 }}>
+          <button onClick={onCancel} style={{ padding: '8px 16px', background: 'transparent', color: C.slate, border: `1px solid ${C.hairline}`, borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>取消</button>
+          <button onClick={submit} disabled={s} style={{ padding: '8px 20px', background: C.purple, color: '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
             {mode === 'create' ? '添加' : '保存'}
-          </Button>
+          </button>
         </div>
       </Form>
     </div>
@@ -131,206 +59,76 @@ function InspectionItemForm({
 
 export function InspectionItemDrawer() {
   const { message } = App.useApp()
-  const {
-    inspectionItemDrawerOpen,
-    inspectionItemTemplateId,
-    editingInspectionItem,
-    closeInspectionItemDrawer,
-  } = useEquipmentStore()
-
+  const { inspectionItemDrawerOpen, inspectionItemTemplateId, editingInspectionItem, closeInspectionItemDrawer } = useEquipmentStore()
   const [items, setItems] = useState<InspectionTemplateItem[]>([])
   const [loading, setLoading] = useState(false)
-
-  // 表单模式：null=浏览模式，'create'=新增，string=编辑的 item id
   const [formMode, setFormMode] = useState<'create' | string | null>(null)
-  // 保存正在编辑的检查项数据，用于预填表单（避免依赖 store 快照）
-  const [editingItemData, setEditingItemData] = useState<InspectionTemplateItem | null>(null)
+  const [editingData, setEditingData] = useState<InspectionTemplateItem | null>(null)
 
-  // 加载检查项列表
-  const loadItems = useCallback(async () => {
-    if (!inspectionItemTemplateId) return
-    setLoading(true)
-    try {
-      const detail = await fetchInspectionTemplateByIdClient(inspectionItemTemplateId)
-      setItems(detail.items || [])
-    } catch {
-      message.error('加载检查项失败')
-    } finally {
-      setLoading(false)
-    }
+  const load = useCallback(async () => {
+    if (!inspectionItemTemplateId) return; setLoading(true)
+    try { const d = await fetchInspectionTemplateByIdClient(inspectionItemTemplateId); setItems(d.items || []) }
+    catch { message.error('加载失败') } finally { setLoading(false) }
   }, [inspectionItemTemplateId, message])
 
   useEffect(() => {
-    if (inspectionItemDrawerOpen && inspectionItemTemplateId) {
-      loadItems()
-      if (editingInspectionItem) {
-        setEditingItemData(editingInspectionItem)
-        setFormMode(editingInspectionItem.id)
-      } else {
-        setFormMode(null)
-        setEditingItemData(null)
-      }
-    }
-  }, [inspectionItemDrawerOpen, inspectionItemTemplateId, editingInspectionItem, loadItems])
+    if (inspectionItemDrawerOpen && inspectionItemTemplateId) { load(); if (editingInspectionItem) { setEditingData(editingInspectionItem); setFormMode(editingInspectionItem.id) } else { setFormMode(null); setEditingData(null) } }
+  }, [inspectionItemDrawerOpen, inspectionItemTemplateId, editingInspectionItem, load])
 
-  // 关闭时清理
-  const handleClose = () => {
-    setFormMode(null)
-    closeInspectionItemDrawer()
-  }
+  const close = () => { setFormMode(null); closeInspectionItemDrawer() }
+  const startEdit = (item: InspectionTemplateItem) => { setEditingData(item); setFormMode(item.id) }
+  const cancelEdit = () => { setFormMode(null); setEditingData(null) }
+  const onFormSuccess = () => { setFormMode(null); setEditingData(null); load() }
+  const handleDelete = async (item: InspectionTemplateItem) => { try { await deleteInspectionTemplateItem(item.id); message.success('已删除'); await load() } catch (e: unknown) { message.error((e as Error).message || '删除失败') } }
 
-  const handleStartCreate = () => setFormMode('create')
-  const handleStartEdit = (item: InspectionTemplateItem) => {
-    setEditingItemData(item)
-    setFormMode(item.id)
-  }
-  const handleCancelEdit = () => { setFormMode(null); setEditingItemData(null) }
-  const handleFormSuccess = () => { setFormMode(null); setEditingItemData(null); loadItems() }
+  const editInit: ItemFormValues | undefined = editingData && formMode === editingData.id ? {
+    item_name: editingData.item_name, item_description: editingData.item_description || '', expected_result: editingData.expected_result || '', check_method: editingData.check_method || '', sort_order: editingData.sort_order,
+  } : undefined
 
-  // 获取编辑模式的初始值（使用本地状态而非 store 快照，确保点击编辑时数据已就绪）
-  const editingInitialValues: ItemFormValues | undefined =
-    editingItemData && formMode === editingItemData.id
-      ? {
-          item_name: editingItemData.item_name,
-          item_description: editingItemData.item_description || '',
-          expected_result: editingItemData.expected_result || '',
-          check_method: editingItemData.check_method || '',
-          sort_order: editingItemData.sort_order,
-        }
-      : undefined
-
-  // 删除
-  const handleDelete = async (item: InspectionTemplateItem) => {
-    try {
-      await deleteInspectionTemplateItem(item.id)
-      message.success('检查项已删除')
-      await loadItems()
-    } catch (err: unknown) {
-      message.error((err as Error).message || '删除失败')
-    }
-  }
-
-  const columns: ColumnsType<InspectionTemplateItem> = [
-    {
-      title: '#',
-      dataIndex: 'sort_order',
-      key: 'sort_order',
-      width: 50,
-    },
-    {
-      title: '检查项名称',
-      dataIndex: 'item_name',
-      key: 'item_name',
-      width: 180,
-      render: (name: string) => <Text strong>{name}</Text>,
-    },
-    {
-      title: '描述',
-      dataIndex: 'item_description',
-      key: 'item_description',
-      width: 180,
-      render: (v: string | null) => v || '-',
-    },
-    {
-      title: '预期结果',
-      dataIndex: 'expected_result',
-      key: 'expected_result',
-      width: 140,
-      render: (v: string | null) => v || '-',
-    },
-    {
-      title: '检查方法',
-      dataIndex: 'check_method',
-      key: 'check_method',
-      width: 140,
-      render: (v: string | null) => v || '-',
-    },
-    {
-      title: '操作',
-      key: 'action',
-      width: 120,
-      fixed: 'end' as const,
-      render: (_: unknown, record: InspectionTemplateItem) => (
-        <Space size={12}>
-          <span role="button" onClick={() => handleStartEdit(record)} style={linkPrimary}>
-            <EditOutlined />编辑
-          </span>
-          <Popconfirm
-            title="确定删除此检查项？"
-            onConfirm={() => handleDelete(record)}
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-          >
-            <span role="button" style={linkDanger}>
-              <DeleteOutlined />删除
-            </span>
+  const cols: ColumnsType<InspectionTemplateItem> = [
+    { title: '#', dataIndex: 'sort_order', width: 44 },
+    { title: '检查项名称', dataIndex: 'item_name', width: 160, render: (n: string) => <Text strong style={{ fontSize: 13 }}>{n}</Text> },
+    { title: '描述', dataIndex: 'item_description', width: 160, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '预期结果', dataIndex: 'expected_result', width: 140, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '检查方法', dataIndex: 'check_method', width: 120, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '操作', key: 'a', width: 110, fixed: 'end' as const,
+      render: (_: unknown, r: InspectionTemplateItem) => (
+        <div style={{ display: 'flex', gap: 10 }}>
+          <span role="button" onClick={() => startEdit(r)} style={linkPrimary}><EditOutlined />编辑</span>
+          <Popconfirm title="确定删除？" onConfirm={() => handleDelete(r)} okText="删除" cancelText="取消" okButtonProps={{ danger: true }}>
+            <span role="button" style={linkDanger}><DeleteOutlined />删除</span>
           </Popconfirm>
-        </Space>
+        </div>
       ),
     },
   ]
 
   return (
-    <Drawer
-      title="管理检查项"
-      size={780}
-      open={inspectionItemDrawerOpen}
-      onClose={handleClose}
-      destroyOnHidden
-      extra={
-        <Space>
-          <Button onClick={handleClose} style={{ borderRadius: 8 }}>关闭</Button>
-        </Space>
-      }
-    >
-      {/* 新增按钮 */}
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text type="secondary" style={{ fontSize: 13 }}>
-          共 {items.length} 个检查项
-        </Text>
+    <Drawer title={null} size={780} open={inspectionItemDrawerOpen} onClose={close} destroyOnHidden
+      styles={{ body: { padding: 0, background: C.surface } }}>
+      <div style={{ background: C.navy, padding: '16px 28px', borderBottom: `3px solid ${C.purple}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 2, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', marginBottom: 2 }}>Checklist Items</div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: '#fff' }}>管理检查项</div>
+        </div>
         {formMode !== 'create' && (
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={handleStartCreate}
-            style={{ borderRadius: 8 }}
-          >
-            添加检查项
-          </Button>
+          <button onClick={() => setFormMode('create')} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.12)', color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <PlusOutlined />添加检查项
+          </button>
         )}
       </div>
+      <div style={{ padding: '20px 28px 40px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <OrderedListOutlined style={{ color: C.purple, fontSize: 14 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>检查项列表</span>
+          <span style={{ fontSize: 11, color: C.stone }}>共 {items.length} 项</span>
+        </div>
 
-      {/* 新增/编辑表单 — 仅在 formMode 非 null 时挂载，避免 useForm 未连接警告 */}
-      {formMode && (
-        <InspectionItemForm
-          mode={formMode}
-          templateId={inspectionItemTemplateId!}
-          itemsCount={items.length}
-          initialValues={formMode !== 'create' ? editingInitialValues : undefined}
-          onSuccess={handleFormSuccess}
-          onCancel={handleCancelEdit}
-        />
-      )}
+        {formMode && <ItemForm mode={formMode} templateId={inspectionItemTemplateId!} itemsCount={items.length} initialValues={formMode !== 'create' ? editInit : undefined} onSuccess={onFormSuccess} onCancel={cancelEdit} />}
 
-      {/* 检查项列表 */}
-      {items.length === 0 && !loading ? (
-        <Empty
-          description="暂无检查项，请点击上方按钮添加"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
-      ) : (
-        <Table
-          columns={columns}
-          dataSource={items}
-          rowKey="id"
-          size="small"
-          loading={loading}
-          pagination={false}
-          scroll={{ x: 'max-content' }}
-          locale={{ emptyText: '暂无检查项' }}
-        />
-      )}
+        {items.length === 0 && !loading ? <Empty description="暂无检查项" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          : <Table columns={cols} dataSource={items} rowKey="id" size="small" loading={loading} pagination={false} scroll={{ x: 'max-content' }} locale={{ emptyText: '暂无检查项' }} />}
+      </div>
     </Drawer>
   )
 }

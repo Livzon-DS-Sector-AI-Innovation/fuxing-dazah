@@ -58,8 +58,8 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
       render: (n: string) => <span style={{ fontWeight: 600, fontSize: 14 }}>{n}</span>,
     },
     {
-      title: '区域', dataIndex: 'area', width: 110,
-      render: (a: string | null) => a || <span style={{ color: '#bbb8b1' }}>—</span>,
+      title: '地点数', dataIndex: 'location_count', width: 80, align: 'center',
+      render: (c: number) => <span style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a' }}>{c || 0}</span>,
     },
     {
       title: '周期', key: 'period', width: 120,

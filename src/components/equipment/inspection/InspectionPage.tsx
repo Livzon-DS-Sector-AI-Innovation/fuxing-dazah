@@ -23,9 +23,10 @@ interface Props {
   initialTemplates: InspectionTemplate[]
   initialEquipments: { id: string; name: string; equipment_no: string }[]
   initialCategories: EquipmentCategory[]
+  initialLocations: { id: string; name: string; code: string }[]
 }
 
-export function InspectionPage({ initialTemplates, initialEquipments, initialCategories }: Props) {
+export function InspectionPage({ initialTemplates, initialEquipments, initialCategories, initialLocations }: Props) {
   const {
     activeTab, setActiveTab,
     executingTaskId, clearExecuting,
@@ -167,8 +168,8 @@ export function InspectionPage({ initialTemplates, initialEquipments, initialCat
       </div>
 
       <InspectionTaskDrawer templates={templates} equipments={initialEquipments} />
-      <InspectionRouteDrawer templates={templates} />
-      <InspectionRouteEquipmentDrawer equipments={initialEquipments} />
+      <InspectionRouteDrawer />
+      <InspectionRouteEquipmentDrawer equipments={initialEquipments} locations={initialLocations} templates={templates} />
       <InspectionDetailDrawer />
       <InspectionTemplateDrawer categories={initialCategories} onRefresh={fetchTemplateData} />
       <InspectionItemDrawer />
