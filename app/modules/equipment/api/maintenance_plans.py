@@ -50,7 +50,7 @@ async def list_maintenance_plans(
 
 @router.get("/overdue", summary="查询到期/逾期的维护计划")
 async def get_overdue_plans(
-    days: int = Query(30, ge=1, description="提前天数"),
+    days: int = Query(0, ge=0, description="提前天数，0=仅逾期"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     plans = await service.get_overdue_maintenance_plans(db, days)

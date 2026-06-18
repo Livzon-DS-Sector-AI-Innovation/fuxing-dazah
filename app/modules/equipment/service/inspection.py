@@ -234,11 +234,6 @@ async def complete_task(
     task = await _get_task(db, task_id)
     _validate_transition(task.status, "已完成")
 
-    if task.plan_type == "线路巡检":
-        raise AppException(
-            message="线路巡检任务请使用线路巡检提交接口完成"
-        )
-
     records = await repo.get_records_by_task(db, task_id)
     has_abnormal = any(r.result == "异常" for r in records)
     task.overall_result = "异常" if has_abnormal else "正常"
@@ -367,10 +362,7 @@ async def _create_anomaly_work_order(
         original_equipment_status=equipment.status,
     )
     db.add(wo)
-    await db.flush()
-
-    # 设备状态改为维修中
-    equipment.status = "维修中"
+    # 异常处理工单不自动改设备状态（问题可能只是仪表偏差，设备仍在运行）
     await db.flush()
 
     # 发送飞书通知（非关键路径）

@@ -104,8 +104,9 @@ async def create_work_order(
 
         try:
             work_order = await repo.create_work_order(db, wo_data)
-            # 设备状态改为维修中
-            await _update_equipment_status(db, data.equipment_id, "维修中")
+            # 非"异常处理"类型的工单才自动改设备状态为维修中
+            if data.order_type != "异常处理":
+                await _update_equipment_status(db, data.equipment_id, "维修中")
             # eager re-fetch，避免返回对象触发懒加载 MissingGreenlet
             return await repo.get_work_order_by_id(db, work_order.id)
         except IntegrityError:
