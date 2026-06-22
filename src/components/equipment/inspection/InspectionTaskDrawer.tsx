@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Avatar, DatePicker, Drawer, Form, Select, Typography } from 'antd'
+import { App, Avatar, Card, DatePicker, Drawer, Form, Select, Tag, Typography } from 'antd'
 import { UserOutlined, CheckSquareOutlined, CalendarOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
 import { createInspectionTask } from '@/actions/inspection'
@@ -31,6 +31,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
   const [routes, setRoutes] = useState<InspectionRoute[]>([])
   const [personnel, setPersonnel] = useState<Personnel[]>([])
   const planType = Form.useWatch('plan_type', form) || '设备巡检'
+  const selectedEquipmentIds: string[] = Form.useWatch('equipment_ids', form) || []
 
   useEffect(() => {
     if (taskDrawerOpen) {
@@ -43,10 +44,18 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
     try {
       const values = await form.validateFields()
       const isRoute = values.plan_type === '线路巡检'
+
+      // 构建设备-模板映射（设备巡检新方式）
+      let equipment_templates: Record<string, string[]> | undefined
+      if (!isRoute && values.equipment_templates) {
+        equipment_templates = values.equipment_templates
+      }
+
       await createInspectionTask({
         route_id: isRoute ? values.route_id : undefined,
         equipment_ids: !isRoute && values.equipment_ids?.length ? values.equipment_ids : undefined,
-        template_ids: values.template_ids?.length ? values.template_ids : undefined,
+        template_ids: !isRoute && !equipment_templates && values.template_ids?.length ? values.template_ids : undefined,
+        equipment_templates,
         plan_type: values.plan_type || '设备巡检',
         assigned_to: values.assigned_to || undefined,
         planned_time: values.planned_time.toISOString(),
@@ -60,6 +69,9 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
       message.error((err as Error).message || '创建失败')
     }
   }
+
+  // 获取已选设备的名称映射
+  const equipmentMap = new Map(equipments.map(e => [e.id, e]))
 
   return (
     <Drawer title={null} size={520} open={taskDrawerOpen}
@@ -111,20 +123,71 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
             </div>
           )}
 
-          {/* templates */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>检查模板</span>
-              {planType === '线路巡检' && <span style={{ fontSize: 11, color: C.stone }}>（线路模式自动获取）</span>}
+          {/* templates — 设备巡检按设备独立选择 */}
+          {planType === '线路巡检' ? (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>检查模板</span>
+                <span style={{ fontSize: 11, color: C.stone }}>（线路模式自动获取）</span>
+              </div>
+              <Form.Item name="template_ids" noStyle>
+                <Select mode="multiple" showSearch placeholder="从路线地点配置获取"
+                  disabled optionFilterProp="label"
+                  popupMatchSelectWidth={false} maxTagCount="responsive" style={{ width: '100%' }}
+                  options={templates.map(t => ({ label: t.name, value: t.id }))} />
+              </Form.Item>
             </div>
-            <Form.Item name="template_ids" noStyle
-              rules={planType === '设备巡检' ? [{ required: true, type: 'array', min: 1, message: '请选模板' }] : undefined}>
-              <Select mode="multiple" showSearch placeholder={planType === '线路巡检' ? '从路线地点配置获取' : '选择模板（可多选）'}
-                disabled={planType === '线路巡检'} optionFilterProp="label"
-                popupMatchSelectWidth={false} maxTagCount="responsive" style={{ width: '100%' }}
-                options={templates.map(t => ({ label: t.name, value: t.id }))} />
-            </Form.Item>
-          </div>
+          ) : selectedEquipmentIds.length > 0 ? (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>检查模板（按设备选择）</span>
+              </div>
+              {selectedEquipmentIds.map(eqId => {
+                const eq = equipmentMap.get(eqId)
+                if (!eq) return null
+                return (
+                  <Card
+                    key={eqId}
+                    size="small"
+                    styles={{
+                      body: { padding: '12px 16px' },
+                    }}
+                    style={{ marginBottom: 8, borderColor: C.hairline, borderRadius: 8 }}
+                    title={
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{eq.name}</span>
+                        <Tag style={{ fontSize: 10, margin: 0 }}>{eq.equipment_no}</Tag>
+                      </div>
+                    }
+                  >
+                    <Form.Item
+                      name={['equipment_templates', eqId]}
+                      noStyle
+                      rules={[{ required: true, type: 'array', min: 1, message: `请为「${eq.name}」选择检查模板` }]}
+                    >
+                      <Select
+                        mode="multiple"
+                        showSearch
+                        placeholder={`为「${eq.name}」选择模板`}
+                        optionFilterProp="label"
+                        popupMatchSelectWidth={false}
+                        maxTagCount="responsive"
+                        style={{ width: '100%' }}
+                        options={templates.map(t => ({ label: t.name, value: t.id }))}
+                      />
+                    </Form.Item>
+                  </Card>
+                )
+              })}
+            </div>
+          ) : (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>检查模板</span>
+                <span style={{ fontSize: 11, color: C.stone }}>（请先选择设备）</span>
+              </div>
+            </div>
+          )}
 
           {/* planned time */}
           <div style={{ marginBottom: 20 }}>

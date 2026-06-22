@@ -4,7 +4,7 @@ const nextConfig: NextConfig = {
   /* config options here */
   output: 'standalone',
   reactCompiler: true,
-  allowedDevOrigins: ['*'],
+  allowedDevOrigins: ['*', '127.0.0.1'],
 
   // 内部部署阶段：启用 sourcemap 方便定位错误
   productionBrowserSourceMaps: true,

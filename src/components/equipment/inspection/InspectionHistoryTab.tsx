@@ -1,14 +1,16 @@
 'use client'
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useMemo, useState } from 'react'
 import { App, Button, Table, Space, DatePicker, Input } from 'antd'
 import { EyeOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { useInspectionStore } from '@/stores/inspection'
 import { fetchInspectionHistory } from '@/lib/api/inspection'
+import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { statusPill, pillSuccess, pillError, pillTab, actionLink, linkPrimary } from '@/components/equipment/shared-styles'
 import type { InspectionTask, InspectionOverallResult } from '@/types/inspection'
+import type { Personnel } from '@/types/equipment-personnel'
 
 const { RangePicker } = DatePicker
 
@@ -43,14 +45,38 @@ export function InspectionHistoryTab({ equipments }: Props) {
     } finally { setHistoryLoading(false) }
   }, [historyDateFrom, historyDateTo, historyEquipmentId, historyResult, historyPage, historyPageSize, setHistoryItems, setHistoryTotal, setHistoryLoading, message])
 
+  const [personnel, setPersonnel] = useState<Personnel[]>([])
+
   useEffect(() => { load() }, [load])
+
+  // 加载人员配置列表作为巡检人过滤选项（与 InspectionTaskDrawer 保持一致）
+  useEffect(() => {
+    fetchPersonnelList({}).then(r => setPersonnel(r.items.filter(p => p.is_active))).catch(() => {})
+  }, [])
+
+  const typeFilters = useMemo(() => [
+    { text: '线路巡检', value: '线路巡检' },
+    { text: '设备巡检', value: '设备巡检' },
+  ], [])
+
+  const assigneeFilters = useMemo(() => {
+    const seen = new Set<string>()
+    personnel.forEach(p => { if (p.name) seen.add(p.name) })
+    return Array.from(seen).sort().map(name => ({ text: name, value: name }))
+  }, [personnel])
 
   const columns: ColumnsType<InspectionTask> = [
     {
       title: '任务编号', dataIndex: 'task_no', width: 175,
+      sorter: (a, b) => a.task_no.localeCompare(b.task_no),
+      defaultSortOrder: 'descend',
       render: (n: string) => <span style={{ fontFamily: '"SF Mono", monospace', fontSize: 12, color: '#5d5b54' }}>{n}</span>,
     },
-    { title: '类型', dataIndex: 'plan_type', width: 85 },
+    {
+      title: '类型', dataIndex: 'plan_type', width: 85,
+      filters: typeFilters,
+      onFilter: (value, record) => record.plan_type === value,
+    },
     {
       title: '路线 / 设备', key: 'target', width: 170, ellipsis: true,
       render: (_: unknown, r: InspectionTask) => r.route_name || r.equipment_name || <span style={{ color: '#bbb8b1' }}>—</span>,
@@ -59,7 +85,7 @@ export function InspectionHistoryTab({ equipments }: Props) {
       title: '计划日期', dataIndex: 'planned_date', width: 105,
       render: (d: string) => <span style={{ fontSize: 13, color: '#5d5b54' }}>{d}</span>,
     },
-    { title: '巡检人', dataIndex: 'assignee_name', width: 85, render: (n: string | undefined) => n || <span style={{ color: '#bbb8b1' }}>—</span> },
+    { title: '巡检人', dataIndex: 'assignee_name', width: 85, filters: assigneeFilters, onFilter: (value, record) => record.assignee_name === value, render: (n: string | undefined) => n || <span style={{ color: '#bbb8b1' }}>—</span> },
     {
       title: '完成时间', dataIndex: 'completed_at', width: 155,
       render: (t: string | null) => t ? dayjs(t).format('MM-DD HH:mm') : <span style={{ color: '#bbb8b1' }}>—</span>,
@@ -125,6 +151,7 @@ export function InspectionHistoryTab({ equipments }: Props) {
       </div>
 
       <Table
+        key={`history-${personnel.length}`}
         columns={columns} dataSource={historyItems} rowKey="id"
         size="small" loading={historyLoading} scroll={{ x: 'max-content' }}
         pagination={{

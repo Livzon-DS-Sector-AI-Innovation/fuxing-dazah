@@ -119,6 +119,7 @@ export interface InspectionTask {
   equipment_id: string | null
   equipment_ids: string[] | null
   template_ids: string[] | null
+  equipment_templates: Record<string, string[]> | null
   plan_type: InspectionPlanType
   assigned_to: string | null
   planned_time: string
@@ -146,6 +147,7 @@ export interface CreateInspectionTaskInput {
   equipment_id?: string
   equipment_ids?: string[]
   template_ids?: string[]
+  equipment_templates?: Record<string, string[]>
   plan_type?: InspectionPlanType
   assigned_to?: string
   planned_time: string
