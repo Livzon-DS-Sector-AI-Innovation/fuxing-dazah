@@ -4,7 +4,8 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -459,16 +460,18 @@ async def serve_photo(
     photo_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.core.storage import is_enabled as minio_enabled, presigned_get_url
+    from app.core.storage import get_object, is_enabled as minio_enabled
 
     photo = await repo.get_photo_by_id(db, photo_id)
     if not photo:
         raise NotFoundException("照片", str(photo_id))
 
     if minio_enabled():
-        # MinIO 模式：生成预签名 URL 并重定向
-        url = presigned_get_url("equipment", photo.file_path)
-        return RedirectResponse(url=url, status_code=307)
+        result = get_object("equipment", photo.file_path)
+        if result is None:
+            raise NotFoundException("照片文件")
+        data, content_type = result
+        return StreamingResponse(BytesIO(data), media_type=content_type)
 
     # 本地文件系统模式
     if not os.path.exists(photo.file_path):

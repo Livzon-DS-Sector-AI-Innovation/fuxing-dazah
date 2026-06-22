@@ -4,7 +4,8 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -55,15 +56,18 @@ async def serve_work_order_image(
     image_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.core.storage import is_enabled as minio_enabled, presigned_get_url
+    from app.core.storage import get_object, is_enabled as minio_enabled
 
     image = await repo.get_image_by_id(db, image_id)
     if not image or str(image.work_order_id) != str(work_order_id):
         raise NotFoundException("图片", str(image_id))
 
     if minio_enabled():
-        url = presigned_get_url("equipment", image.file_path)
-        return RedirectResponse(url=url, status_code=307)
+        result = get_object("equipment", image.file_path)
+        if result is None:
+            raise NotFoundException("图片文件")
+        data, content_type = result
+        return StreamingResponse(BytesIO(data), media_type=content_type)
 
     if not os.path.exists(image.file_path):
         raise NotFoundException("图片文件")
