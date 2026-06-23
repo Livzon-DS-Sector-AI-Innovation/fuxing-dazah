@@ -2,7 +2,7 @@
 
 import { useEffect, useCallback } from 'react'
 import { App, Button, Space, Table, Input } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, ApartmentOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, ApartmentOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useInspectionStore } from '@/stores/inspection'
 import { deleteInspectionRoute } from '@/actions/inspection'
@@ -21,7 +21,7 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
   const {
     routes, routesTotal, routesPage, routesPageSize, routesLoading, routesKeyword, routesRefreshKey,
     setRoutes, setRoutesTotal, setRoutesLoading, setRoutesPage, setRoutesPageSize, setRoutesKeyword,
-    openRouteDrawer, openRouteEquipmentDrawer,
+    openRouteDrawer, openRouteEquipmentDrawer, openScheduleDrawer,
   } = useInspectionStore()
 
   const load = useCallback(async () => {
@@ -62,21 +62,6 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
       render: (c: number) => <span style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a' }}>{c || 0}</span>,
     },
     {
-      title: '周期', key: 'period', width: 120,
-      render: (_: unknown, r: InspectionRoute) => {
-        const v = r.period_value ? `每${r.period_value}` : ''
-        return (
-          <span style={{
-            padding: '2px 10px', borderRadius: 4,
-            fontSize: 12, fontWeight: 600, lineHeight: '20px',
-            color: '#5645d4', background: '#e6e0f5',
-          }}>
-            {v}{r.period_type}
-          </span>
-        )
-      },
-    },
-    {
       title: '设备数', dataIndex: 'equipment_count', width: 80, align: 'center',
       render: (c: number) => <span style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a' }}>{c || 0}</span>,
     },
@@ -92,6 +77,9 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
         <Space size={16}>
           <span role="button" onClick={() => openRouteEquipmentDrawer(r.id)} style={linkPurple}>
             <ApartmentOutlined />设备
+          </span>
+          <span role="button" onClick={() => openScheduleDrawer(r.id, r.name)} style={linkPurple}>
+            <ClockCircleOutlined />定时
           </span>
           <span role="button" onClick={() => openRouteDrawer(r)} style={linkPrimary}>
             <EditOutlined />编辑

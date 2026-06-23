@@ -1,5 +1,4 @@
 // ==================== 巡检枚举 ====================
-export type InspectionPeriodType = '每日' | '每周' | '每月' | '专项'
 export type InspectionTaskStatus = '待执行' | '执行中' | '已完成' | '已关闭'
 export type InspectionPlanType = '线路巡检' | '设备巡检'
 export type InspectionOverallResult = '正常' | '异常'
@@ -11,8 +10,6 @@ export interface InspectionRoute {
   name: string
   description: string | null
   is_active: boolean
-  period_type: InspectionPeriodType
-  period_value: number | null
   equipment_count: number
   location_count: number
   created_at: string
@@ -28,16 +25,12 @@ export interface InspectionRouteDetail extends InspectionRoute {
 export interface CreateInspectionRouteInput {
   name: string
   description?: string
-  period_type?: InspectionPeriodType
-  period_value?: number
 }
 
 export interface UpdateInspectionRouteInput {
   name?: string
   description?: string
   is_active?: boolean
-  period_type?: InspectionPeriodType
-  period_value?: number
 }
 
 // ==================== 路线地点配置 ====================
@@ -98,7 +91,6 @@ export interface RouteEquipmentItem {
 export interface InspectionRouteFilters {
   is_active?: boolean
   location_id?: string
-  period_type?: InspectionPeriodType
   keyword?: string
   page?: number
   page_size?: number
@@ -236,6 +228,32 @@ export interface InspectionHistoryListResponse {
   total: number
   page: number
   page_size: number
+}
+
+// ==================== 定时任务 ====================
+export interface InspectionRouteSchedule {
+  id: string
+  route_id: string
+  cron_expression: string
+  assigned_to: string | null
+  assignee_name?: string | null
+  is_active: boolean
+  last_triggered_at: string | null
+  next_trigger_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateInspectionScheduleInput {
+  cron_expression: string
+  assigned_to?: string | null
+  is_active?: boolean
+}
+
+export interface UpdateInspectionScheduleInput {
+  cron_expression?: string
+  assigned_to?: string | null
+  is_active?: boolean
 }
 
 // ==================== AI 分析 ====================

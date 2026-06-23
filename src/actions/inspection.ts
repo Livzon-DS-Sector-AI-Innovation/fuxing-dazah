@@ -7,6 +7,7 @@ import {
   CreateInspectionTaskInput, EquipmentCheckResult,
   InspectionRecordItem, InspectionAIItemResult,
   RouteCheckSubmitInput, RouteLocationItem,
+  CreateInspectionScheduleInput, UpdateInspectionScheduleInput,
 } from '@/types/inspection'
 
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -171,4 +172,33 @@ export async function analyzeInspectionPhoto(
     },
   )
   return result ?? []
+}
+
+// ==================== 路线定时任务 ====================
+export async function createSchedule(routeId: string, data: CreateInspectionScheduleInput) {
+  const result = await actionFetch(`${BASE}/routes/${routeId}/schedules`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidate()
+  return result
+}
+
+export async function updateSchedule(
+  routeId: string, scheduleId: string, data: UpdateInspectionScheduleInput,
+) {
+  const result = await actionFetch(`${BASE}/routes/${routeId}/schedules/${scheduleId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidate()
+  return result
+}
+
+export async function deleteSchedule(routeId: string, scheduleId: string) {
+  const result = await actionFetch(`${BASE}/routes/${routeId}/schedules/${scheduleId}`, {
+    method: 'DELETE',
+  })
+  revalidate()
+  return result
 }

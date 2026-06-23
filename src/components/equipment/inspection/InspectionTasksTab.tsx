@@ -81,9 +81,18 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
           }
         }
       }
-    } else if (record.template_ids) {
-      // 设备巡检：直接从 template_ids 获取
-      for (const tid of record.template_ids) {
+    } else {
+      // 设备巡检：从 template_ids（旧）或 equipment_templates（新）获取
+      const tids = new Set<string>()
+      if (record.template_ids) {
+        for (const tid of record.template_ids) tids.add(tid)
+      }
+      if (record.equipment_templates) {
+        for (const tplIds of Object.values(record.equipment_templates)) {
+          for (const tid of tplIds) tids.add(tid)
+        }
+      }
+      for (const tid of tids) {
         try {
           const tpl = await fetchInspectionTemplateByIdClient(tid)
           if (tpl?.items) items.push(...tpl.items)

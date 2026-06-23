@@ -267,7 +267,7 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
                         地点选择
                       </div>
                       <Select
-                        showSearch size="small" style={{ width: '100%' }}
+                        showSearch={{ optionFilterProp: 'label' }} size="small" style={{ width: '100%' }}
                         placeholder="选择巡检地点"
                         value={loc.location_id || undefined}
                         onChange={(v) => {
@@ -275,7 +275,7 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
                           updLoc(loc.key, 'location_id', v)
                           updLoc(loc.key, 'location_name', l?.name)
                         }}
-                        optionFilterProp="label" options={locOptions}
+                        options={locOptions}
                       />
                     </div>
                     <div style={{ width: 80 }}>
@@ -335,7 +335,7 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
                         {/* equipment select */}
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <Select
-                            showSearch size="small" style={{ width: '100%' }}
+                            showSearch={{ optionFilterProp: 'label' }} size="small" style={{ width: '100%' }}
                             placeholder="选择设备"
                             value={eq.equipment_id || undefined}
                             onChange={(v) => {
@@ -344,7 +344,7 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
                               updEq(loc.key, eq.key, 'equipment_name', e?.name)
                               updEq(loc.key, eq.key, 'equipment_no', e?.equipment_no)
                             }}
-                            optionFilterProp="label" options={eqOptions}
+                            options={eqOptions}
                           />
                           {eq.equipment_name && (
                             <div style={{ fontSize: 11, color: C.stone, marginTop: 2, paddingLeft: 2 }}>
@@ -385,7 +385,7 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
                           placeholder="绑定巡检模板（可多选，合并检查项）"
                           value={eq.template_ids}
                           onChange={v => updEq(loc.key, eq.key, 'template_ids', v)}
-                          optionFilterProp="label" options={tplOptions}
+                          showSearch={{ optionFilterProp: 'label' }} options={tplOptions}
                         />
                       </div>
                     </div>

@@ -3,6 +3,7 @@ import {
   InspectionTaskFilters, InspectionTaskListResponse, InspectionTask,
   InspectionHistoryFilters, InspectionHistoryListResponse, InspectionTaskDetail,
   InspectionPhoto, RouteLocationsBatch, RouteLocation,
+  InspectionRouteSchedule,
 } from '@/types/inspection'
 
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -25,7 +26,6 @@ export async function fetchInspectionRoutes(filters: InspectionRouteFilters = {}
   const params = new URLSearchParams()
   if (filters.is_active !== undefined) params.append('is_active', filters.is_active.toString())
   if (filters.location_id) params.append('location_id', filters.location_id)
-  if (filters.period_type) params.append('period_type', filters.period_type)
   if (filters.keyword) params.append('keyword', filters.keyword)
   if (filters.page) params.append('page', filters.page.toString())
   if (filters.page_size) params.append('page_size', filters.page_size.toString())
@@ -134,6 +134,16 @@ export async function setRouteLocations(routeId: string, data: RouteLocationsBat
 }
 
 // ==================== 设备列表 ====================
+// ==================== 路线定时任务 ====================
+export async function fetchRouteSchedules(routeId: string): Promise<InspectionRouteSchedule[]> {
+  const response = await fetch(`${INSPECTION_BASE}/routes/${routeId}/schedules`, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!response.ok) throw new Error(`请求失败: ${response.status}`)
+  const result = await response.json()
+  return result.data || []
+}
+
 export async function fetchEquipmentsClient(params: { page?: number; page_size?: number; keyword?: string } = {}) {
   const searchParams = new URLSearchParams()
   if (params.keyword) searchParams.append('keyword', params.keyword)

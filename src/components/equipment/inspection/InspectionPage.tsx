@@ -13,6 +13,7 @@ import { InspectionHistoryTab } from './InspectionHistoryTab'
 import { InspectionExecuteView } from './InspectionExecuteView'
 import { InspectionTaskDrawer } from './InspectionTaskDrawer'
 import { InspectionRouteDrawer } from './InspectionRouteDrawer'
+import { InspectionScheduleDrawer } from './InspectionScheduleDrawer'
 import { InspectionRouteEquipmentDrawer } from './InspectionRouteEquipmentDrawer'
 import { InspectionDetailDrawer } from './InspectionDetailDrawer'
 import { InspectionTemplateTable, InspectionTemplateDrawer, InspectionItemDrawer } from '@/components/equipment'
@@ -169,6 +170,7 @@ export function InspectionPage({ initialTemplates, initialEquipments, initialCat
 
       <InspectionTaskDrawer templates={templates} equipments={initialEquipments} />
       <InspectionRouteDrawer />
+      <InspectionScheduleDrawer />
       <InspectionRouteEquipmentDrawer equipments={initialEquipments} locations={initialLocations} templates={templates} />
       <InspectionDetailDrawer />
       <InspectionTemplateDrawer categories={initialCategories} onRefresh={fetchTemplateData} />

@@ -112,6 +112,13 @@ interface InspectionStore {
   openHistoryDetail: (taskId: string) => void
   closeHistoryDetail: () => void
 
+  // ── 定时任务抽屉 ──
+  scheduleDrawerOpen: boolean
+  scheduleRouteId: string | null
+  scheduleRouteName: string
+  openScheduleDrawer: (routeId: string, routeName: string) => void
+  closeScheduleDrawer: () => void
+
   // ── 共享数据 ──
   templates: InspectionTemplate[]
   setTemplates: (templates: InspectionTemplate[]) => void
@@ -229,6 +236,20 @@ export const useInspectionStore = create<InspectionStore>()((set) => ({
   detailTaskId: null,
   openHistoryDetail: (taskId) => set({ historyDetailOpen: true, detailTaskId: taskId }),
   closeHistoryDetail: () => set({ historyDetailOpen: false, detailTaskId: null }),
+
+  scheduleDrawerOpen: false,
+  scheduleRouteId: null,
+  scheduleRouteName: '',
+  openScheduleDrawer: (routeId, routeName) => set({
+    scheduleDrawerOpen: true,
+    scheduleRouteId: routeId,
+    scheduleRouteName: routeName,
+  }),
+  closeScheduleDrawer: () => set({
+    scheduleDrawerOpen: false,
+    scheduleRouteId: null,
+    scheduleRouteName: '',
+  }),
 
   // 共享
   templates: [],

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Avatar, Card, DatePicker, Drawer, Form, Select, Tag, Typography } from 'antd'
 import { UserOutlined, CheckSquareOutlined, CalendarOutlined } from '@ant-design/icons'
+import { PersonnelSelect } from '@/components/equipment'
 import { useInspectionStore } from '@/stores/inspection'
 import { createInspectionTask } from '@/actions/inspection'
 import { fetchInspectionRoutes } from '@/lib/api/inspection'
@@ -93,7 +94,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
               <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>巡检类型</span>
             </div>
             <Form.Item name="plan_type" noStyle initialValue="设备巡检">
-              <Select size="middle" style={{ width: '100%' }}
+              <Select size="medium" style={{ width: '100%' }}
                 options={[{ label: '线路巡检', value: '线路巡检' }, { label: '设备巡检', value: '设备巡检' }]} />
             </Form.Item>
           </div>
@@ -105,7 +106,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
                 <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>巡检线路</span>
               </div>
               <Form.Item name="route_id" noStyle rules={[{ required: true, message: '请选择巡检线路' }]}>
-                <Select showSearch placeholder="选择巡检线路" optionFilterProp="label"
+                <Select showSearch={{ optionFilterProp: 'label' }} placeholder="选择巡检线路"
                   popupMatchSelectWidth={false} style={{ width: '100%' }}
                   options={routes.map(r => ({ label: `${r.name} — ${r.equipment_count}台 · ${r.location_count || 0}地点`, value: r.id }))} />
               </Form.Item>
@@ -116,7 +117,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
                 <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>巡检设备（可多选）</span>
               </div>
               <Form.Item name="equipment_ids" noStyle rules={[{ required: true, type: 'array', min: 1, message: '请至少选一台设备' }]}>
-                <Select mode="multiple" showSearch placeholder="选择设备" optionFilterProp="label"
+                <Select mode="multiple" showSearch={{ optionFilterProp: 'label' }} placeholder="选择设备"
                   popupMatchSelectWidth={false} maxTagCount="responsive" style={{ width: '100%' }}
                   options={equipments.map(e => ({ label: `${e.name} (${e.equipment_no})`, value: e.id }))} />
               </Form.Item>
@@ -131,8 +132,8 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
                 <span style={{ fontSize: 11, color: C.stone }}>（线路模式自动获取）</span>
               </div>
               <Form.Item name="template_ids" noStyle>
-                <Select mode="multiple" showSearch placeholder="从路线地点配置获取"
-                  disabled optionFilterProp="label"
+                <Select mode="multiple" showSearch={{ optionFilterProp: 'label' }} placeholder="从路线地点配置获取"
+                  disabled
                   popupMatchSelectWidth={false} maxTagCount="responsive" style={{ width: '100%' }}
                   options={templates.map(t => ({ label: t.name, value: t.id }))} />
               </Form.Item>
@@ -167,9 +168,8 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
                     >
                       <Select
                         mode="multiple"
-                        showSearch
+                        showSearch={{ optionFilterProp: 'label' }}
                         placeholder={`为「${eq.name}」选择模板`}
-                        optionFilterProp="label"
                         popupMatchSelectWidth={false}
                         maxTagCount="responsive"
                         style={{ width: '100%' }}
@@ -197,7 +197,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
             </div>
             <Form.Item name="planned_time" noStyle rules={[{ required: true, message: '请选择计划时间' }]} initialValue={dayjs()}>
               <DatePicker showTime={{ format: 'HH:mm' }} getPopupContainer={() => document.body}
-                size="middle"
+                size="medium"
                 style={{ width: '100%', borderRadius: 8 }} />
             </Form.Item>
           </div>
@@ -209,7 +209,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
               <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>巡检人员</span>
             </div>
             <Form.Item name="assigned_to" noStyle rules={[{ required: true, message: '请选择巡检人员' }]}>
-              <Select showSearch placeholder="选择巡检人员" optionFilterProp="label"
+              <Select showSearch={{ optionFilterProp: 'label' }} placeholder="选择巡检人员"
                 popupMatchSelectWidth={false} style={{ width: '100%' }}
                 options={personnel.map(p => ({ label: `${p.name}${p.department ? ' · ' + p.department : ''}`, value: p.user_id || p.id }))}
                 optionRender={o => {

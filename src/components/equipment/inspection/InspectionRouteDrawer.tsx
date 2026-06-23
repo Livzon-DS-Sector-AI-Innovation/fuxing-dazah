@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect } from 'react'
-import { App, Drawer, Form, Input, InputNumber, Select, Space } from 'antd'
-import { EnvironmentOutlined, CalendarOutlined, FileTextOutlined } from '@ant-design/icons'
+import { App, Drawer, Form, Input } from 'antd'
+import { EnvironmentOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
 import { createInspectionRoute, updateInspectionRoute } from '@/actions/inspection'
 
@@ -30,12 +30,10 @@ export function InspectionRouteDrawer() {
       if (editingRoute) {
         form.setFieldsValue({
           name: editingRoute.name,
-          period_type: editingRoute.period_type,
-          period_value: editingRoute.period_value ?? undefined,
           description: editingRoute.description ?? undefined,
         })
       } else {
-        form.setFieldsValue({ period_type: '每日' })
+        form.resetFields()
       }
     }
   }, [routeDrawerOpen, editingRoute, form])
@@ -58,13 +56,6 @@ export function InspectionRouteDrawer() {
       message.error((err as Error).message || '操作失败')
     }
   }
-
-  const periodType = Form.useWatch('period_type', form)
-
-  const periodLabel = periodType === '每日' ? '每隔几天巡检一次'
-    : periodType === '每周' ? '每隔几周巡检一次'
-    : periodType === '每月' ? '每隔几月巡检一次'
-    : '周期数值'
 
   return (
     <Drawer
@@ -112,54 +103,6 @@ export function InspectionRouteDrawer() {
             </Form.Item>
           </div>
 
-          {/* 巡检周期 */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6,
-            }}>
-              <CalendarOutlined style={{ color: C.purple, fontSize: 13 }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: C.slate, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                巡检周期
-              </span>
-            </div>
-            <div style={{
-              padding: '14px 16px', background: C.surfaceSoft,
-              borderRadius: 10, border: `1px solid ${C.hairlineSoft}`,
-            }}>
-              <Form.Item name="period_type" noStyle initialValue="每日">
-                <Select
-                  size="middle"
-                  style={{ width: '100%', marginBottom: 12 }}
-                  options={[
-                    { label: '每日巡检', value: '每日' },
-                    { label: '每周巡检', value: '每周' },
-                    { label: '每月巡检', value: '每月' },
-                    { label: '专项巡检（无固定周期）', value: '专项' },
-                  ]}
-                />
-              </Form.Item>
-              {periodType && periodType !== '专项' && (
-                <Form.Item name="period_value" noStyle>
-                  <Space.Compact style={{ width: '100%' }}>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center',
-                      padding: '0 11px', fontSize: 12, color: C.stone,
-                      background: '#fafaf9', border: `1px solid ${C.hairline}`,
-                      borderRadius: '7px 0 0 7px', whiteSpace: 'nowrap',
-                    }}>{periodLabel}</span>
-                    <InputNumber min={1} style={{ flex: 1, borderRadius: '0 7px 7px 0' }}
-                      placeholder="1" />
-                  </Space.Compact>
-                </Form.Item>
-              )}
-              {periodType === '专项' && (
-                <div style={{ fontSize: 12, color: C.stone, padding: '6px 0 0' }}>
-                  专项巡检无固定周期，需手动创建任务
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* 路线描述 */}
           <div style={{ marginBottom: 24 }}>
             <div style={{
@@ -190,8 +133,10 @@ export function InspectionRouteDrawer() {
             fontSize: 12, color: '#391c57', lineHeight: 1.6,
           }}>
             <strong>💡 提示：</strong>创建路线后，请在路线列表点击
+            <span style={{ color: C.purple, fontWeight: 600 }}>「定时」</span>
+            配置定时执行计划，再点击
             <span style={{ color: C.purple, fontWeight: 600 }}>「设备」</span>
-            按钮配置巡检地点、设备和检查模板。
+            配置巡检地点、设备和检查模板。
           </div>
         </Form>
       </div>
