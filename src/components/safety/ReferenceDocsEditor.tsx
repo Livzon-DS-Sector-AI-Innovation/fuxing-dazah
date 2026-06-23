@@ -9,7 +9,7 @@ import {
   Typography,
   Space,
   Tooltip,
-  message,
+  App,
   Spin,
 } from 'antd'
 import {
@@ -65,6 +65,7 @@ function formatSize(bytes?: number): string {
 }
 
 export default function ReferenceDocsEditor({ value, onChange }: Props) {
+  const { message } = App.useApp()
   const [uploading, setUploading] = useState(false)
   const [kbPickerOpen, setKbPickerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -100,7 +101,7 @@ export default function ReferenceDocsEditor({ value, onChange }: Props) {
     setUploading(true)
     try {
       const res = await uploadWorkflowAttachment(file)
-      if (res.code === 0 && res.data) {
+      if (res.data) {
         const newAtt: ReferenceAttachment = res.data
         emit({ attachments: [...attachments, newAtt] })
         message.success(`${file.name} 已上传并转为 Markdown`)
@@ -136,7 +137,7 @@ export default function ReferenceDocsEditor({ value, onChange }: Props) {
     setUploading(true)
     try {
       const res = await createKnowledgeAttachments(newIds)
-      if (res.code === 0 && res.data) {
+      if (res.data) {
         emit({ attachments: [...attachments, ...res.data] })
         message.success(`已添加 ${res.data.length} 篇知识库文章`)
       } else {

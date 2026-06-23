@@ -71,7 +71,6 @@ export const moduleMenus: ModuleMenu[] = [
         path: "",
         children: [
           { key: "ai-workflow", label: "AI工作流配置", path: "/safety/ai-workflow-config" },
-          { key: "api-config", label: "API调用配置", path: "/safety/api-call-config" },
           { key: "scheduled-tasks", label: "定时任务", path: "/safety/scheduled-tasks" },
         ],
       },
@@ -105,7 +104,6 @@ export const moduleMenus: ModuleMenu[] = [
             label: "隐患排查治理",
             path: "",
             children: [
-              { key: "hazard-check", label: "隐患排查", path: "/safety/hazard" },
               { key: "hazard-inspection-ledger", label: "隐患台账", path: "/safety/hazard-ledger" },
             ],
           },
@@ -115,6 +113,7 @@ export const moduleMenus: ModuleMenu[] = [
             path: "",
             children: [
               { key: "regulation-list", label: "安全操规台账", path: "/safety/regulation" },
+              { key: "regulation-generator", label: "标准化生成", path: "/safety/regulation/generator" },
             ],
           },
           {

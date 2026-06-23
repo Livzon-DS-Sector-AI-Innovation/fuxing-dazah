@@ -4,7 +4,6 @@ import type {
   AccidentQueryParams,
   AIWorkflowConfig,
   AIWorkflowConfigQueryParams,
-  APICallConfig,
   EhsChange,
   EhsChangeQueryParams,
   HazardReport,
@@ -31,6 +30,9 @@ import type {
   SpecialOperationReportQueryParams,
   DailyRiskReport,
   DailyRiskReportQueryParams,
+  HazardIdentification,
+  HazardIdentificationQueryParams,
+  HazardIdentificationStats,
   TrainingRecord,
   ScheduledTask,
   ScheduledTaskLog,
@@ -94,12 +96,6 @@ interface SafetyState {
   aiWorkflowConfigTotal: number
   aiWorkflowConfigLoading: boolean
 
-  // API call config state
-  apiCallConfigs: APICallConfig[]
-  currentAPICallConfig: APICallConfig | null
-  apiCallConfigTotal: number
-  apiCallConfigLoading: boolean
-
   // Special operation personnel state
   personnel: SpecialOperationPersonnel[]
   currentPersonnel: SpecialOperationPersonnel | null
@@ -136,6 +132,13 @@ interface SafetyState {
   dailyRiskReportLoading: boolean
 
   // EHS change state
+  // HazardIdentification state
+  hazardIdentifications: HazardIdentification[]
+  currentHazardIdentification: HazardIdentification | null
+  hazardIdentificationQueryParams: HazardIdentificationQueryParams
+  hazardIdentificationTotal: number
+  hazardIdentificationLoading: boolean
+
   ehsChanges: EhsChange[]
   currentEhsChange: EhsChange | null
   ehsChangeQueryParams: EhsChangeQueryParams
@@ -238,15 +241,6 @@ interface SafetyState {
   updateAIWorkflowConfig: (id: string, config: Partial<AIWorkflowConfig>) => void
   removeAIWorkflowConfig: (id: string) => void
 
-  // Actions - API Call Config
-  setAPICallConfigs: (configs: APICallConfig[]) => void
-  setCurrentAPICallConfig: (config: APICallConfig | null) => void
-  setAPICallConfigTotal: (total: number) => void
-  setAPICallConfigLoading: (loading: boolean) => void
-  addAPICallConfig: (config: APICallConfig) => void
-  updateAPICallConfig: (id: string, config: Partial<APICallConfig>) => void
-  removeAPICallConfig: (id: string) => void
-
   // Actions - Personnel
   setPersonnel: (personnel: SpecialOperationPersonnel[]) => void
   setCurrentPersonnel: (p: SpecialOperationPersonnel | null) => void
@@ -297,6 +291,16 @@ interface SafetyState {
   updateDailyRiskReport: (id: string, r: Partial<DailyRiskReport>) => void
   removeDailyRiskReport: (id: string) => void
 
+  // Actions - HazardIdentification
+  setHazardIdentifications: (items: HazardIdentification[], total: number) => void
+  setCurrentHazardIdentification: (item: HazardIdentification | null) => void
+  setHazardIdentificationQueryParams: (params: Partial<HazardIdentificationQueryParams>) => void
+  setHazardIdentificationTotal: (total: number) => void
+  setHazardIdentificationLoading: (loading: boolean) => void
+  addHazardIdentification: (item: HazardIdentification) => void
+  updateHazardIdentification: (id: string, item: Partial<HazardIdentification>) => void
+  removeHazardIdentification: (id: string) => void
+
   // Actions - EHS Change
   setEhsChanges: (changes: EhsChange[]) => void
   setCurrentEhsChange: (c: EhsChange | null) => void
@@ -342,6 +346,7 @@ interface SafetyState {
   setFeishuChats: (chats: FeishuChat[]) => void
 
   // Actions - Reset
+  resetScheduledTaskState: () => void
   resetOhHazardMonitorState: () => void
   resetOhHealthExamState: () => void
   resetCheckState: () => void
@@ -351,13 +356,13 @@ interface SafetyState {
   resetRegulationState: () => void
   resetRevisionState: () => void
   resetAIWorkflowConfigState: () => void
-  resetAPICallConfigState: () => void
   resetPersonnelState: () => void
   resetPermitState: () => void
   resetArticleState: () => void
   resetSpecialOpReportState: () => void
   resetDailyRiskReportState: () => void
   resetEhsChangeState: () => void
+  resetHazardIdentificationState: () => void
   resetAll: () => void
 }
 
@@ -418,13 +423,6 @@ const initialAIWorkflowConfigState = {
   aiWorkflowConfigLoading: false,
 }
 
-const initialAPICallConfigState = {
-  apiCallConfigs: [] as APICallConfig[],
-  currentAPICallConfig: null as APICallConfig | null,
-  apiCallConfigTotal: 0,
-  apiCallConfigLoading: false,
-}
-
 const initialPersonnelState = {
   personnel: [] as SpecialOperationPersonnel[],
   currentPersonnel: null as SpecialOperationPersonnel | null,
@@ -463,6 +461,14 @@ const initialDailyRiskReportState = {
   dailyRiskReportQueryParams: { page: 1, page_size: 20 } as DailyRiskReportQueryParams,
   dailyRiskReportTotal: 0,
   dailyRiskReportLoading: false,
+}
+
+const initialHazardIdentificationState = {
+  hazardIdentifications: [] as HazardIdentification[],
+  currentHazardIdentification: null as HazardIdentification | null,
+  hazardIdentificationQueryParams: { page: 1, page_size: 20 } as HazardIdentificationQueryParams,
+  hazardIdentificationTotal: 0,
+  hazardIdentificationLoading: false,
 }
 
 const initialEhsChangeState = {
@@ -510,12 +516,12 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialRegulationState,
   ...initialRevisionState,
   ...initialAIWorkflowConfigState,
-  ...initialAPICallConfigState,
   ...initialPersonnelState,
   ...initialPermitState,
   ...initialArticleState,
   ...initialSpecialOpReportState,
   ...initialDailyRiskReportState,
+  ...initialHazardIdentificationState,
   ...initialEhsChangeState,
   ...initialOhHazardMonitorState,
   ...initialOhHealthExamState,
@@ -697,33 +703,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
         state.currentAIWorkflowConfig?.id === id ? null : state.currentAIWorkflowConfig,
     })),
 
-  // ============ API Call Config Actions ============
-  setAPICallConfigs: (configs) => set({ apiCallConfigs: configs }),
-  setCurrentAPICallConfig: (config) => set({ currentAPICallConfig: config }),
-  setAPICallConfigTotal: (total) => set({ apiCallConfigTotal: total }),
-  setAPICallConfigLoading: (loading) => set({ apiCallConfigLoading: loading }),
-
-  addAPICallConfig: (config) =>
-    set((state) => ({ apiCallConfigs: [config, ...state.apiCallConfigs] })),
-
-  updateAPICallConfig: (id, updates) =>
-    set((state) => ({
-      apiCallConfigs: state.apiCallConfigs.map((c) =>
-        c.id === id ? { ...c, ...updates } : c
-      ),
-      currentAPICallConfig:
-        state.currentAPICallConfig?.id === id
-          ? { ...state.currentAPICallConfig, ...updates }
-          : state.currentAPICallConfig,
-    })),
-
-  removeAPICallConfig: (id) =>
-    set((state) => ({
-      apiCallConfigs: state.apiCallConfigs.filter((c) => c.id !== id),
-      currentAPICallConfig:
-        state.currentAPICallConfig?.id === id ? null : state.currentAPICallConfig,
-    })),
-
   // ============ Personnel Actions ============
   setPersonnel: (personnel) => set({ personnel }),
   setCurrentPersonnel: (p) => set({ currentPersonnel: p }),
@@ -835,6 +814,36 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       currentDailyRiskReport: state.currentDailyRiskReport?.id === id ? null : state.currentDailyRiskReport,
     })),
 
+  // ============ HazardIdentification Actions ============
+
+  setHazardIdentifications: (items, total) =>
+    set({ hazardIdentifications: items, hazardIdentificationTotal: total }),
+  setCurrentHazardIdentification: (item) => set({ currentHazardIdentification: item }),
+  setHazardIdentificationQueryParams: (params) =>
+    set((state) => ({
+      hazardIdentificationQueryParams: { ...state.hazardIdentificationQueryParams, ...params },
+    })),
+  setHazardIdentificationTotal: (total) => set({ hazardIdentificationTotal: total }),
+  setHazardIdentificationLoading: (loading) => set({ hazardIdentificationLoading: loading }),
+  addHazardIdentification: (item) =>
+    set((state) => ({ hazardIdentifications: [item, ...state.hazardIdentifications] })),
+  updateHazardIdentification: (id, data) =>
+    set((state) => ({
+      hazardIdentifications: state.hazardIdentifications.map((h) =>
+        h.id === id ? { ...h, ...data } : h
+      ),
+      currentHazardIdentification:
+        state.currentHazardIdentification?.id === id
+          ? { ...state.currentHazardIdentification, ...data }
+          : state.currentHazardIdentification,
+    })),
+  removeHazardIdentification: (id) =>
+    set((state) => ({
+      hazardIdentifications: state.hazardIdentifications.filter((h) => h.id !== id),
+      currentHazardIdentification:
+        state.currentHazardIdentification?.id === id ? null : state.currentHazardIdentification,
+    })),
+
   // ============ EHS Change Actions ============
   setEhsChanges: (ehsChanges) => set({ ehsChanges }),
   setCurrentEhsChange: (currentEhsChange) => set({ currentEhsChange }),
@@ -930,13 +939,13 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetRegulationState: () => set(initialRegulationState),
   resetRevisionState: () => set(initialRevisionState),
   resetAIWorkflowConfigState: () => set(initialAIWorkflowConfigState),
-  resetAPICallConfigState: () => set(initialAPICallConfigState),
   resetPersonnelState: () => set(initialPersonnelState),
   resetPermitState: () => set(initialPermitState),
   resetArticleState: () => set(initialArticleState),
   resetSpecialOpReportState: () => set(initialSpecialOpReportState),
   resetDailyRiskReportState: () => set(initialDailyRiskReportState),
   resetEhsChangeState: () => set(initialEhsChangeState),
+  resetHazardIdentificationState: () => set(initialHazardIdentificationState),
   resetOhHazardMonitorState: () => set(initialOhHazardMonitorState),
   resetOhHealthExamState: () => set(initialOhHealthExamState),
   resetScheduledTaskState: () => set(initialScheduledTaskState),
@@ -950,12 +959,12 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialRegulationState,
       ...initialRevisionState,
       ...initialAIWorkflowConfigState,
-      ...initialAPICallConfigState,
       ...initialPersonnelState,
       ...initialPermitState,
       ...initialArticleState,
       ...initialSpecialOpReportState,
       ...initialDailyRiskReportState,
+      ...initialHazardIdentificationState,
       ...initialEhsChangeState,
       ...initialOhHazardMonitorState,
       ...initialOhHealthExamState,

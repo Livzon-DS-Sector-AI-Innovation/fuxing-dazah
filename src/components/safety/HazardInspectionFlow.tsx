@@ -9,7 +9,6 @@ import {
   Typography,
   App,
   Drawer,
-  Tag,
   Empty,
   Spin,
   Result,
@@ -25,6 +24,9 @@ import {
   InboxOutlined,
   DeleteOutlined,
   ExclamationCircleOutlined,
+  BankOutlined,
+  ClockCircleOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
 import HazardInspectionForm from './HazardInspectionForm'
 import type { InspectionFormValues } from './HazardInspectionForm'
@@ -34,19 +36,129 @@ import {
   updateHazard,
   getHazards,
   runHazardAI,
-  reviewHazardAI,
   deleteHazard,
+  uploadHazardPhoto,
 } from '@/actions/safety'
-import type { HazardReport, HazardReportFormData } from '@/types/safety'
+import type { HazardReport } from '@/types/safety'
 import dayjs from 'dayjs'
 
 const { Text, Title } = Typography
 
 type FlowStep = 'form' | 'analyzing' | 'review' | 'done'
 
-export default function HazardInspectionFlow() {
+interface Props {
+  variant?: 'page' | 'drawer'
+  onDone?: () => void
+}
+
+// ═══════════════════════════════════════════════════════════
+// 视觉组件
+// ═══════════════════════════════════════════════════════════
+
+function StatusPill({
+  color,
+  bg,
+  icon,
+  children,
+}: {
+  color: string
+  bg: string
+  icon?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 10px',
+        borderRadius: 4,
+        fontSize: 12,
+        fontWeight: 600,
+        lineHeight: '20px',
+        color,
+        background: bg,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {icon}
+      {children}
+    </span>
+  )
+}
+
+/** 阶段编号圆点 */
+function StageDot({ num, active }: { num: number; active: boolean }) {
+  return (
+    <div
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: '50%',
+        background: active ? '#5645d4' : '#c8c4be',
+        color: '#ffffff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 13,
+        fontWeight: 700,
+        flexShrink: 0,
+        transition: 'background 0.3s ease',
+      }}
+    >
+      {num}
+    </div>
+  )
+}
+
+/** 阶段连接竖线 */
+function StageConnector() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: '4px 0' }}>
+      <div style={{ width: 2, height: 20, background: '#ede9e4', borderRadius: 1 }} />
+    </div>
+  )
+}
+
+/** Stage Card — 左侧 accent bar + hover 动效 */
+function StageCard({
+  accentColor,
+  children,
+}: {
+  accentColor: string
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      style={{
+        position: 'relative',
+        background: '#ffffff',
+        borderRadius: 12,
+        border: '1px solid #e5e3df',
+        borderLeft: `4px solid ${accentColor}`,
+        overflow: 'hidden',
+        transition: 'all 0.2s ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = '#c8c4be'
+        e.currentTarget.style.boxShadow = 'rgba(15,15,15,0.06) 0px 2px 8px 0px'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = '#e5e3df'
+        e.currentTarget.style.boxShadow = 'none'
+      }}
+    >
+      <div style={{ padding: '20px 24px' }}>{children}</div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════
+
+export default function HazardInspectionFlow({ variant = 'page', onDone }: Props) {
   const router = useRouter()
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
 
   // ── 流程状态 ──
   const [currentStep, setCurrentStep] = useState<FlowStep>('form')
@@ -95,16 +207,16 @@ export default function HazardInspectionFlow() {
       let hazard: HazardReport
 
       if (currentHazard) {
-        // 从草稿继续 → 更新已有记录
         const updateRes = await updateHazard(currentHazard.id, {
           inspection_category: values.inspection_category,
-          location: values.location,
+          discovered_by: values.discovered_by,
           discovered_by_name: values.discovered_by_name,
+          inspector_department: values.inspector_department,
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
-          overall_status: 'draft', // 保持草稿状态，等AI完成后入库
-        } as HazardReportFormData)
+          overall_status: 'draft',
+        } as any)
         if (updateRes.code !== 200) {
           message.error(updateRes.message || '更新失败')
           setSubmitting(false)
@@ -112,16 +224,16 @@ export default function HazardInspectionFlow() {
         }
         hazard = updateRes.data as HazardReport
       } else {
-        // 新建记录
         const createRes = await createHazard({
           hazard_no: '',
           inspection_category: values.inspection_category,
-          location: values.location,
+          discovered_by: values.discovered_by,
           discovered_by_name: values.discovered_by_name,
+          inspector_department: values.inspector_department,
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
-        } as HazardReportFormData)
+        } as any)
         if (createRes.code !== 200) {
           message.error(createRes.message || '创建失败')
           setSubmitting(false)
@@ -136,12 +248,7 @@ export default function HazardInspectionFlow() {
       if (files.length > 0) {
         for (const file of files) {
           try {
-            const formData = new FormData()
-            formData.append('file', file)
-            await fetch(`${API_BASE}/safety/hazards/${hazard.id}/upload-photo`, {
-              method: 'POST',
-              body: formData,
-            })
+            await uploadHazardPhoto(hazard.id, file as unknown as File)
           } catch {
             console.error('图片上传失败')
           }
@@ -157,7 +264,6 @@ export default function HazardInspectionFlow() {
       if (r1.code !== 200) {
         message.warning('AI 识别失败：' + (r1.message || '未知错误'))
         setAiProgress('error')
-        // 仍然允许进入 review 步骤（用户可手动填写）
         const updated = await refreshHazard(hazard.id)
         setCurrentHazard(updated)
         setCurrentStep('review')
@@ -175,7 +281,6 @@ export default function HazardInspectionFlow() {
         setAiProgress('done')
       }
 
-      // 刷新数据并进入审核
       const updated = await refreshHazard(hazard.id)
       setCurrentHazard(updated)
       setCurrentStep('review')
@@ -194,33 +299,33 @@ export default function HazardInspectionFlow() {
       let hazard: HazardReport
 
       if (currentHazard) {
-        // 从草稿继续 → 更新已有记录
         const updateRes = await updateHazard(currentHazard.id, {
           inspection_category: values.inspection_category,
-          location: values.location,
+          discovered_by: values.discovered_by,
           discovered_by_name: values.discovered_by_name,
+          inspector_department: values.inspector_department,
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
           overall_status: 'draft',
-        } as HazardReportFormData)
+        } as any)
         if (updateRes.code !== 200) {
           message.error(updateRes.message || '保存草稿失败')
           return
         }
         hazard = updateRes.data as HazardReport
       } else {
-        // 新建草稿
         const createRes = await createHazard({
           hazard_no: '',
           inspection_category: values.inspection_category,
-          location: values.location,
+          discovered_by: values.discovered_by,
           discovered_by_name: values.discovered_by_name,
+          inspector_department: values.inspector_department,
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
           overall_status: 'draft',
-        } as HazardReportFormData)
+        } as any)
         if (createRes.code !== 200) {
           message.error(createRes.message || '保存草稿失败')
           return
@@ -246,7 +351,6 @@ export default function HazardInspectionFlow() {
 
       message.success('草稿已保存')
       await loadDrafts()
-      // 重置为初始状态
       setCurrentStep('form')
       setCurrentHazard(null)
       setDraftFormValues(undefined)
@@ -262,7 +366,6 @@ export default function HazardInspectionFlow() {
     if (!currentHazard) return
     setConfirming(true)
     try {
-      // 如果有编辑，先更新字段
       if (Object.keys(edits).length > 0) {
         const updateRes = await updateHazard(currentHazard.id, edits as any)
         if (updateRes.code !== 200) {
@@ -272,15 +375,9 @@ export default function HazardInspectionFlow() {
         }
       }
 
-      // 审核通过（入库）
-      const reviewRes = await reviewHazardAI(currentHazard.id, 0, 'approved')
-      if (reviewRes.code === 200) {
-        message.success('隐患已确认入库！')
-        setCompletedHazardNo(currentHazard.hazard_no)
-        setCurrentStep('done')
-      } else {
-        message.error(reviewRes.message || '确认失败')
-      }
+      message.success('隐患已确认入库！')
+      setCompletedHazardNo(currentHazard.hazard_no)
+      setCurrentStep('done')
     } catch {
       message.error('确认操作失败')
     } finally {
@@ -337,8 +434,9 @@ export default function HazardInspectionFlow() {
   const handleContinueDraft = (draft: HazardReport) => {
     setDraftFormValues({
       inspection_category: draft.inspection_category,
-      location: draft.location,
+      discovered_by: draft.discovered_by,
       discovered_by_name: draft.discovered_by_name,
+      inspector_department: draft.inspector_department,
       department: draft.department,
       discovered_at: draft.discovered_at,
       description: draft.description,
@@ -372,9 +470,17 @@ export default function HazardInspectionFlow() {
     setAiProgress('idle')
   }
 
+  const handleGoToLedger = () => {
+    if (variant === 'drawer' && onDone) {
+      onDone()
+    } else {
+      router.push('/safety/hazard-ledger')
+    }
+  }
+
   // ── 步骤条配置 ──
   const stepItems = [
-    { title: '登记信息', icon: <EditOutlined /> },
+    { title: '隐患登记', icon: <EditOutlined /> },
     { title: 'AI分析', icon: <RobotOutlined /> },
     { title: '确认结果', icon: <CheckCircleOutlined /> },
     { title: '完成', icon: <FileTextOutlined /> },
@@ -389,30 +495,8 @@ export default function HazardInspectionFlow() {
           ? 2
           : 3
 
-  return (
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-      {/* ── 页头 ── */}
-      <div style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1a1a1a' }}>
-              隐患排查
-            </h1>
-            <Text style={{ color: '#5d5b54' }}>隐患登记与AI智能分析</Text>
-          </div>
-          <Space>
-            <Button icon={<InboxOutlined />} onClick={() => { loadDrafts(); setDraftDrawerOpen(true) }}>
-              草稿箱
-              {drafts.length > 0 && (
-                <Tag color="blue" style={{ marginLeft: 8, borderRadius: 10 }}>
-                  {drafts.length}
-                </Tag>
-              )}
-            </Button>
-          </Space>
-        </div>
-      </div>
-
+  const content = (
+    <>
       {/* ── 步骤条 ── */}
       <Card style={{ borderRadius: 12, border: '1px solid #e5e3df', marginBottom: 24 }}>
         <Steps
@@ -445,43 +529,46 @@ export default function HazardInspectionFlow() {
 
       {/* ── Step 2: AI 分析中 ── */}
       {currentStep === 'analyzing' && (
-        <Card
-          style={{ borderRadius: 12, border: '1px solid #e5e3df', maxWidth: 600, margin: '0 auto', textAlign: 'center' }}
-        >
-          <Spin size="large" />
-          <div style={{ marginTop: 24 }}>
-            <Title level={4}>
-              🤖 AI 正在分析中...
-            </Title>
-            <Space orientation="vertical" size="middle" style={{ marginTop: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {aiProgress === 'script1' ? (
-                  <LoadingOutlined style={{ color: '#722ed1' }} />
-                ) : aiProgress === 'script2' || aiProgress === 'done' ? (
-                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                ) : aiProgress === 'error' ? (
-                  <ExclamationCircleOutlined style={{ color: '#faad14' }} />
-                ) : null}
-                <Text>
-                  {aiProgress === 'script1'
-                    ? '正在识别隐患信息（Step 1）...'
-                    : aiProgress === 'script2'
-                      ? '正在生成整改建议（Step 2）...'
-                      : aiProgress === 'done'
-                        ? 'AI 分析完成'
-                        : aiProgress === 'error'
-                          ? 'AI 分析遇到问题'
-                          : '准备中...'}
-                </Text>
+        <StageCard accentColor="#5645d4">
+          <div style={{ textAlign: 'center', padding: '16px 0' }}>
+            <Spin size="large" />
+            <div style={{ marginTop: 24 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+                <RobotOutlined style={{ color: '#5645d4', fontSize: 20 }} />
+                <Title level={4} style={{ margin: 0, color: '#1a1a1a' }}>
+                  AI 正在分析中
+                </Title>
               </div>
-            </Space>
-            {currentHazard && (
-              <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>
-                编号：{currentHazard.hazard_no}
-              </Text>
-            )}
+              <Space orientation="vertical" size="middle" style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {aiProgress === 'script1' ? (
+                    <LoadingOutlined style={{ color: '#5645d4' }} />
+                  ) : aiProgress === 'script2' || aiProgress === 'done' ? (
+                    <CheckCircleOutlined style={{ color: '#1aae39' }} />
+                  ) : aiProgress === 'error' ? (
+                    <ExclamationCircleOutlined style={{ color: '#dd5b00' }} />
+                  ) : null}
+                  <Text style={{ fontSize: 14 }}>
+                    {aiProgress === 'script1'
+                      ? '正在识别隐患信息（Step 1）...'
+                      : aiProgress === 'script2'
+                        ? '正在生成整改建议（Step 2）...'
+                        : aiProgress === 'done'
+                          ? 'AI 分析完成'
+                          : aiProgress === 'error'
+                            ? 'AI 分析遇到问题'
+                            : '准备中...'}
+                  </Text>
+                </div>
+              </Space>
+              {currentHazard && (
+                <Text type="secondary" style={{ display: 'block', marginTop: 16 }}>
+                  编号：{currentHazard.hazard_no}
+                </Text>
+              )}
+            </div>
           </div>
-        </Card>
+        </StageCard>
       )}
 
       {/* ── Step 3: AI 结果确认 ── */}
@@ -496,9 +583,7 @@ export default function HazardInspectionFlow() {
 
       {/* ── Step 4: 完成 ── */}
       {currentStep === 'done' && (
-        <Card
-          style={{ borderRadius: 12, border: '1px solid #e5e3df', maxWidth: 600, margin: '0 auto' }}
-        >
+        <StageCard accentColor="#1aae39">
           <Result
             status="success"
             title="隐患已确认入库！"
@@ -507,7 +592,7 @@ export default function HazardInspectionFlow() {
               <Button
                 type="primary"
                 key="ledger"
-                onClick={() => router.push('/safety/hazard-ledger')}
+                onClick={handleGoToLedger}
               >
                 前往台账查看
               </Button>,
@@ -516,7 +601,7 @@ export default function HazardInspectionFlow() {
               </Button>,
             ]}
           />
-        </Card>
+        </StageCard>
       )}
 
       {/* ── 草稿箱抽屉 ── */}
@@ -525,11 +610,14 @@ export default function HazardInspectionFlow() {
           <Space>
             <InboxOutlined />
             <span>草稿箱</span>
-            <Tag color="blue">{drafts.length}</Tag>
+            {drafts.length > 0 && (
+              <StatusPill color="#0075de" bg="#dcecfa">{String(drafts.length)}</StatusPill>
+            )}
           </Space>
         }
         open={draftDrawerOpen}
         onClose={() => setDraftDrawerOpen(false)}
+        styles={{ body: { padding: '16px 24px' } }}
         size={420}
       >
         {draftsLoading ? (
@@ -557,22 +645,18 @@ export default function HazardInspectionFlow() {
                         {draft.hazard_no || '未编号'}
                       </Text>
                       {draft.inspection_category && (
-                        <Tag>{draft.inspection_category}</Tag>
+                        <StatusPill color="#5d5b54" bg="#f0eeec">{draft.inspection_category}</StatusPill>
                       )}
                     </Space>
                     <div style={{ fontSize: 12 }}>
-                      {draft.location && (
-                        <Text type="secondary" style={{ display: 'block' }}>
-                          📍 {draft.location}
-                        </Text>
-                      )}
                       {draft.department && (
                         <Text type="secondary" style={{ display: 'block' }}>
-                          🏢 {draft.department}
+                          <BankOutlined style={{ marginRight: 4 }} />
+                          {draft.department}
                         </Text>
                       )}
                       <Text type="secondary" style={{ display: 'block' }}>
-                        🕐{' '}
+                        <ClockCircleOutlined style={{ marginRight: 4 }} />
                         {draft.created_at
                           ? dayjs(draft.created_at).format('YYYY-MM-DD HH:mm')
                           : '-'}
@@ -602,6 +686,52 @@ export default function HazardInspectionFlow() {
           </div>
         )}
       </Drawer>
+    </>
+  )
+
+  // ── Page variant: wrap with page container + header ──
+  if (variant === 'page') {
+    return (
+      <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <h1 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1a1a1a' }}>
+                隐患登记
+              </h1>
+              <Text style={{ color: '#5d5b54' }}>登记隐患信息并智能分析</Text>
+            </div>
+            <Space>
+              <Button icon={<InboxOutlined />} onClick={() => { loadDrafts(); setDraftDrawerOpen(true) }}>
+                草稿箱
+                {drafts.length > 0 && (
+                  <StatusPill color="#0075de" bg="#dcecfa">{String(drafts.length)}</StatusPill>
+                )}
+              </Button>
+            </Space>
+          </div>
+        </div>
+        {content}
+      </div>
+    )
+  }
+
+  // ── Drawer variant: minimal container (drawer provides padding) ──
+  return (
+    <div>
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SearchOutlined style={{ color: '#5645d4', fontSize: 18 }} />
+          <span style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a' }}>隐患登记</span>
+        </div>
+        <Button icon={<InboxOutlined />} onClick={() => { loadDrafts(); setDraftDrawerOpen(true) }}>
+          草稿箱
+          {drafts.length > 0 && (
+            <StatusPill color="#0075de" bg="#dcecfa">{String(drafts.length)}</StatusPill>
+          )}
+        </Button>
+      </div>
+      {content}
     </div>
   )
 }

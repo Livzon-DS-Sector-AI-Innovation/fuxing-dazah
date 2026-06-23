@@ -3,15 +3,11 @@
 import { useState } from 'react'
 import {
   Card,
-  Descriptions,
-  Tag,
   Button,
-  Space,
   Typography,
   Alert,
   Select,
   Input,
-  Divider,
   Row,
   Col,
   App,
@@ -22,6 +18,7 @@ import {
   ReloadOutlined,
   RobotOutlined,
   ExclamationCircleOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import type { HazardReport, HazardLevel } from '@/types/safety'
 import {
@@ -30,14 +27,12 @@ import {
   HAZARD_CATEGORY_OPTIONS,
 } from '@/types/safety'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
-// HAZARD_CATEGORY_OPTIONS 没有暴露 LABEL_MAP，我们自己构建
-const CATEGORY_LABELS: Record<string, string> = {}
-HAZARD_CATEGORY_OPTIONS.forEach((o) => {
-  CATEGORY_LABELS[o.value] = o.label
-})
+const CATEGORY_LABELS = Object.fromEntries(
+  HAZARD_CATEGORY_OPTIONS.map((o) => [o.value, o.label])
+)
 
 interface EditableFields {
   hazard_type: string
@@ -46,7 +41,6 @@ interface EditableFields {
   description: string
   key_defect: string
   major_hazard_basis: string
-  control_measures: string
   corrective_preventive_measures: string
 }
 
@@ -114,20 +108,46 @@ export default function HazardAIResultPanel({
 
   return (
     <Card
-      style={{ borderRadius: 12, border: '1px solid #e5e3df', maxWidth: 800, margin: '0 auto' }}
+      style={{
+        borderRadius: 12,
+        border: '1px solid #e5e3df',
+        borderLeft: '4px solid #5645d4',
+      }}
+      styles={{ body: { padding: '20px 24px' } }}
     >
-      <div style={{ marginBottom: 20 }}>
-        <Space>
-          <RobotOutlined style={{ fontSize: 20, color: '#722ed1' }} />
-          <Title level={4} style={{ margin: 0 }}>
-            AI 分析结果
-          </Title>
-          <Tag color="purple">编号：{hazard.hazard_no}</Tag>
-        </Space>
-        <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
-          请审核 AI 生成的隐患识别结果和整改建议，可点击"修改"进行人工调整
-        </Text>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 20,
+          paddingBottom: 16,
+          borderBottom: '1px solid #ede9e4',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <RobotOutlined style={{ color: '#5645d4', fontSize: 18 }} />
+          <span style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>AI 分析结果</span>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '2px 10px',
+              borderRadius: 4,
+              fontSize: 12,
+              fontWeight: 600,
+              color: '#391c57',
+              background: '#e6e0f5',
+            }}
+          >
+            编号：{hazard.hazard_no}
+          </span>
+        </div>
       </div>
+      <Text type="secondary" style={{ display: 'block', marginBottom: 20, fontSize: 13, color: '#5d5b54' }}>
+        请审核 AI 生成的隐患识别结果和整改建议，可点击"修改"进行人工调整
+      </Text>
 
       {hasAIError && (
         <Alert
@@ -140,9 +160,32 @@ export default function HazardAIResultPanel({
       )}
 
       {/* ── Step 1 结果：隐患识别 ── */}
-      <Title level={5} style={{ marginBottom: 12 }}>
-        🤖 AI 隐患识别结果（Step 1）
-      </Title>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <RobotOutlined style={{ color: '#5645d4', fontSize: 15 }} />
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>
+          AI 隐患识别结果
+        </span>
+        <span
+          style={{
+            display: 'inline-flex',
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#391c57',
+            background: '#e6e0f5',
+          }}
+        >
+          Step 1
+        </span>
+      </div>
 
       {editing ? (
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
@@ -213,56 +256,88 @@ export default function HazardAIResultPanel({
           </Col>
         </Row>
       ) : (
-        <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}>
-          <Descriptions.Item label="隐患分类">
-            {hazard.hazard_type ? (
-              <Tag>{getTypeLabel(hazard.hazard_type)}</Tag>
-            ) : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="隐患等级">
-            {hazard.hazard_level ? (
-              <Tag color={getLevelColor(hazard.hazard_level as HazardLevel)}>
-                {getLevelLabel(hazard.hazard_level as HazardLevel)}
-              </Tag>
-            ) : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="隐患类别">
-            {hazard.hazard_category ? (
-              <Tag>{CATEGORY_LABELS[hazard.hazard_category] || hazard.hazard_category}</Tag>
-            ) : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="隐患重点">
-            {hazard.key_defect || '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="隐患描述" span={2}>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{hazard.description || '-'}</div>
-          </Descriptions.Item>
-          <Descriptions.Item label="判定依据" span={2}>
-            <div style={{ whiteSpace: 'pre-wrap' }}>{hazard.major_hazard_basis || '-'}</div>
-          </Descriptions.Item>
-        </Descriptions>
+        <>
+          <Row gutter={[16, 12]}>
+            <Col span={8}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>隐患分类</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', minHeight: 40, display: 'flex', alignItems: 'center' }}>
+                {hazard.hazard_type ? (
+                  <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, color: '#391c57', background: '#e6e0f5' }}>{getTypeLabel(hazard.hazard_type)}</span>
+                ) : <Text style={{ fontSize: 14, color: '#a4a097' }}>-</Text>}
+              </div>
+            </Col>
+            <Col span={8}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>隐患等级</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', minHeight: 40, display: 'flex', alignItems: 'center' }}>
+                {hazard.hazard_level ? (
+                  <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, color: getLevelColor(hazard.hazard_level as HazardLevel) === 'red' ? '#e03131' : getLevelColor(hazard.hazard_level as HazardLevel) === 'orange' ? '#dd5b00' : '#5645d4', background: getLevelColor(hazard.hazard_level as HazardLevel) === 'red' ? '#fde0ec' : getLevelColor(hazard.hazard_level as HazardLevel) === 'orange' ? '#ffe8d4' : '#e6e0f5' }}>{getLevelLabel(hazard.hazard_level as HazardLevel)}</span>
+                ) : <Text style={{ fontSize: 14, color: '#a4a097' }}>-</Text>}
+              </div>
+            </Col>
+            <Col span={8}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>隐患类别</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', minHeight: 40, display: 'flex', alignItems: 'center' }}>
+                {hazard.hazard_category ? (
+                  <span style={{ display: 'inline-flex', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, color: '#391c57', background: '#e6e0f5' }}>{CATEGORY_LABELS[hazard.hazard_category] || hazard.hazard_category}</span>
+                ) : <Text style={{ fontSize: 14, color: '#a4a097' }}>-</Text>}
+              </div>
+            </Col>
+          </Row>
+          {hazard.key_defect && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>隐患重点</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#37352f' }}>{hazard.key_defect}</div>
+            </div>
+          )}
+          {hazard.description && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>
+                <ExclamationCircleOutlined style={{ color: '#d4b106', marginRight: 4 }} />
+                隐患描述
+              </div>
+              <div style={{ border: '1px solid #ffe58f', borderRadius: 8, padding: '10px 14px', background: '#fffbe6', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#37352f' }}>{hazard.description}</div>
+            </div>
+          )}
+          {hazard.major_hazard_basis && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>判定依据</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#37352f' }}>{hazard.major_hazard_basis}</div>
+            </div>
+          )}
+        </>
       )}
 
-      <Divider />
-
       {/* ── Step 2 结果：整改建议 ── */}
-      <Title level={5} style={{ marginBottom: 12 }}>
-        📝 AI 整改建议（Step 2）
-      </Title>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          marginBottom: 12,
+          marginTop: 12,
+        }}
+      >
+        <FileTextOutlined style={{ color: '#5645d4', fontSize: 15 }} />
+        <span style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>
+          AI 整改建议
+        </span>
+        <span
+          style={{
+            display: 'inline-flex',
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#391c57',
+            background: '#e6e0f5',
+          }}
+        >
+          Step 2
+        </span>
+      </div>
 
       {editing ? (
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-          <Col span={24}>
-            <Text strong style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-              管控措施（临时）
-            </Text>
-            <TextArea
-              rows={3}
-              value={getFieldValue('control_measures')}
-              onChange={(e) => setEdits((p) => ({ ...p, control_measures: e.target.value }))}
-              placeholder="临时管控措施"
-            />
-          </Col>
           <Col span={24}>
             <Text strong style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
               纠正预防措施（永久）
@@ -278,27 +353,25 @@ export default function HazardAIResultPanel({
           </Col>
         </Row>
       ) : (
-        <Descriptions column={1} size="small" bordered style={{ marginBottom: 16 }}>
-          <Descriptions.Item label="管控措施（临时）">
-            <div style={{ whiteSpace: 'pre-wrap' }}>{hazard.control_measures || '-'}</div>
-          </Descriptions.Item>
-          <Descriptions.Item label="纠正预防措施（永久）">
-            <div style={{ whiteSpace: 'pre-wrap' }}>
-              {hazard.corrective_preventive_measures || '-'}
+        <>
+          {hazard.corrective_preventive_measures ? (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 6, fontWeight: 500 }}>纠正预防措施（永久）</div>
+              <div style={{ border: '1px solid #e5e3df', borderRadius: 8, padding: '10px 14px', background: '#fafaf9', fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: '#37352f' }}>{hazard.corrective_preventive_measures}</div>
             </div>
-          </Descriptions.Item>
-        </Descriptions>
+          ) : null}
+          {!hazard.corrective_preventive_measures && (
+            <Text style={{ fontSize: 14, color: '#a4a097' }}>暂无整改建议</Text>
+          )}
+        </>
       )}
 
-      <Divider />
-
       {/* ── 操作按钮 ── */}
-      <Space style={{ width: '100%', justifyContent: 'center' }} size="middle">
+      <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #ede9e4', display: 'flex', justifyContent: 'center', gap: 16 }}>
         <Button
           icon={editing ? <CheckCircleOutlined /> : <EditOutlined />}
           onClick={() => {
             if (editing) {
-              // 退出编辑模式，放弃修改
               setEditing(false)
               setEdits({})
             } else {
@@ -306,7 +379,7 @@ export default function HazardAIResultPanel({
             }
           }}
         >
-          {editing ? '取消修改' : '✏️ 修改'}
+          {editing ? '取消修改' : '修改'}
         </Button>
         <Button
           type="primary"
@@ -314,17 +387,18 @@ export default function HazardAIResultPanel({
           icon={<CheckCircleOutlined />}
           onClick={handleConfirm}
           loading={confirming}
+          style={{ fontWeight: 600, borderRadius: 8 }}
         >
-          ✅ 确认入库
+          确认入库
         </Button>
         <Button
           icon={<ReloadOutlined />}
           onClick={handleRerun}
           disabled={confirming}
         >
-          🔄 重新分析
+          重新分析
         </Button>
-      </Space>
+      </div>
     </Card>
   )
 }

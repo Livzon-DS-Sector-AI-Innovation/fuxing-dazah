@@ -12,16 +12,17 @@ import {
   Space,
   Tag,
   Typography,
-  message,
+  App,
 } from 'antd'
 import {
   PlusOutlined,
   DeleteOutlined,
   CaretRightOutlined,
 } from '@ant-design/icons'
-import type { AIWorkflowConfig, WorkflowStepItem } from '@/types/safety'
+import type { AIWorkflowConfig, WorkflowStepItem, ReferenceDocsValue } from '@/types/safety'
 import { TRIGGER_EVENT_OPTIONS } from '@/types/safety'
 import { updateAIWorkflowConfig, createAIWorkflowConfig } from '@/actions/safety'
+import ReferenceDocsEditor from './ReferenceDocsEditor'
 
 const { Text, Title } = Typography
 const { TextArea } = Input
@@ -37,6 +38,7 @@ const SECTION_GAP = 24
 const TEXTAREA_ROWS = 5
 
 export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }: Props) {
+  const { message } = App.useApp()
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
   const [activeScriptKeys, setActiveScriptKeys] = useState<string[]>(['0'])
@@ -54,7 +56,11 @@ export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }:
           // Ensure 4-field format with backward compat
           input_info: s.input_info || s.prompt_template || '',
           work_rules: s.work_rules || '',
-          reference_docs: s.reference_docs || '',
+          // reference_docs 兼容旧字符串格式 → 新对象格式
+          reference_docs:
+            typeof s.reference_docs === 'string'
+              ? { text: s.reference_docs, attachments: [] }
+              : s.reference_docs || { text: '', attachments: [] },
           output_format: s.output_format || '',
         })),
       })
@@ -68,11 +74,18 @@ export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }:
       const values = await form.validateFields()
       setSaving(true)
 
+      // 保存原始数据引用，用于合并 expected_keys（前端表单不展示此字段）
+      const origScripts = workflow.script_configs || []
+
       // Strip prompt_template for clean 4-field storage
       const cleanScripts = (values.script_configs || []).map(
-        (s: WorkflowStepItem & { prompt_template?: string }) => {
+        (s: WorkflowStepItem & { prompt_template?: string }, i: number) => {
           const { prompt_template, ...rest } = s
-          return rest
+          // 合并预设的 expected_keys（表单中不展示，从原始数据回填）
+          return {
+            ...rest,
+            expected_keys: origScripts[i]?.expected_keys || rest.expected_keys || [],
+          }
         },
       )
 
@@ -95,7 +108,7 @@ export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }:
           script_configs: cleanScripts,
         })
       }
-      if (res.code === 0) {
+      if (res.data) {
         message.success(isBuiltIn ? '工作流已创建' : '配置已保存')
         onSaved()
         onClose()
@@ -117,7 +130,7 @@ export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }:
         ...updated[index],
         input_info: '',
         work_rules: '',
-        reference_docs: '',
+        reference_docs: { text: '', attachments: [] } as ReferenceDocsValue,
         output_format: '',
       }
       form.setFieldsValue({ script_configs: updated })
@@ -330,40 +343,23 @@ export default function WorkflowEditDrawer({ open, workflow, onClose, onSaved }:
                             {...restField}
                             name={[name, 'reference_docs']}
                             label={<span style={{ fontSize: 12, fontWeight: 600, color: '#37352f' }}>📚 调用文档</span>}
-                            help={<span style={{ fontSize: 11, color: '#bbb8b1' }}>关联的知识库、参考标准、Skill、外部知识等</span>}
+                            help={<span style={{ fontSize: 11, color: '#bbb8b1' }}>引用标准规范、知识库内容、参考文档；可上传附件自动转为 Markdown 供 AI 读取</span>}
                             style={{ marginBottom: 16 }}
                           >
-                            <TextArea
-                              rows={TEXTAREA_ROWS}
-                              placeholder="引用标准规范、知识库内容、参考文档..."
-                              style={{ borderRadius: 8, fontFamily: 'monospace', fontSize: 13 }}
-                            />
+                            <ReferenceDocsEditor />
                           </Form.Item>
 
                           <Form.Item
                             {...restField}
                             name={[name, 'output_format']}
                             label={<span style={{ fontSize: 12, fontWeight: 600, color: '#37352f' }}>📤 输出格式</span>}
-                            help={<span style={{ fontSize: 11, color: '#bbb8b1' }}>按标准格式输出的 JSON 结构和字段说明</span>}
-                            style={{ marginBottom: 16 }}
+                            help={<span style={{ fontSize: 11, color: '#bbb8b1' }}>描述你希望 AI 输出的内容格式，如"输出为标准 PDF"、"按标准分点输出"、"输出 JSON 结构化数据"等</span>}
+                            style={{ marginBottom: 0 }}
                           >
                             <TextArea
                               rows={TEXTAREA_ROWS}
-                              placeholder="定义期望的输出 JSON 格式、字段含义..."
+                              placeholder={'描述你希望 AI 以什么格式输出内容，例如：\n- 输出为标准 PDF 格式报告\n- 按以下分点逐条输出：…\n- 输出 JSON 格式（默认）：{"field1": "…", "field2": "…"}'}
                               style={{ borderRadius: 8, fontFamily: 'monospace', fontSize: 13 }}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            {...restField}
-                            name={[name, 'expected_keys']}
-                            label={<span style={{ fontSize: 12, fontWeight: 600, color: '#37352f' }}>预期输出键</span>}
-                            style={{ marginBottom: 0 }}
-                          >
-                            <Select
-                              mode="tags"
-                              placeholder="输入键名后回车"
-                              style={{ width: '100%', borderRadius: 8 }}
                             />
                           </Form.Item>
 

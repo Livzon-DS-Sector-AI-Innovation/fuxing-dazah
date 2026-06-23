@@ -17,6 +17,7 @@ import {
 import { SearchOutlined, FileTextOutlined } from '@ant-design/icons'
 import { getKnowledgeArticles } from '@/actions/safety'
 import type { SafetyKnowledgeArticle } from '@/types/safety'
+import { KNOWLEDGE_CATEGORY_OPTIONS } from '@/types/safety'
 
 const { Text } = Typography
 
@@ -30,12 +31,7 @@ interface Props {
 
 const CATEGORY_OPTIONS = [
   { value: '', label: '全部分类' },
-  { value: 'regulation', label: '法规标准' },
-  { value: 'policy', label: '管理制度' },
-  { value: 'emergency', label: '应急预案' },
-  { value: 'sop', label: '操作规程' },
-  { value: 'training', label: '培训资料' },
-  { value: 'other', label: '其他' },
+  ...KNOWLEDGE_CATEGORY_OPTIONS,
 ]
 
 const PAGE_SIZE = 50
@@ -56,7 +52,7 @@ export default function KnowledgeBasePicker({ open, onClose, onSelect, excludeId
         keyword: keyword || undefined,
         category: category || undefined,
       })
-      if (res.code === 0 && res.data) {
+      if (res.code === 200 && res.data) {
         setArticles(res.data.filter((a) => !excludeIds.includes(a.id)))
       }
     } catch {

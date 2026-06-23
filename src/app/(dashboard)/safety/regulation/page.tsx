@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   Table,
   Button,
@@ -10,16 +11,15 @@ import {
   Modal,
   Form,
   Upload,
+  Drawer,
   message,
-  Tag,
   Card,
-  Row,
-  Col,
   Typography,
   Tabs,
   Divider,
   Spin,
   Tooltip,
+  App,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { UploadProps } from 'antd'
@@ -33,6 +33,9 @@ import {
   RobotOutlined,
   AimOutlined,
   EyeOutlined,
+  ThunderboltOutlined,
+  FileProtectOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
 import { useSafetyStore } from '@/stores/safety'
 import {
@@ -55,36 +58,59 @@ import type {
   RegulationRevision,
   RegulationRevisionFormData,
 } from '@/types/safety'
+import SopGeneratorModal from '@/components/safety/SopGeneratorModal'
 import {
   RevisionType,
   REVISION_TYPE_OPTIONS,
   REVISION_SCOPE_OPTIONS,
   REVIEW_OPINION_OPTIONS,
 } from '@/types/safety'
+import {
+  actionLink,
+  statusPill,
+  pillSuccess,
+  pillWarning,
+  pillError,
+  pillNeutral,
+  pillInfo,
+  pillPurple,
+  pillDefault,
+  T,
+} from '@/components/safety/shared-styles'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
 
+// ── 操作链接预设 ──
+const $link = actionLink('#0075de')
+const $danger = actionLink('#e03131')
+const $purple = actionLink('#5645d4')
+const $muted = actionLink('#787671')
+
 export default function RegulationPage() {
   const [activeTab, setActiveTab] = useState('regulations')
+  const { modal } = App.useApp()
 
   // ========== Regulation States ==========
   const [regForm] = Form.useForm()
   const [regEditForm] = Form.useForm()
   const [regLoading, setRegLoading] = useState(false)
-  const [regModalVisible, setRegModalVisible] = useState(false)
+  const [regDrawerOpen, setRegDrawerOpen] = useState(false)
   const [editingRegulation, setEditingRegulation] = useState<OperationRegulation | null>(null)
   const [regSearchText, setRegSearchText] = useState('')
   const [positionFilter, setPositionFilter] = useState<string | undefined>()
+  const [statusFilter, setStatusFilter] = useState<string | undefined>('reviewed,exported,draft')
+  const [regSubmitting, setRegSubmitting] = useState(false)
 
   // ========== Revision States ==========
   const [revForm] = Form.useForm()
   const [revLoading, setRevLoading] = useState(false)
-  const [revModalVisible, setRevModalVisible] = useState(false)
+  const [revDrawerOpen, setRevDrawerOpen] = useState(false)
   const [revSearchText, setRevSearchText] = useState('')
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [scopeFilter, setScopeFilter] = useState<string | undefined>()
   const [opinionFilter, setOpinionFilter] = useState<string | undefined>()
+  const [revSubmitting, setRevSubmitting] = useState(false)
 
   // AI revision states
   const [aiModalVisible, setAiModalVisible] = useState(false)
@@ -94,6 +120,11 @@ export default function RegulationPage() {
   const [aiRevisionId, setAiRevisionId] = useState<string | null>(null)
   const [aiConfirming, setAiConfirming] = useState(false)
   const [scopeLoading, setScopeLoading] = useState<string | null>(null)
+
+  const router = useRouter()
+
+  // SOP Generator states
+  const [generatorModalOpen, setGeneratorModalOpen] = useState(false)
 
   // Regulations cache for revision create form
   const [regulationsForSelect, setRegulationsForSelect] = useState<OperationRegulation[]>([])
@@ -130,6 +161,7 @@ export default function RegulationPage() {
         ...regulationQueryParams,
         keyword: regSearchText || undefined,
         position: positionFilter,
+        status: statusFilter,
       })
       if (response.code === 200) {
         setRegulations(response.data)
@@ -175,7 +207,7 @@ export default function RegulationPage() {
 
   useEffect(() => {
     if (activeTab === 'regulations') loadRegulations()
-  }, [regulationQueryParams.page, regulationQueryParams.page_size, positionFilter, activeTab])
+  }, [regulationQueryParams.page, regulationQueryParams.page_size, positionFilter, statusFilter, activeTab])
 
   useEffect(() => {
     if (activeTab === 'revisions') loadRevisions()
@@ -187,27 +219,25 @@ export default function RegulationPage() {
 
   // ---- Regulation CRUD ----
 
-  const handleRegSearch = () => {
-    setRegulationQueryParams({ page: 1 })
-    loadRegulations()
-  }
-
   const handleAddRegulation = () => {
     setEditingRegulation(null)
     regForm.resetFields()
-    setRegModalVisible(true)
+    setRegDrawerOpen(true)
   }
 
   const handleEditRegulation = (record: OperationRegulation) => {
     setEditingRegulation(record)
     regEditForm.setFieldsValue(record)
-    setRegModalVisible(true)
+    setRegDrawerOpen(true)
   }
 
   const handleDeleteRegulation = (id: string) => {
-    Modal.confirm({
+    modal.confirm({
       title: '确认删除',
-      content: '确定要删除这个操规文档吗？',
+      content: '确定要删除这个操规文档吗？此操作不可撤销。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
       onOk: async () => {
         try {
           const response = await deleteRegulation(id)
@@ -224,18 +254,43 @@ export default function RegulationPage() {
     })
   }
 
+  // ── SOP Generator Handlers ──
+
+  const handleOpenGenerator = () => {
+    setGeneratorModalOpen(true)
+  }
+
+  const handleSopGenerated = (result: {
+    regulation_id: string
+    meta: Record<string, string>
+    content: string
+  }) => {
+    setGeneratorModalOpen(false)
+    loadRegulations()
+    router.push(`/safety/regulation/generator/${result.regulation_id}`)
+  }
+
+  const handleOpenEditor = (record: OperationRegulation) => {
+    if (!record.content) {
+      message.warning('该操规尚未生成标准化内容，请先上传旧版操规进行生成')
+      return
+    }
+    router.push(`/safety/regulation/generator/${record.id}`)
+  }
+
   const handleRegSubmit = async () => {
     try {
       const values = editingRegulation
         ? await regEditForm.validateFields()
         : await regForm.validateFields()
+      setRegSubmitting(true)
 
       if (editingRegulation) {
         const response = await updateRegulation(editingRegulation.id, values)
         if (response.code === 200) {
           message.success('更新成功')
           updateRegulationInStore(editingRegulation.id, response.data)
-          setRegModalVisible(false)
+          setRegDrawerOpen(false)
         } else {
           message.error(response.message || '更新失败')
         }
@@ -244,14 +299,16 @@ export default function RegulationPage() {
         if (response.code === 200) {
           message.success('创建成功')
           addRegulation(response.data)
-          setRegModalVisible(false)
+          setRegDrawerOpen(false)
           regForm.resetFields()
         } else {
           message.error(response.message || '创建失败')
         }
       }
     } catch {
-      console.error('表单验证失败')
+      // form validation error
+    } finally {
+      setRegSubmitting(false)
     }
   }
 
@@ -279,37 +336,38 @@ export default function RegulationPage() {
 
   // ---- Revision Handlers ----
 
-  const handleRevSearch = () => {
-    setRevisionQueryParams({ page: 1 })
-    loadRevisions()
-  }
-
   const handleAddRevision = () => {
     revForm.resetFields()
-    setRevModalVisible(true)
+    setRevDrawerOpen(true)
   }
 
   const handleRevSubmit = async () => {
     try {
       const values = await revForm.validateFields()
+      setRevSubmitting(true)
       const response = await createRevision(values as RegulationRevisionFormData)
       if (response.code === 200) {
         message.success('创建修订记录成功')
         addRevision(response.data)
-        setRevModalVisible(false)
+        setRevDrawerOpen(false)
         revForm.resetFields()
       } else {
         message.error(response.message || '创建失败')
       }
     } catch {
-      console.error('表单验证失败')
+      // form validation error
+    } finally {
+      setRevSubmitting(false)
     }
   }
 
   const handleDeleteRevision = (id: string) => {
-    Modal.confirm({
+    modal.confirm({
       title: '确认删除',
-      content: '确定要删除这个修订记录吗？',
+      content: '确定要删除这个修订记录吗？此操作不可撤销。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
       onOk: async () => {
         try {
           const response = await deleteRevision(id)
@@ -333,7 +391,7 @@ export default function RegulationPage() {
       if (response.code === 200) {
         message.success('人工修订完成，已自动审核通过')
         loadRevisions()
-        loadRegulations() // refresh regulation list to reflect new document
+        loadRegulations()
       } else {
         message.error(response.message || '修订失败')
       }
@@ -413,14 +471,26 @@ export default function RegulationPage() {
     }
   }
 
-  const getOpinionColor = (opinion: string) => {
-    const opt = REVIEW_OPINION_OPTIONS.find((o) => o.value === opinion)
-    return opt?.color || 'default'
+  // ── Status rendering helpers ──
+
+  const renderContentStatus = (status: string | undefined, content: string | undefined) => {
+    if (content && status === 'reviewed') return <span style={pillPurple}>已审核</span>
+    if (content && status === 'generated') return <span style={pillInfo}>已生成</span>
+    if (content && status === 'exported') return <span style={pillSuccess}>已导出</span>
+    if (content) return <span style={statusPill('#0891b2', '#cffafe')}>草稿</span>
+    return <span style={pillDefault}>无内容</span>
   }
 
-  const getOpinionLabel = (opinion: string) => {
-    const opt = REVIEW_OPINION_OPTIONS.find((o) => o.value === opinion)
-    return opt?.label || opinion
+  const renderDocStatus = (path: string | undefined, name: string | undefined) => {
+    if (path) {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: T.slate }}>
+          <FileTextOutlined style={{ color: '#0075de', fontSize: 14 }} />
+          <Text ellipsis style={{ maxWidth: 120 }}>{name || path}</Text>
+        </span>
+      )
+    }
+    return <span style={pillDefault}>未上传</span>
   }
 
   // ========== Table Columns ==========
@@ -431,6 +501,11 @@ export default function RegulationPage() {
       dataIndex: 'regulation_no',
       key: 'regulation_no',
       width: 140,
+      render: (no: string) => (
+        <span style={{ fontFamily: '"JetBrains Mono", "SF Mono", monospace', fontSize: 13, color: T.slate }}>
+          {no}
+        </span>
+      ),
     },
     {
       title: '操规名称',
@@ -443,32 +518,31 @@ export default function RegulationPage() {
       title: '所属岗位',
       dataIndex: 'position',
       key: 'position',
-      width: 110,
+      width: 100,
       render: (pos: string) => pos || '-',
     },
     {
       title: '文档',
       dataIndex: 'document_path',
       key: 'document_path',
-      width: 180,
+      width: 170,
       ellipsis: true,
-      render: (path: string, record) =>
-        path ? (
-          <Space size="small">
-            <FileTextOutlined className="text-blue-500" />
-            <Text ellipsis style={{ maxWidth: 100 }}>
-              {record.document_original_name || path}
-            </Text>
-          </Space>
-        ) : (
-          <Tag color="default">未上传</Tag>
-        ),
+      render: (path: string, record: OperationRegulation) =>
+        renderDocStatus(path, record.document_original_name),
+    },
+    {
+      title: '内容状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 90,
+      render: (status: string, record: OperationRegulation) =>
+        renderContentStatus(status, record.content),
     },
     {
       title: '备注',
       dataIndex: 'notes',
       key: 'notes',
-      width: 140,
+      width: 120,
       ellipsis: true,
       render: (notes: string) => notes || '-',
     },
@@ -476,51 +550,48 @@ export default function RegulationPage() {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      width: 110,
+      width: 105,
       render: (date: string) => (date ? dayjs(date).format('YYYY-MM-DD') : '-'),
     },
     {
       title: '操作',
       key: 'action',
-      width: 260,
+      width: 360,
       fixed: 'right',
       render: (_, record) => (
-        <Space size="small" wrap>
+        <Space size={12}>
           <Upload {...regulationUploadProps(record.id)}>
-            <Button type="link" size="small" icon={<UploadOutlined />}>
-              上传
-            </Button>
+            <span role="button" style={$muted}>
+              <UploadOutlined />上传
+            </span>
           </Upload>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEditRegulation(record)}
-          >
-            编辑
-          </Button>
+          <span role="button" style={$link} onClick={() => handleEditRegulation(record)}>
+            <EditOutlined />编辑
+          </span>
           <Tooltip title="查看/新建修订记录">
-            <Button
-              type="link"
-              size="small"
-              icon={<AimOutlined />}
+            <span
+              role="button"
+              style={$link}
               onClick={() => {
                 setActiveTab('revisions')
                 setRevisionQueryParams({ page: 1 })
               }}
             >
-              修订
-            </Button>
+              <AimOutlined />修订
+            </span>
           </Tooltip>
-          <Button
-            type="link"
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDeleteRegulation(record.id)}
-          >
-            删除
-          </Button>
+          {record.content ? (
+            <span role="button" style={$purple} onClick={() => handleOpenEditor(record)}>
+              <EyeOutlined />查看内容
+            </span>
+          ) : (
+            <span role="button" style={$purple} onClick={() => setGeneratorModalOpen(true)}>
+              <ThunderboltOutlined />标准化生成
+            </span>
+          )}
+          <span role="button" style={$danger} onClick={() => handleDeleteRegulation(record.id)}>
+            <DeleteOutlined />删除
+          </span>
         </Space>
       ),
     },
@@ -532,6 +603,11 @@ export default function RegulationPage() {
       dataIndex: 'revision_no',
       key: 'revision_no',
       width: 140,
+      render: (no: string) => (
+        <span style={{ fontFamily: '"JetBrains Mono", "SF Mono", monospace', fontSize: 13, color: T.slate }}>
+          {no}
+        </span>
+      ),
     },
     {
       title: '操规名称',
@@ -544,11 +620,13 @@ export default function RegulationPage() {
       title: '修订类型',
       dataIndex: 'revision_type',
       key: 'revision_type',
-      width: 95,
+      width: 90,
       render: (type: RevisionType) => {
         const opt = REVISION_TYPE_OPTIONS.find((o) => o.value === type)
         return (
-          <Tag color={type === RevisionType.AI ? 'purple' : 'blue'}>{opt?.label || type}</Tag>
+          <span style={type === RevisionType.AI ? pillPurple : pillInfo}>
+            {opt?.label || type}
+          </span>
         )
       },
     },
@@ -556,27 +634,28 @@ export default function RegulationPage() {
       title: '修订人',
       dataIndex: 'reviser_name',
       key: 'reviser_name',
-      width: 90,
+      width: 80,
       render: (name: string) => name || '-',
     },
     {
       title: '时间',
       dataIndex: 'revision_time',
       key: 'revision_time',
-      width: 105,
+      width: 100,
       render: (date: string) => (date ? dayjs(date).format('YYYY-MM-DD') : '-'),
     },
     {
       title: '修订范围',
       dataIndex: 'revision_scope',
       key: 'revision_scope',
-      width: 105,
+      width: 100,
       render: (scope: string) => {
         const opt = REVISION_SCOPE_OPTIONS.find((o) => o.value === scope)
-        return scope ? (
-          <Tag color={scope === 'process' ? 'orange' : 'green'}>{opt?.label || scope}</Tag>
-        ) : (
-          <Tag color="default">未识别</Tag>
+        if (!scope) return <span style={pillDefault}>未识别</span>
+        return (
+          <span style={scope === 'process' ? pillWarning : pillSuccess}>
+            {opt?.label || scope}
+          </span>
         )
       },
     },
@@ -584,73 +663,68 @@ export default function RegulationPage() {
       title: '审核',
       dataIndex: 'review_opinion',
       key: 'review_opinion',
-      width: 80,
-      render: (opinion: string) => (
-        <Tag color={getOpinionColor(opinion)}>{getOpinionLabel(opinion)}</Tag>
-      ),
+      width: 75,
+      render: (opinion: string) => {
+        const opt = REVIEW_OPINION_OPTIONS.find((o) => o.value === opinion)
+        if (!opinion) return <span style={pillDefault}>待审核</span>
+        const color = opt?.color || '#787671'
+        const bgMap: Record<string, string> = {
+          '#52c41a': '#d9f3e1',
+          '#faad14': '#ffe8d4',
+          '#ff4d4f': '#fde0ec',
+        }
+        return <span style={statusPill(color, bgMap[color] || '#f0eeec')}>{opt?.label || opinion}</span>
+      },
     },
     {
       title: '备注',
       dataIndex: 'notes',
       key: 'notes',
-      width: 130,
+      width: 120,
       ellipsis: true,
       render: (notes: string) => notes || '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 320,
+      width: 300,
       fixed: 'right',
       render: (_, record) => (
-        <Space size="small" wrap>
+        <Space size={12}>
           {record.revision_type === RevisionType.MANUAL && !record.new_document_path && (
             <Upload {...manualUploadProps(record.id)}>
-              <Button type="link" size="small" icon={<UploadOutlined />}>
-                上传修订稿
-              </Button>
+              <span role="button" style={$muted}>
+                <UploadOutlined />上传修订稿
+              </span>
             </Upload>
           )}
 
           {record.revision_type === RevisionType.AI && !record.new_document_path && (
-            <Button
-              type="link"
-              size="small"
-              icon={<RobotOutlined />}
-              onClick={() => handleAIGenerate(record.id)}
-              style={{ color: '#722ed1' }}
-            >
-              AI生成
-            </Button>
+            <span role="button" style={$purple} onClick={() => handleAIGenerate(record.id)}>
+              <RobotOutlined />AI生成
+            </span>
           )}
 
           {!record.revision_scope && (
-            <Button
-              type="link"
-              size="small"
-              icon={<AimOutlined />}
-              loading={scopeLoading === record.id}
+            <span
+              role="button"
+              style={$link}
               onClick={() => handleIdentifyScope(record.id)}
             >
-              识别范围
-            </Button>
+              <AimOutlined />
+              {scopeLoading === record.id ? '识别中...' : '识别范围'}
+            </span>
           )}
 
           {record.new_document_path && (
-            <Button type="link" size="small" icon={<EyeOutlined />}>
-              查看文档
-            </Button>
+            <span role="button" style={$link}>
+              <EyeOutlined />查看文档
+            </span>
           )}
 
-          <Button
-            type="link"
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => handleDeleteRevision(record.id)}
-          >
-            删除
-          </Button>
+          <span role="button" style={$danger} onClick={() => handleDeleteRevision(record.id)}>
+            <DeleteOutlined />删除
+          </span>
         </Space>
       ),
     },
@@ -661,50 +735,92 @@ export default function RegulationPage() {
   const tabItems = [
     {
       key: 'regulations',
-      label: '操规列表',
+      label: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <FileProtectOutlined style={{ fontSize: 15 }} />
+          操规列表
+        </span>
+      ),
       children: (
         <>
-          <Row gutter={16} className="mb-4">
-            <Col span={5}>
-              <Input
-                placeholder="搜索编号/名称"
-                prefix={<SearchOutlined />}
-                value={regSearchText}
-                onChange={(e) => setRegSearchText(e.target.value)}
-                onPressEnter={handleRegSearch}
-              />
-            </Col>
-            <Col span={4}>
-              <Select
-                placeholder="所属岗位"
-                allowClear
-                value={positionFilter}
-                onChange={(v) => {
-                  setPositionFilter(v)
-                  setRegulationQueryParams({ page: 1 })
-                }}
-                style={{ width: '100%' }}
-                options={[
-                  { value: '操作工', label: '操作工' },
-                  { value: '班组长', label: '班组长' },
-                  { value: '技术员', label: '技术员' },
-                  { value: '安全员', label: '安全员' },
-                ]}
-              />
-            </Col>
-            <Col span={3}>
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleRegSearch}>
-                查询
-              </Button>
-            </Col>
-          </Row>
+          {/* Search / Filter Bar */}
+          <div
+            style={{
+              marginBottom: 16,
+              display: 'flex',
+              gap: 12,
+              alignItems: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Select
+              placeholder="所属岗位"
+              allowClear
+              style={{ width: 130 }}
+              value={positionFilter}
+              onChange={(v) => {
+                setPositionFilter(v)
+                setRegulationQueryParams({ page: 1 })
+              }}
+              options={[
+                { value: '操作工', label: '操作工' },
+                { value: '班组长', label: '班组长' },
+                { value: '技术员', label: '技术员' },
+                { value: '安全员', label: '安全员' },
+              ]}
+            />
+            <Select
+              placeholder="内容状态"
+              allowClear
+              style={{ width: 150 }}
+              value={statusFilter}
+              onChange={(v) => {
+                setStatusFilter(v)
+                setRegulationQueryParams({ page: 1 })
+              }}
+              options={[
+                { value: 'reviewed,exported,draft', label: '全部台账' },
+                { value: 'reviewed', label: '已审核' },
+                { value: 'exported', label: '已导出' },
+                { value: 'draft', label: '草稿' },
+                { value: 'generated', label: '已生成（未审核）' },
+              ]}
+            />
+            <Input
+              placeholder="搜索操规编号或名称"
+              prefix={<SearchOutlined style={{ color: '#a4a097' }} />}
+              style={{ width: 240 }}
+              value={regSearchText}
+              onChange={(e) => setRegSearchText(e.target.value)}
+              onPressEnter={loadRegulations}
+              allowClear
+            />
+            <div style={{ flex: 1 }} />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleAddRegulation}
+              style={{
+                borderRadius: 8,
+                height: 36,
+                background: '#5645d4',
+                borderColor: '#5645d4',
+                fontWeight: 600,
+                fontSize: 13,
+                boxShadow: 'none',
+              }}
+            >
+              新建操规
+            </Button>
+          </div>
 
           <Table
             columns={regulationColumns}
             dataSource={regulations}
             rowKey="id"
+            size="small"
             loading={regLoading}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 1160 }}
             pagination={{
               current: regulationQueryParams.page,
               pageSize: regulationQueryParams.page_size,
@@ -720,71 +836,92 @@ export default function RegulationPage() {
     },
     {
       key: 'revisions',
-      label: '修订记录',
+      label: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <HistoryOutlined style={{ fontSize: 15 }} />
+          修订记录
+        </span>
+      ),
       children: (
         <>
-          <Row gutter={16} className="mb-4">
-            <Col span={5}>
-              <Input
-                placeholder="搜索修订编号/操规名称"
-                prefix={<SearchOutlined />}
-                value={revSearchText}
-                onChange={(e) => setRevSearchText(e.target.value)}
-                onPressEnter={handleRevSearch}
-              />
-            </Col>
-            <Col span={3}>
-              <Select
-                placeholder="修订类型"
-                allowClear
-                value={typeFilter}
-                onChange={(v) => {
-                  setTypeFilter(v)
-                  setRevisionQueryParams({ page: 1 })
-                }}
-                style={{ width: '100%' }}
-                options={REVISION_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </Col>
-            <Col span={3}>
-              <Select
-                placeholder="修订范围"
-                allowClear
-                value={scopeFilter}
-                onChange={(v) => {
-                  setScopeFilter(v)
-                  setRevisionQueryParams({ page: 1 })
-                }}
-                style={{ width: '100%' }}
-                options={REVISION_SCOPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </Col>
-            <Col span={3}>
-              <Select
-                placeholder="审核状态"
-                allowClear
-                value={opinionFilter}
-                onChange={(v) => {
-                  setOpinionFilter(v)
-                  setRevisionQueryParams({ page: 1 })
-                }}
-                style={{ width: '100%' }}
-                options={REVIEW_OPINION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              />
-            </Col>
-            <Col span={3}>
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleRevSearch}>
-                查询
-              </Button>
-            </Col>
-          </Row>
+          {/* Search / Filter Bar */}
+          <div
+            style={{
+              marginBottom: 16,
+              display: 'flex',
+              gap: 12,
+              alignItems: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Select
+              placeholder="修订类型"
+              allowClear
+              style={{ width: 120 }}
+              value={typeFilter}
+              onChange={(v) => {
+                setTypeFilter(v)
+                setRevisionQueryParams({ page: 1 })
+              }}
+              options={REVISION_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+            <Select
+              placeholder="修订范围"
+              allowClear
+              style={{ width: 120 }}
+              value={scopeFilter}
+              onChange={(v) => {
+                setScopeFilter(v)
+                setRevisionQueryParams({ page: 1 })
+              }}
+              options={REVISION_SCOPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+            <Select
+              placeholder="审核状态"
+              allowClear
+              style={{ width: 120 }}
+              value={opinionFilter}
+              onChange={(v) => {
+                setOpinionFilter(v)
+                setRevisionQueryParams({ page: 1 })
+              }}
+              options={REVIEW_OPINION_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            />
+            <Input
+              placeholder="搜索修订编号或操规名称"
+              prefix={<SearchOutlined style={{ color: '#a4a097' }} />}
+              style={{ width: 240 }}
+              value={revSearchText}
+              onChange={(e) => setRevSearchText(e.target.value)}
+              onPressEnter={loadRevisions}
+              allowClear
+            />
+            <div style={{ flex: 1 }} />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={handleAddRevision}
+              style={{
+                borderRadius: 8,
+                height: 36,
+                background: '#5645d4',
+                borderColor: '#5645d4',
+                fontWeight: 600,
+                fontSize: 13,
+                boxShadow: 'none',
+              }}
+            >
+              新建修订
+            </Button>
+          </div>
 
           <Table
             columns={revisionColumns}
             dataSource={revisions}
             rowKey="id"
+            size="small"
             loading={revLoading}
-            scroll={{ x: 1350 }}
+            scroll={{ x: 1280 }}
             pagination={{
               current: revisionQueryParams.page,
               pageSize: revisionQueryParams.page_size,
@@ -803,59 +940,84 @@ export default function RegulationPage() {
   // ========== Render ==========
 
   return (
-    <div className="p-6">
-      <Card
-        title="安全操规管理"
-        extra={
-          activeTab === 'regulations' ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleAddRegulation}>
-              新建操规
-            </Button>
-          ) : (
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleAddRevision}>
-              新建修订
-            </Button>
-          )
-        }
+    <div style={{ padding: '24px 28px' }}>
+      {/* Page Title Header */}
+      <div style={{ marginBottom: 24 }}>
+        <h2
+          style={{
+            fontSize: 22,
+            fontWeight: 600,
+            color: '#1a1a1a',
+            margin: 0,
+            marginBottom: 4,
+            lineHeight: 1.3,
+          }}
+        >
+          安全操规管理
+        </h2>
+        <p style={{ fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5 }}>
+          管理已审核的安全操作规程 · 版本修订 · AI标准化生成入口
+        </p>
+      </div>
+
+      {/* Content Card */}
+      <div
+        style={{
+          background: '#ffffff',
+          borderRadius: 12,
+          border: '1px solid #e5e3df',
+          padding: '4px 24px 24px',
+        }}
       >
         <Tabs activeKey={activeTab} onChange={(key) => setActiveTab(key)} items={tabItems} />
-      </Card>
+      </div>
 
-      {/* Regulation Modal */}
-      <Modal
+      {/* ═══ Regulation Drawer ═══ */}
+      <Drawer
         title={editingRegulation ? '编辑操规' : '新建操规'}
-        open={regModalVisible}
-        onOk={handleRegSubmit}
-        onCancel={() => setRegModalVisible(false)}
-        width={600}
-        okText="确认"
-        cancelText="取消"
+        open={regDrawerOpen}
+        onClose={() => setRegDrawerOpen(false)}
+        width={480}
+        destroyOnHidden
+        extra={
+          <Space>
+            <Button onClick={() => setRegDrawerOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              loading={regSubmitting}
+              onClick={handleRegSubmit}
+              style={{
+                borderRadius: 8,
+                background: '#5645d4',
+                borderColor: '#5645d4',
+                fontWeight: 600,
+                boxShadow: 'none',
+              }}
+            >
+              保存
+            </Button>
+          </Space>
+        }
       >
         <Form
           form={editingRegulation ? regEditForm : regForm}
           layout="vertical"
-          initialValues={editingRegulation || undefined}
+          requiredMark="optional"
         >
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="regulation_no"
-                label="操规编号"
-                rules={[{ required: true, message: '请输入操规编号' }]}
-              >
-                <Input placeholder="请输入操规编号" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="regulation_name"
-                label="操规名称"
-                rules={[{ required: true, message: '请输入操规名称' }]}
-              >
-                <Input placeholder="请输入操规名称" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item
+            name="regulation_no"
+            label="操规编号"
+            rules={[{ required: true, message: '请输入操规编号' }]}
+          >
+            <Input placeholder="请输入操规编号" />
+          </Form.Item>
+          <Form.Item
+            name="regulation_name"
+            label="操规名称"
+            rules={[{ required: true, message: '请输入操规名称' }]}
+          >
+            <Input placeholder="请输入操规名称" />
+          </Form.Item>
           <Form.Item name="position" label="所属岗位">
             <Input placeholder="请输入所属岗位" />
           </Form.Item>
@@ -863,42 +1025,53 @@ export default function RegulationPage() {
             <Input.TextArea rows={3} placeholder="请输入备注" />
           </Form.Item>
         </Form>
-      </Modal>
+      </Drawer>
 
-      {/* Revision Create Modal */}
-      <Modal
+      {/* ═══ Revision Drawer ═══ */}
+      <Drawer
         title="新建修订记录"
-        open={revModalVisible}
-        onOk={handleRevSubmit}
-        onCancel={() => setRevModalVisible(false)}
-        width={600}
-        okText="确认"
-        cancelText="取消"
+        open={revDrawerOpen}
+        onClose={() => setRevDrawerOpen(false)}
+        width={480}
+        destroyOnHidden
+        extra={
+          <Space>
+            <Button onClick={() => setRevDrawerOpen(false)}>取消</Button>
+            <Button
+              type="primary"
+              loading={revSubmitting}
+              onClick={handleRevSubmit}
+              style={{
+                borderRadius: 8,
+                background: '#5645d4',
+                borderColor: '#5645d4',
+                fontWeight: 600,
+                boxShadow: 'none',
+              }}
+            >
+              保存
+            </Button>
+          </Space>
+        }
       >
-        <Form form={revForm} layout="vertical">
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="revision_no"
-                label="修订编号"
-                rules={[{ required: true, message: '请输入修订编号' }]}
-              >
-                <Input placeholder="请输入修订编号" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="revision_type"
-                label="修订类型"
-                rules={[{ required: true, message: '请选择修订类型' }]}
-              >
-                <Select
-                  options={REVISION_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-                  placeholder="人工修订 / AI修订"
-                />
-              </Form.Item>
-            </Col>
-          </Row>
+        <Form form={revForm} layout="vertical" requiredMark="optional">
+          <Form.Item
+            name="revision_no"
+            label="修订编号"
+            rules={[{ required: true, message: '请输入修订编号' }]}
+          >
+            <Input placeholder="请输入修订编号" />
+          </Form.Item>
+          <Form.Item
+            name="revision_type"
+            label="修订类型"
+            rules={[{ required: true, message: '请选择修订类型' }]}
+          >
+            <Select
+              options={REVISION_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              placeholder="人工修订 / AI修订"
+            />
+          </Form.Item>
           <Form.Item
             name="regulation_id"
             label="关联操规"
@@ -916,18 +1089,12 @@ export default function RegulationPage() {
               }))}
             />
           </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="reviser" label="修订人ID">
-                <Input placeholder="请输入修订人ID" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="reviser_name" label="修订人姓名">
-                <Input placeholder="请输入修订人姓名" />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item name="reviser" label="修订人ID">
+            <Input placeholder="请输入修订人ID" />
+          </Form.Item>
+          <Form.Item name="reviser_name" label="修订人姓名">
+            <Input placeholder="请输入修订人姓名" />
+          </Form.Item>
           <Form.Item name="revision_opinion" label="修订意见">
             <Input.TextArea rows={4} placeholder="描述修订意见，AI修订模式将基于此意见生成修订稿" />
           </Form.Item>
@@ -935,9 +1102,9 @@ export default function RegulationPage() {
             <Input.TextArea rows={2} placeholder="请输入备注" />
           </Form.Item>
         </Form>
-      </Modal>
+      </Drawer>
 
-      {/* AI Generation Result Modal */}
+      {/* ═══ AI Generation Result Modal ═══ */}
       <Modal
         title="AI 修订生成结果"
         open={aiModalVisible}
@@ -954,30 +1121,47 @@ export default function RegulationPage() {
         okButtonProps={{ disabled: !aiContent || aiGenerating }}
       >
         {aiGenerating ? (
-          <div className="flex flex-col items-center justify-center py-12">
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
             <Spin size="large" />
-            <Text className="mt-4 text-gray-500">AI 正在生成修订稿...</Text>
+            <Text style={{ marginTop: 16, color: '#787671' }}>AI 正在生成修订稿...</Text>
           </div>
         ) : aiContent ? (
           <>
-            <div className="text-sm font-medium mb-2">文档名称：</div>
+            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 8, color: '#1a1a1a' }}>文档名称</div>
             <Input
               value={aiDocumentName}
               onChange={(e) => setAiDocumentName(e.target.value)}
               placeholder="修订稿文件名"
-              className="mb-4"
             />
-            <Divider />
-            <div className="text-sm font-medium mb-2">生成内容预览：</div>
+            <Divider style={{ margin: '16px 0' }} />
+            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 8, color: '#1a1a1a' }}>生成内容预览</div>
             <div
-              className="bg-gray-50 p-4 rounded-lg max-h-96 overflow-auto whitespace-pre-wrap text-sm"
-              style={{ border: '1px solid #f0f0f0' }}
+              style={{
+                background: '#fafaf9',
+                border: '1px solid #e5e3df',
+                borderRadius: 8,
+                padding: 16,
+                maxHeight: 400,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: '#37352f',
+              }}
             >
               {aiContent}
             </div>
           </>
         ) : null}
       </Modal>
+
+      {/* ── SOP Generator Modal ── */}
+      <SopGeneratorModal
+        open={generatorModalOpen}
+        onClose={() => setGeneratorModalOpen(false)}
+        onGenerated={handleSopGenerated}
+      />
+
     </div>
   )
 }

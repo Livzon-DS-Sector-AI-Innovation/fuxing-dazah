@@ -17,6 +17,10 @@ const LEVEL_REQUIREMENTS: Record<number, string> = {
   3: '最终确认合规性，关闭隐患',
 }
 
+// ── 复核级别标签映射 ──
+const LEVEL_LABELS: Record<number, string> = {}
+VERIFY_LEVEL_OPTIONS.forEach((o) => { LEVEL_LABELS[o.value as number] = o.label })
+
 interface Props {
   open: boolean
   record: HazardReport | null
@@ -113,10 +117,6 @@ export default function HazardVerifyModal({
               {record.description}
             </div>
             <div>
-              <strong>地点：</strong>
-              {record.location || '-'}
-            </div>
-            <div>
               <strong>整改要求：</strong>
               {record.corrective_preventive_measures || '-'}
             </div>
@@ -136,10 +136,9 @@ export default function HazardVerifyModal({
             >
               <div style={{ fontWeight: 600, marginBottom: 4 }}>📝 整改回复</div>
               <div>{record.rectification_reply}</div>
-              {record.rectification_replied_at && (
+              {record.actual_completion_date && (
                 <div style={{ color: '#999', marginTop: 4 }}>
-                  回复时间：{record.rectification_replied_at}
-                  {record.rectification_replied_by_name ? ` | 回复人：${record.rectification_replied_by_name}` : ''}
+                  回复时间：{record.actual_completion_date}
                 </div>
               )}
             </div>
@@ -152,13 +151,13 @@ export default function HazardVerifyModal({
             column={3}
             style={{ fontSize: 12 }}
           >
-            <Descriptions.Item label="一级复核">
+            <Descriptions.Item label={LEVEL_LABELS[1] || '部门负责人复核'}>
               {renderVerifyStatus(record.verify_level_1_status || 'pending')}
             </Descriptions.Item>
-            <Descriptions.Item label="二级复核">
+            <Descriptions.Item label={LEVEL_LABELS[2] || '分管领导复核'}>
               {renderVerifyStatus(record.verify_level_2_status || 'pending')}
             </Descriptions.Item>
-            <Descriptions.Item label="三级复核">
+            <Descriptions.Item label={LEVEL_LABELS[3] || '检查人员复核'}>
               {renderVerifyStatus(record.verify_level_3_status || 'pending')}
             </Descriptions.Item>
           </Descriptions>
@@ -175,7 +174,7 @@ export default function HazardVerifyModal({
           fontSize: 13,
         }}
       >
-        💡 {LEVEL_REQUIREMENTS[currentLevel]}
+        💡 {LEVEL_LABELS[currentLevel] || `第${currentLevel}级复核`} — {LEVEL_REQUIREMENTS[currentLevel]}
       </div>
 
       <Form form={form} layout="vertical" initialValues={{ level: currentLevel }}>
