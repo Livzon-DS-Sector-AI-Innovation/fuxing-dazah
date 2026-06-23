@@ -50,14 +50,17 @@ from app.modules.equipment.repository.failure_code import (
     get_failure_codes,
     update_failure_code,
 )
-from app.modules.equipment.repository.inspection import (
+from app.modules.equipment.repository.inspection import (  # noqa: F401
     count_photos_by_task,
     create_inspection_records,
     create_photo,
     create_route,
+    create_schedule,
     create_task,
     delete_photo,
     delete_route,
+    delete_schedule,
+    get_due_schedules,
     get_equipment_names_by_ids,
     get_max_task_no,
     get_photo_by_id,
@@ -67,6 +70,8 @@ from app.modules.equipment.repository.inspection import (
     get_route_by_id,
     get_route_equipments,
     get_routes,
+    get_schedule_by_id,
+    get_schedules_by_route,
     get_task_by_id,
     get_task_equipment_completed_ids,
     get_tasks,
@@ -74,6 +79,7 @@ from app.modules.equipment.repository.inspection import (
     set_route_locations,
     soft_delete_records_by_task_equipment,
     update_route,
+    update_schedule,
 )
 from app.modules.equipment.repository.inspection_template import (
     create_inspection_template,

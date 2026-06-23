@@ -1,7 +1,7 @@
 """Inspection repository: data access for routes, tasks, photos."""
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from app.modules.equipment.models.inspection import (
     InspectionPhoto,
     InspectionRoute,
     InspectionRouteEquipment,
+    InspectionRouteSchedule,
     InspectionTask,
 )
 from app.modules.equipment.models.inspection_route_location import (
@@ -76,7 +77,6 @@ async def get_routes(
     db: AsyncSession,
     is_active: bool | None = None,
     location_id: uuid.UUID | None = None,
-    period_type: str | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -93,8 +93,6 @@ async def get_routes(
                 )
             )
         )
-    if period_type:
-        conditions.append(InspectionRoute.period_type == period_type)
     if keyword:
         conditions.append(InspectionRoute.name.ilike(f"%{keyword}%"))
 
@@ -655,3 +653,137 @@ async def _set_equipment_templates(
     for tid, t in existing_by_tid.items():
         if tid not in new_tids and not t.is_deleted:
             t.is_deleted = True
+
+
+# ═══════════ 路线定时任务 ═══════════
+
+async def create_schedule(
+    db: AsyncSession, data: dict
+) -> InspectionRouteSchedule:
+    route_id = data.get("route_id")
+    cron_expr = data.get("cron_expression")
+    assigned_to = data.get("assigned_to")
+
+    # 幂等：已存在活跃记录时直接返回
+    if route_id and cron_expr:
+        active_cond = [
+            InspectionRouteSchedule.route_id == route_id,
+            InspectionRouteSchedule.cron_expression == cron_expr,
+            InspectionRouteSchedule.is_deleted == False,  # noqa: E712
+        ]
+        if assigned_to is not None:
+            active_cond.append(
+                InspectionRouteSchedule.assigned_to == assigned_to,
+            )
+        active_result = await db.execute(
+            select(InspectionRouteSchedule).where(and_(*active_cond)).limit(1)
+        )
+        existing = active_result.scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        # 清理同参数的已软删除记录
+        dup_cond = [
+            InspectionRouteSchedule.route_id == route_id,
+            InspectionRouteSchedule.cron_expression == cron_expr,
+            InspectionRouteSchedule.is_deleted == True,  # noqa: E712
+        ]
+        if assigned_to is not None:
+            dup_cond.append(
+                InspectionRouteSchedule.assigned_to == assigned_to,
+            )
+        else:
+            dup_cond.append(
+                InspectionRouteSchedule.assigned_to.is_(None),
+            )
+        deleted_result = await db.execute(
+            select(InspectionRouteSchedule).where(and_(*dup_cond))
+        )
+        for old in deleted_result.scalars().all():
+            await db.delete(old)
+        await db.flush()
+
+    schedule = InspectionRouteSchedule(**data)
+    db.add(schedule)
+    await db.flush()
+    return schedule
+
+
+async def get_schedules_by_route(
+    db: AsyncSession, route_id: uuid.UUID
+) -> list[InspectionRouteSchedule]:
+    result = await db.execute(
+        select(InspectionRouteSchedule)
+        .where(
+            InspectionRouteSchedule.route_id == route_id,
+            InspectionRouteSchedule.is_deleted == False,  # noqa: E712
+        )
+        .order_by(InspectionRouteSchedule.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_schedule_by_id(
+    db: AsyncSession, schedule_id: uuid.UUID
+) -> InspectionRouteSchedule | None:
+    result = await db.execute(
+        select(InspectionRouteSchedule).where(
+            InspectionRouteSchedule.id == schedule_id,
+            InspectionRouteSchedule.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_schedule(
+    db: AsyncSession, schedule_id: uuid.UUID, data: dict,
+    schedule: InspectionRouteSchedule | None = None,
+) -> InspectionRouteSchedule | None:
+    if schedule is None:
+        schedule = await get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        return None
+    for key, value in data.items():
+        if key == "assigned_to":
+            schedule.assigned_to = value  # allow clearing to None
+        elif value is not None:
+            setattr(schedule, key, value)
+    await db.flush()
+    # Re-fetch to get server-generated onupdate values (e.g. updated_at)
+    result = await db.execute(
+        select(InspectionRouteSchedule).where(
+            InspectionRouteSchedule.id == schedule_id,
+            InspectionRouteSchedule.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_schedule(
+    db: AsyncSession, schedule_id: uuid.UUID
+) -> bool:
+    schedule = await get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        return False
+    schedule.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def get_due_schedules(
+    db: AsyncSession,
+) -> list[InspectionRouteSchedule]:
+    """Find enabled schedules with active routes where next_trigger_at <= now."""
+    now = datetime.now(UTC)
+    result = await db.execute(
+        select(InspectionRouteSchedule)
+        .join(InspectionRoute)
+        .where(
+            InspectionRouteSchedule.is_active == True,    # noqa: E712
+            InspectionRouteSchedule.is_deleted == False,  # noqa: E712
+            InspectionRouteSchedule.next_trigger_at <= now,
+            InspectionRoute.is_active == True,            # noqa: E712
+            InspectionRoute.is_deleted == False,          # noqa: E712
+        )
+    )
+    return list(result.scalars().all())

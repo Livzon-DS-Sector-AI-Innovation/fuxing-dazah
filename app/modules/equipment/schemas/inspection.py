@@ -7,7 +7,6 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 # ── 枚举 ──
-InspectionPeriodType = Literal["每日", "每周", "每月", "专项"]
 InspectionTaskStatus = Literal["待执行", "执行中", "已完成", "已关闭"]
 InspectionPlanType = Literal["线路巡检", "设备巡检"]
 InspectionOverallResult = Literal["正常", "异常"]
@@ -20,22 +19,12 @@ class InspectionRouteCreate(BaseModel):
 
     name: str = Field(..., max_length=200, description="路线名称")
     description: str | None = Field(default=None, description="路线描述")
-    period_type: InspectionPeriodType = Field(
-        default="每日", description="巡检周期类型"
-    )
-    period_value: int | None = Field(
-        default=None, ge=1, description="周期数值"
-    )
-
-
 class InspectionRouteUpdate(BaseModel):
     """更新巡检路线请求"""
 
     name: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None)
     is_active: bool | None = Field(default=None)
-    period_type: InspectionPeriodType | None = Field(default=None)
-    period_value: int | None = Field(default=None)
 
 
 class InspectionRouteResponse(BaseModel):
@@ -45,8 +34,6 @@ class InspectionRouteResponse(BaseModel):
     name: str
     description: str | None
     is_active: bool
-    period_type: InspectionPeriodType
-    period_value: int | None
     equipment_count: int = 0
     location_count: int = 0
     created_at: datetime
@@ -155,6 +142,40 @@ class RouteEquipmentResponse(BaseModel):
     sort_order: int
     equipment_name: str | None = None
     equipment_no: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# ═══════════ 巡检路线定时任务 ═══════════
+class InspectionScheduleCreate(BaseModel):
+    """创建定时任务请求"""
+
+    cron_expression: str = Field(..., max_length=50, description="cron 表达式")
+    assigned_to: uuid.UUID = Field(..., description="巡检人员ID")
+    is_active: bool = Field(default=True, description="是否启用")
+
+
+class InspectionScheduleUpdate(BaseModel):
+    """更新定时任务请求"""
+
+    cron_expression: str | None = Field(default=None, max_length=50)
+    assigned_to: uuid.UUID | None = Field(default=None)
+    is_active: bool | None = Field(default=None)
+
+
+class InspectionScheduleResponse(BaseModel):
+    """定时任务响应"""
+
+    id: uuid.UUID
+    route_id: uuid.UUID
+    cron_expression: str
+    assigned_to: uuid.UUID | None
+    is_active: bool
+    last_triggered_at: datetime | None
+    next_trigger_at: datetime | None
+    assignee_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 

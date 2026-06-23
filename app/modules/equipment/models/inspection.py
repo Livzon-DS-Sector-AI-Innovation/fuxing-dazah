@@ -37,10 +37,6 @@ class InspectionRoute(BaseModel):
         UniqueConstraint(
             "name", "is_deleted", name="uq_inspection_routes_name"
         ),
-        CheckConstraint(
-            "period_type IN ('每日', '每周', '每月', '专项')",
-            name="ck_inspection_routes_period_type",
-        ),
         {"schema": "equipment"},
     )
 
@@ -50,12 +46,6 @@ class InspectionRoute(BaseModel):
     )
     is_active: Mapped[bool] = mapped_column(
         default=True, server_default="true", comment="是否启用"
-    )
-    period_type: Mapped[str] = mapped_column(
-        String(20), default="每日", comment="巡检周期类型"
-    )
-    period_value: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="周期数值"
     )
 
     # 关系
@@ -67,6 +57,42 @@ class InspectionRoute(BaseModel):
             "and_(InspectionRoute.id == foreign(RouteLocation.route_id), "
             "RouteLocation.is_deleted == False)"
         ),
+    )
+
+
+class InspectionRouteSchedule(BaseModel):
+    """巡检路线定时任务配置表"""
+
+    __tablename__ = "inspection_route_schedules"
+    __table_args__ = (
+        UniqueConstraint(
+            "route_id", "cron_expression", "is_deleted",
+            name="uq_route_schedules_route_cron_deleted",
+        ),
+        {"schema": "equipment"},
+    )
+
+    route_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("equipment.inspection_routes.id"), comment="路线ID",
+    )
+    cron_expression: Mapped[str] = mapped_column(
+        String(50), comment="cron 表达式"
+    )
+    assigned_to: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("identity.users.id"), nullable=True, comment="巡检人员ID",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True, server_default="true", comment="是否启用",
+    )
+    last_triggered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="上次触发时间",
+    )
+    next_trigger_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="下次触发时间",
+    )
+
+    route: Mapped[InspectionRoute] = relationship(
+        "InspectionRoute", foreign_keys=[route_id],
     )
 
 

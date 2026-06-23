@@ -2,8 +2,10 @@
 
 import os
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from datetime import timezone as dt_timezone
 
+from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import UploadFile
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -11,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import AppException, NotFoundException
-from app.core.storage import delete_object, is_enabled as minio_enabled, upload_object
+from app.core.storage import delete_object, upload_object
+from app.core.storage import is_enabled as minio_enabled
 from app.modules.equipment import repository as repo
 from app.modules.equipment.models.inspection import (
     InspectionPhoto,
     InspectionRoute,
+    InspectionRouteSchedule,
     InspectionTask,
 )
 from app.modules.equipment.models.inspection_route_location import (
@@ -23,6 +27,9 @@ from app.modules.equipment.models.inspection_route_location import (
 )
 from app.modules.equipment.models.inspection_template import InspectionRecord
 from app.modules.equipment.models.work_order import WorkOrder
+from app.modules.equipment.schemas.inspection import (
+    InspectionScheduleResponse,
+)
 
 _UPLOAD_DIR = "uploads/inspection"
 _MAX_RETRIES = 3
@@ -56,7 +63,6 @@ async def get_routes(
     db: AsyncSession,
     is_active: bool | None = None,
     location_id: uuid.UUID | None = None,
-    period_type: str | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -65,7 +71,6 @@ async def get_routes(
         db,
         is_active=is_active,
         location_id=location_id,
-        period_type=period_type,
         keyword=keyword,
         page=page,
         page_size=page_size,
@@ -674,3 +679,104 @@ async def get_task_detail(
     records = await repo.get_records_by_task(db, task_id)
     photos = await repo.get_photos_by_task(db, task_id)
     return {"task": task, "records": records, "photos": photos}
+
+
+# ═══════════ 定时任务 ═══════════
+
+_CN_TZ = dt_timezone(timedelta(hours=8))
+
+
+def compute_next_cron(
+    expression: str, from_time: datetime | None = None,
+) -> datetime:
+    """Compute the next fire time for a cron expression.
+
+    Raises ValueError if *expression* is not a valid cron string.
+    """
+    base = from_time or datetime.now(_CN_TZ)
+    naive = base.replace(tzinfo=None)
+    is_six = len(expression.split()) == 6
+    cron = croniter(expression, naive, second_at_beginning=is_six)
+    next_naive: datetime = cron.get_next(datetime)
+    return next_naive.replace(tzinfo=_CN_TZ)
+
+
+def _validate_cron(expression: str) -> None:
+    """Raise AppException if cron expression is invalid."""
+    try:
+        is_six = len(expression.split()) == 6
+        croniter(expression, second_at_beginning=is_six)
+    except (ValueError, KeyError) as e:
+        raise AppException(
+            message=f"无效的 cron 表达式: {expression}",
+            detail=str(e),
+        ) from e
+
+
+async def _batch_fetch_user_names(
+    db: AsyncSession, user_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, str]:
+    """Batch-fetch user names for a set of user IDs."""
+    if not user_ids:
+        return {}
+    from app.platform.identity.models import User
+
+    result = await db.execute(
+        select(User.id, User.name).where(User.id.in_(user_ids))
+    )
+    return {row.id: row.name for row in result.all()}
+
+
+async def create_schedule(
+    db: AsyncSession, route_id: uuid.UUID, data: dict,
+) -> InspectionRouteSchedule:
+    await get_route_by_id(db, route_id)  # validate route exists
+    _validate_cron(data["cron_expression"])
+    data["route_id"] = str(route_id)
+    data["assigned_to"] = str(data["assigned_to"])
+    data["next_trigger_at"] = compute_next_cron(data["cron_expression"])
+    return await repo.create_schedule(db, data)
+
+
+async def get_schedules_by_route(
+    db: AsyncSession, route_id: uuid.UUID,
+) -> list[InspectionScheduleResponse]:
+    schedules = await repo.get_schedules_by_route(db, route_id)
+
+    # batch-fetch assignee names
+    user_ids = {
+        s.assigned_to
+        for s in schedules
+        if s.assigned_to is not None
+    }
+    name_map = await _batch_fetch_user_names(db, user_ids)
+
+    result: list[InspectionScheduleResponse] = []
+    for s in schedules:
+        resp = InspectionScheduleResponse.model_validate(s)
+        if s.assigned_to and s.assigned_to in name_map:
+            resp.assignee_name = name_map[s.assigned_to]
+        result.append(resp)
+    return result
+
+
+async def update_schedule(
+    db: AsyncSession, schedule_id: uuid.UUID, data: dict,
+) -> InspectionRouteSchedule:
+    schedule = await repo.get_schedule_by_id(db, schedule_id)
+    if not schedule:
+        raise NotFoundException("定时任务", str(schedule_id))
+    if data.get("cron_expression"):
+        _validate_cron(data["cron_expression"])
+        data["next_trigger_at"] = compute_next_cron(data["cron_expression"])
+    updated = await repo.update_schedule(db, schedule_id, data, schedule=schedule)
+    assert updated is not None
+    return updated
+
+
+async def delete_schedule(
+    db: AsyncSession, schedule_id: uuid.UUID,
+) -> bool:
+    if not await repo.delete_schedule(db, schedule_id):
+        raise NotFoundException("定时任务", str(schedule_id))
+    return True

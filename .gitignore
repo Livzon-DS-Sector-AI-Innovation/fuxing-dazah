@@ -30,6 +30,7 @@ Thumbs.db
 *.swo
 uploads
 
+.superpowers
 docs/superpowers
 uploads
 assets/**/*.xlsx

@@ -2,10 +2,10 @@
 
 import os
 import uuid
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -23,15 +23,18 @@ from app.modules.equipment.schemas.inspection import (
     InspectionRouteDetailResponse,
     InspectionRouteResponse,
     InspectionRouteUpdate,
+    InspectionScheduleCreate,
+    InspectionScheduleResponse,
+    InspectionScheduleUpdate,
     InspectionTaskClose,
     InspectionTaskCreate,
     InspectionTaskDetailResponse,
     InspectionTaskResponse,
     RouteCheckSubmit,
-    RouteLocationsBatch,
-    RouteLocationResponse,
-    RouteLocationEquipmentResponse,
     RouteEquipmentTemplateResponse,
+    RouteLocationEquipmentResponse,
+    RouteLocationResponse,
+    RouteLocationsBatch,
 )
 from app.modules.equipment.service import inspection as inspection_svc
 
@@ -117,7 +120,6 @@ async def create_route(
 async def list_routes(
     is_active: bool | None = Query(None, description="是否启用"),
     location_id: uuid.UUID | None = Query(None, description="按地点筛选"),
-    period_type: str | None = Query(None, description="周期类型"),
     keyword: str | None = Query(None, description="关键词搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
@@ -127,7 +129,6 @@ async def list_routes(
         db,
         is_active=is_active,
         location_id=location_id,
-        period_type=period_type,
         keyword=keyword,
         page=page,
         page_size=page_size,
@@ -460,7 +461,8 @@ async def serve_photo(
     photo_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.core.storage import get_object, is_enabled as minio_enabled
+    from app.core.storage import get_object
+    from app.core.storage import is_enabled as minio_enabled
 
     photo = await repo.get_photo_by_id(db, photo_id)
     if not photo:
@@ -615,3 +617,70 @@ async def get_history_detail(
         ],
     )
     return success_response(data=model)
+
+
+# ═══════════ 路线定时任务 ═══════════
+
+@router.get(
+    "/routes/{route_id}/schedules",
+    summary="获取路线定时任务列表",
+)
+async def list_schedules(
+    route_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    schedules = await inspection_svc.get_schedules_by_route(db, route_id)
+    return success_response(schedules)
+
+
+@router.post(
+    "/routes/{route_id}/schedules",
+    summary="创建定时任务",
+)
+async def create_schedule(
+    route_id: uuid.UUID,
+    body: InspectionScheduleCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    _require_user(current_user)
+    data = body.model_dump(exclude_unset=True)
+    schedule = await inspection_svc.create_schedule(db, route_id, data)
+    return success_response(InspectionScheduleResponse.model_validate(schedule))
+
+
+@router.put(
+    "/routes/{route_id}/schedules/{schedule_id}",
+    summary="更新定时任务",
+)
+async def update_schedule(
+    route_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    body: InspectionScheduleUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    _require_user(current_user)
+    data = body.model_dump(exclude_unset=True)
+    schedule = await inspection_svc.update_schedule(db, schedule_id, data)
+    if str(schedule.route_id) != str(route_id):
+        raise NotFoundException("定时任务", str(schedule_id))
+    return success_response(InspectionScheduleResponse.model_validate(schedule))
+
+
+@router.delete(
+    "/routes/{route_id}/schedules/{schedule_id}",
+    summary="删除定时任务",
+)
+async def delete_schedule(
+    route_id: uuid.UUID,
+    schedule_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = None,
+):
+    _require_user(current_user)
+    schedule = await repo.get_schedule_by_id(db, schedule_id)
+    if not schedule or str(schedule.route_id) != str(route_id):
+        raise NotFoundException("定时任务", str(schedule_id))
+    await inspection_svc.delete_schedule(db, schedule_id)
+    return success_response(None)
