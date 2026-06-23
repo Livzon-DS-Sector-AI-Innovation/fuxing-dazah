@@ -1,22 +1,21 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { getAuthHeaders } from '@/lib/auth'
+import { getAuthHeaders, getServerToken } from '@/lib/auth'
 import type {
   Accident,
   AccidentFormData,
   AccidentQueryParams,
-  CompleteRectificationRequest,
   ConfirmCheckRequest,
   Contractor,
   ContractorFormData,
   ContractorQueryParams,
   ContractorWorkRecord,
   ContractorWorkRecordFormData,
-  ExtendDeadlineRequest,
   HazardReport,
   HazardReportFormData,
   HazardReportQueryParams,
+  HazardStats,
   OperationRegulation,
   OperationRegulationFormData,
   OperationRegulationQueryParams,
@@ -60,9 +59,18 @@ import type {
   CardPreviewResponse,
   DataSourceOption,
   FeishuChat,
+  EhsChange,
+  EhsChangeFormData,
+  EhsChangeQueryParams,
+  OhHazardMonitor,
+  OhHazardMonitorFormData,
+  OhHazardMonitorQueryParams,
+  OhHealthExam,
+  OhHealthExamFormData,
+  OhHealthExamQueryParams,
 } from '@/types/safety'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002/api/v1'
+const API_BASE = process.env.API_BASE_URL ? `${process.env.API_BASE_URL}/api/v1` : 'http://localhost:8000/api/v1'
 
 // ============ Helper Functions ============
 
@@ -183,15 +191,22 @@ export async function deleteCheck(id: string) {
 
 // ============ HazardReport Actions ============
 
+export async function fetchHazardStats(): Promise<HazardStats> {
+  const response = await fetchApi<HazardStats>('/safety/hazards/stats')
+  return (response.data as HazardStats) || { total: 0, pending_review: 0, pending: 0, in_progress: 0, replied: 0, verifying: 0, rejected: 0, closed: 0, overdue: 0 }
+}
+
 export async function getHazards(params: HazardReportQueryParams = {}) {
   const searchParams = new URLSearchParams()
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
   if (params.status) searchParams.set('status', params.status)
+  if (params.rectification_status) searchParams.set('rectification_status', params.rectification_status)
   if (params.overall_status) searchParams.set('overall_status', params.overall_status)
   if (params.hazard_type) searchParams.set('hazard_type', params.hazard_type)
   if (params.hazard_level) searchParams.set('hazard_level', params.hazard_level)
   if (params.hazard_category) searchParams.set('hazard_category', params.hazard_category)
+  if (params.inspection_category) searchParams.set('inspection_category', params.inspection_category)
   if (params.department) searchParams.set('department', params.department)
   if (params.keyword) searchParams.set('keyword', params.keyword)
 
@@ -202,6 +217,13 @@ export async function getHazards(params: HazardReportQueryParams = {}) {
 
 export async function getHazard(id: string) {
   return fetchApi<HazardReport>(`/safety/hazards/${id}`)
+}
+
+/** 根据部门名称查询部门负责人 */
+export async function getDepartmentLeader(departmentName: string) {
+  return fetchApi<{ department: string; leader_name: string | null; leader_id: string | null }>(
+    `/safety/hazards/department-leader?department_name=${encodeURIComponent(departmentName)}`
+  )
 }
 
 export async function createHazard(data: HazardReportFormData) {
@@ -226,24 +248,6 @@ export async function startRectification(id: string) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${id}/rectification/start`,
     { method: 'POST' }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function completeRectification(id: string, data?: CompleteRectificationRequest) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/rectification/complete`,
-    { method: 'POST', body: JSON.stringify(data || {}) }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function extendDeadline(id: string, data: ExtendDeadlineRequest) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${id}/extend`,
-    { method: 'POST', body: JSON.stringify(data) }
   )
   revalidatePath('/safety/hazard')
   return response
@@ -308,9 +312,10 @@ export async function deleteHazards(ids: string[]) {
 export async function uploadHazardPhoto(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/hazards/${id}/upload-photo`,
-    { method: 'POST', body: formData }
+    `${API_BASE}/safety/hazards/${id}/upload-photo`,
+    { method: 'POST', headers: { ...authHeaders }, body: formData }
   )
   revalidatePath('/safety/hazard')
   return response.json()
@@ -319,9 +324,10 @@ export async function uploadHazardPhoto(id: string, file: File) {
 export async function uploadRectificationPhoto(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/hazards/${id}/upload-rectification-photo`,
-    { method: 'POST', body: formData }
+    `${API_BASE}/safety/hazards/${id}/upload-rectification-photo`,
+    { method: 'POST', headers: { ...authHeaders }, body: formData }
   )
   revalidatePath('/safety/hazard')
   return response.json()
@@ -330,19 +336,6 @@ export async function uploadRectificationPhoto(id: string, file: File) {
 export async function runHazardAI(hazardId: string, scriptNumber: number) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${hazardId}/ai/run/${scriptNumber}`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/hazard')
-  return response
-}
-
-export async function reviewHazardAI(
-  hazardId: string,
-  scriptNumber: number,
-  action: 'approved' | 'rejected'
-) {
-  const response = await fetchApi<HazardReport>(
-    `/safety/hazards/${hazardId}/ai/review/${scriptNumber}?action=${action}`,
     { method: 'POST' }
   )
   revalidatePath('/safety/hazard')
@@ -815,9 +808,10 @@ export async function reviewHazardScript(
 export async function uploadHazardAttachment(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/hazard-identifications/${id}/upload`,
-    { method: 'POST', body: formData }
+    `${API_BASE}/safety/hazard-identifications/${id}/upload`,
+    { method: 'POST', headers: { ...authHeaders }, body: formData }
   )
   revalidatePath('/safety/hazard-identification')
   return response.json()
@@ -846,10 +840,11 @@ export async function parseHazardExportQuery(naturalQuery: string) {
 
 export async function exportHazardLedgerPdf(
   params: import('@/types/safety').HazardLedgerExportRequest
-) {
+): Promise<string> {
+  const authHeaders = await getAuthHeaders()
   const response = await fetch(`${API_BASE}/safety/hazard-identifications/export-pdf`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...authHeaders },
     body: JSON.stringify(params),
   })
 
@@ -858,41 +853,9 @@ export async function exportHazardLedgerPdf(
     throw new Error(`导出失败: ${response.status} ${errorText}`)
   }
 
-  // 触发浏览器下载 PDF
-  const blob = await response.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.pdf`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
-}
-
-export async function exportHazardLedgerExcel(
-  params: import('@/types/safety').HazardLedgerExportRequest
-) {
-  const response = await fetch(`${API_BASE}/safety/hazard-identifications/export-excel`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`导出失败: ${response.status} ${errorText}`)
-  }
-
-  const blob = await response.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.xlsx`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
+  // 在 Server Action 中不能使用 browser API，返回 base64 给客户端处理下载
+  const arrayBuffer = await response.arrayBuffer()
+  return Buffer.from(arrayBuffer).toString('base64')
 }
 
 export async function getSafetyEnums() {
@@ -907,6 +870,7 @@ export async function getRegulations(params: OperationRegulationQueryParams = {}
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
   if (params.position) searchParams.set('position', params.position)
   if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.status) searchParams.set('status', params.status)
 
   const queryString = searchParams.toString()
   const endpoint = `/safety/regulations${queryString ? `?${queryString}` : ''}`
@@ -946,12 +910,69 @@ export async function deleteRegulation(id: string) {
 export async function uploadRegulationDocument(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/regulations/${id}/upload`,
-    { method: 'POST', body: formData }
+    `${API_BASE}/safety/regulations/${id}/upload`,
+    { method: 'POST', headers: uploadHeaders, body: formData }
   )
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`上传失败: ${response.status} ${text}`)
+  }
   revalidatePath('/safety/regulation')
   return response.json()
+}
+
+// ============ SOP Generator Actions ============
+
+export async function generateSop(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
+  const response = await fetch(
+    `${API_BASE}/safety/regulations/generate`,
+    { method: 'POST', headers: uploadHeaders, body: formData }
+  )
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`生成失败 (${response.status}): ${text}`)
+  }
+  revalidatePath('/safety/regulation')
+  return response.json()
+}
+
+export async function updateSopContent(regulationId: string, content: string, status?: string) {
+  const authHeaders = await getAuthHeaders()
+  const response = await fetch(
+    `${API_BASE}/safety/regulations/${regulationId}/content`,
+    {
+      method: 'PUT',
+      headers: authHeaders,
+      body: JSON.stringify({ content, status }),
+    }
+  )
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`保存失败 (${response.status}): ${text}`)
+  }
+  revalidatePath('/safety/regulation')
+  return response.json()
+}
+
+export async function exportSopPdf(regulationId: string) {
+  const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...headers } = authHeaders
+  const response = await fetch(
+    `${API_BASE}/safety/regulations/${regulationId}/export`,
+    { method: 'POST', headers }
+  )
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`导出 PDF 失败 (${response.status}): ${text}`)
+  }
+  return response.blob()
 }
 
 // ============ RegulationRevision Actions ============
@@ -1004,7 +1025,7 @@ export async function manualRevisionComplete(revisionId: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
   const response = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/safety/revisions/${revisionId}/manual-complete`,
+    `${API_BASE}/safety/revisions/${revisionId}/manual-complete`,
     { method: 'POST', body: formData }
   )
   revalidatePath('/safety/regulation-revision')
@@ -1097,67 +1118,6 @@ export async function deleteAIWorkflowConfig(id: string) {
   return response
 }
 
-// ============ API Call Config Actions ============
-
-export async function getAPICallConfigs(isActive?: boolean) {
-  const searchParams = new URLSearchParams()
-  if (isActive !== undefined) searchParams.set('is_active', String(isActive))
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/api-call-configs${queryString ? `?${queryString}` : ''}`
-  return fetchApi<import('@/types/safety').APICallConfig[]>(endpoint)
-}
-
-export async function getAPICallConfig(id: string) {
-  return fetchApi<import('@/types/safety').APICallConfig>(
-    `/safety/api-call-configs/${id}`
-  )
-}
-
-export async function createAPICallConfig(
-  data: import('@/types/safety').APICallConfigFormData
-) {
-  const response = await fetchApi<import('@/types/safety').APICallConfig>(
-    '/safety/api-call-configs',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/api-call-config')
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-export async function updateAPICallConfig(
-  id: string,
-  data: Partial<import('@/types/safety').APICallConfig>
-) {
-  const response = await fetchApi<import('@/types/safety').APICallConfig>(
-    `/safety/api-call-configs/${id}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/api-call-config')
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-export async function activateAPICallConfig(id: string) {
-  const response = await fetchApi<import('@/types/safety').APICallConfig>(
-    `/safety/api-call-configs/${id}/activate`,
-    { method: 'POST' }
-  )
-  revalidatePath('/safety/api-call-config')
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-export async function deleteAPICallConfig(id: string) {
-  const response = await fetchApi<null>(`/safety/api-call-configs/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/api-call-config')
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
 // ============ AI Workflow Attachment Actions ============
 
 export async function uploadWorkflowAttachment(
@@ -1166,10 +1126,15 @@ export async function uploadWorkflowAttachment(
   const formData = new FormData()
   formData.append('file', file)
 
-  const authHeaders = await getAuthHeaders()
+  // 只传 Authorization，不能手动设置 Content-Type —— 浏览器需自动设置
+  // multipart/form-data 的 boundary，否则后端无法解析 FormData
+  const token = await getServerToken()
+  const headers: Record<string, string> = {}
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
   const response = await fetch(`${API_BASE}/safety/ai-workflow-configs/attachments/upload`, {
     method: 'POST',
-    headers: { ...authHeaders },
+    headers,
     body: formData,
   })
 
@@ -1601,18 +1566,6 @@ export async function getHazardRiskOptions(params?: {
 
 
 // ============ EHS变更管理 (MOC) ============
-
-import type {
-  EhsChange,
-  EhsChangeFormData,
-  EhsChangeQueryParams,
-  OhHazardMonitor,
-  OhHazardMonitorFormData,
-  OhHazardMonitorQueryParams,
-  OhHealthExam,
-  OhHealthExamFormData,
-  OhHealthExamQueryParams,
-} from '@/types/safety'
 
 // CRUD
 export async function getEhsChanges(params: EhsChangeQueryParams = {}) {

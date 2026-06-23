@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import {
   Table,
   Input,
+  Select,
   Button,
   Space,
   Tag,
@@ -13,39 +14,95 @@ import {
   Modal,
   Descriptions,
   Spin,
+  Card,
+  Row,
+  Col,
+  Statistic,
+  DatePicker,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
   ExportOutlined,
-  RobotOutlined,
   DownloadOutlined,
+  SafetyCertificateOutlined,
+  WarningOutlined,
+  AlertOutlined,
+  InfoCircleOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons'
-import { getHazardIdentifications, parseHazardExportQuery, exportHazardLedgerPdf } from '@/actions/safety'
-import type { HazardIdentification, HazardLedgerExportParsedFilters } from '@/types/safety'
+import {
+  getHazardIdentifications,
+  getHILedgerStats,
+  exportHazardLedgerPdf,
+} from '@/actions/safety'
+import type { HazardIdentification, HazardLedgerStats } from '@/types/safety'
 import {
   OVERALL_STATUS_OPTIONS_HI,
   RISK_LEVEL_OPTIONS,
 } from '@/types/safety'
+import dayjs from 'dayjs'
 
 const { Text } = Typography
+const { RangePicker } = DatePicker
+
+// 风险等级图标映射
+const RISK_ICONS: Record<string, React.ReactNode> = {
+  level_1: <SafetyCertificateOutlined style={{ color: '#f5222d' }} />,
+  level_2: <WarningOutlined style={{ color: '#fa8c16' }} />,
+  level_3: <AlertOutlined style={{ color: '#faad14' }} />,
+  level_4: <InfoCircleOutlined style={{ color: '#52c41a' }} />,
+}
+
+// 风险等级卡片配置
+const RISK_CARD_CONFIG: Record<string, { label: string; color: string; bgColor: string }> = {
+  level_1: { label: '重大风险', color: '#f5222d', bgColor: '#fff1f0' },
+  level_2: { label: '较大风险', color: '#fa8c16', bgColor: '#fff7e6' },
+  level_3: { label: '一般风险', color: '#faad14', bgColor: '#fffbe6' },
+  level_4: { label: '低风险', color: '#52c41a', bgColor: '#f6ffed' },
+}
 
 export default function HazardLedgerPanel() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<HazardIdentification[]>([])
   const [total, setTotal] = useState(0)
+  const [stats, setStats] = useState<HazardLedgerStats>({
+    total: 0, level_1: 0, level_2: 0, level_3: 0, level_4: 0,
+  })
   const [queryParams, setQueryParams] = useState({ page: 1, page_size: 20 })
   const [keyword, setKeyword] = useState('')
   const [department, setDepartment] = useState<string | undefined>()
+  const [position, setPosition] = useState<string | undefined>()
+  const [riskLevel, setRiskLevel] = useState<string | undefined>()
+  const [dateRange, setDateRange] = useState<[string, string] | null>(null)
   const { message } = App.useApp()
 
   // ── AI 导出 Modal 状态 ──
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [naturalQuery, setNaturalQuery] = useState('')
-  const [aiParsing, setAiParsing] = useState(false)
-  const [parsedFilters, setParsedFilters] = useState<HazardLedgerExportParsedFilters | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [exportStep, setExportStep] = useState<string>('')
+
+  // ── 展开行 key ──
+  const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([])
+
+  const loadStats = async () => {
+    try {
+      const res = await getHILedgerStats({
+        department,
+        position,
+        risk_level: riskLevel,
+        date_from: dateRange?.[0],
+        date_to: dateRange?.[1],
+      })
+      if (res.code === 200 && res.data) {
+        setStats(res.data as HazardLedgerStats)
+      }
+    } catch {
+      // non-critical
+    }
+  }
 
   const loadData = async () => {
     setLoading(true)
@@ -55,6 +112,10 @@ export default function HazardLedgerPanel() {
         overall_status: 'completed',
         keyword: keyword || undefined,
         department,
+        position,
+        risk_level: riskLevel,
+        date_from: dateRange?.[0],
+        date_to: dateRange?.[1],
       })
       if (res.code === 200) {
         setData(res.data as HazardIdentification[])
@@ -68,50 +129,68 @@ export default function HazardLedgerPanel() {
   }
 
   useEffect(() => {
+    loadStats()
+  }, [])
+
+  useEffect(() => {
     loadData()
   }, [queryParams])
 
   const handleSearch = () => {
     setQueryParams({ page: 1, page_size: queryParams.page_size })
     loadData()
+    loadStats()
   }
 
-  // ── AI 解析 ──
-  const handleAiParse = async () => {
-    if (!naturalQuery.trim()) {
-      message.warning('请输入筛选条件描述')
-      return
-    }
-    setAiParsing(true)
-    setParsedFilters(null)
-    try {
-      const res = await parseHazardExportQuery(naturalQuery.trim())
-      if (res.code === 200 && res.data) {
-        setParsedFilters(res.data as HazardLedgerExportParsedFilters)
-        message.success('AI 解析完成')
-      } else {
-        message.error(res.message || 'AI 解析失败')
-      }
-    } catch {
-      message.error('AI 解析请求失败')
-    } finally {
-      setAiParsing(false)
-    }
+  const handleReset = () => {
+    setKeyword('')
+    setDepartment(undefined)
+    setPosition(undefined)
+    setRiskLevel(undefined)
+    setDateRange(null)
+    setQueryParams({ page: 1, page_size: 20 })
   }
 
-  // ── 导出 PDF ──
+  // ── base64 → Blob → 触发下载（客户端） ──
+  const downloadBase64 = (base64: string, filename: string, mimeType: string) => {
+    const byteCharacters = atob(base64)
+    const byteNumbers = new Array(byteCharacters.length)
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i)
+    }
+    const byteArray = new Uint8Array(byteNumbers)
+    const blob = new Blob([byteArray], { type: mimeType })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+  }
+
+  // ── 导出 PDF（AI 解析 → 筛选 → Excel标准化填表 → PDF）──
   const handleExportPdf = async () => {
     setExporting(true)
+    setExportStep('AI 正在解析筛选条件…')
     try {
-      await exportHazardLedgerPdf({
+      const base64 = await exportHazardLedgerPdf({
         natural_query: naturalQuery.trim() || undefined,
       })
+      setExportStep('下载中…')
+      downloadBase64(
+        base64,
+        `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.pdf`,
+        'application/pdf'
+      )
       message.success('PDF 导出成功')
       setExportModalOpen(false)
     } catch {
       message.error('PDF 导出失败')
     } finally {
       setExporting(false)
+      setExportStep('')
     }
   }
 
@@ -119,7 +198,6 @@ export default function HazardLedgerPanel() {
   const handleCloseExportModal = () => {
     setExportModalOpen(false)
     setNaturalQuery('')
-    setParsedFilters(null)
   }
 
   const getRiskTag = (level?: string, label?: string) => {
@@ -140,52 +218,45 @@ export default function HazardLedgerPanel() {
 
   const columns: ColumnsType<HazardIdentification> = [
     { title: '编号', dataIndex: 'hazard_id_no', key: 'hazard_id_no', width: 120 },
-    { title: '部门', dataIndex: 'department', key: 'department', width: 100, ellipsis: true },
-    { title: '岗位', dataIndex: 'position', key: 'position', width: 100, ellipsis: true },
+    { title: '部门', dataIndex: 'department', key: 'department', width: 90, ellipsis: true },
+    { title: '岗位', dataIndex: 'position', key: 'position', width: 90, ellipsis: true },
     {
-      title: '作业活动', dataIndex: 'specific_activity', key: 'specific_activity', width: 160, ellipsis: true,
+      title: '生产步骤', dataIndex: 'production_step', key: 'production_step', width: 140, ellipsis: true,
+    },
+    {
+      title: '作业活动', dataIndex: 'specific_activity', key: 'specific_activity', width: 140, ellipsis: true,
       render: (v?: string) => v || '-',
     },
     {
-      title: '固有风险', key: 'inherent_risk', width: 100,
+      title: '事故类型', dataIndex: 'possible_accident', key: 'possible_accident', width: 100, ellipsis: true,
+      render: (v?: string) => v || '-',
+    },
+    {
+      title: '固有风险', key: 'inherent_risk', width: 90,
       render: (_, r) => getRiskTag(r.inherent_risk_level, r.inherent_risk_label),
     },
     {
-      title: '残余风险', key: 'residual_risk', width: 100,
+      title: '残余风险', key: 'residual_risk', width: 90,
       render: (_, r) => getRiskTag(r.residual_risk_level, r.residual_risk_label),
     },
     {
-      title: '管控层级', dataIndex: 'control_level', key: 'control_level', width: 90,
+      title: '措施后风险', key: 'post_risk', width: 90,
+      render: (_, r) => getRiskTag(r.post_risk_level, r.post_risk_label),
+    },
+    {
+      title: '管控层级', dataIndex: 'control_level', key: 'control_level', width: 80,
       render: (v?: string) => getControlLevelTag(v),
     },
-    { title: '责任人', dataIndex: 'responsible_person', key: 'responsible_person', width: 90, ellipsis: true },
+    { title: '责任人', dataIndex: 'responsible_person', key: 'responsible_person', width: 80, ellipsis: true },
     {
-      title: '控制措施', key: 'controls', width: 300, ellipsis: true,
-      render: (_, r) => (
-        <div style={{ fontSize: 12, lineHeight: 1.4, maxWidth: 280 }}>
-          {r.existing_engineering_controls && (
-            <div><Text type="secondary">工程：</Text>{r.existing_engineering_controls}</div>
-          )}
-          {r.existing_management_controls && (
-            <div><Text type="secondary">管理：</Text>{r.existing_management_controls}</div>
-          )}
-          {r.existing_ppe && (
-            <div><Text type="secondary">PPE：</Text>{r.existing_ppe}</div>
-          )}
-          {r.existing_emergency_measures && (
-            <div><Text type="secondary">应急：</Text>{r.existing_emergency_measures}</div>
-          )}
-          {!r.existing_engineering_controls && !r.existing_management_controls &&
-            !r.existing_ppe && !r.existing_emergency_measures && '-'}
-        </div>
-      ),
+      title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 110,
+      render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD') : '-',
     },
     {
-      title: '操作', key: 'action', width: 80, fixed: 'right',
+      title: '操作', key: 'action', width: 70, fixed: 'right',
       render: (_, r) => (
         <Button
-          type="link"
-          size="small"
+          type="link" size="small"
           onClick={() => router.push(`/safety/hazard-identification/${r.id}`)}
         >
           查看
@@ -193,6 +264,70 @@ export default function HazardLedgerPanel() {
       ),
     },
   ]
+
+  // ── 展开行渲染 ──
+  const expandedRowRender = (record: HazardIdentification) => {
+    const lecRow = (label: string, l?: number, e?: number, c?: number, d?: number, level?: string, levelLabel?: string) => (
+      <Descriptions
+        size="small"
+        column={6}
+        colon={false}
+        title={<Text strong style={{ fontSize: 13 }}>{label}</Text>}
+        style={{ marginBottom: 0 }}
+      >
+        <Descriptions.Item label="L">{l ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="E">{e ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="C">{c ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="D">{d ?? '-'}</Descriptions.Item>
+        <Descriptions.Item label="等级" span={2}>
+          {level ? getRiskTag(level, levelLabel) : '-'}
+        </Descriptions.Item>
+      </Descriptions>
+    )
+
+    return (
+      <div style={{ padding: '12px 24px', background: '#fafafa', borderRadius: 8 }}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          {lecRow('固有风险评价', record.l_inherent, record.e_inherent, record.c_inherent, record.d_inherent, record.inherent_risk_level, record.inherent_risk_label)}
+
+          {(record.existing_engineering_controls || record.existing_management_controls || record.existing_ppe || record.existing_emergency_measures) && (
+            <Descriptions size="small" column={2} colon={false} title={<Text strong style={{ fontSize: 13 }}>现有控制措施</Text>}>
+              {record.existing_engineering_controls && (
+                <Descriptions.Item label="工程控制">{record.existing_engineering_controls}</Descriptions.Item>
+              )}
+              {record.existing_management_controls && (
+                <Descriptions.Item label="管理措施">{record.existing_management_controls}</Descriptions.Item>
+              )}
+              {record.existing_ppe && (
+                <Descriptions.Item label="PPE">{record.existing_ppe}</Descriptions.Item>
+              )}
+              {record.existing_emergency_measures && (
+                <Descriptions.Item label="应急措施">{record.existing_emergency_measures}</Descriptions.Item>
+              )}
+            </Descriptions>
+          )}
+
+          {lecRow('残余风险评价', record.l_residual, record.e_residual, record.c_residual, record.d_residual, record.residual_risk_level, record.residual_risk_label)}
+
+          {record.recommendation_content && (
+            <Descriptions size="small" column={2} colon={false} title={<Text strong style={{ fontSize: 13 }}>建议措施</Text>}>
+              {record.recommendation_type && (
+                <Descriptions.Item label="类型">{record.recommendation_type}</Descriptions.Item>
+              )}
+              {record.recommendation_priority && (
+                <Descriptions.Item label="优先级">
+                  <Tag>{record.recommendation_priority}</Tag>
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="内容" span={2}>{record.recommendation_content}</Descriptions.Item>
+            </Descriptions>
+          )}
+
+          {lecRow('措施后风险评价', record.l_post, record.e_post, record.c_post, record.d_post, record.post_risk_level, record.post_risk_label)}
+        </Space>
+      </div>
+    )
+  }
 
   return (
     <div style={{ padding: 24 }}>
@@ -206,16 +341,56 @@ export default function HazardLedgerPanel() {
             危险源辨识台账
           </h1>
           <p style={{ fontSize: 14, color: '#5d5b54', margin: '4px 0 0' }}>
-            已完成危险源辨识记录的只读台账
+            已完成危险源辨识记录的查询、统计与导出
           </p>
         </div>
-        <Button
-          icon={<ExportOutlined />}
-          onClick={() => setExportModalOpen(true)}
-        >
-          AI 导出 PDF
-        </Button>
+        <Space>
+          <Button type="primary" icon={<ExportOutlined />} onClick={() => setExportModalOpen(true)}>
+            导出 PDF
+          </Button>
+        </Space>
       </div>
+
+      {/* Stat Cards */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={4}>
+          <Card
+            size="small"
+            style={{ borderRadius: 12, border: '1px solid #e5e3df' }}
+            styles={{ body: { padding: '16px 20px' } }}
+          >
+            <Statistic
+              title="总记录数"
+              value={stats.total}
+              styles={{ content: { color: '#1677ff', fontSize: 24 } }}
+            />
+          </Card>
+        </Col>
+        {['level_1', 'level_2', 'level_3', 'level_4'].map((level) => {
+          const cfg = RISK_CARD_CONFIG[level]
+          const count = stats[level as keyof HazardLedgerStats] as number
+          return (
+            <Col xs={12} sm={5} key={level}>
+              <Card
+                size="small"
+                style={{
+                  borderRadius: 12,
+                  border: `1px solid ${cfg.color}20`,
+                  background: cfg.bgColor,
+                }}
+                styles={{ body: { padding: '16px 20px' } }}
+              >
+                <Statistic
+                  title={cfg.label}
+                  value={count}
+                  prefix={RISK_ICONS[level]}
+                  styles={{ content: { color: cfg.color, fontSize: 24 } }}
+                />
+              </Card>
+            </Col>
+          )
+        })}
+      </Row>
 
       {/* Filter Bar */}
       <div style={{
@@ -224,12 +399,12 @@ export default function HazardLedgerPanel() {
       }}>
         <Space wrap>
           <Input
-            placeholder="搜索编号/部门/岗位"
+            placeholder="搜索编号/部门/岗位/作业"
             prefix={<SearchOutlined />}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onPressEnter={handleSearch}
-            style={{ width: 220 }}
+            style={{ width: 200 }}
             allowClear
           />
           <Input
@@ -237,11 +412,42 @@ export default function HazardLedgerPanel() {
             value={department}
             onChange={(e) => setDepartment(e.target.value || undefined)}
             onPressEnter={handleSearch}
-            style={{ width: 140 }}
+            style={{ width: 120 }}
             allowClear
+          />
+          <Input
+            placeholder="岗位"
+            value={position}
+            onChange={(e) => setPosition(e.target.value || undefined)}
+            onPressEnter={handleSearch}
+            style={{ width: 120 }}
+            allowClear
+          />
+          <Select
+            placeholder="风险等级"
+            allowClear
+            value={riskLevel}
+            onChange={(v) => setRiskLevel(v)}
+            style={{ width: 120 }}
+            options={RISK_LEVEL_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          />
+          <RangePicker
+            placeholder={['开始日期', '结束日期']}
+            value={dateRange ? [dayjs(dateRange[0]), dayjs(dateRange[1])] : null}
+            onChange={(dates) => {
+              if (dates && dates[0] && dates[1]) {
+                setDateRange([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')])
+              } else {
+                setDateRange(null)
+              }
+            }}
+            style={{ width: 240 }}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
             查询
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={handleReset}>
+            重置
           </Button>
         </Space>
       </div>
@@ -253,8 +459,14 @@ export default function HazardLedgerPanel() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1400 }}
           size="small"
+          expandable={{
+            expandedRowRender,
+            expandedRowKeys,
+            onExpandedRowsChange: (keys) => setExpandedRowKeys(keys as string[]),
+            rowExpandable: () => true,
+          }}
           pagination={{
             current: queryParams.page,
             pageSize: queryParams.page_size,
@@ -266,17 +478,17 @@ export default function HazardLedgerPanel() {
         />
       </div>
 
-      {/* ── AI 导出 PDF Modal ── */}
+      {/* ── 导出 PDF Modal（AI 解析→筛选→Excel标准化填表→PDF）── */}
       <Modal
         title={
           <span>
-            <RobotOutlined style={{ marginRight: 8, color: '#5645D4' }} />
-            AI 智能导出 PDF
+            <ExportOutlined style={{ marginRight: 8, color: '#5645D4' }} />
+            导出 PDF
           </span>
         }
         open={exportModalOpen}
         onCancel={handleCloseExportModal}
-        width={560}
+        width={520}
         footer={[
           <Button key="cancel" onClick={handleCloseExportModal}>
             取消
@@ -287,7 +499,6 @@ export default function HazardLedgerPanel() {
             icon={<DownloadOutlined />}
             loading={exporting}
             onClick={handleExportPdf}
-            disabled={aiParsing}
           >
             导出 PDF
           </Button>,
@@ -304,75 +515,16 @@ export default function HazardLedgerPanel() {
               value={naturalQuery}
               onChange={(e) => setNaturalQuery(e.target.value)}
               rows={3}
-              onPressEnter={(e) => {
-                if (e.ctrlKey || e.metaKey) {
-                  handleAiParse()
-                }
-              }}
             />
             <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
-              也可以直接点击「导出 PDF」，系统将导出全部已完成记录
+              留空则导出全部已完成记录；输入自然语言后点击「导出 PDF」，AI 将自动解析筛选条件并导出。
             </Text>
           </div>
 
-          {/* AI 解析按钮 */}
-          <Button
-            icon={<RobotOutlined />}
-            onClick={handleAiParse}
-            loading={aiParsing}
-            style={{ alignSelf: 'flex-start' }}
-          >
-            AI 解析筛选条件
-          </Button>
-
-          {/* 解析结果 */}
-          {aiParsing && (
+          {/* 导出进度提示 */}
+          {exporting && (
             <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin tip="AI 正在解析筛选条件..." />
-            </div>
-          )}
-
-          {parsedFilters && (
-            <div
-              style={{
-                background: '#f0f5ff',
-                borderRadius: 8,
-                border: '1px solid #d6e4ff',
-                padding: '12px 16px',
-              }}
-            >
-              <Text strong style={{ color: '#5645D4', display: 'block', marginBottom: 8 }}>
-                AI 解析结果
-              </Text>
-              {parsedFilters.explanation && (
-                <Text style={{ fontSize: 13, color: '#5d5b54', display: 'block', marginBottom: 8 }}>
-                  "{parsedFilters.explanation}"
-                </Text>
-              )}
-              <Descriptions size="small" column={2}>
-                {parsedFilters.department && (
-                  <Descriptions.Item label="部门">{parsedFilters.department}</Descriptions.Item>
-                )}
-                {parsedFilters.position && (
-                  <Descriptions.Item label="岗位">{parsedFilters.position}</Descriptions.Item>
-                )}
-                {parsedFilters.risk_level && (
-                  <Descriptions.Item label="风险等级">
-                    <Tag>
-                      {RISK_LEVEL_OPTIONS.find((o) => o.value === parsedFilters.risk_level)?.label || parsedFilters.risk_level}
-                    </Tag>
-                  </Descriptions.Item>
-                )}
-                {parsedFilters.date_from && (
-                  <Descriptions.Item label="日期起">{parsedFilters.date_from}</Descriptions.Item>
-                )}
-                {parsedFilters.date_to && (
-                  <Descriptions.Item label="日期止">{parsedFilters.date_to}</Descriptions.Item>
-                )}
-                {parsedFilters.keyword && (
-                  <Descriptions.Item label="关键词">{parsedFilters.keyword}</Descriptions.Item>
-                )}
-              </Descriptions>
+              <Spin tip={exportStep || '正在导出…'} />
             </div>
           )}
         </div>

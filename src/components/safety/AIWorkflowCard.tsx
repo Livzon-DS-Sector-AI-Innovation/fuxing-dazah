@@ -40,7 +40,7 @@ export default function AIWorkflowCard({ workflow, onEdit, onRefresh }: Props) {
 
   const handleToggle = async (checked: boolean) => {
     const res = await updateAIWorkflowConfig(workflow.id, { is_enabled: checked })
-    if (res.code === 0) {
+    if (res.code === 200) {
       message.success(checked ? '已启用' : '已停用')
       onRefresh()
     } else {
@@ -50,7 +50,7 @@ export default function AIWorkflowCard({ workflow, onEdit, onRefresh }: Props) {
 
   const handleDelete = async () => {
     const res = await deleteAIWorkflowConfig(workflow.id)
-    if (res.code === 0) {
+    if (res.code === 200) {
       message.success('已删除')
       onRefresh()
     } else {

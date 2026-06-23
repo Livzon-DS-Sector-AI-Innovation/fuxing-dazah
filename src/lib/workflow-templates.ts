@@ -97,7 +97,7 @@ export const BUILT_IN_WORKFLOWS: BuiltInWorkflow[] = [
         is_enabled: true,
         expected_keys: ['l_residual', 'e_residual', 'c_residual', 'd_residual', 'residual_risk_level', 'residual_risk_label'],
         input_info: '工作流4输出经人工审核确认后读取：全部前置人工字段、L/E/C/D（固有）、固有风险等级（人工确认）、现有工程/管理/PPE/应急控制措施（工作流4+人工确认）。',
-        work_rules: '1. 评价「现有控制措施全部纳入考虑后」的残余风险\n2. 不得假设未填写、未体现、未确认的控制措施已经实施\n3. 不得无依据过度降低风险\n4. L（残余）：优先考虑工程控制、联锁、防护、隔离、自动化、报警、管理、培训等对事故发生可能性的削减作用；若措施能明显降低概率则可合理下降，否则保持与固有一致\n5. E（残余）：结合措施对人员接触频次、暴露时长、暴露范围的影响判断\n6. C（残余）：仅当现有措施能明确降低事故后果严重程度时才可下降；若措施主要作用于预防发生而不能减轻后果，C保持与固有一致\n7. 残余风险通常不应高于固有风险\n8. 个人防护措施通常优先影响后果严重性或局部暴露，不应替代工程控制和管理控制\n9. 应急措施主要用于降低事故扩大后果，不应直接大幅降低事故发生可能性\n10. 信息不足时填写「待人工确认」',
+        work_rules: '1. 评价「现有控制措施全部纳入考虑后」的残余风险\n2. 不得假设未填写、未体现、未确认的控制措施已经实施\n3. 不得无依据过度降低风险\n4. L（残余）：优先考虑工程控制、联锁、防护、隔离、自动化、报警、管理、培训等对事故发生可能性的削减作用；若措施能明显降低概率则可合理下降，否则保持与固有一致\n5. E（残余）：结合措施对人员接触频次、暴露时长、暴露范围的影响判断\n6. C（残余）：仅当现有措施能明确降低事故后果严重程度时才可下降；若措施主要作用于预防而不能减轻后果，C保持与固有一致\n7. 残余风险通常不应高于固有风险\n8. 个人防护措施通常优先影响后果严重性或局部暴露，不应替代工程控制和管理控制\n9. 应急措施主要用于降低事故扩大后果，不应直接大幅降低事故发生可能性\n10. 信息不足时填写「待人工确认」',
         reference_docs: 'LEC风险评价法标准\n企业风险分级管控管理制度\n企业知识库：危险有害因素辨识结果表',
         output_format: '{"l_residual":1,"e_residual":3,"c_residual":15,"d_residual":45,"residual_risk_level":"level_4","residual_risk_label":"低风险"}',
       },
@@ -147,11 +147,11 @@ export const BUILT_IN_WORKFLOWS: BuiltInWorkflow[] = [
         name: 'AI整改建议',
         description: 'AI基于已识别的隐患信息，自动生成针对性管控措施和纠正预防措施',
         is_enabled: true,
-        expected_keys: ['control_measures', 'corrective_preventive_measures'],
+        expected_keys: ['corrective_preventive_measures'],
         input_info: '读取步骤1输出（经人工审核确认后）：隐患分类、等级、类别、描述、地点、重点缺陷。',
-        work_rules: '1. 基于已识别的隐患信息，生成针对性管控和整改措施\n2. 管控措施（control_measures）：立即采取的临时控制措施\n   - 工程控制：隔离、防护、通风、联锁\n   - 管理控制：检查频次、警示标识、作业许可限制\n   - 个人防护：PPE配置、佩戴要求\n   - 应急：现场应急器材配置、撤离要求\n3. 纠正预防措施（corrective_preventive_measures）：根本性整改方案\n   - 纠正措施：修复、更换、改造具体缺陷\n   - 预防措施：防止同类隐患再次发生的系统性措施\n4. 措施必须具体、可执行、与隐患直接相关\n5. 不得空泛表述（如「加强管理」「注意安全」）\n6. 重大隐患须明确整改措施的具体要求\n7. 信息不足时填写「待人工确认」',
+        work_rules: '1. 基于已识别的隐患信息，生成针对性整改措施\n2. 纠正预防措施（corrective_preventive_measures）：根本性整改方案\n   - 纠正措施：修复、更换、改造具体缺陷\n   - 预防措施：防止同类隐患再次发生的系统性措施\n3. 措施必须具体、可执行、与隐患直接相关\n4. 不得空泛表述（如「加强管理」「注意安全」）\n5. 重大隐患须明确整改措施的具体要求\n6. 信息不足时填写「待人工确认」',
         reference_docs: 'GB/T 12801-2008《生产过程安全卫生要求总则》\nHG 20571-2014《化工企业安全卫生设计规范》\n企业安全管理制度汇编\n企业应急预案及应急处置卡\n行业最佳实践',
-        output_format: '{"control_measures":"具体管控措施","corrective_preventive_measures":"具体纠正预防措施"}',
+        output_format: '{"corrective_preventive_measures":"具体纠正预防措施"}',
       },
     ],
   },
@@ -289,64 +289,63 @@ export const BUILT_IN_WORKFLOWS: BuiltInWorkflow[] = [
   },
   {
     module_code: 'hazard-identification-export',
-    workflow_name: 'AI危险源辨识台账导出（自然语言解析）',
+    workflow_name: 'AI危险源辨识台账智能导出',
     workflow_description:
-      '支持自然语言筛选条件输入，AI 解析意图后智能导出危险源辨识台账 PDF，用于纸质签发存档',
+      '统一工作流：AI 解析自然语言筛选条件 → 查询数据 → AI 格式化生成 HTML 报告 → 导出 PDF。覆盖解析和报告生成两阶段',
     trigger_event: 'manual_start',
     icon: '📋',
     script_configs: [
       {
         script_number: 1,
-        name: 'AI自然语言解析',
+        name: 'AI智能导出（解析+格式化）',
         input_info:
-          '## 用户输入\n' +
-          '用户通过自然语言描述危险源辨识台账的筛选条件，例如：\n' +
+          '## 用户输入（第一阶段：解析筛选条件）\n' +
+          '用户通过自然语言描述要导出哪些危险源辨识记录，例如：\n' +
           '- "上月所有重大风险记录"\n' +
           '- "生产部的设备相关危险源"\n' +
           '- "合成岗位最近三个月的数据"\n' +
-          '- "一级和二级风险的记录"\n' +
-          '\n' +
-          '需要将用户的自然语言输入解析为结构化的筛选参数。',
+          '- "一级和二级风险的记录"\n\n' +
+          '## 查询数据（第二阶段：生成分析报告）\n' +
+          '系统根据解析结果查询数据库，返回结构化的台账数据摘要：\n' +
+          '- 记录总数、风险等级分布、部门/岗位分布\n' +
+          '- 高风险记录详情（一级/二级风险）\n' +
+          '- 全部记录列表（含编号、部门、岗位、作业活动、危险类型、' +
+          '固有/残余LEC值及风险等级、现有控制措施、管控层级、责任人等）',
         work_rules:
-          '## 任务\n' +
+          '## 第一阶段：解析筛选条件\n' +
           '将用户的自然语言查询转换为结构化的危险源辨识台账筛选条件。\n\n' +
-          '## 可用筛选字段\n' +
-          '- department: 部门名称（字符串，如「生产部」「设备部」）\n' +
-          '- position: 岗位名称（字符串，如「合成」「精制」「包装」）\n' +
-          '- risk_level: 风险等级\n' +
-          '  * level_1: 一级/重大风险\n' +
-          '  * level_2: 二级/较大风险\n' +
-          '  * level_3: 三级/一般风险\n' +
-          '  * level_4: 四级/低风险\n' +
-          '- date_from: 开始日期 YYYY-MM-DD\n' +
-          '- date_to: 结束日期 YYYY-MM-DD\n' +
-          '- keyword: 模糊搜索关键词（搜索编号、部门、岗位、作业活动）\n\n' +
-          '## 映射规则\n' +
-          '- 重大风险/一级风险→level_1, 较大风险/二级风险→level_2\n' +
-          '- 一般风险/三级风险→level_3, 低风险/四级风险→level_4\n\n' +
-          '## 约束\n' +
-          '- 无法识别的字段设为 null\n' +
-          '- 对时间表达（今天、本周、上月、最近三个月等）正确计算日期范围\n' +
-          '- 你是一个数据库查询助手，只返回 JSON',
+          '可用筛选字段：\n' +
+          '- department: 部门名称\n' +
+          '- position: 岗位名称\n' +
+          '- risk_level: level_1(重大)/level_2(较大)/level_3(一般)/level_4(低)\n' +
+          '- date_from / date_to: YYYY-MM-DD\n' +
+          '- keyword: 模糊搜索关键词\n\n' +
+          '约束：无法识别的字段设为 null；正确计算时间表达（今天、本周、上月等）；只返回 JSON。\n\n' +
+          '## 第二阶段：生成分析报告\n' +
+          '根据查询结果生成一份专业的危险源辨识台账分析报告。\n\n' +
+          '报告结构：\n' +
+          '1. 报告概述：筛选条件、时间范围、记录总数\n' +
+          '2. 风险分布分析：按部门/岗位/风险等级统计\n' +
+          '3. 重点风险项：逐条列出高风险（一级/二级）记录，评估控制措施充分性\n' +
+          '4. 管控措施现状：工程/管理/PPE/应急措施的覆盖情况\n' +
+          '5. 改进建议：基于数据的安全管理建议\n\n' +
+          '约束：中文撰写、数据准确不编造、表格使用 HTML table、标题 h2/h3',
         reference_docs:
           '## 参考\n' +
           '- 危险源辨识数据模型（HazardIdentification）\n' +
           '- LEC风险评价法标准\n' +
           '- 企业风险分级管控管理制度',
         output_format:
-          '## 输出格式\n' +
-          '返回 JSON 格式（只返回 JSON 不要额外说明）：\n' +
-          '```json\n' +
-          '{\n' +
-          '  "department": null,\n' +
-          '  "position": null,\n' +
-          '  "risk_level": null,\n' +
-          '  "date_from": null,\n' +
-          '  "date_to": null,\n' +
-          '  "keyword": null,\n' +
-          '  "explanation": "用中文简述你理解的筛选条件"\n' +
-          '}\n' +
-          '```',
+          '## 第一阶段输出（JSON筛选条件，只返回 JSON）\n' +
+          '{"department":null,"position":null,"risk_level":null,' +
+          '"date_from":null,"date_to":null,"keyword":null,' +
+          '"explanation":"用中文简述你理解的筛选条件"}\n\n' +
+          '## 第二阶段输出（完整 HTML 文档，可直接生成 PDF）\n' +
+          '样式：A4横向(297mm×210mm)、正文10pt/h2:14pt/h3:12pt、' +
+          '文字#333、表头背景#5645D4白色文字加粗、表格边框0.5pt solid #ddd、' +
+          '斑马纹#f7f6fb、风险标签色(一级红/二级橙/三级蓝/四级绿)、' +
+          "font-family: 'SimSun','Microsoft YaHei',sans-serif; " +
+          '@page{size:A4 landscape;margin:15mm}',
         expected_keys: [
           'department', 'position', 'risk_level',
           'date_from', 'date_to', 'keyword', 'explanation',

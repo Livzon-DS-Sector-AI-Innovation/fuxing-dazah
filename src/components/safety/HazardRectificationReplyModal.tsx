@@ -145,10 +145,6 @@ export default function HazardRectificationReplyModal({
             <strong>隐患描述：</strong>
             {record.description}
           </div>
-          <div>
-            <strong>地点/部位：</strong>
-            {record.location || '-'}
-          </div>
           {record.rectification_responsible_person_name && (
             <div>
               <strong>责任人：</strong>
@@ -167,16 +163,16 @@ export default function HazardRectificationReplyModal({
       <Form form={form} layout="vertical">
         <Form.Item
           name="reply_content"
-          label="整改实施情况"
-          rules={[{ required: true, message: '请描述整改实施情况' }]}
+          label="纠正预防措施"
+          rules={[{ required: true, message: '请描述纠正预防措施' }]}
         >
           <TextArea
             rows={4}
-            placeholder="请详细描述整改实施情况，包括具体整改措施、实施过程、完成情况等"
+            placeholder="请详细描述纠正预防措施，包括具体整改措施、实施过程、完成情况等"
           />
         </Form.Item>
 
-        <Form.Item label="整改后照片">
+        <Form.Item label="整改后照片（可选）">
           <Dragger
             multiple
             fileList={fileList}

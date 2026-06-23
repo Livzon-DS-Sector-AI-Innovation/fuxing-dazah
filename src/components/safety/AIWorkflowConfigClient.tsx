@@ -5,6 +5,7 @@ import { Typography, message } from 'antd'
 import { ApiOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import type { AIWorkflowConfig } from '@/types/safety'
 import { WORKFLOW_MENU_MAP } from '@/types/safety'
+import { getAIWorkflowConfigs } from '@/actions/safety'
 import AIWorkflowCard from './AIWorkflowCard'
 import WorkflowEditDrawer from './WorkflowEditDrawer'
 import {
@@ -32,8 +33,6 @@ export default function AIWorkflowConfigClient({
   const [editingWorkflow, setEditingWorkflow] = useState<AIWorkflowConfig | null>(null)
 
   const refresh = useCallback(async () => {
-    // Re-fetch via server action
-    const { getAIWorkflowConfigs } = await import('@/actions/safety')
     try {
       const res = await getAIWorkflowConfigs({ page_size: 500 })
       setWorkflows(
@@ -191,20 +190,20 @@ export default function AIWorkflowConfigClient({
             </Text>
             <br />
             <Text style={{ fontSize: 12, color: '#bbb8b1' }}>
-              AI 模型连接参数在「API调用配置」中统一管理
+              AI 模型连接参数已硬编码配置
             </Text>
           </div>
         </div>
         <a
-          href="/safety/api-call-config"
           style={{
             fontSize: 13,
-            color: '#5645d4',
+            color: '#bbb8b1',
             fontWeight: 500,
             textDecoration: 'none',
+            cursor: 'default',
           }}
         >
-          前往配置 →
+          DeepSeek / Qwen-VL
         </a>
       </div>
 
