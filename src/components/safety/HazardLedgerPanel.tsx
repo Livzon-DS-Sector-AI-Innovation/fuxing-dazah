@@ -175,12 +175,12 @@ export default function HazardLedgerPanel() {
     setExporting(true)
     setExportStep('AI 正在解析筛选条件…')
     try {
-      const base64 = await exportHazardLedgerPdf({
+      const result = await exportHazardLedgerPdf({
         natural_query: naturalQuery.trim() || undefined,
       })
       setExportStep('下载中…')
       downloadBase64(
-        base64,
+        result.data || '',
         `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.pdf`,
         'application/pdf'
       )

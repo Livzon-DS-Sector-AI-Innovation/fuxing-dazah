@@ -330,7 +330,7 @@ export default function HazardLedgerPage() {
   const loadStats = async () => {
     try {
       const stats = await fetchHazardStats()
-      setHazardStats(stats)
+      setHazardStats(stats.data || null)
     } catch { /* 静默失败，统计数字保持上次值 */ }
   }
   const refreshStats = () => { loadStats() }

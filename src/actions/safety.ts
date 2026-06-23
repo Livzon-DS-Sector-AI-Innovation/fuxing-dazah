@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+// 注意：以下 revalidatePath 调用指向的页面路径部分仍在开发中，待对应页面创建后将自动生效
 import { getAuthHeaders, getServerToken } from '@/lib/auth'
 import type {
   Accident,
@@ -70,7 +71,9 @@ import type {
   OhHealthExamQueryParams,
 } from '@/types/safety'
 
-const API_BASE = process.env.API_BASE_URL ? `${process.env.API_BASE_URL}/api/v1` : 'http://localhost:8000/api/v1'
+const API_BASE = process.env.API_BASE_URL
+  ? `${process.env.API_BASE_URL}/api/v1`
+  : (() => { throw new Error('环境变量 API_BASE_URL 未配置，无法连接后端服务') })()
 
 // ============ Helper Functions ============
 
@@ -191,9 +194,9 @@ export async function deleteCheck(id: string) {
 
 // ============ HazardReport Actions ============
 
-export async function fetchHazardStats(): Promise<HazardStats> {
+export async function fetchHazardStats(): Promise<ApiResponse<HazardStats>> {
   const response = await fetchApi<HazardStats>('/safety/hazards/stats')
-  return (response.data as HazardStats) || { total: 0, pending_review: 0, pending: 0, in_progress: 0, replied: 0, verifying: 0, rejected: 0, closed: 0, overdue: 0 }
+  return response
 }
 
 export async function getHazards(params: HazardReportQueryParams = {}) {
@@ -313,9 +316,10 @@ export async function uploadHazardPhoto(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
   const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
   const response = await fetch(
     `${API_BASE}/safety/hazards/${id}/upload-photo`,
-    { method: 'POST', headers: { ...authHeaders }, body: formData }
+    { method: 'POST', headers: uploadHeaders, body: formData }
   )
   revalidatePath('/safety/hazard')
   return response.json()
@@ -325,9 +329,10 @@ export async function uploadRectificationPhoto(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
   const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
   const response = await fetch(
     `${API_BASE}/safety/hazards/${id}/upload-rectification-photo`,
-    { method: 'POST', headers: { ...authHeaders }, body: formData }
+    { method: 'POST', headers: uploadHeaders, body: formData }
   )
   revalidatePath('/safety/hazard')
   return response.json()
@@ -809,9 +814,10 @@ export async function uploadHazardAttachment(id: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
   const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
   const response = await fetch(
     `${API_BASE}/safety/hazard-identifications/${id}/upload`,
-    { method: 'POST', headers: { ...authHeaders }, body: formData }
+    { method: 'POST', headers: uploadHeaders, body: formData }
   )
   revalidatePath('/safety/hazard-identification')
   return response.json()
@@ -840,7 +846,7 @@ export async function parseHazardExportQuery(naturalQuery: string) {
 
 export async function exportHazardLedgerPdf(
   params: import('@/types/safety').HazardLedgerExportRequest
-): Promise<string> {
+): Promise<ApiResponse<string>> {
   const authHeaders = await getAuthHeaders()
   const response = await fetch(`${API_BASE}/safety/hazard-identifications/export-pdf`, {
     method: 'POST',
@@ -850,12 +856,13 @@ export async function exportHazardLedgerPdf(
 
   if (!response.ok) {
     const errorText = await response.text()
-    throw new Error(`导出失败: ${response.status} ${errorText}`)
+    return { code: response.status, message: `导出失败: ${errorText}`, data: '' } as ApiResponse<string>
   }
 
   // 在 Server Action 中不能使用 browser API，返回 base64 给客户端处理下载
   const arrayBuffer = await response.arrayBuffer()
-  return Buffer.from(arrayBuffer).toString('base64')
+  const base64 = Buffer.from(arrayBuffer).toString('base64')
+  return { code: 0, message: 'ok', data: base64 }
 }
 
 export async function getSafetyEnums() {
@@ -944,24 +951,15 @@ export async function generateSop(file: File) {
 }
 
 export async function updateSopContent(regulationId: string, content: string, status?: string) {
-  const authHeaders = await getAuthHeaders()
-  const response = await fetch(
-    `${API_BASE}/safety/regulations/${regulationId}/content`,
-    {
-      method: 'PUT',
-      headers: authHeaders,
-      body: JSON.stringify({ content, status }),
-    }
+  const response = await fetchApi<OperationRegulation>(
+    `/safety/regulations/${regulationId}/content`,
+    { method: 'PUT', body: JSON.stringify({ content, status }) }
   )
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(`保存失败 (${response.status}): ${text}`)
-  }
   revalidatePath('/safety/regulation')
-  return response.json()
+  return response
 }
 
-export async function exportSopPdf(regulationId: string) {
+export async function exportSopPdf(regulationId: string): Promise<ApiResponse<Blob>> {
   const authHeaders = await getAuthHeaders()
   const { 'Content-Type': _, ...headers } = authHeaders
   const response = await fetch(
@@ -970,9 +968,10 @@ export async function exportSopPdf(regulationId: string) {
   )
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(`导出 PDF 失败 (${response.status}): ${text}`)
+    return { code: response.status, message: `导出 PDF 失败: ${text}` } as ApiResponse<Blob>
   }
-  return response.blob()
+  const blob = await response.blob()
+  return { code: 0, message: 'ok', data: blob }
 }
 
 // ============ RegulationRevision Actions ============
@@ -1024,9 +1023,11 @@ export async function deleteRevision(id: string) {
 export async function manualRevisionComplete(revisionId: string, file: File) {
   const formData = new FormData()
   formData.append('file', file)
+  const authHeaders = await getAuthHeaders()
+  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
   const response = await fetch(
     `${API_BASE}/safety/revisions/${revisionId}/manual-complete`,
-    { method: 'POST', body: formData }
+    { method: 'POST', headers: uploadHeaders, body: formData }
   )
   revalidatePath('/safety/regulation-revision')
   return response.json()
@@ -1415,7 +1416,7 @@ export async function updateSpecialOperationReport(id: string, data: Partial<Spe
 }
 
 export async function deleteSpecialOperationReport(id: string) {
-  const response = await fetchApi<void>(`/safety/special-operation-reports/${id}`, { method: 'DELETE' })
+  const response = await fetchApi<null>(`/safety/special-operation-reports/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/risk-reporting')
 
   return response
@@ -1523,7 +1524,7 @@ export async function updateDailyRiskReport(id: string, data: Partial<DailyRiskR
 }
 
 export async function deleteDailyRiskReport(id: string) {
-  const response = await fetchApi<void>(`/safety/daily-risk-reports/${id}`, { method: 'DELETE' })
+  const response = await fetchApi<null>(`/safety/daily-risk-reports/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/risk-reporting')
   return response
 }
@@ -1605,7 +1606,7 @@ export async function updateEhsChange(id: string, data: Partial<EhsChangeFormDat
 }
 
 export async function deleteEhsChange(id: string) {
-  const response = await fetchApi<void>(`/safety/ehs-changes/${id}`, { method: 'DELETE' })
+  const response = await fetchApi<null>(`/safety/ehs-changes/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/ehs-change')
   return response
 }
@@ -1734,7 +1735,7 @@ export async function updateOhHazardMonitor(id: string, data: Partial<OhHazardMo
 }
 
 export async function deleteOhHazardMonitor(id: string) {
-  const res = await fetchApi<void>(`/safety/oh-hazard-monitors/${id}`, { method: 'DELETE' })
+  const res = await fetchApi<null>(`/safety/oh-hazard-monitors/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/occupational-health')
   return res
 }
@@ -1841,7 +1842,7 @@ export async function updateOhHealthExam(id: string, data: Partial<OhHealthExamF
 }
 
 export async function deleteOhHealthExam(id: string) {
-  const res = await fetchApi<void>(`/safety/oh-health-exams/${id}`, { method: 'DELETE' })
+  const res = await fetchApi<null>(`/safety/oh-health-exams/${id}`, { method: 'DELETE' })
   revalidatePath('/safety/occupational-health')
   return res
 }

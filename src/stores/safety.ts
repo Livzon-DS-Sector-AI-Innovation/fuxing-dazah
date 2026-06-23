@@ -4,6 +4,9 @@ import type {
   AccidentQueryParams,
   AIWorkflowConfig,
   AIWorkflowConfigQueryParams,
+  Contractor,
+  ContractorQueryParams,
+  ContractorWorkRecord,
   EhsChange,
   EhsChangeQueryParams,
   HazardReport,
@@ -32,7 +35,6 @@ import type {
   DailyRiskReportQueryParams,
   HazardIdentification,
   HazardIdentificationQueryParams,
-  HazardIdentificationStats,
   TrainingRecord,
   ScheduledTask,
   ScheduledTaskLog,
@@ -144,6 +146,14 @@ interface SafetyState {
   ehsChangeQueryParams: EhsChangeQueryParams
   ehsChangeTotal: number
   ehsChangeLoading: boolean
+
+  // Contractor state
+  contractors: Contractor[]
+  currentContractor: Contractor | null
+  contractorQueryParams: ContractorQueryParams
+  contractorTotal: number
+  contractorLoading: boolean
+  contractorWorkRecords: ContractorWorkRecord[]
 
   // OH Hazard Monitor state
   ohHazardMonitors: OhHazardMonitor[]
@@ -292,7 +302,7 @@ interface SafetyState {
   removeDailyRiskReport: (id: string) => void
 
   // Actions - HazardIdentification
-  setHazardIdentifications: (items: HazardIdentification[], total: number) => void
+  setHazardIdentifications: (items: HazardIdentification[], total?: number) => void
   setCurrentHazardIdentification: (item: HazardIdentification | null) => void
   setHazardIdentificationQueryParams: (params: Partial<HazardIdentificationQueryParams>) => void
   setHazardIdentificationTotal: (total: number) => void
@@ -310,6 +320,17 @@ interface SafetyState {
   addEhsChange: (c: EhsChange) => void
   updateEhsChange: (id: string, c: Partial<EhsChange>) => void
   removeEhsChange: (id: string) => void
+
+  // Actions - Contractor
+  setContractors: (contractors: Contractor[]) => void
+  setCurrentContractor: (c: Contractor | null) => void
+  setContractorQueryParams: (params: Partial<ContractorQueryParams>) => void
+  setContractorTotal: (total: number) => void
+  setContractorLoading: (loading: boolean) => void
+  addContractor: (c: Contractor) => void
+  updateContractor: (id: string, c: Partial<Contractor>) => void
+  removeContractor: (id: string) => void
+  setContractorWorkRecords: (records: ContractorWorkRecord[]) => void
 
   // Actions - OH Hazard Monitor
   setOhHazardMonitors: (items: OhHazardMonitor[]) => void
@@ -332,7 +353,7 @@ interface SafetyState {
   removeOhHealthExam: (id: string) => void
 
   // Actions - Scheduled Task
-  setScheduledTasks: (items: ScheduledTask[], total: number) => void
+  setScheduledTasks: (items: ScheduledTask[], total?: number) => void
   setCurrentScheduledTask: (item: ScheduledTask | null) => void
   setScheduledTaskQueryParams: (params: Partial<ScheduledTaskQueryParams>) => void
   setScheduledTaskTotal: (total: number) => void
@@ -362,6 +383,7 @@ interface SafetyState {
   resetSpecialOpReportState: () => void
   resetDailyRiskReportState: () => void
   resetEhsChangeState: () => void
+  resetContractorState: () => void
   resetHazardIdentificationState: () => void
   resetAll: () => void
 }
@@ -479,6 +501,15 @@ const initialEhsChangeState = {
   ehsChangeLoading: false,
 }
 
+const initialContractorState = {
+  contractors: [] as Contractor[],
+  currentContractor: null as Contractor | null,
+  contractorQueryParams: { page: 1, page_size: 20 } as ContractorQueryParams,
+  contractorTotal: 0,
+  contractorLoading: false,
+  contractorWorkRecords: [] as ContractorWorkRecord[],
+}
+
 const initialOhHazardMonitorState = {
   ohHazardMonitors: [] as OhHazardMonitor[],
   currentOhHazardMonitor: null as OhHazardMonitor | null,
@@ -523,6 +554,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialDailyRiskReportState,
   ...initialHazardIdentificationState,
   ...initialEhsChangeState,
+  ...initialContractorState,
   ...initialOhHazardMonitorState,
   ...initialOhHealthExamState,
   ...initialScheduledTaskState,
@@ -864,6 +896,27 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       currentEhsChange: state.currentEhsChange?.id === id ? null : state.currentEhsChange,
     })),
 
+  // ============ Contractor Actions ============
+  setContractors: (contractors) => set({ contractors }),
+  setCurrentContractor: (c) => set({ currentContractor: c }),
+  setContractorQueryParams: (params) =>
+    set((state) => ({ contractorQueryParams: { ...state.contractorQueryParams, ...params } })),
+  setContractorTotal: (total) => set({ contractorTotal: total }),
+  setContractorLoading: (loading) => set({ contractorLoading: loading }),
+  addContractor: (c) =>
+    set((state) => ({ contractors: [c, ...state.contractors] })),
+  updateContractor: (id, updates) =>
+    set((state) => ({
+      contractors: state.contractors.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+      currentContractor: state.currentContractor?.id === id ? { ...state.currentContractor, ...updates } : state.currentContractor,
+    })),
+  removeContractor: (id) =>
+    set((state) => ({
+      contractors: state.contractors.filter((c) => c.id !== id),
+      currentContractor: state.currentContractor?.id === id ? null : state.currentContractor,
+    })),
+  setContractorWorkRecords: (records) => set({ contractorWorkRecords: records }),
+
   // ============ OH Hazard Monitor Actions ============
 
   setOhHazardMonitors: (items) => set({ ohHazardMonitors: items }),
@@ -903,6 +956,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   removeOhHealthExam: (id) =>
     set((state) => ({
       ohHealthExams: state.ohHealthExams.filter((e) => e.id !== id),
+      currentOhHealthExam: state.currentOhHealthExam?.id === id ? null : state.currentOhHealthExam,
     })),
 
   // Scheduled Task actions
@@ -945,6 +999,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetSpecialOpReportState: () => set(initialSpecialOpReportState),
   resetDailyRiskReportState: () => set(initialDailyRiskReportState),
   resetEhsChangeState: () => set(initialEhsChangeState),
+  resetContractorState: () => set(initialContractorState),
   resetHazardIdentificationState: () => set(initialHazardIdentificationState),
   resetOhHazardMonitorState: () => set(initialOhHazardMonitorState),
   resetOhHealthExamState: () => set(initialOhHealthExamState),
@@ -966,6 +1021,7 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialDailyRiskReportState,
       ...initialHazardIdentificationState,
       ...initialEhsChangeState,
+      ...initialContractorState,
       ...initialOhHazardMonitorState,
       ...initialOhHealthExamState,
       ...initialScheduledTaskState,

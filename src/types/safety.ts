@@ -33,22 +33,22 @@ export enum CheckType {
 }
 
 export const CHECK_TYPE_OPTIONS = [
-  { value: CheckType.DAILY, label: '日常检查' },
-  { value: CheckType.SPECIAL, label: '专项检查' },
-  { value: CheckType.COMPREHENSIVE, label: '综合检查' },
-  { value: CheckType.HOLIDAY, label: '节假日检查' },
-  { value: CheckType.MONTHLY, label: '月度安全检查' },
-  { value: CheckType.SEASONAL, label: '季节性安全检查' },
-  { value: CheckType.PRE_HOLIDAY, label: '节前安全检查' },
-  { value: CheckType.LEADERSHIP_DUTY, label: '领导干部值班检查' },
-  { value: CheckType.DEPT_CROSS, label: '部门互查' },
-  { value: CheckType.WEEKLY, label: '周检' },
-  { value: CheckType.RESUMPTION, label: '复工复产安全检查' },
-  { value: CheckType.CHANGE_ACCEPTANCE, label: '变更验收' },
-  { value: CheckType.LIGHTNING, label: '防雷检查' },
-  { value: CheckType.SAFETY_VALVE, label: '安全阀专项检查' },
-  { value: CheckType.POST_HOLIDAY, label: '节后复工检查' },
-  { value: CheckType.HEATSTROKE_PREVENTION, label: '防暑降温专项' },
+  { value: CheckType.DAILY, label: '日常检查', color: 'blue' },
+  { value: CheckType.SPECIAL, label: '专项检查', color: 'orange' },
+  { value: CheckType.COMPREHENSIVE, label: '综合检查', color: 'purple' },
+  { value: CheckType.HOLIDAY, label: '节假日检查', color: 'red' },
+  { value: CheckType.MONTHLY, label: '月度安全检查', color: 'blue' },
+  { value: CheckType.SEASONAL, label: '季节性安全检查', color: 'cyan' },
+  { value: CheckType.PRE_HOLIDAY, label: '节前安全检查', color: 'orange' },
+  { value: CheckType.LEADERSHIP_DUTY, label: '领导干部值班检查', color: 'gold' },
+  { value: CheckType.DEPT_CROSS, label: '部门互查', color: 'green' },
+  { value: CheckType.WEEKLY, label: '周检', color: 'blue' },
+  { value: CheckType.RESUMPTION, label: '复工复产安全检查', color: 'orange' },
+  { value: CheckType.CHANGE_ACCEPTANCE, label: '变更验收', color: 'purple' },
+  { value: CheckType.LIGHTNING, label: '防雷检查', color: 'yellow' },
+  { value: CheckType.SAFETY_VALVE, label: '安全阀专项检查', color: 'red' },
+  { value: CheckType.POST_HOLIDAY, label: '节后复工检查', color: 'orange' },
+  { value: CheckType.HEATSTROKE_PREVENTION, label: '防暑降温专项', color: 'volcano' },
 ]
 
 export enum HazardType {
@@ -59,10 +59,10 @@ export enum HazardType {
 }
 
 export const HAZARD_TYPE_OPTIONS = [
-  { value: HazardType.UNSAFE_ACTION, label: '人的不安全行为' },
-  { value: HazardType.UNSAFE_CONDITION, label: '物的不安全状态' },
-  { value: HazardType.ENVIRONMENTAL, label: '环境的不安全因素' },
-  { value: HazardType.MANAGEMENT_DEFECT, label: '管理的缺陷' },
+  { value: HazardType.UNSAFE_ACTION, label: '人的不安全行为', color: 'red' },
+  { value: HazardType.UNSAFE_CONDITION, label: '物的不安全状态', color: 'orange' },
+  { value: HazardType.ENVIRONMENTAL, label: '环境的不安全因素', color: 'blue' },
+  { value: HazardType.MANAGEMENT_DEFECT, label: '管理的缺陷', color: 'purple' },
 ]
 
 export enum HazardLevel {
@@ -111,7 +111,7 @@ export const HAZARD_CATEGORY_OPTIONS = [
 
 // ============ Special Operations Enums ============
 
-export enum OperationType {
+export enum SpecialOperationType {
   HOT_WORK = 'hot_work',
   CONFINED_SPACE = 'confined_space',
   BLIND_PLATE = 'blind_plate',
@@ -123,14 +123,14 @@ export enum OperationType {
 }
 
 export const OPERATION_TYPE_OPTIONS = [
-  { value: OperationType.HOT_WORK, label: '动火作业' },
-  { value: OperationType.CONFINED_SPACE, label: '受限空间作业' },
-  { value: OperationType.BLIND_PLATE, label: '盲板抽堵作业' },
-  { value: OperationType.HEIGHT_WORK, label: '高处作业' },
-  { value: OperationType.LIFTING, label: '吊装作业' },
-  { value: OperationType.TEMPORARY_ELECTRICITY, label: '临时用电作业' },
-  { value: OperationType.EXCAVATION, label: '动土作业' },
-  { value: OperationType.ROAD_BREAKING, label: '断路作业' },
+  { value: SpecialOperationType.HOT_WORK, label: '动火作业', color: 'red' },
+  { value: SpecialOperationType.CONFINED_SPACE, label: '受限空间作业', color: 'red' },
+  { value: SpecialOperationType.BLIND_PLATE, label: '盲板抽堵作业', color: 'orange' },
+  { value: SpecialOperationType.HEIGHT_WORK, label: '高处作业', color: 'red' },
+  { value: SpecialOperationType.LIFTING, label: '吊装作业', color: 'orange' },
+  { value: SpecialOperationType.TEMPORARY_ELECTRICITY, label: '临时用电作业', color: 'blue' },
+  { value: SpecialOperationType.EXCAVATION, label: '动土作业', color: 'orange' },
+  { value: SpecialOperationType.ROAD_BREAKING, label: '断路作业', color: 'blue' },
 ]
 
 export enum OperationLevel {
@@ -477,9 +477,9 @@ export const RECTIFICATION_STATUS_OPTIONS = [
   { value: 'under_review', label: '复核中', color: 'warning' },
   { value: 'completed', label: '已关闭', color: 'success' },
   { value: 'replied', label: '待复核(旧)', color: 'default' },
-  { value: 'level1_approved', label: '一级已通过(旧)', color: 'default' },
-  { value: 'level2_approved', label: '二级已通过(旧)', color: 'default' },
-  { value: 'level3_approved', label: '三级已通过(旧)', color: 'default' },
+  { value: 'level1_approved', label: '一级已通过', color: 'default' },
+  { value: 'level2_approved', label: '二级已通过', color: 'default' },
+  { value: 'level3_approved', label: '三级已通过', color: 'default' },
   { value: 'rejected', label: '已驳回', color: 'error' },
   { value: 'closed', label: '已关闭', color: 'default' },
   { value: 'verified', label: '已验证(旧)', color: 'default' },
@@ -1420,7 +1420,7 @@ export interface SpecialOperationPersonnelFormData {
   personnel_no: string
   name: string
   department?: string
-  certificate_type: OperationType
+  certificate_type: SpecialOperationType
   certificate_number?: string
   issuing_authority?: string
   issue_date?: string
@@ -1475,7 +1475,7 @@ export interface SpecialOperationPermit {
 
 export interface SpecialOperationPermitFormData {
   permit_no: string
-  operation_type: OperationType
+  operation_type: SpecialOperationType
   operation_level?: OperationLevel
   location?: string
   equipment_tag?: string
@@ -1710,6 +1710,7 @@ export interface DailyRiskReport {
 export interface DailyRiskReportFormData {
   report_no: string
   report_date: string
+  report_type?: string
   department?: string
   hazard_identification_id?: string
   operation_description: string
@@ -2243,16 +2244,16 @@ export interface OhHealthExamQueryParams {
 
 // ============ Scheduled Tasks (定时任务) ============
 
-export enum TaskStatus {
+export enum ScheduledTaskStatus {
   RUNNING = 'running',
   SUCCESS = 'success',
   FAILURE = 'failure',
 }
 
 export const TASK_STATUS_OPTIONS = [
-  { value: TaskStatus.SUCCESS, label: '成功' },
-  { value: TaskStatus.FAILURE, label: '失败' },
-  { value: TaskStatus.RUNNING, label: '运行中' },
+  { value: ScheduledTaskStatus.SUCCESS, label: '成功' },
+  { value: ScheduledTaskStatus.FAILURE, label: '失败' },
+  { value: ScheduledTaskStatus.RUNNING, label: '运行中' },
 ]
 
 export enum HeaderColor {

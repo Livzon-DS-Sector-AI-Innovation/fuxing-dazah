@@ -1054,7 +1054,9 @@ export default function SopContentEditor({
     setExporting(true)
     try {
       const { exportSopPdf } = await import('@/actions/safety')
-      const blob = await exportSopPdf(regulationId)
+      const result = await exportSopPdf(regulationId)
+      const blob = result.data
+      if (!blob) { message.error('导出失败：未返回文件数据'); setExporting(false); return }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url; a.download = `${regulationName || '标准化操规'}.pdf`
