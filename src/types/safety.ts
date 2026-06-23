@@ -481,7 +481,7 @@ export const RECTIFICATION_STATUS_OPTIONS = [
   { value: 'level2_approved', label: '二级已通过(旧)', color: 'default' },
   { value: 'level3_approved', label: '三级已通过(旧)', color: 'default' },
   { value: 'rejected', label: '已驳回', color: 'error' },
-  { value: 'closed', label: '已关闭(旧)', color: 'default' },
+  { value: 'closed', label: '已关闭', color: 'default' },
   { value: 'verified', label: '已验证(旧)', color: 'default' },
   { value: 'in_progress', label: '整改中(旧)', color: 'default' },
 ]
