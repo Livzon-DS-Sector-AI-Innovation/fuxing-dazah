@@ -77,7 +77,7 @@ export default function ScheduledTaskLogDrawer({
       title={`执行日志 - ${taskName}`}
       open={open}
       onClose={onClose}
-      width={700}
+      size="large"
     >
       <Table
         dataSource={logs}
