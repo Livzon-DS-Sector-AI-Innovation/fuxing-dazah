@@ -1,5 +1,6 @@
 """Safety API — hazards endpoints."""
 
+import asyncio
 import os
 import uuid
 from datetime import datetime
@@ -23,6 +24,7 @@ from app.modules.safety.schemas import (
 from app.modules.safety.service import (
     SafetyService,
 )
+from app.modules.safety.service.safety import _send_verify_notification
 
 hazards_router = APIRouter()
 
@@ -333,4 +335,58 @@ async def run_hazard_ai(
     await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
+
+@hazards_router.post(
+    "/hazards/{hazard_id}/rectification/notify-reviewer",
+    response_model=ApiResponse,
+    summary="飞书通知当前复核人",
+)
+async def notify_reviewer(
+    hazard_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """手动触发飞书通知，提醒当前复核阶段的责任人进行复核。
+
+    根据隐患当前状态自动判断复核级别：
+    - 待部门负责人复核（level 1）→ 通知部门负责人
+    - 待分管领导复核（level 2）→ 通知分管领导
+    - 待检查人员复核（level 3）→ 通知检查人员
+    """
+    service = SafetyService(db)
+    hazard = await service.repo.get_hazard_by_id(hazard_id)
+    if not hazard:
+        return ApiResponse(code=404, message="隐患不存在")
+
+    # 判断当前复核级别（与前端 currentLevel 逻辑一致）
+    rstatus = hazard.rectification_status
+    is_general = hazard.hazard_level == "general"
+    v1 = hazard.verify_level_1_status
+    v2 = hazard.verify_level_2_status
+    v3 = hazard.verify_level_3_status
+    v1_done = v1 in ("approved", "rejected")
+    v2_done = v2 in ("approved", "rejected")
+    v3_done = v3 in ("approved", "rejected")
+
+    current_level = None
+    if rstatus and rstatus not in ("pending", "in_progress"):
+        if not v1_done:
+            current_level = 1
+        elif not is_general and not v2_done:
+            current_level = 2
+        elif not v3_done:
+            current_level = 3
+
+    if current_level is None:
+        return ApiResponse(code=400, message="当前无需复核，无法发送通知")
+
+    level_labels = {1: "部门负责人", 2: "分管领导", 3: "检查人员"}
+
+    # 异步发送飞书通知，不阻塞响应
+    asyncio.create_task(_send_verify_notification(hazard, current_level))
+
+    return ApiResponse(
+        message=f"已向{level_labels[current_level]}发送飞书通知",
+        data={"level": current_level, "level_label": level_labels[current_level]},
+    )
 
