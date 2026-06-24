@@ -22,7 +22,7 @@ export default function HazardRegistrationDrawer({ open, onClose, onDone }: Prop
       open={open}
       onClose={onClose}
       placement="right"
-      width={800}
+      size="large"
       destroyOnClose
       styles={{ body: { padding: '16px 24px 24px' } }}
     >

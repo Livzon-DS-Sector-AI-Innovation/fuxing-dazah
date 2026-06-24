@@ -283,6 +283,14 @@ export async function verifyLevel(id: string, data: VerifyLevelRequest) {
   return response
 }
 
+export async function notifyReviewer(id: string) {
+  const response = await fetchApi<{ level: number; level_label: string }>(
+    `/safety/hazards/${id}/rectification/notify-reviewer`,
+    { method: 'POST' }
+  )
+  return response
+}
+
 export async function reworkRectification(id: string, data: RectificationReplyRequest) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${id}/rectification/rework`,

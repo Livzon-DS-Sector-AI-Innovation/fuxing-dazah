@@ -32,8 +32,9 @@ import {
   ToolOutlined,
   CameraOutlined,
   InboxOutlined,
+  SendOutlined,
 } from '@ant-design/icons'
-import { getHazard, updateHazard, replyRectification, uploadRectificationPhoto, getDepartmentLeader } from '@/actions/safety'
+import { getHazard, updateHazard, replyRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer } from '@/actions/safety'
 import type { HazardReport } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -433,6 +434,7 @@ export default function HazardLedgerDetailPage() {
   const [replyFiles, setReplyFiles] = useState<any[]>([])
   const [replySubmitting, setReplySubmitting] = useState(false)
   const [leaderLoading, setLeaderLoading] = useState(false)
+  const [notifyLoading, setNotifyLoading] = useState(false)
 
   // ── 人员搜索状态 ──
   interface UserOption { value: string; label: string }
@@ -1250,6 +1252,32 @@ export default function HazardLedgerDetailPage() {
               icon={<CheckCircleOutlined />}
               title="复核"
               statusPill={rectificationPill}
+              extra={
+                currentLevel && (
+                  <Button
+                    icon={<SendOutlined />}
+                    size="small"
+                    loading={notifyLoading}
+                    onClick={async () => {
+                      setNotifyLoading(true)
+                      try {
+                        const res = await notifyReviewer(id)
+                        if (res.code === 200) {
+                          message.success(res.message || '飞书通知已发送')
+                        } else {
+                          message.error(res.message || '发送失败')
+                        }
+                      } catch {
+                        message.error('发送失败，请稍后重试')
+                      } finally {
+                        setNotifyLoading(false)
+                      }
+                    }}
+                  >
+                    飞书通知
+                  </Button>
+                )
+              }
             />
 
             <div style={{ textAlign: 'center', marginBottom: 20 }}>
