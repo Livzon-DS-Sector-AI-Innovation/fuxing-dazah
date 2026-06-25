@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { MaintenancePlan, MaintenancePlanStatus } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteMaintenancePlan } from '@/actions/equipment'
-import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, linkPrimary, linkDanger } from '@/components/equipment/shared-styles'
+import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, linkPrimary, linkDanger } from '@/components/equipment/shared/shared-styles'
 
 const statusMap: Record<MaintenancePlanStatus, React.CSSProperties> = {
   '启用': pillSuccess,
@@ -42,8 +42,20 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
   const columns: ColumnsType<MaintenancePlan> = [
     { title: '计划名称', dataIndex: 'plan_name', key: 'plan_name', width: 160 },
     {
-      title: '关联设备', dataIndex: 'equipment_name', key: 'equipment_name', width: 150,
-      render: (n: string | undefined, r) => n || equipments.find(eq => eq.id === r.equipment_id)?.name || r.equipment_id,
+      title: '关联', dataIndex: 'equipment_name', key: 'target', width: 150,
+      render: (_: unknown, r: MaintenancePlan) => {
+        if (r.equipment_name) return r.equipment_name
+        if (r.category_name) return `[分类] ${r.category_name}`
+        return '-'
+      },
+    },
+    {
+      title: '关联方式', key: 'plan_mode', width: 90,
+      render: (_: unknown, r: MaintenancePlan) => r.category_id ? '按分类' : '按设备',
+    },
+    {
+      title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 100,
+      render: (t: string | null) => t || '-',
     },
     {
       title: '维护类型', dataIndex: 'plan_type', key: 'plan_type', width: 110,

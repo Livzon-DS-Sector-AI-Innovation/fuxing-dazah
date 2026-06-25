@@ -138,6 +138,7 @@ export function MaintenancePage({
       const [ordersRes, stats] = await Promise.all([
         fetchWorkOrdersClient({
           status: workOrderStatusFilter || undefined,
+          exclude_status: workOrderStatusFilter ? undefined : '已关闭',
           priority: workOrderPriorityFilter || undefined,
           order_type: workOrderTypeFilter || undefined,
           page: workOrderPage, page_size: workOrderPageSize,

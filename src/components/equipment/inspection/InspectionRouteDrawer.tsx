@@ -42,10 +42,12 @@ export function InspectionRouteDrawer() {
     try {
       const values = await form.validateFields()
       if (editingRoute) {
-        await updateInspectionRoute(editingRoute.id, values)
+        const result = await updateInspectionRoute(editingRoute.id, values)
+        if (!result.success) { message.error(result.error); return }
         message.success('路线已更新')
       } else {
-        await createInspectionRoute(values)
+        const result = await createInspectionRoute(values)
+        if (!result.success) { message.error(result.error); return }
         message.success('路线已创建')
       }
       form.resetFields()

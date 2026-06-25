@@ -10,7 +10,7 @@ import {
   fetchInspectionTasks, fetchInspectionRouteById,
   fetchInspectionTemplateByIdClient, fetchInspectionTaskById,
 } from '@/lib/api/inspection'
-import { statusPill, pillSuccess, pillError, pillTab, actionLink, linkSuccess, linkWarning, linkMuted } from '@/components/equipment/shared-styles'
+import { statusPill, pillSuccess, pillError, pillTab, actionLink, linkSuccess, linkWarning, linkMuted } from '@/components/equipment/shared/shared-styles'
 import type { InspectionTask, InspectionTaskStatus } from '@/types/inspection'
 import type { InspectionTemplate, InspectionTemplateItem } from '@/types/equipment'
 
@@ -122,7 +122,8 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
     setStartingIds(prev => new Set(prev).add(record.id))
     try {
       if (record.status === '待执行') {
-        await startInspectionTask(record.id)
+        const result = await startInspectionTask(record.id)
+        if (!result.success) { message.error(result.error); return }
         message.success('已开始巡检')
         triggerTasksRefresh()
       }
@@ -145,13 +146,13 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
       cancelText: '返回',
       okButtonProps: { danger: true },
       onOk: async () => {
-        try {
-          await closeInspectionTask(record.id)
-          message.success(isCancelling ? '任务已取消' : '任务已关闭')
-          loadTasks()
-        } catch (err: unknown) {
-          message.error((err as Error).message || '操作失败')
+        const result = await closeInspectionTask(record.id)
+        if (!result.success) {
+          message.error(result.error)
+          return
         }
+        message.success(isCancelling ? '任务已取消' : '任务已关闭')
+        loadTasks()
       },
     })
   }, [modal, message, loadTasks])

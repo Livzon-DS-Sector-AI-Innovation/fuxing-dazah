@@ -1,16 +1,19 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Select, Input, Image } from 'antd'
+import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Input, Image, Upload } from 'antd'
+import type { UploadFile } from 'antd'
 import {
-  ClockCircleOutlined, UserOutlined, ToolOutlined,
+  ClockCircleOutlined, UserOutlined, ToolOutlined, UploadOutlined,
   CheckCircleOutlined, CloseCircleOutlined, StopOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useEquipmentStore } from '@/stores/equipment'
-import { assignWorkOrder, startWorkOrder, completeWorkOrder, verifyWorkOrder, closeWorkOrder, claimWorkOrder } from '@/actions/equipment'
-import { WorkOrderStatus, WorkOrderPriority, Maintainer } from '@/types/equipment'
-import { fetchMaintainersClient, fetchWorkOrderByIdClient } from '@/lib/api/equipment-client'
+import { assignWorkOrder, startWorkOrder, completeWorkOrder, verifyWorkOrder, closeWorkOrder, claimWorkOrder, uploadWorkOrderImages } from '@/actions/equipment'
+import { WorkOrderStatus, WorkOrderPriority, Personnel } from '@/types/equipment'
+import { fetchWorkOrderByIdClient } from '@/lib/api/equipment-client'
+import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
+import { PersonnelSelect } from '@/components/equipment'
 
 const { TextArea } = Input
 
@@ -50,7 +53,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
   const { message, modal } = App.useApp()
   const { workOrderDetailOpen, viewingWorkOrder, closeWorkOrderDetail, setViewingWorkOrder } = useEquipmentStore()
 
-  const [maintainers, setMaintainersState] = useState<Maintainer[]>([])
+  const [personnel, setPersonnel] = useState<Personnel[]>([])
 
   const refreshDetail = async (id: string) => {
     try {
@@ -61,7 +64,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
   }
   useEffect(() => {
     if (workOrderDetailOpen) {
-      fetchMaintainersClient().then(setMaintainersState).catch(() => {})
+      fetchPersonnelList({}).then(r => setPersonnel(r.items.filter(p => p.is_active))).catch(() => {})
     }
   }, [workOrderDetailOpen])
 
@@ -77,16 +80,11 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
       title: '指派维修人',
       content: (
         <div style={{ marginTop: 16 }}>
-          <Select
+          <PersonnelSelect
+            personnel={personnel}
             placeholder="选择维修人员"
             style={{ width: '100%' }}
-            showSearch
-            optionFilterProp="label"
             onChange={(val) => { assigneeId = val }}
-            options={maintainers.map((m) => ({
-              label: `${m.name} (${m.employee_no || '-'})`,
-              value: m.user_id,
-            }))}
           />
         </div>
       ),
@@ -118,8 +116,10 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
 
   const handleComplete = () => {
     let repairDetail = ''
+    const fileListRef: UploadFile[] = []
     modal.confirm({
       title: '提交维修完成',
+      width: 520,
       content: (
         <div style={{ marginTop: 16 }}>
           <div style={{ marginBottom: 8, fontSize: 14, color: '#37352f' }}>维修过程描述 *</div>
@@ -130,6 +130,23 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
             showCount
             onChange={(e) => { repairDetail = e.target.value }}
           />
+          <div style={{ marginTop: 16, marginBottom: 8, fontSize: 14, color: '#37352f' }}>现场照片（可选，可多张）</div>
+          <Upload
+            multiple
+            listType="picture"
+            beforeUpload={(file) => {
+              fileListRef.push(file)
+              return false
+            }}
+            onRemove={(file) => {
+              const idx = fileListRef.findIndex(
+                f => f.name === file.name && f.size === file.size,
+              )
+              if (idx >= 0) fileListRef.splice(idx, 1)
+            }}
+          >
+            <Button icon={<UploadOutlined />}>选择图片</Button>
+          </Upload>
         </div>
       ),
       okText: '提交',
@@ -137,12 +154,20 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
       onOk: async () => {
         if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); throw new Error() }
         try {
+          // 先上传图片
+          if (fileListRef.length > 0) {
+            const formData = new FormData()
+            fileListRef.forEach(f => {
+              const file = (f as any).originFileObj || f
+              if (file instanceof File) formData.append('files', file)
+            })
+            await uploadWorkOrderImages(wo.id, formData)
+          }
           await completeWorkOrder(wo.id, { repair_detail: repairDetail })
           message.success('已提交验收')
           await refreshDetail(wo.id)
         } catch (error: any) {
           message.error(error?.message || '操作失败')
-          throw error
         }
       },
     })
@@ -173,7 +198,6 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
           await refreshDetail(wo.id)
         } catch (error: any) {
           message.error(error?.message || '操作失败')
-          throw error
         }
       },
     })
@@ -316,7 +340,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
 
       {wo.images && wo.images.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', marginBottom: 12 }}>故障图片</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', marginBottom: 12 }}>现场照片</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {wo.images.map((img) => (
               <Image

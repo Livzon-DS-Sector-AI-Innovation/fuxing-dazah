@@ -72,7 +72,7 @@ const statusCardConfig: {
   bgColor: string
   statusFilter: WorkOrderStatus | ''
 }[] = [
-  { key: 'total', title: '全部工单', icon: <FileTextOutlined />, color: '#5645d4', bgColor: '#ede9f7', statusFilter: '' },
+  { key: 'active', title: '进行中', icon: <FileTextOutlined />, color: '#5645d4', bgColor: '#ede9f7', statusFilter: '' },
   { key: 'pending', title: '待处理', icon: <ExclamationCircleOutlined />, color: '#e03131', bgColor: '#fff1f0', statusFilter: '待处理' },
   { key: 'executing', title: '执行中', icon: <ToolOutlined />, color: '#dd5b00', bgColor: '#fff7e6', statusFilter: '执行中' },
   { key: 'pending_verify', title: '待验收', icon: <ClockCircleOutlined />, color: '#d4b106', bgColor: '#fffbe6', statusFilter: '待验收' },
@@ -89,7 +89,9 @@ export function WorkOrderStatsCards({ statistics }: WorkOrderStatsCardsProps) {
 
   const statusCounts = useMemo(() => {
     if (!statistics) return {} as Record<string, number>
-    return { total: statistics.total, ...statistics.by_status }
+    // 'active' card = total minus closed
+    const closed = statistics.by_status?.['已关闭'] || 0
+    return { active: statistics.total - closed, ...statistics.by_status }
   }, [statistics])
 
   return (
@@ -98,7 +100,7 @@ export function WorkOrderStatsCards({ statistics }: WorkOrderStatsCardsProps) {
         <Col key={config.key} flex="1 0 150px">
           <StatCard
             title={config.title}
-            value={statusCounts[config.key === 'total' ? 'total' : config.statusFilter] || 0}
+            value={statusCounts[config.key === 'active' ? 'active' : config.statusFilter] || 0}
             icon={config.icon}
             color={config.color}
             bgColor={config.bgColor}

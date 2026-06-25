@@ -429,15 +429,17 @@ const priorityConfig: Record<string, { color: string; bg: string; dot: string; l
 const typeIcons: Record<string, React.ReactNode> = {
   '故障维修': <WarningFilled />,
   '计划维护': <ScheduleOutlined />,
-  '巡检': <AimOutlined />,
   '校准': <ExperimentOutlined />,
+  '异常处理': <ThunderboltFilled />,
+  '日常维护': <ToolFilled />,
 }
 
 const typeColors: Record<string, string> = {
   '故障维修': '#e03131',
   '计划维护': '#dd5b00',
-  '巡检': '#0075de',
   '校准': '#7b3ff2',
+  '异常处理': '#e03131',
+  '日常维护': '#0075de',
 }
 
 function WorkOrderPipeline({ statistics }: { statistics: WorkOrderStatistics }) {

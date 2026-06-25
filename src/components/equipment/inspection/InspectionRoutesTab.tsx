@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { useInspectionStore } from '@/stores/inspection'
 import { deleteInspectionRoute } from '@/actions/inspection'
 import { fetchInspectionRoutes } from '@/lib/api/inspection'
-import { statusPill, pillSuccess, pillNeutral, linkPurple, linkPrimary, linkDanger } from '@/components/equipment/shared-styles'
+import { statusPill, pillSuccess, pillNeutral, linkPurple, linkPrimary, linkDanger } from '@/components/equipment/shared/shared-styles'
 import type { InspectionRoute } from '@/types/inspection'
 import type { InspectionTemplate } from '@/types/equipment'
 
@@ -46,8 +46,9 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
       okText: '确认删除', cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
-        try { await deleteInspectionRoute(r.id); message.success('已删除'); load() }
-        catch (err: unknown) { message.error((err as Error).message || '删除失败') }
+        const result = await deleteInspectionRoute(r.id)
+        if (!result.success) { message.error(result.error); return }
+        message.success('已删除'); load()
       },
     })
   }, [modal, message, load])

@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { SparePart } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteSparePart } from '@/actions/equipment'
-import { pillSuccess, pillNeutral, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared-styles'
+import { pillSuccess, pillNeutral, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 
 interface Props { onRefresh?: () => void }
 

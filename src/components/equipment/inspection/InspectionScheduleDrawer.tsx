@@ -113,32 +113,36 @@ export function InspectionScheduleDrawer() {
     if (!scheduleRouteId) return
     if (!assigneeId) { message.warning('请选择巡检人员'); return }
     if (times.length === 0) { message.warning('请选择时间'); return }
-    try {
-      for (const t of times) {
+    let created = 0
+    for (const t of times) {
+      try {
         const cron = buildCron(freqType, t, weekDays, monthDays)
-        await createSchedule(scheduleRouteId, { cron_expression: cron, assigned_to: assigneeId })
+        const result = await createSchedule(scheduleRouteId, { cron_expression: cron, assigned_to: assigneeId })
+        if (!result.success) { message.error(`添加 ${t} 失败: ${result.error}`); return }
+        created++
+      } catch (e: unknown) {
+        message.error(`构建定时表达式失败 (${t}): ${(e as Error).message || '未知错误'}`)
+        return
       }
-      message.success(`已添加 ${times.length} 个定时任务`)
-      setTimes(['09:00']); setWeekDays([1]); setMonthDays([1]); setAssigneeId(undefined)
-      load()
-    } catch (e: unknown) { message.error((e as Error).message || '添加失败') }
+    }
+    message.success(`已添加 ${created} 个定时任务`)
+    setTimes(['09:00']); setWeekDays([1]); setMonthDays([1]); setAssigneeId(undefined)
+    load()
   }
 
   const handleToggle = async (s: InspectionRouteSchedule) => {
     if (!scheduleRouteId) return
-    try {
-      await updateSchedule(scheduleRouteId, s.id, { is_active: !s.is_active })
-      load()
-    } catch (e: unknown) { message.error((e as Error).message || '操作失败') }
+    const result = await updateSchedule(scheduleRouteId, s.id, { is_active: !s.is_active })
+    if (!result.success) { message.error(result.error); return }
+    load()
   }
 
   const handleDelete = async (s: InspectionRouteSchedule) => {
     if (!scheduleRouteId) return
-    try {
-      await deleteSchedule(scheduleRouteId, s.id)
-      message.success('已删除')
-      load()
-    } catch (e: unknown) { message.error((e as Error).message || '删除失败') }
+    const result = await deleteSchedule(scheduleRouteId, s.id)
+    if (!result.success) { message.error(result.error); return }
+    message.success('已删除')
+    load()
   }
 
   return (

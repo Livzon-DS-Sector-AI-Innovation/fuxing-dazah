@@ -8,7 +8,7 @@ import type { Equipment, MaintenancePlan, WorkOrder } from '@/types/equipment'
 import type { InspectionTask } from '@/types/inspection'
 import { fetchMaintenancePlansClient, fetchWorkOrdersClient } from '@/lib/api/equipment-client'
 import { fetchInspectionHistory } from '@/lib/api/inspection'
-import { monoFont, pillNeutral, pillSuccess, pillWarning, pillError, pillInfo, pillPurple, statusPill } from '@/components/equipment/shared-styles'
+import { monoFont, pillNeutral, pillSuccess, pillWarning, pillError, pillInfo, pillPurple, statusPill } from '@/components/equipment/shared/shared-styles'
 import type { EquipmentStatus, EquipmentImportance } from '@/types/equipment'
 
 interface EquipmentDetailDrawerProps {

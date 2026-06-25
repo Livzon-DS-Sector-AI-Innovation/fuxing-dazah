@@ -52,7 +52,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
         equipment_templates = values.equipment_templates
       }
 
-      await createInspectionTask({
+      const result = await createInspectionTask({
         route_id: isRoute ? values.route_id : undefined,
         equipment_ids: !isRoute && values.equipment_ids?.length ? values.equipment_ids : undefined,
         template_ids: !isRoute && !equipment_templates && values.template_ids?.length ? values.template_ids : undefined,
@@ -61,6 +61,7 @@ export function InspectionTaskDrawer({ templates, equipments }: Props) {
         assigned_to: values.assigned_to || undefined,
         planned_time: values.planned_time.toISOString(),
       })
+      if (!result.success) { message.error(result.error); return }
       message.success('巡检任务已创建')
       form.resetFields()
       closeTaskDrawer()

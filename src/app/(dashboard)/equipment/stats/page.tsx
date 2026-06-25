@@ -33,7 +33,7 @@ const defaultEquipmentStats: EquipmentStatistics = {
 const defaultWorkOrderStats: WorkOrderStatistics = {
   total: 0,
   by_status: { '待处理': 0, '执行中': 0, '待验收': 0, '已完成': 0, '已关闭': 0 } as Record<WorkOrderStatus, number>,
-  by_type: { '故障维修': 0, '计划维护': 0, '巡检': 0, '校准': 0 } as Record<WorkOrderType, number>,
+  by_type: { '故障维修': 0, '计划维护': 0, '校准': 0, '异常处理': 0, '日常维护': 0 } as Record<WorkOrderType, number>,
   by_priority: { '紧急': 0, '高': 0, '中': 0, '低': 0 } as Record<WorkOrderPriority, number>,
 }
 

@@ -105,6 +105,7 @@ export async function fetchWorkOrders(filters: WorkOrderFilters = {}): Promise<W
   if (filters.equipment_id) params.append('equipment_id', filters.equipment_id)
   if (filters.priority) params.append('priority', filters.priority)
   if (filters.order_type) params.append('order_type', filters.order_type)
+  if (filters.exclude_status) params.append('exclude_status', filters.exclude_status)
   if (filters.page) params.append('page', filters.page.toString())
   if (filters.page_size) params.append('page_size', filters.page_size.toString())
 
@@ -116,8 +117,11 @@ export async function fetchWorkOrders(filters: WorkOrderFilters = {}): Promise<W
   return apiFetchPaginated(url)
 }
 
-export async function fetchWorkOrderStatistics(): Promise<WorkOrderStatistics> {
-  return apiFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/statistics`)
+export async function fetchWorkOrderStatistics(exclude_status?: string): Promise<WorkOrderStatistics> {
+  const params = new URLSearchParams()
+  if (exclude_status) params.append('exclude_status', exclude_status)
+  const qs = params.toString()
+  return apiFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/statistics${qs ? `?${qs}` : ''}`)
 }
 
 export async function fetchWorkOrderById(id: string): Promise<WorkOrder> {
@@ -193,6 +197,7 @@ export async function fetchSparePartStock(id: string): Promise<{ current_qty: nu
 export async function fetchMaintenancePlans(filters: MaintenancePlanFilters = {}): Promise<MaintenancePlanListResponse> {
   const params = new URLSearchParams()
   if (filters.equipment_id) params.append('equipment_id', filters.equipment_id)
+  if (filters.category_id) params.append('category_id', filters.category_id)
   if (filters.status) params.append('status', filters.status)
   if (filters.keyword) params.append('keyword', filters.keyword)
   if (filters.page) params.append('page', filters.page.toString())

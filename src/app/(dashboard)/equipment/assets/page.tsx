@@ -22,33 +22,40 @@ export default async function EquipmentPageWrapper() {
   let statistics = defaultStatistics
   let departments: DepartmentOption[] = []
 
-  // 每个 API 独立 try/catch，避免一个失败拖垮全部数据
-  try {
-    categories = await fetchCategoryTree()
-  } catch (error) {
-    console.warn('加载分类树失败:', error)
+  // Promise.allSettled：并行请求 + 独立容错，避免一个失败拖垮全部数据
+  const results = await Promise.allSettled([
+    fetchCategoryTree(),
+    fetchLocationTree(),
+    fetchEquipments({ page: 1, page_size: 20 }),
+    fetchEquipmentStatistics(),
+    fetchDepartments(),
+  ])
+
+  if (results[0].status === 'fulfilled') {
+    categories = results[0].value
+  } else {
+    console.warn('加载分类树失败:', results[0].reason)
   }
-  try {
-    locations = await fetchLocationTree()
-  } catch (error) {
-    console.warn('加载位置树失败:', error)
+  if (results[1].status === 'fulfilled') {
+    locations = results[1].value
+  } else {
+    console.warn('加载位置树失败:', results[1].reason)
   }
-  try {
-    const result = await fetchEquipments({ page: 1, page_size: 20 })
-    equipments = result.items
-    total = result.total
-  } catch (error) {
-    console.warn('加载设备列表失败:', error)
+  if (results[2].status === 'fulfilled') {
+    equipments = results[2].value.items
+    total = results[2].value.total
+  } else {
+    console.warn('加载设备列表失败:', results[2].reason)
   }
-  try {
-    statistics = await fetchEquipmentStatistics()
-  } catch (error) {
-    console.warn('加载设备统计失败:', error)
+  if (results[3].status === 'fulfilled') {
+    statistics = results[3].value
+  } else {
+    console.warn('加载设备统计失败:', results[3].reason)
   }
-  try {
-    departments = await fetchDepartments()
-  } catch (error) {
-    console.warn('加载部门列表失败:', error)
+  if (results[4].status === 'fulfilled') {
+    departments = results[4].value
+  } else {
+    console.warn('加载部门列表失败:', results[4].reason)
   }
 
   return (

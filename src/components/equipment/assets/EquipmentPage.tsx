@@ -10,12 +10,12 @@ import { antdTheme } from '@/lib/antd-theme'
 import { fetchEquipmentsClient, fetchEquipmentStatisticsClient, fetchCategoriesClient, fetchLocationsClient, fetchDepartmentsClient } from '@/lib/api/equipment-client'
 import { StatsCards } from './StatsCards'
 import { EquipmentTable } from './EquipmentTable'
-import { CategoryTree } from './CategoryTree'
-import { LocationTree } from './LocationTree'
+import { CategoryTree } from '../shared/CategoryTree'
+import { LocationTree } from '../shared/LocationTree'
 import { EquipmentDrawer } from './EquipmentDrawer'
-import { CategoryDrawer } from './CategoryDrawer'
-import { LocationDrawer } from './LocationDrawer'
-import { RepairDrawer } from './RepairDrawer'
+import { CategoryDrawer } from '../shared/CategoryDrawer'
+import { LocationDrawer } from '../shared/LocationDrawer'
+import { RepairDrawer } from '../maintenance/RepairDrawer'
 
 interface EquipmentPageProps {
   initialCategories: EquipmentCategory[]

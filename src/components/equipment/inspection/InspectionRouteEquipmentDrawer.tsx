@@ -134,11 +134,10 @@ export function InspectionRouteEquipmentDrawer({ equipments, locations, template
       message.warning('请至少配置一个地点且每个地点至少一台设备'); return
     }
     setSaving(true)
-    try {
-      await setRouteLocations(editingRouteId, items)
-      message.success('路线配置已保存'); closeRouteEquipmentDrawer(); triggerRoutesRefresh()
-    } catch (err: unknown) { message.error((err as Error).message || '保存失败') }
-    finally { setSaving(false) }
+    const result = await setRouteLocations(editingRouteId, items)
+    setSaving(false)
+    if (!result.success) { message.error(result.error); return }
+    message.success('路线配置已保存'); closeRouteEquipmentDrawer(); triggerRoutesRefresh()
   }
 
   /* ── helpers ── */

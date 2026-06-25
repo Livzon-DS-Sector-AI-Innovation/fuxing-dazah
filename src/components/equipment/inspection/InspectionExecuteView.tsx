@@ -81,16 +81,19 @@ export function InspectionExecuteView({ onClose }: Props) {
 
   const submitCheck = useCallback(async (records: InspectionRecordItem[]) => {
     if (!executingTaskId || !cur) return
-    try {
-      await submitEquipmentCheck(executingTaskId, cur.equipment_id, { records })
-      for (const f of photos[cur.equipment_id] || []) {
+    const result = await submitEquipmentCheck(executingTaskId, cur.equipment_id, { records })
+    if (!result.success) { message.error(result.error); return }
+    const photoResults = await Promise.all(
+      (photos[cur.equipment_id] || []).map(f => {
         const fd = new FormData(); fd.append('file', f)
-        await uploadInspectionPhoto(executingTaskId, cur.equipment_id, fd)
-      }
-      setDone(prev => new Set(prev).add(cur.equipment_id))
-      message.success(`${cur.equipment_name} 检查完成`)
-      if (step < total - 1) setStep(step + 1)
-    } catch (err: unknown) { message.error((err as Error).message || '提交失败') }
+        return uploadInspectionPhoto(executingTaskId, cur.equipment_id, fd)
+      }),
+    )
+    const firstFailure = photoResults.find(r => !r.success)
+    if (firstFailure) { message.error(firstFailure.error); return }
+    setDone(prev => new Set(prev).add(cur.equipment_id))
+    message.success(`${cur.equipment_name} 检查完成`)
+    if (step < total - 1) setStep(step + 1)
   }, [executingTaskId, cur, step, total, photos, message])
 
   const finish = useCallback(() => {
@@ -102,9 +105,10 @@ export function InspectionExecuteView({ onClose }: Props) {
       okText: '确认提交', cancelText: '取消',
       onOk: async () => {
         setSubmitting(true)
-        try { await completeInspectionTask(executingTaskId); message.success('巡检任务已完成'); clearExecuting(); onClose() }
-        catch (err: unknown) { message.error((err as Error).message || '提交失败') }
-        finally { setSubmitting(false) }
+        const result = await completeInspectionTask(executingTaskId)
+        setSubmitting(false)
+        if (!result.success) { message.error(result.error); return }
+        message.success('巡检任务已完成'); clearExecuting(); onClose()
       },
     })
   }, [executingTaskId, doneN, total, clearExecuting, onClose, message, modal])
@@ -267,7 +271,9 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
         r.onerror = () => reject(new Error('图片读取失败'))
         r.readAsDataURL(file)
       })
-      const results = await analyzeInspectionPhoto(tid, equipmentId, b64, file.type || 'image/jpeg')
+      const aiResult = await analyzeInspectionPhoto(tid, equipmentId, b64, file.type || 'image/jpeg')
+      if (!aiResult.success) { message.error(aiResult.error); return }
+      const results = aiResult.data ?? []
       const vals: typeof formVals = {}
       templateItems.forEach((item, i) => {
         const ai = results.find(r => r.template_item_id === item.id)

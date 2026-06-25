@@ -1,4 +1,6 @@
 // 设备分类
+export type { Personnel } from './equipment-personnel'
+
 export interface EquipmentCategory {
   id: string
   name: string
@@ -181,7 +183,7 @@ export interface UpdateFailureCodeInput {
 }
 
 // ==================== 维修工单 ====================
-export type WorkOrderType = '故障维修' | '计划维护' | '巡检' | '校准' | '异常处理' | '日常维护'
+export type WorkOrderType = '故障维修' | '计划维护' | '校准' | '异常处理' | '日常维护'
 export type WorkOrderPriority = '紧急' | '高' | '中' | '低'
 export type WorkOrderStatus = '待处理' | '执行中' | '待验收' | '已完成' | '已关闭'
 export type VerificationResult = '合格' | '不合格'
@@ -274,6 +276,7 @@ export interface WorkOrderFilters {
   equipment_id?: string
   priority?: WorkOrderPriority
   order_type?: WorkOrderType
+  exclude_status?: string
   page?: number
   page_size?: number
 }
@@ -473,14 +476,17 @@ export type FrequencyUnit = '天' | '周' | '月' | '年'
 
 export interface MaintenancePlan {
   id: string
-  equipment_id: string
+  equipment_id: string | null
+  category_id: string | null
+  category_name?: string | null
   plan_name: string
   plan_type: MaintenancePlanType
   frequency: number
   frequency_unit: FrequencyUnit
   last_maintenance_date: string | null
   next_maintenance_date: string | null
-  responsible_person_id: string | null
+  executor_id: string | null
+  executor_name?: string | null
   maintenance_content: string | null
   status: MaintenancePlanStatus
   remark: string | null
@@ -490,17 +496,17 @@ export interface MaintenancePlan {
   updated_by: string | null
   equipment_name?: string
   equipment_no?: string
-  responsible_person_name?: string
 }
 
 export interface CreateMaintenancePlanInput {
-  equipment_id: string
+  equipment_id?: string
+  category_id?: string
   plan_name: string
   plan_type?: MaintenancePlanType
   frequency: number
   frequency_unit: FrequencyUnit
   last_maintenance_date?: string
-  responsible_person_id?: string
+  executor_id?: string
   maintenance_content?: string
   remark?: string
 }
@@ -511,7 +517,7 @@ export interface UpdateMaintenancePlanInput {
   frequency?: number
   frequency_unit?: FrequencyUnit
   last_maintenance_date?: string
-  responsible_person_id?: string
+  executor_id?: string
   maintenance_content?: string
   status?: MaintenancePlanStatus
   remark?: string
@@ -519,6 +525,7 @@ export interface UpdateMaintenancePlanInput {
 
 export interface MaintenancePlanFilters {
   equipment_id?: string
+  category_id?: string
   status?: MaintenancePlanStatus
   keyword?: string
   page?: number

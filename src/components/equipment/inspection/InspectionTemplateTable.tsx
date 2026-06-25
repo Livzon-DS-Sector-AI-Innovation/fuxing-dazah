@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { InspectionTemplate } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteInspectionTemplate } from '@/actions/equipment'
-import { pillSuccess, pillNeutral, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared-styles'
+import { pillSuccess, pillNeutral, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 
 interface Props { onRefresh?: () => void; categories: { id: string; name: string }[] }
 

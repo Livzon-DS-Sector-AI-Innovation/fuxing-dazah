@@ -138,7 +138,6 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
           <Select options={[
             { label: '故障维修', value: '故障维修' },
             { label: '计划维护', value: '计划维护' },
-            { label: '巡检', value: '巡检' },
             { label: '校准', value: '校准' },
             { label: '异常处理', value: '异常处理' },
             { label: '日常维护', value: '日常维护' },

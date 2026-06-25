@@ -101,6 +101,7 @@ export async function fetchWorkOrdersClient(params: WorkOrderFilters = {}): Prom
   if (params.equipment_id) searchParams.append('equipment_id', params.equipment_id)
   if (params.priority) searchParams.append('priority', params.priority)
   if (params.order_type) searchParams.append('order_type', params.order_type)
+  if (params.exclude_status) searchParams.append('exclude_status', params.exclude_status)
   if (params.page && params.page > 0) searchParams.append('page', params.page.toString())
   if (params.page_size && params.page_size > 0) searchParams.append('page_size', params.page_size.toString())
 
@@ -123,8 +124,13 @@ export async function fetchWorkOrdersClient(params: WorkOrderFilters = {}): Prom
   }
 }
 
-export async function fetchWorkOrderStatisticsClient(): Promise<WorkOrderStatistics> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/statistics`)
+export async function fetchWorkOrderStatisticsClient(
+  exclude_status?: string,
+): Promise<WorkOrderStatistics> {
+  const searchParams = new URLSearchParams()
+  if (exclude_status) searchParams.append('exclude_status', exclude_status)
+  const qs = searchParams.toString()
+  const response = await fetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/statistics${qs ? `?${qs}` : ''}`)
   if (!response.ok) {
     throw new Error(`请求失败: ${response.status} ${response.statusText}`)
   }
@@ -238,6 +244,7 @@ export async function fetchStockWarningsClient(): Promise<StockWarning[]> {
 export async function fetchMaintenancePlansClient(params: MaintenancePlanFilters = {}): Promise<MaintenancePlanListResponse> {
   const searchParams = new URLSearchParams()
   if (params.equipment_id) searchParams.append('equipment_id', params.equipment_id)
+  if (params.category_id) searchParams.append('category_id', params.category_id)
   if (params.status) searchParams.append('status', params.status)
   if (params.keyword) searchParams.append('keyword', params.keyword)
   if (params.page && params.page > 0) searchParams.append('page', params.page.toString())

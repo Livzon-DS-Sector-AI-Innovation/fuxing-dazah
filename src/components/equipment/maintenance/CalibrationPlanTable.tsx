@@ -7,7 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { CalibrationPlan, CalibrationPlanStatus, CalibrationType } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteCalibrationPlan } from '@/actions/equipment'
-import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, statusPill, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared-styles'
+import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, statusPill, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 
 const statusMap: Record<CalibrationPlanStatus, React.CSSProperties> = {
   '启用': pillSuccess,

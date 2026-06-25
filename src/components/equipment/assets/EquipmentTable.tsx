@@ -6,7 +6,7 @@ import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutline
 import { Equipment, EquipmentStatus } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
-import { statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared-styles'
+import { statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared/shared-styles'
 import { EquipmentDetailDrawer } from './EquipmentDetailDrawer'
 
 const statusConfig: Record<EquipmentStatus, { color: string; bg: string }> = {

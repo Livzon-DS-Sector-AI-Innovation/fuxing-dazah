@@ -5,7 +5,7 @@ import { PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { CalibrationRecord, CalibrationType, CalibrationResult } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
-import { pillSuccess, pillError, pillPurple, pillWarning, statusPill } from '@/components/equipment/shared-styles'
+import { pillSuccess, pillError, pillPurple, pillWarning, statusPill } from '@/components/equipment/shared/shared-styles'
 
 interface Props { onRefresh?: () => void }
 
