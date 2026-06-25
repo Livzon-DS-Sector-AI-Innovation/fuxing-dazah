@@ -1,13 +1,12 @@
 """维修工单 API 路由."""
 
+import asyncio
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import NO_VALUE
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser
@@ -26,6 +25,39 @@ from app.modules.equipment.schemas import (
     WorkOrderVerify,
 )
 
+logger = logging.getLogger(__name__)
+
+
+async def _notify_start(wo) -> None:
+    """网页点击开始执行时，飞书通知维修人。非关键路径。"""
+    try:
+        if not wo.assignee:
+            return
+        from app.modules.equipment.feishu.notification import send_user_card
+
+        user = wo.assignee
+        if not user.feishu_user_id:
+            return
+
+        eq_name = wo.equipment.name if wo.equipment else ""
+        title = f"🔧 开始维修 - {wo.work_order_no}"
+        lines = [
+            f"**工单编号：**{wo.work_order_no}",
+            f"**关联设备：**{eq_name}",
+            f"**工单类型：**{wo.order_type}",
+            f"**优先级：**{wo.priority}",
+            "",
+            "维修已开始，请尽快完成维修并提交。",
+        ]
+        content = "\n".join(lines)
+        await send_user_card(
+            open_id=user.feishu_user_id,
+            title=title,
+            content=content,
+        )
+    except Exception:
+        logger.exception("开始维修通知异常: %s", wo.work_order_no)
+
 
 def _require_user(current_user: CurrentUser) -> uuid.UUID:
     """要求已认证用户，返回用户ID"""
@@ -35,20 +67,8 @@ def _require_user(current_user: CurrentUser) -> uuid.UUID:
 
 
 def _to_response(wo) -> WorkOrderResponse:
-    """将 ORM WorkOrder 转为响应对象，填充关联名称"""
-    # 异步环境下写操作返回的对象可能未 eager load images 关系
-    # 提前检测，直接跳过懒加载赋值，在 resp 上补充空列表
-    has_images = True
-    try:
-        insp = sa_inspect(wo)
-        if insp.attrs.images.loaded_value is NO_VALUE:
-            has_images = False
-    except MissingGreenlet:
-        has_images = False
-
+    """将 ORM WorkOrder 转为响应对象，填充关联名称。"""
     resp = WorkOrderResponse.model_validate(wo)
-    if not has_images:
-        resp.images = []
     if wo.reporter:
         resp.reporter_name = wo.reporter.name
     if wo.assignee:
@@ -94,6 +114,7 @@ async def update_work_order(
 @router.get("/", summary="工单列表")
 async def list_work_orders(
     status: str | None = Query(None, description="工单状态"),
+    exclude_status: str | None = Query(None, description="排除状态"),
     equipment_id: uuid.UUID | None = Query(None, description="设备ID"),
     priority: str | None = Query(None, description="优先级"),
     order_type: str | None = Query(None, description="工单类型"),
@@ -102,7 +123,8 @@ async def list_work_orders(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     work_orders, total = await service.get_work_orders(
-        db, status=status, equipment_id=equipment_id,
+        db, status=status, exclude_status=exclude_status,
+        equipment_id=equipment_id,
         priority=priority, order_type=order_type,
         page=page, page_size=page_size,
     )
@@ -114,9 +136,12 @@ async def list_work_orders(
 
 @router.get("/statistics", summary="工单统计")
 async def get_work_order_statistics(
+    exclude_status: str | None = Query(None, description="排除状态"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    stats = await service.get_work_order_statistics(db)
+    stats = await service.get_work_order_statistics(
+        db, exclude_status=exclude_status,
+    )
     return success_response(data=WorkOrderStatistics.model_validate(stats))
 
 
@@ -147,6 +172,8 @@ async def start_work_order(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     wo = await service.start_work_order(db, work_order_id)
+    # 网页点击开始时飞书通知维修人（非关键路径）
+    asyncio.ensure_future(_notify_start(wo))
     return success_response(data=_to_response(wo))
 
 

@@ -83,6 +83,7 @@ async def count_open_work_orders_by_equipment(
 async def get_work_orders(
     db: AsyncSession,
     status: str | None = None,
+    exclude_status: str | None = None,
     equipment_id: uuid.UUID | None = None,
     priority: str | None = None,
     order_type: str | None = None,
@@ -107,6 +108,8 @@ async def get_work_orders(
 
     if status:
         query = query.where(WorkOrder.status == status)
+    if exclude_status:
+        query = query.where(WorkOrder.status != exclude_status)
     if equipment_id:
         query = query.where(WorkOrder.equipment_id == equipment_id)
     if priority:
@@ -126,30 +129,37 @@ async def get_work_orders(
     return list(result.scalars().all()), total
 
 
-async def get_work_order_statistics(db: AsyncSession) -> dict[str, Any]:
+async def get_work_order_statistics(
+    db: AsyncSession,
+    exclude_status: str | None = None,
+) -> dict[str, Any]:
     """获取工单统计"""
+    base_where = WorkOrder.is_deleted == False  # noqa: E712
+    if exclude_status:
+        base_where = base_where & (WorkOrder.status != exclude_status)
+
     total_result = await db.execute(
-        select(func.count()).where(WorkOrder.is_deleted == False)  # noqa: E712
+        select(func.count()).where(base_where)
     )
     total = total_result.scalar() or 0
 
     status_result = await db.execute(
         select(WorkOrder.status, func.count())
-        .where(WorkOrder.is_deleted == False)  # noqa: E712
+        .where(base_where)
         .group_by(WorkOrder.status)
     )
     by_status = {row[0]: row[1] for row in status_result.all()}
 
     type_result = await db.execute(
         select(WorkOrder.order_type, func.count())
-        .where(WorkOrder.is_deleted == False)  # noqa: E712
+        .where(base_where)
         .group_by(WorkOrder.order_type)
     )
     by_type = {row[0]: row[1] for row in type_result.all()}
 
     priority_result = await db.execute(
         select(WorkOrder.priority, func.count())
-        .where(WorkOrder.is_deleted == False)  # noqa: E712
+        .where(base_where)
         .group_by(WorkOrder.priority)
     )
     by_priority = {row[0]: row[1] for row in priority_result.all()}
@@ -273,3 +283,21 @@ async def get_work_order_by_no(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def count_open_fault_work_orders(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+) -> int:
+    """统计设备未关闭的故障维修工单数"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.order_type == "故障维修",
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0

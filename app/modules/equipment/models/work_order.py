@@ -42,7 +42,7 @@ class WorkOrder(BaseModel):
             name="uq_work_orders_work_order_no",
         ),
         CheckConstraint(
-            "order_type IN ('故障维修', '计划维护', '巡检', '校准', '异常处理', '日常维护')",
+            "order_type IN ('故障维修', '计划维护', '校准', '异常处理', '日常维护')",
             name="ck_work_orders_order_type",
         ),
         CheckConstraint(
@@ -68,7 +68,7 @@ class WorkOrder(BaseModel):
         comment="设备ID",
     )
     order_type: Mapped[str] = mapped_column(
-        String(20), comment="工单类型：故障维修/计划维护/巡检/校准/异常处理/日常维护"
+        String(20), comment="工单类型：故障维修/计划维护/校准/异常处理/日常维护"
     )
     responsible_person_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("identity.users.id"),

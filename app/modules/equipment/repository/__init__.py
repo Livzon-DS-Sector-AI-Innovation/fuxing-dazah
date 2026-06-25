@@ -100,6 +100,7 @@ from app.modules.equipment.repository.maintenance_plan import (
     create_maintenance_plan,
     delete_maintenance_plan,
     exists_unclosed_work_order_for_plan,
+    get_equipment_ids_by_category,
     get_maintenance_plan_by_id,
     get_maintenance_plans,
     get_maintenance_plans_due,
@@ -141,6 +142,7 @@ from app.modules.equipment.repository.spare_part import (
     update_stock_qty,
 )
 from app.modules.equipment.repository.work_order import (
+    count_open_fault_work_orders,
     count_open_work_orders_by_equipment,
     create_material_consumption,
     create_work_order,
@@ -176,6 +178,7 @@ __all__ = [
     "FailureCodeModel",
     "count_equipments_by_category",
     "count_equipments_by_location",
+    "count_open_fault_work_orders",
     "count_open_work_orders_by_equipment",
     "create_equipment",
     "create_inspection_template",
@@ -207,6 +210,7 @@ __all__ = [
     "get_equipment_categories",
     "get_equipment_category_by_id",
     "get_equipment_category_tree",
+    "get_equipment_ids_by_category",
     "get_equipment_statistics",
     "get_equipments",
     "get_failure_code_by_id",

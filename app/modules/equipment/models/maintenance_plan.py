@@ -20,6 +20,7 @@ from app.shared.base_model import BaseModel
 
 if TYPE_CHECKING:
     from app.modules.equipment.models.equipment import Equipment
+    from app.platform.identity.models import User
 
 
 class MaintenancePlan(BaseModel):
@@ -42,9 +43,14 @@ class MaintenancePlan(BaseModel):
         {"schema": "equipment"},
     )
 
-    equipment_id: Mapped[uuid.UUID] = mapped_column(
+    equipment_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("equipment.equipments.id"),
-        comment="设备ID",
+        nullable=True,
+        comment="设备ID（与 category_id 二选一）",
+    )
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True,
+        comment="设备分类ID（与 equipment_id 二选一）",
     )
     plan_name: Mapped[str] = mapped_column(
         String(200), comment="计划名称"
@@ -66,10 +72,10 @@ class MaintenancePlan(BaseModel):
     next_maintenance_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="下次维护日期"
     )
-    responsible_person_id: Mapped[uuid.UUID | None] = mapped_column(
+    executor_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("identity.users.id"),
         nullable=True,
-        comment="负责人ID",
+        comment="执行人ID",
     )
     maintenance_content: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="维护内容说明"
@@ -91,4 +97,8 @@ class MaintenancePlan(BaseModel):
     equipment: Mapped[Equipment] = relationship(
         "Equipment",
         foreign_keys=[equipment_id],
+    )
+    executor: Mapped[User | None] = relationship(
+        "User",
+        foreign_keys=[executor_id],
     )

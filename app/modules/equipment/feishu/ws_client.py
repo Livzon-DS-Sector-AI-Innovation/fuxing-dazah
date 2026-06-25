@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import ssl
+import uuid
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -225,14 +226,20 @@ async def _handle_binary_message(ws, message: bytes) -> None:
 
             if msg_type == MessageType.EVENT:
                 event = json.loads(frame.payload.decode("utf-8"))
+
+                # ⚠️ 先发送 ACK 再处理事件，避免 AI 分析耗时过长
+                # 导致飞书因收不到 ACK 而重试投递
+                end_ms = int(round(time.time() * 1000))
+                ack_data = _build_ack_frame(frame, end_ms - start_ms)
+                await ws.send(ack_data)
+
                 await _dispatch_event(event)
             else:
                 logger.info("设备机器人 DATA 帧: type=%s", msg_type)
 
-            # 发送 ACK
-            end_ms = int(round(time.time() * 1000))
-            ack_data = _build_ack_frame(frame, end_ms - start_ms)
-            await ws.send(ack_data)
+                end_ms = int(round(time.time() * 1000))
+                ack_data = _build_ack_frame(frame, end_ms - start_ms)
+                await ws.send(ack_data)
 
     except Exception:
         logger.exception(
@@ -243,18 +250,29 @@ async def _handle_binary_message(ws, message: bytes) -> None:
 
 async def _dispatch_event(event: dict) -> None:
     """解析事件并分发给设备模块事件处理器。"""
-    header = event.get("header", {})
-    event_type = header.get("event_type", "")
+    try:
+        header = event.get("header", {})
+        event_type = header.get("event_type", "")
 
-    if not event_type:
-        inner = event.get("event", {})
-        event_type = inner.get("type", event.get("type", ""))
+        if not event_type:
+            inner = event.get("event", {})
+            event_type = inner.get("type", event.get("type", ""))
 
-    if event_type == "im.message.receive_v1":
-        event_data = event.get("event", event)
-        await _handle_message_event(event_data)
-    else:
-        logger.info("设备机器人忽略事件: %s", event_type)
+        logger.debug("设备机器人事件: type=%s, keys=%s", event_type, list(event.keys()))
+
+        if event_type == "im.message.receive_v1":
+            event_data = event.get("event", event)
+            await _handle_message_event(event_data)
+        elif event_type == "card.action.trigger":
+            event_data = event.get("event", event)
+            await _handle_card_action_event(event_data)
+        else:
+            logger.info("设备机器人忽略事件: %s", event_type)
+    except Exception:
+        logger.exception(
+            "设备机器人事件分发失败: type=%s",
+            event.get("header", {}).get("event_type", "?"),
+        )
 
 
 async def _handle_message_event(event_data: dict) -> None:
@@ -281,7 +299,7 @@ async def _handle_message_event(event_data: dict) -> None:
     from app.core.redis import redis_client
 
     dedup_key = f"feishu:msg:{message_id}"
-    is_new = await redis_client.set(dedup_key, "1", ex=120, nx=True)
+    is_new = await redis_client.set(dedup_key, "1", ex=600, nx=True)
     if not is_new:
         logger.info("重复消息已忽略: message_id=%s", message_id)
         return
@@ -320,6 +338,178 @@ async def _handle_message_event(event_data: dict) -> None:
         )
     else:
         logger.info("忽略非图片/文本消息: type=%s", msg_type)
+
+
+async def _handle_card_action_event(event_data: dict) -> None:
+    """处理 card.action.trigger 事件（验收卡片按钮点击）。
+
+    直接在 ws_client 内完成验收逻辑，不委托 handler.py 避免循环 import。
+    """
+    logger.info(
+        "卡片事件原始数据: %s",
+        json.dumps(event_data, ensure_ascii=False)[:800],
+    )
+    try:
+        # 1. 提取用户信息
+        operator = event_data.get("operator", {})
+        open_id = operator.get("open_id", "")
+        user_id = operator.get("user_id", "")
+
+        # 2. 解析 action value（双重 JSON 编码）
+        action = event_data.get("action", {})
+        raw_value = action.get("value", "")
+        payload = {}
+        try:
+            inner = json.loads(raw_value)
+            payload = json.loads(inner) if isinstance(inner, str) else inner
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("无法解析 action value: %s", repr(raw_value)[:300])
+            return
+
+        act = payload.get("action", "")
+        wo_id = payload.get("work_order_id", "")
+        result = payload.get("result", "")
+        logger.info("卡片解析: act=%s, wo=%s, result=%s", act, wo_id, result)
+
+        if act != "verify" or not wo_id or result not in ("合格", "不合格"):
+            logger.warning("无效的卡片 payload: %s", payload)
+            return
+
+        # 3. 卡片事件去重（防止飞书重试导致重复处理）
+        open_message_id = (
+            event_data.get("context", {}).get("open_message_id", "")
+        )
+        from app.core.redis import redis_client
+
+        dedup_key = f"feishu:card:{wo_id}:{result}"
+        if open_message_id:
+            dedup_key = f"feishu:card:{open_message_id}:{result}"
+        is_new = await redis_client.set(dedup_key, "1", ex=300, nx=True)
+        if not is_new:
+            logger.info("重复卡片事件已忽略: wo=%s, result=%s", wo_id, result)
+            return
+
+        # 4. 查找用户 → 执行验收
+        from sqlalchemy import select as sa_select
+
+        from app.core.database import async_session_factory
+        from app.modules.equipment import repository as repo
+        from app.modules.equipment.feishu.notification import send_user_card
+        from app.modules.equipment.schemas import WorkOrderVerify
+        from app.modules.equipment.service.work_order import verify_work_order
+        from app.platform.identity.models import User
+
+        async with async_session_factory() as db:
+            user = None
+            if user_id:
+                row = await db.execute(
+                    sa_select(User).where(
+                        User.feishu_user_id == user_id,
+                        User.is_deleted == False,  # noqa: E712
+                    )
+                )
+                user = row.scalar_one_or_none()
+
+            if not user:
+                await send_user_card(
+                    open_id=open_id,
+                    title="❌ 未找到用户",
+                    receive_id_type="open_id",
+                    content="未找到与您的飞书账号关联的系统用户。",
+                )
+                return
+
+            wo = await repo.get_work_order_by_id(db, uuid.UUID(wo_id))
+            if not wo:
+                await send_user_card(
+                    open_id=open_id,
+                    title="❌ 工单不存在",
+                    receive_id_type="open_id",
+                    content="工单不存在或已删除。",
+                )
+                return
+
+            if wo.status != "待验收":
+                await send_user_card(
+                    open_id=open_id,
+                    title="⚠️ 无法验收",
+                    receive_id_type="open_id",
+                    content=f"工单 **{wo.work_order_no}** 当前为「{wo.status}」，"
+                            "只有「待验收」才可操作。",
+                )
+                return
+
+            label = "验收通过" if result == "合格" else "退回"
+            verify_data = WorkOrderVerify(
+                result=result,  # type: ignore[arg-type]
+                remark=f"通过飞书卡片{label}",
+            )
+            try:
+                await verify_work_order(db, wo.id, user.id, verify_data)
+                await db.commit()
+            except Exception as e:
+                logger.exception("飞书卡片验收失败: %s", e)
+                await send_user_card(
+                    open_id=open_id,
+                    title="❌ 操作失败",
+                    receive_id_type="open_id",
+                    content=f"验收操作失败：{e}",
+                )
+                return
+
+        # 5. 更新原卡片：去掉按钮，显示结果
+        if open_message_id:
+            emoji = "✅" if result == "合格" else "↩️"
+            updated_card = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": f"{emoji} 已{label} - {wo.work_order_no}",
+                    },
+                    "template": "green" if result == "合格" else "red",
+                },
+                "elements": [
+                    {"tag": "markdown", "content": "此工单已处理完毕。"},
+                ],
+            }
+            try:
+                from lark_oapi.api.im.v1 import (
+                    PatchMessageRequest,
+                    PatchMessageRequestBody,
+                )
+
+                from app.modules.equipment.feishu.client import (
+                    get_equipment_feishu_client,
+                    get_equipment_tenant_token,
+                )
+
+                client = await get_equipment_feishu_client()
+                token = await get_equipment_tenant_token(client)
+                req = (
+                    PatchMessageRequest.builder()
+                    .message_id(open_message_id)
+                    .request_body(
+                        PatchMessageRequestBody.builder()
+                        .content(json.dumps(updated_card, ensure_ascii=False))
+                        .build()
+                    )
+                    .build()
+                )
+                req.headers["Authorization"] = f"Bearer {token}"
+                resp = await client.im.v1.message.apatch(req)
+                if resp.success():
+                    logger.info("卡片已更新: msg=%s", open_message_id)
+                else:
+                    logger.warning(
+                        "卡片更新失败: msg=%s, code=%s, msg=%s",
+                        open_message_id, resp.code, resp.msg,
+                    )
+            except Exception:
+                logger.exception("更新卡片消息失败")
+
+    except Exception:
+        logger.exception("处理卡片事件失败")
 
 
 async def _handle_text_command(

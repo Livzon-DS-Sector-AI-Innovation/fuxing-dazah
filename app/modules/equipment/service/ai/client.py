@@ -1,5 +1,7 @@
 """千文 (Qwen) API 客户端 — OpenAI 兼容接口。"""
 
+import os
+
 import httpx
 
 
@@ -8,17 +10,28 @@ class QwenClient:
 
     通过阿里云 DashScope OpenAI 兼容接口调用千文 VL 模型，支持图片理解。
     参考: https://help.aliyun.com/zh/model-studio/qwen-vl-api
+
+    BASE_URL / MODEL / API_KEY 从环境变量读取，支持部署时覆盖，
+    默认值为阿里云 DashScope 千文模型。
     """
 
-    BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    MODEL = "qwen3.7-plus"
-    API_KEY = "sk-a2ef55e9d2904572bb039f51e236a250"
-
-    def __init__(self, timeout: int = 120):
+    def __init__(
+        self,
+        timeout: int = 120,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ):
+        self._base_url = base_url or os.getenv(
+            "EQUIPMENT_AI_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        self._model = model or os.getenv("EQUIPMENT_AI_MODEL", "qwen3.7-plus")
+        self._api_key = api_key or os.getenv("EQUIPMENT_AI_API_KEY", "")
         self._client = httpx.AsyncClient(
-            base_url=self.BASE_URL,
+            base_url=self._base_url,
             headers={
-                "Authorization": f"Bearer {self.API_KEY}",
+                "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
             timeout=timeout,
@@ -42,7 +55,7 @@ class QwenClient:
             temperature: 温度参数
         """
         body: dict = {
-            "model": self.MODEL,
+            "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {
@@ -79,7 +92,7 @@ class QwenClient:
             temperature: 温度参数
         """
         body: dict = {
-            "model": self.MODEL,
+            "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

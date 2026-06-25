@@ -3,17 +3,21 @@
 import logging
 import uuid
 from datetime import date as date_type
-from datetime import datetime, timedelta
+from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment import repository as repo
 from app.modules.equipment.models import MaintenancePlan
 from app.modules.equipment.schemas import (
     MaintenancePlanCreate,
     MaintenancePlanUpdate,
+)
+from app.modules.equipment.service.work_order import (
+    generate_work_order_no,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +72,13 @@ async def create_maintenance_plan(
     data: MaintenancePlanCreate,
 ) -> MaintenancePlan:
     """创建维护计划"""
+    # 校验 equipment_id 和 category_id 互斥（schema 已有，这里做二次保险）
+    if (data.equipment_id is None and data.category_id is None) or \
+       (data.equipment_id is not None and data.category_id is not None):
+        raise AppException(
+            message="equipment_id 和 category_id 必须恰好提供一个"
+        )
+
     plan_data = data.model_dump()
 
     # 自动计算下次维护日期
@@ -78,7 +89,9 @@ async def create_maintenance_plan(
             data.frequency_unit,
         )
 
-    return await repo.create_maintenance_plan(db, plan_data)
+    plan = await repo.create_maintenance_plan(db, plan_data)
+    # 创建后 re-fetch 加载关联数据
+    return await repo.get_maintenance_plan_by_id(db, plan.id)
 
 
 async def get_maintenance_plan_by_id(
@@ -95,6 +108,7 @@ async def get_maintenance_plan_by_id(
 async def get_maintenance_plans(
     db: AsyncSession,
     equipment_id: uuid.UUID | None = None,
+    category_id: uuid.UUID | None = None,
     status: str | None = None,
     keyword: str | None = None,
     page: int = 1,
@@ -104,6 +118,7 @@ async def get_maintenance_plans(
     return await repo.get_maintenance_plans(
         db,
         equipment_id=equipment_id,
+        category_id=category_id,
         status=status,
         keyword=keyword,
         page=page,
@@ -186,94 +201,115 @@ async def generate_due_work_orders(
             skipped_count += 1
             continue
 
-        # 校验设备存在且状态有效
-        equipment = await repo.get_equipment_by_id(db, plan.equipment_id)
-        if not equipment:
-            logger.warning(
-                "维护计划 %s (%s) 的设备不存在或已删除，跳过",
-                plan.id,
-                plan.plan_name,
+        # 确定目标设备列表
+        if plan.category_id:
+            # category 模式：查询分类下所有可用设备
+            equipment_ids = await repo.get_equipment_ids_by_category(
+                db, plan.category_id
             )
+            if not equipment_ids:
+                logger.info(
+                    "维护计划 %s (%s) 的分类下无可用设备，跳过",
+                    plan.id, plan.plan_name,
+                )
+                skipped_count += 1
+                continue
+        elif plan.equipment_id:
+            equipment_ids = [plan.equipment_id]
+        else:
             skipped_count += 1
             continue
 
-        if equipment.status in ("停用", "报废"):
-            logger.info(
-                "维护计划 %s (%s) 的设备状态为 %s，跳过",
-                plan.id,
-                plan.plan_name,
-                equipment.status,
-            )
-            skipped_count += 1
-            continue
-
-        # 检查该计划是否已有未关闭工单（双重保险）
+        # 检查该计划是否已有未关闭工单（提前到循环外，避免 N 次重复查询）
         has_unclosed = await repo.exists_unclosed_work_order_for_plan(
             db, plan.id
         )
         if has_unclosed:
             logger.info(
                 "维护计划 %s (%s) 已有未关闭工单，跳过",
-                plan.id,
-                plan.plan_name,
+                plan.id, plan.plan_name,
             )
             skipped_count += 1
             continue
 
-        # 生成工单（带重试，处理工单号并发冲突）
-        work_order_created = False
-        for attempt in range(_MAX_RETRIES):
-            wo_no = await _generate_work_order_no(db)
-            wo_data: dict[str, object] = {
-                "work_order_no": wo_no,
-                "equipment_id": plan.equipment_id,
-                "order_type": "计划维护",
-                "priority": "中",
-                "status": "待处理",
-                "reporter_id": None,  # 系统自动生成，无报修人
-                "maintenance_plan_id": plan.id,
-                "responsible_person_id": plan.responsible_person_id,
-                "planned_start_date": plan.next_maintenance_date,
-                "original_equipment_status": equipment.status,
-            }
-            try:
-                await repo.create_work_order(db, wo_data)
-                # 更新计划的 last_generated_date 防重
-                plan.last_generated_date = plan.next_maintenance_date
-                await db.flush()
+        # 批量查询所有目标设备（避免 N+1）
+        from app.modules.equipment.models.equipment import Equipment
 
-                created_count += 1
-                work_order_created = True
+        eq_result = await db.execute(
+            select(Equipment).where(
+                Equipment.id.in_(equipment_ids),
+                Equipment.is_deleted == False,  # noqa: E712
+            )
+        )
+        eq_map = {e.id: e for e in eq_result.scalars().all()}
+
+        any_created = False
+        for eq_id in equipment_ids:
+            equipment = eq_map.get(eq_id)
+            if not equipment:
+                logger.warning(
+                    "维护计划 %s (%s) 的设备 %s 不存在或已删除，跳过",
+                    plan.id, plan.plan_name, eq_id,
+                )
+                continue
+
+            if equipment.status in ("停用", "报废"):
                 logger.info(
-                    "自动生成工单 %s (计划=%s, 设备=%s)",
-                    wo_no,
-                    plan.plan_name,
-                    equipment.name,
+                    "维护计划 %s (%s) 的设备 %s 状态为 %s，跳过",
+                    plan.id, plan.plan_name, equipment.name, equipment.status,
                 )
-                break
-            except IntegrityError:
-                if attempt < _MAX_RETRIES - 1:
-                    await db.rollback()
-                    continue
-                logger.error(
-                    "维护计划 %s 工单号生成失败（重试 %d 次后放弃）",
-                    plan.id,
-                    _MAX_RETRIES,
-                )
+                continue
 
-        if not work_order_created:
+            # 生成工单（带重试，使用 SAVEPOINT 避免并发冲突时
+            # 回滚同一事务中已创建的其他设备工单）
+            for attempt in range(_MAX_RETRIES):
+                wo_no = await generate_work_order_no(db)
+                wo_data: dict[str, object] = {
+                    "work_order_no": wo_no,
+                    "equipment_id": eq_id,
+                    "order_type": "计划维护",
+                    "priority": "中",
+                    "status": "待处理",
+                    "reporter_id": None,  # 系统自动生成，无报修人
+                    "maintenance_plan_id": plan.id,
+                    "responsible_person_id": plan.executor_id,
+                    "planned_start_date": plan.next_maintenance_date,
+                    "original_equipment_status": equipment.status,
+                }
+                try:
+                    async with db.begin_nested():
+                        await repo.create_work_order(db, wo_data)
+                    created_count += 1
+                    any_created = True
+                    logger.info(
+                        "自动生成工单 %s (计划=%s, 设备=%s)",
+                        wo_no,
+                        plan.plan_name,
+                        equipment.name,
+                    )
+                    break
+                except IntegrityError:
+                    if attempt < _MAX_RETRIES - 1:
+                        continue
+                    logger.error(
+                        "维护计划 %s 工单号生成失败（重试 %d 次后放弃）",
+                        plan.id,
+                        _MAX_RETRIES,
+                    )
+
+        if any_created:
+            # 更新 last_generated_date 防重
+            plan.last_generated_date = plan.next_maintenance_date
+            # 分类计划在此推进下次维护日期（设备计划由工单完成时推进）
+            if plan.category_id and plan.next_maintenance_date:
+                plan.next_maintenance_date = _calculate_next_maintenance_date(
+                    plan.next_maintenance_date,
+                    plan.frequency,
+                    plan.frequency_unit,
+                )
+            await db.flush()
+        else:
             skipped_count += 1
 
     return created_count, skipped_count
 
-
-async def _generate_work_order_no(db: AsyncSession) -> str:
-    """生成工单号：WO-{yyyyMMdd}-{seq:04d}（scheduler 内部使用）"""
-    max_no = await repo.get_max_work_order_no(db)
-    today = datetime.now().strftime("%Y%m%d")
-    if max_no:
-        seq_str = max_no.split("-")[-1]
-        seq = int(seq_str) + 1
-    else:
-        seq = 1
-    return f"WO-{today}-{seq:04d}"

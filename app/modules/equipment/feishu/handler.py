@@ -1,4 +1,4 @@
-"""设备模块飞书事件处理器 — 巡检交互专用。
+"""设备模块飞书事件处理器 — 巡检交互 + 验收卡片回调。
 
 在 WebSocket 线程中同步调用，
 通过 asyncio.run_coroutine_threadsafe 桥接到主 async event loop。
@@ -8,9 +8,13 @@
 import asyncio
 import json
 import logging
+import uuid
 
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
+from lark_oapi.api.im.v1 import (
+    P2CardActionTriggerV1,
+    P2ImMessageReceiveV1,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,7 @@ def build_equipment_event_handler() -> lark.EventDispatcherHandler:
     return (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(_on_message_receive)
+        .register_p2_card_action_trigger_v1(_on_card_action)
         .build()
     )
 
@@ -97,7 +102,7 @@ async def _handle_message_async(
     from app.core.redis import redis_client
 
     dedup_key = f"feishu:msg:{message_id}"
-    is_new = await redis_client.set(dedup_key, "1", ex=120, nx=True)
+    is_new = await redis_client.set(dedup_key, "1", ex=600, nx=True)
     if not is_new:
         logger.info("重复消息已忽略: message_id=%s", message_id)
         return
@@ -181,3 +186,142 @@ async def _handle_text_message(
     )
 
     await process_feishu_text(open_id, text)
+
+
+def _on_card_action(data: P2CardActionTriggerV1) -> None:
+    """卡片按钮点击事件（同步入口，在 WS 线程中调用）。"""
+    event = data.event
+    if not event:
+        return
+
+    action_value = getattr(event, "action_value", None) or ""
+    open_id = ""
+    user_id = ""
+    if event.operator:
+        open_id = event.operator.open_id or ""
+        user_id = event.operator.user_id or ""
+
+    logger.info(
+        "卡片按钮点击: user_id=%s, value=%s", user_id, action_value,
+    )
+
+    if _main_loop is None:
+        logger.error("主 event loop 未设置")
+        return
+
+    future = asyncio.run_coroutine_threadsafe(
+        _handle_card_action_async(
+            action_value=action_value,
+            open_id=open_id,
+            user_id=user_id,
+        ),
+        _main_loop,
+    )
+    try:
+        future.result(timeout=30)
+    except Exception:
+        logger.exception("异步处理卡片回调超时或异常")
+
+
+async def _handle_card_action_async(
+    *,
+    action_value: str,
+    open_id: str,
+    user_id: str,
+) -> None:
+    """处理验收卡片按钮点击。"""
+    if _main_loop is None:
+        set_main_loop(asyncio.get_running_loop())
+
+    try:
+        payload = json.loads(action_value)
+    except (json.JSONDecodeError, TypeError):
+        logger.error("无法解析卡片 action value: %s", action_value)
+        return
+
+    action = payload.get("action")
+    work_order_id = payload.get("work_order_id")
+    result = payload.get("result")
+
+    if action != "verify" or not work_order_id or result not in ("合格", "不合格"):
+        logger.error("无效的卡片 action: %s", payload)
+        return
+
+    from sqlalchemy import select as sa_select
+
+    from app.core.database import async_session_factory
+    from app.modules.equipment import repository as repo
+    from app.modules.equipment.feishu.notification import send_user_card
+    from app.modules.equipment.schemas import WorkOrderVerify
+    from app.modules.equipment.service.work_order import verify_work_order
+    from app.platform.identity.models import User
+
+    async with async_session_factory() as db:
+        # 查找操作用户
+        user = None
+        if user_id:
+            result_ = await db.execute(
+                sa_select(User).where(
+                    User.feishu_user_id == user_id,
+                    User.is_deleted == False,  # noqa: E712
+                )
+            )
+            user = result_.scalar_one_or_none()
+
+        if not user:
+            await send_user_card(
+                open_id=open_id,
+                title="❌ 未找到用户",
+                receive_id_type="open_id",
+                content="未找到与您的飞书账号关联的系统用户，无法执行验收操作。",
+            )
+            return
+
+        wo = await repo.get_work_order_by_id(db, uuid.UUID(work_order_id))
+        if not wo:
+            await send_user_card(
+                open_id=open_id,
+                title="❌ 工单不存在",
+                receive_id_type="open_id",
+                content=f"工单 {work_order_id} 不存在或已删除。",
+            )
+            return
+
+        if wo.status != "待验收":
+            await send_user_card(
+                open_id=open_id,
+                title="⚠️ 无法验收",
+                receive_id_type="open_id",
+                content=f"工单 **{wo.work_order_no}** 当前状态为「{wo.status}」，"
+                        "只有「待验收」的工单才能验收。",
+            )
+            return
+
+        label = "验收通过" if result == "合格" else "退回"
+        try:
+            verify_data = WorkOrderVerify(
+                result=result,  # type: ignore[arg-type]
+                remark=f"通过飞书卡片{label}",
+            )
+            await verify_work_order(db, wo.id, user.id, verify_data)
+            await db.commit()
+        except Exception as e:
+            logger.exception("飞书卡片验收失败: %s", e)
+            await send_user_card(
+                open_id=open_id,
+                title="❌ 操作失败",
+                receive_id_type="open_id",
+                content=f"验收操作失败：{e}",
+            )
+            return
+
+    await send_user_card(
+        open_id=open_id,
+        title=f"✅ {label}",
+        receive_id_type="open_id",
+        content=(
+            f"工单 **{wo.work_order_no}**"
+            f"（{wo.equipment.name if wo.equipment else ''}）\n"
+            f"已{label}。"
+        ),
+    )

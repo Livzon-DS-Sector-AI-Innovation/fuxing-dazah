@@ -4,12 +4,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import service
+from app.modules.equipment.models.equipment import EquipmentCategory
 from app.modules.equipment.schemas import (
     MaintenancePlanCreate,
     MaintenancePlanResponse,
@@ -19,6 +21,35 @@ from app.modules.equipment.schemas import (
 router = APIRouter()
 
 
+async def _fetch_category_names(
+    db: AsyncSession,
+    cat_ids: list[uuid.UUID],
+) -> dict[str, str]:
+    """批量查询分类名称，返回 {id_str: name} 映射。"""
+    if not cat_ids:
+        return {}
+    result = await db.execute(
+        select(EquipmentCategory.id, EquipmentCategory.name).where(
+            EquipmentCategory.id.in_(cat_ids),
+            EquipmentCategory.is_deleted == False,  # noqa: E712
+        )
+    )
+    return {str(row[0]): row[1] for row in result.all()}
+
+
+def _enrich_plan(plan, category_names: dict[str, str]) -> MaintenancePlanResponse:
+    """填充维护计划响应的关联名称"""
+    resp = MaintenancePlanResponse.model_validate(plan)
+    if plan.equipment:
+        resp.equipment_name = plan.equipment.name
+        resp.equipment_no = plan.equipment.equipment_no
+    if plan.executor:
+        resp.executor_name = plan.executor.name
+    if plan.category_id and str(plan.category_id) in category_names:
+        resp.category_name = category_names[str(plan.category_id)]
+    return resp
+
+
 @router.post("/", summary="新增维护计划")
 async def create_maintenance_plan(
     data: MaintenancePlanCreate,
@@ -26,12 +57,15 @@ async def create_maintenance_plan(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     plan = await service.create_maintenance_plan(db, data)
-    return success_response(data=MaintenancePlanResponse.model_validate(plan))
+    cat_ids = [plan.category_id] if plan.category_id else []
+    category_names = await _fetch_category_names(db, cat_ids)
+    return success_response(data=_enrich_plan(plan, category_names))
 
 
 @router.get("/", summary="维护计划列表")
 async def list_maintenance_plans(
     equipment_id: uuid.UUID | None = Query(None, description="设备ID"),
+    category_id: uuid.UUID | None = Query(None, description="分类ID"),
     status: str | None = Query(None, description="状态"),
     keyword: str | None = Query(None, description="关键词搜索"),
     page: int = Query(1, ge=1, description="页码"),
@@ -39,11 +73,15 @@ async def list_maintenance_plans(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     plans, total = await service.get_maintenance_plans(
-        db, equipment_id=equipment_id, status=status,
-        keyword=keyword, page=page, page_size=page_size,
+        db, equipment_id=equipment_id, category_id=category_id,
+        status=status, keyword=keyword, page=page, page_size=page_size,
     )
+    # 批量查询分类名称
+    cat_ids = [p.category_id for p in plans if p.category_id]
+    category_names = await _fetch_category_names(db, cat_ids)
+
     return paginated_response(
-        data=[MaintenancePlanResponse.model_validate(p) for p in plans],
+        data=[_enrich_plan(p, category_names) for p in plans],
         page=page, page_size=page_size, total=total,
     )
 
@@ -54,8 +92,10 @@ async def get_overdue_plans(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     plans = await service.get_overdue_maintenance_plans(db, days)
+    cat_ids = [p.category_id for p in plans if p.category_id]
+    category_names = await _fetch_category_names(db, cat_ids)
     return success_response(
-        data=[MaintenancePlanResponse.model_validate(p) for p in plans]
+        data=[_enrich_plan(p, category_names) for p in plans]
     )
 
 
@@ -65,7 +105,9 @@ async def get_maintenance_plan(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     plan = await service.get_maintenance_plan_by_id(db, plan_id)
-    return success_response(data=MaintenancePlanResponse.model_validate(plan))
+    cat_ids = [plan.category_id] if plan.category_id else []
+    category_names = await _fetch_category_names(db, cat_ids)
+    return success_response(data=_enrich_plan(plan, category_names))
 
 
 @router.put("/{plan_id}", summary="修改维护计划")
@@ -76,7 +118,9 @@ async def update_maintenance_plan(
     current_user: CurrentUser = None,
 ) -> JSONResponse:
     plan = await service.update_maintenance_plan(db, plan_id, data)
-    return success_response(data=MaintenancePlanResponse.model_validate(plan))
+    cat_ids = [plan.category_id] if plan.category_id else []
+    category_names = await _fetch_category_names(db, cat_ids)
+    return success_response(data=_enrich_plan(plan, category_names))
 
 
 @router.delete("/{plan_id}", summary="删除维护计划")

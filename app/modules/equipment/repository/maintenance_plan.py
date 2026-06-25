@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modules.equipment.models import MaintenancePlan
 
@@ -27,7 +28,12 @@ async def get_maintenance_plan_by_id(
 ) -> MaintenancePlan | None:
     """根据ID获取维护计划"""
     result = await db.execute(
-        select(MaintenancePlan).where(
+        select(MaintenancePlan)
+        .options(
+            selectinload(MaintenancePlan.equipment),
+            selectinload(MaintenancePlan.executor),
+        )
+        .where(
             MaintenancePlan.id == plan_id,
             MaintenancePlan.is_deleted == False,  # noqa: E712
         )
@@ -38,17 +44,25 @@ async def get_maintenance_plan_by_id(
 async def get_maintenance_plans(
     db: AsyncSession,
     equipment_id: uuid.UUID | None = None,
+    category_id: uuid.UUID | None = None,
     status: str | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[MaintenancePlan], int]:
     """获取维护计划列表"""
-    query = select(MaintenancePlan).where(
-        MaintenancePlan.is_deleted == False  # noqa: E712
+    query = (
+        select(MaintenancePlan)
+        .options(
+            selectinload(MaintenancePlan.equipment),
+            selectinload(MaintenancePlan.executor),
+        )
+        .where(MaintenancePlan.is_deleted == False)  # noqa: E712
     )
     if equipment_id:
         query = query.where(MaintenancePlan.equipment_id == equipment_id)
+    if category_id:
+        query = query.where(MaintenancePlan.category_id == category_id)
     if status:
         query = query.where(MaintenancePlan.status == status)
     if keyword:
@@ -78,8 +92,7 @@ async def update_maintenance_plan(
     for key, value in data.items():
         setattr(plan, key, value)
     await db.flush()
-    await db.refresh(plan)
-    return plan
+    return await get_maintenance_plan_by_id(db, plan_id)
 
 
 async def delete_maintenance_plan(
@@ -102,6 +115,10 @@ async def get_maintenance_plans_due(
     """查询到期/逾期的维护计划"""
     result = await db.execute(
         select(MaintenancePlan)
+        .options(
+            selectinload(MaintenancePlan.equipment),
+            selectinload(MaintenancePlan.executor),
+        )
         .where(
             MaintenancePlan.is_deleted == False,  # noqa: E712
             MaintenancePlan.status == "启用",
@@ -129,3 +146,29 @@ async def exists_unclosed_work_order_for_plan(
         )
     )
     return (result.scalar() or 0) > 0
+
+
+async def get_equipment_ids_by_category(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """获取某分类下所有非停用/报废设备的ID列表"""
+    from app.modules.equipment.models.equipment import (
+        Equipment,
+        EquipmentCategoryLink,
+    )
+
+    result = await db.execute(
+        select(Equipment.id)
+        .join(
+            EquipmentCategoryLink,
+            EquipmentCategoryLink.equipment_id == Equipment.id,
+        )
+        .where(
+            EquipmentCategoryLink.category_id == category_id,
+            EquipmentCategoryLink.is_deleted == False,  # noqa: E712
+            Equipment.is_deleted == False,  # noqa: E712
+            Equipment.status.notin_(["停用", "报废"]),
+        )
+    )
+    return [row[0] for row in result.all()]
