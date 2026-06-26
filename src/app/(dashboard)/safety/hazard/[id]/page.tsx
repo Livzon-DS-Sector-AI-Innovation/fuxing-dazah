@@ -17,7 +17,12 @@ import {
   Flex,
   Upload,
   Avatar,
+  Tag,
+  Radio,
+  Timeline,
 } from 'antd'
+
+const { Paragraph } = Typography
 import {
   ArrowLeftOutlined,
   CheckCircleOutlined,
@@ -33,8 +38,10 @@ import {
   CameraOutlined,
   InboxOutlined,
   SendOutlined,
+  ReloadOutlined,
+  SyncOutlined,
 } from '@ant-design/icons'
-import { getHazard, updateHazard, replyRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer } from '@/actions/safety'
+import { getHazard, updateHazard, replyRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer, notifyRectification, triggerRectificationReview, verifyLevel } from '@/actions/safety'
 import type { HazardReport } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -43,20 +50,19 @@ import {
   INSPECTION_CATEGORY_OPTIONS,
   RECTIFICATION_STATUS_OPTIONS,
   INSPECTOR_DEPARTMENT_OPTIONS,
+  VERIFY_LEVEL_OPTIONS,
+  VERIFY_LEVEL_STATUS_OPTIONS,
 } from '@/types/safety'
-import HazardVerifyModal from '@/components/safety/HazardVerifyModal'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
 const { TextArea } = Input
 
-// ── 后端静态文件基础 URL ──
-const BACKEND_HOST = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1')
-  .replace(/\/api\/v1$/, '')
+import { fileProxyUrl } from '@/lib/file-url'
 
 // ── 解析照片 JSON 数组 → 完整 URL ──
 // 兼容两种格式：
-//   A) 本地路径字符串（平台上传/下载后） → 拼接 BACKEND_HOST
+//   A) 本地路径或 object_key（通过后端代理访问） → 调用 fileProxyUrl
 //   B) Bitable attachment 对象 {file_token, name, url?} → 优先用 url
 function parsePhotos(photos?: string | null): string[] {
   if (!photos) return []
@@ -69,10 +75,10 @@ function parsePhotos(photos?: string | null): string[] {
   }
   return arr
     .map((item): string | null => {
-      // 本地路径字符串
+      // 本地路径或 MinIO object_key
       if (typeof item === 'string') {
         if (item.startsWith('http')) return item
-        return `${BACKEND_HOST}/${item.replace(/^\/+/, '')}`
+        return fileProxyUrl(item)
       }
       // Bitable attachment 对象：优先用预签名 url / tmp_url
       if (typeof item === 'object' && item !== null) {
@@ -164,6 +170,9 @@ const pillWarning = (text: string) => (
 )
 const pillPurple = (text: string) => (
   <StatusPill color="#5645d4" bg="#e6e0f5">{text}</StatusPill>
+)
+const pillProcessing = (text: string) => (
+  <StatusPill color="#0075de" bg="#dcecfa" icon={<SyncOutlined spin />}>{text}</StatusPill>
 )
 
 /** 阶段编号圆点 */
@@ -435,6 +444,8 @@ export default function HazardLedgerDetailPage() {
   const [replySubmitting, setReplySubmitting] = useState(false)
   const [leaderLoading, setLeaderLoading] = useState(false)
   const [notifyLoading, setNotifyLoading] = useState(false)
+  const [aiReviewTriggering, setAiReviewTriggering] = useState(false)
+  const [notifyRectLoading, setNotifyRectLoading] = useState(false)
 
   // ── 人员搜索状态 ──
   interface UserOption { value: string; label: string }
@@ -467,9 +478,6 @@ export default function HazardLedgerDetailPage() {
       }
     }, 300)
   }, [])
-
-  // Modal 状态
-  const [verifyModalVisible, setVerifyModalVisible] = useState(false)
 
   const loadRecord = async () => {
     try {
@@ -569,7 +577,6 @@ export default function HazardLedgerDetailPage() {
 
   // ── 状态判定 ──
   const rStatus = record.rectification_status
-  const isGeneral = record.hazard_level === 'general'
   const v1 = record.verify_level_1_status
   const v2 = record.verify_level_2_status
   const v3 = record.verify_level_3_status
@@ -577,42 +584,265 @@ export default function HazardLedgerDetailPage() {
   const v2Done = v2 === 'approved' || v2 === 'rejected'
   const v3Done = v3 === 'approved' || v3 === 'rejected'
 
+  // 当前待复核级别：仅当整改状态为「已回复」或某级已通过时，尚未复核的
+  // 最低级别才是当前可操作级别。rejected / ai_reviewing 等状态下不应出现复核入口。
   const currentLevel = (() => {
-    if (!rStatus || rStatus === 'pending' || rStatus === 'in_progress') return null
+    if (!rStatus || rStatus === 'pending' || rStatus === 'in_progress' || rStatus === 'rejected' || rStatus === 'ai_reviewing') return null
     if (!v1Done) return 1
-    if (!isGeneral && !v2Done) return 2
-    if (!v3Done) return isGeneral && v2Done ? 3 : (v2Done || isGeneral ? 3 : 2)
+    if (!v2Done) return 2
+    if (!v3Done) return 3
     return null
   })()
 
-  // ── 复核操作按钮（仅用于 section ④）──
-  const renderVerifyAction = () => {
-    if (rStatus === 'replied') {
+  // ── 复核操作（equipment 风格 modal.confirm）──
+  const handleVerify = (level: number) => {
+    const levelLabel = VERIFY_LEVEL_OPTIONS.find((o) => o.value === level)?.label || `第${level}级复核`
+    const refs = { action: 'approved' as string, opinion: '' }
+
+    modal.confirm({
+      title: `${levelLabel}复核`,
+      icon: null,
+      width: 560,
+      content: (
+        <div style={{ marginTop: 16 }}>
+          {/* 隐患摘要 */}
+          <div style={{
+            background: '#faf9f7', padding: 12, borderRadius: 8,
+            marginBottom: 16, fontSize: 13, lineHeight: 1.8,
+          }}>
+            <div><strong>隐患编号：</strong>{record!.hazard_no}</div>
+            <div><strong>隐患描述：</strong>{record!.description}</div>
+            <div><strong>整改回复：</strong>{record!.rectification_reply || '-'}</div>
+          </div>
+
+          {/* 三级复核进度 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {[1, 2, 3].map((l) => {
+                const s = [v1, v2, v3][l - 1]
+                const label = VERIFY_LEVEL_OPTIONS.find((o) => o.value === l)?.label
+                const statusOpt = VERIFY_LEVEL_STATUS_OPTIONS.find((o) => o.value === (s || 'pending'))
+                return (
+                  <Tag key={l} color={statusOpt?.color}>{label}: {statusOpt?.label}</Tag>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* 复核结论 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 12 }}>
+              <Text strong>复核结论</Text>
+            </div>
+            <Radio.Group defaultValue="approved" onChange={(e) => { refs.action = e.target.value }}>
+              <Radio value="approved">✅ 通过</Radio>
+              <Radio value="rejected">❌ 驳回</Radio>
+            </Radio.Group>
+          </div>
+
+          {/* 复核意见 */}
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <Text strong>复核意见（可选）</Text>
+            </div>
+            <TextArea rows={3} placeholder="请填写复核意见" onChange={(e) => { refs.opinion = e.target.value }} />
+          </div>
+        </div>
+      ),
+      okText: '提交复核',
+      cancelText: '取消',
+      onOk: async () => {
+        const res = await verifyLevel(record!.id, {
+          level,
+          action: refs.action as 'approved' | 'rejected',
+          opinion: refs.opinion || undefined,
+        })
+        if (res.code === 200) {
+          message.success(`${levelLabel}复核${refs.action === 'approved' ? '通过' : '驳回'}`)
+          setRecord(res.data!)
+        } else {
+          message.error(res.message || '复核失败')
+          throw new Error(res.message) // 阻止弹窗关闭
+        }
+      },
+    })
+  }
+
+  // ── 飞书通知状态标识 ──
+  const renderNotifyStatus = (
+    notifyStatus: string | null | undefined,
+    notifiedAt: string | null | undefined,
+    notifyError: string | null | undefined,
+  ) => {
+    if (notifyStatus === 'success' && notifiedAt) {
       return (
-        <Button type="primary" icon={<CheckCircleOutlined />} size="middle"
-          onClick={() => setVerifyModalVisible(true)}>
-          部门负责人复核
-        </Button>
+        <span style={{ color: '#1aae39', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <CheckCircleOutlined style={{ fontSize: 12 }} />
+          已通知 {fmtDate(notifiedAt, 'YYYY-MM-DD HH:mm')}
+        </span>
       )
     }
-    if (rStatus === 'level1_approved') {
-      const label = isGeneral ? '检查人员复核' : '分管领导复核'
+    if (notifyStatus === 'failed') {
       return (
-        <Button type="primary" icon={<CheckCircleOutlined />} size="middle"
-          onClick={() => setVerifyModalVisible(true)}>
-          {label}
-        </Button>
+        <span style={{ color: '#e03131', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <ExclamationCircleOutlined style={{ fontSize: 12 }} />
+          通知失败{notifyError ? `：${notifyError}` : ''}
+        </span>
       )
     }
-    if (rStatus === 'level2_approved') {
+    // 从未发送过通知
+    return (
+      <span style={{ color: '#999', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <ExclamationCircleOutlined style={{ fontSize: 12 }} />
+        未通知
+      </span>
+    )
+  }
+
+  // ── AI 初审状态渲染 ──
+  const renderAIReviewStatus = () => {
+    const aiStatus = record?.ai_review_status || 'pending'
+    const aiResult = record?.ai_review_result
+
+    if (aiStatus === 'pending') {
       return (
-        <Button type="primary" icon={<CheckCircleOutlined />} size="middle"
-          onClick={() => setVerifyModalVisible(true)}>
-          检查人员复核
-        </Button>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#8c8c8c', fontSize: 13 }}>
+          <RobotOutlined style={{ fontSize: 14 }} />
+          AI 初审待处理
+        </span>
       )
     }
-    return null
+    if (aiStatus === 'processing') {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#0075de', fontSize: 13 }}>
+          <Spin size="small" />
+          AI 初审中...
+        </span>
+      )
+    }
+    if (aiStatus === 'failed') {
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            background: '#fde0ec', color: '#e03131', fontSize: 12,
+            padding: '2px 10px', borderRadius: 999,
+          }}>
+            <ExclamationCircleOutlined style={{ fontSize: 12 }} />
+            AI 初审失败
+          </span>
+          {record?.ai_error_message && (
+            <Text type="danger" style={{ fontSize: 12 }}>{record.ai_error_message}</Text>
+          )}
+        </span>
+      )
+    }
+    if (aiStatus === 'completed' && aiResult) {
+      const conclusion = aiResult.review_conclusion
+      if (conclusion === '通过') {
+        return (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            background: '#e6f9ee', color: '#1aae39', fontSize: 12,
+            padding: '2px 10px', borderRadius: 999,
+          }}>
+            <CheckCircleOutlined style={{ fontSize: 12 }} />
+            AI 初审通过
+          </span>
+        )
+      }
+      if (conclusion === '不通过') {
+        return (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            background: '#fde0ec', color: '#e03131', fontSize: 12,
+            padding: '2px 10px', borderRadius: 999,
+          }}>
+            <CloseCircleOutlined style={{ fontSize: 12 }} />
+            AI 初审不通过（需重新整改）
+          </span>
+        )
+      }
+    }
+    return (
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        background: '#f0f0f0', color: '#8c8c8c', fontSize: 12,
+        padding: '2px 10px', borderRadius: 999,
+      }}>
+        <RobotOutlined style={{ fontSize: 12 }} />
+        AI 初审
+      </span>
+    )
+  }
+
+  const renderAIReviewDetail = () => {
+    const aiResult = record?.ai_review_result
+    if (!aiResult || record?.ai_review_status !== 'completed') return null
+
+    const levelLabelMap: Record<string, Record<string, string>> = {
+      photo_match_level: { matched: '匹配', partial_match: '部分匹配', unmatched: '不匹配', no_photos: '无照片' },
+      measure_quality_level: { adequate: '合格', basic: '基本合格', inadequate: '不合格' },
+      completeness_level: { full: '完整', partial: '部分', insufficient: '不足' },
+      standard_compliance_level: { compliant: '合规', basically_compliant: '基本合规', non_compliant: '不合规' },
+    }
+
+    const levelColorMap: Record<string, string> = {
+      matched: 'success', adequate: 'success', full: 'success', compliant: 'success',
+      partial_match: 'warning', basic: 'warning', partial: 'warning', basically_compliant: 'warning',
+      unmatched: 'error', no_photos: 'error', inadequate: 'error', insufficient: 'error', non_compliant: 'error',
+    }
+
+    // 维度定义：key → label、icon、及对应的描述文本字段
+    const dims = [
+      { key: 'photo_match_level' as const, descKey: 'photo_match_analysis', label: '图片比对', icon: <CameraOutlined /> },
+      { key: 'measure_quality_level' as const, descKey: 'measure_quality_assessment', label: '措施质量', icon: <ToolOutlined /> },
+      { key: 'completeness_level' as const, descKey: 'completeness_check', label: '完整性', icon: <CheckCircleOutlined /> },
+      { key: 'standard_compliance_level' as const, descKey: 'standard_compliance', label: '标准合规', icon: <FileTextOutlined /> },
+    ]
+
+    return (
+      <div style={{ marginTop: 12 }}>
+        {/* 各维度判定：等级 pill + 详细描述 */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {dims.map(dim => {
+            const level = aiResult[dim.key] as string
+            const label = levelLabelMap[dim.key]?.[level] || level || '—'
+            const color = levelColorMap[level] || 'default'
+            const description = (aiResult as Record<string, unknown>)[dim.descKey] as string | undefined
+
+            return (
+              <div key={dim.key} style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: '#fafaf9',
+                border: '1px solid #ede9e4',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: description ? 6 : 0 }}>
+                  {dim.icon}
+                  <Text style={{ fontSize: 13, fontWeight: 600, color: '#3b3833' }}>{dim.label}</Text>
+                  <Tag style={{ margin: 0, fontSize: 11, lineHeight: '18px' }} color={color}>{label}</Tag>
+                </div>
+                {description && (
+                  <Text style={{ fontSize: 12, color: '#5d5b54', lineHeight: 1.7, display: 'block' }}>
+                    {description}
+                  </Text>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {aiResult.confidence != null && (
+          <div style={{ marginTop: 10, textAlign: 'center' }}>
+            <Text style={{ fontSize: 12, color: '#8c8c8c' }}>AI 置信度 </Text>
+            <Text style={{ fontSize: 13, fontWeight: 600 }}>
+              {Math.round(aiResult.confidence * 100)}%
+            </Text>
+          </div>
+        )}
+      </div>
+    )
   }
 
   // ── 整改回复提交 ──
@@ -696,6 +926,7 @@ export default function HazardLedgerDetailPage() {
     if (rStatus === 'rejected') return pillError(label)
     if (rStatus === 'replied' || rStatus === 'level1_approved' || rStatus === 'level2_approved')
       return pillInfo(label)
+    if (rStatus === 'ai_reviewing') return pillProcessing(label)
     if (rStatus === 'in_progress') return pillWarning(label)
     return pillNeutral(label)
   }
@@ -716,71 +947,138 @@ export default function HazardLedgerDetailPage() {
     rectification: parsePhotos(record.rectification_photos),
   }
 
-  // ── 复核卡片渲染 ──
-  const reviewCard = (
-    _level: number,
-    label: string,
-    status: string | undefined,
-    isCurrent: boolean,
-  ) => {
-    const done = status === 'approved' || status === 'rejected'
-    const approved = status === 'approved'
-    const rejected = status === 'rejected'
+  // ── 复核流程 Timeline ──
+  // 参照 equipment 模块 WorkOrderDetailDrawer 的 Timeline 交互模式
+  const buildReviewTimelineItems = () => {
+    const items: Array<{ color: string; dot: React.ReactNode; children: React.ReactNode }> = []
 
-    let cardBg = '#fafaf9'
-    let cardBorder = '#e5e3df'
-    let dotColor = '#c8c4be'
-    let statusText = '未开始'
-    let statusColor = '#787671'
-    let statusBg = '#f0eeec'
+    // ── AI 初审 ──
+    const aiStatus = record.ai_review_status || 'pending'
+    const aiResult = record.ai_review_result
+    let aiColor = '#c8c4be'
+    let aiDot: React.ReactNode = <RobotOutlined style={{ fontSize: 14 }} />
 
-    if (approved) {
-      cardBg = '#f6ffed'; cardBorder = '#b7eb8f'; dotColor = '#1aae39'
-      statusText = '已同意'; statusColor = '#1aae39'; statusBg = '#d9f3e1'
-    } else if (rejected) {
-      cardBg = '#fff2f0'; cardBorder = '#ffccc7'; dotColor = '#e03131'
-      statusText = '已驳回'; statusColor = '#e03131'; statusBg = '#fde0ec'
-    } else if (isCurrent) {
-      cardBg = '#f0f7ff'; cardBorder = '#1677ff'; dotColor = '#1677ff'
-      statusText = '待复核'; statusColor = '#0075de'; statusBg = '#dcecfa'
+    if (aiStatus === 'completed' && aiResult?.review_conclusion === '通过') {
+      aiColor = '#1aae39'
+      aiDot = <CheckCircleOutlined style={{ fontSize: 14 }} />
+    } else if (aiStatus === 'completed' && aiResult?.review_conclusion === '不通过') {
+      aiColor = '#e03131'
+      aiDot = <CloseCircleOutlined style={{ fontSize: 14 }} />
+    } else if (aiStatus === 'processing') {
+      aiColor = '#0075de'
+      aiDot = <SyncOutlined spin style={{ fontSize: 14 }} />
+    } else if (aiStatus === 'failed') {
+      aiColor = '#e03131'
+      aiDot = <ExclamationCircleOutlined style={{ fontSize: 14 }} />
     }
 
-    return (
-      <div
-        style={{
-          flex: '1 1 200px',
-          minWidth: 200,
-          background: cardBg,
-          border: `1.5px solid ${cardBorder}`,
-          borderRadius: 12,
-          padding: '18px 16px',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 8,
-          transition: 'all 0.2s ease',
-          boxShadow: isCurrent ? '0 0 0 2px rgba(22,119,255,0.15)' : undefined,
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = 'translateY(-2px)'
-          e.currentTarget.style.boxShadow = isCurrent
-            ? '0 0 0 2px rgba(22,119,255,0.2), rgba(15,15,15,0.08) 0px 4px 12px 0px'
-            : 'rgba(15,15,15,0.08) 0px 4px 12px 0px'
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = 'none'
-          e.currentTarget.style.boxShadow = isCurrent ? '0 0 0 2px rgba(22,119,255,0.15)' : 'none'
-        }}
-      >
-        {/* 状态圆点 */}
-        <div style={{ width: 14, height: 14, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        {/* 状态标签 */}
-        <StatusPill color={statusColor} bg={statusBg}>{statusText}</StatusPill>
-        {/* 角色名称 */}
-        <Text strong style={{ fontSize: 14, color: '#1a1a1a' }}>{label}</Text>
-        {!done && isCurrent && <Text style={{ fontSize: 12, color: '#1677ff' }}>等待复核</Text>}
-      </div>
-    )
+    items.push({
+      color: aiColor,
+      dot: aiDot,
+      children: (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text strong style={{ fontSize: 14 }}>AI 初审</Text>
+              {renderAIReviewStatus()}
+            </div>
+            {(aiStatus === 'failed') && (
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                loading={aiReviewTriggering}
+                onClick={async () => {
+                  setAiReviewTriggering(true)
+                  try {
+                    const res = await triggerRectificationReview(id)
+                    if (res.code === 200) {
+                      message.success(res.message || 'AI 初审已触发')
+                      const updated = await getHazard(id)
+                      if (updated?.data) setRecord(updated.data)
+                    } else {
+                      message.error(res.message || '触发失败')
+                    }
+                  } catch {
+                    message.error('触发 AI 初审失败')
+                  } finally {
+                    setAiReviewTriggering(false)
+                  }
+                }}
+              >
+                重试
+              </Button>
+            )}
+          </div>
+          {renderAIReviewDetail()}
+        </div>
+      ),
+    })
+
+    // ── 三级人工复核 ──
+    const levelConfigs = [
+      { level: 1, label: '部门负责人复核', status: v1 },
+      { level: 2, label: '分管领导复核', status: v2 },
+      { level: 3, label: '检查人员复核', status: v3 },
+    ]
+
+    levelConfigs.forEach(({ level, label, status }) => {
+      const isCurrent = currentLevel === level
+      const isApproved = status === 'approved'
+      const isRejected = status === 'rejected'
+
+      let color = '#c8c4be'
+      let dot: React.ReactNode = (
+        <span style={{
+          display: 'inline-flex', width: 24, height: 24, borderRadius: '50%',
+          background: '#f0eeec', color: '#787671',
+          alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, fontWeight: 700,
+        }}>
+          {level}
+        </span>
+      )
+
+      if (isApproved) {
+        color = '#1aae39'
+        dot = <CheckCircleOutlined style={{ fontSize: 16 }} />
+      } else if (isRejected) {
+        color = '#e03131'
+        dot = <CloseCircleOutlined style={{ fontSize: 16 }} />
+      } else if (isCurrent) {
+        color = '#1677ff'
+        dot = <ClockCircleOutlined style={{ fontSize: 16 }} />
+      }
+
+      let statusTag: React.ReactNode = <StatusPill color="#787671" bg="#f0eeec">待开始</StatusPill>
+      if (isApproved) statusTag = pillSuccess('已通过')
+      else if (isRejected) statusTag = pillError('已驳回')
+      else if (isCurrent) statusTag = pillInfo('待复核')
+
+      items.push({
+        color,
+        dot,
+        children: (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text strong style={{ fontSize: 14 }}>{label}</Text>
+              {statusTag}
+            </div>
+            {isCurrent && (
+              <Button
+                type="primary"
+                size="small"
+                icon={<CheckCircleOutlined />}
+                onClick={() => handleVerify(level)}
+              >
+                复核
+              </Button>
+            )}
+          </div>
+        ),
+      })
+    })
+
+    return items
   }
 
   // ── 隐患级别 pill ──
@@ -1103,7 +1401,37 @@ export default function HazardLedgerDetailPage() {
               icon={<ToolOutlined />}
               title="整改回复"
               statusPill={stage3Pill}
-              extra={<EditButton editing={editSection === 'rectification'} loading={saving} onEdit={() => handleEdit('rectification')} onCancel={handleCancelEdit} onSave={handleSave} />}
+              extra={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  {renderNotifyStatus(record.rectification_notify_status, record.rectification_notified_at, record.rectification_notify_error)}
+                  <Button
+                    icon={<SendOutlined />}
+                    size="small"
+                    loading={notifyRectLoading}
+                    onClick={async () => {
+                      setNotifyRectLoading(true)
+                      try {
+                        const res = await notifyRectification(id)
+                        if (res.code === 200) {
+                          message.success(res.message || '飞书通知已发送')
+                          // 刷新数据以展示通知状态
+                          const updated = await getHazard(id)
+                          if (updated?.data) setRecord(updated.data)
+                        } else {
+                          message.error(res.message || '发送失败')
+                        }
+                      } catch {
+                        message.error('发送失败，请稍后重试')
+                      } finally {
+                        setNotifyRectLoading(false)
+                      }
+                    }}
+                  >
+                    飞书通知
+                  </Button>
+                  <EditButton editing={editSection === 'rectification'} loading={saving} onEdit={() => handleEdit('rectification')} onCancel={handleCancelEdit} onSave={handleSave} />
+                </div>
+              }
             />
 
             {editSection === 'rectification' ? (
@@ -1228,12 +1556,78 @@ export default function HazardLedgerDetailPage() {
                   </div>
                 )}
                 {rStatus === 'rejected' && (
-                  <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #ede9e4', display: 'flex', justifyContent: 'center' }}>
-                    <Button danger icon={<EditOutlined />} size="middle"
-                      onClick={() => handleEdit('rectification')}>
-                      重新整改
-                    </Button>
-                  </div>
+                  <>
+                    {/* AI 初审驳回原因：展示具体不通过的维度，帮助责任人了解需改进方向 */}
+                    {record?.ai_review_status === 'completed' && record?.ai_review_result?.review_conclusion === '不通过' && (
+                      <div style={{
+                        marginTop: 16, padding: 12,
+                        background: '#fff2f0', borderRadius: 8,
+                        border: '1px solid #ffccc7',
+                      }}>
+                        <Text style={{ fontSize: 13, fontWeight: 600, color: '#e03131' }}>
+                          <RobotOutlined style={{ marginRight: 4 }} />
+                          AI 初审驳回（不通过）
+                        </Text>
+                        <div style={{ marginTop: 8, fontSize: 13, color: '#5d5b54' }}>
+                          {(() => {
+                            const ar = record.ai_review_result
+                            // 每一项包含：问题描述 + 改进指导
+                            const items: { problem: string; guidance: string }[] = []
+                            if (ar?.photo_match_level === 'no_photos') {
+                              items.push({
+                                problem: '未提供整改后照片',
+                                guidance: '请拍摄整改后的现场照片（同一角度、同一位置），清晰展示缺陷已修复',
+                              })
+                            }
+                            if (ar?.photo_match_level === 'unmatched') {
+                              items.push({
+                                problem: '整改后图片与原始缺陷不符',
+                                guidance: '请确保照片拍摄角度与原始缺陷照片一致，完整覆盖整改区域',
+                              })
+                            }
+                            if (ar?.measure_quality_level === 'inadequate') {
+                              items.push({
+                                problem: '整改措施不合格（空泛/不可操作）',
+                                guidance: '请补充具体的整改措施，包含量化标准、时间节点、责任主体，避免使用「已整改」「已处理」等笼统描述',
+                              })
+                            }
+                            if (ar?.completeness_level === 'insufficient') {
+                              items.push({
+                                problem: '核心问题未得到处理',
+                                guidance: '请对照 AI 识别的关键缺陷逐条回复，确保每项问题都有对应的整改措施',
+                              })
+                            }
+                            if (ar?.standard_compliance_level === 'non_compliant') {
+                              items.push({
+                                problem: '整改措施不符合标准要求',
+                                guidance: '请参照相关法规标准要求，确保整改措施符合规范（可参考上方 AI 审核详情中的法规依据）',
+                              })
+                            }
+                            return items.length > 0 ? items.map((item, i) => (
+                              <div key={i} style={{ marginTop: i > 0 ? 10 : 0 }}>
+                                <div style={{ fontWeight: 600, color: '#3b3833' }}>
+                                  • {item.problem}
+                                </div>
+                                <div style={{
+                                  marginTop: 2, marginLeft: 12, paddingLeft: 8,
+                                  borderLeft: '2px solid #e8c55a',
+                                  color: '#5d5b54', fontSize: 12, lineHeight: 1.7,
+                                }}>
+                                  {item.guidance}
+                                </div>
+                              </div>
+                            )) : <Text style={{ color: '#a4a097' }}>详见上方各维度分析</Text>
+                          })()}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #ede9e4', display: 'flex', justifyContent: 'center' }}>
+                      <Button danger icon={<EditOutlined />} size="middle"
+                        onClick={() => handleEdit('rectification')}>
+                        重新整改
+                      </Button>
+                    </div>
+                  </>
                 )}
               </>
             )}
@@ -1253,63 +1647,53 @@ export default function HazardLedgerDetailPage() {
               title="复核"
               statusPill={rectificationPill}
               extra={
-                currentLevel && (
-                  <Button
-                    icon={<SendOutlined />}
-                    size="small"
-                    loading={notifyLoading}
-                    onClick={async () => {
-                      setNotifyLoading(true)
-                      try {
-                        const res = await notifyReviewer(id)
-                        if (res.code === 200) {
-                          message.success(res.message || '飞书通知已发送')
-                        } else {
-                          message.error(res.message || '发送失败')
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  {renderNotifyStatus(record.review_notify_status, record.review_notified_at, record.review_notify_error)}
+                  {currentLevel && (
+                    <Button
+                      icon={<SendOutlined />}
+                      size="small"
+                      loading={notifyLoading}
+                      onClick={async () => {
+                        setNotifyLoading(true)
+                        try {
+                          const res = await notifyReviewer(id)
+                          if (res.code === 200) {
+                            message.success(res.message || '飞书通知已发送')
+                            const updated = await getHazard(id)
+                            if (updated?.data) setRecord(updated.data)
+                          } else {
+                            message.error(res.message || '发送失败')
+                          }
+                        } catch {
+                          message.error('发送失败，请稍后重试')
+                        } finally {
+                          setNotifyLoading(false)
                         }
-                      } catch {
-                        message.error('发送失败，请稍后重试')
-                      } finally {
-                        setNotifyLoading(false)
-                      }
-                    }}
-                  >
-                    飞书通知
-                  </Button>
-                )
+                      }}
+                    >
+                      飞书通知
+                    </Button>
+                  )}
+                </div>
               }
             />
 
-            <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <Text style={{ fontSize: 13, color: '#5d5b54', marginRight: 8 }}>整改状态</Text>
-              {rectificationPill}
-            </div>
+            {/* ── 四级复核 Timeline（参照 equipment 模块 WorkOrderDetailDrawer）── */}
+            <Timeline
+              items={buildReviewTimelineItems()}
+              style={{ marginTop: 4 }}
+            />
 
-            <Flex gap={16} wrap="wrap" justify="center">
-              {reviewCard(1, '部门负责人复核', v1, currentLevel === 1)}
-              {!isGeneral && reviewCard(2, '分管领导复核', v2, currentLevel === 2)}
-              {reviewCard(3, '检查人员复核', v3, currentLevel === 3)}
-            </Flex>
-
-            {currentLevel && renderVerifyAction() && (
-              <div style={{ textAlign: 'center', marginTop: 24, paddingTop: 16, borderTop: '1px solid #ede9e4' }}>
-                {renderVerifyAction()}
-              </div>
-            )}
+            {/* 已关闭状态 */}
             {!currentLevel && (rStatus === 'completed' || rStatus === 'closed') && (
-              <div style={{ textAlign: 'center', marginTop: 20 }}>{pillSuccess('整改已关闭')}</div>
+              <div style={{ textAlign: 'center', marginTop: 20, paddingTop: 16, borderTop: '1px solid #ede9e4' }}>
+                {pillSuccess('整改已关闭')}
+              </div>
             )}
           </StageCard>
         </div>
       </div>
-
-      {/* ═══════ Modals ═══════ */}
-      <HazardVerifyModal
-        open={verifyModalVisible}
-        record={record}
-        onClose={() => setVerifyModalVisible(false)}
-        onSuccess={(updated) => { setRecord(updated); setVerifyModalVisible(false) }}
-      />
     </div>
   )
 }
