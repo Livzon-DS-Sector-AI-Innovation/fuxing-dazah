@@ -4,15 +4,12 @@ import { useState } from 'react'
 import { Modal, Form, Input, Upload, App, Image } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
 import { replyRectification, reworkRectification, uploadRectificationPhoto } from '@/actions/safety'
+import { fileProxyUrl } from '@/lib/file-url'
 import type { HazardReport } from '@/types/safety'
 import type { UploadFile } from 'antd/es/upload'
 
 const { TextArea } = Input
 const { Dragger } = Upload
-
-// ── 图片后端基础 URL ──
-const BACKEND_HOST = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1')
-  .replace(/\/api\/v1$/, '')
 
 interface Props {
   open: boolean
@@ -40,11 +37,20 @@ export default function HazardRectificationReplyModal({
       const values = await form.validateFields()
       setSubmitting(true)
 
-      // 上传所有待上传的文件
+      // 保留已有照片路径（防止新上传覆盖历史照片导致丢失）
+      const existingUrls: string[] = (() => {
+        if (!record?.rectification_photos) return []
+        try {
+          const parsed = JSON.parse(record.rectification_photos)
+          return Array.isArray(parsed) ? parsed : []
+        } catch { return [] }
+      })()
       const pendingFiles = fileList.filter((f) => !f.url && !f.status)
-      const uploadedUrls: string[] = fileList
-        .filter((f) => f.url)
-        .map((f) => f.url!)
+      // 初始化时包含已有照片，确保不会因只发新路径而覆盖丢失
+      const uploadedUrls: string[] = [
+        ...existingUrls,
+        ...fileList.filter((f) => f.url).map((f) => f.url!),
+      ]
 
       if (pendingFiles.length > 0) {
         setUploading(true)
@@ -55,14 +61,12 @@ export default function HazardRectificationReplyModal({
               file.originFileObj as File
             )
             if (response.code === 200 && response.data) {
-              // 从返回数据中提取 rectification_photos
               const data = response.data as HazardReport
               if (data.rectification_photos) {
-                // 获取最新上传的图片 URL
                 try {
                   const photos = JSON.parse(data.rectification_photos)
                   const lastUrl = Array.isArray(photos) ? photos[photos.length - 1] : null
-                  if (lastUrl) {
+                  if (lastUrl && !uploadedUrls.includes(lastUrl)) {
                     uploadedUrls.push(lastUrl)
                   }
                 } catch { /* ignore parse error */ }
@@ -78,7 +82,7 @@ export default function HazardRectificationReplyModal({
       const data: { reply_content: string; rectification_photos?: string } = {
         reply_content: values.reply_content,
       }
-      // 将上传后的 URL 列表转为 JSON 字符串
+      // 合并已有 + 新上传的照片路径，转为 JSON 字符串提交
       if (uploadedUrls.length > 0) {
         data.rectification_photos = JSON.stringify(uploadedUrls)
       }
@@ -206,7 +210,7 @@ export default function HazardRectificationReplyModal({
                 {existingPhotos.map((url, i) => (
                   <Image
                     key={i}
-                    src={url.startsWith('http') ? url : `${BACKEND_HOST}/${url.replace(/^\/+/, '')}`}
+                    src={fileProxyUrl(url)}
                     alt={`整改照片 ${i + 1}`}
                     width={80}
                     height={80}
