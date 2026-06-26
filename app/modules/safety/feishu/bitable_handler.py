@@ -1042,12 +1042,12 @@ def _compute_rectification_status(
     v3: str | None,
     hazard_level: str | None,
 ) -> str | None:
-    """根据三级复核状态 + 隐患级别计算整体整改状态。
+    """根据三级复核状态计算整体整改状态。
 
     与 SafetyService.verify_level 的状态机逻辑保持一致：
+    所有隐患级别统一走完整四阶段：AI初审 → L1 → L2 → L3
       - 任一驳回 → rejected
       - L3 通过 → closed
-      - 一般隐患 L1 通过 → level2_approved（跳过 L2）
       - L2 通过 → level2_approved
       - L1 通过 → level1_approved
     """
@@ -1055,16 +1055,8 @@ def _compute_rectification_status(
         return "rejected"
     if v3 == "approved":
         return "closed"
-    is_general = hazard_level == "general"
-    if is_general:
-        if v1 == "approved":
-            return "level2_approved"
-    else:
-        if v2 == "approved":
-            return "level2_approved"
-        if v1 == "approved":
-            return "level1_approved"
-    # 只有部分审批（未完成全部流程）
+    if v2 == "approved":
+        return "level2_approved"
     if v1 == "approved":
         return "level1_approved"
     return None
@@ -1258,13 +1250,13 @@ async def _update_hazard_from_bitable(
         and old_rectification_status in ("pending", "in_progress", "rejected")
         and "rectification_status" not in update_data
     ):
-        update_data["rectification_status"] = "replied"
+        update_data["rectification_status"] = "ai_reviewing"
         _debug_log(
             f"UPDATE_STATUS_SET: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
-            f"old_status={old_rectification_status} → replied"
+            f"old_status={old_rectification_status} → ai_reviewing"
         )
         logger.info(
-            "整改回复已提交，状态自动转换: record_id=%s %s → replied",
+            "整改回复已提交，状态自动转换: record_id=%s %s → ai_reviewing",
             record_id, old_rectification_status,
             record_id,
         )
@@ -1287,18 +1279,28 @@ async def _update_hazard_from_bitable(
             f"v1={v1} v2={v2} v3={v3} level={hl} old={old_rectification_status} computed={computed_status} "
             f"mapped_verify_keys={[k for k in mapped if 'verify' in k]}"
         )
+        # 防御性关卡：AI 初审必须已完成，否则不允许从 Bitable 同步复核状态变更。
+        # 防止在 AI 审核未通过/未完成时，通过直接修改 Bitable 审批字段绕过 AI 初审流程。
+        ai_status = getattr(hazard, "ai_review_status", None)
         if computed_status and computed_status != old_rectification_status:
-            update_data["rectification_status"] = computed_status
-            _debug_log(
-                f"UPDATE_COMPUTE_APPLY: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
-                f"{old_rectification_status} → {computed_status}"
-            )
-            if computed_status == "closed":
-                update_data["status"] = "closed"
-            logger.info(
-                "复核状态自动计算: record_id=%s v1=%s v2=%s v3=%s level=%s current=%s → %s",
-                record_id, v1, v2, v3, hl, old_rectification_status, computed_status,
-            )
+            if ai_status != "completed":
+                logger.warning(
+                    "Bitable 复核状态变更被拒绝: record_id=%s AI 初审未完成 (ai_review_status=%s)，"
+                    "不允许同步复核状态 (v1=%s v2=%s v3=%s computed=%s)",
+                    record_id, ai_status, v1, v2, v3, computed_status,
+                )
+            else:
+                update_data["rectification_status"] = computed_status
+                _debug_log(
+                    f"UPDATE_COMPUTE_APPLY: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
+                    f"{old_rectification_status} → {computed_status}"
+                )
+                if computed_status == "closed":
+                    update_data["status"] = "closed"
+                logger.info(
+                    "复核状态自动计算: record_id=%s v1=%s v2=%s v3=%s level=%s current=%s → %s",
+                    record_id, v1, v2, v3, hl, old_rectification_status, computed_status,
+                )
         else:
             _debug_log(
                 f"UPDATE_COMPUTE_SKIP: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
@@ -1358,32 +1360,37 @@ async def _update_hazard_from_bitable(
                 "📬 状态变更触发通知: record_id=%s %s→%s level=%s hazard_no=%s",
                 record_id, old_rectification_status, new_status, hl, hazard.hazard_no,
             )
-            if new_status == "replied":
+            if new_status == "ai_reviewing":
+                # AI 初审中 → 异步触发 AI 审查（不阻塞）
                 _debug_log(
                     f"UPDATE_NOTIFY_DISPATCH: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
-                    f"→ _send_verify_notification(hazard, 1)"
+                    f"→ run_rectification_review(hazard)"
                 )
-                asyncio.create_task(_send_verify_notification(hazard, 1))
+                asyncio.create_task(service.run_rectification_review(hazard.id))
+            elif new_status == "replied":
+                _debug_log(
+                    f"UPDATE_NOTIFY_DISPATCH: record_id={record_id} hazard_no={getattr(hazard, 'hazard_no', '?')} "
+                    f"→ run_rectification_review(hazard)"
+                )
+                asyncio.create_task(service.run_rectification_review(hazard.id))
             elif new_status == "level1_approved":
-                if hl == "general":
-                    asyncio.create_task(_send_verify_notification(hazard, 3))
-                else:
-                    asyncio.create_task(_send_verify_notification(hazard, 2))
+                asyncio.create_task(_send_verify_notification(hazard, 2))
             elif new_status == "level2_approved":
                 asyncio.create_task(_send_verify_notification(hazard, 3))
 
-            # ── 回写整改状态到 Bitable ──
-            try:
-                status_label = _STATUS_TO_BITABLE_LABEL.get(new_status, new_status)
-                _bt = SafetyBitableClient()
-                await _set_sync_ignore(record_id, ttl=30)
-                await _bt.update_record(record_id, {"整改状态": status_label})
-                logger.info(
-                    "整改状态已回写 Bitable: record_id=%s status=%s label=%s",
-                    record_id, new_status, status_label,
-                )
-            except Exception:
-                logger.exception("整改状态回写 Bitable 失败: record_id=%s", record_id)
+            # ── 回写整改状态到 Bitable（跳过 ai_reviewing 中间态，AI 完成后会同步最终状态）──
+            if new_status != "ai_reviewing":
+                try:
+                    status_label = _STATUS_TO_BITABLE_LABEL.get(new_status, new_status)
+                    _bt = SafetyBitableClient()
+                    await _set_sync_ignore(record_id, ttl=30)
+                    await _bt.update_record(record_id, {"整改状态": status_label})
+                    logger.info(
+                        "整改状态已回写 Bitable: record_id=%s status=%s label=%s",
+                        record_id, new_status, status_label,
+                    )
+                except Exception:
+                    logger.exception("整改状态回写 Bitable 失败: record_id=%s", record_id)
 
         return hazard
 

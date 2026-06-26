@@ -9,10 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import delete_object
+from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.feishu.notification import send_user_card
-from app.platform.audit.service import record_audit_log
 from app.modules.safety.models import (
     Accident,
     Contractor,
@@ -39,6 +41,7 @@ from app.modules.safety.schemas import (
     TrainingRecordCreate,
     TrainingRecordUpdate,
 )
+from app.platform.audit.service import record_audit_log
 from app.platform.integrations.ai.client import AIOutputError, AIService
 from app.platform.integrations.ai.document_parser import DocumentParser
 from app.platform.integrations.ai.prompts import (
@@ -95,6 +98,39 @@ class SafetyService:
             )
         except Exception:
             logger.exception("审计日志记录失败 (%s:%s)", resource_type, action)
+
+    @staticmethod
+    def _cleanup_file(file_path: str | None) -> None:
+        """Delete a single file from MinIO or local disk."""
+        if not file_path:
+            return
+        try:
+            if minio_enabled():
+                try:
+                    delete_object("safety", file_path)
+                except Exception:
+                    pass
+            else:
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _cleanup_json_array_files(json_str: str | None) -> None:
+        """Parse a JSON array of file paths and delete each file."""
+        if not json_str:
+            return
+        try:
+            import json as _json
+            paths = _json.loads(json_str)
+            if isinstance(paths, list):
+                for p in paths:
+                    if isinstance(p, str):
+                        SafetyService._cleanup_file(p)
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     # ==================== SafetyCheck Operations ====================
 
@@ -215,9 +251,13 @@ class SafetyService:
         return await self.repo.get_hazard_by_id(hazard_id)
 
     async def create_hazard(
-        self, data: HazardReportCreate, auto_run_ai: bool = True
+        self, data: HazardReportCreate, auto_run_ai: bool = False
     ) -> HazardReport:
-        """创建隐患（hazard_no 留空时自动生成），创建后自动执行 AI 工作流。"""
+        """创建隐患（hazard_no 留空时自动生成）。
+
+        AI 识别不在此处执行——调用方应在图片上传完成后通过
+        run_hazard_ai_script() 手动触发，与 Bitable 同步流程对齐。
+        """
         hazard_data = data.model_dump(exclude_none=True)
         if not hazard_data.get("hazard_no"):
             # 自动生成：HZ-年月日-序号
@@ -240,18 +280,52 @@ class SafetyService:
         await self._audit("create", "hazard_report", resource_id=item.id)
 
         # ── 自动执行 AI 隐患识别（插件：有照片走视觉模型，无照片走文本模型）──
+        # 在 savepoint 内执行，避免 AI 流程中的 DB 错误污染外层事务
         if auto_run_ai:
             logger.info("触发 AI 隐患识别: hazard_id=%s hazard_no=%s", item.id, item.hazard_no)
+            ai_savepoint = await self.session.begin_nested()
             try:
                 item = await self.run_hazard_ai_script(item.id, 1)
+                await ai_savepoint.commit()
                 logger.info(
                     "AI 隐患识别完成: hazard_id=%s type=%s level=%s category=%s error=%s",
                     item.id, item.hazard_type, item.hazard_level,
                     item.hazard_category, item.ai_error_message,
                 )
             except Exception as e:
+                await ai_savepoint.rollback()
                 logger.error(f"AI 隐患识别失败(hazard {item.id}): {e}")
                 # 即使 AI 失败也返回记录，用户可在台账中手动重试
+
+        # ── 自动计算整改期限（discovered_at + 60 天）──
+        # 与 Bitable 同步流程 (_create_hazard_from_bitable) 保持一致
+        if not item.deadline:
+            from datetime import timedelta
+            base_date = item.discovered_at or datetime.now()
+            computed_deadline = base_date + timedelta(days=60)
+            item = await self.repo.update_hazard(item.id, {"deadline": computed_deadline})
+            logger.info("整改期限自动计算: hazard_id=%s deadline=%s", item.id, computed_deadline)
+
+        # ── 自动判定整改责任人（根据责任部门查部门负责人）──
+        # 与 Bitable 同步流程 (_create_hazard_from_bitable) 保持一致
+        if item.department and not item.rectification_responsible_person_name:
+            try:
+                from app.modules.safety.feishu.identity_resolver import IdentityResolver
+                resolver = IdentityResolver(self.session)
+                person = await resolver.resolve_department_leader(item.department)
+                if person and person.name:
+                    item = await self.repo.update_hazard(item.id, {
+                        "rectification_responsible_person": (
+                            uuid.UUID(person.id) if person.id else None
+                        ),
+                        "rectification_responsible_person_name": person.name,
+                    })
+                    logger.info(
+                        "责任人自动判定: dept=%s leader=%s uuid=%s",
+                        item.department, person.name, person.id,
+                    )
+            except Exception:
+                logger.exception("责任人自动判定失败: dept=%s", item.department)
 
         return item
 
@@ -333,12 +407,12 @@ class SafetyService:
         rectification_reply: str | None = None,
         actual_completion_date: datetime | None = None,
     ) -> HazardReport | None:
-        """整改回复：in_progress → replied（合并了原 complete_rectification 步骤）。"""
+        """整改回复：in_progress → ai_reviewing（AI 初审作为复核阶段第一道关卡）。"""
         hazard = await self.repo.get_hazard_by_id(hazard_id)
         if not hazard or hazard.rectification_status not in ("pending", "in_progress"):
             return None
         update_data: dict[str, Any] = {
-            "rectification_status": "replied",
+            "rectification_status": "ai_reviewing",
         }
         # 整改完成时间：优先用传入值，其次保留已有值，最后 fallback 当前时间
         if actual_completion_date:
@@ -357,9 +431,11 @@ class SafetyService:
         if updated:
             await self._audit("reply_rectification", "hazard_report", resource_id=hazard_id)
 
-        # 整改回复后，异步通知一级复核人（部门负责人）
+        # 整改回复后，异步触发 AI 初审（非阻塞），AI 结果将决定后续通知路由
         if updated:
-            asyncio.create_task(_send_verify_notification(updated, 1))
+            asyncio.create_task(
+                self.run_rectification_review(hazard_id)
+            )
 
         return updated
 
@@ -374,31 +450,31 @@ class SafetyService:
     ) -> HazardReport | None:
         """三级复核：按级别审批或驳回。
 
-        一般隐患：仅需一级（部门负责人）+ 三级（隐患发现人），跳过二级。
-        较大/重大隐患：三级全流程。
+        所有隐患级别统一走完整四阶段复核流程：
+        AI初审 → 部门负责人复核(1) → 分管领导复核(2) → 检查人员复核(3)
+        不可逾越，不可跳过。
+
+        一级复核（部门负责人）双重门禁：
+        - rectification_status 必须为 replied（AI 已给出结论）
+        - ai_review_status 必须为 completed（AI 审核已成功完成，不能是 failed/pending/processing）
+        防止 AI 审核异常兜底时流程被错误路由到人工复核。
         """
         hazard = await self.repo.get_hazard_by_id(hazard_id)
         if not hazard:
             return None
 
-        # 判断是否一般隐患（可跳过二级复核）
-        is_general = hazard.hazard_level == "general"
-
-        # 检查当前状态是否允许该级别复核
-        if level == 1 and hazard.rectification_status != "replied":
-            return None
+        # 检查当前状态是否允许该级别复核（严格线性门禁）
+        if level == 1:
+            if hazard.rectification_status != "replied":
+                return None
+            # 防御性关卡：AI 审核必须已完成，防止 AI 异常/失败时流程被错误放行
+            if hazard.ai_review_status != "completed":
+                return None
         if level == 2 and hazard.verify_level_1_status != "approved":
             return None
-        if level == 3:
-            # 一般隐患：一级通过后可直接三级复核
-            if is_general:
-                if hazard.verify_level_1_status != "approved":
-                    return None
-            else:
-                if hazard.verify_level_2_status != "approved":
-                    return None
+        if level == 3 and hazard.verify_level_2_status != "approved":
+            return None
 
-        now = datetime.now()
         if action == "rejected":
             update_data: dict[str, Any] = {
                 "rectification_status": "rejected",
@@ -407,22 +483,15 @@ class SafetyService:
             return await self.repo.update_hazard(hazard_id, update_data)
 
         # action == "approved"
-        if level == 1 and is_general:
-            # 一般隐患：一级通过后自动跳过二级，状态直接到 level2_approved
+        if level == 3:
             update_data: dict[str, Any] = {
-                "rectification_status": "level2_approved",
-                "verify_level_1_status": "approved",
-                "verify_level_2_status": "approved",
-            }
-        elif level == 3:
-            update_data = {
                 "rectification_status": "closed",
                 "status": "closed",
                 "verify_level_3_status": "approved",
             }
         else:
             next_status = f"level{level}_approved"
-            update_data = {
+            update_data: dict[str, Any] = {
                 "rectification_status": next_status,
                 f"verify_level_{level}_status": "approved",
             }
@@ -437,12 +506,8 @@ class SafetyService:
             )
 
         # 审核通过后，异步通知下一级复核人
-        if updated and action == "approved":
-            if level == 1 and is_general:
-                # 一般隐患：跳过二级，直接通知三级
-                asyncio.create_task(_send_verify_notification(updated, 3))
-            elif level < 3:
-                asyncio.create_task(_send_verify_notification(updated, level + 1))
+        if updated and action == "approved" and level < 3:
+            asyncio.create_task(_send_verify_notification(updated, level + 1))
 
         return updated
 
@@ -454,31 +519,41 @@ class SafetyService:
         user_id: uuid.UUID,
         user_name: str,
     ) -> HazardReport | None:
-        """重新整改：rejected → replied，重置所有复核级别"""
+        """重新整改：rejected → ai_reviewing，重置所有复核级别，AI 重新审查"""
         hazard = await self.repo.get_hazard_by_id(hazard_id)
         if not hazard or hazard.rectification_status != "rejected":
             return None
         update_data: dict[str, Any] = {
-            "rectification_status": "replied",
+            "rectification_status": "ai_reviewing",
             "rectification_reply": reply_content,
             "verify_level_1_status": "pending",
             "verify_level_2_status": "pending",
             "verify_level_3_status": "pending",
+            # 重置 AI 初审状态，重新审查
+            "ai_review_status": "pending",
+            "ai_review_result": None,
+            "ai_review_completed_at": None,
         }
         if rectification_photos is not None:
             update_data["rectification_photos"] = rectification_photos
         updated = await self.repo.update_hazard(hazard_id, update_data)
 
-        # 重新整改回复后，异步通知一级复核人
+        # 重新整改回复后，异步触发 AI 初审（非阻塞），AI 结果将决定后续通知路由
         if updated:
-            asyncio.create_task(_send_verify_notification(updated, 1))
+            asyncio.create_task(
+                self.run_rectification_review(hazard_id)
+            )
 
         return updated
 
     async def delete_hazard(self, hazard_id: uuid.UUID) -> bool:
         """删除隐患"""
+        hazard = await self.repo.get_hazard_by_id(hazard_id)
         result = await self.repo.delete_hazard(hazard_id)
         if result:
+            if hazard:
+                self._cleanup_json_array_files(hazard.defect_photos)
+                self._cleanup_json_array_files(hazard.rectification_photos)
             await self._audit("delete", "hazard_report", resource_id=hazard_id)
         return result
 
@@ -532,19 +607,45 @@ class SafetyService:
             defect_photos=image_urls,
         )
 
-        # 根据是否有图片选择 AI 服务
+        # 根据是否有图片选择 AI 服务（在知识加载前创建，供智能卡片选择使用）
         if image_urls:
             ai_service = await self._get_vision_ai_service()
         else:
             ai_service = await self._get_ai_service()
+
+        # 加载法规知识库上下文（savepoint 隔离：知识库查询失败不能污染外层事务）
+        try:
+            from app.modules.safety.knowledge import KnowledgeInjector
+            knowledge_sp = await self.session.begin_nested()
+            try:
+                injector = KnowledgeInjector(self.session)
+                knowledge_context = await injector.build_knowledge_context(
+                    hazard_description=item.description or "",
+                    department=item.department or "",
+                    ai_service=ai_service,
+                    max_cards=5,
+                )
+                await knowledge_sp.commit()
+                logger.info("法规知识库加载完成: len=%d chars", len(knowledge_context))
+            except Exception as e:
+                await knowledge_sp.rollback()
+                logger.warning("法规知识库加载失败，继续不使用知识增强: %s", e)
+                knowledge_context = None
+        except Exception as e:
+            logger.warning("法规知识库加载失败，继续不使用知识增强: %s", e)
+            knowledge_context = None
 
         try:
             config = PluginConfig(
                 temperature=0.05,
                 strict_mode=False,   # 非严格模式：验证警告不阻塞流程
                 enable_vision=bool(image_urls),
+                enable_knowledge=bool(knowledge_context),
             )
-            plugin = AIHazardIdentifier(ai_service, config)
+            plugin = AIHazardIdentifier(
+                ai_service, config,
+                knowledge_context=knowledge_context,
+            )
             output = await plugin.identify(input_data)
 
             # 转换为 dict 供 _map_hazard_ai_output() 使用
@@ -619,6 +720,258 @@ class SafetyService:
                 except Exception as exc:
                     logger.warning("无法读取图片 %s: %s", found_path, exc)
         return urls
+
+    async def _generate_rectification_review(self, item: HazardReport) -> dict:
+        """使用 AIRectificationReviewer 插件执行整改回复 AI 初审。
+
+        插件负责：before/after 图片对比、措施质量评估、完整性检查、标准合规、综合结论。
+        返回 dict 供直接写入 ai_review_result JSONB 字段。
+        """
+
+        from app.modules.safety.ai_rectification_review import (
+            AIRectificationReviewer,
+            RectificationReviewInput,
+        )
+        from app.modules.safety.ai_rectification_review import (
+            PluginConfig as ReviewPluginConfig,
+        )
+
+        # 解析原始缺陷图片
+        defect_image_urls = (
+            self._parse_defect_photo_urls(item.defect_photos)
+            if item.defect_photos else []
+        )
+
+        # 解析整改后图片
+        rectification_image_urls = (
+            self._parse_defect_photo_urls(item.rectification_photos)
+            if item.rectification_photos else []
+        )
+
+        logger.info(
+            "AI 整改初审插件启动: hazard_id=%s defect_photos=%d rectification_photos=%d reply_len=%d",
+            item.id, len(defect_image_urls), len(rectification_image_urls),
+            len(item.rectification_reply or ""),
+        )
+
+        # 解析 AI 识别结果中的整改建议
+        ai_suggestion = None
+        if item.corrective_preventive_measures:
+            # 尝试解析三层结构（格式：【立即措施】... 【短期整改】... 【长期预防】...）
+            # 直接以原始文本形式传递，AI 会自行解析
+            try:
+                ai_suggestion = {"raw": item.corrective_preventive_measures}
+            except Exception:
+                ai_suggestion = None
+
+        # 构建插件输入
+        input_data = RectificationReviewInput(
+            hazard_id=item.id,
+            original_description=item.description or "",
+            original_defect_photos=defect_image_urls,
+            key_defect=item.key_defect or "",
+            hazard_type=item.hazard_type or "",
+            hazard_category=item.hazard_category or "",
+            hazard_level=item.hazard_level or "",
+            ai_rectification_suggestion=ai_suggestion,
+            rectification_reply=item.rectification_reply or "",
+            rectification_photos=rectification_image_urls,
+            department=item.department or "",
+        )
+
+        # 根据是否有整改后图片选择 AI 服务（在知识加载前创建，供智能卡片选择使用）
+        if rectification_image_urls:
+            ai_service = await self._get_vision_ai_service()
+        else:
+            ai_service = await self._get_ai_service()
+
+        # 加载法规知识库上下文（savepoint 隔离：知识库查询失败不能污染外层事务）
+        knowledge_context = None
+        try:
+            from app.modules.safety.knowledge import KnowledgeInjector
+            knowledge_sp = await self.session.begin_nested()
+            try:
+                injector = KnowledgeInjector(self.session)
+                knowledge_context = await injector.build_knowledge_context(
+                    hazard_description=item.description or "",
+                    department=item.department or "",
+                    ai_service=ai_service,
+                    max_cards=5,
+                )
+                await knowledge_sp.commit()
+                logger.info("法规知识库加载完成: len=%d chars", len(knowledge_context))
+            except Exception as e:
+                await knowledge_sp.rollback()
+                logger.warning("法规知识库加载失败，继续不使用知识增强: %s", e)
+        except Exception as e:
+            logger.warning("法规知识库加载失败，继续不使用知识增强: %s", e)
+
+        try:
+            config = ReviewPluginConfig(
+                temperature=0.05,
+                strict_mode=False,   # 非严格模式：验证警告不阻塞流程
+                enable_vision=bool(rectification_image_urls),
+                enable_knowledge=bool(knowledge_context),
+            )
+            plugin = AIRectificationReviewer(
+                ai_service, config,
+                knowledge_context=knowledge_context,
+            )
+            output = await plugin.review(input_data)
+
+            # 转换为 dict
+            return {
+                "photo_match_analysis": output.photo_match_analysis,
+                "photo_match_level": output.photo_match_level.value,
+                "measure_quality_assessment": output.measure_quality_assessment,
+                "measure_quality_level": output.measure_quality_level.value,
+                "completeness_check": output.completeness_check,
+                "completeness_level": output.completeness_level.value,
+                "standard_compliance": output.standard_compliance,
+                "standard_compliance_level": output.standard_compliance_level.value,
+                "review_conclusion": output.review_conclusion.value,
+                "review_comments": output.review_comments,
+                "confidence": output.confidence,
+                "reasoning": output.reasoning,
+            }
+        except Exception as e:
+            logger.error("AI 整改初审插件执行失败: %s", e)
+            raise AIOutputError(f"AI 整改初审失败: {e}") from e
+        finally:
+            await ai_service.close()
+
+    async def run_rectification_review(
+        self, hazard_id: uuid.UUID
+    ) -> HazardReport | None:
+        """执行整改回复 AI 初审（公开方法，供 API 和 Bitable handler 调用）。
+
+        使用独立的数据库 session：此方法通过 asyncio.create_task 在后台执行，
+        请求作用域的 session 可能在 AI 调用完成前就已关闭。
+        独立 session 确保 AI 调用期间数据库连接始终有效。
+
+        Args:
+            hazard_id: 隐患记录 ID
+
+        Returns:
+            更新后的 HazardReport，失败时返回 None
+        """
+        from app.core.database import async_session_factory
+
+        async with async_session_factory() as bg_session:
+            bg_service = SafetyService(bg_session)
+
+            item = await bg_service.repo.get_hazard_by_id(hazard_id)
+            if not item:
+                logger.warning("run_rectification_review: hazard not found id=%s", hazard_id)
+                return None
+
+            # 设置处理中状态
+            await bg_service.repo.update_hazard(
+                hazard_id, {"ai_review_status": "processing"}
+            )
+            await bg_session.commit()
+
+            try:
+                result = await bg_service._generate_rectification_review(item)
+                update_data: dict[str, Any] = {
+                    "ai_review_result": result,
+                    "ai_review_status": "completed",
+                    "ai_review_completed_at": datetime.now(),
+                }
+                await bg_service.repo.update_hazard(hazard_id, update_data)
+                await bg_session.commit()
+
+                # Re-fetch for notification (needs fresh state after update)
+                updated = await bg_service.repo.get_hazard_by_id(hazard_id)
+
+                logger.info(
+                    "AI 整改初审完成: hazard_id=%s conclusion=%s",
+                    hazard_id, result.get("review_conclusion"),
+                )
+                # ── 根据 AI 评审判定路由后续通知 ──
+                # 对结论字符串做 strip 处理，防止 AI 模型附加空白字符导致比较失败
+                conclusion = (result.get("review_conclusion") or "").strip()
+                if conclusion == "通过":
+                    # AI 判定通过 → 开放人工复核入口 + 通知一级复核人
+                    await bg_service.repo.update_hazard(
+                        hazard_id, {"rectification_status": "replied"}
+                    )
+                    await bg_session.commit()
+                    passed = await bg_service.repo.get_hazard_by_id(hazard_id)
+                    if passed:
+                        asyncio.create_task(_send_verify_notification(passed, 1))
+                        # 同步「已回复」状态到 Bitable
+                        asyncio.create_task(
+                            _sync_rectification_status_to_bitable(passed, "replied")
+                        )
+                    logger.info(
+                        "AI 初审通过 → 通知一级复核人: hazard_id=%s", hazard_id
+                    )
+                elif conclusion == "不通过":
+                    # AI 判定不通过 → 自动驳回，通知责任人重新整改
+                    await bg_service.repo.update_hazard(
+                        hazard_id, {"rectification_status": "rejected"}
+                    )
+                    await bg_session.commit()
+                    rejected = await bg_service.repo.get_hazard_by_id(hazard_id)
+                    if rejected:
+                        asyncio.create_task(
+                            _send_rectification_notification(rejected)
+                        )
+                        # 同步「已驳回」状态到 Bitable，防止 Bitable 仍显示「已回复」
+                        # 导致部门负责人误认为仍需复核
+                        asyncio.create_task(
+                            _sync_rectification_status_to_bitable(rejected, "rejected")
+                        )
+                    logger.info(
+                        "AI 初审不通过 → 自动驳回，通知责任人: hazard_id=%s",
+                        hazard_id,
+                    )
+                else:
+                    # 未知结论类型，安全兜底：保守处理为不通过，通知责任人重新整改
+                    # 不能放行到人工复核（避免 AI 未真正审核时跳过关键检查）
+                    logger.warning(
+                        "AI 初审返回未知结论: hazard_id=%s conclusion=%r → 保守处理为不通过",
+                        hazard_id, conclusion,
+                    )
+                    await bg_service.repo.update_hazard(
+                        hazard_id, {"rectification_status": "rejected"}
+                    )
+                    await bg_session.commit()
+                    unknown = await bg_service.repo.get_hazard_by_id(hazard_id)
+                    if unknown:
+                        asyncio.create_task(
+                            _send_rectification_notification(unknown)
+                        )
+                return updated
+            except AIOutputError as e:
+                logger.error("AI 整改初审失败(hazard %s): %s", hazard_id, e)
+                await bg_service.repo.update_hazard(
+                    hazard_id,
+                    {
+                        "ai_review_status": "failed",
+                        "ai_error_message": str(e),
+                        "rectification_status": "replied",
+                    },
+                )
+                await bg_session.commit()
+                # AI 失败兜底：开放复核 + 通知一级复核人进行人工审核，避免流程卡死
+                asyncio.create_task(_send_verify_notification(item, 1))
+                return None
+            except Exception as e:
+                logger.error("AI 整改初审异常(hazard %s): %s", hazard_id, e)
+                await bg_service.repo.update_hazard(
+                    hazard_id,
+                    {
+                        "ai_review_status": "failed",
+                        "ai_error_message": f"AI 初审异常：{e}",
+                        "rectification_status": "replied",
+                    },
+                )
+                await bg_session.commit()
+                # AI 异常兜底：开放复核 + 通知一级复核人进行人工审核，避免流程卡死
+                asyncio.create_task(_send_verify_notification(item, 1))
+                return None
 
     # ── AI 服务工厂 ──
 
@@ -708,6 +1061,311 @@ class SafetyService:
                 if parts:
                     update_data["corrective_preventive_measures"] = "\n\n".join(parts)
         # script 2 已废弃：整改建议由插件在 script 1 中生成
+
+    # ==================== HazardIdentification Operations ====================
+
+    async def get_hazard_identifications(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        department: str | None = None,
+        overall_status: str | None = None,
+        ai_node_progress: str | None = None,
+        keyword: str | None = None,
+        position: str | None = None,
+        risk_level: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        batch_id: str | None = None,
+    ) -> tuple[list, int]:
+        """获取危险源辨识列表"""
+        return await self.repo.get_hazard_identifications(
+            skip, limit, department, overall_status, ai_node_progress, keyword,
+            position, risk_level, date_from, date_to, batch_id,
+        )
+
+    async def get_hazard_identification_stats(self) -> dict[str, int]:
+        """获取危险源辨识工作流统计"""
+        return await self.repo.get_hazard_identification_stats()
+
+    async def get_hazard_identification_ledger_stats(
+        self,
+        department: str | None = None,
+        position: str | None = None,
+        risk_level: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict:
+        """获取危险源辨识台账统计"""
+        return await self.repo.get_hazard_identification_ledger_stats(
+            department, position, risk_level, date_from, date_to,
+        )
+
+    async def get_hazard_identification(self, hid: uuid.UUID):
+        """获取单条危险源辨识"""
+        return await self.repo.get_hazard_identification_by_id(hid)
+
+    async def create_hazard_identification(self, data):
+        """创建单条危险源辨识记录"""
+        from app.modules.safety.schemas.hazard_identifications import (
+            HazardIdentificationCreate,
+        )
+        create_data = data.model_dump() if not isinstance(data, dict) else data
+        # 自动生成 hazard_id_no: HI-YYYYMMDD-NNN
+        if not create_data.get("hazard_id_no"):
+            today = datetime.now().strftime("%Y%m%d")
+            count = await self.repo.count_hazard_identifications_today(today)
+            create_data["hazard_id_no"] = f"HI-{today}-{count + 1:03d}"
+        item = await self.repo.create_hazard_identification(create_data)
+        await self._audit("create", "hazard_identification", resource_id=item.id)
+        return item
+
+    async def update_hazard_identification(self, hid: uuid.UUID, data):
+        """更新危险源辨识记录"""
+        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+        item = await self.repo.update_hazard_identification(hid, update_data)
+        if item:
+            await self._audit("update", "hazard_identification", resource_id=hid)
+        return item
+
+    async def delete_hazard_identification(self, hid: uuid.UUID) -> bool:
+        """删除危险源辨识记录"""
+        success = await self.repo.delete_hazard_identification(hid)
+        if success:
+            await self._audit("delete", "hazard_identification", resource_id=hid)
+        return success
+
+    async def submit_hazard_identification(self, hid: uuid.UUID) -> dict | None:
+        """提交危险源辨识进入 AI 流程"""
+        item = await self.repo.get_hazard_identification_by_id(hid)
+        if not item:
+            return None
+        updated = await self.repo.update_hazard_identification(
+            hid,
+            {"ai_node_progress": "pending_script1", "overall_status": "in_progress"},
+        )
+        return updated
+
+    async def get_hazard_risk_options(
+        self, department: str | None = None, keyword: str | None = None,
+        skip: int = 0, limit: int = 100,
+    ) -> tuple[list, int]:
+        """获取危险源风险选项（供常规作业报备使用）"""
+        from app.modules.safety.models.hazard_identification import HazardIdentification
+        from sqlalchemy import select, func, or_
+        query = select(HazardIdentification).where(
+            HazardIdentification.is_deleted == False,
+            HazardIdentification.overall_status == "completed",
+            HazardIdentification.inherent_risk_level.in_(["level_1", "level_2"]),
+        )
+        if department:
+            query = query.where(HazardIdentification.department == department)
+        if keyword:
+            query = query.where(
+                or_(
+                    HazardIdentification.hazard_id_no.ilike(f"%{keyword}%"),
+                    HazardIdentification.department.ilike(f"%{keyword}%"),
+                    HazardIdentification.position.ilike(f"%{keyword}%"),
+                )
+            )
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await self.db.execute(count_query)).scalar() or 0
+        items = (await self.db.execute(query.offset(skip).limit(limit))).scalars().all()
+        return list(items), total
+
+    async def run_script(self, hid: uuid.UUID, script_number: int, ai_output: dict | None = None):
+        """执行危险源辨识脚本"""
+        from app.modules.safety.ai_hazard_identification.orchestrator import (
+            HazardIdentificationOrchestrator,
+        )
+        item = await self.repo.get_hazard_identification_by_id(hid)
+        if not item:
+            return None
+        orch = HazardIdentificationOrchestrator(self.db, item.id)
+        result = await orch.execute_script(script_number, ai_output)
+        await self.db.flush()
+        updated = await self.repo.get_hazard_identification_by_id(hid)
+        return updated
+
+    async def review_script(self, hid: uuid.UUID, script_number: int, action: str):
+        """审核脚本结果"""
+        item = await self.repo.get_hazard_identification_by_id(hid)
+        if not item:
+            return None
+        review_field = f"script{script_number}_review_status"
+        update_data = {review_field: action}
+        if action == "rejected":
+            update_data["ai_node_progress"] = f"pending_script{script_number}"
+            update_data["overall_status"] = "in_progress"
+        await self.repo.update_hazard_identification(hid, update_data)
+        await self.db.flush()
+        return await self.repo.get_hazard_identification_by_id(hid)
+
+    async def upload_attachment(self, hid: uuid.UUID, file, original_name: str):
+        """上传附件到危险源辨识"""
+        import os
+        from app.core.storage import upload_object
+        item = await self.repo.get_hazard_identification_by_id(hid)
+        if not item:
+            return None
+        ext = os.path.splitext(original_name)[1]
+        object_name = f"safety/hazard_identifications/{hid}{ext}"
+        url = await upload_object(file, object_name)
+        await self.repo.update_hazard_identification(
+            hid,
+            {"attachment_path": url, "attachment_original_name": original_name},
+        )
+        await self.db.flush()
+        return await self.repo.get_hazard_identification_by_id(hid)
+
+    async def parse_hazard_export_query(self, query_str: str) -> dict:
+        """解析隐患台账导出查询参数"""
+        import json
+        try:
+            return json.loads(query_str)
+        except (json.JSONDecodeError, TypeError):
+            # 简单 key:value 格式
+            filters = {}
+            for part in query_str.split(","):
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    filters[k.strip()] = v.strip()
+            return filters
+
+    async def export_hazard_ledger_pdf(self, filters: dict) -> bytes:
+        """导出隐患台账 PDF"""
+        items, _ = await self.repo.get_hazard_identifications(
+            skip=0, limit=10000,
+            department=filters.get("department"),
+            overall_status=filters.get("overall_status"),
+            risk_level=filters.get("risk_level"),
+            date_from=filters.get("date_from"),
+            date_to=filters.get("date_to"),
+        )
+        from app.modules.safety.service.safety import _export_hazard_ledger_pdf_fallback
+        return _export_hazard_ledger_pdf_fallback(items)
+
+    # ── 批量危险源辨识 + 工段预览 ──
+
+    async def create_hazard_identification_batch(self, data) -> dict:
+        """批量创建危险源辨识记录（一个操规 → 多工艺阶段）。
+
+        流程:
+        1. 查询 regulation，校验 content 非空
+        2. 解析 Chapter 7 → 提取工艺阶段列表
+        3. 校验 stage_names ⊆ 解析结果
+        4. 生成 batch_id，对每个 stage 生成 hazard_id_no + chapter7_context
+        5. 批量 INSERT
+        6. 可选 auto_submit
+        """
+        from app.modules.safety.document_parser import parse_chapter7_stages
+
+        batch_id = uuid.uuid4()
+
+        # 1. 查询操规
+        reg = await self.repo.get_regulation_by_id(data.regulation_id)
+        if not reg:
+            raise ValueError(f"安全操作规程不存在: {data.regulation_id}")
+        if not reg.content:
+            raise ValueError(
+                f"安全操作规程「{reg.regulation_name}」尚无标准化内容，"
+                "请先生成操规后再创建危险源辨识"
+            )
+
+        # 2. 解析工艺阶段
+        all_stages = parse_chapter7_stages(reg.content)
+        if not all_stages:
+            raise ValueError(
+                f"安全操作规程「{reg.regulation_name}」第7章未找到工艺阶段，"
+                "请确认操规包含完整的生产工艺流程（第7章应为 H2 标题的工艺阶段）"
+            )
+
+        # 3. 校验 stage_names
+        valid_names = {s["stage_name"] for s in all_stages}
+        for sn in data.stage_names:
+            if sn not in valid_names:
+                raise ValueError(
+                    f"工艺阶段「{sn}」不在操规第7章中。"
+                    f"可用阶段: {', '.join(sorted(valid_names))}"
+                )
+
+        # 4. 生成编号 & 构建记录
+        today = datetime.now().strftime("%Y%m%d")
+        existing = await self.repo.count_hi_today(today)
+        seq = existing + 1
+
+        records_data: list[dict[str, Any]] = []
+        for sn in data.stage_names:
+            stage_info = next(s for s in all_stages if s["stage_name"] == sn)
+            records_data.append({
+                "hazard_id_no": f"HI-{today}-{seq:03d}",
+                "department": data.department,
+                "position": data.position,
+                "production_step": sn,
+                "regulation_id": data.regulation_id,
+                "regulation_name": reg.regulation_name,
+                "batch_id": batch_id,
+                "stage_name": sn,
+                "chapter7_context": stage_info["markdown"],
+                "notes": data.notes,
+                "ai_node_progress": "pending_input",
+                "overall_status": "draft",
+            })
+            seq += 1
+
+        # 5. 批量 INSERT
+        items = await self.repo.create_hazard_identifications_batch(records_data)
+        logger.info(
+            "批量创建危险源辨识: batch_id=%s, regulation=%s, stages=%d",
+            batch_id, reg.regulation_name, len(items),
+        )
+        await self._audit("create_batch", "hazard_identification", resource_id=batch_id)
+
+        # 6. 可选自动提交
+        if data.auto_submit:
+            for item in items:
+                await self.repo.update_hazard_identification(
+                    item.id,
+                    {"ai_node_progress": "pending_script1", "overall_status": "in_progress"},
+                )
+
+        from app.modules.safety.schemas.hazard_identifications import (
+            HazardIdentificationResponse,
+        )
+        return {
+            "batch_id": str(batch_id),
+            "regulation_id": str(data.regulation_id),
+            "regulation_name": reg.regulation_name,
+            "records": [HazardIdentificationResponse.model_validate(r) for r in items],
+            "total_stages": len(all_stages),
+            "created_count": len(items),
+        }
+
+    async def get_regulation_stages(self, regulation_id: uuid.UUID) -> dict | None:
+        """获取操规 Chapter 7 的工艺阶段列表（供前端批量辨识预览）。"""
+        from app.modules.safety.document_parser import parse_chapter7_stages
+
+        reg = await self.repo.get_regulation_by_id(regulation_id)
+        if not reg or not reg.content:
+            return None
+
+        all_stages = parse_chapter7_stages(reg.content)
+        if not all_stages:
+            return None
+
+        return {
+            "regulation_id": str(regulation_id),
+            "regulation_name": reg.regulation_name,
+            "stages": [
+                {
+                    "stage_name": s["stage_name"],
+                    "safety_count": len(s["safety_items"]),
+                    "operation_count": len(s["operation_items"]),
+                }
+                for s in all_stages
+            ],
+        }
+
 # ═══════════════════════════════════════════════════════════════
 # 测试阶段：通知硬编码目标
 # ═══════════════════════════════════════════════════════════════
@@ -757,7 +1415,7 @@ async def _build_verify_card_content(
         f"**隐患级别：** {level_emoji} {level_label}\n"
         f"**责任部门：** {hazard.department or '-'}\n"
         f"**整改回复：** {reply_text}\n"
-        + (f"\n⬇ 请到在下方点击「同意」或「驳回」操作" if button_state is None else "")
+        + ("\n⬇ 请到在下方点击「同意」或「驳回」操作" if button_state is None else "")
     )
 
     elements: list[dict] = []
@@ -974,9 +1632,41 @@ async def _send_verify_notification(hazard: HazardReport, level: int) -> None:
                     "复核通知发送失败: hazard_no=%s level=%s to=%s receive_id=%s id_type=%s",
                     hazard.hazard_no, level, person.name, receive_id, id_type,
                 )
+
+            # 记录通知结果到数据库
+            try:
+                await session.execute(
+                    update(HazardReport)
+                    .where(HazardReport.id == hazard.id)
+                    .values(
+                        review_notified_at=datetime.now(),
+                        review_notified_level=level,
+                        review_notify_status="success" if success else "failed",
+                        review_notify_error=None if success else "send_user_card returned False",
+                    )
+                )
+                await session.commit()
+            except Exception:
+                logger.exception("记录复核通知结果失败: hazard_no=%s", hazard.hazard_no)
     except Exception as e:
         _debug_log(f"VERIFY_EXCEPTION: hazard_no={hazard.hazard_no} level={level} error={e}")
         logger.warning("复核通知异常: hazard_no=%s level=%s error=%s", hazard.hazard_no, level, e)
+        # 记录异常到数据库
+        try:
+            async with async_session_factory() as session2:
+                await session2.execute(
+                    update(HazardReport)
+                    .where(HazardReport.id == hazard.id)
+                    .values(
+                        review_notified_at=datetime.now(),
+                        review_notified_level=level,
+                        review_notify_status="failed",
+                        review_notify_error=str(e)[:500],
+                    )
+                )
+                await session2.commit()
+        except Exception:
+            logger.exception("记录复核通知异常失败: hazard_no=%s", hazard.hazard_no)
 
 
 async def _send_rectification_notification(hazard: HazardReport) -> None:
@@ -1054,7 +1744,9 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
                 if photos and isinstance(photos, list):
                     clean = [p for p in photos if isinstance(p, str)]
                     if clean:
-                        from app.modules.safety.feishu.notification import upload_images_batch
+                        from app.modules.safety.feishu.notification import (
+                            upload_images_batch,
+                        )
                         image_keys = await upload_images_batch(clean)
                         if image_keys:
                             elements.append({"tag": "hr"})
@@ -1113,9 +1805,76 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
                 "整改通知发送失败: hazard_no=%s to=%s receive_id=%s id_type=%s",
                 hazard.hazard_no, person.name, receive_id, id_type,
             )
+
+        # 记录通知结果到数据库
+        try:
+            await session.execute(
+                update(HazardReport)
+                .where(HazardReport.id == hazard.id)
+                .values(
+                    rectification_notified_at=datetime.now(),
+                    rectification_notify_status="success" if success else "failed",
+                    rectification_notify_error=None if success else "send_user_card returned False",
+                )
+            )
+            await session.commit()
+        except Exception:
+            logger.exception("记录整改通知结果失败: hazard_no=%s", hazard.hazard_no)
+
     except Exception as e:
         _debug_log(f"RECTIFY_EXCEPTION: hazard_no={hazard.hazard_no} error={e}")
         logger.warning("整改通知异常: error=%s hazard_no=%s", e, hazard.hazard_no)
+        # 记录异常到数据库
+        try:
+            async with async_session_factory() as session2:
+                await session2.execute(
+                    update(HazardReport)
+                    .where(HazardReport.id == hazard.id)
+                    .values(
+                        rectification_notified_at=datetime.now(),
+                        rectification_notify_status="failed",
+                        rectification_notify_error=str(e)[:500],
+                    )
+                )
+                await session2.commit()
+        except Exception:
+            logger.exception("记录整改通知异常失败: hazard_no=%s", hazard.hazard_no)
+
+
+async def _sync_rectification_status_to_bitable(
+    hazard: HazardReport, status: str
+) -> None:
+    """将平台整改状态同步到 Bitable，确保两端数据一致。
+
+    用于 AI 初审驳回等非 webhook 触发的状态变更场景。
+    若未同步，Bitable 仍显示旧状态，可能导致：
+    - 部门负责人误认为仍需复核（实际已 AI 驳回）
+    - Bitable webhook 将旧状态回写到平台，覆盖正确状态
+    """
+    try:
+        record_id = hazard.feishu_record_id
+        if not record_id:
+            return
+
+        from app.modules.safety.feishu.bitable_handler import (
+            _STATUS_TO_BITABLE_LABEL,
+            SafetyBitableClient,
+            _set_sync_ignore,
+        )
+
+        status_label = _STATUS_TO_BITABLE_LABEL.get(status, status)
+        bitable = SafetyBitableClient()
+        await _set_sync_ignore(record_id, ttl=30)
+        await bitable.update_record(record_id, {"整改状态": status_label})
+        logger.info(
+            "整改状态已同步到 Bitable: hazard_no=%s status=%s label=%s",
+            hazard.hazard_no, status, status_label,
+        )
+    except Exception:
+        logger.exception(
+            "同步整改状态到 Bitable 失败: hazard_no=%s status=%s",
+            hazard.hazard_no, status,
+        )
 
 
     # ==================== Accident Operations ====================
@@ -1256,8 +2015,11 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
 
     async def delete_accident(self, accident_id: uuid.UUID) -> bool:
         """删除事故"""
+        accident = await self.repo.get_accident_by_id(accident_id)
         result = await self.repo.delete_accident(accident_id)
         if result:
+            if accident:
+                self._cleanup_file(accident.investigation_report_path)
             await self._audit("delete", "accident", resource_id=accident_id)
         return result
 
@@ -1443,8 +2205,11 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
 
     async def delete_training(self, training_id: uuid.UUID) -> bool:
         """删除安全培训"""
+        training = await self.repo.get_training_by_id(training_id)
         result = await self.repo.delete_training(training_id)
         if result:
+            if training:
+                self._cleanup_file(training.course_material_path)
             await self._audit("delete", "safety_training", resource_id=training_id)
         return result
 
@@ -1514,11 +2279,12 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
         risk_level: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        batch_id: str | None = None,
     ) -> tuple[list, int]:
         """获取危险源辨识列表"""
         return await self.repo.get_hazard_identifications(
             skip, limit, department, overall_status, ai_node_progress, keyword,
-            position, risk_level, date_from, date_to,
+            position, risk_level, date_from, date_to, batch_id,
         )
 
     async def get_hazard_identification_stats(self) -> dict[str, int]:
@@ -1543,14 +2309,27 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
         return await self.repo.get_hazard_identification_by_id(hid)
 
     async def create_hazard_identification(self, data) -> Any:
-        """创建危险源辨识记录"""
+        """创建危险源辨识记录（hazard_id_no 留空时自动生成 HI-年月日-序号）"""
 
-        create_data = data.model_dump()
+        create_data = data.model_dump(exclude_none=True)
+        if not create_data.get("hazard_id_no"):
+            today = datetime.now().strftime("%Y%m%d")
+            existing = await self.repo.count_hi_today(today)
+            create_data["hazard_id_no"] = f"HI-{today}-{existing + 1:03d}"
+        # production_step 已取消输入，设默认值以兼容 DB NOT NULL 约束
+        create_data.setdefault("production_step", "")
+        # 引用安全操作规程：从 regulation_id 回填 regulation_name
+        if create_data.get("regulation_id") and not create_data.get("regulation_name"):
+            reg = await self.repo.get_regulation_by_id(create_data["regulation_id"])
+            if reg:
+                create_data["regulation_name"] = reg.regulation_name
         create_data["ai_node_progress"] = "pending_input"
         create_data["overall_status"] = "draft"
         item = await self.repo.create_hazard_identification(create_data)
         await self._audit("create", "hazard_identification", resource_id=item.id)
         return item
+
+
 
     async def update_hazard_identification(self, hid: uuid.UUID, data) -> Any | None:
         """更新危险源辨识"""
@@ -1562,8 +2341,11 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
 
     async def delete_hazard_identification(self, hid: uuid.UUID) -> bool:
         """删除危险源辨识"""
+        hi = await self.repo.get_hazard_identification_by_id(hid)
         result = await self.repo.delete_hazard_identification(hid)
         if result:
+            if hi:
+                self._cleanup_file(hi.attachment_path)
             await self._audit("delete", "hazard_identification", resource_id=hid)
         return result
 
@@ -1681,7 +2463,10 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
     async def _generate_ai_output(
         self, script_number: int, item: Any
     ) -> dict:
-        """调用 AI 服务生成工作流输出。失败时抛出 AIOutputError。
+        """[DEPRECATED v2.0] 调用 AI 服务生成工作流输出。
+
+        已由 HazardIdentificationOrchestrator + 7 个独立 Plugin 替代。
+        保留此方法作为 fallback，新代码请使用 Orchestrator。
 
         优先从数据库 ai_workflow_configs 表读取对应模块的工作流配置，
         fallback 到 prompts.py 的硬编码 WORKFLOW_STEP_CONFIG。
@@ -1762,7 +2547,12 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
     async def run_script(
         self, hid: uuid.UUID, script_number: int, ai_output: dict | None = None
     ) -> Any | None:
-        """执行AI脚本（状态机推进）"""
+        """执行 AI 脚本（状态机推进）。
+
+        v2.0 重构：使用 HazardIdentificationOrchestrator 调用 7 个独立 Plugin。
+        每个 Plugin 继承 BasePlugin 的 4-phase pipeline（对标 AIHazardIdentifier）。
+        旧 _generate_ai_output() 保留为 fallback。
+        """
 
         item = await self.repo.get_hazard_identification_by_id(hid)
         if not item:
@@ -1773,44 +2563,121 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
 
         current_node, next_node, review_field = self.SCRIPT_NODE_MAP[script_number]
 
-        # Check current state allows this script
+        # 状态校验：当前节点必须匹配
         if item.ai_node_progress != current_node:
             return None
 
-        # Check previous script's review status is approved (for scripts 2-7)
+        # 前置审核校验（脚本2-7：上一步必须已审核通过）
         if script_number > 1:
             prev_review = getattr(item, f"script{script_number - 1}_review_status")
             if prev_review != "approved":
                 return None
 
+        # [增强] 关键字段非空校验（按标准文件要求）
+        if not self._validate_prerequisites(item, script_number):
+            return None
+
         update_data: dict[str, Any] = {}
 
-        # ── AI 生成或使用传入数据 ──
+        # ── 人工覆盖模式（demo / 手动填入）──
         if ai_output is not None:
-            # 人工覆盖 / 前端 demo 数据
             self._map_ai_output(script_number, ai_output, update_data)
             self._calculate_risk_levels(script_number, update_data)
             update_data["ai_node_progress"] = next_node
             update_data["ai_error_message"] = None
         else:
-            # 调用真实 AI
+            # ── 方案B: 使用 Orchestrator 调用 Plugin ──
             try:
-                generated = await self._generate_ai_output(script_number, item)
-                self._map_ai_output(script_number, generated, update_data)
-                self._calculate_risk_levels(script_number, update_data)
-                update_data["ai_node_progress"] = next_node
-                update_data["ai_error_message"] = None
-            except AIOutputError as e:
-                logger.error(f"Script {script_number} AI 输出错误: {e}")
+                from app.modules.safety.ai_hazard_identification.orchestrator import (
+                    HazardIdentificationOrchestrator,
+                    OrchestratorError,
+                )
+                from app.modules.safety.ai_hazard_identification.schemas import (
+                    PluginConfig,
+                )
+
+                ai_service = await self._get_ai_service()
+
+                orchestrator = HazardIdentificationOrchestrator(
+                    ai_service,
+                    session=self.db,
+                    config=PluginConfig(temperature=0.05),
+                )
+                plugin_update = await orchestrator.run_script(item, script_number)
+                update_data.update(plugin_update)
+
+            except OrchestratorError as e:
+                logger.error("脚本 %d Orchestrator 执行失败: %s", script_number, e)
                 update_data[f"script{script_number}_review_status"] = "rejected"
                 update_data["ai_error_message"] = str(e)
             except Exception as e:
-                logger.error(f"Script {script_number} 执行异常: {e}")
+                logger.error("脚本 %d 执行异常: %s", script_number, e)
                 update_data[f"script{script_number}_review_status"] = "rejected"
                 update_data["ai_error_message"] = f"AI 服务调用失败：{e}"
+            finally:
+                await ai_service.close()
 
         result = await self.repo.update_hazard_identification(hid, update_data)
         return result
+
+    @staticmethod
+    def _validate_prerequisites(item: Any, script_number: int) -> bool:
+        """校验关键前置字段非空（增强触发条件）。
+
+        参照标准文件：每步 AI 执行前，关键人工确认字段不能为空
+        且不能为「待人工确认」。
+
+        Returns:
+            True 表示前置条件满足，False 表示阻断。
+        """
+        UNCONFIRMED = "待人工确认"
+
+        checks: dict[int, list[tuple[str, str]]] = {
+            1: [
+                ("department", "部门"), ("position", "岗位"),
+                ("production_step", "生产步骤"),
+            ],
+            2: [
+                ("specific_activity", "具体作业活动"),
+                ("equipment_facilities", "设备设施"),
+                ("raw_auxiliary_materials", "原辅料"),
+            ],
+            3: [
+                ("hazard_type", "危险类型"),
+                ("possible_accident", "可能导致事故"),
+                ("unsafe_behavior", "不规范作业行为表现"),
+            ],
+            4: [
+                ("l_inherent", "可能性L（固有）"),
+                ("e_inherent", "暴露频率E（固有）"),
+                ("c_inherent", "严重性C（固有）"),
+            ],
+            5: [
+                ("existing_engineering_controls", "现有工程控制措施"),
+                ("existing_management_controls", "现有管理控制措施"),
+                ("existing_ppe", "现有个人防护措施"),
+                ("existing_emergency_measures", "现有应急措施"),
+            ],
+            6: [
+                ("l_residual", "可能性L（残余）"),
+                ("e_residual", "暴露频率E（残余）"),
+                ("c_residual", "严重性C（残余）"),
+            ],
+            7: [
+                ("recommendation_content", "建议措施内容"),
+            ],
+        }
+
+        for field, label in checks.get(script_number, []):
+            value = getattr(item, field, None)
+            if value is None or (
+                isinstance(value, str) and value.strip() in ("", UNCONFIRMED)
+            ):
+                logger.warning(
+                    "脚本%d前置校验失败: %s 为空或待人工确认", script_number, label
+                )
+                return False
+        return True
 
     async def review_script(
         self, hid: uuid.UUID, script_number: int, action: str
