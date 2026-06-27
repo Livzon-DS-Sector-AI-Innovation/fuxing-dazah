@@ -10,14 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import service
+from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
 from app.modules.equipment.models.equipment import EquipmentCategory
 from app.modules.equipment.schemas import (
     MaintenancePlanCreate,
     MaintenancePlanResponse,
     MaintenancePlanUpdate,
 )
-from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
 
 router = APIRouter()
 
@@ -55,9 +54,11 @@ def _enrich_plan(plan, category_names: dict[str, str]) -> MaintenancePlanRespons
 async def create_maintenance_plan(
     data: MaintenancePlanCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:create")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:create"),
+    ),
 ) -> JSONResponse:
-    plan = await service.create_maintenance_plan(db, data)
+    plan = await service.create_maintenance_plan(db, data, ctx)
     cat_ids = [plan.category_id] if plan.category_id else []
     category_names = await _fetch_category_names(db, cat_ids)
     return success_response(data=_enrich_plan(plan, category_names))
@@ -72,10 +73,12 @@ async def list_maintenance_plans(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     plans, total = await service.get_maintenance_plans(
-        db, equipment_id=equipment_id, category_id=category_id,
+        db, ctx=ctx, equipment_id=equipment_id, category_id=category_id,
         status=status, keyword=keyword, page=page, page_size=page_size,
     )
     # 批量查询分类名称
@@ -92,9 +95,11 @@ async def list_maintenance_plans(
 async def get_overdue_plans(
     days: int = Query(0, ge=0, description="提前天数，0=仅逾期"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
-    plans = await service.get_overdue_maintenance_plans(db, days)
+    plans = await service.get_overdue_maintenance_plans(db, ctx, days)
     cat_ids = [p.category_id for p in plans if p.category_id]
     category_names = await _fetch_category_names(db, cat_ids)
     return success_response(
@@ -106,7 +111,9 @@ async def get_overdue_plans(
 async def get_maintenance_plan(
     plan_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     plan = await service.get_maintenance_plan_by_id(db, plan_id)
     cat_ids = [plan.category_id] if plan.category_id else []
@@ -119,9 +126,11 @@ async def update_maintenance_plan(
     plan_id: uuid.UUID,
     data: MaintenancePlanUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:update"),
+    ),
 ) -> JSONResponse:
-    plan = await service.update_maintenance_plan(db, plan_id, data)
+    plan = await service.update_maintenance_plan(db, plan_id, data, ctx)
     cat_ids = [plan.category_id] if plan.category_id else []
     category_names = await _fetch_category_names(db, cat_ids)
     return success_response(data=_enrich_plan(plan, category_names))
@@ -131,7 +140,9 @@ async def update_maintenance_plan(
 async def delete_maintenance_plan(
     plan_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:delete")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:delete"),
+    ),
 ) -> JSONResponse:
-    await service.delete_maintenance_plan(db, plan_id)
+    await service.delete_maintenance_plan(db, plan_id, ctx)
     return success_response(message="删除成功")

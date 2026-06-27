@@ -8,7 +8,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import MaintenancePlan
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 
 
 async def create_maintenance_plan(
@@ -43,6 +45,7 @@ async def get_maintenance_plan_by_id(
 
 async def get_maintenance_plans(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     equipment_id: uuid.UUID | None = None,
     category_id: uuid.UUID | None = None,
     status: str | None = None,
@@ -59,6 +62,8 @@ async def get_maintenance_plans(
         )
         .where(MaintenancePlan.is_deleted == False)  # noqa: E712
     )
+    query = apply_equipment_scope(query, ctx, MaintenancePlan.created_by, "user_id")
+
     if equipment_id:
         query = query.where(MaintenancePlan.equipment_id == equipment_id)
     if category_id:
@@ -110,10 +115,11 @@ async def delete_maintenance_plan(
 
 async def get_maintenance_plans_due(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     threshold: date_type,
 ) -> list[MaintenancePlan]:
     """查询到期/逾期的维护计划"""
-    result = await db.execute(
+    query = (
         select(MaintenancePlan)
         .options(
             selectinload(MaintenancePlan.equipment),
@@ -124,8 +130,10 @@ async def get_maintenance_plans_due(
             MaintenancePlan.status == "启用",
             MaintenancePlan.next_maintenance_date <= threshold,
         )
-        .order_by(MaintenancePlan.next_maintenance_date)
     )
+    query = apply_equipment_scope(query, ctx, MaintenancePlan.created_by, "user_id")
+    query = query.order_by(MaintenancePlan.next_maintenance_date)
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
