@@ -7,12 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import (
     Equipment,
     EquipmentCategory,
     EquipmentCategoryLink,
     Location,
 )
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 from app.platform.identity.models import Department, User
 
 
@@ -373,6 +375,7 @@ async def get_equipment_by_no(
 
 async def get_equipments(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     category_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
     department_id: uuid.UUID | None = None,
@@ -390,6 +393,9 @@ async def get_equipments(
         )
         .where(Equipment.is_deleted == False)  # noqa: E712
     )
+
+    # 数据范围过滤
+    query = apply_equipment_scope(query, ctx, Equipment.department_id, "department_id")
 
     if category_id:
         category_ids = await _get_category_child_ids(db, category_id)

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.equipment import repository as repo
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import Equipment, EquipmentCategory, Location
 from app.modules.equipment.schemas import (
     EquipmentCategoryCreate,
@@ -17,6 +18,7 @@ from app.modules.equipment.schemas import (
     LocationCreate,
     LocationUpdate,
 )
+from app.modules.equipment.service.data_scope import verify_write_ownership
 
 
 # ==================== 设备分类 ====================
@@ -219,6 +221,7 @@ async def get_equipment_by_id(
 
 async def get_equipments(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     category_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
     department_id: uuid.UUID | None = None,
@@ -229,7 +232,8 @@ async def get_equipments(
 ) -> tuple[list[Equipment], int]:
     """获取设备列表"""
     return await repo.get_equipments(
-        db, category_id, location_id, department_id, status, keyword, page, page_size
+        db, ctx, category_id, location_id,
+        department_id, status, keyword, page, page_size,
     )
 
 
@@ -237,9 +241,11 @@ async def update_equipment(
     db: AsyncSession,
     equipment_id: uuid.UUID,
     data: EquipmentUpdate,
+    ctx: EquipmentAccessContext,
 ) -> Equipment:
     """更新设备"""
-    await get_equipment_by_id(db, equipment_id)
+    equipment = await get_equipment_by_id(db, equipment_id)
+    await verify_write_ownership(ctx, equipment, "department_id", "department_id")
 
     if data.category_ids is not None:
         for cid in data.category_ids:
@@ -254,9 +260,11 @@ async def update_equipment(
 async def delete_equipment(
     db: AsyncSession,
     equipment_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> bool:
     """删除设备"""
     equipment = await get_equipment_by_id(db, equipment_id)
+    await verify_write_ownership(ctx, equipment, "department_id", "department_id")
     equipment.is_deleted = True
     await db.flush()
     return True
