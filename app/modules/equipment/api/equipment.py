@@ -68,7 +68,7 @@ async def create_equipment_category(
     ),
 ) -> JSONResponse:
     """创建设备分类"""
-    category = await service.create_equipment_category(db, data)
+    category = await service.create_equipment_category(db, data, ctx)
     return success_response(data=EquipmentCategoryResponse.model_validate(category))
 
 
@@ -83,11 +83,11 @@ async def get_equipment_categories(
 ) -> JSONResponse:
     """获取设备分类列表"""
     if tree:
-        categories = await service.get_equipment_category_tree(db)
+        categories = await service.get_equipment_category_tree(db, ctx)
         return success_response(
             data=[EquipmentCategoryTree.model_validate(c) for c in categories]
         )
-    categories = await service.get_equipment_categories(db, parent_id)
+    categories = await service.get_equipment_categories(db, parent_id, ctx)
     return success_response(
         data=[EquipmentCategoryResponse.model_validate(c) for c in categories]
     )
@@ -116,7 +116,7 @@ async def update_equipment_category(
     ),
 ) -> JSONResponse:
     """更新设备分类"""
-    category = await service.update_equipment_category(db, category_id, data)
+    category = await service.update_equipment_category(db, category_id, data, ctx)
     return success_response(data=EquipmentCategoryResponse.model_validate(category))
 
 
@@ -129,7 +129,7 @@ async def delete_equipment_category(
     ),
 ) -> JSONResponse:
     """删除设备分类"""
-    await service.delete_equipment_category(db, category_id)
+    await service.delete_equipment_category(db, category_id, ctx)
     return success_response(message="删除成功")
 
 
@@ -143,7 +143,7 @@ async def create_location(
     ),
 ) -> JSONResponse:
     """创建位置"""
-    location = await service.create_location(db, data)
+    location = await service.create_location(db, data, ctx)
     return success_response(data=LocationResponse.model_validate(location))
 
 
@@ -158,11 +158,11 @@ async def get_locations(
 ) -> JSONResponse:
     """获取位置列表"""
     if tree:
-        locations = await service.get_location_tree(db)
+        locations = await service.get_location_tree(db, ctx)
         return success_response(
             data=[LocationTree.model_validate(loc) for loc in locations]
         )
-    locations = await service.get_locations(db, parent_id)
+    locations = await service.get_locations(db, parent_id, ctx)
     return success_response(
         data=[LocationResponse.model_validate(loc) for loc in locations]
     )
@@ -191,7 +191,7 @@ async def update_location(
     ),
 ) -> JSONResponse:
     """更新位置"""
-    location = await service.update_location(db, location_id, data)
+    location = await service.update_location(db, location_id, data, ctx)
     return success_response(data=LocationResponse.model_validate(location))
 
 
@@ -204,7 +204,7 @@ async def delete_location(
     ),
 ) -> JSONResponse:
     """删除位置"""
-    await service.delete_location(db, location_id)
+    await service.delete_location(db, location_id, ctx)
     return success_response(message="删除成功")
 
 

@@ -25,13 +25,24 @@ from app.modules.equipment.service.data_scope import verify_write_ownership
 async def create_equipment_category(
     db: AsyncSession,
     data: EquipmentCategoryCreate,
+    ctx: EquipmentAccessContext,
 ) -> EquipmentCategory:
-    """创建设备分类"""
-    # 检查编码是否重复
-    if await repo.exists_category_by_code(db, data.code):
+    """创建设备分类，自动绑定部门"""
+    # 获取用户所属部门 ID（用于绑定和去重校验）
+    department_id = (
+        ctx.visible_department_ids[0] if ctx.visible_department_ids else None
+    )
+
+    # 检查编码是否重复（部门范围内）
+    if await repo.exists_category_by_code(db, data.code, department_id=department_id):
         raise DuplicateException("分类代码", data.code)
 
-    return await repo.create_equipment_category(db, data.model_dump())
+    category_data = data.model_dump()
+    # 自动绑定部门
+    if department_id:
+        category_data["department_id"] = department_id
+
+    return await repo.create_equipment_category(db, category_data)
 
 
 async def get_equipment_category_by_id(
@@ -48,26 +59,35 @@ async def get_equipment_category_by_id(
 async def get_equipment_categories(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[EquipmentCategory]:
     """获取设备分类列表"""
-    return await repo.get_equipment_categories(db, parent_id)
+    return await repo.get_equipment_categories(db, parent_id, ctx)
 
 
-async def get_equipment_category_tree(db: AsyncSession) -> list[EquipmentCategory]:
+async def get_equipment_category_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[EquipmentCategory]:
     """获取设备分类树形结构"""
-    return await repo.get_equipment_category_tree(db)
+    return await repo.get_equipment_category_tree(db, ctx)
 
 
 async def update_equipment_category(
     db: AsyncSession,
     category_id: uuid.UUID,
     data: EquipmentCategoryUpdate,
+    ctx: EquipmentAccessContext,
 ) -> EquipmentCategory:
     """更新设备分类"""
-    if data.code is not None and await repo.exists_category_by_code(
-        db, data.code, exclude_id=category_id
-    ):
-        raise DuplicateException("分类代码", data.code)
+    if data.code is not None:
+        # 获取该分类的部门 ID，用于同部门范围内去重
+        existing = await repo.get_equipment_category_by_id(db, category_id)
+        department_id = existing.department_id if existing else None
+        if await repo.exists_category_by_code(
+            db, data.code, exclude_id=category_id, department_id=department_id
+        ):
+            raise DuplicateException("分类代码", data.code)
 
     category = await repo.update_equipment_category(
         db, category_id, data.model_dump(exclude_unset=True)
@@ -80,11 +100,12 @@ async def update_equipment_category(
 async def delete_equipment_category(
     db: AsyncSession,
     category_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> bool:
     """删除设备分类"""
     await get_equipment_category_by_id(db, category_id)
 
-    children = await repo.get_equipment_categories(db, parent_id=category_id)
+    children = await repo.get_equipment_categories(db, parent_id=category_id, ctx=ctx)
     if children:
         raise AppException(message="该分类下存在子分类，无法删除")
 
@@ -99,13 +120,24 @@ async def delete_equipment_category(
 async def create_location(
     db: AsyncSession,
     data: LocationCreate,
+    ctx: EquipmentAccessContext,
 ) -> Location:
-    """创建位置"""
-    # 检查编码是否重复
-    if await repo.exists_location_by_code(db, data.code):
+    """创建位置，自动绑定部门"""
+    # 获取用户所属部门 ID（用于绑定和去重校验）
+    department_id = (
+        ctx.visible_department_ids[0] if ctx.visible_department_ids else None
+    )
+
+    # 检查编码是否重复（部门范围内）
+    if await repo.exists_location_by_code(db, data.code, department_id=department_id):
         raise DuplicateException("位置代码", data.code)
 
-    return await repo.create_location(db, data.model_dump())
+    location_data = data.model_dump()
+    # 自动绑定部门
+    if department_id:
+        location_data["department_id"] = department_id
+
+    return await repo.create_location(db, location_data)
 
 
 async def get_location_by_id(
@@ -122,26 +154,35 @@ async def get_location_by_id(
 async def get_locations(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[Location]:
     """获取位置列表"""
-    return await repo.get_locations(db, parent_id)
+    return await repo.get_locations(db, parent_id, ctx)
 
 
-async def get_location_tree(db: AsyncSession) -> list[Location]:
+async def get_location_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[Location]:
     """获取位置树形结构"""
-    return await repo.get_location_tree(db)
+    return await repo.get_location_tree(db, ctx)
 
 
 async def update_location(
     db: AsyncSession,
     location_id: uuid.UUID,
     data: LocationUpdate,
+    ctx: EquipmentAccessContext,
 ) -> Location:
     """更新位置"""
-    if data.code is not None and await repo.exists_location_by_code(
-        db, data.code, exclude_id=location_id
-    ):
-        raise DuplicateException("位置代码", data.code)
+    if data.code is not None:
+        # 获取该位置的部门 ID，用于同部门范围内去重
+        existing = await repo.get_location_by_id(db, location_id)
+        department_id = existing.department_id if existing else None
+        if await repo.exists_location_by_code(
+            db, data.code, exclude_id=location_id, department_id=department_id
+        ):
+            raise DuplicateException("位置代码", data.code)
 
     location = await repo.update_location(
         db, location_id, data.model_dump(exclude_unset=True)
@@ -154,11 +195,12 @@ async def update_location(
 async def delete_location(
     db: AsyncSession,
     location_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> bool:
     """删除位置"""
     await get_location_by_id(db, location_id)
 
-    children = await repo.get_locations(db, parent_id=location_id)
+    children = await repo.get_locations(db, parent_id=location_id, ctx=ctx)
     if children:
         raise AppException(message="该位置下存在子位置，无法删除")
 

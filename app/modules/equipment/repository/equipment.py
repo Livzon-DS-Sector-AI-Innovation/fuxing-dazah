@@ -28,12 +28,15 @@ async def exists_category_by_code(
     db: AsyncSession,
     code: str,
     exclude_id: uuid.UUID | None = None,
+    department_id: uuid.UUID | None = None,
 ) -> bool:
-    """Check if category code exists."""
+    """Check if category code exists, optionally scoped to a department."""
     query = select(EquipmentCategory.id).where(
         EquipmentCategory.code == code,
         EquipmentCategory.is_deleted == False,  # noqa: E712
     )
+    if department_id is not None:
+        query = query.where(EquipmentCategory.department_id == department_id)
     if exclude_id:
         query = query.where(EquipmentCategory.id != exclude_id)
     result = await db.execute(query.limit(1))
@@ -44,12 +47,15 @@ async def exists_location_by_code(
     db: AsyncSession,
     code: str,
     exclude_id: uuid.UUID | None = None,
+    department_id: uuid.UUID | None = None,
 ) -> bool:
-    """Check if location code exists."""
+    """Check if location code exists, optionally scoped to a department."""
     query = select(Location.id).where(
         Location.code == code,
         Location.is_deleted == False,  # noqa: E712
     )
+    if department_id is not None:
+        query = query.where(Location.department_id == department_id)
     if exclude_id:
         query = query.where(Location.id != exclude_id)
     result = await db.execute(query.limit(1))
@@ -84,11 +90,17 @@ async def get_equipment_category_by_id(
 async def get_equipment_categories(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[EquipmentCategory]:
-    """获取设备分类列表"""
+    """获取设备分类列表，可按部门范围过滤"""
     query = select(EquipmentCategory).where(
         EquipmentCategory.is_deleted == False  # noqa: E712
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            EquipmentCategory.department_id.in_(ctx.visible_department_ids)
+        )
     if parent_id is not None:
         query = query.where(EquipmentCategory.parent_id == parent_id)
     else:
@@ -98,14 +110,23 @@ async def get_equipment_categories(
     return list(result.scalars().all())
 
 
-async def get_equipment_category_tree(db: AsyncSession) -> list[EquipmentCategory]:
-    """获取设备分类树形结构"""
-    result = await db.execute(
+async def get_equipment_category_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[EquipmentCategory]:
+    """获取设备分类树形结构，可按部门范围过滤"""
+    query = (
         select(EquipmentCategory)
         .where(EquipmentCategory.is_deleted == False)  # noqa: E712
         .options(selectinload(EquipmentCategory.children))
         .order_by(EquipmentCategory.code)
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            EquipmentCategory.department_id.in_(ctx.visible_department_ids)
+        )
+    result = await db.execute(query)
     categories = list(result.scalars().all())
 
     category_map: dict[uuid.UUID, EquipmentCategory] = {
@@ -184,9 +205,15 @@ async def get_location_by_id(
 async def get_locations(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[Location]:
-    """获取位置列表"""
+    """获取位置列表，可按部门范围过滤"""
     query = select(Location).where(Location.is_deleted == False)  # noqa: E712
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            Location.department_id.in_(ctx.visible_department_ids)
+        )
     if parent_id is not None:
         query = query.where(Location.parent_id == parent_id)
     else:
@@ -196,14 +223,23 @@ async def get_locations(
     return list(result.scalars().all())
 
 
-async def get_location_tree(db: AsyncSession) -> list[Location]:
-    """获取位置树形结构"""
-    result = await db.execute(
+async def get_location_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[Location]:
+    """获取位置树形结构，可按部门范围过滤"""
+    query = (
         select(Location)
         .where(Location.is_deleted == False)  # noqa: E712
         .options(selectinload(Location.children))
         .order_by(Location.code)
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            Location.department_id.in_(ctx.visible_department_ids)
+        )
+    result = await db.execute(query)
     locations = list(result.scalars().all())
 
     location_map: dict[uuid.UUID, Location] = {loc.id: loc for loc in locations}
