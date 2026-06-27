@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { getServerToken } from '@/lib/auth'
+import { getAuthHeaders } from '@/lib/auth'
 import type {
   CreateRoleInput, UpdateRoleInput, AddPersonnelInput,
   AssignRolesInput, AssignCategoriesInput,
@@ -10,11 +10,11 @@ import type {
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 async function actionFetch<T>(url: string, options?: RequestInit): Promise<T | null> {
+  const authHeaders = await getAuthHeaders()
   const response = await fetch(url, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${await getServerToken()}`,
+      ...authHeaders,
       ...options?.headers,
     },
   })

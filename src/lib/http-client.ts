@@ -4,12 +4,13 @@
 // ═══════════════════════════════════════════════════════════════
 
 // ── 惰性 token 管理 ──
-let _tokenGetter: (() => Promise<string | undefined>) | undefined
+let _tokenGetter: (() => Promise<{ token?: string; cookieHeader?: string }>) | undefined
 let _token: string | undefined
+let _cookieHeader: string | undefined
 let _tokenReady = false
 
 /** 注册 token 获取函数（http-server.ts 在服务端自动调用） */
-export function setTokenGetter(getter: () => Promise<string | undefined>): void {
+export function setTokenGetter(getter: () => Promise<{ token?: string; cookieHeader?: string }>): void {
   _tokenGetter = getter
 }
 
@@ -17,13 +18,16 @@ async function ensureToken(): Promise<void> {
   if (_tokenReady) return
   _tokenReady = true
   if (_tokenGetter) {
-    _token = await _tokenGetter()
+    const result = await _tokenGetter()
+    _token = result.token
+    _cookieHeader = result.cookieHeader
   }
 }
 
 function authHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (_token) headers['Authorization'] = `Bearer ${_token}`
+  if (_cookieHeader) headers['Cookie'] = _cookieHeader
   return { ...headers, ...extraHeaders }
 }
 

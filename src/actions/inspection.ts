@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { getServerToken } from '@/lib/auth'
+import { getAuthHeaders, getServerToken, getImpersonateToken } from '@/lib/auth'
 import {
   CreateInspectionRouteInput, UpdateInspectionRouteInput,
   CreateInspectionTaskInput, EquipmentCheckResult,
@@ -27,11 +27,11 @@ async function actionFetch<T>(
 ): Promise<ActionResult<T>> {
   const { skipRevalidate, ...fetchInit } = options || {}
   try {
+    const authHeaders = await getAuthHeaders()
     const response = await fetch(url, {
       ...fetchInit,
       headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${await getServerToken()}`,
+        ...authHeaders,
         ...fetchInit.headers,
       },
     })
@@ -59,9 +59,12 @@ async function actionFetch<T>(
 async function uploadPhoto(urlSuffix: string, formData: FormData): Promise<ActionResult<unknown>> {
   try {
     const token = await getServerToken()
+    const impToken = await getImpersonateToken()
+    const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+    if (impToken) headers['Cookie'] = `impersonate_token=${impToken}`
     const response = await fetch(`${BASE}${urlSuffix}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
       body: formData,
     })
     if (!response.ok) {
