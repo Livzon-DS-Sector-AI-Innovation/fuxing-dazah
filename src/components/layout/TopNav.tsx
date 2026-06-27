@@ -7,18 +7,27 @@ import { Dropdown, Avatar } from "antd"
 import { LogoutOutlined, UserOutlined } from "@ant-design/icons"
 import { moduleMenus } from "@/lib/menu-config"
 import { ModuleIcon, SearchIcon, BellIcon } from "@/components/icons"
-import { logout, getCurrentUser } from "@/actions/auth"
-import type { User } from "@/types/user"
+import { logout, getCurrentUser, getImpersonationStatus } from "@/actions/auth"
+import { usePermission } from "@/hooks/usePermission"
+import { useSidebarStore } from "@/stores/sidebar"
+import { MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons"
+import { ImpersonateBanner } from "@/components/permission/ImpersonateBanner"
+import type { User, ImpersonationStatus } from "@/types/user"
 
 export function TopNav() {
   const pathname = usePathname()
   const activeModule = pathname.split("/")[1] || "production"
   const [loggingOut, setLoggingOut] = useState(false)
   const [user, setUser] = useState<User | null>(null)
+  const { hasPermission, isLoaded } = usePermission()
+  const { collapsed, toggle: toggleSidebar } = useSidebarStore()
+
+  const [impersonation, setImpersonation] = useState<ImpersonationStatus | null>(null)
 
   useEffect(() => {
     getCurrentUser().then(setUser)
-  }, [])
+    getImpersonationStatus().then(setImpersonation)
+  }, [isLoaded])
 
   const handleLogout = async () => {
     setLoggingOut(true)
@@ -28,7 +37,18 @@ export function TopNav() {
   const avatarSrc = user?.avatar_url || undefined
   const displayName = user?.name || "API"
 
+  const visibleMenus = isLoaded
+    ? moduleMenus.filter((mod) => {
+        if (!mod.permissions || mod.permissions.length === 0) return true
+        return hasPermission(...mod.permissions)
+      })
+    : moduleMenus
+
   return (
+    <>
+      {impersonation?.is_impersonating && impersonation.target_user && (
+        <ImpersonateBanner targetUser={impersonation.target_user} />
+      )}
     <header className="h-16 bg-[var(--color-canvas)] border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-2.5 mr-10 shrink-0">
@@ -42,7 +62,7 @@ export function TopNav() {
 
       {/* Module Tabs */}
       <nav className="flex items-center gap-0.5 flex-1 overflow-x-auto scrollbar-hide h-full">
-        {moduleMenus.map((mod) => {
+        {visibleMenus.map((mod) => {
           const isActive = activeModule === mod.key
           return (
             <Link
@@ -68,6 +88,13 @@ export function TopNav() {
 
       {/* Right Section */}
       <div className="flex items-center gap-1 ml-4 shrink-0">
+        <button
+          onClick={toggleSidebar}
+          className="w-8 h-8 flex items-center justify-center rounded-[var(--rounded-sm)] text-[var(--color-steel)] hover:text-[var(--color-charcoal)] hover:bg-[var(--color-surface)] transition-colors"
+          title={collapsed ? "展开侧边栏" : "收起侧边栏"}
+        >
+          {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        </button>
         <button className="w-8 h-8 flex items-center justify-center rounded-[var(--rounded-sm)] text-[var(--color-steel)] hover:text-[var(--color-charcoal)] hover:bg-[var(--color-surface)] transition-colors">
           <SearchIcon className="w-[18px] h-[18px]" />
         </button>
@@ -107,5 +134,6 @@ export function TopNav() {
         </Dropdown>
       </div>
     </header>
+    </>
   )
 }

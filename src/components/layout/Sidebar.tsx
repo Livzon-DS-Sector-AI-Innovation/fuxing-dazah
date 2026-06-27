@@ -6,6 +6,7 @@ import { Menu } from "antd"
 import type { MenuProps } from "antd"
 import { getModuleByKey } from "@/lib/menu-config"
 import type { SubMenuItem } from "@/lib/menu-config"
+import { useSidebarStore } from "@/stores/sidebar"
 
 type MenuItem = Required<MenuProps>['items'][number]
 
@@ -90,6 +91,7 @@ function containsPath(items: SubMenuItem[], pathname: string): boolean {
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
+  const collapsed = useSidebarStore((s) => s.collapsed)
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
 
@@ -116,35 +118,39 @@ export function Sidebar() {
   if (!currentModule) return null
 
   return (
-    <aside className="w-56 bg-[var(--color-canvas)] border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-y-auto">
-      <div
-        className={`px-4 pt-5 pb-3${moduleKey === "safety" ? " cursor-pointer group" : ""}`}
-        onClick={moduleKey === "safety" ? () => router.push(currentModule.path) : undefined}
-      >
-        <h2
-          className={`text-[18px] font-semibold text-[var(--color-charcoal)]${
-            moduleKey === "safety" ? " group-hover:text-[var(--color-primary)] transition-colors" : ""
-          }`}
+    <aside
+      className={`bg-[var(--color-canvas)] border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-hidden transition-all duration-200 ${
+        collapsed ? "w-0 border-r-0" : "w-56"
+      }`}
+    >
+      <div className="flex-1 overflow-y-auto min-w-[224px]">
+        <div
+          className={`px-4 pt-5 pb-3${moduleKey === "safety" ? " cursor-pointer group" : ""}`}
+          onClick={moduleKey === "safety" ? () => router.push(currentModule.path) : undefined}
         >
-          {currentModule.label}
-        </h2>
+          <h2
+            className={`text-[18px] font-semibold text-[var(--color-charcoal)]${
+              moduleKey === "safety" ? " group-hover:text-[var(--color-primary)] transition-colors" : ""
+            }`}
+          >
+            {currentModule.label}
+          </h2>
+        </div>
+
+        <Menu
+          mode="inline"
+          selectedKeys={selectedKey ? [selectedKey] : []}
+          openKeys={openKeys}
+          onOpenChange={handleOpenChange}
+          items={menuItems}
+          onClick={handleClick}
+          className="sidebar-menu"
+          style={{ borderInlineEnd: 'none' }}
+        />
       </div>
 
-      <Menu
-        mode="inline"
-        selectedKeys={selectedKey ? [selectedKey] : []}
-        openKeys={openKeys}
-        onOpenChange={handleOpenChange}
-        items={menuItems}
-        onClick={handleClick}
-        className="sidebar-menu flex-1"
-        style={{ borderInlineEnd: 'none' }}
-      />
-
-      <div className="px-4 py-3 border-t border-[var(--color-hairline-soft)]">
-        <p className="text-[12px] text-[var(--color-stone)]">
-          v0.1.1
-        </p>
+      <div className="px-4 py-3 border-t border-[var(--color-hairline-soft)] min-w-[224px]">
+        <p className="text-[12px] text-[var(--color-stone)]">v0.1.1</p>
       </div>
     </aside>
   )

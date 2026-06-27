@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import '@/lib/http-server'
 import { StatsDashboard } from '@/components/equipment'
 import {
   fetchEquipmentStatistics,

@@ -13,6 +13,7 @@ import {
 import { statusPill, pillSuccess, pillError, pillTab, actionLink, linkSuccess, linkWarning, linkMuted } from '@/components/equipment/shared/shared-styles'
 import type { InspectionTask, InspectionTaskStatus } from '@/types/inspection'
 import type { InspectionTemplate, InspectionTemplateItem } from '@/types/equipment'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props {
   templates: InspectionTemplate[]
@@ -29,6 +30,7 @@ const STATUS_MAP: Record<string, { label: string; color: string; bg: string; ico
 const ALL_STATUSES: InspectionTaskStatus[] = ['待执行', '执行中', '已完成']
 
 export function InspectionTasksTab({ templates, equipments: allEquipments }: Props) {
+  const { hasPermission } = usePermission()
   const { message, modal } = App.useApp()
   const {
     tasks, tasksTotal, tasksPage, tasksPageSize, tasksLoading, tasksStatusFilter, tasksRefreshKey,
@@ -210,7 +212,9 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
     },
     {
       title: '操作', key: 'action', width: 140, fixed: 'end' as const,
-      render: (_: unknown, record: InspectionTask) => (
+      render: (_: unknown, record: InspectionTask) => {
+        if (!hasPermission('equipment:inspection:update')) return null
+        return (
         <Space size={12}>
           {(record.status === '待执行' || record.status === '执行中') && (
             startingIds.has(record.id) ? (
@@ -235,7 +239,8 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
             </span>
           )}
         </Space>
-      ),
+        )
+      },
     },
   ]
 
@@ -262,6 +267,7 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
           })}
         </div>
 
+        {hasPermission('equipment:inspection:create') && (
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -275,6 +281,7 @@ export function InspectionTasksTab({ templates, equipments: allEquipments }: Pro
         >
           创建任务
         </Button>
+        )}
       </div>
 
       <Table

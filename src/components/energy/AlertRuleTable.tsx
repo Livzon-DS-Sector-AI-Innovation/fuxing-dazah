@@ -5,6 +5,7 @@ import { EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { AlertRule, AlertLevel, EnergyType } from '@/types/energy'
 import { energyTypeLabels } from './constants'
+import { usePermission } from '@/hooks/usePermission'
 
 interface AlertRuleTableProps {
   data: AlertRule[]
@@ -36,6 +37,8 @@ export function AlertRuleTable({
   onEdit,
   onDelete,
 }: AlertRuleTableProps) {
+  const { hasPermission } = usePermission()
+
   const handleDelete = async (id: string) => {
     await onDelete(id)
   }
@@ -101,23 +104,27 @@ export function AlertRuleTable({
       width: 120,
       render: (_, record) => (
         <Space>
-          <Button
-            type="link"
-            icon={<EditOutlined />}
-            onClick={() => onEdit(record)}
-          >
-            编辑
-          </Button>
-          <Popconfirm
-            title="确定删除此规则？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button type="link" danger icon={<DeleteOutlined />}>
-              删除
+          {hasPermission('energy:alert:manage') && (
+            <Button
+              type="link"
+              icon={<EditOutlined />}
+              onClick={() => onEdit(record)}
+            >
+              编辑
             </Button>
-          </Popconfirm>
+          )}
+          {hasPermission('energy:alert:manage') && (
+            <Popconfirm
+              title="确定删除此规则？"
+              onConfirm={() => handleDelete(record.id)}
+              okText="确定"
+              cancelText="取消"
+            >
+              <Button type="link" danger icon={<DeleteOutlined />}>
+                删除
+              </Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },

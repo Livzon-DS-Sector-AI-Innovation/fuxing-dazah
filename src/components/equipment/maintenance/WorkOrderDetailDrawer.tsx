@@ -14,6 +14,7 @@ import { WorkOrderStatus, WorkOrderPriority, Personnel } from '@/types/equipment
 import { fetchWorkOrderByIdClient } from '@/lib/api/equipment-client'
 import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { PersonnelSelect } from '@/components/equipment'
+import { usePermission } from '@/hooks/usePermission'
 
 const { TextArea } = Input
 
@@ -52,6 +53,7 @@ interface WorkOrderDetailDrawerProps {
 export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps) {
   const { message, modal } = App.useApp()
   const { workOrderDetailOpen, viewingWorkOrder, closeWorkOrderDetail, setViewingWorkOrder } = useEquipmentStore()
+  const { hasPermission } = usePermission()
 
   const [personnel, setPersonnel] = useState<Personnel[]>([])
 
@@ -363,21 +365,21 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
 
       <div style={{ borderTop: '1px solid #ede9e4', paddingTop: 16 }}>
         <Space wrap>
-          {wo.status === '待处理' && (
+          {wo.status === '待处理' && hasPermission('equipment:work_order:update') && (
             <>
               <Button type="primary" onClick={handleStart}>开始执行</Button>
               <Button onClick={handleAssign}>指派维修人</Button>
               <Button icon={<ThunderboltOutlined />} onClick={handleClaim}>抢单</Button>
             </>
           )}
-          {wo.status === '执行中' && <Button type="primary" onClick={handleComplete}>提交完成</Button>}
-          {wo.status === '待验收' && (
+          {wo.status === '执行中' && hasPermission('equipment:work_order:update') && <Button type="primary" onClick={handleComplete}>提交完成</Button>}
+          {wo.status === '待验收' && hasPermission('equipment:work_order:approve') && (
             <>
               <Button type="primary" onClick={() => handleVerify('合格')}>验收通过</Button>
               <Button danger onClick={() => handleVerify('不合格')}>打回重修</Button>
             </>
           )}
-          {wo.status === '已完成' && <Button onClick={handleClose}>关闭工单</Button>}
+          {wo.status === '已完成' && hasPermission('equipment:work_order:update') && <Button onClick={handleClose}>关闭工单</Button>}
         </Space>
       </div>
     </Drawer>

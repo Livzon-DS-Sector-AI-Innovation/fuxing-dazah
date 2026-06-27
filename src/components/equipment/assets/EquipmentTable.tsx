@@ -8,6 +8,7 @@ import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
 import { statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared/shared-styles'
 import { EquipmentDetailDrawer } from './EquipmentDetailDrawer'
+import { usePermission } from '@/hooks/usePermission'
 
 const statusConfig: Record<EquipmentStatus, { color: string; bg: string }> = {
   '在用':   { color: '#1aae39', bg: '#d9f3e1' },
@@ -40,6 +41,8 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
     setStatusFilter, setKeyword,
     openEquipmentDrawer, openRepairDrawer,
   } = useEquipmentStore()
+
+  const { hasPermission } = usePermission()
 
   // 本地分页
   const [localPage, setLocalPage] = useState(1)
@@ -113,9 +116,15 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
       render: (_: unknown, record: Equipment) => (
         <Space size={8}>
           <span role="button" onClick={() => { setDetailEquipment(record); setDetailOpen(true) }} style={linkPrimary}><EyeOutlined />详情</span>
-          <span role="button" onClick={() => openRepairDrawer(record.id)} style={linkWarning}><ToolOutlined />报修</span>
-          <span role="button" onClick={() => openEquipmentDrawer(record)} style={linkPrimary}><EditOutlined />编辑</span>
-          <span role="button" onClick={() => handleDelete(record)} style={linkDanger}><DeleteOutlined />删除</span>
+          {hasPermission('equipment:maintenance:create') && (
+            <span role="button" onClick={() => openRepairDrawer(record.id)} style={linkWarning}><ToolOutlined />报修</span>
+          )}
+          {hasPermission('equipment:asset:update') && (
+            <span role="button" onClick={() => openEquipmentDrawer(record)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {hasPermission('equipment:asset:delete') && (
+            <span role="button" onClick={() => handleDelete(record)} style={linkDanger}><DeleteOutlined />删除</span>
+          )}
         </Space>
       ),
     },
@@ -137,7 +146,9 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
         <Input placeholder="搜索设备编号或名称" prefix={<SearchOutlined style={{ color: '#a4a097' }} />}
           style={{ width: 240 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} allowClear />
         <div style={{ flex: 1 }} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openEquipmentDrawer()}>新增设备</Button>
+        {hasPermission('equipment:asset:create') && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openEquipmentDrawer()}>新增设备</Button>
+        )}
       </div>
       <div ref={tableWrapRef} style={{ flex: 1, minHeight: 0 }}>
         <Table

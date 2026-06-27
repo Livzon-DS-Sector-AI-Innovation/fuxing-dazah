@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const PUBLIC_PATHS = ['/login', '/auth/callback']
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/api']
 
 /**
  * 从请求头中获取用户实际访问的地址（而非 Docker 容器内部 hostname）。

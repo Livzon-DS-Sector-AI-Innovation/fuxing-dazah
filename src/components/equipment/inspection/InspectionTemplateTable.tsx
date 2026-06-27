@@ -8,10 +8,12 @@ import { InspectionTemplate } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteInspectionTemplate } from '@/actions/equipment'
 import { pillSuccess, pillNeutral, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props { onRefresh?: () => void; categories: { id: string; name: string }[] }
 
 export function InspectionTemplateTable({ onRefresh, categories }: Props) {
+  const { hasPermission } = usePermission()
   const { message, modal } = App.useApp()
   const {
     inspectionTemplates, inspectionTemplateTotal, inspectionTemplatePage, inspectionTemplatePageSize,
@@ -44,9 +46,15 @@ export function InspectionTemplateTable({ onRefresh, categories }: Props) {
       title: '操作', key: 'action', width: 220, fixed: 'end',
       render: (_: unknown, r: InspectionTemplate) => (
         <Space size={12}>
+          {hasPermission('equipment:inspection:update') && (
           <span role="button" onClick={() => openInspectionItemDrawer(r.id)} style={linkPurple}><UnorderedListOutlined />检查项</span>
+          )}
+          {hasPermission('equipment:inspection:update') && (
           <span role="button" onClick={() => openInspectionTemplateDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {hasPermission('equipment:inspection:delete') && (
           <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          )}
         </Space>
       ),
     },

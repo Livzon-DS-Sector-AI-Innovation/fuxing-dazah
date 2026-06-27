@@ -9,6 +9,7 @@ import { deletePersonnel } from '@/actions/equipment-personnel'
 import { PersonnelInfo } from './PersonnelInfo'
 import type { EquipmentRole, Personnel } from '@/types/equipment-personnel'
 import type { ColumnsType } from 'antd/es/table'
+import { usePermission } from '@/hooks/usePermission'
 
 const { Text } = Typography
 
@@ -35,6 +36,7 @@ const STATUS_PILL: Record<string, React.CSSProperties> = {
 }
 
 export function PersonnelTable({ roles, onAddClick, onRoleClick, onCategoryClick }: Props) {
+  const { hasPermission } = usePermission()
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [keyword, setKeyword] = useState('')
@@ -119,6 +121,7 @@ export function PersonnelTable({ roles, onAddClick, onRoleClick, onCategoryClick
       width: 190,
       render: (_: unknown, record: Personnel) => (
         <div style={{ display: 'flex', gap: 8 }}>
+          {hasPermission('equipment:personnel:manage') && (
           <Button
             size="small"
             icon={<TeamOutlined />}
@@ -127,6 +130,8 @@ export function PersonnelTable({ roles, onAddClick, onRoleClick, onCategoryClick
           >
             角色
           </Button>
+          )}
+          {hasPermission('equipment:personnel:manage') && (
           <Button
             size="small"
             icon={<ApartmentOutlined />}
@@ -135,6 +140,8 @@ export function PersonnelTable({ roles, onAddClick, onRoleClick, onCategoryClick
           >
             分类
           </Button>
+          )}
+          {hasPermission('equipment:personnel:manage') && (
           <Popconfirm
             title="确认移除该人员？"
             onConfirm={() => handleDelete(record.id)}
@@ -146,6 +153,7 @@ export function PersonnelTable({ roles, onAddClick, onRoleClick, onCategoryClick
               style={{ borderRadius: 8, fontWeight: 500, fontSize: 12 }}
             />
           </Popconfirm>
+          )}
         </div>
       ),
     },

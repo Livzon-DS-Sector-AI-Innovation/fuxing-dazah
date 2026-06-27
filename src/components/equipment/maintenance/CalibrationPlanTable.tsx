@@ -8,6 +8,7 @@ import { CalibrationPlan, CalibrationPlanStatus, CalibrationType } from '@/types
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteCalibrationPlan } from '@/actions/equipment'
 import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, statusPill, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 const statusMap: Record<CalibrationPlanStatus, React.CSSProperties> = {
   '启用': pillSuccess,
@@ -24,6 +25,8 @@ export function CalibrationPlanTable({ onRefresh, onRecordRefresh }: Props) {
     setCalibrationPlanPage, setCalibrationPlanPageSize, setCalibrationPlanStatusFilter,
     openCalibrationPlanDrawer, openCalibrationRecordDrawer,
   } = useEquipmentStore()
+
+  const { hasPermission } = usePermission()
 
   const handleDelete = useCallback((r: CalibrationPlan) => {
     modal.confirm({
@@ -62,9 +65,15 @@ export function CalibrationPlanTable({ onRefresh, onRecordRefresh }: Props) {
       title: '操作', key: 'action', width: 180, fixed: 'end',
       render: (_: unknown, r: CalibrationPlan) => (
         <Space size={12}>
-          <span role="button" onClick={() => openCalibrationRecordDrawer({ calibration_plan_id: r.id, calibration_type: r.calibration_type } as any)} style={linkPurple}><FileTextOutlined />记录</span>
-          <span role="button" onClick={() => openCalibrationPlanDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
-          <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          {hasPermission('equipment:maintenance:create') && (
+            <span role="button" onClick={() => openCalibrationRecordDrawer({ calibration_plan_id: r.id, calibration_type: r.calibration_type } as any)} style={linkPurple}><FileTextOutlined />记录</span>
+          )}
+          {hasPermission('equipment:maintenance:update') && (
+            <span role="button" onClick={() => openCalibrationPlanDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {hasPermission('equipment:maintenance:delete') && (
+            <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          )}
         </Space>
       ),
     },
@@ -76,7 +85,9 @@ export function CalibrationPlanTable({ onRefresh, onRecordRefresh }: Props) {
         <Select placeholder="计划状态" allowClear style={{ width: 120 }}
           value={calibrationPlanStatusFilter || undefined} onChange={v => setCalibrationPlanStatusFilter(v || '')}
           options={[{ label: '启用', value: '启用' }, { label: '停用', value: '停用' }]} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openCalibrationPlanDrawer()}>新增校准计划</Button>
+        {hasPermission('equipment:maintenance:create') && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openCalibrationPlanDrawer()}>新增校准计划</Button>
+        )}
       </div>
       <Table columns={columns} dataSource={calibrationPlans} rowKey="id" size="small" loading={calibrationPlanLoading}
         scroll={{ x: 'max-content' }}

@@ -5,6 +5,7 @@ import { ReloadOutlined, EyeOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { CollectLog, CollectStatus } from '@/types/energy'
 import { useEnergyStore } from '@/stores/energy'
+import { usePermission } from '@/hooks/usePermission'
 
 // ── 轻奢 Pill 样式 ──
 
@@ -135,6 +136,7 @@ export function CollectLogTable({
   onRetry,
 }: CollectLogTableProps) {
   const { logFilters, setLogFilters, openCollectLogDrawer } = useEnergyStore()
+  const { hasPermission } = usePermission()
 
   const columns: TableColumnsType<CollectLog> = [
     {
@@ -230,7 +232,7 @@ export function CollectLogTable({
           >
             详情
           </Button>
-          {record.status === 'failed' && onRetry && (
+          {record.status === 'failed' && onRetry && hasPermission('energy:collect_log:read') && (
             <Button
               type="text"
               size="small"

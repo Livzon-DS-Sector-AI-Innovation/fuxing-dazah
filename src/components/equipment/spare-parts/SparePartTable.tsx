@@ -8,6 +8,7 @@ import { SparePart } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteSparePart } from '@/actions/equipment'
 import { pillSuccess, pillNeutral, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props { onRefresh?: () => void }
 
@@ -19,6 +20,7 @@ export function SparePartTable({ onRefresh }: Props) {
     setSparePartPage, setSparePartPageSize, setSparePartKeyword,
     openSparePartDrawer, openStockInboundDrawer, stockWarnings,
   } = useEquipmentStore()
+  const { hasPermission } = usePermission()
 
   const handleDelete = useCallback((record: SparePart) => {
     modal.confirm({
@@ -53,9 +55,15 @@ export function SparePartTable({ onRefresh }: Props) {
       title: '操作', key: 'action', width: 180, fixed: 'end',
       render: (_: unknown, r: SparePart) => (
         <Space size={12}>
-          <span role="button" onClick={() => openStockInboundDrawer(r.id)} style={linkPurple}><ImportOutlined />入库</span>
-          <span role="button" onClick={() => openSparePartDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
-          <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          {hasPermission('equipment:spare_part:update') && (
+            <span role="button" onClick={() => openStockInboundDrawer(r.id)} style={linkPurple}><ImportOutlined />入库</span>
+          )}
+          {hasPermission('equipment:spare_part:update') && (
+            <span role="button" onClick={() => openSparePartDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {hasPermission('equipment:spare_part:delete') && (
+            <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          )}
         </Space>
       ),
     },
@@ -73,7 +81,9 @@ export function SparePartTable({ onRefresh }: Props) {
             </Badge>
           )}
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>新建备件</Button>
+        {hasPermission('equipment:spare_part:create') && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>新建备件</Button>
+        )}
       </div>
       <Table columns={columns} dataSource={spareParts} rowKey="id" size="small" loading={sparePartLoading}
         scroll={{ x: 'max-content' }}

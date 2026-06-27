@@ -21,6 +21,7 @@ import { InspectionTemplateDrawer } from './InspectionTemplateDrawer'
 import { InspectionItemDrawer } from './InspectionItemDrawer'
 import { fetchInspectionTemplatesClient } from '@/lib/api/equipment-client'
 import type { InspectionTemplate, EquipmentCategory } from '@/types/equipment'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props {
   initialTemplates: InspectionTemplate[]
@@ -30,6 +31,7 @@ interface Props {
 }
 
 export function InspectionPage({ initialTemplates, initialEquipments, initialCategories, initialLocations }: Props) {
+  const { hasPermission } = usePermission()
   const {
     activeTab, setActiveTab,
     executingTaskId, clearExecuting,
@@ -110,10 +112,12 @@ export function InspectionPage({ initialTemplates, initialEquipments, initialCat
             <h2 style={{ fontSize: 18, fontWeight: 600, color: '#1a1a1a', margin: 0 }}>
               巡检模板列表
             </h2>
+            {hasPermission('equipment:inspection:create') && (
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openInspectionTemplateDrawer()}
               style={{ borderRadius: 8, height: 36, background: '#5645d4', borderColor: '#5645d4', fontWeight: 600, fontSize: 13, boxShadow: 'none' }}>
               新建巡检模板
             </Button>
+            )}
           </div>
           <InspectionTemplateTable onRefresh={fetchTemplateData} categories={initialCategories} />
         </div>

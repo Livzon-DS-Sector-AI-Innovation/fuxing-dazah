@@ -1,3 +1,4 @@
+import '@/lib/http-server'
 import { EquipmentPage } from '@/components/equipment'
 import { fetchCategoryTree, fetchLocationTree, fetchEquipments, fetchEquipmentStatistics, fetchDepartments } from '@/lib/api/equipment'
 import type { DepartmentOption } from '@/lib/api/equipment'

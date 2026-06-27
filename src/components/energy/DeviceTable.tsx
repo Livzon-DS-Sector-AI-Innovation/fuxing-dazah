@@ -7,6 +7,7 @@ import type { TableColumnsType } from 'antd'
 import { EnergyDeviceConfig, EnergyType } from '@/types/energy'
 import { useEnergyStore } from '@/stores/energy'
 import { deleteEnergyDevice } from '@/actions/energy'
+import { PermissionGuard } from '@/components/permission/PermissionGuard'
 
 // ── 轻奢 Pill 样式（全圆角、半透明底色、轻字重） ──
 
@@ -247,22 +248,24 @@ export function DeviceTable({
       width: 72,
       render: (_: unknown, record: EnergyDeviceConfig) => (
         <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openDeviceDrawer('edit', record.id)}
-            style={{ color: '#5645d4' }}
-            aria-label="编辑"
-          />
-          <Button
-            type="text"
-            size="small"
-            icon={<DeleteOutlined />}
-            onClick={() => handleDelete(record)}
-            style={{ color: '#e03131' }}
-            aria-label="删除"
-          />
+          <PermissionGuard permission="energy:device:manage">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openDeviceDrawer('edit', record.id)}
+              style={{ color: '#5645d4' }}
+              aria-label="编辑"
+            />
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              onClick={() => handleDelete(record)}
+              style={{ color: '#e03131' }}
+              aria-label="删除"
+            />
+          </PermissionGuard>
         </div>
       ),
     },

@@ -6,6 +6,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { CalibrationRecord, CalibrationType, CalibrationResult } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { pillSuccess, pillError, pillPurple, pillWarning, statusPill } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props { onRefresh?: () => void }
 
@@ -15,6 +16,8 @@ export function CalibrationRecordTable({ onRefresh }: Props) {
     calibrationRecordLoading, setCalibrationRecordPage, setCalibrationRecordPageSize,
     openCalibrationRecordDrawer,
   } = useEquipmentStore()
+
+  const { hasPermission } = usePermission()
 
   const columns: ColumnsType<CalibrationRecord> = [
     { title: '设备', dataIndex: 'equipment_name', key: 'equipment_name', width: 150, render: (n: string | undefined, r) => n || r.equipment_id },
@@ -36,7 +39,9 @@ export function CalibrationRecordTable({ onRefresh }: Props) {
   return (
     <div>
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openCalibrationRecordDrawer()}>新增校准记录</Button>
+        {hasPermission('equipment:maintenance:create') && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openCalibrationRecordDrawer()}>新增校准记录</Button>
+        )}
       </div>
       <Table columns={columns} dataSource={calibrationRecords} rowKey="id" size="small" loading={calibrationRecordLoading}
         scroll={{ x: 'max-content' }}

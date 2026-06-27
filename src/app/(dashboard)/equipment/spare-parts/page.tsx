@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import '@/lib/http-server'
 import { SparePartsPage } from '@/components/equipment'
 import { fetchSpareParts, fetchStockWarnings } from '@/lib/api/equipment'
 import { SparePart, StockWarning } from '@/types/equipment'

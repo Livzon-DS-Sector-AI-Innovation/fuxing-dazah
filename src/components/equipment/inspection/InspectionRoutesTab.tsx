@@ -10,6 +10,7 @@ import { fetchInspectionRoutes } from '@/lib/api/inspection'
 import { statusPill, pillSuccess, pillNeutral, linkPurple, linkPrimary, linkDanger } from '@/components/equipment/shared/shared-styles'
 import type { InspectionRoute } from '@/types/inspection'
 import type { InspectionTemplate } from '@/types/equipment'
+import { usePermission } from '@/hooks/usePermission'
 
 interface Props {
   templates: InspectionTemplate[]
@@ -17,6 +18,7 @@ interface Props {
 }
 
 export function InspectionRoutesTab({ templates, equipments }: Props) {
+  const { hasPermission } = usePermission()
   const { message, modal } = App.useApp()
   const {
     routes, routesTotal, routesPage, routesPageSize, routesLoading, routesKeyword, routesRefreshKey,
@@ -76,18 +78,26 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
       title: '操作', key: 'action', width: 190, fixed: 'end' as const,
       render: (_: unknown, r: InspectionRoute) => (
         <Space size={16}>
+          {hasPermission('equipment:inspection:update') && (
           <span role="button" onClick={() => openRouteEquipmentDrawer(r.id)} style={linkPurple}>
             <ApartmentOutlined />设备
           </span>
+          )}
+          {hasPermission('equipment:inspection:update') && (
           <span role="button" onClick={() => openScheduleDrawer(r.id, r.name)} style={linkPurple}>
             <ClockCircleOutlined />定时
           </span>
+          )}
+          {hasPermission('equipment:inspection:update') && (
           <span role="button" onClick={() => openRouteDrawer(r)} style={linkPrimary}>
             <EditOutlined />编辑
           </span>
+          )}
+          {hasPermission('equipment:inspection:delete') && (
           <span role="button" onClick={() => handleDelete(r)} style={linkDanger}>
             <DeleteOutlined />删除
           </span>
+          )}
         </Space>
       ),
     },
@@ -104,6 +114,7 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
           onChange={e => setRoutesKeyword(e.target.value)}
           onSearch={v => setRoutesKeyword(v)}
         />
+        {hasPermission('equipment:inspection:create') && (
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -117,6 +128,7 @@ export function InspectionRoutesTab({ templates, equipments }: Props) {
         >
           新建路线
         </Button>
+        )}
       </div>
 
       <Table

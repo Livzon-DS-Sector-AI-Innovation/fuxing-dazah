@@ -6,6 +6,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { WorkOrder, WorkOrderStatus, WorkOrderPriority, WorkOrderType } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { statusPill, pillSuccess, pillError, pillWarning, pillPurple, pillNeutral, pillInfo, actionLink, linkPrimary, linkPurple } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 const statusColorMap: Record<WorkOrderStatus, React.CSSProperties> = {
   '待处理': pillError,
@@ -43,6 +44,8 @@ export function WorkOrderTable({ onRefresh }: Props) {
     setWorkOrderStatusFilter, setWorkOrderPriorityFilter, setWorkOrderTypeFilter,
     openWorkOrderDrawer, openWorkOrderDetail,
   } = useEquipmentStore()
+
+  const { hasPermission } = usePermission()
 
   const columns: ColumnsType<WorkOrder> = [
     { title: '工单号', dataIndex: 'work_order_no', key: 'work_order_no', width: 160, fixed: 'start' },
@@ -87,7 +90,7 @@ export function WorkOrderTable({ onRefresh }: Props) {
       render: (_: unknown, r: WorkOrder) => (
         <Space size={12}>
           <span role="button" onClick={() => openWorkOrderDetail(r)} style={linkPrimary}><EyeOutlined />详情</span>
-          {r.status === '待处理' && (
+          {r.status === '待处理' && hasPermission('equipment:work_order:update') && (
             <span role="button" onClick={() => openWorkOrderDrawer(r)} style={linkPurple}><EditOutlined />编辑</span>
           )}
         </Space>

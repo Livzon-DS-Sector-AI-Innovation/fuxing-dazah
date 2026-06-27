@@ -4,6 +4,7 @@ export interface SubMenuItem {
   path: string
   children?: SubMenuItem[]   // 嵌套子菜单 → Ant Design SubMenu
   disabled?: boolean         // 灰显占位，功能未开发
+  permissions?: string[]     // 权限码，用于前端菜单可见性控制
 }
 
 export interface ModuleMenu {
@@ -12,6 +13,7 @@ export interface ModuleMenu {
   icon: string
   path: string
   children: SubMenuItem[]
+  permissions?: string[]     // 权限码，用于前端菜单可见性控制
 }
 
 export const moduleMenus: ModuleMenu[] = [
@@ -20,6 +22,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "生产管理",
     icon: "factory",
     path: "/production",
+    permissions: ["production:*:read"],
     children: [
       { key: "batches", label: "批次管理", path: "/production/batches" },
       { key: "plan", label: "生产计划", path: "/production/plan" },
@@ -33,6 +36,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "设备管理",
     icon: "cog",
     path: "/equipment",
+    permissions: ["equipment:*:read"],
     children: [
       { key: "stats", label: "设备仪表盘", path: "/equipment/stats" },
       { key: "assets", label: "设备台账", path: "/equipment/assets" },
@@ -47,6 +51,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "能源管理",
     icon: "bolt",
     path: "/energy",
+    permissions: ["energy:*:read"],
     children: [
       { key: "overview", label: "能源总览", path: "/energy" },
       { key: "devices", label: "数据源配置", path: "/energy/devices" },
@@ -63,6 +68,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "安全管理",
     icon: "shield",
     path: "/safety",
+    permissions: ["safety:*:read"],
     children: [
             // ── 系统配置 ──
       {
@@ -183,6 +189,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "研发管理",
     icon: "beaker",
     path: "/rd",
+    permissions: ["research:*:read"],
     children: [
       { key: "projects", label: "研发项目", path: "/rd/projects" },
       { key: "experiments", label: "实验记录", path: "/rd/experiments" },
@@ -194,6 +201,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "注册管理",
     icon: "document",
     path: "/registration",
+    permissions: ["registration:*:read"],
     children: [
       { key: "filing", label: "注册申报", path: "/registration/filing" },
       { key: "regulation", label: "法规跟踪", path: "/registration/regulation" },
@@ -205,6 +213,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "质量管理",
     icon: "check-circle",
     path: "/quality",
+    permissions: ["quality:*:read"],
     children: [
       { key: "inspection", label: "质量检验", path: "/quality/inspection" },
       { key: "deviation", label: "偏差管理", path: "/quality/deviation" },
@@ -217,6 +226,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "行政管理",
     icon: "building",
     path: "/admin",
+    permissions: ["administration:*:read"],
     children: [
       { key: "notice", label: "公告通知", path: "/admin/notice" },
       { key: "meeting", label: "会议管理", path: "/admin/meeting" },
@@ -228,6 +238,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "人事管理",
     icon: "users",
     path: "/hr",
+    permissions: ["hr:*:read"],
     children: [
       {
         key: "old-factory",
@@ -273,6 +284,7 @@ export const moduleMenus: ModuleMenu[] = [
     label: "仓储管理",
     icon: "archive",
     path: "/warehouse",
+    permissions: ["warehouse:*:read"],
     children: [
       { key: "inventory", label: "库存管理", path: "/warehouse/inventory" },
       { key: "inout", label: "出入库记录", path: "/warehouse/inout" },
@@ -284,10 +296,22 @@ export const moduleMenus: ModuleMenu[] = [
     label: "采购管理",
     icon: "cart",
     path: "/purchasing",
+    permissions: ["procurement:*:read"],
     children: [
       { key: "request", label: "采购申请", path: "/purchasing/request" },
       { key: "supplier", label: "供应商管理", path: "/purchasing/supplier" },
       { key: "order", label: "采购订单", path: "/purchasing/order" },
+    ],
+  },
+  {
+    key: "permission",
+    label: "权限管理",
+    icon: "lock",
+    path: "/permission/roles",
+    permissions: ["permission:role:manage"],
+    children: [
+      { key: "roles", label: "角色管理", path: "/permission/roles" },
+      { key: "users", label: "用户权限", path: "/permission/users" },
     ],
   },
 ]

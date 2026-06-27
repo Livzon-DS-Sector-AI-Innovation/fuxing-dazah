@@ -7,6 +7,7 @@ import type { ColumnsType } from 'antd/es/table'
 import { FailureCode } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteFailureCode } from '@/actions/equipment'
+import { usePermission } from '@/hooks/usePermission'
 
 const tabConfig = [
   { key: 'symptoms' as const, label: '故障现象', path: 'symptoms' as const },
@@ -21,6 +22,7 @@ interface FailureCodePanelProps {
 export function FailureCodePanel({ onRefresh }: FailureCodePanelProps) {
   const { message, modal } = App.useApp()
   const { failureCodes, failureCodeLoading, openFailureCodeDrawer } = useEquipmentStore()
+  const { hasPermission } = usePermission()
 
   const handleDelete = useCallback((path: 'symptoms' | 'causes' | 'actions', record: FailureCode) => {
     modal.confirm({
@@ -60,8 +62,12 @@ export function FailureCodePanel({ onRefresh }: FailureCodePanelProps) {
       title: '操作', key: 'action', width: 120,
       render: (_: unknown, record: FailureCode) => (
         <Space>
-          <Button type="link" icon={<EditOutlined />} onClick={() => openFailureCodeDrawer(path, record)} style={{ padding: 0 }}>编辑</Button>
-          <Button type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(path, record)} style={{ padding: 0 }}>删除</Button>
+          {hasPermission('equipment:maintenance:update') && (
+            <Button type="link" icon={<EditOutlined />} onClick={() => openFailureCodeDrawer(path, record)} style={{ padding: 0 }}>编辑</Button>
+          )}
+          {hasPermission('equipment:maintenance:delete') && (
+            <Button type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(path, record)} style={{ padding: 0 }}>删除</Button>
+          )}
         </Space>
       ),
     },
@@ -73,9 +79,11 @@ export function FailureCodePanel({ onRefresh }: FailureCodePanelProps) {
     children: (
       <div>
         <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'flex-end' }}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openFailureCodeDrawer(config.key)}>
-            新增{config.label}
-          </Button>
+          {hasPermission('equipment:maintenance:create') && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openFailureCodeDrawer(config.key)}>
+              新增{config.label}
+            </Button>
+          )}
         </div>
         <Table
           columns={getColumns(config.key)}

@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import '@/lib/http-server'
 import { MaintenancePage } from '@/components/equipment'
 import {
   fetchEquipments, fetchWorkOrders, fetchWorkOrderStatistics, fetchFailureCodes,

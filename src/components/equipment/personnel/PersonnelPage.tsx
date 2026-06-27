@@ -11,8 +11,10 @@ import { RoleManagePanel } from './RoleManagePanel'
 import { PersonnelDrawer } from './PersonnelDrawer'
 import { PersonnelCategoryDrawer } from './PersonnelCategoryDrawer'
 import type { EquipmentRole, Personnel } from '@/types/equipment-personnel'
+import { usePermission } from '@/hooks/usePermission'
 
 export function PersonnelPage() {
+  const { hasPermission } = usePermission()
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<'personnel' | 'roles'>('personnel')
@@ -79,6 +81,7 @@ export function PersonnelPage() {
             marginBottom: 20,
           }}>
             <div style={{ display: 'flex', gap: 8 }}>
+              {hasPermission('equipment:personnel:manage') && (
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
@@ -92,6 +95,8 @@ export function PersonnelPage() {
               >
                 添加人员
               </Button>
+              )}
+              {hasPermission('equipment:personnel:manage') && (
               <Button
                 icon={<SyncOutlined spin={refreshing} />}
                 onClick={handleRefresh}
@@ -102,6 +107,7 @@ export function PersonnelPage() {
               >
                 刷新飞书
               </Button>
+              )}
             </div>
           </div>
           <PersonnelTable

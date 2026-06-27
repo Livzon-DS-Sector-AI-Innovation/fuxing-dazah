@@ -33,6 +33,7 @@ import { CalibrationRecordDrawer } from './CalibrationRecordDrawer'
 import { MaintenancePlanTable } from './MaintenancePlanTable'
 import { MaintenancePlanDrawer } from './MaintenancePlanDrawer'
 import { InspectionCompleteDrawer } from './InspectionCompleteDrawer'
+import { usePermission } from '@/hooks/usePermission'
 
 interface MaintenancePageProps {
   initialEquipments: Equipment[]
@@ -72,6 +73,8 @@ export function MaintenancePage({
     openWorkOrderDrawer,
     openMaintenancePlanDrawer,
   } = useEquipmentStore()
+
+  const { hasPermission } = usePermission()
 
   // 超时配置
   const [claimTimeoutConfig, setClaimTimeoutConfig] = useState({
@@ -266,7 +269,9 @@ export function MaintenancePage({
                       </Space.Compact>
                     </div>
                   ))}
-                  <Button type="primary" onClick={handleSaveConfig}>保存配置</Button>
+                  {hasPermission('equipment:work_order:update') && (
+                    <Button type="primary" onClick={handleSaveConfig}>保存配置</Button>
+                  )}
                 </div>
               ),
             }]}
@@ -277,9 +282,11 @@ export function MaintenancePage({
               <h2 className="font-semibold" style={{ fontSize: 18, color: '#1a1a1a', lineHeight: 1.4, margin: 0 }}>
                 工单列表
               </h2>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => openWorkOrderDrawer()}>
-                新建工单
-              </Button>
+              {hasPermission('equipment:work_order:create') && (
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => openWorkOrderDrawer()}>
+                  新建工单
+                </Button>
+              )}
             </div>
             <WorkOrderTable onRefresh={fetchWorkOrderData} />
           </div>
@@ -313,9 +320,11 @@ export function MaintenancePage({
             <h2 className="font-semibold" style={{ fontSize: 18, color: '#1a1a1a', lineHeight: 1.4, margin: 0 }}>
               维护计划列表
             </h2>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => openMaintenancePlanDrawer()}>
-              新建维护计划
-            </Button>
+            {hasPermission('equipment:maintenance:create') && (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openMaintenancePlanDrawer()}>
+                新建维护计划
+              </Button>
+            )}
           </div>
           <MaintenancePlanTable onRefresh={fetchMaintenancePlanData} equipments={equipments} />
         </div>

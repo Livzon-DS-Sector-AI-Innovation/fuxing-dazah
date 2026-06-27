@@ -8,6 +8,7 @@ import { MaintenancePlan, MaintenancePlanStatus } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteMaintenancePlan } from '@/actions/equipment'
 import { pillSuccess, pillNeutral, pillPurple, pillWarning, pillError, linkPrimary, linkDanger } from '@/components/equipment/shared/shared-styles'
+import { usePermission } from '@/hooks/usePermission'
 
 const statusMap: Record<MaintenancePlanStatus, React.CSSProperties> = {
   '启用': pillSuccess,
@@ -25,6 +26,7 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
     setMaintenancePlanPage, setMaintenancePlanPageSize, setMaintenancePlanStatusFilter,
     setMaintenancePlanKeyword, openMaintenancePlanDrawer,
   } = useEquipmentStore()
+  const { hasPermission } = usePermission()
 
   const handleDelete = useCallback((r: MaintenancePlan) => {
     modal.confirm({
@@ -79,8 +81,12 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
       title: '操作', key: 'action', width: 150, fixed: 'end',
       render: (_: unknown, r: MaintenancePlan) => (
         <Space size={12}>
-          <span role="button" onClick={() => openMaintenancePlanDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
-          <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          {hasPermission('equipment:maintenance:update') && (
+            <span role="button" onClick={() => openMaintenancePlanDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {hasPermission('equipment:maintenance:delete') && (
+            <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
+          )}
         </Space>
       ),
     },
