@@ -5,12 +5,14 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.personnel import (
     EquipmentPersonnel,
     EquipmentPersonnelCategory,
     EquipmentPersonnelRole,
     EquipmentRole,
 )
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 
 # ── 角色 Repository ──
 
@@ -113,6 +115,7 @@ async def get_personnel_by_id(
 
 async def list_personnel(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     *,
     role_ids: list[uuid.UUID] | None = None,
     is_active: bool | None = None,
@@ -125,6 +128,14 @@ async def list_personnel(
     )
     count_stmt = select(func.count()).select_from(EquipmentPersonnel).where(
         EquipmentPersonnel.is_deleted == False,  # noqa: E712
+    )
+
+    # 数据范围过滤
+    stmt = apply_equipment_scope(
+        stmt, ctx, EquipmentPersonnel.department, "personnel_dept",
+    )
+    count_stmt = apply_equipment_scope(
+        count_stmt, ctx, EquipmentPersonnel.department, "personnel_dept",
     )
 
     if is_active is not None:
@@ -311,7 +322,7 @@ async def get_candidates(
     role_ids: list[uuid.UUID],
     category_id: uuid.UUID | None = None,
 ) -> list[dict]:
-    """按角色查找可分配人员，支持设备分类过滤"""
+    """按角色编码查找可分配人员，支持设备分类过滤"""
     base = (
         select(
             EquipmentPersonnel,

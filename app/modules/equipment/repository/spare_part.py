@@ -6,12 +6,14 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.spare_part import (
     EquipmentSparePart,
     SparePart,
     SparePartStock,
     SparePartTransaction,
 )
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 
 
 async def create_spare_part(
@@ -42,6 +44,7 @@ async def get_spare_part_by_id(
 
 async def get_spare_parts(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     category: str | None = None,
     keyword: str | None = None,
     is_active: bool | None = None,
@@ -52,6 +55,10 @@ async def get_spare_parts(
     query = select(SparePart).where(
         SparePart.is_deleted == False  # noqa: E712
     )
+
+    # 数据范围过滤
+    query = apply_equipment_scope(query, ctx, SparePart.created_by, "user_id")
+
     if category:
         query = query.where(SparePart.category == category)
     if keyword:
