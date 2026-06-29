@@ -137,37 +137,44 @@ async def get_work_orders(
 
 async def get_work_order_statistics(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     exclude_status: str | None = None,
 ) -> dict[str, Any]:
-    """获取工单统计"""
+    """获取工单统计（按数据范围过滤）"""
     base_where = WorkOrder.is_deleted == False  # noqa: E712
     if exclude_status:
         base_where = base_where & (WorkOrder.status != exclude_status)
 
-    total_result = await db.execute(
-        select(func.count()).where(base_where)
-    )
+    # 按 reporter_id（user_id 模式）过滤数据范围
+    def _apply_scope(q):
+        return apply_equipment_scope(q, ctx, WorkOrder.reporter_id, "user_id")
+
+    total_query = _apply_scope(select(func.count()).where(base_where))
+    total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
 
-    status_result = await db.execute(
+    status_query = _apply_scope(
         select(WorkOrder.status, func.count())
         .where(base_where)
         .group_by(WorkOrder.status)
     )
+    status_result = await db.execute(status_query)
     by_status = {row[0]: row[1] for row in status_result.all()}
 
-    type_result = await db.execute(
+    type_query = _apply_scope(
         select(WorkOrder.order_type, func.count())
         .where(base_where)
         .group_by(WorkOrder.order_type)
     )
+    type_result = await db.execute(type_query)
     by_type = {row[0]: row[1] for row in type_result.all()}
 
-    priority_result = await db.execute(
+    priority_query = _apply_scope(
         select(WorkOrder.priority, func.count())
         .where(base_where)
         .group_by(WorkOrder.priority)
     )
+    priority_result = await db.execute(priority_query)
     by_priority = {row[0]: row[1] for row in priority_result.all()}
 
     return {

@@ -273,7 +273,7 @@ async def get_equipment_statistics(
     ),
 ) -> JSONResponse:
     """获取设备统计"""
-    stats = await service.get_equipment_statistics(db)
+    stats = await service.get_equipment_statistics(db, ctx)
     return success_response(data=EquipmentStatistics(**stats))
 
 

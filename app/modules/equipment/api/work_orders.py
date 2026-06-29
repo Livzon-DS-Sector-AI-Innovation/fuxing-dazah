@@ -142,7 +142,7 @@ async def get_work_order_statistics(
     ),
 ) -> JSONResponse:
     stats = await service.get_work_order_statistics(
-        db, exclude_status=exclude_status,
+        db, ctx, exclude_status=exclude_status,
     )
     return success_response(data=WorkOrderStatistics.model_validate(stats))
 

@@ -605,43 +605,67 @@ async def get_max_equipment_no_by_category(
     return result.scalar_one_or_none()
 
 
-async def get_equipment_statistics(db: AsyncSession) -> dict[str, Any]:
-    """获取设备统计"""
+async def get_equipment_statistics(
+    db: AsyncSession, ctx: EquipmentAccessContext,
+) -> dict[str, Any]:
+    """获取设备统计（按数据范围过滤）"""
     # 总数
-    total_result = await db.execute(
-        select(func.count()).where(Equipment.is_deleted == False)  # noqa: E712
+    total_query = select(func.count()).where(
+        Equipment.is_deleted == False  # noqa: E712
     )
+    total_query = apply_equipment_scope(
+        total_query, ctx, Equipment.department_id, "department_id",
+    )
+    total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
 
     # 按状态统计
-    status_result = await db.execute(
+    status_query = (
         select(Equipment.status, func.count())
         .where(Equipment.is_deleted == False)  # noqa: E712
         .group_by(Equipment.status)
     )
+    status_query = apply_equipment_scope(
+        status_query, ctx, Equipment.department_id, "department_id",
+    )
+    status_result = await db.execute(status_query)
     by_status = {row[0]: row[1] for row in status_result.all()}
 
     # 按分类统计（通过联结表）
-    category_result = await db.execute(
-        select(EquipmentCategory.name, func.count(func.distinct(EquipmentCategoryLink.equipment_id)))
+    category_query = (
+        select(
+            EquipmentCategory.name,
+            func.count(func.distinct(EquipmentCategoryLink.equipment_id)),
+        )
         .select_from(EquipmentCategoryLink)
         .join(Equipment, Equipment.id == EquipmentCategoryLink.equipment_id)
-        .join(EquipmentCategory, EquipmentCategory.id == EquipmentCategoryLink.category_id)
+        .join(
+            EquipmentCategory,
+            EquipmentCategory.id == EquipmentCategoryLink.category_id,
+        )
         .where(
             Equipment.is_deleted == False,  # noqa: E712
             EquipmentCategoryLink.is_deleted == False,  # noqa: E712
         )
         .group_by(EquipmentCategory.name)
     )
+    category_query = apply_equipment_scope(
+        category_query, ctx, Equipment.department_id, "department_id",
+    )
+    category_result = await db.execute(category_query)
     by_category = {row[0]: row[1] for row in category_result.all()}
 
     # 按位置统计
-    location_result = await db.execute(
+    location_query = (
         select(Location.name, func.count())
         .join(Equipment, Equipment.location_id == Location.id)
         .where(Equipment.is_deleted == False)  # noqa: E712
         .group_by(Location.name)
     )
+    location_query = apply_equipment_scope(
+        location_query, ctx, Equipment.department_id, "department_id",
+    )
+    location_result = await db.execute(location_query)
     by_location = {row[0]: row[1] for row in location_result.all()}
 
     return {

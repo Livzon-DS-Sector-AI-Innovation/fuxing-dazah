@@ -607,11 +607,12 @@ async def get_work_orders(
 
 async def get_work_order_statistics(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     exclude_status: str | None = None,
 ) -> dict[str, object]:
-    """获取工单统计"""
+    """获取工单统计（按数据范围过滤）"""
     return await repo.get_work_order_statistics(
-        db, exclude_status=exclude_status,
+        db, ctx, exclude_status=exclude_status,
     )
 
 
