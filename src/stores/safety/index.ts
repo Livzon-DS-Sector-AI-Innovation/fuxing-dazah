@@ -1,7 +1,6 @@
 'use client'
 
 import { create } from 'zustand'
-export { useWorkflowStore } from './workflowSlice'
 import type { SafetyState } from './types'
 import {
   initialCheckState,
@@ -10,7 +9,6 @@ import {
   initialTrainingState,
   initialRegulationState,
   initialRevisionState,
-  initialAIWorkflowConfigState,
   initialPersonnelState,
   initialPermitState,
   initialArticleState,
@@ -21,7 +19,6 @@ import {
   initialContractorState,
   initialOhHazardMonitorState,
   initialOhHealthExamState,
-  initialScheduledTaskState,
 } from './initialStates'
 
 export const useSafetyStore = create<SafetyState>((set) => ({
@@ -32,7 +29,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialTrainingState,
   ...initialRegulationState,
   ...initialRevisionState,
-  ...initialAIWorkflowConfigState,
   ...initialPersonnelState,
   ...initialPermitState,
   ...initialArticleState,
@@ -43,7 +39,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialContractorState,
   ...initialOhHazardMonitorState,
   ...initialOhHealthExamState,
-  ...initialScheduledTaskState,
 
   // ============ Check Actions ============
   setChecks: (checks) => set({ checks }),
@@ -188,37 +183,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
     set((state) => ({
       revisions: state.revisions.filter((r) => r.id !== id),
       currentRevision: state.currentRevision?.id === id ? null : state.currentRevision,
-    })),
-
-  // ============ AI Workflow Config Actions ============
-  setAIWorkflowConfigs: (configs) => set({ aiWorkflowConfigs: configs }),
-  setCurrentAIWorkflowConfig: (config) => set({ currentAIWorkflowConfig: config }),
-  setAIWorkflowConfigQueryParams: (params) =>
-    set((state) => ({
-      aiWorkflowConfigQueryParams: { ...state.aiWorkflowConfigQueryParams, ...params },
-    })),
-  setAIWorkflowConfigTotal: (total) => set({ aiWorkflowConfigTotal: total }),
-  setAIWorkflowConfigLoading: (loading) => set({ aiWorkflowConfigLoading: loading }),
-
-  addAIWorkflowConfig: (config) =>
-    set((state) => ({ aiWorkflowConfigs: [config, ...state.aiWorkflowConfigs] })),
-
-  updateAIWorkflowConfig: (id, updates) =>
-    set((state) => ({
-      aiWorkflowConfigs: state.aiWorkflowConfigs.map((c) =>
-        c.id === id ? { ...c, ...updates } : c
-      ),
-      currentAIWorkflowConfig:
-        state.currentAIWorkflowConfig?.id === id
-          ? { ...state.currentAIWorkflowConfig, ...updates }
-          : state.currentAIWorkflowConfig,
-    })),
-
-  removeAIWorkflowConfig: (id) =>
-    set((state) => ({
-      aiWorkflowConfigs: state.aiWorkflowConfigs.filter((c) => c.id !== id),
-      currentAIWorkflowConfig:
-        state.currentAIWorkflowConfig?.id === id ? null : state.currentAIWorkflowConfig,
     })),
 
   // ============ Personnel Actions ============
@@ -442,32 +406,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       currentOhHealthExam: state.currentOhHealthExam?.id === id ? null : state.currentOhHealthExam,
     })),
 
-  // ============ Scheduled Task Actions ============
-  setScheduledTasks: (items, total) => set({ scheduledTasks: items, scheduledTaskTotal: total ?? items.length }),
-  setCurrentScheduledTask: (item) => set({ currentScheduledTask: item }),
-  setScheduledTaskQueryParams: (params) =>
-    set((state) => ({ scheduledTaskQueryParams: { ...state.scheduledTaskQueryParams, ...params } })),
-  setScheduledTaskTotal: (total) => set({ scheduledTaskTotal: total }),
-  setScheduledTaskLoading: (loading) => set({ scheduledTaskLoading: loading }),
-  addScheduledTask: (item) =>
-    set((state) => ({ scheduledTasks: [item, ...state.scheduledTasks] })),
-  updateScheduledTask: (id, data) =>
-    set((state) => ({
-      scheduledTasks: state.scheduledTasks.map((t) => (t.id === id ? { ...t, ...data } : t)),
-      currentScheduledTask:
-        state.currentScheduledTask?.id === id
-          ? { ...state.currentScheduledTask, ...data }
-          : state.currentScheduledTask,
-    })),
-  removeScheduledTask: (id) =>
-    set((state) => ({
-      scheduledTasks: state.scheduledTasks.filter((t) => t.id !== id),
-    })),
-  setScheduledTaskLogs: (logs) => set({ scheduledTaskLogs: logs }),
-  setScheduledTaskLogsLoading: (loading) => set({ scheduledTaskLogsLoading: loading }),
-  setDataSourceOptions: (options) => set({ dataSourceOptions: options }),
-  setFeishuChats: (chats) => set({ feishuChats: chats }),
-
   // ============ Reset Actions ============
   resetCheckState: () => set(initialCheckState),
   resetHazardState: () => set(initialHazardState),
@@ -475,7 +413,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetTrainingState: () => set(initialTrainingState),
   resetRegulationState: () => set(initialRegulationState),
   resetRevisionState: () => set(initialRevisionState),
-  resetAIWorkflowConfigState: () => set(initialAIWorkflowConfigState),
   resetPersonnelState: () => set(initialPersonnelState),
   resetPermitState: () => set(initialPermitState),
   resetArticleState: () => set(initialArticleState),
@@ -486,7 +423,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetHazardIdentificationState: () => set(initialHazardIdentificationState),
   resetOhHazardMonitorState: () => set(initialOhHazardMonitorState),
   resetOhHealthExamState: () => set(initialOhHealthExamState),
-  resetScheduledTaskState: () => set(initialScheduledTaskState),
 
   resetAll: () =>
     set({
@@ -496,7 +432,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialTrainingState,
       ...initialRegulationState,
       ...initialRevisionState,
-      ...initialAIWorkflowConfigState,
       ...initialPersonnelState,
       ...initialPermitState,
       ...initialArticleState,
@@ -507,6 +442,5 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialContractorState,
       ...initialOhHazardMonitorState,
       ...initialOhHealthExamState,
-      ...initialScheduledTaskState,
     }),
 }))

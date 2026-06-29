@@ -52,14 +52,6 @@ import type {
   TrainingRecord,
   TrainingRecordFormData,
   ApiResponse,
-  ScheduledTask,
-  ScheduledTaskLog,
-  ScheduledTaskFormData,
-  ScheduledTaskQueryParams,
-  CardPreviewRequest,
-  CardPreviewResponse,
-  DataSourceOption,
-  FeishuChat,
   EhsChange,
   EhsChangeFormData,
   EhsChangeQueryParams,
@@ -345,6 +337,11 @@ export async function uploadHazardPhoto(id: string, file: File) {
     `${API_BASE}/safety/hazards/${id}/upload-photo`,
     { method: 'POST', headers: uploadHeaders, body: formData }
   )
+  if (!response.ok) {
+    let detail = ''
+    try { const err = await response.json(); detail = err.detail || err.message || '' } catch { /* ignore */ }
+    throw new Error(`HTTP ${response.status}${detail ? ': ' + detail : ''}`)
+  }
   revalidatePath('/safety/hazard')
   return response.json()
 }
@@ -358,6 +355,11 @@ export async function uploadRectificationPhoto(id: string, file: File) {
     `${API_BASE}/safety/hazards/${id}/upload-rectification-photo`,
     { method: 'POST', headers: uploadHeaders, body: formData }
   )
+  if (!response.ok) {
+    let detail = ''
+    try { const err = await response.json(); detail = err.detail || err.message || '' } catch { /* ignore */ }
+    throw new Error(`HTTP ${response.status}${detail ? ': ' + detail : ''}`)
+  }
   revalidatePath('/safety/hazard')
   return response.json()
 }
@@ -1109,108 +1111,6 @@ export async function identifyRevisionScope(revisionId: string) {
   return response
 }
 
-// ============ AI Workflow Config Actions ============
-
-export async function getAIWorkflowConfigs(
-  params: import('@/types/safety').AIWorkflowConfigQueryParams = {}
-) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.module_code) searchParams.set('module_code', params.module_code)
-  if (params.is_enabled !== undefined) searchParams.set('is_enabled', String(params.is_enabled))
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/ai-workflow-configs${queryString ? `?${queryString}` : ''}`
-  return fetchApi<import('@/types/safety').AIWorkflowConfig[]>(endpoint)
-}
-
-export async function getAIWorkflowConfig(id: string) {
-  return fetchApi<import('@/types/safety').AIWorkflowConfig>(
-    `/safety/ai-workflow-configs/${id}`
-  )
-}
-
-export async function createAIWorkflowConfig(
-  data: import('@/types/safety').AIWorkflowConfigFormData
-) {
-  const response = await fetchApi<import('@/types/safety').AIWorkflowConfig>(
-    '/safety/ai-workflow-configs',
-    { method: 'POST', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-export async function updateAIWorkflowConfig(
-  id: string,
-  data: Partial<import('@/types/safety').AIWorkflowConfig>
-) {
-  const response = await fetchApi<import('@/types/safety').AIWorkflowConfig>(
-    `/safety/ai-workflow-configs/${id}`,
-    { method: 'PUT', body: JSON.stringify(data) }
-  )
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-export async function deleteAIWorkflowConfig(id: string) {
-  const response = await fetchApi<null>(`/safety/ai-workflow-configs/${id}`, {
-    method: 'DELETE',
-  })
-  revalidatePath('/safety/ai-workflow-config')
-  return response
-}
-
-// ============ AI Workflow Attachment Actions ============
-
-export async function uploadWorkflowAttachment(
-  file: File
-): Promise<ApiResponse<import('@/types/safety').ReferenceAttachment>> {
-  const formData = new FormData()
-  formData.append('file', file)
-
-  // 只传 Authorization，不能手动设置 Content-Type —— 浏览器需自动设置
-  // multipart/form-data 的 boundary，否则后端无法解析 FormData
-  const token = await getServerToken()
-  const headers: Record<string, string> = {}
-  if (token) headers['Authorization'] = `Bearer ${token}`
-
-  const response = await fetch(`${API_BASE}/safety/ai-workflow-configs/attachments/upload`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
-
-  if (!response.ok) {
-    let errorMessage = `HTTP ${response.status}`
-    try {
-      const errorBody = await response.json()
-      if (errorBody.message) errorMessage = errorBody.message
-    } catch { /* ignore */ }
-    return { code: response.status, message: errorMessage } as ApiResponse<import('@/types/safety').ReferenceAttachment>
-  }
-
-  return response.json()
-}
-
-export async function deleteWorkflowAttachment(
-  attachmentId: string
-): Promise<ApiResponse<null>> {
-  return fetchApi<null>(`/safety/ai-workflow-configs/attachments/${attachmentId}`, {
-    method: 'DELETE',
-  })
-}
-
-export async function createKnowledgeAttachments(
-  knowledgeIds: string[]
-): Promise<ApiResponse<import('@/types/safety').ReferenceAttachment[]>> {
-  return fetchApi<import('@/types/safety').ReferenceAttachment[]>(
-    '/safety/ai-workflow-configs/attachments/from-knowledge',
-    { method: 'POST', body: JSON.stringify({ knowledge_ids: knowledgeIds }) }
-  )
-}
-
 // ============ SpecialOperationPersonnel Actions ============
 
 export async function getPersonnelList(params: SpecialOperationPersonnelQueryParams = {}) {
@@ -1955,81 +1855,5 @@ export async function addExamAbnormality(id: string, data: Record<string, unknow
 export async function updateExamAbnormalityStatus(id: string, index: number, status: string) {
   const res = await fetchApi<OhHealthExam>(`/safety/oh-health-exams/${id}/abnormality-records/${index}?status=${encodeURIComponent(status)}`, { method: 'PUT' })
   revalidatePath('/safety/occupational-health')
-  return res
-}
-
-// ============ Scheduled Tasks ============
-
-export async function getScheduledTasks(params: ScheduledTaskQueryParams = {}) {
-  const { page = 1, page_size = 20, is_enabled, search } = params
-  const qs = new URLSearchParams({ page: String(page), page_size: String(page_size) })
-  if (is_enabled !== undefined) qs.set('is_enabled', String(is_enabled))
-  if (search) qs.set('search', search)
-  const res = await fetchApi<ScheduledTask[]>(`/safety/scheduled-tasks?${qs.toString()}`)
-  return res
-}
-
-export async function getScheduledTask(id: string) {
-  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}`)
-  return res
-}
-
-export async function createScheduledTask(data: ScheduledTaskFormData) {
-  const res = await fetchApi<ScheduledTask>('/safety/scheduled-tasks', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/scheduled-tasks')
-  return res
-}
-
-export async function updateScheduledTask(id: string, data: Partial<ScheduledTaskFormData>) {
-  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  revalidatePath('/safety/scheduled-tasks')
-  return res
-}
-
-export async function deleteScheduledTask(id: string) {
-  const res = await fetchApi<null>(`/safety/scheduled-tasks/${id}`, { method: 'DELETE' })
-  revalidatePath('/safety/scheduled-tasks')
-  return res
-}
-
-export async function toggleScheduledTask(id: string, enabled: boolean) {
-  const res = await fetchApi<ScheduledTask>(`/safety/scheduled-tasks/${id}/toggle?enabled=${enabled}`, { method: 'POST' })
-  revalidatePath('/safety/scheduled-tasks')
-  return res
-}
-
-export async function runScheduledTaskNow(id: string) {
-  const res = await fetchApi<ScheduledTaskLog>(`/safety/scheduled-tasks/${id}/run`, { method: 'POST' })
-  revalidatePath('/safety/scheduled-tasks')
-  return res
-}
-
-export async function getScheduledTaskLogs(taskId: string, page = 1, page_size = 20) {
-  const qs = new URLSearchParams({ page: String(page), page_size: String(page_size) })
-  const res = await fetchApi<ScheduledTaskLog[]>(`/safety/scheduled-tasks/${taskId}/logs?${qs.toString()}`)
-  return res
-}
-
-export async function getDataSourceOptions() {
-  const res = await fetchApi<DataSourceOption[]>('/safety/scheduled-tasks/data-source-options')
-  return res
-}
-
-export async function getFeishuChats() {
-  const res = await fetchApi<FeishuChat[]>('/safety/scheduled-tasks/feishu-chats')
-  return res
-}
-
-export async function previewCard(data: CardPreviewRequest) {
-  const res = await fetchApi<CardPreviewResponse>('/safety/scheduled-tasks/preview-card', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
   return res
 }

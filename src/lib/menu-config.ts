@@ -75,10 +75,7 @@ export const moduleMenus: ModuleMenu[] = [
         key: "system-config",
         label: "系统配置",
         path: "",
-        children: [
-          { key: "ai-workflow", label: "AI工作流配置", path: "/safety/ai-workflow-config" },
-          { key: "scheduled-tasks", label: "定时任务", path: "/safety/scheduled-tasks" },
-        ],
+        children: [],
       },
       // ── 作业安全 ──
       {

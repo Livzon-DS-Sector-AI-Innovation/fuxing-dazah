@@ -15,5 +15,12 @@ export function fileProxyUrl(path: string | null | undefined): string {
   const base =
     process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
 
-  return `${base}/safety/files/${encodeURIComponent(path)}`
+  // Encode each path segment separately to preserve / as directory separator.
+  // encodeURIComponent encodes / as %2F, but the backend's MinIO object keys
+  // and local paths use literal / — the mismatch causes 404.
+  const encoded = path
+    .split('/')
+    .map((seg) => encodeURIComponent(seg))
+    .join('/')
+  return `${base}/safety/files/${encoded}`
 }

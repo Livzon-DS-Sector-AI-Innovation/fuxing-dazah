@@ -5,7 +5,6 @@ import type {
   SafetyTraining, SafetyTrainingQueryParams, TrainingRecord,
   OperationRegulation, OperationRegulationQueryParams,
   RegulationRevision, RegulationRevisionQueryParams,
-  AIWorkflowConfig, AIWorkflowConfigQueryParams,
   SpecialOperationPersonnel, SpecialOperationPersonnelQueryParams,
   SpecialOperationPermit, SpecialOperationPermitQueryParams,
   SafetyKnowledgeArticle, SafetyKnowledgeArticleQueryParams,
@@ -16,7 +15,6 @@ import type {
   Contractor, ContractorQueryParams, ContractorWorkRecord,
   OhHazardMonitor, OhHazardMonitorQueryParams,
   OhHealthExam, OhHealthExamQueryParams,
-  ScheduledTask, ScheduledTaskQueryParams, ScheduledTaskLog, DataSourceOption, FeishuChat,
 } from '@/types/safety'
 
 // ============ Store State Types ============
@@ -64,13 +62,6 @@ export interface SafetyState {
   revisionQueryParams: RegulationRevisionQueryParams
   revisionTotal: number
   revisionLoading: boolean
-
-  // AI workflow config state
-  aiWorkflowConfigs: AIWorkflowConfig[]
-  currentAIWorkflowConfig: AIWorkflowConfig | null
-  aiWorkflowConfigQueryParams: AIWorkflowConfigQueryParams
-  aiWorkflowConfigTotal: number
-  aiWorkflowConfigLoading: boolean
 
   // Special operation personnel state
   personnel: SpecialOperationPersonnel[]
@@ -143,17 +134,6 @@ export interface SafetyState {
   ohHealthExamTotal: number
   ohHealthExamLoading: boolean
 
-  // Scheduled Task state
-  scheduledTasks: ScheduledTask[]
-  currentScheduledTask: ScheduledTask | null
-  scheduledTaskQueryParams: ScheduledTaskQueryParams
-  scheduledTaskTotal: number
-  scheduledTaskLoading: boolean
-  scheduledTaskLogs: ScheduledTaskLog[]
-  scheduledTaskLogsLoading: boolean
-  dataSourceOptions: DataSourceOption[]
-  feishuChats: FeishuChat[]
-
   // Actions - Check
   setChecks: (checks: SafetyCheck[]) => void
   setCurrentCheck: (check: SafetyCheck | null) => void
@@ -214,16 +194,6 @@ export interface SafetyState {
   addRevision: (revision: RegulationRevision) => void
   updateRevision: (id: string, revision: Partial<RegulationRevision>) => void
   removeRevision: (id: string) => void
-
-  // Actions - AI Workflow Config
-  setAIWorkflowConfigs: (configs: AIWorkflowConfig[]) => void
-  setCurrentAIWorkflowConfig: (config: AIWorkflowConfig | null) => void
-  setAIWorkflowConfigQueryParams: (params: Partial<AIWorkflowConfigQueryParams>) => void
-  setAIWorkflowConfigTotal: (total: number) => void
-  setAIWorkflowConfigLoading: (loading: boolean) => void
-  addAIWorkflowConfig: (config: AIWorkflowConfig) => void
-  updateAIWorkflowConfig: (id: string, config: Partial<AIWorkflowConfig>) => void
-  removeAIWorkflowConfig: (id: string) => void
 
   // Actions - Personnel
   setPersonnel: (personnel: SpecialOperationPersonnel[]) => void
@@ -326,22 +296,7 @@ export interface SafetyState {
   updateOhHealthExam: (id: string, item: Partial<OhHealthExam>) => void
   removeOhHealthExam: (id: string) => void
 
-  // Actions - Scheduled Task
-  setScheduledTasks: (items: ScheduledTask[], total?: number) => void
-  setCurrentScheduledTask: (item: ScheduledTask | null) => void
-  setScheduledTaskQueryParams: (params: Partial<ScheduledTaskQueryParams>) => void
-  setScheduledTaskTotal: (total: number) => void
-  setScheduledTaskLoading: (loading: boolean) => void
-  addScheduledTask: (item: ScheduledTask) => void
-  updateScheduledTask: (id: string, item: Partial<ScheduledTask>) => void
-  removeScheduledTask: (id: string) => void
-  setScheduledTaskLogs: (logs: ScheduledTaskLog[]) => void
-  setScheduledTaskLogsLoading: (loading: boolean) => void
-  setDataSourceOptions: (options: DataSourceOption[]) => void
-  setFeishuChats: (chats: FeishuChat[]) => void
-
   // Actions - Reset
-  resetScheduledTaskState: () => void
   resetOhHazardMonitorState: () => void
   resetOhHealthExamState: () => void
   resetCheckState: () => void
@@ -350,7 +305,6 @@ export interface SafetyState {
   resetTrainingState: () => void
   resetRegulationState: () => void
   resetRevisionState: () => void
-  resetAIWorkflowConfigState: () => void
   resetPersonnelState: () => void
   resetPermitState: () => void
   resetArticleState: () => void

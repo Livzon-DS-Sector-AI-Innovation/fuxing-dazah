@@ -41,7 +41,7 @@ import {
   ReloadOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { getHazard, updateHazard, replyRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer, notifyRectification, triggerRectificationReview, verifyLevel } from '@/actions/safety'
+import { getHazard, updateHazard, replyRectification, reworkRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer, notifyRectification, triggerRectificationReview, verifyLevel } from '@/actions/safety'
 import type { HazardReport } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -71,7 +71,8 @@ function parsePhotos(photos?: string | null): string[] {
     arr = JSON.parse(photos)
     if (!Array.isArray(arr)) return []
   } catch {
-    return photos.split(',').map((s) => s.trim()).filter(Boolean)
+    // 兼容旧格式：逗号分隔的路径字符串
+    arr = photos.split(',').map((s) => s.trim()).filter(Boolean)
   }
   return arr
     .map((item): string | null => {
@@ -896,15 +897,19 @@ export default function HazardLedgerDetailPage() {
 
       const allPhotoPaths = [...existingPaths, ...newPaths]
 
-      // 3. 调用 replyRectification
+      // 3. 根据状态调用 replyRectification 或 reworkRectification
       const replyContent = edits.rectification_reply || record.rectification_reply || fieldVal('rectification_reply')
-      const replyRes = await replyRectification(id, {
+      const data = {
         reply_content: replyContent,
         rectification_photos: allPhotoPaths.length > 0 ? JSON.stringify(allPhotoPaths) : undefined,
-      })
+      }
+      const isRework = record.rectification_status === 'rejected'
+      const replyRes = isRework
+        ? await reworkRectification(id, data)
+        : await replyRectification(id, data)
 
       if (replyRes.code === 200) {
-        message.success('整改回复已提交')
+        message.success(isRework ? '已重新提交整改回复' : '整改回复已提交')
         setRecord(replyRes.data as HazardReport)
         setEditSection(null)
         setEdits({})

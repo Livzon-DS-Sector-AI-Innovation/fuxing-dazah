@@ -5,7 +5,6 @@ import type {
   SafetyTraining, SafetyTrainingQueryParams, TrainingRecord,
   OperationRegulation, OperationRegulationQueryParams,
   RegulationRevision, RegulationRevisionQueryParams,
-  AIWorkflowConfig, AIWorkflowConfigQueryParams,
   SpecialOperationPersonnel, SpecialOperationPersonnelQueryParams,
   SpecialOperationPermit, SpecialOperationPermitQueryParams,
   SafetyKnowledgeArticle, SafetyKnowledgeArticleQueryParams,
@@ -16,7 +15,6 @@ import type {
   Contractor, ContractorQueryParams, ContractorWorkRecord,
   OhHazardMonitor, OhHazardMonitorQueryParams,
   OhHealthExam, OhHealthExamQueryParams,
-  ScheduledTask, ScheduledTaskQueryParams, ScheduledTaskLog, DataSourceOption, FeishuChat,
 } from '@/types/safety'
 
 export const initialCheckState = {
@@ -66,14 +64,6 @@ export const initialRevisionState = {
   revisionQueryParams: { page: 1, page_size: 20 } as RegulationRevisionQueryParams,
   revisionTotal: 0,
   revisionLoading: false,
-}
-
-export const initialAIWorkflowConfigState = {
-  aiWorkflowConfigs: [] as AIWorkflowConfig[],
-  currentAIWorkflowConfig: null as AIWorkflowConfig | null,
-  aiWorkflowConfigQueryParams: { page: 1, page_size: 100 } as AIWorkflowConfigQueryParams,
-  aiWorkflowConfigTotal: 0,
-  aiWorkflowConfigLoading: false,
 }
 
 export const initialPersonnelState = {
@@ -155,16 +145,4 @@ export const initialOhHealthExamState = {
   ohHealthExamQueryParams: { page: 1, page_size: 20 } as OhHealthExamQueryParams,
   ohHealthExamTotal: 0,
   ohHealthExamLoading: false,
-}
-
-export const initialScheduledTaskState = {
-  scheduledTasks: [] as ScheduledTask[],
-  currentScheduledTask: null as ScheduledTask | null,
-  scheduledTaskQueryParams: { page: 1, page_size: 20 } as ScheduledTaskQueryParams,
-  scheduledTaskTotal: 0,
-  scheduledTaskLoading: false,
-  scheduledTaskLogs: [] as ScheduledTaskLog[],
-  scheduledTaskLogsLoading: false,
-  dataSourceOptions: [] as DataSourceOption[],
-  feishuChats: [] as FeishuChat[],
 }

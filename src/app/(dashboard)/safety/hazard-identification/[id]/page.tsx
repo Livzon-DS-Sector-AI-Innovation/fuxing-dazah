@@ -54,7 +54,23 @@ import {
   RECOMMENDATION_PRIORITY_OPTIONS,
 } from '@/types/safety'
 import dayjs from 'dayjs'
-import { getWorkflowStepList } from '@/lib/workflow-templates'
+
+// ── 工作流步骤定义（硬编码） ──
+interface WorkflowStepInfo {
+  num: number
+  title: string
+  desc: string
+  expected_keys: string[]
+}
+const HAZARD_IDENTIFICATION_STEPS: WorkflowStepInfo[] = [
+  { num: 1, title: '附件解析', desc: 'AI提取附件中的作业活动、设备设施、原辅料信息', expected_keys: ['specific_activity', 'equipment_facilities', 'raw_auxiliary_materials'] },
+  { num: 2, title: '危险源辨识', desc: 'AI从人机料法环五个维度系统辨识危险源与事故类型', expected_keys: ['hazard_type', 'possible_accident', 'unsafe_behavior'] },
+  { num: 3, title: '固有风险评价', desc: 'AI进行LEC固有风险评价（未考虑现有控制措施前）', expected_keys: ['l_inherent', 'e_inherent', 'c_inherent', 'd_inherent', 'inherent_risk_level', 'inherent_risk_label'] },
+  { num: 4, title: '现有控制措施', desc: 'AI识别现有工程/管理/PPE/应急四类控制措施', expected_keys: ['existing_engineering_controls', 'existing_management_controls', 'existing_ppe', 'existing_emergency_measures'] },
+  { num: 5, title: '残余风险评价', desc: 'AI对现有控制措施生效后的残余风险进行LEC评价', expected_keys: ['l_residual', 'e_residual', 'c_residual', 'd_residual', 'residual_risk_level', 'residual_risk_label'] },
+  { num: 6, title: '建议措施', desc: 'AI按风险控制层级提出针对性改进建议措施', expected_keys: ['needs_recommendation', 'recommendation_type', 'recommendation_content', 'recommendation_priority'] },
+  { num: 7, title: '措施后风险评价', desc: 'AI评价建议措施实施后的风险水平', expected_keys: ['l_post', 'e_post', 'c_post', 'd_post', 'post_risk_level', 'post_risk_label'] },
+]
 
 const { Title, Text, Paragraph } = Typography
 
@@ -114,7 +130,7 @@ const RISK_COLORS: Record<string, { bg: string; border: string; text: string; ba
 }
 
 // ── 工作流步骤配置 ──
-const WORKFLOW_STEPS = getWorkflowStepList('hazard-identification').map((s) => ({
+const WORKFLOW_STEPS = HAZARD_IDENTIFICATION_STEPS.map((s) => ({
   ...s,
   icon: STEP_ICONS[s.num] || <RobotOutlined />,
 }))
