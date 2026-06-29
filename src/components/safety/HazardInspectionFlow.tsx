@@ -30,21 +30,19 @@ import {
 } from '@ant-design/icons'
 import HazardInspectionForm from './HazardInspectionForm'
 import type { InspectionFormValues } from './HazardInspectionForm'
-import HazardAIResultPanel from './HazardAIResultPanel'
 import {
   createHazard,
   updateHazard,
   getHazards,
   runHazardAI,
   deleteHazard,
-  uploadHazardPhoto,
 } from '@/actions/safety'
 import type { HazardReport } from '@/types/safety'
 import dayjs from 'dayjs'
 
 const { Text, Title } = Typography
 
-type FlowStep = 'form' | 'analyzing' | 'review' | 'done'
+type FlowStep = 'form' | 'analyzing' | 'done'
 
 interface Props {
   variant?: 'page' | 'drawer'
@@ -164,7 +162,6 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
   const [currentStep, setCurrentStep] = useState<FlowStep>('form')
   const [currentHazard, setCurrentHazard] = useState<HazardReport | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [confirming, setConfirming] = useState(false)
   const [aiProgress, setAiProgress] = useState<'idle' | 'script1' | 'script2' | 'done' | 'error'>('idle')
 
   // ── 草稿箱状态 ──
@@ -215,7 +212,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
-          overall_status: 'draft',
+
         } as any)
         if (updateRes.code !== 200) {
           message.error(updateRes.message || '更新失败')
@@ -244,13 +241,23 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
 
       setCurrentHazard(hazard)
 
-      // 上传图片
+      // 上传图片（客户端直接 fetch，避免 Server Action 序列化破坏 File 对象）
       if (files.length > 0) {
         for (const file of files) {
           try {
-            await uploadHazardPhoto(hazard.id, file as unknown as File)
+            const formData = new FormData()
+            formData.append('file', file)
+            const res = await fetch(`${API_BASE}/safety/hazards/${hazard.id}/upload-photo`, {
+              method: 'POST',
+              body: formData,
+            })
+            if (!res.ok) {
+              console.error('图片上传失败:', res.status)
+              message.warning('部分图片上传失败，可稍后重试')
+            }
           } catch {
             console.error('图片上传失败')
+            message.warning('部分图片上传失败，可稍后重试')
           }
         }
       }
@@ -266,7 +273,8 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
         setAiProgress('error')
         const updated = await refreshHazard(hazard.id)
         setCurrentHazard(updated)
-        setCurrentStep('review')
+        setCompletedHazardNo(updated?.hazard_no || hazard.hazard_no)
+        setCurrentStep('done')
         return
       }
 
@@ -283,7 +291,8 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
 
       const updated = await refreshHazard(hazard.id)
       setCurrentHazard(updated)
-      setCurrentStep('review')
+      setCompletedHazardNo(updated?.hazard_no || hazard.hazard_no)
+      setCurrentStep('done')
     } catch (err) {
       console.error('提交失败:', err)
       message.error('提交失败，请重试')
@@ -361,65 +370,6 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
     }
   }
 
-  // ── 确认入库 ──
-  const handleConfirm = async (edits: Partial<Record<string, string>>) => {
-    if (!currentHazard) return
-    setConfirming(true)
-    try {
-      if (Object.keys(edits).length > 0) {
-        const updateRes = await updateHazard(currentHazard.id, edits as any)
-        if (updateRes.code !== 200) {
-          message.error(updateRes.message || '更新失败')
-          setConfirming(false)
-          return
-        }
-      }
-
-      message.success('隐患已确认入库！')
-      setCompletedHazardNo(currentHazard.hazard_no)
-      setCurrentStep('done')
-    } catch {
-      message.error('确认操作失败')
-    } finally {
-      setConfirming(false)
-    }
-  }
-
-  // ── 重新AI分析 ──
-  const handleRerun = async () => {
-    if (!currentHazard) return
-    setCurrentStep('analyzing')
-    setAiProgress('script1')
-
-    try {
-      const r1 = await runHazardAI(currentHazard.id, 1)
-      if (r1.code !== 200) {
-        message.warning('AI 识别失败：' + (r1.message || ''))
-        setAiProgress('error')
-        const updated = await refreshHazard(currentHazard.id)
-        setCurrentHazard(updated)
-        setCurrentStep('review')
-        return
-      }
-
-      setAiProgress('script2')
-      const r2 = await runHazardAI(currentHazard.id, 2)
-      if (r2.code !== 200) {
-        message.warning('AI 整改建议生成失败：' + (r2.message || ''))
-        setAiProgress('error')
-      } else {
-        setAiProgress('done')
-      }
-
-      const updated = await refreshHazard(currentHazard.id)
-      setCurrentHazard(updated)
-      setCurrentStep('review')
-    } catch {
-      message.error('AI 重新执行失败')
-      setCurrentStep('review')
-    }
-  }
-
   // ── 刷新隐患数据 ──
   const refreshHazard = async (id: string): Promise<HazardReport | null> => {
     const res = await fetch(`${API_BASE}/safety/hazards/${id}`)
@@ -482,7 +432,6 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
   const stepItems = [
     { title: '隐患登记', icon: <EditOutlined /> },
     { title: 'AI分析', icon: <RobotOutlined /> },
-    { title: '确认结果', icon: <CheckCircleOutlined /> },
     { title: '完成', icon: <FileTextOutlined /> },
   ]
 
@@ -491,9 +440,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
       ? 0
       : currentStep === 'analyzing'
         ? 1
-        : currentStep === 'review'
-          ? 2
-          : 3
+        : 2
 
   const content = (
     <>
@@ -571,22 +518,12 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
         </StageCard>
       )}
 
-      {/* ── Step 3: AI 结果确认 ── */}
-      {currentStep === 'review' && currentHazard && (
-        <HazardAIResultPanel
-          hazard={currentHazard}
-          confirming={confirming}
-          onConfirm={handleConfirm}
-          onRerun={handleRerun}
-        />
-      )}
-
-      {/* ── Step 4: 完成 ── */}
+      {/* ── Step 3: 完成 ── */}
       {currentStep === 'done' && (
         <StageCard accentColor="#1aae39">
           <Result
             status="success"
-            title="隐患已确认入库！"
+            title="AI 识别完成，隐患已入库！"
             subTitle={`编号：${completedHazardNo || currentHazard?.hazard_no || ''}`}
             extra={[
               <Button

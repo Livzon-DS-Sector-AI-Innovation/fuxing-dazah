@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useCallback } from 'react'
-import { Modal, Button, message, Typography } from 'antd'
+import { App, Button, Modal, Typography } from 'antd'
 import {
   InboxOutlined,
   FileWordOutlined,
@@ -309,6 +309,8 @@ export default function SopGeneratorModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const { message } = App.useApp()
+
   /* ── reset state when modal opens/closes ── */
 
   const handleClose = useCallback(() => {
@@ -422,6 +424,7 @@ export default function SopGeneratorModal({
   const maskClosable = !uploading
 
   return (
+    <App>
     <Modal
       title={null}
       open={open}
@@ -576,5 +579,6 @@ export default function SopGeneratorModal({
         }}
       />
     </Modal>
+    </App>
   )
 }

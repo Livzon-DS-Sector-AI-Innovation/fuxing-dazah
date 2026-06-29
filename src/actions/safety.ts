@@ -291,6 +291,22 @@ export async function notifyReviewer(id: string) {
   return response
 }
 
+export async function notifyRectification(id: string) {
+  const response = await fetchApi<{ target: string }>(
+    `/safety/hazards/${id}/rectification/notify-rectification`,
+    { method: 'POST' }
+  )
+  return response
+}
+
+export async function triggerRectificationReview(id: string) {
+  const response = await fetchApi<HazardReport>(
+    `/safety/hazards/${id}/rectification/review`,
+    { method: 'POST' }
+  )
+  return response
+}
+
 export async function reworkRectification(id: string, data: RectificationReplyRequest) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${id}/rectification/rework`,
@@ -349,7 +365,7 @@ export async function uploadRectificationPhoto(id: string, file: File) {
 export async function runHazardAI(hazardId: string, scriptNumber: number) {
   const response = await fetchApi<HazardReport>(
     `/safety/hazards/${hazardId}/ai/run/${scriptNumber}`,
-    { method: 'POST' }
+    { method: 'POST', body: '{}' }
   )
   revalidatePath('/safety/hazard')
   return response
@@ -758,6 +774,25 @@ export async function createHazardIdentification(
 ) {
   const response = await fetchApi<import('@/types/safety').HazardIdentification>(
     '/safety/hazard-identifications',
+    { method: 'POST', body: JSON.stringify(data) }
+  )
+  revalidatePath('/safety/hazard-identification')
+  return response
+}
+
+// ── 批量辨识 ──
+
+export async function getRegulationStages(regulationId: string) {
+  return fetchApi<import('@/types/safety').RegulationStagesResponse>(
+    `/safety/regulations/${regulationId}/stages`
+  )
+}
+
+export async function createHazardIdentificationBatch(
+  data: import('@/types/safety').HazardIdentificationBatchCreateInput
+) {
+  const response = await fetchApi<import('@/types/safety').HazardIdentificationBatchResponse>(
+    '/safety/hazard-identifications/batch',
     { method: 'POST', body: JSON.stringify(data) }
   )
   revalidatePath('/safety/hazard-identification')

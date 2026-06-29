@@ -950,32 +950,32 @@ export default function HazardLedgerDetailPage() {
   // ── 复核流程 Timeline ──
   // 参照 equipment 模块 WorkOrderDetailDrawer 的 Timeline 交互模式
   const buildReviewTimelineItems = () => {
-    const items: Array<{ color: string; dot: React.ReactNode; children: React.ReactNode }> = []
+    const items: Array<{ color: string; icon: React.ReactNode; content: React.ReactNode }> = []
 
     // ── AI 初审 ──
     const aiStatus = record.ai_review_status || 'pending'
     const aiResult = record.ai_review_result
     let aiColor = '#c8c4be'
-    let aiDot: React.ReactNode = <RobotOutlined style={{ fontSize: 14 }} />
+    let aiIcon: React.ReactNode = <RobotOutlined style={{ fontSize: 14 }} />
 
     if (aiStatus === 'completed' && aiResult?.review_conclusion === '通过') {
       aiColor = '#1aae39'
-      aiDot = <CheckCircleOutlined style={{ fontSize: 14 }} />
+      aiIcon = <CheckCircleOutlined style={{ fontSize: 14 }} />
     } else if (aiStatus === 'completed' && aiResult?.review_conclusion === '不通过') {
       aiColor = '#e03131'
-      aiDot = <CloseCircleOutlined style={{ fontSize: 14 }} />
+      aiIcon = <CloseCircleOutlined style={{ fontSize: 14 }} />
     } else if (aiStatus === 'processing') {
       aiColor = '#0075de'
-      aiDot = <SyncOutlined spin style={{ fontSize: 14 }} />
+      aiIcon = <SyncOutlined spin style={{ fontSize: 14 }} />
     } else if (aiStatus === 'failed') {
       aiColor = '#e03131'
-      aiDot = <ExclamationCircleOutlined style={{ fontSize: 14 }} />
+      aiIcon = <ExclamationCircleOutlined style={{ fontSize: 14 }} />
     }
 
     items.push({
       color: aiColor,
-      dot: aiDot,
-      children: (
+      icon: aiIcon,
+      content: (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1027,7 +1027,7 @@ export default function HazardLedgerDetailPage() {
       const isRejected = status === 'rejected'
 
       let color = '#c8c4be'
-      let dot: React.ReactNode = (
+      let icon: React.ReactNode = (
         <span style={{
           display: 'inline-flex', width: 24, height: 24, borderRadius: '50%',
           background: '#f0eeec', color: '#787671',
@@ -1040,13 +1040,13 @@ export default function HazardLedgerDetailPage() {
 
       if (isApproved) {
         color = '#1aae39'
-        dot = <CheckCircleOutlined style={{ fontSize: 16 }} />
+        icon = <CheckCircleOutlined style={{ fontSize: 16 }} />
       } else if (isRejected) {
         color = '#e03131'
-        dot = <CloseCircleOutlined style={{ fontSize: 16 }} />
+        icon = <CloseCircleOutlined style={{ fontSize: 16 }} />
       } else if (isCurrent) {
         color = '#1677ff'
-        dot = <ClockCircleOutlined style={{ fontSize: 16 }} />
+        icon = <ClockCircleOutlined style={{ fontSize: 16 }} />
       }
 
       let statusTag: React.ReactNode = <StatusPill color="#787671" bg="#f0eeec">待开始</StatusPill>
@@ -1056,8 +1056,8 @@ export default function HazardLedgerDetailPage() {
 
       items.push({
         color,
-        dot,
-        children: (
+        icon,
+        content: (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Text strong style={{ fontSize: 14 }}>{label}</Text>

@@ -26,6 +26,7 @@ import {
 import {
   INSPECTION_CATEGORY_OPTIONS,
   INSPECTOR_DEPARTMENT_OPTIONS,
+  DEPARTMENT_OPTIONS,
 } from '@/types/safety'
 import { getCurrentUser } from '@/actions/auth'
 import dayjs from 'dayjs'
@@ -40,10 +41,10 @@ interface UserOption {
 }
 
 export interface InspectionFormValues {
-  inspection_category?: string
-  discovered_by?: string       // user UUID (person field)
-  discovered_by_name?: string  // display name
-  inspector_department?: string
+  inspection_category?: string     // 逗号分隔的多选值（匹配 Bitable multi_select）
+  discovered_by?: string           // user UUID (person field)
+  discovered_by_name?: string      // display name
+  inspector_department?: string    // 逗号分隔的多选值（匹配 Bitable multi_select）
   department?: string
   discovered_at?: string
   description?: string
@@ -102,7 +103,10 @@ export default function HazardInspectionForm({
   useEffect(() => {
     if (initialValues) {
       form.setFieldsValue({
-        inspection_category: initialValues.inspection_category,
+        // inspection_category 是 multi_select → 回填时拆分为数组
+        inspection_category: initialValues.inspection_category
+          ? initialValues.inspection_category.split(/[,，]/).filter(Boolean)
+          : undefined,
         inspector_department: initialValues.inspector_department
           ? initialValues.inspector_department.split(/[,，]/).filter(Boolean)
           : undefined,
@@ -155,7 +159,7 @@ export default function HazardInspectionForm({
     })
   }, [initialValues])
 
-  // 规范化表单值：mode="tags"/"multiple" 字段返回数组，需转为字符串
+  // 规范化表单值：mode="multiple" 字段返回数组，需转为逗号分隔字符串（匹配 Bitable multi_select）
   const normalizeValues = (values: any): InspectionFormValues => {
     // 从选中的用户选项中提取纯姓名（去掉 " - 部门" 后缀）
     let discoveredByName = values.discovered_by_name || ''
@@ -169,6 +173,10 @@ export default function HazardInspectionForm({
       ...values,
       discovered_by: values.discovered_by || undefined,
       discovered_by_name: discoveredByName || undefined,
+      // multi_select 字段：数组 → 逗号分隔字符串（匹配 Bitable 字段类型）
+      inspection_category: Array.isArray(values.inspection_category)
+        ? values.inspection_category.join(',')
+        : values.inspection_category,
       inspector_department: Array.isArray(values.inspector_department)
         ? values.inspector_department.join(',')
         : values.inspector_department,
@@ -251,11 +259,13 @@ export default function HazardInspectionForm({
               rules={[{ required: true, message: '请选择检查类别' }]}
             >
               <Select
-                placeholder="请选择检查类别"
+                mode="multiple"
+                placeholder="请选择检查类别（可多选，匹配多维表格）"
                 options={INSPECTION_CATEGORY_OPTIONS.map((o) => ({
                   value: o.value,
                   label: o.label,
                 }))}
+                maxTagCount={3}
               />
             </Form.Item>
           </Col>
@@ -316,9 +326,16 @@ export default function HazardInspectionForm({
             <Form.Item
               name="department"
               label="责任部门"
-              rules={[{ required: true, message: '请输入责任部门' }]}
+              rules={[{ required: true, message: '请选择责任部门' }]}
             >
-              <Input placeholder="请输入责任部门" />
+              <Select
+                showSearch
+                placeholder="请选择责任部门（匹配多维表格预设值）"
+                options={DEPARTMENT_OPTIONS}
+                filterOption={(input, option) =>
+                  (option?.label as string)?.includes(input)
+                }
+              />
             </Form.Item>
           </Col>
         </Row>
@@ -351,10 +368,10 @@ export default function HazardInspectionForm({
           </Col>
         </Row>
 
-        <Form.Item name="description" label="隐患描述（可选）">
+        <Form.Item name="description" label="隐患描述">
           <TextArea
             rows={3}
-            placeholder="可选填写隐患描述。如上传图片，AI 将自动识别并生成描述。"
+            placeholder="填写隐患描述"
           />
         </Form.Item>
 

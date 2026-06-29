@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  Card,
+  Drawer,
   Form,
   Input,
   Select,
@@ -11,11 +11,9 @@ import {
   Typography,
   Row,
   Col,
-  Steps,
   App,
 } from 'antd'
 import {
-  ArrowLeftOutlined,
   FileTextOutlined,
   ThunderboltOutlined,
   SaveOutlined,
@@ -31,7 +29,13 @@ import type { OperationRegulation } from '@/types/safety'
 
 const { Text } = Typography
 
-export default function NewHazardIdentificationPage() {
+interface Props {
+  open: boolean
+  onClose: () => void
+  onDone: () => void
+}
+
+export default function HazardIdentificationDrawer({ open, onClose, onDone }: Props) {
   const router = useRouter()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
@@ -56,7 +60,9 @@ export default function NewHazardIdentificationPage() {
     }
   }, [])
 
-  useEffect(() => { loadRegulations() }, [loadRegulations])
+  useEffect(() => {
+    if (open) loadRegulations()
+  }, [open, loadRegulations])
 
   const handleSubmit = async (saveOnly: boolean) => {
     try {
@@ -89,7 +95,12 @@ export default function NewHazardIdentificationPage() {
       }
 
       message.success(saveOnly ? '草稿已保存' : '提交成功，进入AI辨识流程')
-      router.push(`/safety/hazard-identification/${recordId}`)
+      form.resetFields()
+      onClose()
+      onDone()
+      if (!saveOnly) {
+        router.push(`/safety/hazard-identification/${recordId}`)
+      }
     } catch {
       if (!loading) {
         message.error('请完善表单信息')
@@ -99,47 +110,42 @@ export default function NewHazardIdentificationPage() {
     }
   }
 
+  const handleClose = () => {
+    if (loading) return
+    form.resetFields()
+    onClose()
+  }
+
+  // 构建操规选项
   const regulationOptions = regulations.map((r) => ({
     value: r.id,
     label: `${r.regulation_no} — ${r.regulation_name}${r.position ? ` (${r.position})` : ''}`,
   }))
 
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
-      {/* 返回 */}
-      <Button
-        type="text"
-        icon={<ArrowLeftOutlined />}
-        onClick={() => router.push('/safety/hazard-identification')}
-        style={{ marginBottom: 24 }}
-      >
-        返回列表
-      </Button>
-
-      {/* 步骤引导 */}
-      <Card
-        style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e5e3df' }}
-        styles={{ body: { padding: '16px 24px' } }}
-      >
-        <Steps
-          current={0}
-          size="small"
-          items={[
-            { title: '填写基础信息', icon: <FileTextOutlined /> },
-            { title: '引用岗位操作规程', icon: <FileTextOutlined /> },
-            { title: '提交进入AI流程', icon: <ThunderboltOutlined /> },
-          ]}
-        />
-      </Card>
-
+    <Drawer
+      title={
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <BankOutlined style={{ color: '#5645d4' }} />
+          <span style={{ fontSize: 16, fontWeight: 600 }}>新建危险源辨识</span>
+        </span>
+      }
+      open={open}
+      onClose={handleClose}
+      placement="right"
+      size="large"
+      destroyOnClose
+      styles={{ body: { padding: '16px 24px 24px' } }}
+    >
       {/* 表单卡片 — 与隐患登记 HazardInspectionForm 视觉对齐 */}
-      <Card
+      <div
         style={{
           borderRadius: 12,
           border: '1px solid #e5e3df',
           borderLeft: '4px solid #5645d4',
+          padding: '20px 24px',
+          background: '#ffffff',
         }}
-        styles={{ body: { padding: '20px 24px' } }}
       >
         {/* 表单头部 */}
         <div
@@ -235,7 +241,7 @@ export default function NewHazardIdentificationPage() {
               borderTop: '1px solid #e5e3df',
             }}
           >
-            <Button onClick={() => router.push('/safety/hazard-identification')}>
+            <Button onClick={handleClose} disabled={loading}>
               取消
             </Button>
             <Button
@@ -255,7 +261,7 @@ export default function NewHazardIdentificationPage() {
             </Button>
           </div>
         </Form>
-      </Card>
-    </div>
+      </div>
+    </Drawer>
   )
 }

@@ -41,10 +41,8 @@ export default function HazardVerifyModal({
   // 自动确定当前复核级别
   const detectLevel = (): number => {
     if (!record) return 1
-    const isGeneral = record.hazard_level === 'general'
     if (record.rectification_status === 'level2_approved') return 3
-    // 一般隐患：一级通过后直接跳到三级
-    if (record.rectification_status === 'level1_approved') return isGeneral ? 3 : 2
+    if (record.rectification_status === 'level1_approved') return 2
     if (record.rectification_status === 'replied') return 1
     return 1
   }

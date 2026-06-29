@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { Table, Button, Space, message, Typography, Empty, Spin } from 'antd'
+import { App, Button, Empty, Space, Spin, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   InboxOutlined,
@@ -55,6 +55,8 @@ export default function SopGeneratorPanel({
   const [generatedSops, setGeneratedSops] = useState<OperationRegulation[]>([])
   const [loadingList, setLoadingList] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const { message } = App.useApp()
 
   const loadGeneratedSops = useCallback(async () => {
     setLoadingList(true)
@@ -252,6 +254,7 @@ export default function SopGeneratorPanel({
   /* ── render ── */
 
   return (
+    <App>
     <div>
       {/* ═══ Upload Section ═══ */}
       <div
@@ -603,5 +606,6 @@ export default function SopGeneratorPanel({
         )}
       </div>
     </div>
+    </App>
   )
 }

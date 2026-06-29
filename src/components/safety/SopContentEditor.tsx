@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { Button, message, Modal } from 'antd'
+import { App, Button, Modal } from 'antd'
 import {
   DownloadOutlined,
   SaveOutlined,
@@ -901,6 +901,8 @@ export default function SopContentEditor({
   const [isDirty, setIsDirty] = useState(false)
   const [collapsedKeys, setCollapsedKeys] = useState<Record<string, boolean>>({})
 
+  const { message } = App.useApp()
+
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const toggleCollapse = useCallback((key: string) => {
@@ -1740,6 +1742,7 @@ export default function SopContentEditor({
   /* ── render ── */
 
   return (
+    <App>
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: TOKENS.surface }}>
       {/* ═══ TOP BAR ═══ */}
       <div style={S.topBar}>
@@ -1918,5 +1921,6 @@ export default function SopContentEditor({
         .sop-paper-scroll::-webkit-scrollbar-thumb:hover { background: #a4a097; }
       `}} />
     </div>
+    </App>
   )
 }

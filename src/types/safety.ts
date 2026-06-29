@@ -423,6 +423,37 @@ export const INSPECTION_CATEGORY_OPTIONS = [
   { value: '关键风险作业专项检查', label: '关键风险作业专项检查' },
 ]
 
+// ── 责任部门（Bitable「责任部门」SingleSelect 27个预设选项，与后端 DEPARTMENT_CONFIG 对齐）──
+export const DEPARTMENT_OPTIONS = [
+  { value: '合规监察部', label: '合规监察部' },
+  { value: '生产管理部', label: '生产管理部' },
+  { value: '仓储部', label: '仓储部' },
+  { value: '菌种中心', label: '菌种中心' },
+  { value: '设备工程部', label: '设备工程部' },
+  { value: '动力部', label: '动力部' },
+  { value: '发酵工程部', label: '发酵工程部' },
+  { value: '提炼工程一部', label: '提炼工程一部' },
+  { value: '提炼工程三部', label: '提炼工程三部' },
+  { value: '提炼工程二部', label: '提炼工程二部' },
+  { value: '精制工程一部', label: '精制工程一部' },
+  { value: '提炼工程四部', label: '提炼工程四部' },
+  { value: '提炼工程五部', label: '提炼工程五部' },
+  { value: '提炼工程六部', label: '提炼工程六部' },
+  { value: '提炼技术精进中心', label: '提炼技术精进中心' },
+  { value: '质量控制部（QC部）', label: '质量控制部（QC部）' },
+  { value: '质量保证部（QA部）', label: '质量保证部（QA部）' },
+  { value: '法规注册部（RA部）', label: '法规注册部（RA部）' },
+  { value: '环保工程中心', label: '环保工程中心' },
+  { value: '安全工程中心', label: '安全工程中心' },
+  { value: 'AI创新部', label: 'AI创新部' },
+  { value: '发酵工程中心', label: '发酵工程中心' },
+  { value: '提炼半合成工程中心', label: '提炼半合成工程中心' },
+  { value: '人力资源部', label: '人力资源部' },
+  { value: '行政后勤部', label: '行政后勤部' },
+  { value: '采购部', label: '采购部' },
+  { value: '财务部', label: '财务部' },
+]
+
 // ── 检查人员部门（Bitable「检查人员.部门」MultiSelect 60个预设选项）──
 export const INSPECTOR_DEPARTMENT_OPTIONS = [
   { value: 'EHS部', label: 'EHS部' },
@@ -473,17 +504,18 @@ export const CHECK_RESULT_OPTIONS = [
 ]
 
 export const RECTIFICATION_STATUS_OPTIONS = [
-  { value: 'pending', label: '整改中', color: 'processing' },
-  { value: 'under_review', label: '复核中', color: 'warning' },
-  { value: 'completed', label: '已关闭', color: 'success' },
-  { value: 'replied', label: '待复核(旧)', color: 'default' },
+  { value: 'pending', label: '待整改', color: 'processing' },
+  { value: 'in_progress', label: '整改中', color: 'processing' },
+  { value: 'replied', label: '待复核', color: 'default' },
+  { value: 'ai_reviewing', label: 'AI 初审中', color: 'processing' },
   { value: 'level1_approved', label: '一级已通过', color: 'default' },
   { value: 'level2_approved', label: '二级已通过', color: 'default' },
   { value: 'level3_approved', label: '三级已通过', color: 'default' },
   { value: 'rejected', label: '已驳回', color: 'error' },
   { value: 'closed', label: '已关闭', color: 'default' },
-  { value: 'verified', label: '已验证(旧)', color: 'default' },
-  { value: 'in_progress', label: '整改中(旧)', color: 'default' },
+  { value: 'verified', label: '已验证', color: 'default' },
+  { value: 'under_review', label: '复核中', color: 'warning' },
+  { value: 'completed', label: '已关闭', color: 'success' },
 ]
 
 export const VERIFY_LEVEL_OPTIONS = [
@@ -624,13 +656,26 @@ export interface HazardReport {
   ai_generated: boolean
   script1_review_status: string
   script2_review_status: string
+  // ── AI 整改初审 ──
+  ai_review_result?: Record<string, any> | null
+  ai_review_status: string
+  ai_review_completed_at?: string | null
   created_at: string
   updated_at: string
+  // ── 飞书通知追踪 ──
+  rectification_notified_at?: string | null
+  rectification_notify_status?: string | null
+  rectification_notify_error?: string | null
+  review_notified_at?: string | null
+  review_notified_level?: number | null
+  review_notify_status?: string | null
+  review_notify_error?: string | null
 }
 
 export interface HazardReportFormData {
   hazard_no: string
   inspection_category?: string
+  inspector_department?: string
   hazard_type?: HazardType
   hazard_level?: HazardLevel
   hazard_category?: HazardCategory
@@ -1029,16 +1074,52 @@ export interface HazardIdentification {
   script7_review_status: string
   // Meta
   notes?: string
+  batch_id?: string
+  stage_name?: string
+  regulation_name?: string
   created_at: string
   updated_at: string
 }
 
 export interface HazardIdentificationFormData {
-  hazard_id_no: string
+  hazard_id_no?: string  // 留空时后端自动生成 HI-YYYYMMDD-NNN
   department: string
   position: string
-  production_step: string
+  production_step?: string  // 已取消输入
+  regulation_id?: string  // 引用的安全操作规程 ID
   notes?: string
+}
+
+// ── 批量辨识 ──
+
+export interface RegulationStageInfo {
+  stage_name: string
+  safety_count: number
+  operation_count: number
+}
+
+export interface RegulationStagesResponse {
+  regulation_id: string
+  regulation_name?: string
+  stages: RegulationStageInfo[]
+}
+
+export interface HazardIdentificationBatchCreateInput {
+  regulation_id: string
+  department: string
+  position: string
+  stage_names: string[]
+  notes?: string
+  auto_submit?: boolean
+}
+
+export interface HazardIdentificationBatchResponse {
+  batch_id: string
+  regulation_id: string
+  regulation_name?: string
+  records: HazardIdentification[]
+  total_stages: number
+  created_count: number
 }
 
 export interface HazardIdentificationQueryParams {
@@ -1052,6 +1133,7 @@ export interface HazardIdentificationQueryParams {
   risk_level?: string
   date_from?: string
   date_to?: string
+  batch_id?: string
 }
 
 export interface HazardIdentificationStats {
