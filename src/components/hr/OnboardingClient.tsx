@@ -1,18 +1,16 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Table, Space, Input, Tag } from 'antd'
+import { App, Button, Table, Space, Input, Tag, Modal, Form, DatePicker, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
-  SyncOutlined,
-  EyeOutlined } from '@ant-design/icons'
+  EyeOutlined,
+  PlusOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
-import {
-  fetchOnboardingRecords,
-  syncOnboardingFromFeishu } from '@/lib/api/hr'
+import { fetchOnboardingRecords, fetchDepartments } from '@/lib/api/hr'
 import OnboardingDetailModal from './OnboardingDetailModal'
-import HrChatbot from './HrChatbot'
+import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
   initialRecords: OnboardingRecord[]
@@ -30,13 +28,17 @@ export default function OnboardingClient({
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterDepartment, setFilterDepartment] = useState('')
   const [filterPosition, setFilterPosition] = useState('')
-  const [filterIsEmployed, setFilterIsEmployed] = useState('')
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<OnboardingRecord | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+
+  const handleFormSuccess = () => {
+    setCreateOpen(false)
+    loadData()
+  }
 
   const doFetch = fetchAction || fetchOnboardingRecords
 
@@ -46,7 +48,6 @@ export default function OnboardingClient({
       const res = await doFetch({
         department: filterDepartment || undefined,
         position: filterPosition || undefined,
-        is_employed: filterIsEmployed || undefined,
         keyword: searchKeyword || undefined,
         page,
         page_size: pageSize })
@@ -57,24 +58,11 @@ export default function OnboardingClient({
     } finally {
       setLoading(false)
     }
-  }, [filterDepartment, filterPosition, filterIsEmployed, searchKeyword, page, pageSize, doFetch])
+  }, [filterDepartment, filterPosition, searchKeyword, page, pageSize, doFetch])
 
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
     setPageSize(newPageSize)
-  }
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncOnboardingFromFeishu()
-      message.success(res.message)
-      loadData()
-    } catch (err: any) {
-      message.error(err.message || '同步失败')
-    } finally {
-      setSyncing(false)
-    }
   }
 
   const handleViewDetail = (record: OnboardingRecord) => {
@@ -84,7 +72,7 @@ export default function OnboardingClient({
 
   useEffect(() => {
     loadData()
-  }, [filterDepartment, filterPosition, filterIsEmployed, searchKeyword, page, pageSize])
+  }, [filterDepartment, filterPosition, searchKeyword, page, pageSize])
 
   const employedColorMap: Record<string, string> = {
     '是': 'success',
@@ -146,19 +134,6 @@ export default function OnboardingClient({
       width: 160,
       ellipsis: true },
     {
-      title: '是否在职',
-      dataIndex: 'is_employed',
-      key: 'is_employed',
-      width: 90,
-      render: (val: string) => (
-        <Tag color={employedColorMap[val] || 'default'}>{val || '-'}</Tag>
-      ),
-      filters: [
-        { text: '是', value: '是' },
-        { text: '否', value: '否' },
-      ],
-      onFilter: (value, record: OnboardingRecord) => record.is_employed === String(value) },
-    {
       title: '手机',
       dataIndex: 'phone',
       key: 'phone',
@@ -187,19 +162,12 @@ export default function OnboardingClient({
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          老厂入职台账
+          入职台账
         </h1>
-        <Button
-          type="primary"
-          icon={<SyncOutlined spin={syncing} />}
-          onClick={handleSync}
-          loading={syncing}
-        >
-          从飞书同步
-        </Button>
       </div>
 
       <div className="flex flex-wrap gap-3 items-center">
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建入职</Button>
         <Input
           placeholder="搜索姓名或工号"
           value={searchKeyword}
@@ -220,13 +188,6 @@ export default function OnboardingClient({
           value={filterPosition}
           onChange={(e) => setFilterPosition(e.target.value)}
           className="w-40"
-          allowClear
-        />
-        <Input
-          placeholder="是否在职"
-          value={filterIsEmployed}
-          onChange={(e) => setFilterIsEmployed(e.target.value)}
-          className="w-32"
           allowClear
         />
       </div>
@@ -253,7 +214,9 @@ export default function OnboardingClient({
         onClose={() => setDetailOpen(false)}
       />
 
-      <HrChatbot />
+      <EmployeeForm open={createOpen} employee={null} onClose={() => setCreateOpen(false)}
+        onSuccess={handleFormSuccess} />
+
     </div>
   )
 }

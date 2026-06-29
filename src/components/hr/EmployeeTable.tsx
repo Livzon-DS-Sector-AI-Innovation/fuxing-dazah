@@ -1,11 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Table, Button, Space, Tag, Input, Select, Popconfirm, Tooltip } from 'antd'
-import { SearchOutlined, EditOutlined, DeleteOutlined, SyncOutlined, CheckCircleFilled } from '@ant-design/icons'
+import { App, Table, Button, Space, Tag, Input, Select, Popconfirm, Modal } from 'antd'
+import { SearchOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
-import { deleteEmployee, syncToFeishuAction } from '@/actions/hr'
+import { deleteEmployee } from '@/actions/hr'
 
 interface EmployeeTableProps {
   employees: Employee[]
@@ -33,7 +33,8 @@ export default function EmployeeTable({
   onEdit }: EmployeeTableProps) {
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
-  const [syncingId, setSyncingId] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailEmp, setDetailEmp] = useState<Employee | null>(null)
   const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
 
   const handleDelete = async (id: string) => {
@@ -49,20 +50,7 @@ export default function EmployeeTable({
     }
   }
 
-  const handleSyncToFeishu = async (id: string) => {
-    setSyncingId(id)
-    try {
-      const res = await syncToFeishuAction(id)
-      message.success(`已同步到飞书: ${res.data.feishu_record_id}`)
-      onRefresh()
-    } catch (err: any) {
-      message.error(err.message || '同步到飞书失败')
-    } finally {
-      setSyncingId(null)
-    }
-  }
-
-  const columns = [
+  const allColumns: any[] = [
     {
       title: '工号',
       dataIndex: 'employee_number',
@@ -79,7 +67,7 @@ export default function EmployeeTable({
       title: '部门',
       dataIndex: 'department',
       key: 'department',
-      width: 120 },
+      width: 180 },
     {
       title: '班组',
       dataIndex: 'team',
@@ -89,7 +77,13 @@ export default function EmployeeTable({
       title: '职位',
       dataIndex: 'position',
       key: 'position',
-      width: 120 },
+      width: 140 },
+    {
+      title: '兼任部门',
+      dataIndex: 'concurrent_departments',
+      key: 'concurrent_departments',
+      width: 130,
+      render: (v: string) => v || '-' },
     {
       title: '性别',
       dataIndex: 'gender',
@@ -122,11 +116,6 @@ export default function EmployeeTable({
       title: '入职日期',
       dataIndex: 'hire_date',
       key: 'hire_date',
-      width: 110 },
-    {
-      title: '进厂时间',
-      dataIndex: 'factory_entry_date',
-      key: 'factory_entry_date',
       width: 110 },
     {
       title: '籍贯',
@@ -174,20 +163,6 @@ export default function EmployeeTable({
       key: 'major',
       width: 120 },
     {
-      title: '飞书同步',
-      key: 'feishu_sync',
-      width: 100,
-      fixed: 'right' as const,
-      render: (_: any, record: Employee) => (
-        record.feishu_record_id ? (
-          <Tooltip title={`record_id: ${record.feishu_record_id}`}>
-            <Tag color="success" icon={<CheckCircleFilled />}>已同步</Tag>
-          </Tooltip>
-        ) : (
-          <Tag color="warning">未同步</Tag>
-        )
-      ) },
-    {
       title: '操作',
       key: 'action',
       width: 200,
@@ -197,19 +172,18 @@ export default function EmployeeTable({
           <Button
             type="text"
             size="small"
-            icon={<EditOutlined />}
-            onClick={() => onEdit(record)}
+            icon={<EyeOutlined />}
+            onClick={() => { setDetailEmp(record); setDetailOpen(true) }}
           >
-            编辑
+            详情
           </Button>
           <Button
             type="text"
             size="small"
-            icon={<SyncOutlined spin={syncingId === record.id} />}
-            onClick={() => handleSyncToFeishu(record.id)}
-            loading={syncingId === record.id}
+            icon={<EditOutlined />}
+            onClick={() => onEdit(record)}
           >
-            同步
+            编辑
           </Button>
           <Popconfirm
             title="确认删除"
@@ -230,6 +204,16 @@ export default function EmployeeTable({
         </Space>
       ) },
   ]
+
+  // Hide columns where ALL rows have empty values (except key & important columns)
+  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'position', 'concurrent_departments'])
+  const columns = allColumns.filter(col => {
+    if (alwaysShow.has(col.key as string)) return true
+    return employees.some((emp: any) => {
+      const v = emp[col.dataIndex as string]
+      return v !== null && v !== undefined && v !== ''
+    })
+  })
 
   return (
     <div className="space-y-4">
@@ -272,6 +256,33 @@ export default function EmployeeTable({
         scroll={{ x: 2200 }}
         size="small"
       />
+
+      <Modal title="员工详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={600}>
+        {detailEmp && (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {[
+                ['工号', detailEmp.employee_number], ['姓名', detailEmp.name],
+                ['性别', detailEmp.gender], ['部门', detailEmp.department],
+                ['岗位', detailEmp.position], ['学历', detailEmp.education],
+                ['毕业院校', detailEmp.school], ['专业', detailEmp.major],
+                ['毕业时间', detailEmp.graduation_date], ['入职日期', detailEmp.hire_date],
+                ['职类', detailEmp.job_category], ['级别', detailEmp.level],
+                ['域账号', detailEmp.domain_account], ['状态', detailEmp.status],
+                ['手机', detailEmp.phone], ['邮箱', detailEmp.email],
+                ['身份证号', detailEmp.id_card], ['籍贯', detailEmp.native_place],
+                ['政治面貌', detailEmp.political_status], ['婚姻状况', detailEmp.marital_status],
+              ].map(([label, val], i) => (
+                <tr key={i}>
+                  <td style={{ padding: '6px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600, width: '30%' }}>{label}</td>
+                  <td style={{ padding: '6px 12px', border: '1px solid #eee' }}>{val || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Modal>
+
     </div>
   )
 }

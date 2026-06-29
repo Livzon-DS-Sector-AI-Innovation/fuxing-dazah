@@ -25,6 +25,7 @@ import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
   fetchEmployeeByNumber,
+  fetchEmployees,
   fetchTrainingLedgers,
   createTrainingLedger,
   updateTrainingLedger,
@@ -48,13 +49,37 @@ export default function TrainingLedgerClient({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Partial<TrainingLedgerRecord>>({})
   const [saving, setSaving] = useState(false)
+  const [searchEmpNo, setSearchEmpNo] = useState(employeeNumber || '')
+  const [searching, setSearching] = useState(false)
+  const [searchOptions, setSearchOptions] = useState<{value:string, label:string}[]>([])
+
+  const handleEmployeeSearch = async (keyword: string) => {
+    if (!keyword || keyword.length < 1) { setSearchOptions([]); return }
+    setSearching(true)
+    try {
+      const res = await fetchEmployees({ keyword, page_size: 20 })
+      const emps = res.data || []
+      setSearchOptions(emps.map((e: any) => ({
+        value: e.employee_number,
+        label: `${e.employee_number} — ${e.name} (${e.department || ''})`,
+      })))
+    } catch { setSearchOptions([]) }
+    finally { setSearching(false) }
+  }
 
   const loadData = async () => {
     setLoading(true)
     try {
-      const empRes = await fetchEmployeeByNumber(employeeNumber)
-      setEmployee(empRes.data)
+      if (employeeNumber) {
+        const empRes = await fetchEmployeeByNumber(employeeNumber)
+        setEmployee(empRes.data)
+      }
 
+      if (!employeeNumber) {
+        setRecords([])
+        setLoading(false)
+        return
+      }
       const ledgerRes = await fetchTrainingLedgers({
         employee_number: employeeNumber,
         date_from: dateFrom || undefined,
@@ -191,7 +216,7 @@ export default function TrainingLedgerClient({
     )
   }
 
-  if (!employee) {
+  if (!employee && employeeNumber) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-gray-400">
         <p>未找到工号为 {employeeNumber} 的员工信息</p>
@@ -202,6 +227,19 @@ export default function TrainingLedgerClient({
   return (
     <div className="space-y-4">
       {/* 控制栏 — 打印时隐藏 */}
+        <Select
+          showSearch
+          placeholder="输入工号或姓名搜索员工"
+          value={employeeNumber || undefined}
+          style={{ width: 320 }}
+          filterOption={false}
+          onSearch={handleEmployeeSearch}
+          onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
+          notFoundContent={searching ? '搜索中...' : null}
+          options={searchOptions}
+          allowClear
+        />
+        {/* 打印时隐藏 */}
       <div className="no-print flex flex-wrap items-center gap-4">
         <Button icon={<PrinterOutlined />} onClick={handlePrint}>
           打印
@@ -257,7 +295,7 @@ export default function TrainingLedgerClient({
                   colSpan={7}
                   className="text-center text-lg font-bold border border-gray-300 py-2"
                 >
-                  丽珠集团新北江制药股份有限公司
+                  丽珠集团福州福兴医药有限公司
                 </td>
               </tr>
               {/* 第3行: 标题 */}
@@ -275,13 +313,13 @@ export default function TrainingLedgerClient({
                   姓　名
                 </td>
                 <td className="border border-gray-300 px-2 py-2 text-center">
-                  {employee.name}
+                  {employee?.name || ''}
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   性　别
                 </td>
                 <td className="border border-gray-300 px-2 py-2 text-center">
-                  {employee.gender || ''}
+                  {employee?.gender || ''}
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   工 作 卡 号
@@ -290,7 +328,7 @@ export default function TrainingLedgerClient({
                   colSpan={2}
                   className="border border-gray-300 px-2 py-2 text-center"
                 >
-                  {employee.employee_number}
+                  {employee?.employee_number || ''}
                 </td>
               </tr>
               {/* 第5行: 部门 岗位/职务 入厂时间 */}
@@ -299,13 +337,13 @@ export default function TrainingLedgerClient({
                   部　门
                 </td>
                 <td className="border border-gray-300 px-2 py-2 text-center">
-                  {employee.department}
+                  {employee?.department || ''}
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   岗 位/职 务
                 </td>
                 <td className="border border-gray-300 px-2 py-2 text-center">
-                  {employee.position}
+                  {employee?.position || ''}
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   入 厂 时 间
@@ -314,7 +352,7 @@ export default function TrainingLedgerClient({
                   colSpan={2}
                   className="border border-gray-300 px-2 py-2 text-center"
                 >
-                  {employee.factory_entry_date || employee.hire_date || ''}
+                  {employee?.factory_entry_date || employee?.hire_date || ''}
                 </td>
               </tr>
               {/* 第6-7行: 岗位变动记录 */}
@@ -327,7 +365,7 @@ export default function TrainingLedgerClient({
                   rowSpan={2}
                   className="border border-gray-300 px-2 py-2 align-top"
                 >
-                  {employee.transfer_history || '无'}
+                  {employee?.transfer_history || '无'}
                 </td>
               </tr>
               <tr>

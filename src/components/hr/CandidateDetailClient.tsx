@@ -12,9 +12,9 @@ import {
   Input,
   message,
 } from 'antd'
-import { ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined, EditOutlined, SaveOutlined, CloseOutlined, SyncOutlined } from '@ant-design/icons'
+import { ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined, EditOutlined, SaveOutlined, CloseOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
-import { updateCandidateAction, updateCandidateRecommendationLevelAction, syncCandidateToFeishuAction } from '@/actions/hr'
+import { updateCandidateAction, updateCandidateRecommendationLevelAction } from '@/actions/hr'
 
 const AIReportPanel = dynamic(
   () => import('./AIReportPanel'),
@@ -49,7 +49,6 @@ export default function CandidateDetailClient({
     major: candidate.major || '',
   })
   const [saving, setSaving] = useState(false)
-  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => {
     const raw = sessionStorage.getItem('candidate_list_context')
@@ -140,19 +139,6 @@ export default function CandidateDetailClient({
       major: candidate.major || '',
     })
     setIsEditing(false)
-  }
-
-  const handleSyncToFeishu = async () => {
-    setSyncing(true)
-    try {
-      await syncCandidateToFeishuAction(candidate.id)
-      message.success('已成功同步到飞书')
-      router.refresh()
-    } catch (err: any) {
-      message.error(err.message || '同步到飞书失败')
-    } finally {
-      setSyncing(false)
-    }
   }
 
   const recommendationOptions = [
@@ -274,30 +260,6 @@ export default function CandidateDetailClient({
           </div>
 
           <Descriptions bordered size="small" column={1}>
-            <Descriptions.Item label="飞书同步状态">
-              <div className="flex items-center gap-2">
-                {candidate.feishu_sync_status === 'synced' ? (
-                  <Tag color="success">已同步</Tag>
-                ) : candidate.feishu_sync_status === 'failed' ? (
-                  <Tag color="error">同步失败</Tag>
-                ) : (
-                  <Tag>未同步</Tag>
-                )}
-                {candidate.feishu_sync_status !== 'synced' && (
-                  <Button
-                    size="small"
-                    icon={<SyncOutlined spin={syncing} />}
-                    loading={syncing}
-                    onClick={handleSyncToFeishu}
-                  >
-                    {candidate.feishu_sync_status === 'failed' ? '重新同步' : '同步到飞书'}
-                  </Button>
-                )}
-              </div>
-              {candidate.feishu_sync_error && (
-                <div className="text-xs text-red-500 mt-1">{candidate.feishu_sync_error}</div>
-              )}
-            </Descriptions.Item>
             <Descriptions.Item label="应聘职位">
               {isEditing ? (
                 <Input

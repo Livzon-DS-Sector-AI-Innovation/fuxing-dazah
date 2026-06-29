@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   Button,
   Card,
@@ -33,13 +34,16 @@ import {
   sendTrainingNotification,
 } from '@/lib/api/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
+import EvaluationPreview from './EvaluationPreview'
 
 const TRAINING_METHODS = [
   { value: '面授', label: '面授' },
-  { value: '函授', label: '函授' },
-  { value: '远程教育', label: '远程教育' },
   { value: '自学', label: '自学' },
-  { value: '其他', label: '其他' },
+]
+
+const ASSESSMENT_METHODS = [
+  { value: '笔试', label: '笔试' },
+  { value: '问答', label: '问答' },
 ]
 
 const TD_LABEL = {
@@ -52,16 +56,20 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
   const numbers = new Set<string>()
   const hr = moduleMenus.find((m) => m.key === 'hr')
   const training = hr?.children?.find((c) => c.key === 'training')
-  const ledger = training?.children?.find((c) => c.key === 'training-ledger')
+  const trainingLedger = training?.children?.find((c) => c.key === 'training-ledger')
 
   function collectChildren(items: SubMenuItem[] | undefined) {
     items?.forEach((c) => {
-      const match = c.path.match(/employee_number=(\d+)/)
+      const match = c.path?.match(/employee_number=(\d+)/)
       if (match) numbers.add(match[1])
-      collectChildren(c.children)
+      if (c.children) collectChildren(c.children)
     })
   }
-  collectChildren(ledger?.children)
+  if (trainingLedger?.path) {
+    const match = trainingLedger.path.match(/employee_number=(\d+)/)
+    if (match) numbers.add(match[1])
+  }
+  collectChildren(trainingLedger?.children)
 
   try {
     const res = await fetchTrainingLedgerPages()
@@ -82,6 +90,10 @@ export default function TrainingNotificationClient() {
   const [submittingEval, setSubmittingEval] = useState(false)
   const [addingToLedger, setAddingToLedger] = useState(false)
   const [sendingNotify, setSendingNotify] = useState(false)
+  const [trainerDept, setTrainerDept] = useState<string | undefined>(undefined)
+  const [trainerEmployees, setTrainerEmployees] = useState<{ value: string; label: string }[]>([])
+
+  const searchParams = useSearchParams()
 
   useEffect(() => {
     fetchDepartments({ page_size: 100 }).then((res) => {
@@ -89,6 +101,50 @@ export default function TrainingNotificationClient() {
       setDepartments(list)
     })
   }, [])
+
+  // 从年度计划跳转过来时，自动填入
+  useEffect(() => {
+    const subject = searchParams.get('subject')
+    const method = searchParams.get('method')
+    const dept = searchParams.get('dept')
+    if (subject) {
+      form.setFieldsValue({
+        subject: decodeURIComponent(subject),
+        training_method: method ? decodeURIComponent(method) : undefined,
+        assessment_method: searchParams.get('assessment') ? decodeURIComponent(searchParams.get('assessment')!) : undefined,
+      })
+      if (dept) {
+        const deptName = decodeURIComponent(dept)
+        setTrainerDept(deptName)
+        // 加载该部门员工
+        fetchEmployees({ department: deptName, page_size: 200 }).then(res => {
+          const emps = (res.data || []).map((e: any) => ({
+            value: e.name, label: `${e.employee_number} ${e.name}`,
+            employee_number: e.employee_number
+          }))
+          setEmployees(emps)
+          setTrainerEmployees(emps)
+          const map: Record<string, string> = {}
+          emps.forEach((e: any) => { map[e.value] = e.employee_number })
+          setNameToNumberMap(map)
+        })
+      }
+    }
+  }, [searchParams])
+
+  // 培训师：选部门后加载该部门员工
+  const loadTrainerEmployees = async (dept: string) => {
+    setTrainerDept(dept)
+    form.setFieldsValue({ trainer: undefined })
+    if (!dept) { setTrainerEmployees([]); return }
+    try {
+      const res = await fetchEmployees({ department: dept, page_size: 200 })
+      setTrainerEmployees((res.data || []).map((e: any) => ({
+        value: e.name,
+        label: `${e.name} (${e.employee_number || ''})`,
+      })))
+    } catch { setTrainerEmployees([]) }
+  }
 
   const loadEmployees = async (depts: string[]) => {
     if (!depts || depts.length === 0) {
@@ -142,6 +198,8 @@ export default function TrainingNotificationClient() {
           : undefined,
         location: values.location,
         trainer: values.trainer,
+        training_method: values.training_method,
+        assessment_method: values.assessment_method,
         content: values.content,
         trainee_names: traineeDepts,
         issuer_department: values.issuer_department || values.department,
@@ -178,6 +236,7 @@ export default function TrainingNotificationClient() {
         instructor: values.trainer,
         location: values.location,
         training_method: values.training_method,
+        assessment_method: values.assessment_method,
         employee_names: values.employee_names || [],
       }
       await generateTrainingSignInSheet(payload)
@@ -201,15 +260,16 @@ export default function TrainingNotificationClient() {
         durationHours = Math.round(diffMinutes / 30) / 2
       }
 
-      const topicStr = [values.subject, values.content].filter(Boolean).join(' ')
       const payload = {
-        subject: topicStr,
+        subject: values.subject,
         training_date: values.training_date.format('YYYY-MM-DD'),
+        training_time_start: values.training_time ? dayjs(values.training_time[0]).format('HH:mm') : undefined,
+        training_time_end: values.training_time ? dayjs(values.training_time[1]).format('HH:mm') : undefined,
         duration_hours: durationHours,
         training_method: values.training_method,
-        trainer_type: values.trainer,
-        textbook: `${values.department || ''} / ${(values.trainee_departments || []).join('、')} / ${(values.employee_names || []).length}人`,
-        expected_count: (values.employee_names || []).length,
+        trainer: values.trainer,
+        trainee_names: values.employee_names || [],
+        assessment_method: values.assessment_method,
       }
       await generateTrainingEvaluation(payload)
       message.success('培训效果评估表已生成')
@@ -426,7 +486,8 @@ export default function TrainingNotificationClient() {
     : dateStr
   const topicStr = [subjectValue, contentValue].filter(Boolean).join(' ')
 
-  const signInPageSize = 30
+  const assessmentMethodValue = formValues?.assessment_method || ''
+  const signInPageSize = 15
   const signInPages = previewNames.length > 0
     ? Array.from({ length: Math.ceil(previewNames.length / signInPageSize) }, (_, i) =>
         previewNames.slice(i * signInPageSize, (i + 1) * signInPageSize)
@@ -434,6 +495,15 @@ export default function TrainingNotificationClient() {
     : []
 
   const hasBasicInfo = !!deptValue && !!dateValue && !!subjectValue
+  // Compute duration hours for preview
+  const evalHours = (() => {
+    if (timeValue && timeValue.length === 2) {
+      const diff = dayjs(timeValue[1]).diff(dayjs(timeValue[0]), 'minute')
+      const h = Math.round(diff / 30) / 2
+      return h === Math.floor(h) ? `${h}小时` : `${h}小时`
+    }
+    return ''
+  })()
   const evalDurationHours = (() => {
     if (timeValue && timeValue.length === 2) {
       const diff = dayjs(timeValue[1]).diff(dayjs(timeValue[0]), 'minute')
@@ -489,8 +559,31 @@ export default function TrainingNotificationClient() {
               <Input placeholder="请输入培训地点" />
             </Form.Item>
 
-            <Form.Item name="trainer" label="培训师">
-              <Input placeholder="请输入培训师姓名" />
+            <Form.Item label="培训师">
+              <div className="flex gap-2">
+                <Select
+                  showSearch
+                  placeholder="选择部门"
+                  options={departments}
+                  value={trainerDept}
+                  onChange={(v) => loadTrainerEmployees(v)}
+                  allowClear
+                  className="flex-1"
+                />
+                <Form.Item name="trainer" noStyle>
+                  <Select
+                    showSearch
+                    placeholder="选择人员"
+                    options={trainerEmployees}
+                    disabled={!trainerDept}
+                    allowClear
+                    className="flex-1"
+                    filterOption={(input, option) =>
+                      (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                    }
+                  />
+                </Form.Item>
+              </div>
             </Form.Item>
 
             <Form.Item name="training_method" label="培训方式">
@@ -502,8 +595,23 @@ export default function TrainingNotificationClient() {
               />
             </Form.Item>
 
+            <Form.Item name="assessment_method" label="考核方式">
+              <Select
+                showSearch
+                placeholder="选择考核方式"
+                options={ASSESSMENT_METHODS}
+                className="w-full"
+              />
+            </Form.Item>
+
             <Form.Item name="issuer_department" label="落款部门">
-              <Input placeholder="默认为主办部门" />
+              <Select
+                showSearch
+                placeholder="默认为主办部门"
+                options={departments}
+                allowClear
+                className="w-full"
+              />
             </Form.Item>
 
             <Form.Item name="issue_date" label="落款日期">
@@ -596,221 +704,254 @@ export default function TrainingNotificationClient() {
       {/* Print preview area */}
       {hasBasicInfo && (
         <div id="print-area" className="space-y-6">
+          {/* 培训通知预览 — 匹配 Word 模板布局 */}
           <Card>
-            <div className="max-w-3xl mx-auto p-8 text-sm leading-relaxed">
-              <h2 className="text-center text-xl font-bold mb-8">培训通知</h2>
-
-              <p className="mb-4 indent-8">
-                <span className="border-b border-gray-800 px-2">{deptValue}</span>
-                将于
-                <span className="border-b border-gray-800 px-2">{dateStr}</span>
-                举行
-                <span className="border-b border-gray-800 px-2">{subjectValue}</span>
-                的培训，详细培训安排如下：
-              </p>
-
-              <p className="mb-2">
-                <strong>培训时间：</strong>
-                <span className="border-b border-gray-800 px-2 min-w-[200px] inline-block">
-                  {timeStr || ' '}
-                </span>
-              </p>
-              <p className="mb-2">
-                <strong>培训地点：</strong>
-                <span className="border-b border-gray-800 px-2 min-w-[200px] inline-block">
-                  {locationValue || ' '}
-                </span>
-              </p>
-              <p className="mb-2">
-                <strong>培训师：</strong>
-                <span className="border-b border-gray-800 px-2 min-w-[200px] inline-block">
-                  {trainerValue || ' '}
-                </span>
-              </p>
-              <p className="mb-2">
-                <strong>培训内容：</strong>
-                <span className="border-b border-gray-800 px-2 min-w-[300px] inline-block">
-                  {contentValue || ' '}
-                </span>
-              </p>
-              <p className="mb-4">
-                <strong>培训人员：</strong>
-                <span className="border-b border-gray-800 px-2 min-w-[300px] inline-block">
-                  {traineeDepts.join('、') || ' '}
-                </span>
-              </p>
-
-              <div className="mb-6">
-                <p className="mb-1">
-                  <strong>备注：</strong>1.请培训人员自带笔记本、笔，做好笔记。
+            <div className="max-w-4xl mx-auto text-sm leading-relaxed">
+              {/* 公司抬头 */}
+              <div className="text-center mb-4">
+                <p className="text-base font-bold">丽珠集团福州福兴医药有限公司</p>
+                <p className="text-xs font-bold">LIVZON GROUP FUZHOU FUXING PHARMACEUTICAL CO., LTD.</p>
+                <p className="text-xl font-bold mt-2">培训通知书</p>
+                <p className="text-sm font-bold">Training Notification Form</p>
+                <p className="text-xs mt-1 text-gray-500">
+                  附件10/Annex 10&nbsp;&nbsp;SOP.01.1102.017
                 </p>
-                <p className="mb-1 pl-10">2.请部门安排好参训人员的工作时间，做到培训工作两不误。</p>
-                <p className="pl-10">3.不得无故缺席、迟到，到场签到，有特殊情况须提前请假。</p>
               </div>
 
-              <div className="mt-10 flex justify-between items-end">
-                <div>
-                  <p className="mb-1">
-                    <strong>部门：</strong>
-                    <span className="border-b border-gray-800 px-2 min-w-[120px] inline-block">
-                      {issuerValue || ' '}
-                    </span>
-                  </p>
-                </div>
-                <div>
-                  <p>
-                    <span className="border-b border-gray-800 px-2 min-w-[80px] inline-block text-center">
-                      {issueDateValue ? issueDateValue.format('YYYY') : '____'}
-                    </span>
-                    年
-                    <span className="border-b border-gray-800 px-2 min-w-[40px] inline-block text-center">
-                      {issueDateValue ? issueDateValue.format('MM') : '__'}
-                    </span>
-                    月
-                    <span className="border-b border-gray-800 px-2 min-w-[40px] inline-block text-center">
-                      {issueDateValue ? issueDateValue.format('DD') : '__'}
-                    </span>
-                    日
-                  </p>
-                </div>
+              {/* 信息表 — 匹配模板 */}
+              <table className="w-full border-collapse border border-gray-700 text-center" style={{ tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: '18%' }} />
+                  <col style={{ width: '32%' }} />
+                  <col style={{ width: '15%' }} />
+                  <col style={{ width: '35%' }} />
+                </colgroup>
+                <tbody>
+                  {/* 培训内容 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      培训内容<br /><span className="text-xs font-normal">Training content</span>
+                    </td>
+                    <td className="border border-gray-700 p-2" colSpan={3}>
+                      {topicStr || '___'}
+                    </td>
+                  </tr>
+                  {/* 培训日期 + 课时 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      培训日期<br /><span className="text-xs font-normal">Training date</span>
+                    </td>
+                    <td className="border border-gray-700 p-2">{dateStr}</td>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50">课时<br /><span className="text-xs font-normal">Hours</span></td>
+                    <td className="border border-gray-700 p-2">{evalHours || '___'}</td>
+                  </tr>
+                  {/* 培训方式 + 授课人 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      培训方式<br /><span className="text-xs font-normal">Training method</span>
+                    </td>
+                    <td className="border border-gray-700 p-2">{trainingMethodValue || '___'}</td>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50">授课人<br /><span className="text-xs font-normal">Trainer</span></td>
+                    <td className="border border-gray-700 p-2">{trainerValue || '___'}</td>
+                  </tr>
+                  {/* 培训对象 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      培训对象<br /><span className="text-xs font-normal">Trainees</span>
+                    </td>
+                    <td className="border border-gray-700 p-2" colSpan={3}>
+                      {traineeDepts.join('、') || deptValue || '___'}
+                    </td>
+                  </tr>
+                  {/* 培训地点 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      培训地点<br /><span className="text-xs font-normal">Training place</span>
+                    </td>
+                    <td className="border border-gray-700 p-2" colSpan={3}>
+                      {locationValue || '___'}
+                    </td>
+                  </tr>
+                  {/* 考核方式 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                      考核方式<br /><span className="text-xs font-normal">Assessment way</span>
+                    </td>
+                    <td className="border border-gray-700 p-2" colSpan={3}>
+                      {assessmentMethodValue || '___'}
+                    </td>
+                  </tr>
+                  {/* 注意事项 */}
+                  <tr>
+                    <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '60px' }}>
+                      注意事项<br /><span className="text-xs font-normal">Precautions</span>
+                    </td>
+                    <td className="border border-gray-700 p-2 text-left text-xs" colSpan={3}>
+                      1. 请培训人员自带笔记本、笔，做好笔记。<br />
+                      2. 请部门安排好参训人员的工作时间，做到培训工作两不误。<br />
+                      3. 不得无故缺席、迟到，到场签到，有特殊情况须提前请假。
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              {/* 底部签发 */}
+              <div className="flex justify-between items-end mt-4 text-sm px-2">
+                <p>
+                  部门/Dept：<span className="border-b border-gray-800 px-4 min-w-[100px] inline-block">{issuerValue || '___'}</span>
+                  &nbsp;&nbsp;&nbsp;&nbsp;签发人/Issued by：<span className="border-b border-gray-800 px-4 min-w-[80px] inline-block"></span>
+                </p>
+                <p>
+                  <span className="border-b border-gray-800 px-2 inline-block text-center min-w-[60px]">
+                    {issueDateValue ? issueDateValue.format('YYYY') : '____'}
+                  </span>年
+                  <span className="border-b border-gray-800 px-2 inline-block text-center min-w-[30px]">
+                    {issueDateValue ? issueDateValue.format('MM') : '__'}
+                  </span>月
+                  <span className="border-b border-gray-800 px-2 inline-block text-center min-w-[30px]">
+                    {issueDateValue ? issueDateValue.format('DD') : '__'}
+                  </span>日
+                </p>
               </div>
             </div>
           </Card>
 
-          {/* 签到表预览 */}
-          {signInPages.map((pageNames, pageIdx) => (
-            <Card key={pageIdx} className="mt-6">
-              <div className="max-w-3xl mx-auto p-8 text-sm leading-relaxed">
-                <h2 className="text-center text-xl font-bold mb-6">
-                  培训签到表{signInPages.length > 1 ? `（第${pageIdx + 1}/${signInPages.length}张）` : ''}
-                </h2>
+          {/* 签到表预览 — 匹配 Word 模板布局 */}
+          {signInPages.map((pageNames, pageIdx) => {
+            const totalPages = signInPages.length
+            return (
+              <Card key={pageIdx} className="mt-6 print:break-before-page">
+                <div className="max-w-4xl mx-auto text-sm leading-relaxed">
+                  {/* 公司抬头 — 匹配模板页眉 */}
+                  <div className="text-center mb-4">
+                    <p className="text-base font-bold">丽珠集团福州福兴医药有限公司</p>
+                    <p className="text-xs font-bold">LIVZON GROUP FUZHOU FUXING PHARMACEUTICAL CO., LTD.</p>
+                    <p className="text-xl font-bold mt-2">员工培训签到表</p>
+                    <p className="text-sm font-bold">Employee Training Attendance Form</p>
+                    <p className="text-xs mt-1 text-gray-500">
+                      附件5/Annex 5&nbsp;&nbsp;SOP.01.1102.017（1/1）&nbsp;&nbsp;&nbsp;&nbsp;
+                      第 {pageIdx + 1} 页 / page，共 {totalPages} 页 / in total
+                    </p>
+                  </div>
 
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <strong>日期：</strong>
-                    <span className="border-b border-gray-800 px-2">{dateStr}</span>
-                  </div>
-                  <div>
-                    <strong>受训部门：</strong>
-                    <span className="border-b border-gray-800 px-2">{traineeDepts[0] || deptValue || ' '}</span>
-                  </div>
-                  <div>
-                    <strong>培训方式：</strong>
-                    <span className="border-b border-gray-800 px-2">{trainingMethodValue || ' '}</span>
-                  </div>
-                  <div>
-                    <strong>应受训人数：</strong>
-                    <span className="border-b border-gray-800 px-2">{previewNames.length}人</span>
-                  </div>
-                  <div>
-                    <strong>培训时间：</strong>
-                    <span className="border-b border-gray-800 px-2">{timeStr || ' '}</span>
-                  </div>
-                  <div>
-                    <strong>培训地点：</strong>
-                    <span className="border-b border-gray-800 px-2">{locationValue || ' '}</span>
-                  </div>
-                </div>
-                <div className="mb-4">
-                  <strong>培训题目/内容概要：</strong>
-                  <span className="border-b border-gray-800 px-2">{topicStr || ' '}</span>
-                </div>
-                <div className="mb-4">
-                  <strong>授课人：</strong>
-                  <span className="border-b border-gray-800 px-2">{trainerValue || ' '}</span>
-                </div>
-
-                <table className="w-full border-collapse border border-gray-800 text-center">
-                  <thead>
-                    <tr className="bg-gray-100">
-                      <th className="border border-gray-800 p-2 w-16">序号</th>
-                      <th className="border border-gray-800 p-2">姓名</th>
-                      <th className="border border-gray-800 p-2 w-24">签到</th>
-                      <th className="border border-gray-800 p-2 w-16">序号</th>
-                      <th className="border border-gray-800 p-2">姓名</th>
-                      <th className="border border-gray-800 p-2 w-24">签到</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from({ length: Math.max(15, Math.ceil(pageNames.length / 2)) }).map((_, rowIdx) => {
-                      const leftIdx = rowIdx
-                      const rightIdx = rowIdx + 15
-                      return (
-                        <tr key={rowIdx}>
-                          <td className="border border-gray-800 p-2">{leftIdx + 1 + pageIdx * 30}</td>
-                          <td className="border border-gray-800 p-2">{pageNames[leftIdx] || ''}</td>
-                          <td className="border border-gray-800 p-2"></td>
-                          <td className="border border-gray-800 p-2">{rightIdx + 1 + pageIdx * 30}</td>
-                          <td className="border border-gray-800 p-2">{pageNames[rightIdx] || ''}</td>
-                          <td className="border border-gray-800 p-2"></td>
+                  {/* 信息表 — 匹配模板 Table */}
+                  <table className="w-full border-collapse border border-gray-700 text-center" style={{ tableLayout: 'fixed' }}>
+                    <colgroup>
+                      <col style={{ width: '20%' }} />
+                      <col style={{ width: '31%' }} />
+                      <col style={{ width: '18%' }} />
+                      <col style={{ width: '31%' }} />
+                    </colgroup>
+                    <tbody>
+                      {/* Row 1: 培训内容 */}
+                      <tr>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                          培训内容<br /><span className="text-xs font-normal">Training content</span>
+                        </td>
+                        <td className="border border-gray-700 p-2" colSpan={3}>
+                          {topicStr || '___'}
+                        </td>
+                      </tr>
+                      {/* Row 2: 培训对象 + 培训方式 */}
+                      <tr>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                          培训对象<br /><span className="text-xs font-normal">Trainees</span>
+                        </td>
+                        <td className="border border-gray-700 p-2">
+                          {traineeDepts.join('、') || deptValue || '___'}
+                        </td>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50">
+                          培训方式<br /><span className="text-xs font-normal">Training method</span>
+                        </td>
+                        <td className="border border-gray-700 p-2">
+                          {trainingMethodValue || '___'}
+                        </td>
+                      </tr>
+                      {/* Row 3: 培训课时 + 考核方式 */}
+                      <tr>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                          培训课时<br /><span className="text-xs font-normal">Training hours</span>
+                        </td>
+                        <td className="border border-gray-700 p-2">
+                          {evalHours || '___'}
+                        </td>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50">
+                          考核方式<br /><span className="text-xs font-normal">Assessment method</span>
+                        </td>
+                        <td className="border border-gray-700 p-2">
+                          {assessmentMethodValue || '___'}
+                        </td>
+                      </tr>
+                      {/* Row 4: 培训日期 */}
+                      <tr>
+                        <td className="border border-gray-700 p-2 font-bold bg-gray-50" style={{ height: '40px' }}>
+                          培训日期<br /><span className="text-xs font-normal">Training date</span>
+                        </td>
+                        <td className="border border-gray-700 p-2" colSpan={3}>
+                          {dateStr || '____年__月__日'}
+                        </td>
+                      </tr>
+                      {/* Row 5: 表头 */}
+                      <tr className="bg-gray-100 font-bold">
+                        <td className="border border-gray-700 p-2" style={{ height: '36px' }}>
+                          姓名<br /><span className="text-xs">Name</span>
+                        </td>
+                        <td className="border border-gray-700 p-2" colSpan={2}>
+                          部门<br /><span className="text-xs">Dept.</span>
+                        </td>
+                        <td className="border border-gray-700 p-2">
+                          签名+日期<br /><span className="text-xs">Signature + date</span>
+                        </td>
+                      </tr>
+                      {/* Employee rows */}
+                      {Array.from({ length: signInPageSize }).map((_, ri) => (
+                        <tr key={ri} style={{ height: '28px' }}>
+                          <td className="border border-gray-400 p-1 text-center">
+                            {pageNames[ri] || ''}
+                          </td>
+                          <td className="border border-gray-400 p-1 text-center" colSpan={2}>
+                            {pageNames[ri] ? (traineeDepts[0] || deptValue) : ''}
+                          </td>
+                          <td className="border border-gray-400 p-1"></td>
                         </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ))}
+                      ))}
+                      {/* Footer: 培训师签名 — 仅最后一页显示 */}
+                      {pageIdx === totalPages - 1 && (
+                        <>
+                          <tr>
+                            <td className="border border-gray-700 p-2 font-bold bg-gray-50" colSpan={2} style={{ height: '40px' }}>
+                              培训师/培训组织者 签名/日期<br /><span className="text-xs font-normal">Trainer/training organizer&apos;s signature/date</span>
+                            </td>
+                            <td className="border border-gray-700 p-2" colSpan={2}></td>
+                          </tr>
+                          <tr>
+                            <td className="border border-gray-400 p-2" colSpan={2}></td>
+                            <td className="border border-gray-400 p-2" colSpan={2}></td>
+                          </tr>
+                        </>
+                      )}
+                    </tbody>
+                  </table>
 
-          {/* 培训效果评估表预览 */}
+                  {/* 页码指示 */}
+                  {totalPages > 1 && (
+                    <p className="text-center text-xs text-gray-400 mt-2">
+                      — 第 {pageIdx + 1} / {totalPages} 页 —
+                    </p>
+                  )}
+                </div>
+              </Card>
+            )
+          })}
+
           <Card className="mt-6">
-            <div className="max-w-3xl mx-auto p-4 text-sm leading-relaxed">
-              <div className="text-xs text-gray-500 mb-1">QR.SOP.PM.003/18（格式） P8/12</div>
-              <div className="text-center text-lg font-bold mb-1">丽珠集团新北江制药股份有限公司</div>
-              <div className="text-center text-xl font-bold mb-6">培训效果评估表</div>
-
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <tbody>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="font-bold bg-gray-50">培训主题：{topicStr}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={3} className="bg-gray-50">培训时间：{dateStr}</td>
-                    <td style={TD_LABEL} colSpan={2} className="bg-gray-50">学时：{evalDurationHours}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={3} className="bg-gray-50">培训方式：{trainingMethodValue || '□面授  □函授  □远程教育  □自学  □其他方式'}</td>
-                    <td style={TD_LABEL} colSpan={2} className="bg-gray-50">□考试</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">培训人员：□讲师/专家/官员等    {trainerValue}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">应出席 {previewNames.length} 人；实际出席 ___ 人；缺席 ___ 人。</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">培训教材：{deptValue} / {traineeDepts.join('、')} / {previewNames.length}人</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, height: '48px' }} colSpan={5} className="bg-gray-50">缺席人员处理方式：</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">考核方式：□ 笔试    □ 口试   □ 实操   □ 写总结</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">考核结果：□合格 ___ 人；□不合格 ___ 人；缺考 ___ 人。</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, height: '36px' }} colSpan={5} className="bg-gray-50">缺考人员处理方式和原因：</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">综合评分：□优秀 ___ 人；□合格 ___ 人；□不合格 ___ 人。</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, height: '24px' }} colSpan={5} className="bg-gray-50"></td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, height: '48px' }} colSpan={5} className="bg-gray-50">培训效果评估及结论：</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} colSpan={5} className="bg-gray-50">培训组织人/日期：</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, height: '36px' }} colSpan={5} className="bg-gray-50">备注：</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            <EvaluationPreview
+              topicStr={topicStr} dateStr={dateStr}
+              trainingMethodValue={trainingMethodValue} trainerValue={trainerValue}
+              assessmentMethodValue={assessmentMethodValue} deptValue={deptValue}
+              traineeDepts={traineeDepts} previewNames={previewNames}
+              evalDurationHours={evalDurationHours}
+            />
           </Card>
         </div>
       )}

@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   DatePicker,
+  Select,
   Spin,
   message,
   Space,
@@ -19,6 +20,7 @@ import {
   EditOutlined,
   ArrowLeftOutlined,
   DownloadOutlined,
+  SendOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import Link from 'next/link'
@@ -31,9 +33,7 @@ interface AnnualPlanDetailClientProps {
   plan: AnnualTrainingPlan | null
 }
 
-const QUARTER_OPTIONS = [
-  '第一季度', '第二季度', '第三季度', '第四季度',
-]
+const MONTH_OPTIONS = Array.from({length:12}, (_,i) => `${i+1}月`)
 
 export default function AnnualPlanDetailClient({
   planId,
@@ -44,6 +44,16 @@ export default function AnnualPlanDetailClient({
   const [saving, setSaving] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<Partial<AnnualTrainingPlanItem>>({})
+  const [deptList, setDeptList] = useState<string[]>([])
+  const [trainerList, setTrainerList] = useState<string[]>([])
+
+  useEffect(() => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+    fetch(`${API_BASE}/api/v1/hr/departments?page_size=100`).then(r => r.json())
+      .then(d => setDeptList((d.data||[]).map((x:any) => x.name)))
+    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`).then(r => r.json())
+      .then(d => setTrainerList((d.data||[]).map((x:any) => x.name)))
+  }, [])
 
   const loadItems = async () => {
     setLoading(true)
@@ -237,18 +247,20 @@ export default function AnnualPlanDetailClient({
 
       <div id="print-area" className="print-area">
         <Card bordered={false} className="annual-plan-preview">
-          <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed' }}>
+          <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed', minWidth: '1200px' }}>
             <colgroup>
-              <col style={{ width: '5%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '24%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '4%' }} />
+              <col style={{ width: '35px' }} />
+              <col style={{ width: '90px' }} />
+              <col style={{ width: '280px' }} />
+              <col style={{ width: '170px' }} />
+              <col style={{ width: '140px' }} />
+              <col style={{ width: '65px' }} />
+              <col style={{ width: '65px' }} />
+              <col style={{ width: '90px' }} />
+              <col style={{ width: '55px' }} />
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '80px' }} />
             </colgroup>
             <tbody>
               {/* 第1行: 标题 */}
@@ -296,6 +308,9 @@ export default function AnnualPlanDetailClient({
                   确认人/日期
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                  状态
+                </td>
+                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
                   备注
                 </td>
                 <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center no-print">
@@ -308,10 +323,10 @@ export default function AnnualPlanDetailClient({
                 const isBlank = item.id.startsWith('blank-')
                 return (
                   <tr key={item.id}>
-                    <td className="border border-gray-300 px-1 py-1 text-center align-top">
-                      <span className="px-1">{idx + 1}</span>
+                    <td className="border border-gray-300 px-1 py-2 text-center align-top" style={{ lineHeight: '1.6' }}>
+                      <span>{idx + 1}</span>
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <div className="space-y-1">
                           <select
@@ -320,9 +335,7 @@ export default function AnnualPlanDetailClient({
                             onChange={(e) => updateField('month', e.target.value)}
                           >
                             <option value="">请选择</option>
-                            {['第一季度','第二季度','第三季度','第四季度'].map((m) => (
-                              <option key={m} value={m}>{m}</option>
-                            ))}
+                            {MONTH_OPTIONS.map((m) => ( <option key={m} value={m}>{m}</option> ))}
                           </select>
                           <InputNumber
                             size="small"
@@ -335,14 +348,14 @@ export default function AnnualPlanDetailClient({
                           />
                         </div>
                       ) : (
-                        <span className="px-1">
+                        <span>
                           {item.month || ''}
                           {item.month && item.duration_hours ? ' ' : ''}
                           {item.duration_hours ? `${item.duration_hours}课时` : ''}
                         </span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <Input
                           size="small"
@@ -350,43 +363,40 @@ export default function AnnualPlanDetailClient({
                           onChange={(e) => updateField('content_and_textbook', e.target.value)}
                         />
                       ) : (
-                        <span className="px-1">{item.content_and_textbook || ''}</span>
+                        <span>{item.content_and_textbook || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
-                        <Input
-                          size="small"
-                          value={editForm.target_audience || ''}
-                          onChange={(e) => updateField('target_audience', e.target.value)}
-                        />
+                        <Select mode="tags" size="small" style={{ width: '100%' }} placeholder="选部门或输入"
+                          value={editForm.target_audience ? editForm.target_audience.split(/[,，、\s]+/).filter(Boolean) : []}
+                          onChange={(vals) => updateField('target_audience', vals.join('、'))}
+                          options={deptList.map(d => ({value:d,label:d}))} />
                       ) : (
-                        <span className="px-1">{item.target_audience || ''}</span>
+                        <span>{item.target_audience || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
-                        <Input
-                          size="small"
-                          value={editForm.position_and_count || ''}
-                          onChange={(e) => updateField('position_and_count', e.target.value)}
-                        />
+                        <Select mode="tags" size="small" style={{ width: '100%' }} placeholder="选培训师或输入"
+                          value={editForm.position_and_count ? editForm.position_and_count.split(/[,，、\s]+/).filter(Boolean) : []}
+                          onChange={(vals) => updateField('position_and_count', vals.join('、'))}
+                          options={trainerList.map(t => ({value:t,label:t}))} />
                       ) : (
-                        <span className="px-1">{item.position_and_count || ''}</span>
+                        <span className="whitespace-pre-wrap">{item.position_and_count || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
-                        <Input
-                          size="small"
-                          value={editForm.training_method || ''}
-                          onChange={(e) => updateField('training_method', e.target.value)}
-                        />
+                        <Select size="small" style={{ width: '100%' }} placeholder="选择"
+                          value={editForm.training_method || undefined}
+                          onChange={(v) => updateField('training_method', v)}
+                          options={[{value:'面授',label:'面授'},{value:'自学',label:'自学'},{value:'自学+面授',label:'自学+面授'}]} />
                       ) : (
-                        <span className="px-1">{item.training_method || ''}</span>
+                        <span>{item.training_method || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top text-center" style={{ lineHeight: '1.6' }}>
                       {editing ? (
                         <select
                           className="w-full text-xs border rounded px-1 py-0.5"
@@ -398,10 +408,10 @@ export default function AnnualPlanDetailClient({
                           <option value="未完成">未完成</option>
                         </select>
                       ) : (
-                        <span className="px-1">{item.tracking_status ? `□${item.tracking_status}` : ''}</span>
+                        <span>{item.tracking_status ? `□${item.tracking_status}` : ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <div className="space-y-1">
                           <Input
@@ -419,14 +429,21 @@ export default function AnnualPlanDetailClient({
                           />
                         </div>
                       ) : (
-                        <span className="px-1">
+                        <span>
                           {item.confirmer || ''}
                           {item.confirmer && item.confirm_date ? ' / ' : ''}
                           {item.confirm_date || ''}
                         </span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 align-top">
+                    <td className="border border-gray-300 px-2 py-2 align-top text-center" style={{ lineHeight: '1.6' }}>
+                      {(() => {
+                        const s = (item as any).training_status || '—'
+                        const colors: Record<string, string> = {'已评估': '#52c41a', '已通知': '#1677ff', '未开始': '#999'}
+                        return <span style={{ color: colors[s] || '#999', fontWeight: 500, fontSize: 12 }}>{s}</span>
+                      })()}
+                    </td>
+                    <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <Input
                           size="small"
@@ -434,10 +451,10 @@ export default function AnnualPlanDetailClient({
                           onChange={(e) => updateField('remarks', e.target.value)}
                         />
                       ) : (
-                        <span className="px-1">{item.remarks || ''}</span>
+                        <span>{item.remarks || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-1 text-center align-top no-print">
+                    <td className="border border-gray-300 px-1 py-2 text-center align-top no-print">
                       {isBlank ? null : editing ? (
                         <Space size="small" direction="vertical" className="w-full">
                           <Button
@@ -449,6 +466,19 @@ export default function AnnualPlanDetailClient({
                         </Space>
                       ) : (
                         <Space size="small" direction="vertical" className="w-full">
+                          <Button
+                            size="small"
+                            type="primary"
+                            icon={<SendOutlined />}
+                            onClick={() => {
+                              const params = new URLSearchParams()
+                              params.set('subject', item.content_and_textbook || '')
+                              params.set('method', item.training_method || '')
+                              params.set('dept', plan?.department || '')
+                              params.set('assessment', item.training_method || '')
+                              window.open(`/hr/training/notification?${params.toString()}`, '_blank')
+                            }}
+                          />
                           <Button
                             size="small"
                             icon={<EditOutlined />}
@@ -481,6 +511,7 @@ export default function AnnualPlanDetailClient({
               </tr>
             </tbody>
           </table>
+          </div>
         </Card>
       </div>
 

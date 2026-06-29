@@ -1,17 +1,14 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Table, Space, Input, Tag } from 'antd'
+import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
-  SyncOutlined,
-  EyeOutlined } from '@ant-design/icons'
+  EyeOutlined,
+  PlusOutlined } from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
-import {
-  fetchDepartureRecords,
-  syncDepartureFromFeishu } from '@/lib/api/hr'
-import HrChatbot from './HrChatbot'
+import { fetchDepartureRecords, fetchDepartments } from '@/lib/api/hr'
 
 interface DepartureClientProps {
   initialRecords: DepartureRecord[]
@@ -29,10 +26,64 @@ export default function DepartureClient({
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [filterDepartment, setFilterDepartment] = useState('')
   const [filterOffboardingType, setFilterOffboardingType] = useState('')
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createLoading, setCreateLoading] = useState(false)
+  const [createForm] = Form.useForm()
+  const [departments, setDepartments] = useState<{value:string,label:string}[]>([])
+  const [deptEmployees, setDeptEmployees] = useState<any[]>([])
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
+  const [selectedDept, setSelectedDept] = useState<string>('')
+
+  useEffect(() => {
+    fetchDepartments({ page_size: 200 }).then(r => {
+      setDepartments((r.data||[]).map((d:any) => ({ value: d.name, label: d.name })))
+    })
+  }, [])
+
+  const handleDeptChange = async (dept: string) => {
+    setSelectedDept(dept)
+    createForm.setFieldValue('employee', undefined)
+    if (!dept) { setDeptEmployees([]); return }
+    try {
+      const url = `http://localhost:8000/api/v1/hr/employees?department=${encodeURIComponent(dept)}&page=1&page_size=200`
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const d = await res.json()
+      const list = (d.data||[]).map((e:any) => ({
+        value: e.id, label: `${e.employee_number} ${e.name} (${e.position||''})`,
+        name: e.name, department: e.department, position: e.position
+      }))
+      setDeptEmployees(list)
+      if (list.length === 0) message.warning(`${dept} 下暂无在职员工`)
+    } catch (err: any) { message.error('加载失败: ' + (err.message||'')) }
+  }
+
+  const handleCreate = async () => {
+    try {
+      const vals = await createForm.validateFields()
+      setCreateLoading(true)
+      const emp = deptEmployees.find((e:any) => e.value === vals.employee)
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: emp?.name || '', department: selectedDept,
+          position: emp?.position || '',
+          offboarding_date: vals.offboarding_date?.format('YYYY-MM-DD'),
+          offboarding_type: vals.offboarding_type || '辞职',
+          reason: vals.reason || '',
+        }),
+      })
+      if (!res.ok) throw new Error('创建失败')
+      message.success('离职记录创建成功')
+      setCreateOpen(false); createForm.resetFields(); loadData()
+    } catch (err: any) { message.error(err.message || '创建失败') }
+    finally { setCreateLoading(false) }
+  }
 
   const doFetch = fetchAction || fetchDepartureRecords
 
@@ -57,19 +108,6 @@ export default function DepartureClient({
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
     setPageSize(newPageSize)
-  }
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncDepartureFromFeishu()
-      message.success(res.message)
-      loadData()
-    } catch (err: any) {
-      message.error(err.message || '同步失败')
-    } finally {
-      setSyncing(false)
-    }
   }
 
   useEffect(() => {
@@ -182,7 +220,7 @@ export default function DepartureClient({
             type="text"
             size="small"
             icon={<EyeOutlined />}
-            onClick={() => message.info(`查看 ${record.name} 的详情（待实现）`)}
+            onClick={() => { setDetailRecord(record); setDetailOpen(true) }}
           >
             详情
           </Button>
@@ -194,19 +232,12 @@ export default function DepartureClient({
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          老厂离职台账
+          离职台账
         </h1>
-        <Button
-          type="primary"
-          icon={<SyncOutlined spin={syncing} />}
-          onClick={handleSync}
-          loading={syncing}
-        >
-          从飞书同步
-        </Button>
       </div>
 
       <div className="flex flex-wrap gap-3 items-center">
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateOpen(true); setSelectedDept(''); setDeptEmployees([]); createForm.resetFields() }}>新建离职</Button>
         <Input
           placeholder="搜索姓名/部门/职位"
           value={searchKeyword}
@@ -247,7 +278,53 @@ export default function DepartureClient({
         size="small"
       />
 
-      <HrChatbot />
+
+      <Modal title="新建离职记录" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)}
+        confirmLoading={createLoading} destroyOnClose width={500}>
+        <Form form={createForm} layout="vertical">
+          <Form.Item label="选择部门" required>
+            <Select placeholder="先选部门" options={departments} value={selectedDept || undefined}
+              onChange={(v) => handleDeptChange(v)} allowClear />
+          </Form.Item>
+          <Form.Item name="employee" label="选择员工" rules={[{ required: true, message: '请选择员工' }]}>
+            <Select placeholder="选完部门后选员工" options={deptEmployees} disabled={!selectedDept}
+              showSearch filterOption={(input, option) => (option?.label||'').toLowerCase().includes(input.toLowerCase())} />
+          </Form.Item>
+          <Form.Item name="offboarding_date" label="离职日期" rules={[{ required: true }]}>
+            <DatePicker className="w-full" />
+          </Form.Item>
+          <Form.Item name="offboarding_type" label="离职类型" initialValue="辞职">
+            <Select options={[{value:'辞职',label:'辞职'},{value:'辞退',label:'辞退'},{value:'自离',label:'自离'},{value:'其他',label:'其他'}]} />
+          </Form.Item>
+          <Form.Item name="reason" label="离职原因">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+
+      <Modal title="离职详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={600}>
+        {detailRecord && (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              {[
+                ['姓名', detailRecord.name],
+                ['部门', detailRecord.department],
+                ['职位', detailRecord.position],
+                ['离职日期', detailRecord.offboarding_date],
+                ['离职类型', detailRecord.offboarding_type],
+                ['离职原因', Array.isArray(detailRecord.offboarding_reason) ? detailRecord.offboarding_reason.join(', ') : (detailRecord.offboarding_reason || '')],
+              ].map(([label, val], i) => (
+                <tr key={i}>
+                  <td style={{ padding: '8px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600, width: '30%' }}>{label}</td>
+                  <td style={{ padding: '8px 12px', border: '1px solid #eee' }}>{val || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Modal>
+
     </div>
   )
 }

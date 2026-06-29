@@ -8,6 +8,7 @@ export interface Employee {
   position: string
   job_category?: string
   level?: string
+  concurrent_departments?: string
   qualifications?: string[]
   qualification_type?: string
   gender?: string

@@ -108,7 +108,7 @@ export default function PreJobPlanClient() {
                 <div className="text-xs text-gray-500 mb-1">
                   QR.SOP.PM.003/18（格式） P2/12
                 </div>
-                <div className="text-lg font-bold">丽珠集团新北江制药股份有限公司</div>
+                <div className="text-lg font-bold">丽珠集团福州福兴医药有限公司</div>
                 <div className="text-base font-semibold mt-1">岗前培训计划</div>
               </div>
             }

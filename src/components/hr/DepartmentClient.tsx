@@ -1,13 +1,13 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import { App, Button, Table, Space, Popconfirm, Input, Modal } from 'antd'
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons'
 import { Department } from '@/types/hr'
 import { fetchDepartmentsAction, deleteDepartment } from '@/actions/hr'
 import DepartmentForm from './DepartmentForm'
 import TeamClient from './TeamClient'
-import HrChatbot from './HrChatbot'
 
 interface DepartmentClientProps {
   initialDepartments: Department[]
@@ -28,6 +28,7 @@ export default function DepartmentClient({
   const [editingDepartment, setEditingDepartment] = useState<Department | null>(null)
   const [loading, setLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const router = useRouter()
   const [teamModalOpen, setTeamModalOpen] = useState(false)
   const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
 
@@ -101,7 +102,17 @@ export default function DepartmentClient({
       title: '部门名称',
       dataIndex: 'name',
       key: 'name',
-      width: 160 },
+      width: 180 },
+    {
+      title: '人数',
+      dataIndex: 'employee_count',
+      key: 'employee_count',
+      width: 80,
+      render: (count: number, record: Department) => (
+        <a onClick={() => router.push(`/hr/profile?department=${encodeURIComponent(record.name)}`)}>
+          {count || 0} 人
+        </a>
+      ) },
     {
       title: '描述',
       dataIndex: 'description',
@@ -153,7 +164,7 @@ export default function DepartmentClient({
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
-          老厂部门管理
+          部门管理
         </h1>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
           新增部门
@@ -206,7 +217,6 @@ export default function DepartmentClient({
         )}
       </Modal>
 
-      <HrChatbot />
     </div>
   )
 }

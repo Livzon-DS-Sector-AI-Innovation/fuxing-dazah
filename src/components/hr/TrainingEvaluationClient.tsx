@@ -311,7 +311,7 @@ export default function TrainingEvaluationClient() {
                 QR.SOP.PM.003/18（格式）  P8/12
               </div>
               <h2 className="text-center text-lg font-bold mb-1">
-                丽珠集团新北江制药股份有限公司
+                丽珠集团福州福兴医药有限公司
               </h2>
               <h2 className="text-center text-xl font-bold mb-6">
                 培训效果评估表
