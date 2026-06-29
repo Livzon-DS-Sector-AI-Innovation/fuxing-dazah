@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 
 from app.modules.safety.ai_hazard_identification.schemas import (
     HazardCategoryEnum,
@@ -190,30 +190,24 @@ class RuleEngine:
     ) -> None:
         """验证整改建议格式和质量（兼容 model_construct 产生的 dict）。"""
         if isinstance(suggestion, dict):
-            immediate = suggestion.get("immediate", "")
-            short_term = suggestion.get("short_term", "")
-            long_term = suggestion.get("long_term", "")
+            corrective = suggestion.get("corrective", "")
+            preventive = suggestion.get("preventive", "")
         else:
-            immediate = suggestion.immediate
-            short_term = suggestion.short_term
-            long_term = suggestion.long_term
+            corrective = suggestion.corrective
+            preventive = suggestion.preventive
 
-        # 三层都不能为空
-        if not immediate or len(immediate.strip()) < 10:
-            errors.append("立即措施不能为空或过短（<10字）")
-        if not short_term or len(short_term.strip()) < 10:
-            errors.append("短期整改不能为空或过短（<10字）")
-        if not long_term or len(long_term.strip()) < 10:
-            errors.append("长期预防不能为空或过短（<10字）")
+        # 两层都不能为空
+        if not corrective or len(corrective.strip()) < 10:
+            errors.append("整改措施不能为空或过短（<10字）")
+        if not preventive or len(preventive.strip()) < 10:
+            errors.append("预防措施不能为空或过短（<10字）")
 
         # 检查泛泛表述
         for phrase in BANNED_PHRASES:
-            if phrase in immediate:
-                warnings.append(f"立即措施包含泛泛表述: '{phrase}'")
-            if phrase in short_term:
-                warnings.append(f"短期整改包含泛泛表述: '{phrase}'")
-            if phrase in long_term:
-                warnings.append(f"长期预防包含泛泛表述: '{phrase}'")
+            if phrase in corrective:
+                warnings.append(f"整改措施包含泛泛表述: '{phrase}'")
+            if phrase in preventive:
+                warnings.append(f"预防措施包含泛泛表述: '{phrase}'")
 
     def _validate_basis(
         self,
@@ -302,7 +296,7 @@ def auto_correct(output: HazardIdentificationOutput) -> HazardIdentificationOutp
     output.key_defect = output.key_defect.strip()
 
     # 保障整改建议非空
-    for field_name in ("immediate", "short_term", "long_term"):
+    for field_name in ("corrective", "preventive"):
         value = getattr(output.rectification_suggestion, field_name, "")
         if not value or not value.strip():
             setattr(

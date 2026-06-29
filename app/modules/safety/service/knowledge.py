@@ -1,10 +1,12 @@
 """Safety business workflows."""
 
 import logging
+import os
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import delete_object, is_enabled as minio_enabled
 from app.modules.safety.models import (
     SafetyKnowledgeArticle,
 )
@@ -23,6 +25,24 @@ class KnowledgeService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = SafetyRepository(session)
+
+    @staticmethod
+    def _cleanup_file(file_path: str | None) -> None:
+        """Delete a single file from MinIO or local disk."""
+        if not file_path:
+            return
+        try:
+            if minio_enabled():
+                try:
+                    delete_object("safety", file_path)
+                except Exception:
+                    pass
+            else:
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+        except OSError:
+            pass
 
     async def get_articles(
         self,
@@ -62,7 +82,11 @@ class KnowledgeService:
 
     async def delete_article(self, article_id: uuid.UUID) -> bool:
         """删除知识库文章"""
-        return await self.repo.delete_knowledge_article(article_id)
+        article = await self.repo.get_knowledge_article_by_id(article_id)
+        result = await self.repo.delete_knowledge_article(article_id)
+        if result and article:
+            self._cleanup_file(article.attachment_path)
+        return result
 
     async def publish_article(self, article_id: uuid.UUID) -> SafetyKnowledgeArticle | None:
         """发布文章（草稿→已发布）"""

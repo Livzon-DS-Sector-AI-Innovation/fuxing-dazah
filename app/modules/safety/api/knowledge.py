@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.core.storage import is_enabled as minio_enabled, upload_object
 from app.modules.safety.schemas import (
     SafetyKnowledgeArticleCreate,
     SafetyKnowledgeArticleResponse,
@@ -139,23 +140,28 @@ async def upload_knowledge_article_attachment(
 ):
     """上传知识库文章附件"""
 
-    upload_dir = os.path.join("uploads", "safety", "knowledge")
-    os.makedirs(upload_dir, exist_ok=True)
-
     file_ext = os.path.splitext(file.filename or ".bin")[1]
     safe_name = f"{article_id}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"knowledge/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "application/octet-stream")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "knowledge")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     from app.modules.safety.repository import SafetyRepository
     repo = SafetyRepository(db)
     item = await repo.update_knowledge_article(
         article_id,
         {
-            "attachment_path": file_path,
+            "attachment_path": stored_path,
             "attachment_original_name": file.filename or "unknown",
         },
     )

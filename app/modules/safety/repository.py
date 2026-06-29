@@ -595,6 +595,7 @@ class SafetyRepository:
         risk_level: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        batch_id: str | None = None,
     ) -> tuple[list["HazardIdentification"], int]:
         """获取危险源辨识列表"""
         from datetime import datetime as dt_module
@@ -606,6 +607,14 @@ class SafetyRepository:
             HazardIdentification.is_deleted == False
         )
 
+        if batch_id:
+            try:
+                bid = uuid.UUID(batch_id)
+            except ValueError:
+                bid = None
+            if bid:
+                query = query.where(HazardIdentification.batch_id == bid)
+                count_query = count_query.where(HazardIdentification.batch_id == bid)
         if department:
             query = query.where(HazardIdentification.department == department)
             count_query = count_query.where(HazardIdentification.department == department)
@@ -766,6 +775,14 @@ class SafetyRepository:
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def count_hi_today(self, date_prefix: str) -> int:
+        """统计指定日期前缀的危险源编号数量（含软删除），用于自动生成序号。"""
+        query = select(func.count(HazardIdentification.id)).where(
+            HazardIdentification.hazard_id_no.like(f"HI-{date_prefix}-%"),
+        )
+        result = await self.session.execute(query)
+        return result.scalar() or 0
+
     async def create_hazard_identification(
         self, data: dict[str, Any]
     ) -> "HazardIdentification":
@@ -810,6 +827,42 @@ class SafetyRepository:
         )
         result = await self.session.execute(query)
         return result.rowcount > 0
+
+    async def create_hazard_identifications_batch(
+        self, records_data: list[dict[str, Any]]
+    ) -> list["HazardIdentification"]:
+        """批量创建危险源辨识记录（共享 batch_id，单次 INSERT）。"""
+        items = [HazardIdentification(**data) for data in records_data]
+        self.session.add_all(items)
+        await self.session.flush()
+
+        # 批量 re-fetch 以获取 server-generated 默认值
+        ids = [item.id for item in items]
+        stmt = (
+            select(HazardIdentification)
+            .where(HazardIdentification.id.in_(ids))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_hazard_identifications_by_batch_id(
+        self, batch_id: uuid.UUID, skip: int = 0, limit: int = 100
+    ) -> tuple[list["HazardIdentification"], int]:
+        """按 batch_id 查询辨识记录。"""
+        base = (
+            select(HazardIdentification)
+            .where(
+                HazardIdentification.batch_id == batch_id,
+                HazardIdentification.is_deleted == False,
+            )
+        )
+        count_query = select(func.count()).select_from(base.subquery())
+        total_result = await self.session.execute(count_query)
+        total = total_result.scalar() or 0
+
+        query = base.order_by(HazardIdentification.created_at.asc()).offset(skip).limit(limit)
+        result = await self.session.execute(query)
+        return list(result.scalars().all()), total
 
     # ==================== OperationRegulation Operations ====================
 

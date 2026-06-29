@@ -7,6 +7,12 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import (
+    delete_object as minio_delete,
+    get_object as minio_get,
+    is_enabled as minio_enabled,
+    upload_object,
+)
 from app.modules.safety.document_parser import (
     extract_to_markdown as _extract_to_markdown,
 )
@@ -58,20 +64,46 @@ class AttachmentService:
         file_size = len(content)
 
         # 1. 保存原始文件
-        original_path = os.path.join(self.UPLOAD_DIR, f"{attachment_id}{ext}")
-        with open(original_path, "wb") as f:
-            f.write(content)
+        if minio_enabled():
+            upload_object("safety", f"ai-workflow/{attachment_id}{ext}", content, file_size, "application/octet-stream")
+        else:
+            original_path = os.path.join(self.UPLOAD_DIR, f"{attachment_id}{ext}")
+            with open(original_path, "wb") as f:
+                f.write(content)
 
         # 2. 提取文本并转为 Markdown
-        try:
-            md_content = _extract_to_markdown(original_path)
-        except Exception:
-            md_content = f"# 📎 {original_name}\n\n> 未能解析文档内容，请查看原始文件。"
+        if minio_enabled():
+            # In MinIO mode, write content to a temp file for DocumentParser
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            try:
+                md_content = _extract_to_markdown(tmp_path)
+            except Exception:
+                md_content = f"# 📎 {original_name}\n\n> 未能解析文档内容，请查看原始文件。"
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        else:
+            # Local mode: can read directly from saved file
+            try:
+                md_content = _extract_to_markdown(original_path)
+            except Exception:
+                md_content = f"# 📎 {original_name}\n\n> 未能解析文档内容，请查看原始文件。"
 
         # 3. 保存 MD 文件
-        md_path = os.path.join(self.UPLOAD_DIR, self.MD_SUBDIR, f"{attachment_id}.md")
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(md_content)
+        md_bytes = md_content.encode("utf-8")
+        if minio_enabled():
+            upload_object("safety", f"ai-workflow/md/{attachment_id}.md", md_bytes, len(md_bytes), "text/markdown; charset=utf-8")
+            markdown_path = f"ai-workflow/md/{attachment_id}.md"
+        else:
+            md_path = os.path.join(self.UPLOAD_DIR, self.MD_SUBDIR, f"{attachment_id}.md")
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(md_content)
+            markdown_path = md_path
 
         # 4. 构建预览 URL
         preview_url = f"/api/v1/safety/ai-workflow-configs/attachments/{attachment_id}/preview"
@@ -84,7 +116,7 @@ class AttachmentService:
             "original_name": original_name,
             "file_type": ext.lstrip("."),
             "file_size": file_size,
-            "markdown_path": md_path,
+            "markdown_path": markdown_path,
             "knowledge_id": None,
             "created_at": datetime.now().isoformat(),
         }
@@ -92,20 +124,32 @@ class AttachmentService:
     async def delete_attachment(self, attachment_id: str) -> bool:
         """删除附件及其关联文件。
 
-        清理：
-        - uploads/safety/ai-workflow/{attachment_id}.* （原始文件）
-        - uploads/safety/ai-workflow/md/{attachment_id}.md （MD 文件）
+        清理（MinIO 模式：按 object_key 删除；本地模式：glob + remove）：
+        - ai-workflow/{attachment_id}.* （原始文件）
+        - ai-workflow/md/{attachment_id}.md （MD 文件）
         """
         import glob as glob_m
 
-        deleted = False
+        if minio_enabled():
+            # MinIO mode: we know the pattern but not the extension
+            # Delete common extensions; 404s are ignored by MinIO
+            for ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".png", ".jpg"):
+                try:
+                    minio_delete("safety", f"ai-workflow/{attachment_id}{ext}")
+                except Exception:
+                    pass
+            try:
+                minio_delete("safety", f"ai-workflow/md/{attachment_id}.md")
+            except Exception:
+                pass
+            return True
 
-        # 删除原始文件（任意扩展名）
+        # Local mode
+        deleted = False
         for f in glob_m.iglob(os.path.join(self.UPLOAD_DIR, f"{attachment_id}.*")):
             os.remove(f)
             deleted = True
 
-        # 删除 MD 文件
         md_file = os.path.join(self.UPLOAD_DIR, self.MD_SUBDIR, f"{attachment_id}.md")
         if os.path.exists(md_file):
             os.remove(md_file)
@@ -114,8 +158,16 @@ class AttachmentService:
         return deleted
 
     def get_preview_path(self, attachment_id: str) -> str | None:
-        """获取附件原始文件的路径，供预览使用。"""
+        """获取附件原始文件的路径，供预览使用。
+
+        MinIO mode: returns the object_key (not a local path).
+        Local mode: returns the local file path.
+        """
         import glob as glob_m
+
+        if minio_enabled():
+            # Return the object_key prefix — caller must try common extensions
+            return f"ai-workflow/{attachment_id}"
 
         matches = list(glob_m.iglob(os.path.join(self.UPLOAD_DIR, f"{attachment_id}.*")))
         if matches:
@@ -162,9 +214,15 @@ class AttachmentService:
             md_content = "\n".join(md_lines)
 
             # 保存 MD 文件
-            md_path = os.path.join(self.UPLOAD_DIR, self.MD_SUBDIR, f"{attachment_id}.md")
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(md_content)
+            md_bytes = md_content.encode("utf-8")
+            if minio_enabled():
+                upload_object("safety", f"ai-workflow/md/{attachment_id}.md", md_bytes, len(md_bytes), "text/markdown; charset=utf-8")
+                markdown_path = f"ai-workflow/md/{attachment_id}.md"
+            else:
+                md_path = os.path.join(self.UPLOAD_DIR, self.MD_SUBDIR, f"{attachment_id}.md")
+                with open(md_path, "w", encoding="utf-8") as f:
+                    f.write(md_content)
+                markdown_path = md_path
 
             preview_url = f"/api/v1/safety/ai-workflow-configs/attachments/{attachment_id}/preview"
 
@@ -176,7 +234,7 @@ class AttachmentService:
                 "original_name": None,
                 "file_type": "md",
                 "file_size": len(md_content.encode("utf-8")),
-                "markdown_path": md_path,
+                "markdown_path": markdown_path,
                 "knowledge_id": kid,
                 "created_at": datetime.now().isoformat(),
             })

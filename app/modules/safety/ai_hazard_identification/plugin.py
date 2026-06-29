@@ -46,8 +46,8 @@ from app.modules.safety.ai_hazard_identification.rules import (
 from app.modules.safety.ai_hazard_identification.schemas import (
     HazardIdentificationInput,
     HazardIdentificationOutput,
-    RectificationSuggestion,
     PluginConfig,
+    RectificationSuggestion,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,15 +65,17 @@ class AIHazardIdentifier:
     - 低温度（0.05）保证输出可复现
     - DB-first 配置 + 硬编码 fallback
     - 规则引擎后处理确保质量
+    - 法规知识库注入（RAG-lite）
     - 完整的日志记录用于审计
 
     Args:
         ai_service: AI 服务实例（已配置 API key / base_url / model）
         config: 插件运行时配置（可选，使用默认值）
+        knowledge_context: 法规知识库上下文文本（可选，注入到 prompt 中）
 
     Example:
         >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-v4-flash")
-        >>> plugin = AIHazardIdentifier(ai_service)
+        >>> plugin = AIHazardIdentifier(ai_service, knowledge_context="...")
         >>> output = await plugin.identify(HazardIdentificationInput(
         ...     description="防爆电箱堵头缺失",
         ...     department="生产部",
@@ -84,10 +86,12 @@ class AIHazardIdentifier:
         self,
         ai_service: Any,  # AIService from app.platform.integrations.ai.client
         config: PluginConfig | None = None,
+        knowledge_context: str | None = None,
     ):
         self.ai_service = ai_service
         self.config = config or PluginConfig()
         self.rule_engine = RuleEngine()
+        self.knowledge_context = knowledge_context
 
     # ── 公共 API ──
 
@@ -112,8 +116,13 @@ class AIHazardIdentifier:
         logger.info("阶段一：输入预处理 — hazard_no=%s", input_data.hazard_no)
         has_photos = bool(input_data.defect_photos)
 
+        # ── 阶段1.5：加载知识库 ──
+        if not self.knowledge_context and self.config.enable_knowledge:
+            logger.info("阶段1.5：知识库未提供，使用空上下文（集成层应在调用前注入）")
+
         # ── 阶段二：AI 分析 ──
-        logger.info("阶段二：AI 分析 — has_photos=%s", has_photos)
+        logger.info("阶段二：AI 分析 — has_photos=%s has_knowledge=%s",
+                     has_photos, bool(self.knowledge_context))
 
         if has_photos and self.config.enable_vision:
             raw_output = await self._call_vision_ai(input_data)
@@ -191,7 +200,10 @@ class AIHazardIdentifier:
             ),
         )
 
-        prompt = build_full_prompt(context, vision_mode=False, include_fewshot=True)
+        prompt = build_full_prompt(
+            context, vision_mode=False, include_fewshot=True,
+            knowledge_context=self.knowledge_context,
+        )
         expected_keys = get_expected_keys()
 
         messages = [
@@ -225,7 +237,8 @@ class AIHazardIdentifier:
             if hasattr(self.ai_service, "chat_vision_parsed"):
                 return await self.ai_service.chat_vision_parsed(
                     text_prompt=build_full_prompt(
-                        context, vision_mode=True, include_fewshot=True
+                        context, vision_mode=True, include_fewshot=True,
+                        knowledge_context=self.knowledge_context,
                     ),
                     image_urls=input_data.defect_photos,
                     expected_keys=expected_keys,
@@ -272,7 +285,7 @@ class AIHazardIdentifier:
                 try:
                     rs = _json.loads(rs)
                 except (_json.JSONDecodeError, TypeError):
-                    rs = {"immediate": rs, "short_term": "", "long_term": ""}
+                    rs = {"corrective": rs, "preventive": ""}
 
             return HazardIdentificationOutput(
                 key_defect=raw.get("key_defect", ""),
@@ -280,9 +293,8 @@ class AIHazardIdentifier:
                 hazard_category=HazardCategoryEnum(raw.get("hazard_category", "")),
                 hazard_level=HazardLevelEnum(raw.get("hazard_level", "")),
                 rectification_suggestion=RectificationSuggestion(
-                    immediate=rs.get("immediate", ""),
-                    short_term=rs.get("short_term", ""),
-                    long_term=rs.get("long_term", ""),
+                    corrective=rs.get("corrective", ""),
+                    preventive=rs.get("preventive", ""),
                 ),
                 major_hazard_basis=raw.get("major_hazard_basis", ""),
                 confidence=raw.get("confidence") if self.config.enable_reasoning else None,

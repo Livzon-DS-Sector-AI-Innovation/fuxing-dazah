@@ -21,7 +21,7 @@ _env_dir = Path(__file__).resolve().parent.parent.parent.parent.parent
 _app_env = os.getenv("APP_ENV", "development")
 _env_path = _env_dir / f".env.{_app_env}"
 if _env_path.exists():
-    load_dotenv(_env_path)
+    load_dotenv(_env_path, override=True)
 
 SAFETY_BITABLE_APP_TOKEN = os.getenv("SAFETY_FEISHU_BITABLE_APP_TOKEN", "")
 SAFETY_BITABLE_HAZARD_TABLE_ID = os.getenv("SAFETY_FEISHU_BITABLE_HAZARD_TABLE_ID", "")
@@ -205,13 +205,37 @@ class SafetyBitableClient:
         *,
         filter_str: str | None = None,
         page_size: int = 100,
-    ) -> list[dict[str, Any]]:
-        """搜索记录，返回 [{"record_id": "...", "fields": {...}}, ...]."""
+        page_token: str | None = None,
+        automatic_fields: bool = False,
+        filter_info: dict[str, Any] | None = None,
+        sort: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """搜索记录。
+
+        返回 {"items": [...], "has_more": bool, "page_token": str|None, "total": int|None}.
+
+        filter_str: 字符串公式过滤（如 'CurrentValue.[状态]="待整改"'）
+        filter_info: 结构化过滤（与 filter_str 互斥，优先使用 filter_info）
+            格式: {"conjunction": "and",
+                   "conditions": [{"field_name": "...", "operator": "...", "value": [...]}]}
+        sort: 排序条件列表 [{"field_name": "修改时间", "desc": true}]
+        automatic_fields: 是否返回系统字段
+            （created_time, last_modified_time, created_by, last_modified_by）
+        page_token: 分页游标，首次请求不传
+        """
         token = await self._token()
         tid = table_id or self.table_id
         payload: dict[str, Any] = {"page_size": page_size}
-        if filter_str:
+        if filter_info:
+            payload["filter"] = filter_info
+        elif filter_str:
             payload["filter"] = filter_str
+        if automatic_fields:
+            payload["automatic_fields"] = True
+        if sort:
+            payload["sort"] = sort
+        if page_token:
+            payload["page_token"] = page_token
 
         async with httpx.AsyncClient(timeout=30) as http:
             resp = await http.post(
@@ -225,8 +249,66 @@ class SafetyBitableClient:
             data = resp.json()
             if data.get("code") != 0:
                 logger.error("Bitable search_records 失败: %s", data.get("msg"))
-                return []
-            return data.get("data", {}).get("items", [])
+                return {
+                    "items": [], "has_more": False,
+                    "page_token": None, "total": None,
+                }
+            result = data.get("data", {})
+            return {
+                "items": result.get("items", []),
+                "has_more": result.get("has_more", False),
+                "page_token": result.get("page_token"),
+                "total": result.get("total"),
+            }
+
+    async def list_all_records(
+        self,
+        table_id: str | None = None,
+        *,
+        filter_str: str | None = None,
+        filter_info: dict[str, Any] | None = None,
+        sort: list[dict[str, Any]] | None = None,
+        automatic_fields: bool = False,
+        page_size: int = 200,
+    ) -> list[dict[str, Any]]:
+        """分页拉取全部匹配记录。
+
+        返回 [{"record_id": "...", "fields": {...}, ...}, ...]。
+        自动处理分页，直至 has_more=false 或 page_token 为空。
+        """
+        all_items: list[dict[str, Any]] = []
+        pt: str | None = None
+        page_count = 0
+
+        while True:
+            page_count += 1
+            result = await self.search_records(
+                table_id=table_id,
+                filter_str=filter_str,
+                filter_info=filter_info,
+                sort=sort,
+                automatic_fields=automatic_fields,
+                page_size=page_size,
+                page_token=pt,
+            )
+            items = result.get("items", [])
+            all_items.extend(items)
+            logger.debug(
+                "Bitable list_all_records page %d: %d items (total=%s, has_more=%s)",
+                page_count, len(items), result.get("total"), result.get("has_more"),
+            )
+
+            if not result.get("has_more"):
+                break
+            pt = result.get("page_token")
+            if not pt:
+                break
+
+        logger.info(
+            "Bitable list_all_records 完成: %d 页 %d 条记录",
+            page_count, len(all_items),
+        )
+        return all_items
 
     async def list_fields(self, table_id: str | None = None) -> list[dict[str, Any]]:
         """列出表格的所有字段。"""

@@ -9,6 +9,9 @@ from app.modules.safety.feishu.bitable_id_mapper import (
     get_bitable_person_value,
     get_user_id_by_bitable_open_id,
 )
+from app.modules.safety.feishu.catch_up import (
+    diagnose_missed_records,
+)
 from app.modules.safety.feishu.client import (
     get_safety_feishu_client,
     get_safety_tenant_token,
@@ -19,6 +22,7 @@ from app.modules.safety.feishu.identity_resolver import (
 )
 
 __all__ = [
+    "diagnose_missed_records",
     "get_bitable_open_id",
     "get_bitable_person_value",
     "get_user_id_by_bitable_open_id",

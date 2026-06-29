@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.core.storage import is_enabled as minio_enabled, upload_object
 from app.modules.safety.schemas import (
     OperationRegulationCreate,
     OperationRegulationResponse,
@@ -133,20 +134,25 @@ async def upload_regulation_document(
 ):
     """上传操规文档并更新操规记录"""
 
-    upload_dir = os.path.join("uploads", "safety", "regulations")
-    os.makedirs(upload_dir, exist_ok=True)
-
     file_ext = os.path.splitext(file.filename or ".md")[1]
     safe_name = f"{regulation_id}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"regulation/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "application/octet-stream")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "regulations")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     service = RegulationService(db)
     item = await service.upload_regulation_document(
-        regulation_id, file.filename or "unknown", file_path
+        regulation_id, file.filename or "unknown", stored_path
     )
     if not item:
         return ApiResponse(code=404, message="操规不存在")
@@ -267,25 +273,30 @@ async def manual_revision_complete(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """上传修订后的文档，完成人工修订流程：
-    1. 保存新文档到 uploads/
+    1. 保存新文档（MinIO 或本地）
     2. 更新修订记录（新文档链接 + 审核通过）
     3. 同步更新操规表文档链接
     """
 
-    upload_dir = os.path.join("uploads", "safety", "regulations")
-    os.makedirs(upload_dir, exist_ok=True)
-
     file_ext = os.path.splitext(file.filename or ".md")[1]
     safe_name = f"revision_{revision_id}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"regulation/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "application/octet-stream")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "regulations")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     service = RegulationService(db)
     item = await service.manual_revision_complete(
-        revision_id, file_path, file.filename
+        revision_id, stored_path, file.filename
     )
     if not item:
         return ApiResponse(code=400, message="无法完成修订，当前状态不允许或修订类型不是人工修订")
@@ -449,17 +460,42 @@ async def export_sop_pdf(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """将存储的标准化 Markdown 渲染为 PDF，返回文件下载。"""
+    from app.core.storage import get_object as minio_get, is_enabled as _minio_enabled
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+
     service = SopGeneratorService(db)
     pdf_path = await service.export_pdf(regulation_id)
 
-    if not pdf_path or not os.path.exists(pdf_path):
+    if not pdf_path:
         return ApiResponse(code=400, message="导出失败：操规不存在或内容为空")
+
+    # Check path validity — MinIO mode: object_key; local mode: local path
+    if _minio_enabled():
+        result = minio_get("safety", pdf_path)
+        if result is None:
+            return ApiResponse(code=400, message="导出失败：PDF文件不存在")
+    else:
+        if not os.path.exists(pdf_path):
+            return ApiResponse(code=400, message="导出失败：PDF文件不存在")
 
     await db.commit()
 
     # Generate a friendly download filename (RFC 5987 encoded for non-ASCII chars)
     filename = f"标准化操规_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     encoded_filename = quote(filename)
+
+    if _minio_enabled():
+        result = minio_get("safety", pdf_path)
+        if result is not None:
+            data, ct = result
+            return StreamingResponse(
+                BytesIO(data),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
+                },
+            )
 
     return FileResponse(
         pdf_path,

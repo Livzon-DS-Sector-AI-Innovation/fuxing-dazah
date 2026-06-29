@@ -1,12 +1,14 @@
 """Safety business workflows."""
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import delete_object, is_enabled as minio_enabled
 from app.modules.safety.repository import SafetyRepository
 from app.platform.audit.service import record_audit_log
 from app.platform.integrations.ai.client import AIOutputError, AIService
@@ -50,6 +52,24 @@ class RegulationService:
         except Exception:
             logger.exception("审计日志记录失败 (%s:%s)", resource_type, action)
 
+    @staticmethod
+    def _cleanup_file(file_path: str | None) -> None:
+        """Delete a single file from MinIO or local disk."""
+        if not file_path:
+            return
+        try:
+            if minio_enabled():
+                try:
+                    delete_object("safety", file_path)
+                except Exception:
+                    pass
+            else:
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+        except OSError:
+            pass
+
     # ==================== 安全操作规程 CRUD ====================
 
     async def get_regulations(
@@ -85,8 +105,12 @@ class RegulationService:
 
     async def delete_regulation(self, regulation_id: uuid.UUID) -> bool:
         """删除安全操作规程"""
+        regulation = await self.repo.get_regulation_by_id(regulation_id)
         result = await self.repo.delete_regulation(regulation_id)
         if result:
+            if regulation:
+                self._cleanup_file(regulation.document_path)
+                self._cleanup_file(regulation.source_document_path)
             await self._audit("delete", "regulation", resource_id=regulation_id)
         return result
 
@@ -145,8 +169,12 @@ class RegulationService:
 
     async def delete_revision(self, revision_id: uuid.UUID) -> bool:
         """删除修订记录"""
+        revision = await self.repo.get_revision_by_id(revision_id)
         result = await self.repo.delete_revision(revision_id)
         if result:
+            if revision:
+                self._cleanup_file(revision.old_document_path)
+                self._cleanup_file(revision.new_document_path)
             await self._audit("delete", "regulation_revision", resource_id=revision_id)
         return result
 

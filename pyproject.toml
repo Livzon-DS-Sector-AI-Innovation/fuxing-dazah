@@ -22,9 +22,12 @@ dependencies = [
     "openai>=2.41.0",
     "openpyxl>=3.1.5",
     "python-docx>=1.2.0",
+    "reportlab>=4.0.0",
+    "Pillow>=10.0.0",
     "croniter>=6.2.2",
     "fastmcp>=3.4.2",
     "minio>=7.2.0",
+    "graphon>=0.5.3,<0.6",
 ]
 
 [project.optional-dependencies]

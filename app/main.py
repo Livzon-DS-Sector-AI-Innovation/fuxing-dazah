@@ -86,6 +86,33 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     safety_ws_task = asyncio.create_task(start_ws())
 
+    # ── Phase 1: Bitable 漏单诊断（启动时检查停机期间遗漏的记录）──
+    async def _run_safety_catch_up_diagnostic() -> None:
+        """启动时比对 Bitable 与本地 DB，检测 WS 断线期间的漏单。
+
+        延迟 5 秒让 WS 完成建连和订阅后再查询 Bitable。
+        纯诊断，不修改数据。异常不阻塞服务启动。
+        """
+        try:
+            await asyncio.sleep(5)
+
+            from app.core.database import async_session_factory
+            from app.modules.safety.feishu.catch_up import diagnose_missed_records
+
+            async with async_session_factory() as diag_db:
+                result = await diagnose_missed_records(diag_db)
+
+            missed = result.get("missed", 0)
+            if missed < 0:
+                logger.warning("Bitable 漏单诊断: 执行失败，详见上方日志")
+            elif missed == 0:
+                logger.info("Bitable 漏单诊断: 启动检查完成，无漏单")
+            # 有漏单时 catch_up.py 已打印醒目 box 日志，这里不再重复
+        except Exception:
+            logger.exception("Bitable 漏单诊断: 启动检查异常（非致命）")
+
+    asyncio.create_task(_run_safety_catch_up_diagnostic())
+
     # ── 安全模块定时任务调度引擎 ──
     from app.modules.safety.scheduler import (
         scheduled_task_loop,

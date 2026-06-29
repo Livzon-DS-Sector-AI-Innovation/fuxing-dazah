@@ -159,18 +159,44 @@ async def preview_workflow_attachment(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """预览上传的附件原始文件（浏览器内嵌预览或触发下载）。"""
+    from app.core.storage import get_object as minio_get, is_enabled as _minio_enabled
+    from fastapi.responses import StreamingResponse
+    from io import BytesIO
+
     service = AttachmentService()
     file_path = service.get_preview_path(attachment_id)
 
     # 知识库附件（无原始文件）— 返回 MD 预览
     if not file_path:
-        md_path = os.path.join(service.UPLOAD_DIR, service.MD_SUBDIR, f"{attachment_id}.md")
-        if os.path.exists(md_path):
-            with open(md_path, encoding="utf-8") as f:
-                content = f.read()
-            return PlainTextResponse(content, media_type="text/plain; charset=utf-8")
+        if _minio_enabled():
+            result = minio_get("safety", f"ai-workflow/md/{attachment_id}.md")
+            if result is not None:
+                data, _ = result
+                return PlainTextResponse(data.decode("utf-8"), media_type="text/plain; charset=utf-8")
+        else:
+            md_path = os.path.join(service.UPLOAD_DIR, service.MD_SUBDIR, f"{attachment_id}.md")
+            if os.path.exists(md_path):
+                with open(md_path, encoding="utf-8") as f:
+                    content = f.read()
+                return PlainTextResponse(content, media_type="text/plain; charset=utf-8")
         return ApiResponse(code=404, message="附件不存在或已被删除")
 
+    # MinIO mode: file_path is an object_key prefix; try common extensions
+    if _minio_enabled() and not os.path.exists(file_path):
+        for ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".md", ".png", ".jpg", ".jpeg"):
+            full_key = f"{file_path}{ext}"
+            result = minio_get("safety", full_key)
+            if result is not None:
+                data, ct = result
+                return StreamingResponse(BytesIO(data), media_type=ct or "application/octet-stream")
+        # Also try as-is (might be a full object_key)
+        result = minio_get("safety", file_path)
+        if result is not None:
+            data, ct = result
+            return StreamingResponse(BytesIO(data), media_type=ct or "application/octet-stream")
+        return ApiResponse(code=404, message="附件不存在或已被删除")
+
+    # Local mode
     # 根据文件类型设置 media_type
     ext = os.path.splitext(file_path)[1].lower()
     media_types = {

@@ -1,12 +1,14 @@
 """Safety business workflows."""
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import delete_object, is_enabled as minio_enabled
 from app.modules.safety.models import (
     SpecialOperationPermit,
     SpecialOperationPersonnel,
@@ -59,6 +61,24 @@ class SpecialOperationService:
         except Exception:
             logger.exception("审计日志记录失败 (%s:%s)", resource_type, action)
 
+    @staticmethod
+    def _cleanup_file(file_path: str | None) -> None:
+        """Delete a single file from MinIO or local disk."""
+        if not file_path:
+            return
+        try:
+            if minio_enabled():
+                try:
+                    delete_object("safety", file_path)
+                except Exception:
+                    pass
+            else:
+                abs_path = os.path.abspath(file_path)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
+        except OSError:
+            pass
+
     # ==================== 人员资质 CRUD ====================
 
     async def get_personnel(
@@ -104,8 +124,11 @@ class SpecialOperationService:
 
     async def delete_personnel(self, personnel_id: uuid.UUID) -> bool:
         """删除人员资质"""
+        personnel = await self.repo.get_special_operation_personnel_by_id(personnel_id)
         result = await self.repo.delete_special_operation_personnel(personnel_id)
         if result:
+            if personnel:
+                self._cleanup_file(personnel.certificate_file_path)
             await self._audit("delete", "special_operation_personnel", resource_id=personnel_id)
         return result
 

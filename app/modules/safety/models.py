@@ -645,6 +645,42 @@ class HazardReport(BaseModel):
         String(64), nullable=True, comment="飞书多维表格记录 ID，双向同步关联"
     )
 
+    # ── AI 整改初审 ──
+    ai_review_result: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True,
+        comment="AI 整改初审结果 JSON（RectificationReviewOutput 完整输出）"
+    )
+    ai_review_status: Mapped[str] = mapped_column(
+        String(32), default="pending", server_default="pending", nullable=False,
+        comment="AI 初审状态: pending / processing / completed / failed"
+    )
+    ai_review_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="AI 初审完成时间"
+    )
+
+    # ── 飞书通知追踪 ──
+    rectification_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="整改通知最近发送时间"
+    )
+    rectification_notify_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="整改通知状态: success / failed"
+    )
+    rectification_notify_error: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="整改通知失败原因"
+    )
+    review_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="复核通知最近发送时间"
+    )
+    review_notified_level: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="复核通知级别: 1/2/3"
+    )
+    review_notify_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="复核通知状态: success / failed"
+    )
+    review_notify_error: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="复核通知失败原因"
+    )
+
     # 关系
     safety_check: Mapped["SafetyCheck | None"] = relationship(
         "SafetyCheck", back_populates="hazards"
@@ -829,6 +865,7 @@ class HazardIdentification(BaseModel):
     __tablename__ = "hazard_identifications"
     __table_args__ = (
         Index("uq_hazard_identifications_no", "hazard_id_no", unique=True, postgresql_where=text("is_deleted = false")),
+        Index("ix_hazard_identifications_regulation_batch", "regulation_id", "batch_id"),
         {"schema": "safety"},
     )
 
@@ -842,6 +879,23 @@ class HazardIdentification(BaseModel):
     )
     attachment_original_name: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="附件原始文件名"
+    )
+    regulation_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="引用的安全操作规程 ID（替代附件上传）"
+    )
+    regulation_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="引用的安全操作规程名称"
+    )
+
+    # ── 多工段辨识（batch / per-stage）──
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True, comment="批次ID，同一regulation多工段同时创建时共享"
+    )
+    stage_name: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="工艺阶段名称（Chapter 7 H2 标题）"
+    )
+    chapter7_context: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="该工段对应的 Chapter 7 节选 Markdown（供Script 1使用）"
     )
 
     # ── 脚本1 输出：附件解析（AI → 人工审核） ──
@@ -1255,6 +1309,16 @@ class SafetyKnowledgeArticle(BaseModel):
     )
     attachment_original_name: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="附件原始文件名"
+    )
+    # ── AI 知识增强字段 ──
+    knowledge_card: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True, comment="AI 知识卡片 JSON（结构化法规摘要，供 AI 识别注入 prompt）"
+    )
+    card_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="知识卡片生成时间"
+    )
+    card_version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False, comment="知识卡片版本号"
     )
 
 

@@ -11,11 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.core.storage import is_enabled as minio_enabled
+from app.core.storage import upload_object
 from app.modules.safety.schemas import (
     DepartmentLeaderResponse,
     HazardReportCreate,
     HazardReportResponse,
-    HazardReportRunAIRequest,
     HazardReportUpdate,
     HazardStatsResponse,
     RectificationReplyRequest,
@@ -24,7 +25,10 @@ from app.modules.safety.schemas import (
 from app.modules.safety.service import (
     SafetyService,
 )
-from app.modules.safety.service.safety import _send_verify_notification
+from app.modules.safety.service.safety import (
+    _send_rectification_notification,
+    _send_verify_notification,
+)
 
 hazards_router = APIRouter()
 
@@ -110,9 +114,10 @@ async def create_hazard(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """创建隐患"""
+    """创建隐患（AI 识别不在此处执行——调用方应在图片上传完成后通过
+    POST /hazards/{id}/ai/run/1 手动触发，与 Bitable 同步流程对齐）。"""
     service = SafetyService(db)
-    item = await service.create_hazard(data)
+    item = await service.create_hazard(data, auto_run_ai=False)
     await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
@@ -146,19 +151,24 @@ async def upload_hazard_photo(
 ):
     """上传隐患缺陷图片，追加到 defect_photos JSON 数组"""
 
-    upload_dir = os.path.join("uploads", "safety", "hazard")
-    os.makedirs(upload_dir, exist_ok=True)
-
     file_ext = os.path.splitext(file.filename or ".png")[1]
     safe_name = f"hazard_{hazard_id}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"hazard/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "image/jpeg")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "hazard")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     service = SafetyService(db)
-    item = await service.upload_hazard_photo(hazard_id, file.filename or "unknown", file_path)
+    item = await service.upload_hazard_photo(hazard_id, file.filename or "unknown", stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
     await db.commit()
@@ -178,19 +188,24 @@ async def upload_rectification_photo(
 ):
     """上传整改后图片，追加到 rectification_photos JSON 数组"""
 
-    upload_dir = os.path.join("uploads", "safety", "hazard")
-    os.makedirs(upload_dir, exist_ok=True)
-
     file_ext = os.path.splitext(file.filename or ".png")[1]
     safe_name = f"rectification_{hazard_id}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"hazard/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "image/jpeg")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "hazard")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     service = SafetyService(db)
-    item = await service.upload_rectification_photo(hazard_id, file_path)
+    item = await service.upload_rectification_photo(hazard_id, stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
     await db.commit()
@@ -323,16 +338,24 @@ async def delete_hazard(
 async def run_hazard_ai(
     hazard_id: uuid.UUID,
     script_number: int,
-    data: HazardReportRunAIRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """执行隐患AI工作流脚本。AI从已有数据库数据读取上下文，无需额外传入参数。"""
+    """执行隐患AI工作流脚本。AI从已有数据库数据读取上下文，无需额外传入参数。
+
+    没有 body 参数——FastAPI 不会解析请求 body，避免空 body + JSON Content-Type 触发 422。
+    """
     service = SafetyService(db)
     item = await service.run_hazard_ai_script(hazard_id, script_number)
     if item is None:
         return ApiResponse(code=400, message="无法执行AI工作流，当前状态不允许或前置步骤未完成")
     await db.commit()
+
+    # AI 识别完成后异步通知责任人整改（与 Bitable 同步流程对齐：
+    # _create_hazard_from_bitable → AI 完成 → _send_rectification_notification）
+    if script_number == 1 and item and not item.ai_error_message:
+        asyncio.create_task(_send_rectification_notification(item))
+
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -389,4 +412,94 @@ async def notify_reviewer(
         message=f"已向{level_labels[current_level]}发送飞书通知",
         data={"level": current_level, "level_label": level_labels[current_level]},
     )
+
+
+@hazards_router.post(
+    "/hazards/{hazard_id}/rectification/review",
+    response_model=ApiResponse,
+    summary="触发整改回复 AI 初审",
+)
+async def trigger_rectification_review(
+    hazard_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """手动触发整改回复 AI 初审（异步执行，不阻塞响应）。
+
+    适用场景：
+    - AI 初审失败后重试
+    - 前端手动触发重新审查
+    """
+    service = SafetyService(db)
+    hazard = await service.repo.get_hazard_by_id(hazard_id)
+    if not hazard:
+        return ApiResponse(code=404, message="隐患不存在")
+
+    if hazard.rectification_status not in ("replied",):
+        return ApiResponse(
+            code=400,
+            message="当前整改状态不允许触发 AI 初审，仅「已回复」状态可触发",
+        )
+
+    # 异步执行，不阻塞 HTTP 响应
+    asyncio.create_task(service.run_rectification_review(hazard_id))
+
+    return ApiResponse(message="AI 初审已触发，正在异步处理中")
+
+
+@hazards_router.post(
+    "/hazards/{hazard_id}/rectification/notify-rectification",
+    response_model=ApiResponse,
+    summary="飞书通知整改责任人",
+)
+async def notify_rectification(
+    hazard_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """手动触发飞书通知，提醒整改责任人进行整改回复。"""
+    service = SafetyService(db)
+    hazard = await service.repo.get_hazard_by_id(hazard_id)
+    if not hazard:
+        return ApiResponse(code=404, message="隐患不存在")
+
+    # 异步发送飞书通知，不阻塞响应
+    asyncio.create_task(_send_rectification_notification(hazard))
+
+    return ApiResponse(
+        message="已向整改责任人发送飞书通知",
+        data={"target": hazard.rectification_responsible_person_name or "未知"},
+    )
+
+
+@hazards_router.get(
+    "/hazards/catch-up/diagnose",
+    response_model=ApiResponse,
+    summary="Bitable 漏单诊断",
+)
+async def diagnose_bitable_catch_up(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """诊断 Bitable 多维表格中是否有在 WebSocket 断线期间被遗漏的记录。
+
+    使用飞书 Bitable 系统字段「修改时间」做精准增量查询：
+    - 获取本地最新记录的 updated_at 作为时间下界
+    - 查询 Bitable 中 last_modified_time > 此值的记录
+    - 按 feishu_record_id 比对，找出本地不存在的记录
+
+    纯查询操作，不修改数据库或 Bitable 中的任何数据。
+
+    返回字段：
+    - cutoff_time: 时间下界（ISO 格式）
+    - bitable_matched: 查询窗口内 Bitable 返回的记录总数
+    - local_total: 本地已关联 feishu_record_id 的记录数
+    - missed: 漏单数（Bitable 有但本地没有），-1 表示诊断失败
+    - existing: 两边都存在的记录数
+    - missed_records: 漏单详情（最多 50 条，含 record_id + 关键字段）
+    """
+    from app.modules.safety.feishu.catch_up import diagnose_missed_records
+
+    result = await diagnose_missed_records(db)
+    return ApiResponse(data=result)
 

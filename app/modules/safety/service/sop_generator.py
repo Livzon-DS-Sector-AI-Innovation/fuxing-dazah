@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import is_enabled as minio_enabled, upload_object
 from app.modules.safety.repository import SafetyRepository
 
 # ── Plugin path resolution ─────────────────────────────────────────
@@ -56,12 +57,13 @@ class SopGeneratorService:
         reg = await self._create_draft_regulation(name, draft_path)
 
         # 3. Run the generator pipeline (synchronous, in thread)
-        pdf_path = os.path.join(
+        pdf_local_path = os.path.join(
             self.UPLOAD_DIR, f"{reg.id}_{int(datetime.now().timestamp())}.pdf"
         )
+        os.makedirs(self.UPLOAD_DIR, exist_ok=True)
 
-        result = await asyncio.to_thread(
-            self._run_pipeline_sync, draft_path, str(pdf_path)
+        result = await _asyncio.to_thread(
+            self._run_pipeline_sync, draft_path, str(pdf_local_path)
         )
 
         # 4. Read generated Markdown
@@ -71,14 +73,23 @@ class SopGeneratorService:
             with open(md_path, encoding="utf-8") as f:
                 content = f.read()
 
-        # 5. Update regulation record with generated content
+        # 5. Upload PDF to MinIO (or keep local path)
+        pdf_stored_path: str = pdf_local_path
+        if minio_enabled() and os.path.exists(pdf_local_path):
+            with open(pdf_local_path, "rb") as f:
+                pdf_data = f.read()
+            object_key = f"regulation/{reg.id}_export_{int(datetime.now().timestamp())}.pdf"
+            upload_object("safety", object_key, pdf_data, len(pdf_data), "application/pdf")
+            pdf_stored_path = object_key
+
+        # 6. Update regulation record with generated content
         await self.repo.update_regulation(
             reg.id,
             {
                 "content": content,
                 "status": "generated",
-                "document_path": pdf_path,
-                "document_original_name": os.path.basename(pdf_path),
+                "document_path": pdf_stored_path,
+                "document_original_name": os.path.basename(pdf_stored_path),
             },
         )
         await self.session.flush()
@@ -136,7 +147,7 @@ class SopGeneratorService:
             "post_name": "",
         }
 
-        pdf_path = os.path.join(
+        pdf_local_path = os.path.join(
             self.UPLOAD_DIR,
             f"{regulation_id}_export_{int(datetime.now().timestamp())}.pdf",
         )
@@ -144,17 +155,27 @@ class SopGeneratorService:
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
 
         await asyncio.to_thread(
-            self._render_markdown_sync, reg.content, str(pdf_path), pdf_meta
+            self._render_markdown_sync, reg.content, str(pdf_local_path), pdf_meta
         )
+
+        # Upload to MinIO (or keep local path)
+        if minio_enabled() and os.path.exists(pdf_local_path):
+            with open(pdf_local_path, "rb") as f:
+                pdf_data = f.read()
+            object_key = f"regulation/{regulation_id}_export_{int(datetime.now().timestamp())}.pdf"
+            upload_object("safety", object_key, pdf_data, len(pdf_data), "application/pdf")
+            stored_path = object_key
+        else:
+            stored_path = pdf_local_path
 
         # Update status
         await self.repo.update_regulation(
             regulation_id,
-            {"status": "exported", "document_path": pdf_path},
+            {"status": "exported", "document_path": stored_path},
         )
         await self.session.flush()
 
-        return pdf_path
+        return stored_path
 
     async def get_content(self, regulation_id: uuid.UUID) -> dict | None:
         """获取 Markdown 内容（供编辑器加载）"""
@@ -171,17 +192,21 @@ class SopGeneratorService:
     # ── Private helpers ────────────────────────────────────────────
 
     async def _save_upload(self, file: Any) -> str:
-        """Save uploaded .docx to disk, return file path."""
+        """Save uploaded .docx — MinIO or local, return path/object_key."""
         file_ext = os.path.splitext(file.filename or ".docx")[1]
         safe_name = f"draft_{uuid.uuid4().hex}{file_ext}"
-        file_path = os.path.join(self.UPLOAD_DIR, safe_name)
-
         content = await file.read()
         await file.seek(0)  # Reset for potential re-reads
 
+        if minio_enabled():
+            object_key = f"regulation/{safe_name}"
+            upload_object("safety", object_key, content, len(content), file.content_type or "application/octet-stream")
+            return object_key
+
+        file_path = os.path.join(self.UPLOAD_DIR, safe_name)
+        os.makedirs(self.UPLOAD_DIR, exist_ok=True)
         with open(file_path, "wb") as f:
             f.write(content)
-
         return file_path
 
     async def _create_draft_regulation(

@@ -11,7 +11,6 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 枚举定义（与设计方案 2.2 节完全对齐）
 # ═══════════════════════════════════════════════════════════════════════════
@@ -91,15 +90,12 @@ class HazardIdentificationInput(BaseModel):
 
 
 class RectificationSuggestion(BaseModel):
-    """整改建议 — 三分级结构"""
-    immediate: str = Field(
-        ..., description="立即措施（24小时内），应急处置/隔离/停用"
+    """整改建议 — 两层结构"""
+    corrective: str = Field(
+        ..., description="整改措施 — 针对隐患描述的最直接整改措施，含具体操作步骤、责任岗位、完成时限、验收标准"
     )
-    short_term: str = Field(
-        ..., description="短期整改（1-7天），修复/更换/培训"
-    )
-    long_term: str = Field(
-        ..., description="长期预防，修订制度/纳入巡检/建立台账"
+    preventive: str = Field(
+        ..., description="预防措施 — 防止该隐患再次出现的预防措施，含制度修订、巡检纳入、台账建立、培训计划、考核方式"
     )
 
 
@@ -169,6 +165,9 @@ class PluginConfig(BaseModel):
     )
     enable_reasoning: bool = Field(
         False, description="是否请求 AI 输出推理过程（增加 token 消耗）"
+    )
+    enable_knowledge: bool = Field(
+        True, description="是否启用法规知识库注入（RAG-lite）"
     )
     strict_mode: bool = Field(
         True, description="严格模式：规则验证失败时抛出异常"

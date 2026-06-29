@@ -657,9 +657,8 @@ class SafetyService:
                 "major_hazard_basis": output.major_hazard_basis,
                 # 整改建议也返回，供后续 script 2 或人工参考
                 "rectification_suggestion": {
-                    "immediate": output.rectification_suggestion.immediate,
-                    "short_term": output.rectification_suggestion.short_term,
-                    "long_term": output.rectification_suggestion.long_term,
+                    "corrective": output.rectification_suggestion.corrective,
+                    "preventive": output.rectification_suggestion.preventive,
                 },
             }
         except Exception as e:
@@ -770,7 +769,7 @@ class SafetyService:
         # 解析 AI 识别结果中的整改建议
         ai_suggestion = None
         if item.corrective_preventive_measures:
-            # 尝试解析三层结构（格式：【立即措施】... 【短期整改】... 【长期预防】...）
+            # 尝试解析两层结构（格式：【整改措施】... 【预防措施】...）
             # 直接以原始文本形式传递，AI 会自行解析
             try:
                 ai_suggestion = {"raw": item.corrective_preventive_measures}
@@ -1061,16 +1060,14 @@ class SafetyService:
                         continue
                     update_data[db_field] = val
 
-            # 插件生成的整改建议（三层结构）→ 格式化为可读中文文本
+            # 插件生成的整改建议（两层结构）→ 格式化为可读中文文本
             rs = output.get("rectification_suggestion")
             if rs and isinstance(rs, dict):
                 parts: list[str] = []
-                if rs.get("immediate"):
-                    parts.append(f"【立即措施】{rs['immediate']}")
-                if rs.get("short_term"):
-                    parts.append(f"【短期整改】{rs['short_term']}")
-                if rs.get("long_term"):
-                    parts.append(f"【长期预防】{rs['long_term']}")
+                if rs.get("corrective"):
+                    parts.append(f"【整改措施】{rs['corrective']}")
+                if rs.get("preventive"):
+                    parts.append(f"【预防措施】{rs['preventive']}")
                 if parts:
                     update_data["corrective_preventive_measures"] = "\n\n".join(parts)
         # script 2 已废弃：整改建议由插件在 script 1 中生成

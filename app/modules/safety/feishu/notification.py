@@ -246,17 +246,42 @@ async def build_card(
 
 
 async def upload_image_to_feishu(file_path: str) -> str | None:
-    """上传本地图片到飞书 CDN，返回 image_key（用于卡片 img 元素）。
+    """上传图片到飞书 CDN，返回 image_key（用于卡片 img 元素）。
+
+    支持 MinIO object_key 和本地文件路径。
 
     Args:
-        file_path: 本地图片相对路径（如 uploads/safety/hazard/xxx.jpg）
+        file_path: object_key（如 hazard/xxx.jpg）或本地路径（如 uploads/safety/hazard/xxx.jpg）
 
     Returns:
         飞书 image_key（如 img_v3_xxx），失败返回 None
     """
-    abs_path = os.path.abspath(file_path)
-    if not os.path.exists(abs_path):
-        logger.warning("图片文件不存在，跳过上传: %s", abs_path)
+    from app.core.storage import get_object, is_enabled as minio_enabled
+
+    image_data: bytes | None = None
+    image_filename: str = os.path.basename(file_path)
+
+    if minio_enabled():
+        # Try MinIO first
+        result = get_object("safety", file_path)
+        if result is not None:
+            image_data, _ = result
+        else:
+            # Fallback to local
+            abs_path = os.path.abspath(file_path)
+            if os.path.exists(abs_path):
+                with open(abs_path, "rb") as f:
+                    image_data = f.read()
+    else:
+        abs_path = os.path.abspath(file_path)
+        if not os.path.exists(abs_path):
+            logger.warning("图片文件不存在，跳过上传: %s", abs_path)
+            return None
+        with open(abs_path, "rb") as f:
+            image_data = f.read()
+
+    if not image_data:
+        logger.warning("无法读取图片数据，跳过上传: %s", file_path)
         return None
 
     try:
@@ -264,23 +289,22 @@ async def upload_image_to_feishu(file_path: str) -> str | None:
         token = await get_safety_tenant_token(client)
 
         async with httpx.AsyncClient(timeout=30) as http_client:
-            with open(abs_path, "rb") as f:
-                resp = await http_client.post(
-                    "https://open.feishu.cn/open-apis/im/v1/images",
-                    headers={"Authorization": f"Bearer {token}"},
-                    files={"image": (os.path.basename(file_path), f, "image/jpeg")},
-                    data={"image_type": "message"},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("code") == 0:
-                        image_key = data.get("data", {}).get("image_key", "")
-                        if image_key:
-                            logger.info("图片上传飞书成功: %s → %s", file_path, image_key)
-                            return image_key
-                    logger.error("上传图片到飞书失败: %s", data)
-                else:
-                    logger.error("上传图片到飞书 HTTP错误: %s", resp.status_code)
+            resp = await http_client.post(
+                "https://open.feishu.cn/open-apis/im/v1/images",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"image": (image_filename, image_data, "image/jpeg")},
+                data={"image_type": "message"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("code") == 0:
+                    image_key = data.get("data", {}).get("image_key", "")
+                    if image_key:
+                        logger.info("图片上传飞书成功: %s → %s", file_path, image_key)
+                        return image_key
+                logger.error("上传图片到飞书失败: %s", data)
+            else:
+                logger.error("上传图片到飞书 HTTP错误: %s", resp.status_code)
     except Exception:
         logger.exception("上传图片到飞书异常: %s", file_path)
     return None

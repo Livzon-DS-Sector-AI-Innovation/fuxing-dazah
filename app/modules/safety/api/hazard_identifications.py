@@ -10,7 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
+from app.core.storage import is_enabled as minio_enabled, upload_object
 from app.modules.safety.schemas import (
+    HazardIdentificationBatchCreate,
+    HazardIdentificationBatchResponse,
     HazardIdentificationCreate,
     HazardIdentificationResponse,
     HazardIdentificationReview,
@@ -18,6 +21,7 @@ from app.modules.safety.schemas import (
     HazardIdentificationUpdate,
     HazardLedgerExportRequest,
     HazardRiskOption,
+    RegulationStagesResponse,
 )
 from app.modules.safety.service import (
     DailyRiskReportService,
@@ -43,6 +47,7 @@ async def get_hazard_identifications(
     risk_level: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    batch_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
@@ -51,7 +56,7 @@ async def get_hazard_identifications(
     skip = (page - 1) * page_size
     items, total = await service.get_hazard_identifications(
         skip, page_size, department, overall_status, ai_node_progress, keyword,
-        position, risk_level, date_from, date_to,
+        position, risk_level, date_from, date_to, batch_id,
     )
     return ApiResponse(
         data=[HazardIdentificationResponse.model_validate(i) for i in items],
@@ -154,6 +159,46 @@ async def create_hazard_identification(
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
+# ── 批量辨识 + 工段预览 ──
+
+
+@hazard_identifications_router.get(
+    "/regulations/{regulation_id}/stages",
+    response_model=ApiResponse,
+    summary="获取操规工艺阶段列表（批量辨识前预览）",
+)
+async def get_regulation_stages(
+    regulation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """解析操规 Chapter 7 → 返回工艺阶段名称 + 安全要求/操作步骤数量"""
+    service = SafetyService(db)
+    stages = await service.get_regulation_stages(regulation_id)
+    if stages is None:
+        return ApiResponse(code=404, message="操规不存在或无可解析的第七章内容")
+    return ApiResponse(data=stages)
+
+
+@hazard_identifications_router.post(
+    "/hazard-identifications/batch",
+    response_model=ApiResponse,
+    summary="批量创建危险源辨识（一个操规多工段）",
+)
+async def create_hazard_identification_batch(
+    data: HazardIdentificationBatchCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """根据操规第7章的工艺阶段，批量创建危险源辨识记录"""
+    service = SafetyService(db)
+    try:
+        result = await service.create_hazard_identification_batch(data)
+        await db.commit()
+        return ApiResponse(data=result)
+    except ValueError as e:
+        return ApiResponse(code=400, message=str(e))
+
+
 @hazard_identifications_router.put(
     "/hazard-identifications/{hid}",
     response_model=ApiResponse,
@@ -245,22 +290,26 @@ async def upload_hazard_attachment(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """上传危险源辨识的岗位资料附件"""
-    # 保存到本地 uploads/safety/hazard 目录
-
-    upload_dir = os.path.join("uploads", "safety", "hazard")
-    os.makedirs(upload_dir, exist_ok=True)
 
     file_ext = os.path.splitext(file.filename or ".bin")[1]
     safe_name = f"{hid}_{int(datetime.now().timestamp())}{file_ext}"
-    file_path = os.path.join(upload_dir, safe_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+
+    if minio_enabled():
+        object_key = f"hazard-identification/{safe_name}"
+        upload_object("safety", object_key, content, len(content), file.content_type or "application/octet-stream")
+        stored_path = object_key
+    else:
+        upload_dir = os.path.join("uploads", "safety", "hazard")
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, safe_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        stored_path = file_path
 
     service = SafetyService(db)
     item = await service.upload_attachment(
-        hid, file.filename or "unknown", file_path
+        hid, file.filename or "unknown", stored_path
     )
     if not item:
         return ApiResponse(code=404, message="记录不存在")
