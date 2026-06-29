@@ -98,9 +98,11 @@ class WorkflowService:
     ) -> WorkflowRun:
         """执行工作流：创建 run 记录 → 执行 → 更新结果。
 
-        当前版本为同步 blocking 执行。
-        后续可改为 SSE streaming。
+        graphon 引擎同步执行（线程池），此方法在 run_in_executor 中被调用。
         """
+        from app.modules.safety.service.config import create_ai_service
+        from app.modules.safety.workflow.entry import WorkflowEntry
+
         wf = await self.repo.get_definition(workflow_id)
         if wf is None:
             raise ValueError(f"工作流定义不存在: {workflow_id}")
@@ -108,7 +110,6 @@ class WorkflowService:
         if not wf.is_enabled:
             raise ValueError(f"工作流已禁用: {wf.name}")
 
-        # 创建 run 记录
         run = await self.repo.create_run({
             "workflow_id": workflow_id,
             "inputs": inputs,
@@ -118,19 +119,20 @@ class WorkflowService:
             "entity_id": entity_id,
         })
 
+        ai_service = None
+        start = time.monotonic()
         try:
-            # 执行工作流（同步 blocking）
-            from app.modules.safety.workflow.entry import WorkflowEntry
-            from app.modules.safety.service.config import create_ai_service
-
             ai_service = create_ai_service("text")
-            entry = WorkflowEntry(self.session, ai_service)
+            entry = WorkflowEntry(ai_service)
 
-            start = time.monotonic()
-            result = entry.run(wf, inputs)
+            # graphon 同步执行
+            result = entry.run(
+                workflow_def=wf,
+                inputs=inputs,
+                workflow_run_id=str(run.id),
+            )
             elapsed = time.monotonic() - start
 
-            # 更新 run 记录为成功
             await self.repo.update_run(run.id, {
                 "status": "succeeded",
                 "outputs": result.get("outputs", {}),
@@ -141,24 +143,24 @@ class WorkflowService:
                 "finished_at": datetime.utcnow(),
             })
 
-            # 关闭 AI service 连接
-            await ai_service.close()
-
             return await self.repo.get_run(run.id)
 
         except Exception as e:
             logger.exception("工作流执行失败: %s", e)
+            elapsed = time.monotonic() - start
             await self.repo.update_run(run.id, {
                 "status": "failed",
                 "error_message": str(e),
-                "elapsed_time": time.monotonic() - start,
+                "elapsed_time": round(elapsed, 3),
                 "finished_at": datetime.utcnow(),
             })
-            try:
-                await ai_service.close()
-            except Exception:
-                pass
             raise
+        finally:
+            if ai_service is not None:
+                try:
+                    await ai_service.close()
+                except Exception:
+                    pass
 
     # ═══════════════════════════════════════════════════════════
     # 运行记录

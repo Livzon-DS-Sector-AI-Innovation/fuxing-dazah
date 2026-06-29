@@ -130,25 +130,28 @@ async def run_workflow(
     body: WorkflowRunRequest = WorkflowRunRequest(),
     db: AsyncSession = Depends(get_db),
 ):
+
     service = WorkflowService(db)
     wf = await service.get_definition(id)
     if wf is None:
         return success_response(message="工作流不存在", status_code=404)
 
-    # graphon 是同步执行引擎，用 run_in_executor 避免阻塞 FastAPI 事件循环
+    # graphon 同步执行 → 用 run_in_executor 避免阻塞事件循环
     loop = asyncio.get_running_loop()
-    try:
-        run = await loop.run_in_executor(
-            None,
-            lambda: asyncio.run(
-                service.run_workflow(
-                    workflow_id=id,
-                    inputs=body.inputs,
-                    entity_type=body.entity_type,
-                    entity_id=body.entity_id,
-                )
-            ),
+
+    def _sync_run():
+        """在 executor 线程中运行 async service.run_workflow()。"""
+        return asyncio.run(
+            service.run_workflow(
+                workflow_id=id,
+                inputs=body.inputs,
+                entity_type=body.entity_type,
+                entity_id=body.entity_id,
+            )
         )
+
+    try:
+        run = await loop.run_in_executor(None, _sync_run)
         return success_response(
             data=WorkflowRunResponse.model_validate(run),
             message="执行成功",

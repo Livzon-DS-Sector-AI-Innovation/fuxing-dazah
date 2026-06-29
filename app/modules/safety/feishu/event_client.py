@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import websockets
 
+from app.core.redis import redis_client
 from app.modules.safety.feishu.client import (
     SAFETY_FEISHU_APP_ID,
     SAFETY_FEISHU_APP_SECRET,
@@ -173,6 +174,151 @@ def _get_frame_stats() -> dict:
     return dict(_frame_count)
 
 
+# ── 事件游标：断线补偿的时间锚点 ──
+
+_CURSOR_KEY = "safety:feishu:last_event_create_time"
+
+
+async def _save_event_cursor(create_time_ms: int) -> None:
+    """将最后成功处理的事件 create_time 写入 Redis。
+
+    用于 WebSocket 断线重连后定位补偿拉取的起始时间。
+    Redis 不可用时静默跳过，不影响实时事件处理。
+    """
+    try:
+        if redis_client:
+            await redis_client.set(_CURSOR_KEY, str(create_time_ms), ex=7 * 24 * 3600)
+    except Exception:
+        pass
+
+
+async def _get_event_cursor() -> int | None:
+    """读取上次成功处理的事件 create_time（毫秒时间戳）。
+
+    返回 None 表示首次启动或 Redis 不可用，此时跳过补偿拉取。
+    """
+    try:
+        if redis_client:
+            val = await redis_client.get(_CURSOR_KEY)
+            if val:
+                return int(val)
+    except Exception:
+        pass
+    return None
+
+
+# ── 补偿拉取：从 Bitable 拉取断线期间的遗漏变更 ──
+
+
+async def _catch_up_missed_events() -> dict:
+    """断线重连后从 Bitable 拉取遗漏的变更记录并补偿处理。
+
+    流程：
+      1. 读取游标（上次成功处理的事件 create_time）
+      2. 查询 Bitable 中 last_modified_time > 游标 的记录
+      3. 逐条调用 _handle_single_record_action（与实时事件同一入口）
+      4. 更新游标到当前时间
+
+    幂等性：_handle_single_record_action 内部有 Redis 去重（按 record_id+action，
+    TTL=60s），断线窗口外的补偿不会触发重复处理。
+    """
+    cursor_ms = await _get_event_cursor()
+    if cursor_ms is None:
+        logger.info("补偿拉取: 无游标（首次启动），跳过")
+        return {"status": "skipped", "reason": "no_cursor"}
+
+    logger.info("补偿拉取: 从游标 %d ms 开始查询遗漏记录", cursor_ms)
+
+    from app.modules.safety.feishu.bitable_client import SafetyBitableClient
+    from app.modules.safety.feishu.bitable_handler import (
+        _TARGET_FILE_TOKEN,
+        _TARGET_TABLE_ID,
+        _handle_single_record_action,
+    )
+
+    if not _TARGET_FILE_TOKEN or not _TARGET_TABLE_ID:
+        logger.warning("补偿拉取: Bitable 配置缺失，跳过")
+        return {"status": "skipped", "reason": "no_bitable_config"}
+
+    client = SafetyBitableClient()
+
+    # 查询 Bitable 中断线窗口内被修改的记录
+    try:
+        missed = await client.list_all_records(
+            table_id=_TARGET_TABLE_ID,
+            filter_info={
+                "conjunction": "and",
+                "conditions": [
+                    {
+                        "field_name": "修改时间",
+                        "operator": "isGreater",
+                        "value": ["ExactDate", str(cursor_ms)],
+                    }
+                ],
+            },
+            sort=[{"field_name": "修改时间", "desc": False}],
+            automatic_fields=True,
+            page_size=200,
+        )
+    except Exception:
+        logger.exception("补偿拉取: Bitable API 查询失败")
+        return {"status": "error", "reason": "api_failed"}
+
+    if not missed:
+        logger.info("补偿拉取: 无遗漏记录")
+        return {"status": "ok", "missed_count": 0}
+
+    logger.warning("补偿拉取: 发现 %d 条遗漏记录，开始逐条补偿处理", len(missed))
+
+    processed = 0
+    max_modified_time = cursor_ms
+
+    for rec in missed:
+        record_id = rec.get("record_id", "")
+        if not record_id:
+            continue
+
+        fields = rec.get("fields", {})
+        modified_time_str = rec.get("last_modified_time", "0")
+        try:
+            modified_time = int(modified_time_str)
+        except (ValueError, TypeError):
+            modified_time = 0
+
+        try:
+            # 使用 "update" action：如果记录在本地已存在则同步更新，
+            # 不存在则自动回退为创建（_handle_single_record_action 内部处理）
+            await _handle_single_record_action(
+                bitable=client,
+                file_token=_TARGET_FILE_TOKEN,
+                table_id=_TARGET_TABLE_ID,
+                record_id=record_id,
+                action="update",
+                event_fields=fields,
+            )
+            processed += 1
+            if modified_time > max_modified_time:
+                max_modified_time = modified_time
+        except Exception:
+            logger.exception(
+                "补偿拉取: 处理遗漏记录失败 record_id=%s", record_id,
+            )
+
+    # 更新游标到最后一条记录的修改时间
+    await _save_event_cursor(max_modified_time)
+
+    logger.info(
+        "补偿拉取: 完成，成功处理 %d/%d 条，游标更新至 %d ms",
+        processed, len(missed), max_modified_time,
+    )
+    return {
+        "status": "ok",
+        "missed_count": len(missed),
+        "processed": processed,
+        "cursor_ms": max_modified_time,
+    }
+
+
 async def _handle_binary_message(ws, message: bytes) -> None:
     """处理 protobuf 帧（区分 CONTROL 和 DATA）。"""
     _frame_count["received"] += 1
@@ -308,6 +454,10 @@ async def start_ws() -> None:
 
                 await ensure_bitable_subscribed()
 
+                # 3.5 补偿拉取：重连后拉取断线期间的遗漏事件
+                catch_up_result = await _catch_up_missed_events()
+                logger.info("补偿拉取结果: %s", catch_up_result.get("status"))
+
                 # 4. 启动 protobuf PING 心跳循环
                 ping_task = asyncio.create_task(_ping_loop(ws, service_id))
 
@@ -373,7 +523,10 @@ async def start_ws() -> None:
 
 
 async def _dispatch_event(event: dict[str, Any]) -> Any:
-    """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。"""
+    """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。
+
+    处理成功后会将事件的 create_time 写入 Redis 游标，供断线补偿使用。
+    """
     # v2 格式: {"schema": "2.0", "header": {"event_type": "..."}, "event": {...}}
     header = event.get("header", {})
     event_type = header.get("event_type", "")
@@ -385,7 +538,15 @@ async def _dispatch_event(event: dict[str, Any]) -> Any:
 
     if event_type:
         event_data = event.get("event", event)
-        return await _dispatch(event_type, event_data)
+        result = await _dispatch(event_type, event_data)
+        # 成功后更新游标（用于断线后的补偿拉取）
+        create_time_str = header.get("create_time", "")
+        if create_time_str:
+            try:
+                await _save_event_cursor(int(create_time_str))
+            except (ValueError, TypeError):
+                pass
+        return result
     else:
         logger.debug("安全飞书无法确定事件类型: %s", json.dumps(event, ensure_ascii=False)[:200])
         return None

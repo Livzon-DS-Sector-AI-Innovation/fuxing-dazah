@@ -26,6 +26,7 @@ from app.modules.safety.api.special_operation_reports import (
 from app.modules.safety.api.special_ops_permits import special_ops_permits_router
 from app.modules.safety.api.special_ops_personnel import special_ops_personnel_router
 from app.modules.safety.api.trainings import trainings_router
+from app.modules.safety.workflow.api import workflow_router
 
 router = APIRouter()
 
@@ -48,3 +49,4 @@ router.include_router(special_operation_reports_router)
 router.include_router(special_ops_permits_router)
 router.include_router(special_ops_personnel_router)
 router.include_router(trainings_router)
+router.include_router(workflow_router)

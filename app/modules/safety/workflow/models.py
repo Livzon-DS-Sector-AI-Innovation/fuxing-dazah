@@ -7,7 +7,7 @@ graph JSON 格式直接对接 graphon 的 Graph.init()，存储完整 DAG：
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, JSON, String, Text, text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
