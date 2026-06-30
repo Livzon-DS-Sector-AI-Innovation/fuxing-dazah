@@ -12,7 +12,6 @@ import {
   Form,
   Upload,
   Drawer,
-  message,
   Card,
   Typography,
   Tabs,
@@ -89,7 +88,7 @@ const $muted = actionLink('#787671')
 
 export default function RegulationPage() {
   const [activeTab, setActiveTab] = useState('regulations')
-  const { modal } = App.useApp()
+  const { modal, message } = App.useApp()
 
   // ========== Regulation States ==========
   const [regForm] = Form.useForm()

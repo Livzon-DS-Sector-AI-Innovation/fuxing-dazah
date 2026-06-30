@@ -37,7 +37,7 @@ import {
   runHazardAI,
   deleteHazard,
 } from '@/actions/safety'
-import type { HazardReport } from '@/types/safety'
+import type { HazardReport, HazardReportFormData } from '@/types/safety'
 import dayjs from 'dayjs'
 
 const { Text, Title } = Typography
@@ -173,7 +173,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
   // ── 已完成状态 ──
   const [completedHazardNo, setCompletedHazardNo] = useState('')
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
 
   // 加载草稿列表
   const loadDrafts = useCallback(async () => {
@@ -187,7 +187,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
         setDrafts(res.data)
       }
     } catch {
-      // 静默失败
+      // 草稿加载非关键路径，失败时静默降级为空白列表
     } finally {
       setDraftsLoading(false)
     }
@@ -213,7 +213,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
           discovered_at: values.discovered_at,
           description: values.description,
 
-        } as any)
+        } as Partial<HazardReportFormData>)
         if (updateRes.code !== 200) {
           message.error(updateRes.message || '更新失败')
           setSubmitting(false)
@@ -230,7 +230,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
           department: values.department,
           discovered_at: values.discovered_at,
           description: values.description,
-        } as any)
+        } as HazardReportFormData)
         if (createRes.code !== 200) {
           message.error(createRes.message || '创建失败')
           setSubmitting(false)
@@ -252,11 +252,9 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
               body: formData,
             })
             if (!res.ok) {
-              console.error('图片上传失败:', res.status)
               message.warning('部分图片上传失败，可稍后重试')
             }
           } catch {
-            console.error('图片上传失败')
             message.warning('部分图片上传失败，可稍后重试')
           }
         }
@@ -294,8 +292,8 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
       setCompletedHazardNo(updated?.hazard_no || hazard.hazard_no)
       setCurrentStep('done')
     } catch (err) {
-      console.error('提交失败:', err)
-      message.error('提交失败，请重试')
+      const errMsg = err instanceof Error ? err.message : '请重试'
+      message.error(`提交失败：${errMsg}`)
     } finally {
       setSubmitting(false)
     }
@@ -317,7 +315,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
           discovered_at: values.discovered_at,
           description: values.description,
           overall_status: 'draft',
-        } as any)
+        } as Partial<HazardReportFormData>)
         if (updateRes.code !== 200) {
           message.error(updateRes.message || '保存草稿失败')
           return
@@ -334,7 +332,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
           discovered_at: values.discovered_at,
           description: values.description,
           overall_status: 'draft',
-        } as any)
+        } as HazardReportFormData)
         if (createRes.code !== 200) {
           message.error(createRes.message || '保存草稿失败')
           return
@@ -353,7 +351,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
               body: formData,
             })
           } catch {
-            // 静默失败
+            // 照片批量上传：单张失败不阻塞其余
           }
         }
       }

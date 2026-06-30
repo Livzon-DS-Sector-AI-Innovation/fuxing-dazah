@@ -106,7 +106,7 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
   useEffect(() => { fetchData() }, [fetchData])
 
   // ── AI Export ──
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002/api/v1'
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
 
   const handleAIExport = async () => {
     if (!exportQuery.trim()) {

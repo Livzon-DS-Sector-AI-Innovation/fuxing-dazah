@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons'
 
 import { T } from '@/components/safety/shared-styles'
+import animStyles from './safety-animations.module.css'
 
 const { Text } = Typography
 
@@ -263,7 +264,7 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
-    animation: 'pulseRing 2s ease-in-out infinite',
+    /* animation moved to safety-animations.module.css */
   } as React.CSSProperties,
 
   generatingText: {
@@ -463,7 +464,7 @@ export default function SopGeneratorModal({
         {uploading ? (
           /* ── generating state ── */
           <div style={styles.generatingOverlay}>
-            <div style={styles.generatingPulse}>
+            <div style={styles.generatingPulse} className={animStyles.pulse12}>
               <LoadingOutlined style={{ fontSize: 28, color: TOKENS.primary }} />
             </div>
             <div style={styles.generatingText}>
@@ -566,18 +567,7 @@ export default function SopGeneratorModal({
         </div>
       </div>
 
-      {/* keyframe animation for the pulse ring */}
-      <style
-        dangerouslySetInnerHTML={{
-          __html: `
-            @keyframes pulseRing {
-              0%   { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0.3); }
-              50%  { box-shadow: 0 0 0 12px rgba(86, 69, 212, 0); }
-              100% { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0); }
-            }
-          `,
-        }}
-      />
+      {/* pulse animation now via safety-animations.module.css */}
     </Modal>
     </App>
   )

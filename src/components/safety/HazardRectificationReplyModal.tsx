@@ -75,7 +75,6 @@ export default function HazardRectificationReplyModal({
           } catch (err) {
             const detail = err instanceof Error ? err.message : '请稍后重试'
             message.error(`图片上传失败：${detail}`)
-            console.error('整改图片上传失败:', err)
           }
         }
         setUploading(false)

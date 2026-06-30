@@ -8,13 +8,13 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useSafetyStore } from '@/stores/safety'
+import { T } from './shared-styles'
 import { getPersonnelList, createPersonnel, updatePersonnel, deletePersonnel } from '@/actions/safety'
 import type { SpecialOperationPersonnel, SpecialOperationPersonnelFormData } from '@/types/safety'
 import { OPERATION_TYPE_OPTIONS, PERSONNEL_STATUS_OPTIONS } from '@/types/safety'
 import dayjs from 'dayjs'
 
 const { Text } = Typography
-const T = { primary: '#5645d4', ink: '#1a1a1a', slate: '#5d5b54', muted: '#bbb8b1' }
 
 const getStatusColor = (status: string) => PERSONNEL_STATUS_OPTIONS.find(o => o.value === status)?.color || 'default'
 const getStatusLabel = (status: string) => PERSONNEL_STATUS_OPTIONS.find(o => o.value === status)?.label || status

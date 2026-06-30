@@ -94,7 +94,7 @@ export const monoFont: React.CSSProperties = {
   letterSpacing: -0.2,
 }
 
-// ── 设计 tokens ──
+// ── 设计 tokens（唯一来源，所有组件从此导入）──
 export const T = {
   primary: '#5645d4',
   ink: '#1a1a1a',
@@ -107,4 +107,17 @@ export const T = {
   hairline: '#e5e3df',
   hairlineSoft: '#ede9e4',
   cardTintLavender: '#e6e0f5',
+  // 语义色
+  error: '#E03131',
+  warning: '#DD5B00',
+  success: '#1AAE39',
+  // 背景/强调色
+  peach: '#ffe8d4',
+  rose: '#fde0ec',
+  mint: '#d9f3e1',
+  lavender: '#e6e0f5',
+  sky: '#dcecfa',
+  yellow: '#fef7d6',
+  yellowBold: '#f9e79f',
+  gray: '#f0eeec',
 } as const

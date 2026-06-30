@@ -1,0 +1,45 @@
+/* ═══════════════════════════════════════════════════
+   Shared CSS Module — safety component animations & scrollbar
+
+   Safely imported as CSS Module (no dangerouslySetInnerHTML).
+   ═══════════════════════════════════════════════════ */
+
+/* ── pulse ring animation (16px spread, SopGeneratorPanel) ── */
+.pulse16 {
+  animation: pulseRing16 2s ease-in-out infinite;
+}
+
+@keyframes pulseRing16 {
+  0%   { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0.3); }
+  50%  { box-shadow: 0 0 0 16px rgba(86, 69, 212, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0); }
+}
+
+/* ── pulse ring animation (12px spread, SopGeneratorModal) ── */
+.pulse12 {
+  animation: pulseRing12 2s ease-in-out infinite;
+}
+
+@keyframes pulseRing12 {
+  0%   { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0.3); }
+  50%  { box-shadow: 0 0 0 12px rgba(86, 69, 212, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0); }
+}
+
+/* ── scrollbar styling (SopContentEditor paper preview) ── */
+.scrollBar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.scrollBar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollBar::-webkit-scrollbar-thumb {
+  background: #c8c4be;
+  border-radius: 9999px;
+}
+
+.scrollBar::-webkit-scrollbar-thumb:hover {
+  background: #a4a097;
+}

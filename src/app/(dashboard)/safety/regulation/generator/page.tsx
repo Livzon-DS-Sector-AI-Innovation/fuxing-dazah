@@ -2,13 +2,14 @@
 
 import { useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { message } from 'antd'
+import { App } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import SopGeneratorPanel from '@/components/safety/SopGeneratorPanel'
 import type { OperationRegulation } from '@/types/safety'
 
 export default function SopGeneratorPage() {
   const router = useRouter()
+  const { message } = App.useApp()
 
   const handleSopGenerated = useCallback(
     (result: {

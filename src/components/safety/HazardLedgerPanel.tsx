@@ -37,23 +37,10 @@ import {
 import type { HazardIdentification, HazardLedgerStats } from '@/types/safety'
 import { RISK_LEVEL_OPTIONS } from '@/types/safety'
 import dayjs from 'dayjs'
+import { statusPill } from '@/components/safety/shared-styles'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
-
-// ── 本地样式辅助函数 ──
-const statusPill = (color: string, bg: string): React.CSSProperties => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 10px',
-  borderRadius: 4,
-  fontSize: 12,
-  fontWeight: 600,
-  lineHeight: '20px',
-  color,
-  background: bg,
-})
 
 // ── 风险等级语义色（表格内 pills）──
 const LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
@@ -73,7 +60,13 @@ const STATS_PILLS = [
 ]
 
 // ── 可筛选字段配置 ──
-const FILTER_FIELDS = [
+interface FilterFieldConfig {
+  key: string
+  label: string
+  type?: 'text' | 'select'
+  options: Array<{ value: string; label: string }>
+}
+const FILTER_FIELDS: FilterFieldConfig[] = [
   {
     key: 'risk_level',
     label: '风险等级',
@@ -741,7 +734,7 @@ export default function HazardLedgerPanel() {
           <div style={{ fontSize: 12, color: '#787671', marginBottom: 8 }}>
             {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.label}
           </div>
-          {(FILTER_FIELDS.find((f) => f.key === pendingFilterField) as any)?.type === 'text' ? (
+          {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.type === 'text' ? (
             <Input
               placeholder={
                 pendingFilterField === 'department' ? '请输入部门名称' :
@@ -980,7 +973,7 @@ export default function HazardLedgerPanel() {
             gap: 8,
             paddingBottom: 0,
             msOverflowStyle: 'none',
-            scrollbarWidth: 'thin' as any,
+            scrollbarWidth: 'thin',
           }}
         >
           {/* 活跃筛选条件 chips */}
@@ -1232,7 +1225,7 @@ export default function HazardLedgerPanel() {
 
           {exporting && (
             <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin tip={exportStep || '正在导出…'} />
+              <Spin description={exportStep || '正在导出…'} />
             </div>
           )}
         </div>

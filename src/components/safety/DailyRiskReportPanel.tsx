@@ -151,7 +151,7 @@ export default function DailyRiskReportPanel() {
         if (response.code === 200) { message.success('创建成功'); addDailyRiskReport(response.data as DailyRiskReport); setModalVisible(false); form.resetFields() }
         else { message.error(response.message || '创建失败') }
       }
-    } catch { console.error('表单验证失败') }
+    } catch { message.warning('表单验证失败，请检查填写内容') }
   }
 
   const handleSubmitFlow = async (id: string) => {

@@ -71,7 +71,7 @@ export default function BatchProgressPanel({
   if (loading) {
     return (
       <Card size="small">
-        <Spin tip="加载批次进度..." />
+        <Spin description="加载批次进度..." />
       </Card>
     )
   }

@@ -40,35 +40,9 @@ import HazardIdentificationDrawer from './HazardIdentificationDrawer'
 import HazardIdentificationBatchDrawer from './HazardIdentificationBatchDrawer'
 import BatchProgressPanel from './BatchProgressPanel'
 
+import { statusPill, actionLink } from '@/components/safety/shared-styles'
+
 const { Text } = Typography
-
-// ── 本地样式辅助函数 ──
-const statusPill = (color: string, bg: string): React.CSSProperties => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 10px',
-  borderRadius: 4,
-  fontSize: 12,
-  fontWeight: 600,
-  lineHeight: '20px',
-  color,
-  background: bg,
-})
-
-const actionLink = (color: string): React.CSSProperties => ({
-  color,
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  lineHeight: '22px',
-})
 
 // ── AI 进度颜色配置 ──
 const PROGRESS_COLOR_CONFIG: Record<string, { color: string; bg: string }> = {
@@ -100,7 +74,13 @@ const STATS_PILLS = [
 ]
 
 // ── 可筛选字段配置 ──
-const FILTER_FIELDS = [
+interface FilterFieldConfig {
+  key: string
+  label: string
+  type?: 'text' | 'select'
+  options: Array<{ value: string; label: string }>
+}
+const FILTER_FIELDS: FilterFieldConfig[] = [
   {
     key: 'ai_node_progress',
     label: 'AI 进度',
@@ -626,7 +606,7 @@ export default function WorkflowListPanel() {
           <div style={{ fontSize: 12, color: '#787671', marginBottom: 8 }}>
             {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.label}
           </div>
-          {(FILTER_FIELDS.find((f) => f.key === pendingFilterField) as any)?.type === 'text' ? (
+          {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.type === 'text' ? (
             <Input
               placeholder="请输入部门名称"
               onPressEnter={(e) => {
@@ -840,7 +820,7 @@ export default function WorkflowListPanel() {
             gap: 8,
             paddingBottom: 0,
             msOverflowStyle: 'none',
-            scrollbarWidth: 'thin' as any,
+            scrollbarWidth: 'thin',
           }}
         >
           {/* 活跃筛选条件 chips */}
