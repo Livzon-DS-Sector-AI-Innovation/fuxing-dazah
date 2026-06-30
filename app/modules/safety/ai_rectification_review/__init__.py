@@ -29,7 +29,6 @@ from app.modules.safety.ai_rectification_review.rules import (
     auto_correct,
 )
 from app.modules.safety.ai_rectification_review.schemas import (
-    CompletenessLevel,
     ComplianceLevel,
     MeasureQualityLevel,
     PhotoMatchLevel,
@@ -55,7 +54,6 @@ __all__ = [
     # 枚举
     "PhotoMatchLevel",
     "MeasureQualityLevel",
-    "CompletenessLevel",
     "ComplianceLevel",
     "ReviewConclusion",
     # 工具

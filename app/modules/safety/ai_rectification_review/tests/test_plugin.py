@@ -25,7 +25,6 @@ from app.modules.safety.ai_rectification_review.rules import (
     auto_correct,
 )
 from app.modules.safety.ai_rectification_review.schemas import (
-    CompletenessLevel,
     ComplianceLevel,
     MeasureQualityLevel,
     PhotoMatchLevel,
@@ -44,8 +43,6 @@ VALID_OUTPUT_DICT = {
     "photo_match_level": "matched",
     "measure_quality_assessment": "措施质量较高：有具体操作（加装堵头、密封胶固定、吸尘器清理），有量化标准（扭矩12N·m），有时间节点（7月1日起），有责任主体（持证电工张工），针对根因建立了巡检制度。未出现空泛表述。",
     "measure_quality_level": "adequate",
-    "completeness_check": "覆盖了全部4个层面：key_defect中的引入口未封堵已加装堵头修复，immediate层的断电+警示标识已体现，short_term层的加装堵头+清理积尘已完成，long_term层的修订巡检规程已建立长效机制。三层整改建议全部覆盖。",
-    "completeness_level": "full",
     "standard_compliance": "满足GB 3836.1-2010第15章引入口封堵要求和GB 50016-2014第10.2.4条防爆措施要求。堵头加装符合标准。",
     "standard_compliance_level": "compliant",
     "review_conclusion": "通过",
@@ -146,7 +143,6 @@ class TestSchemas:
         assert out.review_conclusion == ReviewConclusion.PASS
         assert out.photo_match_level == PhotoMatchLevel.MATCHED
         assert out.measure_quality_level == MeasureQualityLevel.ADEQUATE
-        assert out.completeness_level == CompletenessLevel.FULL
         assert out.standard_compliance_level == ComplianceLevel.COMPLIANT
 
     def test_enum_rejection(self):
@@ -178,12 +174,11 @@ class TestPrompts:
         assert len(SYSTEM_ROLE) > 100
         assert "安全审核" in SYSTEM_ROLE
 
-    def test_work_rules_has_five_sections(self):
+    def test_work_rules_has_four_sections(self):
         assert "### 1. 图片比对规则" in WORK_RULES
         assert "### 2. 措施有效性评估规则" in WORK_RULES
-        assert "### 3. 整改完整性规则" in WORK_RULES
-        assert "### 4. 标准合规评估规则" in WORK_RULES
-        assert "### 5. 综合评审判定规则" in WORK_RULES
+        assert "### 3. 标准合规评估规则" in WORK_RULES
+        assert "### 4. 综合评审判定规则" in WORK_RULES
 
     def test_output_format_has_all_keys(self):
         for key in get_expected_keys():
@@ -191,7 +186,7 @@ class TestPrompts:
 
     def test_expected_keys(self):
         keys = get_expected_keys()
-        assert len(keys) == 10
+        assert len(keys) == 8
         assert "photo_match_analysis" in keys
         assert "review_conclusion" in keys
 
@@ -363,16 +358,6 @@ class TestRuleEngine:
         result = self.engine.validate(inp, out)
         assert not result.is_valid
         assert any("unmatched" in e for e in result.errors)
-
-    def test_insufficient_completeness_pass_blocked(self):
-        """完整性不足 + 通过 → 错误。"""
-        inp = make_input()
-        out = make_output(
-            completeness_level="insufficient",
-            review_conclusion="通过",
-        )
-        result = self.engine.validate(inp, out)
-        assert not result.is_valid
 
     def test_non_compliant_pass_allowed_with_warning(self):
         """不合规 + 通过 → 允许（但产生 warning，标准合规是参考维度）。"""

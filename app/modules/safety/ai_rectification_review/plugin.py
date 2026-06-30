@@ -20,7 +20,7 @@
     )
 
     output = await plugin.review(input_data)
-    print(output.review_conclusion)
+    logger.debug("审查结论: %s", output.review_conclusion)
 """
 
 from __future__ import annotations
@@ -165,11 +165,10 @@ class AIRectificationReviewer:
         # ── 阶段四：返回结果 ──
         elapsed = time.monotonic() - start_time
         logger.info(
-            "初审完成 — conclusion=%s photo=%s quality=%s completeness=%s compliance=%s elapsed=%.2fs",
+            "初审完成 — conclusion=%s photo=%s quality=%s compliance=%s elapsed=%.2fs",
             output.review_conclusion.value,
             output.photo_match_level.value,
             output.measure_quality_level.value,
-            output.completeness_level.value,
             output.standard_compliance_level.value,
             elapsed,
         )
@@ -336,7 +335,6 @@ class AIRectificationReviewer:
         """
         try:
             from app.modules.safety.ai_rectification_review.schemas import (
-                CompletenessLevel,
                 ComplianceLevel,
                 MeasureQualityLevel,
                 PhotoMatchLevel,
@@ -356,12 +354,6 @@ class AIRectificationReviewer:
                 measure_quality_level=MeasureQualityLevel(
                     self._sanitize_enum_value(
                         raw.get("measure_quality_level", "basic")
-                    )
-                ),
-                completeness_check=raw.get("completeness_check", ""),
-                completeness_level=CompletenessLevel(
-                    self._sanitize_enum_value(
-                        raw.get("completeness_level", "partial")
                     )
                 ),
                 standard_compliance=raw.get("standard_compliance", ""),

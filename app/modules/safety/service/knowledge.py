@@ -6,7 +6,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import delete_object, is_enabled as minio_enabled
+from app.core.storage import delete_object
+from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
     SafetyKnowledgeArticle,
 )

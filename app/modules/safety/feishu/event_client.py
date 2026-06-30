@@ -7,7 +7,6 @@
 import asyncio
 import json
 import logging
-import os
 import ssl
 import time
 from typing import Any
@@ -16,7 +15,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import websockets
 
-from app.core.redis import redis_client
 from app.modules.safety.feishu.client import (
     SAFETY_FEISHU_APP_ID,
     SAFETY_FEISHU_APP_SECRET,
@@ -28,6 +26,9 @@ logger = logging.getLogger(__name__)
 _handlers: dict[str, list] = {}
 _stop: asyncio.Event | None = None
 _ws_task: asyncio.Task | None = None
+
+# 长连接重连：与设备模块一致，不设置重试上限，持续重连直到显式 stop
+# 连接失败/断连后等待 10s 重试，由无限 while 循环驱动
 
 # 飞书 endpoint
 FEISHU_DOMAIN = "https://open.feishu.cn"
@@ -166,155 +167,13 @@ async def _ping_loop(ws, service_id: int) -> None:
 # 帧活动计数器（用于诊断连接是否存活）
 _frame_count: dict[str, int] = {"received": 0, "control": 0, "data": 0, "event": 0, "error": 0}
 
+# PONG 看门狗：记录最后一次收到 PONG 的时间，用于检测静默断连
+_last_pong_at: float = 0.0  # monotonic seconds
+
 
 def _get_frame_stats() -> dict:
     """返回帧活动统计。"""
     return dict(_frame_count)
-
-
-# ── 事件游标：断线补偿的时间锚点 ──
-
-_CURSOR_KEY = "safety:feishu:last_event_create_time"
-
-
-async def _save_event_cursor(create_time_ms: int) -> None:
-    """将最后成功处理的事件 create_time 写入 Redis。
-
-    用于 WebSocket 断线重连后定位补偿拉取的起始时间。
-    Redis 不可用时静默跳过，不影响实时事件处理。
-    """
-    try:
-        if redis_client:
-            await redis_client.set(_CURSOR_KEY, str(create_time_ms), ex=7 * 24 * 3600)
-    except Exception:
-        pass
-
-
-async def _get_event_cursor() -> int | None:
-    """读取上次成功处理的事件 create_time（毫秒时间戳）。
-
-    返回 None 表示首次启动或 Redis 不可用，此时跳过补偿拉取。
-    """
-    try:
-        if redis_client:
-            val = await redis_client.get(_CURSOR_KEY)
-            if val:
-                return int(val)
-    except Exception:
-        pass
-    return None
-
-
-# ── 补偿拉取：从 Bitable 拉取断线期间的遗漏变更 ──
-
-
-async def _catch_up_missed_events() -> dict:
-    """断线重连后从 Bitable 拉取遗漏的变更记录并补偿处理。
-
-    流程：
-      1. 读取游标（上次成功处理的事件 create_time）
-      2. 查询 Bitable 中 last_modified_time > 游标 的记录
-      3. 逐条调用 _handle_single_record_action（与实时事件同一入口）
-      4. 更新游标到当前时间
-
-    幂等性：_handle_single_record_action 内部有 Redis 去重（按 record_id+action，
-    TTL=60s），断线窗口外的补偿不会触发重复处理。
-    """
-    cursor_ms = await _get_event_cursor()
-    if cursor_ms is None:
-        logger.info("补偿拉取: 无游标（首次启动），跳过")
-        return {"status": "skipped", "reason": "no_cursor"}
-
-    logger.info("补偿拉取: 从游标 %d ms 开始查询遗漏记录", cursor_ms)
-
-    from app.modules.safety.feishu.bitable_client import SafetyBitableClient
-    from app.modules.safety.feishu.bitable_handler import (
-        _TARGET_FILE_TOKEN,
-        _TARGET_TABLE_ID,
-        _handle_single_record_action,
-    )
-
-    if not _TARGET_FILE_TOKEN or not _TARGET_TABLE_ID:
-        logger.warning("补偿拉取: Bitable 配置缺失，跳过")
-        return {"status": "skipped", "reason": "no_bitable_config"}
-
-    client = SafetyBitableClient()
-
-    # 查询 Bitable 中断线窗口内被修改的记录
-    try:
-        missed = await client.list_all_records(
-            table_id=_TARGET_TABLE_ID,
-            filter_info={
-                "conjunction": "and",
-                "conditions": [
-                    {
-                        "field_name": "修改时间",
-                        "operator": "isGreater",
-                        "value": ["ExactDate", str(cursor_ms)],
-                    }
-                ],
-            },
-            sort=[{"field_name": "修改时间", "desc": False}],
-            automatic_fields=True,
-            page_size=200,
-        )
-    except Exception:
-        logger.exception("补偿拉取: Bitable API 查询失败")
-        return {"status": "error", "reason": "api_failed"}
-
-    if not missed:
-        logger.info("补偿拉取: 无遗漏记录")
-        return {"status": "ok", "missed_count": 0}
-
-    logger.warning("补偿拉取: 发现 %d 条遗漏记录，开始逐条补偿处理", len(missed))
-
-    processed = 0
-    max_modified_time = cursor_ms
-
-    for rec in missed:
-        record_id = rec.get("record_id", "")
-        if not record_id:
-            continue
-
-        fields = rec.get("fields", {})
-        modified_time_str = rec.get("last_modified_time", "0")
-        try:
-            modified_time = int(modified_time_str)
-        except (ValueError, TypeError):
-            modified_time = 0
-
-        try:
-            # 使用 "update" action：如果记录在本地已存在则同步更新，
-            # 不存在则自动回退为创建（_handle_single_record_action 内部处理）
-            await _handle_single_record_action(
-                bitable=client,
-                file_token=_TARGET_FILE_TOKEN,
-                table_id=_TARGET_TABLE_ID,
-                record_id=record_id,
-                action="update",
-                event_fields=fields,
-            )
-            processed += 1
-            if modified_time > max_modified_time:
-                max_modified_time = modified_time
-        except Exception:
-            logger.exception(
-                "补偿拉取: 处理遗漏记录失败 record_id=%s", record_id,
-            )
-
-    # 更新游标到最后一条记录的修改时间
-    await _save_event_cursor(max_modified_time)
-
-    logger.info(
-        "补偿拉取: 完成，成功处理 %d/%d 条，游标更新至 %d ms",
-        processed, len(missed), max_modified_time,
-    )
-    return {
-        "status": "ok",
-        "missed_count": len(missed),
-        "processed": processed,
-        "cursor_ms": max_modified_time,
-    }
 
 
 async def _handle_binary_message(ws, message: bytes) -> None:
@@ -337,7 +196,8 @@ async def _handle_binary_message(ws, message: bytes) -> None:
                 type_val = _get_by_key(frame.headers, HEADER_TYPE)
                 msg_type = MessageType(type_val)
                 if msg_type == MessageType.PONG:
-                    logger.info("安全飞书 ← PONG (连接存活, 共收到 %d 帧)", _frame_count["received"])
+                    _last_pong_at = asyncio.get_running_loop().time()
+                    logger.debug("安全飞书 ← PONG (连接存活, 共收到 %d 帧)", _frame_count["received"])
                 else:
                     logger.info("安全飞书 CONTROL 帧: %s (共 %d 帧)", msg_type, _frame_count["received"])
             except Exception:
@@ -364,7 +224,7 @@ async def _handle_binary_message(ws, message: bytes) -> None:
                         card_resp = await asyncio.wait_for(
                             _dispatch_event(event), timeout=2.9,
                         )
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         logger.warning("卡片操作超时，返回通用 ACK")
                         card_resp = None
                     # ── 构建飞书 WS 协议要求的 Response 信封 ──
@@ -401,21 +261,12 @@ async def _handle_binary_message(ws, message: bytes) -> None:
 async def start_ws() -> None:
     """启动安全模块飞书 WebSocket 连接。
 
-    无限重连直到 stop_ws() 被调用。安全模块特有功能：
-    - Bitable 文档事件订阅
-    - 断线补偿拉取（事件游标 + Bitable 增量查询）
-    - card.action.trigger 同步卡片更新
-    设置 SAFETY_FEISHU_WS_ENABLED=false 可禁用事件订阅。
+    与设备交互机器人一致：无限重连模式，连接断开后自动重试，不设重试上限。
+    仅当显式调用 stop_ws() 或 restart_ws() 时才会停止。
     """
     global _stop, _ws_task
     _stop = asyncio.Event()
     _ws_task = asyncio.current_task()
-
-    # 开关检查（与设备模块 EQUIPMENT_FEISHU_WS_ENABLED 模式一致）
-    ws_enabled = os.getenv("SAFETY_FEISHU_WS_ENABLED", "true").lower() not in ("false", "0", "no")
-    if not ws_enabled:
-        logger.info("安全飞书 WS 已禁用 (SAFETY_FEISHU_WS_ENABLED=false)，跳过事件订阅")
-        return
 
     if not SAFETY_FEISHU_APP_ID or not SAFETY_FEISHU_APP_SECRET:
         logger.warning(
@@ -423,14 +274,22 @@ async def start_ws() -> None:
         )
         return
 
-    logger.info("启动安全模块飞书事件订阅 (app_id=%s)", SAFETY_FEISHU_APP_ID)
+    logger.info(
+        "启动安全模块飞书事件订阅 (app_id=%s, 无限重连模式)",
+        SAFETY_FEISHU_APP_ID,
+    )
 
+    attempt = 0
     while not _stop.is_set():
         try:
             # 1. 获取 WebSocket URL + service_id
             ws_url, service_id = await _get_ws_url_and_config()
             if not ws_url:
-                logger.error("安全飞书无法获取 WebSocket URL，10 秒后重试")
+                attempt += 1
+                logger.error(
+                    "安全飞书无法获取 WebSocket URL，第 %d 次重试，10 秒后重连",
+                    attempt,
+                )
                 await asyncio.sleep(10)
                 continue
 
@@ -445,17 +304,23 @@ async def start_ws() -> None:
                 close_timeout=5,
             ) as ws:
                 logger.info("安全飞书 WebSocket 已连接 (service_id=%s)", service_id)
+                attempt = 0  # 连接成功，重置失败计数
 
                 # 3. 订阅 Bitable 文档事件（持久订阅，每次启动重试无害）
                 from app.modules.safety.feishu.bitable_handler import (
                     ensure_bitable_subscribed,
                 )
 
-                await ensure_bitable_subscribed()
-
-                # 3.5 补偿拉取：重连后拉取断线期间的遗漏事件
-                catch_up_result = await _catch_up_missed_events()
-                logger.info("补偿拉取结果: %s", catch_up_result.get("status"))
+                subscribed = await ensure_bitable_subscribed()
+                if not subscribed:
+                    _subscription_ok = False
+                    logger.error(
+                        "⚠️ Bitable 事件订阅失败！WebSocket 已连接但不会收到任何 Bitable 事件。"
+                        "请检查 SAFETY_FEISHU_BITABLE_APP_TOKEN 配置和飞书应用权限。"
+                    )
+                else:
+                    _subscription_ok = True
+                    logger.info("✅ Bitable 事件订阅就绪，WebSocket 将接收实时事件推送")
 
                 # 4. 启动 protobuf PING 心跳循环
                 ping_task = asyncio.create_task(_ping_loop(ws, service_id))
@@ -466,6 +331,14 @@ async def start_ws() -> None:
                         try:
                             message = await asyncio.wait_for(ws.recv(), timeout=180)
                         except TimeoutError:
+                            # PONG 看门狗：若超过 300s 未收到 PONG，标记连接可能已僵死
+                            now = asyncio.get_running_loop().time()
+                            if _last_pong_at > 0 and (now - _last_pong_at) > 300:
+                                logger.error(
+                                    "⚠️ PONG 超时: 已 %.0fs 未收到 PONG，连接可能已僵死，将主动断开重连",
+                                    now - _last_pong_at,
+                                )
+                                break  # 退出接收循环，触发重连
                             logger.debug("安全飞书 WS recv 超时(180s)，继续等待...")
                             continue
 
@@ -493,14 +366,21 @@ async def start_ws() -> None:
         except asyncio.CancelledError:
             break
         except websockets.exceptions.ConnectionClosed as e:
-            logger.warning("安全飞书 WebSocket 连接关闭: %s，5 秒后重连", e)
-            await asyncio.sleep(5)
+            attempt += 1
+            logger.warning(
+                "安全飞书 WebSocket 连接关闭: %s，第 %d 次重试，10 秒后重连",
+                e, attempt,
+            )
         except Exception:
-            logger.exception("安全飞书 WebSocket 异常，10 秒后重连")
-            await asyncio.sleep(10)
+            attempt += 1
+            logger.exception(
+                "安全飞书 WebSocket 异常，第 %d 次重试，10 秒后重连",
+                attempt,
+            )
 
+        # 无限重连模式：等待 10s 后自动重试（除非显式 stop）
         try:
-            await asyncio.wait_for(_stop.wait(), timeout=5)
+            await asyncio.wait_for(_stop.wait(), timeout=10)
         except TimeoutError:
             pass
 
@@ -508,10 +388,7 @@ async def start_ws() -> None:
 
 
 async def _dispatch_event(event: dict[str, Any]) -> Any:
-    """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。
-
-    处理成功后会将事件的 create_time 写入 Redis 游标，供断线补偿使用。
-    """
+    """解析并分发单个事件，返回处理器的返回值（用于 card 响应）。"""
     # v2 格式: {"schema": "2.0", "header": {"event_type": "..."}, "event": {...}}
     header = event.get("header", {})
     event_type = header.get("event_type", "")
@@ -523,15 +400,7 @@ async def _dispatch_event(event: dict[str, Any]) -> Any:
 
     if event_type:
         event_data = event.get("event", event)
-        result = await _dispatch(event_type, event_data)
-        # 成功后更新游标（用于断线后的补偿拉取）
-        create_time_str = header.get("create_time", "")
-        if create_time_str:
-            try:
-                await _save_event_cursor(int(create_time_str))
-            except (ValueError, TypeError):
-                pass
-        return result
+        return await _dispatch(event_type, event_data)
     else:
         logger.debug("安全飞书无法确定事件类型: %s", json.dumps(event, ensure_ascii=False)[:200])
         return None
@@ -545,7 +414,7 @@ async def stop_ws() -> None:
 
 
 async def restart_ws() -> dict:
-    """手动恢复 WS 连接（重试次数耗尽后调用）。"""
+    """手动重启 WS 连接（先停止旧连接，再启动新连接）。"""
     global _stop, _ws_task
 
     if _stop:
@@ -567,11 +436,22 @@ async def restart_ws() -> dict:
     }
 
 
+# 订阅状态（由 start_ws 在连接成功后设置）
+_subscription_ok: bool = False
+
+
 async def get_ws_status() -> dict:
     """查询当前 WS 连接状态。"""
     task_alive = _ws_task is not None and not _ws_task.done()
+    pong_ago: float | None = None
+    if _last_pong_at > 0:
+        pong_ago = asyncio.get_running_loop().time() - _last_pong_at
     return {
         "connected": task_alive,
+        "subscription_ok": _subscription_ok,
         "registered_events": list(_handlers.keys()),
+        "mode": "unlimited",  # 无限重连模式，与设备交互机器人一致
         "frame_stats": _get_frame_stats(),
+        "last_pong_seconds_ago": round(pong_ago, 1) if pong_ago is not None else None,
+        "pong_watchdog_healthy": pong_ago is not None and pong_ago < 300 if pong_ago is not None else None,
     }

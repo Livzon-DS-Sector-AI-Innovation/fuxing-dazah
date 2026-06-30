@@ -30,13 +30,6 @@ class MeasureQualityLevel(StrEnum):
     INADEQUATE = "inadequate"    # 措施空泛、不可操作、未针对根因
 
 
-class CompletenessLevel(StrEnum):
-    """整改完整性等级"""
-    FULL = "full"                # 覆盖了所有 AI 识别的问题点
-    PARTIAL = "partial"          # 覆盖了主要问题但遗漏了部分要点
-    INSUFFICIENT = "insufficient"  # 严重遗漏，核心问题未处理
-
-
 class ComplianceLevel(StrEnum):
     """标准合规等级"""
     COMPLIANT = "compliant"                     # 完全符合相关标准要求
@@ -109,7 +102,7 @@ class RectificationReviewInput(BaseModel):
 
 
 class RectificationReviewOutput(BaseModel):
-    """AI 整改初审完整输出 — 5 个审核维度 + 综合结论"""
+    """AI 整改初审完整输出 — 3 个审核维度 + 综合结论"""
 
     # ── 图片比对 ──
     photo_match_analysis: str = Field(
@@ -120,22 +113,13 @@ class RectificationReviewOutput(BaseModel):
         ..., description="图片比对结论"
     )
 
-    # ── 措施质量 ──
+    # ── 措施有效性 ──
     measure_quality_assessment: str = Field(
         ..., min_length=1,
-        description="措施质量评估：是否具体可执行、有量化标准、时间节点、责任主体，是否针对根因"
+        description="措施有效性评估：是否描述了具体可执行的操作、逻辑上能否消除隐患"
     )
     measure_quality_level: MeasureQualityLevel = Field(
-        ..., description="措施质量等级"
-    )
-
-    # ── 整改完整性 ──
-    completeness_check: str = Field(
-        ..., min_length=1,
-        description="完整性检查：是否覆盖了 AI 识别输出的所有问题点（key_defect + 三层整改建议）"
-    )
-    completeness_level: CompletenessLevel = Field(
-        ..., description="完整性等级"
+        ..., description="措施有效性等级"
     )
 
     # ── 标准合规 ──

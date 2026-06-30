@@ -15,6 +15,7 @@ from app.core.storage import is_enabled as minio_enabled
 from app.core.storage import upload_object
 from app.modules.safety.schemas import (
     DepartmentLeaderResponse,
+    DepartmentSafetyOfficerResponse,
     HazardReportCreate,
     HazardReportResponse,
     HazardReportUpdate,
@@ -23,9 +24,9 @@ from app.modules.safety.schemas import (
     VerifyLevelRequest,
 )
 from app.modules.safety.service import (
-    SafetyService,
+    HazardService,
 )
-from app.modules.safety.service.safety import (
+from app.modules.safety.service.hazard import (
     _send_rectification_notification,
     _send_verify_notification,
 )
@@ -49,7 +50,7 @@ async def get_hazards(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取隐患列表"""
-    service = SafetyService(db)
+    service = HazardService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_hazards(
         skip, page_size, status, rectification_status, hazard_type, hazard_level,
@@ -66,7 +67,7 @@ async def get_hazard_stats(
     db: AsyncSession = Depends(get_db),
 ):
     """获取隐患全局统计数据（不受分页/筛选影响，用于统计药丸展示）。"""
-    service = SafetyService(db)
+    service = HazardService(db)
     stats = await service.get_hazard_stats()
     return ApiResponse(data=HazardStatsResponse(**stats))
 
@@ -94,6 +95,29 @@ async def get_department_leader(
     ))
 
 
+@hazards_router.get("/hazards/department-safety-officer", response_model=ApiResponse, summary="查询部门分管安全员")
+async def get_department_safety_officer(
+    department_name: str = Query(..., min_length=1, description="部门名称"),
+    db: AsyncSession = Depends(get_db),
+):
+    """根据部门名称查询分管安全员姓名。
+
+    数据来源：DEPARTMENT_CONFIG（人工维护），仅返回已配置安全员的部门。
+    未配置安全员的部门返回 404。
+    """
+    from app.modules.safety.feishu import IdentityResolver
+
+    resolver = IdentityResolver(db)
+    person = await resolver.resolve_safety_officer(department_name)
+    if person is None:
+        return ApiResponse(code=404, message=f"未找到部门 '{department_name}' 的安全员")
+    return ApiResponse(data=DepartmentSafetyOfficerResponse(
+        department=person.department or department_name,
+        safety_officer_name=person.name,
+        safety_officer_id=person.id or None,
+    ))
+
+
 @hazards_router.get("/hazards/{hazard_id}", response_model=ApiResponse, summary="获取隐患详情")
 async def get_hazard(
     hazard_id: uuid.UUID,
@@ -101,7 +125,7 @@ async def get_hazard(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取隐患详情"""
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.get_hazard(hazard_id)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
@@ -116,7 +140,7 @@ async def create_hazard(
 ):
     """创建隐患（AI 识别不在此处执行——调用方应在图片上传完成后通过
     POST /hazards/{id}/ai/run/1 手动触发，与 Bitable 同步流程对齐）。"""
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.create_hazard(data, auto_run_ai=False)
     await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
@@ -130,7 +154,7 @@ async def update_hazard(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """更新隐患"""
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.update_hazard(hazard_id, data)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
@@ -169,7 +193,7 @@ async def upload_hazard_photo(
         # (serve_file joins with ./uploads/ → ./uploads/safety/hazard/file.jpg)
         stored_path = os.path.join("safety", "hazard", safe_name)
 
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.upload_hazard_photo(hazard_id, file.filename or "unknown", stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
@@ -207,7 +231,7 @@ async def upload_rectification_photo(
         # Store path relative to uploads/ to avoid double-prefix when serving
         stored_path = os.path.join("safety", "hazard", safe_name)
 
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.upload_rectification_photo(hazard_id, stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
@@ -226,7 +250,7 @@ async def start_rectification(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """开始整改"""
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.start_rectification(hazard_id)
     if not item:
         return ApiResponse(code=400, message="无法开始整改，当前状态不允许")
@@ -246,7 +270,7 @@ async def reply_rectification(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """责任人提交整改回复（含纠正预防措施），rectification_status: in_progress → replied"""
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.reply_rectification(
         hazard_id,
         reply_content=data.reply_content,
@@ -273,7 +297,7 @@ async def verify_level(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """三级复核确认：1=一级(部门负责人), 2=二级(分管领导), 3=三级(隐患发现人)"""
-    service = SafetyService(db)
+    service = HazardService(db)
     user_id = current_user.id if current_user else None
     user_name = current_user.name if current_user else None
     item = await service.verify_level(
@@ -302,7 +326,7 @@ async def rework_rectification(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """复核驳回后重新整改，rejected → replied，重置所有复核级别"""
-    service = SafetyService(db)
+    service = HazardService(db)
     user_id = current_user.id if current_user else None
     user_name = current_user.name if current_user else None
     item = await service.rework_rectification(
@@ -325,7 +349,7 @@ async def delete_hazard(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """删除隐患"""
-    service = SafetyService(db)
+    service = HazardService(db)
     result = await service.delete_hazard(hazard_id)
     if not result:
         return ApiResponse(code=404, message="隐患不存在")
@@ -348,7 +372,7 @@ async def run_hazard_ai(
 
     没有 body 参数——FastAPI 不会解析请求 body，避免空 body + JSON Content-Type 触发 422。
     """
-    service = SafetyService(db)
+    service = HazardService(db)
     item = await service.run_hazard_ai_script(hazard_id, script_number)
     if item is None:
         return ApiResponse(code=400, message="无法执行AI工作流，当前状态不允许或前置步骤未完成")
@@ -379,7 +403,7 @@ async def notify_reviewer(
     - 待分管领导复核（level 2）→ 通知分管领导
     - 待检查人员复核（level 3）→ 通知检查人员
     """
-    service = SafetyService(db)
+    service = HazardService(db)
     hazard = await service.repo.get_hazard_by_id(hazard_id)
     if not hazard:
         return ApiResponse(code=404, message="隐患不存在")
@@ -433,7 +457,7 @@ async def trigger_rectification_review(
     - AI 初审失败后重试
     - 前端手动触发重新审查
     """
-    service = SafetyService(db)
+    service = HazardService(db)
     hazard = await service.repo.get_hazard_by_id(hazard_id)
     if not hazard:
         return ApiResponse(code=404, message="隐患不存在")
@@ -461,7 +485,7 @@ async def notify_rectification(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """手动触发飞书通知，提醒整改责任人进行整改回复。"""
-    service = SafetyService(db)
+    service = HazardService(db)
     hazard = await service.repo.get_hazard_by_id(hazard_id)
     if not hazard:
         return ApiResponse(code=404, message="隐患不存在")

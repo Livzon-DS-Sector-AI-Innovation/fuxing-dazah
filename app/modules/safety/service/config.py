@@ -11,17 +11,29 @@ logger = logging.getLogger(__name__)
 
 
 def _get_ai_config() -> dict:
-    """读取 AI 模型配置，环境变量优先，否则回退到硬编码默认值。"""
+    """读取 AI 模型配置，必须通过环境变量配置，不提供硬编码默认值。"""
+    _text_key = os.getenv("SAFETY_AI_TEXT_API_KEY")
+    _vision_key = os.getenv("SAFETY_AI_VISION_API_KEY")
+    if not _text_key:
+        raise RuntimeError(
+            "环境变量 SAFETY_AI_TEXT_API_KEY 未配置，无法初始化 AI 文本模型。"
+            "请在 .env 文件中设置该变量。"
+        )
+    if not _vision_key:
+        raise RuntimeError(
+            "环境变量 SAFETY_AI_VISION_API_KEY 未配置，无法初始化 AI 视觉模型。"
+            "请在 .env 文件中设置该变量。"
+        )
     return {
         "text": {
-            "api_key": os.getenv("SAFETY_AI_TEXT_API_KEY", "sk-3b7d6bd5252246ff8af5f30a0f97b8f5"),
+            "api_key": _text_key,
             "base_url": os.getenv("SAFETY_AI_TEXT_BASE_URL", "https://api.deepseek.com"),
             "model": os.getenv("SAFETY_AI_TEXT_MODEL", "deepseek-v4-flash"),
             "temperature": 0.1,
             "timeout": 120,
         },
         "vision": {
-            "api_key": os.getenv("SAFETY_AI_VISION_API_KEY", "sk-a2ef55e9d2904572bb039f51e236a250"),
+            "api_key": _vision_key,
             "base_url": os.getenv("SAFETY_AI_VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             "model": os.getenv("SAFETY_AI_VISION_MODEL", "qwen-vl-max"),
             "temperature": 0.1,

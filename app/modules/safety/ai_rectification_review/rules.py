@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 
 from app.modules.safety.ai_rectification_review.schemas import (
-    CompletenessLevel,
     ComplianceLevel,
     MeasureQualityLevel,
     PhotoMatchLevel,
@@ -46,7 +45,6 @@ BANNED_PHRASES = [
 # 硬性错误:
 # - photo_match_level=unmatched → review_conclusion ≠ 通过
 # - measure_quality=inadequate → review_conclusion ≠ 通过
-# - completeness=insufficient → review_conclusion ≠ 通过
 # 降级为 warning:
 # - photo_match_level=no_photos + 通过 → warning（文字可能具体可信）
 # - compliance=non_compliant + 通过 → warning（标准合规是参考维度）
@@ -60,7 +58,7 @@ class RuleEngine:
         result = engine.validate(input_data, output)
         if not result.is_valid:
             for error in result.errors:
-                print(f"ERROR: {error}")
+                logger.error("规则验证失败: %s", error)
     """
 
     def validate(
@@ -117,13 +115,6 @@ class RuleEngine:
                 f"无效的措施质量等级: {quality_val}，合法值: {valid_quality}"
             )
 
-        valid_completeness = {e.value for e in CompletenessLevel}
-        comp_val = _enum_value(output.completeness_level)
-        if comp_val not in valid_completeness:
-            errors.append(
-                f"无效的完整性等级: {comp_val}，合法值: {valid_completeness}"
-            )
-
         valid_compliance = {e.value for e in ComplianceLevel}
         compliance_val = _enum_value(output.standard_compliance_level)
         if compliance_val not in valid_compliance:
@@ -147,8 +138,7 @@ class RuleEngine:
         """验证各文本字段的长度下限。"""
         text_checks = [
             ("图片比对分析", output.photo_match_analysis, 50),
-            ("措施质量评估", output.measure_quality_assessment, 50),
-            ("完整性检查", output.completeness_check, 30),
+            ("措施有效性评估", output.measure_quality_assessment, 50),
             ("标准合规评估", output.standard_compliance, 30),
             ("AI初审结果", output.review_comments, 1),
         ]
@@ -187,7 +177,6 @@ class RuleEngine:
         核心规则（硬性错误 — 无法消除隐患的情况）：
         - unmatched → 不能 通过（照片显示隐患仍存在）
         - inadequate → 不能 通过（无具体操作、逻辑上无法消除隐患）
-        - insufficient → 不能 通过（核心安全缺陷未处理）
 
         降级为 warning（允许有一定灵活度）：
         - no_photos + 通过 → warning（无照片但文字描述可能具体可信）
@@ -196,7 +185,6 @@ class RuleEngine:
         conclusion = _enum_value(output.review_conclusion)
         photo = _enum_value(output.photo_match_level)
         quality = _enum_value(output.measure_quality_level)
-        completeness = _enum_value(output.completeness_level)
         compliance = _enum_value(output.standard_compliance_level)
 
         if conclusion == ReviewConclusion.PASS.value:
@@ -210,12 +198,6 @@ class RuleEngine:
             if quality == MeasureQualityLevel.INADEQUATE.value:
                 errors.append(
                     "措施有效性为 inadequate（无具体操作、逻辑上无法消除隐患）时评审判定不能为 通过"
-                )
-
-            # 核心缺陷未处理 → 硬性不通过
-            if completeness == CompletenessLevel.INSUFFICIENT.value:
-                errors.append(
-                    "整改完整性为 insufficient（核心安全缺陷未处理）时评审判定不能为 通过"
                 )
 
             # 无照片但文字描述可能具体可信 → 降级为 warning
@@ -278,7 +260,6 @@ def auto_correct(
     # 清理所有文本字段的首尾空白
     output.photo_match_analysis = output.photo_match_analysis.strip()
     output.measure_quality_assessment = output.measure_quality_assessment.strip()
-    output.completeness_check = output.completeness_check.strip()
     output.standard_compliance = output.standard_compliance.strip()
     output.review_comments = output.review_comments.strip()
 
@@ -287,10 +268,7 @@ def auto_correct(
         output.photo_match_analysis = "未提供整改后图片，无法进行图片比对分析"
 
     if not output.measure_quality_assessment:
-        output.measure_quality_assessment = "整改回复文本为空，无法评估措施质量"
-
-    if not output.completeness_check:
-        output.completeness_check = "信息不足，无法进行完整性检查"
+        output.measure_quality_assessment = "整改回复文本为空，无法评估措施有效性"
 
     if not output.standard_compliance:
         output.standard_compliance = "参照知识库标准，信息不足以进行合规判定"

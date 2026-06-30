@@ -6,6 +6,7 @@ the FastAPI web service, wrapping synchronous calls in asyncio.to_thread.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import uuid
@@ -15,7 +16,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import is_enabled as minio_enabled, upload_object
+from app.core.storage import is_enabled as minio_enabled
+from app.core.storage import upload_object
 from app.modules.safety.repository import SafetyRepository
 
 # ── Plugin path resolution ─────────────────────────────────────────
@@ -45,7 +47,6 @@ class SopGeneratorService:
         Returns:
             dict with keys: regulation_id, meta, content, status
         """
-        import asyncio
 
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
 
@@ -62,7 +63,7 @@ class SopGeneratorService:
         )
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
 
-        result = await _asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._run_pipeline_sync, draft_path, str(pdf_local_path)
         )
 
@@ -124,25 +125,58 @@ class SopGeneratorService:
             update_data["status"] = status
         return await self.repo.update_regulation(regulation_id, update_data)
 
+    @staticmethod
+    def _parse_markdown_header_meta(content: str) -> dict[str, str]:
+        """从 Markdown 内容中解析页眉元信息（文件编号/生效日期/颁发部门）。
+
+        前端编辑器将这些字段以 **字段名：** 值 格式存入 Markdown 前导区。
+        解析成功时返回对应值；未找到时返回空字符串。
+        """
+        import re
+
+        result: dict[str, str] = {}
+        lines = content.split("\n")
+        for line in lines[:15]:
+            line = line.strip()
+            if not line or line == "---":
+                continue
+            m = re.match(r"\*\*文件编号[：:]\s*\*\*\s*(.*)", line)
+            if m:
+                result["doc_number"] = m.group(1).strip()
+                continue
+            m = re.match(r"\*\*生效日期[：:]\s*\*\*\s*(.*)", line)
+            if m:
+                result["effective_date"] = m.group(1).strip()
+                continue
+            m = re.match(r"\*\*颁发部门[：:]\s*\*\*\s*(.*)", line)
+            if m:
+                result["department"] = m.group(1).strip()
+                continue
+            # Stop at first non-meta, non-blank, non-separator line
+            if not line.startswith("**"):
+                break
+        return result
+
     async def export_pdf(self, regulation_id: uuid.UUID) -> str | None:
         """将存储的 Markdown 渲染为 PDF，返回文件路径
 
         Returns:
             Absolute path to the generated PDF file, or None on failure.
         """
-        import asyncio
-
         reg = await self.repo.get_regulation_by_id(regulation_id)
         if not reg or not reg.content:
             return None
 
-        # Build meta dict from the regulation record
+        # Parse header meta from markdown content (editor-saved values take priority)
+        md_meta = self._parse_markdown_header_meta(reg.content or "")
+
+        # Build meta dict: markdown header > DB record fields
         pdf_meta = {
             "company_name": "",
             "company_name_en": "",
-            "doc_number": reg.regulation_no or "",
-            "effective_date": "",
-            "department": reg.position or "",
+            "doc_number": md_meta.get("doc_number") or reg.regulation_no or "",
+            "effective_date": md_meta.get("effective_date") or "",
+            "department": md_meta.get("department") or reg.position or "",
             "product_name": reg.regulation_name or "",
             "post_name": "",
         }

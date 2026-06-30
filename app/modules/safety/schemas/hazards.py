@@ -174,3 +174,11 @@ class DepartmentLeaderResponse(BaseModel):
     leader_id: str | None = Field(None, description="负责人 UUID")
 
 
+class DepartmentSafetyOfficerResponse(BaseModel):
+    """部门分管安全员查询响应"""
+
+    department: str = Field(..., description="部门名称")
+    safety_officer_name: str | None = Field(None, description="安全员姓名")
+    safety_officer_id: str | None = Field(None, description="安全员 UUID")
+
+
