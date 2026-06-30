@@ -328,7 +328,7 @@ export default function HrChatbot() {
 
       <Drawer
         placement="right"
-        width={460}
+        size={460}
         open={isOpen}
         onClose={() => setOpen(false)}
         title={

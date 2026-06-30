@@ -44,11 +44,6 @@ export default function CandidateListView({
     '不推荐': 'red',
   }
 
-  const syncStatusMap: Record<string, { text: string; color: string }> = {
-    synced: { text: '已同步', color: 'success' },
-    failed: { text: '同步失败', color: 'error' },
-  }
-
   const columns: ColumnsType<Candidate> = [
     {
       title: '姓名',
@@ -99,16 +94,6 @@ export default function CandidateListView({
         ) : (
           '-'
         ),
-    },
-    {
-      title: '飞书同步',
-      dataIndex: 'feishu_sync_status',
-      key: 'feishu_sync_status',
-      width: 100,
-      render: (val: string | null | undefined) => {
-        const status = val ? syncStatusMap[val] : { text: '未同步', color: 'default' }
-        return <Tag color={status.color}>{status.text}</Tag>
-      },
     },
     {
       title: '操作',

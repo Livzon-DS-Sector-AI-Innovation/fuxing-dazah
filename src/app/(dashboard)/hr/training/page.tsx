@@ -61,7 +61,7 @@ export default function TrainingPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">
-          老厂培训管理
+          培训管理
         </h1>
         <p className="text-[14px] text-[var(--color-steel)]">
           员工培训相关业务管理

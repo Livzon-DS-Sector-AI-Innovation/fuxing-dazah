@@ -443,6 +443,7 @@ export interface TrainingSignInSheetData {
   instructor?: string
   location?: string
   training_method?: string
+  assessment_method?: string
   employee_names: string[]
   remarks?: string
 }
@@ -461,11 +462,11 @@ export async function generateTrainingSignInSheet(
   const url = window.URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  const contentType = res.headers.get('content-type') || ''
-  const isZip = contentType.includes('zip')
-  a.download = isZip
-    ? `7.5培训签到表_${data.training_date}.zip`
-    : `7.5培训签到表_${data.training_date}.xlsx`
+  const disposition = res.headers.get('content-disposition')
+  const filenameMatch = disposition?.match(/filename\*=utf-8''(.+)/)
+  a.download = filenameMatch
+    ? decodeURIComponent(filenameMatch[1])
+    : `培训签到表_${data.training_date}.docx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -480,6 +481,8 @@ export interface TrainingNotificationData {
   training_time_end?: string
   location?: string
   trainer?: string
+  training_method?: string
+  assessment_method?: string
   content?: string
   trainee_names: string[]
   issuer_department?: string
@@ -542,27 +545,9 @@ export interface TrainingEvaluationData {
   training_time_end?: string
   duration_hours?: number
   training_method?: string
-  is_exam?: boolean
-  trainer_type?: string
   trainer?: string
-  department_personnel?: string
-  expected_count?: number
-  actual_count?: number
-  absent_count?: number
-  textbook?: string
-  makeup_training?: boolean
+  trainee_names?: string[]
   assessment_method?: string
-  pass_count?: number
-  fail_count?: number
-  absent_exam_count?: number
-  absent_exam_handling?: string
-  excellent_count?: number
-  qualified_count?: number
-  unqualified_count?: number
-  evaluation_conclusion?: string
-  organizer?: string
-  organizer_date?: string
-  remarks?: string
 }
 
 export async function generateTrainingEvaluation(
@@ -579,8 +564,8 @@ export async function generateTrainingEvaluation(
   const url = window.URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  const safeDate = data.training_date || 'nodate'
-  a.download = `7.11培训效果评估表_${safeDate}.xlsx`
+  const safeDate = (data.training_date || 'nodate').replace(/-/g, '')
+  a.download = `培训效果评估表_${safeDate}.docx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -942,6 +927,22 @@ export async function fetchPlanItems(id: string): Promise<{ code: number; messag
 export async function fetchCandidates(params: Record<string, any> = {}): Promise<{ data: any[]; meta?: { total: number } }> {
   // TODO: backend candidate API not yet implemented
   return { data: [], meta: { total: 0 } }
+}
+
+// ─── SOP Catalog APIs ───
+
+export async function fetchSopCatalog(params?: {
+  department?: string; category?: string; keyword?: string; page?: number; page_size?: number
+}): Promise<{ code: number; message: string; data: any[]; meta: { page: number; page_size: number; total: number } }> {
+  const sp = new URLSearchParams()
+  if (params?.department) sp.set('department', params.department)
+  if (params?.category) sp.set('category', params.category)
+  if (params?.keyword) sp.set('keyword', params.keyword)
+  sp.set('page', String(params?.page || 1))
+  sp.set('page_size', String(params?.page_size || 50))
+  const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog?${sp.toString()}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('获取SOP目录失败')
+  return res.json()
 }
 
 export async function fetchCandidateById(id: string): Promise<{ code: number; message: string; data: any }> {

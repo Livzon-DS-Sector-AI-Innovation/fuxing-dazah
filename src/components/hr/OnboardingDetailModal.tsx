@@ -113,7 +113,6 @@ export default function OnboardingDetailModal({
         { label: '培训档案编号', value: record.training_id },
         { label: '异动记录', value: record.transfer_history },
         { label: '备注', value: record.remarks?.join(', ') },
-        { label: '飞书同步时间', value: record.feishu_synced_at },
       ],
     },
   ]

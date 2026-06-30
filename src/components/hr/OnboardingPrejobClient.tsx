@@ -1,522 +1,309 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Select, Space } from 'antd'
-import {
-  FileTextOutlined,
-  PrinterOutlined,
-  DownloadOutlined } from '@ant-design/icons'
+import { App, Button, Card, Select, Space, Input } from 'antd'
+import { DownloadOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
 import {
-  fetchEmployees,
-  fetchOnboardingTrainingRecord,
-  fetchPrejobTrainingPlan,
-  fetchOnboardingEvaluationByEmployeeId } from '@/lib/api/hr'
+  fetchOnboardingRecords,
+} from '@/lib/api/hr'
 
-const DEPT_CONTENT_MAP: Record<string, string[]> = {
-  '人事行政部': [
-    '公司级公用文件(详见附件一)',
-    '部门级公用文件(详见附件二)',
-    '人事行政部人事行政专员岗位文件(详见附件三)',
-    '人事行政专员岗位职责(QP.PM.053)',
-    '生产安全知识',
-    '岗前培训计划',
-  ] }
-
-const TD_LABEL = {
-  border: '1px solid #1f2937',
-  padding: '8px' } as React.CSSProperties
-
-const TD_VALUE = {
-  border: '1px solid #1f2937',
-  padding: '8px' } as React.CSSProperties
-
-const TH = {
-  border: '1px solid #1f2937',
-  padding: '8px' } as React.CSSProperties
+const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
+const LABEL = { ...CELL, background: '#f5f5f5', fontWeight: 600, textAlign: 'center' as const, width: '15%' }
+const VALUE = { ...CELL }
 
 export default function OnboardingPrejobClient() {
   const { message } = App.useApp()
-  const [employees, setEmployees] = useState<Employee[]>([])
+  const [employees, setEmployees] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   const [downloadingWord, setDownloadingWord] = useState(false)
-  const [downloadingExcel, setDownloadingExcel] = useState(false)
-  const [downloadingEval, setDownloadingEval] = useState(false)
+  const [allSops, setAllSops] = useState<any[]>([])
+  const [selectedSops, setSelectedSops] = useState<any[]>([])
+  const [sopSearch, setSopSearch] = useState('')
+  const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
+  const [sopDept, setSopDept] = useState('')
+  const [sopCat, setSopCat] = useState('')
+  const [sopDepts, setSopDepts] = useState<{value:string,label:string}[]>([])
+  const [sopCats, setSopCats] = useState<{value:string,label:string}[]>([])
 
   useEffect(() => {
     setLoading(true)
-    fetchEmployees({ page_size: 200 })
-      .then((res) => {
-        setEmployees(res.data || [])
-      })
-      .catch((err) => {
-        message.error('加载员工列表失败: ' + (err.message || '未知错误'))
-      })
-      .finally(() => {
-        setLoading(false)
-      })
+    fetchOnboardingRecords({ page_size: 50 })
+      .then((res) => setEmployees(res.data || []))
+      .catch((err) => message.error('加载入职台账失败: ' + (err.message || '未知错误')))
+      .finally(() => setLoading(false))
   }, [])
 
-  const selectedEmployee = employees.find((e) => e.id === selectedEmployeeId)
+  const handleSearch = async (keyword: string) => {
+    if (!keyword || keyword.length < 1) return
+    setLoading(true)
+    try {
+      const res = await fetchOnboardingRecords({ keyword, page_size: 30 })
+      setEmployees(res.data || [])
+    } catch (err: any) {
+      message.error('搜索失败: ' + (err.message || '未知错误'))
+    } finally { setLoading(false) }
+  }
+
+  const selectedEmployee = employees.find((e: any) => e.id === selectedEmployeeId)
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+
+  // 加载部门和分类列表
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`).then(r => r.json())
+      .then(res => setSopDepts((res.data||[]).map((d:string) => ({value:d,label:d}))))
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/categories`).then(r => r.json())
+      .then(res => setSopCats((res.data||[]).map((c:string) => ({value:c,label:c}))))
+    fetch(`http://localhost:8000/api/v1/hr/trainers?page_size=200`).then(r => r.json())
+      .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
+  }, [])
+
+  // 按条件加载 SOP 列表
+  useEffect(() => {
+    const params = new URLSearchParams({ page_size: '200' })
+    if (sopDept) params.set('department', sopDept)
+    if (sopCat) params.set('category', sopCat)
+    if (sopSearch) params.set('keyword', sopSearch)
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog?${params.toString()}`)
+      .then(r => r.json())
+      .then(res => setAllSops(res.data || []))
+      .catch(() => setAllSops([]))
+  }, [sopDept, sopCat, sopSearch])
+
+  const [sopMethods, setSopMethods] = useState<Record<string, string>>({})
+  const [sopTrainers, setSopTrainers] = useState<Record<string, string>>({})
+
+  const updateSopMethod = (sopId: string, method: string) => {
+    setSopMethods(prev => ({ ...prev, [sopId]: method }))
+  }
+
+  const toggleSop = (sop: any) => {
+    setSelectedSops(prev => {
+      const exists = prev.find(s => s.id === sop.id)
+      if (exists) return prev.filter(s => s.id !== sop.id)
+      return [...prev, sop]
+    })
+  }
 
   const handleExportWord = async () => {
-    if (!selectedEmployee) {
-      message.warning('请先选择员工')
-      return
-    }
+    if (!selectedEmployee) return message.warning('请先选择员工')
     setDownloadingWord(true)
     try {
-      await fetchOnboardingTrainingRecord(selectedEmployee.id, selectedEmployee.name)
+      const items = selectedSops.map(s => ({
+        sop_number: s.sop_number || '',
+        file_name: s.file_name || '',
+        content: s.file_name || '',
+        method: sopMethods[s.id] || '',
+        trainer: sopTrainers[s.id] || '',
+      }))
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/onboarding-training-record`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ training_items: items }),
+      })
+      if (!res.ok) throw new Error('导出失败')
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `入职培训记录_${selectedEmployee.name || 'employee'}.docx`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
       message.success('入职培训记录已导出')
-    } catch (err: any) {
-      message.error(err.message || '导出失败')
-    } finally {
-      setDownloadingWord(false)
-    }
+    } catch (err: any) { message.error(err.message || '导出失败') }
+    finally { setDownloadingWord(false) }
   }
-
-  const handleExportExcel = async () => {
-    if (!selectedEmployee) {
-      message.warning('请先选择员工')
-      return
-    }
-    setDownloadingExcel(true)
-    try {
-      await fetchPrejobTrainingPlan(selectedEmployee.id, selectedEmployee.name)
-      message.success('岗前培训计划已导出')
-    } catch (err: any) {
-      message.error(err.message || '导出失败')
-    } finally {
-      setDownloadingExcel(false)
-    }
-  }
-
-  const handleExportEvaluation = async () => {
-    if (!selectedEmployee) {
-      message.warning('请先选择员工')
-      return
-    }
-    setDownloadingEval(true)
-    try {
-      await fetchOnboardingEvaluationByEmployeeId(
-        selectedEmployee.id,
-        selectedEmployee.name
-      )
-      message.success('员工上岗评估表已导出')
-    } catch (err: any) {
-      message.error(err.message || '导出失败')
-    } finally {
-      setDownloadingEval(false)
-    }
-  }
-
-  const handlePrint = () => {
-    if (!selectedEmployee) {
-      message.warning('请先选择员工')
-      return
-    }
-    window.print()
-  }
-
-  const prejobContents = selectedEmployee
-    ? DEPT_CONTENT_MAP[selectedEmployee.department || ''] || []
-    : []
 
   return (
-    <div className="space-y-6">
-      {/* 顶部选择器 */}
+    <div className="space-y-4">
       <Card>
-        <Space wrap size="middle" align="center">
+        <Space wrap size="middle">
           <Select
             showSearch
-            placeholder="选择员工"
+            placeholder="输入工号或姓名搜索员工"
             value={selectedEmployeeId || undefined}
-            onChange={(value) => setSelectedEmployeeId(value)}
+            onChange={setSelectedEmployeeId}
             options={employees.map((e) => ({
               value: e.id,
-              label: `${e.employee_number} - ${e.name} (${e.department})` }))}
-            filterOption={(input, option) =>
-              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-            }
+              label: `${e.employee_number} - ${e.name} (${e.department})`,
+            }))}
+            onSearch={handleSearch}
+            loading={loading}
+            filterOption={false}
             style={{ minWidth: 320 }}
           />
-          <Button
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={handleExportWord}
-            loading={downloadingWord}
-          >
-            导出入职培训记录(Word)
-          </Button>
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={handleExportExcel}
-            loading={downloadingExcel}
-          >
-            导出岗前培训计划(Excel)
-          </Button>
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={handleExportEvaluation}
-            loading={downloadingEval}
-          >
-            导出员工上岗评估表(Excel)
-          </Button>
-          <Button icon={<PrinterOutlined />} onClick={handlePrint} disabled={!selectedEmployee}>
-            打印
-          </Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportWord} loading={downloadingWord}>导出岗位员工培训计划(Word)</Button>
         </Space>
       </Card>
 
-      {/* 打印预览区 */}
       {selectedEmployee && (
-        <div id="print-area" className="print-area space-y-6">
-          {/* ─── 新员工入职培训记录 ─── */}
-          <Card
-            title={
-              <div className="text-center">
-                <div className="text-xs text-gray-500 mb-1">QR.SOP.PM.003/18（格式） P1/12</div>
-                <div className="text-lg font-bold">丽珠集团新北江制药股份有限公司</div>
-                <div className="text-base font-semibold mt-1">新员工入职培训记录</div>
-              </div>
-            }
-            className="training-record-preview"
-          >
-            <div className="max-w-3xl mx-auto p-4 text-sm leading-relaxed">
-              <div className="font-bold mb-2 border-b border-gray-300 pb-1">第一部分：新员工概况</div>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <tbody>
-                  <tr>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">姓　　名</td>
-                    <td style={TD_VALUE} className="w-32 text-center">{selectedEmployee.name}</td>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">性　别</td>
-                    <td style={TD_VALUE} className="w-32 text-center">{selectedEmployee.gender || ''}</td>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">工作卡号</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.employee_number}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">部　　门</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.department}</td>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">拟定岗位</td>
-                    <td style={TD_VALUE} colSpan={3} className="text-center">{selectedEmployee.position}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">报到日期</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.hire_date || ''}</td>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">转正日期</td>
-                    <td style={TD_VALUE} colSpan={3} className="text-center"></td>
-                  </tr>
-                </tbody>
-              </table>
+        <div id="print-area" className="space-y-6">
+          {/* ===== Part I: 员工概况 (匹配模板) ===== */}
+          <Card className="no-print-padding">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <colgroup>
+                <col style={{ width: '16%' }} /><col style={{ width: '17%' }} />
+                <col style={{ width: '16%' }} /><col style={{ width: '17%' }} />
+                <col style={{ width: '16%' }} /><col style={{ width: '18%' }} />
+              </colgroup>
+              <tbody>
+                <tr>
+                  <td colSpan={6} style={{...CELL, textAlign: 'center', fontWeight: 700, background: '#e8e8e8'}}>
+                    第一部分：员工概况 Part I: Description of the employee
+                  </td>
+                </tr>
+                <tr>
+                  <td style={LABEL}>姓名<br/>Name</td><td style={VALUE}>{selectedEmployee.name}</td>
+                  <td style={LABEL}>学历<br/>Education</td><td style={VALUE}>{selectedEmployee.education || ''}</td>
+                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>新员工</td>
+                </tr>
+                <tr>
+                  <td style={LABEL}>毕业院校<br/>Graduation school</td><td style={VALUE}>{selectedEmployee.school || ''}</td>
+                  <td style={LABEL}></td><td style={VALUE}></td>
+                  <td style={LABEL}>毕业时间<br/>Graduation time</td><td style={VALUE}>{selectedEmployee.graduation_date || ''}</td>
+                </tr>
+                <tr>
+                  <td style={LABEL}>部门<br/>Dept.</td><td style={VALUE}>{selectedEmployee.department}</td>
+                  <td style={LABEL}>拟定岗位<br/>Intended post</td><td style={VALUE}>{selectedEmployee.position || ''}</td>
+                  <td style={LABEL}>职称<br/>Title</td><td style={VALUE}></td>
+                </tr>
+                <tr>
+                  <td style={LABEL}>报到日期<br/>Entry date</td><td style={VALUE}>{selectedEmployee.hire_date || ''}</td>
+                  <td style={LABEL}>预定培训期<br/>Training period</td><td style={{...VALUE}} colSpan={3}></td>
+                </tr>
+              </tbody>
+            </table>
+          </Card>
 
-              <div className="font-bold mb-2 mt-4 border-b border-gray-300 pb-1">第二部分：培训记录</div>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={TH} className="text-left w-1/2 bg-gray-50">培训内容</th>
-                    <th style={TH} className="text-left w-24 bg-gray-50">员工签名</th>
-                    <th style={TH} className="text-left w-24 bg-gray-50">考核人</th>
-                    <th style={TH} className="text-left w-24 bg-gray-50">日期</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={4} className="font-medium">
-                      人事行政部 <span className="float-right text-gray-500">考核成绩：</span>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>公司历史、企业文化、职业道德等</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>公司用工管理制度</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>公司其它规章制度</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={4} className="font-medium">
-                      QA <span className="float-right text-gray-500">考核成绩：</span>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>人员卫生要求</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>《药品生产质量管理规范》（GMP）</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>《药品管理法》等药品生产相关法律法规</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={4} className="font-medium">安全环保部 <span className="float-right text-gray-500">考核成绩：</span></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>公司安全生产制度和相关要求</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>公司职业健康方面知识</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE}>安全生产、劳动保护的意义</td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={4} className="font-medium">其他培训内容</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_VALUE, height: '64px' }}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                    <td style={TD_VALUE}></td>
-                  </tr>
-                </tbody>
-              </table>
+          {/* ===== SOP 选择面板（打印时隐藏） ===== */}
+          <Card className="no-print" title="SOP 目录（点击勾选加入培训计划）" size="small">
+            <Space wrap style={{ marginBottom: 12 }}>
+              <Select placeholder="部门" allowClear value={sopDept||undefined}
+                onChange={v => { setSopDept(v||''); setSopCat('') }}
+                options={sopDepts} style={{ width: 200 }} showSearch
+                filterOption={(input, option) => (option?.label||'').toLowerCase().includes(input.toLowerCase())} />
+              <Select placeholder="分类" allowClear value={sopCat||undefined}
+                onChange={v => setSopCat(v||'')}
+                options={sopCats} style={{ width: 200 }} />
+              <Input.Search placeholder="搜索编号或名称" value={sopSearch}
+                onChange={e => setSopSearch(e.target.value)} style={{ width: 260 }} allowClear />
+            </Space>
+            <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 4 }}>
+              {allSops.slice(0, 200).map(sop => {
+                const sel = selectedSops.find(s => s.id === sop.id)
+                return (
+                  <div key={sop.id} onClick={() => toggleSop(sop)}
+                    style={{ padding: '6px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0',
+                      background: sel ? '#e6f4ff' : 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input type="checkbox" checked={!!sel} readOnly style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 12, color: '#999', flexShrink: 0 }}>{sop.sop_number || ''}</span>
+                    <span style={{ flex: 1, fontSize: 13 }}>{sop.file_name}</span>
+                    <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{sop.department}</span>
+                    <span style={{ fontSize: 11, color: '#aaa', flexShrink: 0 }}>{sop.category}</span>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 13, color: '#666' }}>已选 {selectedSops.length} 项</span>
+              <Space>
+                <Button size="small" onClick={() => {
+                  const visibleIds = new Set(allSops.slice(0, 200).map(s => s.id))
+                  const others = selectedSops.filter(s => !visibleIds.has(s.id))
+                  setSelectedSops([...others, ...allSops.slice(0, 200)])
+                }}>全选当前</Button>
+                <Button size="small" onClick={() => {
+                  const visibleIds = new Set(allSops.slice(0, 200).map(s => s.id))
+                  setSelectedSops(prev => prev.filter(s => !visibleIds.has(s.id)))
+                }}>取消全选</Button>
+              </Space>
             </div>
           </Card>
 
-          {/* ─── 岗前培训计划 ─── */}
-          <Card
-            title={
-              <div className="text-center">
-                <div className="text-xs text-gray-500 mb-1">QR.SOP.PM.003/18（格式） P2/12</div>
-                <div className="text-lg font-bold">丽珠集团新北江制药股份有限公司</div>
-                <div className="text-base font-semibold mt-1">岗前培训计划</div>
-              </div>
-            }
-            className="training-record-preview"
-          >
-            <div className="max-w-3xl mx-auto p-4 text-sm leading-relaxed">
-              <div className="font-bold mb-2 border-b border-gray-300 pb-1">第一部分：员工概况</div>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <tbody>
-                  <tr>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">姓　　名</td>
-                    <td style={TD_VALUE} className="w-32 text-center">{selectedEmployee.name}</td>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">部　　门</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.department}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">工作卡号</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.employee_number}</td>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">报到日期</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.hire_date || ''}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">拟定岗位</td>
-                    <td style={TD_VALUE} colSpan={3} className="text-center">{selectedEmployee.position}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">类　　别</td>
-                    <td style={TD_VALUE} colSpan={3}>
-                      <span className="mr-4">□ 新员工</span>
-                      <span className="mr-4">□ 岗位/职位变动</span>
-                      <span>□ 长期（三个月以上）休假</span>
+          {/* ===== Part II & IV: 培训计划 + 完成确认 (匹配模板) ===== */}
+          <Card className="no-print-padding">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <colgroup>
+                <col style={{ width: '4%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} /><col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} /><col style={{ width: '10%' }} />
+                <col style={{ width: '8%' }} /><col style={{ width: '8%' }} /><col style={{ width: '8%' }} />
+                <col style={{ width: '10%' }} /><col style={{ width: '10%' }} /><col style={{ width: '10%' }} />
+              </colgroup>
+              <tbody>
+                {/* 标题行 */}
+                <tr>
+                  <td colSpan={10} style={{...CELL, textAlign: 'center', fontWeight: 700, background: '#e8e8e8'}}>
+                    第二部分：培训计划/内容 Part II: Training plans/content
+                  </td>
+                  <td colSpan={3} style={{...CELL, textAlign: 'center', fontWeight: 700, background: '#e8e8e8'}}>
+                    第四部分：培训完成情况确认 Part IV: Training completion
+                  </td>
+                </tr>
+                {/* 表头 */}
+                <tr style={{ background: '#f5f5f5' }}>
+                  <td style={CELL}></td>
+                  <td style={CELL} colSpan={4}>培训内容 Training items</td>
+                  <td style={CELL} colSpan={2}>计划完成期限 Plan date</td>
+                  <td style={CELL} colSpan={2}>培训师 Trainer</td>
+                  <td style={CELL}>培训方式 Method</td>
+                  <td style={CELL}>培训日期 Date</td>
+                  <td style={CELL}>员工/日期</td>
+                  <td style={CELL}>培训师/日期</td>
+                </tr>
+                {/* 培训明细行 */}
+                {selectedSops.length > 0 ? selectedSops.map((item, i) => (
+                  <tr key={i}>
+                    <td style={{...CELL, textAlign: 'center'}}>{i + 1}</td>
+                    <td style={CELL} colSpan={4}>{item.sop_number ? `${item.sop_number} ` : ''}{item.file_name || ''}</td>
+                    <td style={CELL} colSpan={2}></td>
+                    <td style={CELL} colSpan={2}>
+                      <Select size="small" value={sopTrainers[item.id] || undefined}
+                        onChange={v => setSopTrainers(prev => ({...prev, [item.id]: v}))}
+                        options={trainers} placeholder="选培训师" style={{ width: '100%' }}
+                        showSearch filterOption={(input, option) => (option?.label||'').toLowerCase().includes(input.toLowerCase())} />
                     </td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <div className="font-bold mb-2 mt-4 border-b border-gray-300 pb-1">第二部分：培训计划</div>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={TH} className="text-left w-16 bg-gray-50">序号</th>
-                    <th style={TH} className="text-left bg-gray-50">培训内容</th>
-                    <th style={TH} className="text-left w-32 bg-gray-50">完成期限</th>
-                    <th style={TH} className="text-left w-32 bg-gray-50">培训师</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({ length: 10 }, (_, i) => (
-                    <tr key={i}>
-                      <td style={TD_VALUE} className="text-center">{i + 1}</td>
-                      <td style={{ ...TD_VALUE, height: '32px' }}>{prejobContents[i] || ''}</td>
-                      <td style={TD_VALUE}></td>
-                      <td style={TD_VALUE}></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              <div className="mt-4">
-                <div className="font-bold mb-2 border-b border-gray-300 pb-1">第三部分：审核批准</div>
-                <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                  <tbody>
-                    <tr>
-                      <td style={TD_LABEL} className="w-48 bg-gray-50 font-bold text-center">部门负责人</td>
-                      <td style={TD_VALUE}></td>
-                      <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">日　　期</td>
-                      <td style={TD_VALUE} className="w-48"></td>
-                    </tr>
-                    <tr>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">人事行政部负责人</td>
-                      <td style={TD_VALUE}></td>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">日　　期</td>
-                      <td style={TD_VALUE}></td>
-                    </tr>
-                    <tr>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">QA负责人</td>
-                      <td style={TD_VALUE}></td>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">日　　期</td>
-                      <td style={TD_VALUE}></td>
-                    </tr>
-                    <tr>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">质量管理负责人</td>
-                      <td style={TD_VALUE}></td>
-                      <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">日　　期</td>
-                      <td style={TD_VALUE}></td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </Card>
-
-          {/* ─── 员工上岗评估表 ─── */}
-          <Card
-            title={
-              <div className="text-center">
-                <div className="text-xs text-gray-500 mb-1">QR.SOP.PM.003/18（格式） P9/12</div>
-                <div className="text-lg font-bold">丽珠集团新北江制药股份有限公司</div>
-                <div className="text-base font-semibold mt-1">员工上岗评估表</div>
-              </div>
-            }
-            className="training-record-preview"
-          >
-            <div className="max-w-3xl mx-auto p-4 text-sm leading-relaxed">
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <tbody>
-                  <tr>
-                    <td style={TD_LABEL} className="w-16 bg-gray-50 font-bold text-center">姓名</td>
-                    <td style={TD_VALUE} className="w-24 text-center">{selectedEmployee.name}</td>
-                    <td style={TD_LABEL} className="w-16 bg-gray-50 font-bold text-center">性别</td>
-                    <td style={TD_VALUE} className="w-24 text-center">{selectedEmployee.gender || ''}</td>
-                    <td style={TD_LABEL} className="w-24 bg-gray-50 font-bold text-center">所在部门/岗位</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.department}/{selectedEmployee.position}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">工作卡号</td>
-                    <td style={TD_VALUE} className="text-center" colSpan={5}>{selectedEmployee.employee_number}</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">入厂时间</td>
-                    <td style={TD_VALUE} className="text-center">{selectedEmployee.hire_date || ''}</td>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">培训/考核期</td>
-                    <td style={TD_VALUE} className="text-center"></td>
-                    <td style={TD_LABEL} className="bg-gray-50 font-bold text-center">转正时间</td>
-                    <td style={TD_VALUE} className="text-center"></td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, textAlign: 'center' }} className="font-bold bg-gray-50" colSpan={6}>上岗培训期内考核内容、培训内容和结果</td>
-                  </tr>
-                  {Array.from({ length: 6 }, (_, i) => (
-                    <tr key={i}>
-                      <td style={{ ...TD_VALUE, height: '28px' }} colSpan={6}></td>
-                    </tr>
-                  ))}
-                  <tr>
-                    <td style={TD_LABEL} className="font-bold bg-gray-50" colSpan={6}>培训/考核期综合评语：</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_VALUE, height: '48px' }} colSpan={6}></td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={6}>
-                      □经考核该员工培训期表现优秀/确认，同意该员工正式上岗，担任<span style={{ borderBottom: '1px solid #1f2937', padding: '0 8px', display: 'inline-block', minWidth: '60px' }}></span>岗位。
+                    <td style={CELL}>
+                      <Select size="small" value={sopMethods[item.id] || undefined}
+                        onChange={v => updateSopMethod(item.id, v)}
+                        options={[{value:'面授',label:'面授'},{value:'自学',label:'自学'},{value:'自学+面授',label:'自学+面授'}]}
+                        placeholder="选择" style={{ width: '100%' }} />
                     </td>
+                    <td style={CELL}></td><td style={CELL}></td><td style={CELL}></td>
                   </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={6}>
-                      □经考核该员工培训期内表现不符合此岗位要求，不准上岗。
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={6}>考核方式：□理论 □实操 □现场</td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={6}>
-                      <div className="flex justify-between">
-                        <span>部门负责人签名：<span style={{ borderBottom: '1px solid #1f2937', padding: '0 8px', display: 'inline-block', minWidth: '80px' }}></span></span>
-                        <span>日期：<span style={{ borderBottom: '1px solid #1f2937', padding: '0 8px', display: 'inline-block', minWidth: '100px' }}></span></span>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style={TD_VALUE} colSpan={6}>备注：培训期延长或转岗，由部门主管决定。</td>
-                  </tr>
-                  <tr>
-                    <td style={{ ...TD_LABEL, textAlign: 'center' }} className="font-bold bg-gray-50" colSpan={6}>上岗考核审批</td>
-                  </tr>
-                  {['部门负责人', '人事行政部负责人', '质量管理负责人'].map((title, i) => (
-                    <tr key={i}>
-                      <td style={{ ...TD_VALUE, width: '128px' }} className="text-center">□同意  □不同意</td>
-                      <td style={{ ...TD_LABEL, width: '128px' }} className="text-center font-bold bg-gray-50" colSpan={2}>{title}</td>
-                      <td style={{ ...TD_VALUE, width: '128px' }} className="text-center"></td>
-                      <td style={{ ...TD_LABEL, width: '64px' }} className="text-center font-bold bg-gray-50">日期</td>
-                      <td style={TD_VALUE} className="text-center"></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                )) : (
+                  <tr><td style={CELL} colSpan={13}>请在上方 SOP 目录中勾选培训内容</td></tr>
+                )}
+                {/* Part III: 审核批准 */}
+                <tr>
+                  <td colSpan={10} style={{...CELL, textAlign: 'center', fontWeight: 700, background: '#e8e8e8'}}>
+                    第三部分：培训计划审核批准 Part III: Training plans review and approval
+                  </td>
+                  <td colSpan={3} style={{...CELL, textAlign: 'center', fontWeight: 700, background: '#e8e8e8'}}>
+                    备注 Remarks
+                  </td>
+                </tr>
+                <tr>
+                  <td style={LABEL} colSpan={3}>部门/日期<br/>Dept./Date</td>
+                  <td style={VALUE} colSpan={2}></td>
+                  <td style={LABEL} colSpan={2}>HR/日期<br/>HR/Date</td>
+                  <td style={VALUE} colSpan={3}></td>
+                  <td style={LABEL}>QA/日期<br/>QA/Date</td>
+                  <td style={VALUE} colSpan={2}></td>
+                  <td style={VALUE} colSpan={3}></td>
+                </tr>
+              </tbody>
+            </table>
           </Card>
         </div>
       )}
-
-      {!selectedEmployee && (
-        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-          <FileTextOutlined className="text-5xl mb-4" />
-          <p>请在上方选择员工以生成入职培训记录、岗前培训计划和员工上岗评估表</p>
-        </div>
-      )}
-
-      {/* 打印样式 */}
-      <style jsx global>{`
+      <style>{`
         @media print {
-          body * {
-            visibility: hidden;
-          }
-          #print-area,
-          #print-area * {
-            visibility: visible;
-          }
-          #print-area {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-          }
-          .ant-card-head {
-            border-bottom: 1px solid #000 !important;
-          }
+          .no-print { display: none !important; }
+          .no-print-padding .ant-card-body { padding: 0 !important; }
         }
       `}</style>
     </div>

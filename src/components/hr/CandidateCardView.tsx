@@ -43,11 +43,6 @@ export default function CandidateCardView({
     '不推荐': 'red',
   }
 
-  const syncStatusMap: Record<string, { text: string; color: string }> = {
-    synced: { text: '已同步', color: 'success' },
-    failed: { text: '同步失败', color: 'error' },
-  }
-
   if (loading) {
     return (
       <div className="flex justify-center py-20">
@@ -109,9 +104,6 @@ export default function CandidateCardView({
                     {candidate.recommendation_level}
                   </Tag>
                 )}
-                <Tag color={candidate.feishu_sync_status ? syncStatusMap[candidate.feishu_sync_status]?.color || 'default' : 'default'}>
-                  {candidate.feishu_sync_status ? syncStatusMap[candidate.feishu_sync_status]?.text || candidate.feishu_sync_status : '未同步'}
-                </Tag>
               </div>
               <Popconfirm
                 title="确认删除"

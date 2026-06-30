@@ -4,16 +4,12 @@ import { useState, useCallback, useEffect } from 'react'
 import { App, Button, Radio, Input, Tabs } from 'antd'
 import {
   SearchOutlined,
-  SyncOutlined,
   AppstoreOutlined,
   UnorderedListOutlined,
   PlusOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
 import { fetchCandidates } from '@/lib/api/hr'
-import {
-  syncCandidatesFromFeishuAction,
-  deleteCandidateAction,
-  syncCandidateToFeishuAction } from '@/actions/hr'
+import { deleteCandidateAction } from '@/actions/hr'
 import CandidateListView from './CandidateListView'
 import CandidateCardView from './CandidateCardView'
 import CreateCandidateModal from './CreateCandidateModal'
@@ -33,9 +29,8 @@ export default function RecruitmentClient({
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
-  const [syncing, setSyncing] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
-  const [activeTab, setActiveTab] = useState<'all' | 'recommended' | 'unsynced'>('all')
+  const [activeTab, setActiveTab] = useState<'all' | 'recommended'>('all')
   const [modalOpen, setModalOpen] = useState(false)
 
   const loadData = useCallback(async () => {
@@ -44,7 +39,6 @@ export default function RecruitmentClient({
       const res = await fetchCandidates({
         keyword: searchKeyword || undefined,
         recommendation_level: activeTab === 'recommended' ? '推荐,强烈推荐' : undefined,
-        sync_status: activeTab === 'unsynced' ? 'unsynced' : undefined,
         page,
         page_size: pageSize })
       setCandidates(res.data)
@@ -59,19 +53,6 @@ export default function RecruitmentClient({
   const handlePageChange = (newPage: number, newPageSize: number) => {
     setPage(newPage)
     setPageSize(newPageSize)
-  }
-
-  const handleSync = async () => {
-    setSyncing(true)
-    try {
-      const res = await syncCandidatesFromFeishuAction()
-      message.success(res.message)
-      loadData()
-    } catch (err: any) {
-      message.error(err.message || '同步失败')
-    } finally {
-      setSyncing(false)
-    }
   }
 
   const handleDelete = async (id: string) => {
@@ -115,21 +96,13 @@ export default function RecruitmentClient({
           >
             新建候选人
           </Button>
-          <Button
-            type="primary"
-            icon={<SyncOutlined spin={syncing} />}
-            onClick={handleSync}
-            loading={syncing}
-          >
-            从飞书同步
-          </Button>
         </div>
       </div>
 
       <Tabs
         activeKey={activeTab}
         onChange={(key) => {
-          setActiveTab(key as 'all' | 'recommended' | 'unsynced')
+          setActiveTab(key as 'all' | 'recommended')
           setPage(1)
         }}
         items={[
@@ -140,10 +113,6 @@ export default function RecruitmentClient({
           {
             key: 'recommended',
             label: '推荐候选',
-            children: null },
-          {
-            key: 'unsynced',
-            label: '未同步',
             children: null },
         ]}
       />
