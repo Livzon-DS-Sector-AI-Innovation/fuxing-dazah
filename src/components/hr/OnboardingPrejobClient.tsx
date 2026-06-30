@@ -98,7 +98,8 @@ export default function OnboardingPrejobClient() {
         method: sopMethods[s.id] || '',
         trainer: sopTrainers[s.id] || '',
       }))
-      const res = await fetch(`http://localhost:8000/api/v1/hr/employees/${selectedEmployee.employee_number}/onboarding-training-record`, {
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/onboarding-training-record`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ training_items: items }),

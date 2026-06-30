@@ -5,12 +5,14 @@ import {
   Button,
   Card,
   Input,
+  InputNumber,
   Upload,
   message,
   Space,
   Divider,
   Typography,
   Spin,
+  Switch,
 } from 'antd'
 import {
   UploadOutlined,
@@ -54,6 +56,14 @@ export default function AiExamClient() {
   // 导出状态
   const [exporting, setExporting] = useState(false)
 
+  // 题目配置
+  const [choiceEnabled, setChoiceEnabled] = useState(true)
+  const [choiceCount, setChoiceCount] = useState(5)
+  const [tfEnabled, setTfEnabled] = useState(true)
+  const [tfCount, setTfCount] = useState(5)
+  const [qaEnabled, setQaEnabled] = useState(false)
+  const [qaCount, setQaCount] = useState(3)
+
   const handleUploadChange = (info: { fileList: UploadFile[] }) => {
     setFileList(info.fileList.slice(-1)) // 只保留最后一个文件
   }
@@ -66,8 +76,14 @@ export default function AiExamClient() {
 
     setGenerating(true)
     try {
+      const config = {
+        choice_count: choiceEnabled ? choiceCount : 0,
+        true_false_count: tfEnabled ? tfCount : 0,
+        qa_count: qaEnabled ? qaCount : 0,
+      }
       const res: ExamGenerateResponse = await generateExamQuestions(
-        fileList[0].originFileObj
+        fileList[0].originFileObj,
+        config
       )
       if (res.data?.choice_questions) {
         setChoiceQuestions(res.data.choice_questions)
@@ -211,6 +227,26 @@ export default function AiExamClient() {
             <Button icon={<UploadOutlined />}>选择文件</Button>
           </Upload>
           <Text type="secondary">支持 .docx 和 .txt 格式，文件大小不超过 10MB</Text>
+
+          <Divider style={{ margin: '8px 0' }} />
+          <Text strong>题目配置</Text>
+          <Space wrap>
+            <Space>
+              <Switch checked={choiceEnabled} onChange={setChoiceEnabled} size="small" />
+              <span>单选题</span>
+              {choiceEnabled && <InputNumber min={1} max={20} value={choiceCount} onChange={v => setChoiceCount(v || 1)} size="small" style={{ width: 60 }} />}
+            </Space>
+            <Space>
+              <Switch checked={tfEnabled} onChange={setTfEnabled} size="small" />
+              <span>判断题</span>
+              {tfEnabled && <InputNumber min={1} max={20} value={tfCount} onChange={v => setTfCount(v || 1)} size="small" style={{ width: 60 }} />}
+            </Space>
+            <Space>
+              <Switch checked={qaEnabled} onChange={setQaEnabled} size="small" />
+              <span>简答题</span>
+              {qaEnabled && <InputNumber min={1} max={10} value={qaCount} onChange={v => setQaCount(v || 1)} size="small" style={{ width: 60 }} />}
+            </Space>
+          </Space>
 
           <Button
             type="primary"

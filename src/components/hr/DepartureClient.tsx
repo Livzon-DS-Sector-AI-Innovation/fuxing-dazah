@@ -280,7 +280,7 @@ export default function DepartureClient({
 
 
       <Modal title="新建离职记录" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)}
-        confirmLoading={createLoading} destroyOnClose width={500}>
+        confirmLoading={createLoading} destroyOnHidden width={500}>
         <Form form={createForm} layout="vertical">
           <Form.Item label="选择部门" required>
             <Select placeholder="先选部门" options={departments} value={selectedDept || undefined}
