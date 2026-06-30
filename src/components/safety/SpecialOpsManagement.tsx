@@ -106,7 +106,7 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
     try {
       const res = await getSpecialOperationLedgerStats()
       if (res.code === 200 && res.data) setStats(res.data)
-    } catch { /* silent */ }
+    } catch { /* 统计数据获取失败，继续展示列表 */ }
   }, [])
 
   useEffect(() => { if (!initialStats?.length) fetchStats() }, [fetchStats, initialStats])
@@ -139,7 +139,7 @@ export default function SpecialOpsManagement({ initialStats }: SpecialOpsManagem
   useEffect(() => { fetchData() }, [fetchData])
 
   // ── AI Export ──
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8002/api/v1'
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
 
   const handleAIExport = async () => {
     if (!exportQuery.trim()) {

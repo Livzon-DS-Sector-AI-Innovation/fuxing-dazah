@@ -22,6 +22,7 @@ import {
   T,
 } from '@/components/safety/shared-styles'
 import dayjs from 'dayjs'
+import animStyles from './safety-animations.module.css'
 
 const { Text } = Typography
 
@@ -341,6 +342,7 @@ export default function SopGeneratorPanel({
             }}
           >
             <div
+              className={animStyles.pulse16}
               style={{
                 width: 64,
                 height: 64,
@@ -349,7 +351,6 @@ export default function SopGeneratorPanel({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                animation: 'pulseRing 2s ease-in-out infinite',
               }}
             >
               <LoadingOutlined style={{ fontSize: 28, color: T.primary }} />
@@ -503,18 +504,7 @@ export default function SopGeneratorPanel({
           onChange={handleFileChange}
         />
 
-        {/* pulse animation keyframes */}
-        <style
-          dangerouslySetInnerHTML={{
-            __html: `
-              @keyframes pulseRing {
-                0%   { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0.3); }
-                50%  { box-shadow: 0 0 0 16px rgba(86, 69, 212, 0); }
-                100% { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0); }
-              }
-            `,
-          }}
-        />
+        {/* pulse animation now via safety-animations.module.css */}
       </div>
 
       {/* ═══ Generated SOPs List ═══ */}
@@ -574,7 +564,7 @@ export default function SopGeneratorPanel({
         {/* table */}
         {loadingList ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 64 }}>
-            <Spin size="default" />
+            <Spin size="medium" />
           </div>
         ) : generatedSops.length === 0 ? (
           <div style={{ padding: 64 }}>

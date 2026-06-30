@@ -41,7 +41,7 @@ import {
   ReloadOutlined,
   SyncOutlined,
 } from '@ant-design/icons'
-import { getHazard, updateHazard, replyRectification, reworkRectification, uploadRectificationPhoto, getDepartmentLeader, notifyReviewer, notifyRectification, triggerRectificationReview, verifyLevel } from '@/actions/safety'
+import { getHazard, updateHazard, replyRectification, reworkRectification, uploadRectificationPhoto, getDepartmentLeader, getDepartmentSafetyOfficer, notifyReviewer, notifyRectification, triggerRectificationReview, verifyLevel } from '@/actions/safety'
 import type { HazardReport } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -358,7 +358,7 @@ function PhotoGallery({ photos: urls }: { photos: string[] }) {
               width={130}
               height={130}
               style={{ objectFit: 'cover', display: 'block' }}
-              preview={{ mask: <CameraOutlined style={{ fontSize: 20 }} /> }}
+              preview={{ cover: <CameraOutlined style={{ fontSize: 20 }} /> }}
             />
           </div>
         ))}
@@ -447,6 +447,7 @@ export default function HazardLedgerDetailPage() {
   const [notifyLoading, setNotifyLoading] = useState(false)
   const [aiReviewTriggering, setAiReviewTriggering] = useState(false)
   const [notifyRectLoading, setNotifyRectLoading] = useState(false)
+  const [safetyOfficerName, setSafetyOfficerName] = useState<string | null>(null)
 
   // ── 人员搜索状态 ──
   interface UserOption { value: string; label: string }
@@ -484,7 +485,21 @@ export default function HazardLedgerDetailPage() {
     try {
       const response = await getHazard(id)
       if (response.code === 200) {
-        setRecord(response.data as HazardReport)
+        const hazard = response.data as HazardReport
+        setRecord(hazard)
+        // 加载安全员信息
+        if (hazard.department) {
+          try {
+            const soRes = await getDepartmentSafetyOfficer(hazard.department)
+            if (soRes.code === 200 && soRes.data?.safety_officer_name) {
+              setSafetyOfficerName(soRes.data.safety_officer_name)
+            } else {
+              setSafetyOfficerName(null)
+            }
+          } catch {
+            setSafetyOfficerName(null)
+          }
+        }
       } else {
         console.error('加载隐患详情失败:', { id, code: response.code, message: response.message })
         message.error(response.message || `加载失败 (${response.code})`)
@@ -539,6 +554,17 @@ export default function HazardLedgerDetailPage() {
             return [{ value: leaderId, label: `${name} - ${dept}` }, ...prev]
           })
         }
+      }
+      // 同步获取安全员
+      try {
+        const soRes = await getDepartmentSafetyOfficer(dept)
+        if (soRes.code === 200 && soRes.data?.safety_officer_name) {
+          setSafetyOfficerName(soRes.data.safety_officer_name)
+        } else {
+          setSafetyOfficerName(null)
+        }
+      } catch {
+        setSafetyOfficerName(null)
       }
     } catch {
       // silently ignore — user can search manually
@@ -784,21 +810,19 @@ export default function HazardLedgerDetailPage() {
     const levelLabelMap: Record<string, Record<string, string>> = {
       photo_match_level: { matched: '匹配', partial_match: '部分匹配', unmatched: '不匹配', no_photos: '无照片' },
       measure_quality_level: { adequate: '合格', basic: '基本合格', inadequate: '不合格' },
-      completeness_level: { full: '完整', partial: '部分', insufficient: '不足' },
       standard_compliance_level: { compliant: '合规', basically_compliant: '基本合规', non_compliant: '不合规' },
     }
 
     const levelColorMap: Record<string, string> = {
-      matched: 'success', adequate: 'success', full: 'success', compliant: 'success',
-      partial_match: 'warning', basic: 'warning', partial: 'warning', basically_compliant: 'warning',
-      unmatched: 'error', no_photos: 'error', inadequate: 'error', insufficient: 'error', non_compliant: 'error',
+      matched: 'success', adequate: 'success', compliant: 'success',
+      partial_match: 'warning', basic: 'warning', basically_compliant: 'warning',
+      unmatched: 'error', no_photos: 'error', inadequate: 'error', non_compliant: 'error',
     }
 
     // 维度定义：key → label、icon、及对应的描述文本字段
     const dims = [
       { key: 'photo_match_level' as const, descKey: 'photo_match_analysis', label: '图片比对', icon: <CameraOutlined /> },
-      { key: 'measure_quality_level' as const, descKey: 'measure_quality_assessment', label: '措施质量', icon: <ToolOutlined /> },
-      { key: 'completeness_level' as const, descKey: 'completeness_check', label: '完整性', icon: <CheckCircleOutlined /> },
+      { key: 'measure_quality_level' as const, descKey: 'measure_quality_assessment', label: '措施有效性', icon: <ToolOutlined /> },
       { key: 'standard_compliance_level' as const, descKey: 'standard_compliance', label: '标准合规', icon: <FileTextOutlined /> },
     ]
 
@@ -1244,6 +1268,12 @@ export default function HazardLedgerDetailPage() {
                       <Text style={{ fontSize: 14 }}>{record.department || '-'}</Text>
                     </FieldTile>
                   </Col>
+                  <Col span={8}>
+                    <FieldLabel>分管安全员</FieldLabel>
+                    <FieldTile>
+                      <Text style={{ fontSize: 14 }}>{safetyOfficerName || '-'}</Text>
+                    </FieldTile>
+                  </Col>
                 </Row>
 
                 {record.description && (
@@ -1594,12 +1624,6 @@ export default function HazardLedgerDetailPage() {
                               items.push({
                                 problem: '整改措施不合格（空泛/不可操作）',
                                 guidance: '请补充具体的整改措施，包含量化标准、时间节点、责任主体，避免使用「已整改」「已处理」等笼统描述',
-                              })
-                            }
-                            if (ar?.completeness_level === 'insufficient') {
-                              items.push({
-                                problem: '核心问题未得到处理',
-                                guidance: '请对照 AI 识别的关键缺陷逐条回复，确保每项问题都有对应的整改措施',
                               })
                             }
                             if (ar?.standard_compliance_level === 'non_compliant') {

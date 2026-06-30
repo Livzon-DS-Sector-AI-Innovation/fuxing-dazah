@@ -64,7 +64,7 @@ export default function StageSelector({
   if (loading) {
     return (
       <div style={{ padding: 24, textAlign: 'center' }}>
-        <Spin tip="正在解析工艺阶段..." />
+        <Spin description="正在解析工艺阶段..." />
       </div>
     )
   }

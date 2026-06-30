@@ -46,6 +46,7 @@ import type {
   HazardReport,
   HazardLevel,
   HazardStats,
+  HazardReportQueryParams,
 } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
@@ -57,36 +58,9 @@ import HazardRectificationReplyModal from '@/components/safety/HazardRectificati
 import HazardVerifyModal from '@/components/safety/HazardVerifyModal'
 import HazardRegistrationDrawer from '@/components/safety/HazardRegistrationDrawer'
 import dayjs from 'dayjs'
+import { statusPill, actionLink } from '@/components/safety/shared-styles'
 
 const { Text } = Typography
-
-// ── 本地样式辅助函数（与 equipment/shared-styles 同模式，模块隔离）──
-const statusPill = (color: string, bg: string): React.CSSProperties => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  padding: '2px 10px',
-  borderRadius: 4,
-  fontSize: 12,
-  fontWeight: 600,
-  lineHeight: '20px',
-  color,
-  background: bg,
-})
-
-const actionLink = (color: string): React.CSSProperties => ({
-  color,
-  fontSize: 13,
-  fontWeight: 600,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  lineHeight: '22px',
-})
 
 // ── 整改状态语义色配置 ──
 const RECTIFICATION_STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
@@ -118,7 +92,13 @@ const STATS_PILLS = [
 ]
 
 // ── 可筛选字段配置（用于多维筛选弹出菜单）──
-const FILTER_FIELDS = [
+interface FilterFieldConfig {
+  key: string
+  label: string
+  type?: 'text' | 'select'
+  options: Array<{ value: string; label: string }>
+}
+const FILTER_FIELDS: FilterFieldConfig[] = [
   {
     key: 'hazard_level',
     label: '隐患等级',
@@ -304,7 +284,7 @@ export default function HazardLedgerPage() {
         inspection_category: inspectionCategoryFilter,
         department: deptFilter,
         keyword: searchKeywordRef.current || undefined,
-      } as any)
+      } as HazardReportQueryParams)
       if (response.code === 200) {
         let data = response.data || []
         // 客户端排序（多维表格即时排序体验）
@@ -936,7 +916,7 @@ export default function HazardLedgerPage() {
           <div style={{ fontSize: 12, color: '#787671', marginBottom: 8 }}>
             {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.label}
           </div>
-          {(FILTER_FIELDS.find((f) => f.key === pendingFilterField) as any)?.type === 'text' ? (
+          {FILTER_FIELDS.find((f) => f.key === pendingFilterField)?.type === 'text' ? (
             <Input
               placeholder="请输入责任部门名称"
               onPressEnter={(e) => {
@@ -1150,7 +1130,7 @@ export default function HazardLedgerPage() {
             gap: 8,
             paddingBottom: 0,
             msOverflowStyle: 'none',
-            scrollbarWidth: 'thin' as any,
+            scrollbarWidth: 'thin',
           }}
         >
           {/* 活跃筛选条件 chips */}

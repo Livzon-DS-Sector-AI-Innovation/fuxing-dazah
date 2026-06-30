@@ -14,14 +14,8 @@ import {
   CarryOutOutlined,
 } from '@ant-design/icons'
 
-// ── DESIGN.md Token Colors ──
-export const T = {
-  primary: '#5645d4', error: '#E03131', warning: '#DD5B00', success: '#1AAE39',
-  ink: '#1a1a1a', charcoal: '#37352f', slate: '#5d5b54', steel: '#787671',
-  muted: '#bbb8b1', hairline: '#e5e3df', surface: '#f6f5f4', canvas: '#ffffff',
-  sky: '#dcecfa', lavender: '#e6e0f5', peach: '#ffe8d4', rose: '#fde0ec',
-  mint: '#d9f3e1', yellow: '#fef7d6',
-}
+// ── DESIGN.md Token Colors（从 shared-styles 统一导入）──
+export { T } from './shared-styles'
 
 // ── Operation type labels, colors & icons ──
 export const OP_TYPE_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {

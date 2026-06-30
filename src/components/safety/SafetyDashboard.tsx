@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import type { SpecialOperationReport, DailyRiskReport, TrainingRecord } from '@/types/safety'
+import { T } from './shared-styles'
 
 const { Title, Text } = Typography
 
@@ -41,31 +42,6 @@ interface TodayRiskRow {
   responsiblePerson: string
   timeRange: string
   status: string
-}
-
-// ── DESIGN.md Token Colors ──
-
-const T = {
-  primary: '#5645d4',
-  error: '#E03131',
-  warning: '#DD5B00',
-  success: '#1AAE39',
-  ink: '#1a1a1a',
-  charcoal: '#37352f',
-  slate: '#5d5b54',
-  steel: '#787671',
-  muted: '#bbb8b1',
-  hairline: '#e5e3df',
-  surface: '#f6f5f4',
-  canvas: '#ffffff',
-  peach: '#ffe8d4',
-  rose: '#fde0ec',
-  mint: '#d9f3e1',
-  lavender: '#e6e0f5',
-  sky: '#dcecfa',
-  yellow: '#fef7d6',
-  yellowBold: '#f9e79f',
-  gray: '#f0eeec',
 }
 
 // ── Operation type labels ──

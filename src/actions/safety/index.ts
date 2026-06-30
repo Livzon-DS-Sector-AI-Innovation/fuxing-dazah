@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 // 注意：以下 revalidatePath 调用指向的页面路径部分仍在开发中，待对应页面创建后将自动生效
-import { getAuthHeaders, getServerToken } from '@/lib/auth'
+import { fetchApi, uploadPhoto, getAuthHeaders } from './_helpers'
+import { API_BASE, buildQueryString } from './_utils'
 import type {
   Accident,
   AccidentFormData,
@@ -63,78 +64,10 @@ import type {
   OhHealthExamQueryParams,
 } from '@/types/safety'
 
-const API_BASE = process.env.API_BASE_URL
-  ? `${process.env.API_BASE_URL}/api/v1`
-  : (() => { throw new Error('环境变量 API_BASE_URL 未配置，无法连接后端服务') })()
-
-// ============ Helper Functions ============
-
-async function fetchApi<T>(
-  endpoint: string,
-  options?: RequestInit
-): Promise<ApiResponse<T>> {
-  let response: Response
-  try {
-    const authHeaders = await getAuthHeaders()
-    const { headers: optHeaders, ...restOptions } = options || {}
-    response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        ...authHeaders,
-        ...optHeaders,
-      },
-      ...restOptions,
-    })
-  } catch {
-    return {
-      code: -1,
-      message: `网络请求失败，无法连接到后端服务 (${API_BASE}${endpoint})`,
-    } as ApiResponse<T>
-  }
-
-  if (!response.ok) {
-    let errorMessage = `HTTP ${response.status}`
-    try {
-      const errorBody = await response.text()
-      try {
-        const errorJson = JSON.parse(errorBody)
-        if (errorJson.message) {
-          errorMessage = errorJson.message
-        } else if (errorJson.detail) {
-          errorMessage = errorJson.detail
-        }
-      } catch {
-        errorMessage = errorBody.substring(0, 200)
-      }
-    } catch {
-      // 无法读取响应体
-    }
-    return { code: response.status, message: errorMessage } as ApiResponse<T>
-  }
-
-  try {
-    return await response.json()
-  } catch {
-    const text = await response.text().catch(() => '无法读取响应')
-    return {
-      code: -1,
-      message: `响应解析失败: ${text.substring(0, 200)}`,
-    } as ApiResponse<T>
-  }
-}
-
 // ============ SafetyCheck Actions ============
 
 export async function getChecks(params: SafetyCheckQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.check_type) searchParams.set('check_type', params.check_type)
-  if (params.department) searchParams.set('department', params.department)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/checks${queryString ? `?${queryString}` : ''}`
-  return fetchApi<SafetyCheck[]>(endpoint)
+  return fetchApi<SafetyCheck[]>(`/safety/checks${buildQueryString(params)}`)
 }
 
 export async function getCheck(id: string) {
@@ -186,28 +119,12 @@ export async function deleteCheck(id: string) {
 
 // ============ HazardReport Actions ============
 
-export async function fetchHazardStats(): Promise<ApiResponse<HazardStats>> {
-  const response = await fetchApi<HazardStats>('/safety/hazards/stats')
-  return response
+export async function fetchHazardStats() {
+  return fetchApi<HazardStats>('/safety/hazards/stats')
 }
 
 export async function getHazards(params: HazardReportQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.rectification_status) searchParams.set('rectification_status', params.rectification_status)
-  if (params.overall_status) searchParams.set('overall_status', params.overall_status)
-  if (params.hazard_type) searchParams.set('hazard_type', params.hazard_type)
-  if (params.hazard_level) searchParams.set('hazard_level', params.hazard_level)
-  if (params.hazard_category) searchParams.set('hazard_category', params.hazard_category)
-  if (params.inspection_category) searchParams.set('inspection_category', params.inspection_category)
-  if (params.department) searchParams.set('department', params.department)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/hazards${queryString ? `?${queryString}` : ''}`
-  return fetchApi<HazardReport[]>(endpoint)
+  return fetchApi<HazardReport[]>(`/safety/hazards${buildQueryString(params)}`)
 }
 
 export async function getHazard(id: string) {
@@ -218,6 +135,13 @@ export async function getHazard(id: string) {
 export async function getDepartmentLeader(departmentName: string) {
   return fetchApi<{ department: string; leader_name: string | null; leader_id: string | null }>(
     `/safety/hazards/department-leader?department_name=${encodeURIComponent(departmentName)}`
+  )
+}
+
+/** 根据部门名称查询分管安全员 */
+export async function getDepartmentSafetyOfficer(departmentName: string) {
+  return fetchApi<{ department: string; safety_officer_name: string | null; safety_officer_id: string | null }>(
+    `/safety/hazards/department-safety-officer?department_name=${encodeURIComponent(departmentName)}`
   )
 }
 
@@ -329,39 +253,11 @@ export async function deleteHazards(ids: string[]) {
 }
 
 export async function uploadHazardPhoto(id: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/hazards/${id}/upload-photo`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  if (!response.ok) {
-    let detail = ''
-    try { const err = await response.json(); detail = err.detail || err.message || '' } catch { /* ignore */ }
-    throw new Error(`HTTP ${response.status}${detail ? ': ' + detail : ''}`)
-  }
-  revalidatePath('/safety/hazard')
-  return response.json()
+  return uploadPhoto(`/safety/hazards/${id}/upload-photo`, file)
 }
 
 export async function uploadRectificationPhoto(id: string, file: File) {
-  const formData = new FormData()
-  formData.append('file', file)
-  const authHeaders = await getAuthHeaders()
-  const { 'Content-Type': _, ...uploadHeaders } = authHeaders
-  const response = await fetch(
-    `${API_BASE}/safety/hazards/${id}/upload-rectification-photo`,
-    { method: 'POST', headers: uploadHeaders, body: formData }
-  )
-  if (!response.ok) {
-    let detail = ''
-    try { const err = await response.json(); detail = err.detail || err.message || '' } catch { /* ignore */ }
-    throw new Error(`HTTP ${response.status}${detail ? ': ' + detail : ''}`)
-  }
-  revalidatePath('/safety/hazard')
-  return response.json()
+  return uploadPhoto(`/safety/hazards/${id}/upload-rectification-photo`, file)
 }
 
 export async function runHazardAI(hazardId: string, scriptNumber: number) {
@@ -376,20 +272,7 @@ export async function runHazardAI(hazardId: string, scriptNumber: number) {
 // ============ Accident Actions ============
 
 export async function getAccidents(params: AccidentQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.accident_type) searchParams.set('accident_type', params.accident_type)
-  if (params.accident_level) searchParams.set('accident_level', params.accident_level)
-  if (params.department) searchParams.set('department', params.department)
-  if (params.date_from) searchParams.set('date_from', params.date_from)
-  if (params.date_to) searchParams.set('date_to', params.date_to)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/accidents${queryString ? `?${queryString}` : ''}`
-  return fetchApi<Accident[]>(endpoint)
+  return fetchApi<Accident[]>(`/safety/accidents${buildQueryString(params)}`)
 }
 
 export async function getAccident(id: string) {
@@ -488,17 +371,7 @@ export async function deleteAccident(id: string) {
 // ============ Contractor Actions ============
 
 export async function getContractors(params: ContractorQueryParams = {}) {
-  const searchParams = new URLSearchParams()
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-  if (params.status) searchParams.set('status', params.status)
-  if (params.qualification_type) searchParams.set('qualification_type', params.qualification_type)
-  if (params.training_status) searchParams.set('training_status', params.training_status)
-  if (params.keyword) searchParams.set('keyword', params.keyword)
-
-  const queryString = searchParams.toString()
-  const endpoint = `/safety/contractors${queryString ? `?${queryString}` : ''}`
-  return fetchApi<Contractor[]>(endpoint)
+  return fetchApi<Contractor[]>(`/safety/contractors${buildQueryString(params)}`)
 }
 
 export async function getContractor(id: string) {

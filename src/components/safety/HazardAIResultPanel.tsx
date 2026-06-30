@@ -77,10 +77,11 @@ export default function HazardAIResultPanel({
   }
 
   const getFieldValue = (field: keyof EditableFields): string => {
+    const rawValue = hazard[field as keyof HazardReport] as unknown
     if (editing && field in edits) {
-      return edits[field] ?? (hazard as any)[field] ?? ''
+      return edits[field] ?? String(rawValue ?? '')
     }
-    return (hazard as any)[field] ?? ''
+    return String(rawValue ?? '')
   }
 
   const handleConfirm = async () => {

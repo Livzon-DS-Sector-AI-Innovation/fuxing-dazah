@@ -77,12 +77,15 @@ export default function HazardInspectionForm({
       setUserOptions([])
       return
     }
+    // 组件卸载标记，防止在已卸载组件上 setState
+    let cancelled = false
     searchTimerRef.current = setTimeout(async () => {
       setUserSearchLoading(true)
       try {
-        const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+        const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
         const params = new URLSearchParams({ keyword, limit: '50' })
         const resp = await fetch(`${API_BASE}/api/v1/identity/personnel?${params}`)
+        if (cancelled) return
         if (resp.ok) {
           const json = await resp.json()
           const items = (json.data?.items ?? []) as Record<string, unknown>[]
@@ -92,9 +95,9 @@ export default function HazardInspectionForm({
           })))
         }
       } catch {
-        // 静默失败
+        if (!cancelled) setUserOptions([])
       } finally {
-        setUserSearchLoading(false)
+        if (!cancelled) setUserSearchLoading(false)
       }
     }, 300)
   }, [])
@@ -117,7 +120,7 @@ export default function HazardInspectionForm({
         discovered_at: initialValues.discovered_at
           ? dayjs(initialValues.discovered_at)
           : undefined,
-      } as any)
+      } as Record<string, unknown>)
       // 回填时预填当前用户到选项列表，确保 Select 正确显示
       if (initialValues.discovered_by && initialValues.discovered_by_name) {
         setUserOptions([{

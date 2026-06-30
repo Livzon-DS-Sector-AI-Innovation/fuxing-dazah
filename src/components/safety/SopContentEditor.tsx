@@ -16,6 +16,7 @@ import {
 } from '@ant-design/icons'
 
 import { T } from '@/components/safety/shared-styles'
+import animStyles from './safety-animations.module.css'
 
 /* ─────── design tokens ─────── */
 
@@ -384,7 +385,7 @@ function parseNumberedSections(md: string): SectionBlock[] {
     }
 
     // Numbered item: 1. xxx or 1. xxx
-    const numMatch = trimmed.match(/^\d+[\.\、\)]\s*(.+)/)
+    const numMatch = trimmed.match(/^\d+[\.\、\)]\s*(.*)/)
     if (numMatch && currentSection) {
       currentSection.items.push(numMatch[1].trim())
       continue
@@ -459,7 +460,7 @@ function parseStageBlocks(md: string): StageBlock[] {
     }
 
     // Numbered item
-    const numMatch = trimmed.match(/^\d+[\.\、\)]\s*(.+)/)
+    const numMatch = trimmed.match(/^\d+[\.\、\)]\s*(.*)/)
     if (numMatch && currentStage && currentMode) {
       const content = numMatch[1].trim()
       if (currentMode === 'safety') {
@@ -895,6 +896,7 @@ export default function SopContentEditor({
   const [sigTable, setSigTable] = useState<SigTableData>({ ...EMPTY_SIG, versions: [] })
   const [chapters, setChapters] = useState<Record<number, string>>({})
   const [preambleText, setPreambleText] = useState('')
+  const [sopName, setSopName] = useState(regulationName)
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
@@ -945,9 +947,9 @@ export default function SopContentEditor({
   const fullPreambleMarkdown = useMemo(() => {
     const parts: string[] = []
     const metaLines: string[] = []
-    if (headerMeta.docNumber.trim()) metaLines.push(`**文件编号:** ${headerMeta.docNumber.trim()}`)
-    if (headerMeta.effectiveDate.trim()) metaLines.push(`**生效日期:** ${headerMeta.effectiveDate.trim()}`)
-    if (headerMeta.department.trim()) metaLines.push(`**颁发部门:** ${headerMeta.department.trim()}`)
+    if (headerMeta.docNumber.trim()) metaLines.push(`**文件编号：** ${headerMeta.docNumber.trim()}`)
+    if (headerMeta.effectiveDate.trim()) metaLines.push(`**生效日期：** ${headerMeta.effectiveDate.trim()}`)
+    if (headerMeta.department.trim()) metaLines.push(`**颁发部门：** ${headerMeta.department.trim()}`)
     if (metaLines.length > 0) { parts.push(metaLines.join('\n')); parts.push('---') }
     if (preambleText.trim()) parts.push(preambleText.trim())
     parts.push(serializeSigTable(sigTable))
@@ -1033,6 +1035,7 @@ export default function SopContentEditor({
         setSigTable(sig)
         setPreambleText(preambleWithoutSig)
         setChapters(parsed.chapters)
+        setSopName(regulationName)
         setIsDirty(false)
         message.success('已撤回所有修改')
       },
@@ -1044,13 +1047,16 @@ export default function SopContentEditor({
   const handleSave = useCallback(async () => {
     setSaving(true)
     try {
-      const { updateSopContent } = await import('@/actions/safety')
+      const { updateSopContent, updateRegulation } = await import('@/actions/safety')
       await updateSopContent(regulationId, fullContent, 'reviewed')
+      if (sopName !== regulationName) {
+        await updateRegulation(regulationId, { regulation_name: sopName })
+      }
       setJustSaved(true); setIsDirty(false); onSaved()
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '保存失败')
     } finally { setSaving(false) }
-  }, [regulationId, fullContent, onSaved])
+  }, [regulationId, fullContent, onSaved, sopName, regulationName])
 
   const handleExport = useCallback(async () => {
     setExporting(true)
@@ -1073,8 +1079,11 @@ export default function SopContentEditor({
   const handleSaveAndExport = useCallback(async () => {
     setSaving(true)
     try {
-      const { updateSopContent } = await import('@/actions/safety')
+      const { updateSopContent, updateRegulation } = await import('@/actions/safety')
       await updateSopContent(regulationId, fullContent, 'reviewed')
+      if (sopName !== regulationName) {
+        await updateRegulation(regulationId, { regulation_name: sopName })
+      }
       setJustSaved(true); setIsDirty(false); onSaved()
       setSaving(false)
       await handleExport()
@@ -1082,7 +1091,7 @@ export default function SopContentEditor({
       message.error(err instanceof Error ? err.message : '保存失败')
       setSaving(false)
     }
-  }, [regulationId, fullContent, onSaved, handleExport])
+  }, [regulationId, fullContent, onSaved, handleExport, sopName, regulationName])
 
   const handleBack = useCallback(() => {
     if (isDirty) {
@@ -1756,7 +1765,7 @@ export default function SopContentEditor({
             <ArrowLeftOutlined style={{ fontSize: 12 }} />
             返回列表
           </div>
-          <div style={S.sopName}>{regulationName}</div>
+          <div style={S.sopName}>{sopName || regulationName}</div>
           <div style={S.badge}>
             <ThunderboltOutlined style={{ fontSize: 11 }} />
             AI 生成
@@ -1819,10 +1828,35 @@ export default function SopContentEditor({
       </div>
 
       {/* ═══ MAIN: PAPER VIEW ═══ */}
-      <div style={S.mainArea} className="sop-paper-scroll">
+      <div style={S.mainArea} className={`sop-paper-scroll ${animStyles.scrollBar}`}>
         <div style={S.paperOuter}>
+          {/* SAFETY: PREVIEW_CSS is a purely-presentational CSS string built from
+              design-token constants (TOKENS.*, RADIUS.*) imported from shared-styles.
+              No user input is ever interpolated into this string. Full migration to
+              CSS Modules is deferred because the CSS uses JS template literals to
+              reference runtime design tokens; a proper migration would require
+              CSS custom properties on a wrapper element. */}
           <style dangerouslySetInnerHTML={{ __html: PREVIEW_CSS }} />
           <div className="sop-paper">
+            {/* ── Regulation Name ── */}
+            <div style={{ marginBottom: 16 }}>
+              <input
+                value={sopName}
+                onChange={(e) => { setSopName(e.target.value); markDirty() }}
+                placeholder="操规名称"
+                aria-label="操规名称"
+                style={{
+                  width: '100%', border: 'none', outline: 'none',
+                  fontSize: 22, fontWeight: 700, lineHeight: 1.35, color: '#000000',
+                  borderBottom: '2px solid transparent', padding: '0 0 8px 0',
+                  background: 'transparent', fontFamily: 'inherit',
+                  transition: 'border-color 0.15s',
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderBottomColor = TOKENS.primary }}
+                onBlur={(e) => { e.currentTarget.style.borderBottomColor = 'transparent' }}
+              />
+            </div>
+
             {/* ── Header Metadata Bar ── */}
             <div className="paper-header-bar">
               <div className="hdr-field">
@@ -1913,13 +1947,7 @@ export default function SopContentEditor({
         </div>
       </div>
 
-      {/* scrollbar styling */}
-      <style dangerouslySetInnerHTML={{ __html: `
-        .sop-paper-scroll::-webkit-scrollbar { width: 8px; }
-        .sop-paper-scroll::-webkit-scrollbar-track { background: transparent; }
-        .sop-paper-scroll::-webkit-scrollbar-thumb { background: #c8c4be; border-radius: 9999px; }
-        .sop-paper-scroll::-webkit-scrollbar-thumb:hover { background: #a4a097; }
-      `}} />
+      {/* scrollbar styling now via safety-animations.module.css */}
     </div>
     </App>
   )
