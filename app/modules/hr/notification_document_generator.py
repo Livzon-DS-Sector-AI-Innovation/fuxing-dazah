@@ -106,34 +106,19 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
         "3. 不得无故缺席、迟到，到场签到，有特殊情况须提前请假。"
     )
 
-    # ── Para 1: "部门/Dept：___多个空格___签发人/ Issued by：" ──
-    # Template uses spaces as fill-in blanks. Insert department name between the two
-    # labels, leaving the issuer blank for handwriting.
-    p1 = doc.paragraphs[1]
-    if p1.runs:
-        text = p1.runs[0].text
-        # Find the gap between "部门/Dept：" and "签发人"
-        prefix = "部门/Dept："
-        suffix = "签发人/ Issued by："
+    # ── Para 0: department line ──
+    for p_idx in (0, 1):
+        if p_idx < len(doc.paragraphs):
+            p = doc.paragraphs[p_idx]
+            # Clear all runs first
+            for r in p.runs:
+                r.text = ""
+    if len(doc.paragraphs) > 0:
         dept_name = data.issuer_department or data.department or ""
-        # Rebuild: prefix + dept_name + spaces + suffix
-        # Keep some space after dept name for visual separation
-        new_text = f"{prefix}{dept_name}          {suffix}"
-        p1.runs[0].text = new_text
-
-    # ── Para 2: "___spaces___年/Y    ___月/M    ___日/D" ──
-    # Remove /Y /M /D markers, fill with clean date
-    p2 = doc.paragraphs[2]
-    runs = p2.runs
-    d = data.training_date
-    if len(runs) >= 7:
-        runs[0].text = str(d.year)            # year → "2026"
-        runs[1].text = "年"                    # keep "年"
-        runs[2].text = f"  {d.month:02d}  "   # replace "/Y    " with month
-        runs[3].text = "月"                    # keep "月"
-        runs[4].text = f"  {d.day:02d}  "     # replace "/M    " with day
-        runs[5].text = "日"                    # keep "日"
-        runs[6].text = ""                      # remove "/D"
+        doc.paragraphs[0].runs[0].text = f"部门/Dept：{dept_name}          签发人/ Issued by："
+    if len(doc.paragraphs) > 1:
+        d = data.training_date
+        doc.paragraphs[1].runs[0].text = f"{d.year}年{d.month:02d}月{d.day:02d}日"
 
     buf = BytesIO()
     doc.save(buf)

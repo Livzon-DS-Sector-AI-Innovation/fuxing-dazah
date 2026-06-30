@@ -1269,6 +1269,22 @@ async def delete_training_ledger(
 
 # ─── AnnualTrainingPlan Routes ───
 
+@router.post("/annual-training-plans/upload", summary="上传年度培训计划")
+async def upload_annual_training_plan(
+    file: UploadFile,
+    service: EmployeeService = Depends(get_employee_service),
+):
+    """上传 Excel 年度培训计划，按年度+部门自动分类为计划项。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    try:
+        content = await file.read()
+        result = await service.upload_annual_plan(content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(data=result, message=f"新增 {result['created']} 条计划项")
+
+
 @router.get("/annual-training-plans", summary="年度培训计划列表")
 async def list_annual_training_plans(
     year: int | None = Query(None, description="年度筛选"),
@@ -1510,6 +1526,22 @@ async def export_annual_training_plan(
     )
 
 # ─── Trainer Routes ───
+
+
+@router.post("/trainers/upload", summary="上传内训师台账")
+async def upload_trainers(
+    file: UploadFile,
+    service: EmployeeService = Depends(get_employee_service),
+):
+    """上传 Excel 内训师名单，按姓名+部门自动新增或更新。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    try:
+        content = await file.read()
+        result = await service.upload_trainers(content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
 
 
 @router.get("/trainers", summary="内训师台账列表", response_model=TrainerListResponse)
