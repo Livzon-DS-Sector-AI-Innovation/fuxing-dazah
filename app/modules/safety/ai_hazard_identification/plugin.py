@@ -21,8 +21,7 @@
     )
 
     output = await plugin.identify(input_data)
-    print(output.key_defect)
-    print(output.hazard_level)
+    logger.debug("识别结果: key_defect=%s hazard_level=%s", output.key_defect, output.hazard_level)
 """
 
 from __future__ import annotations

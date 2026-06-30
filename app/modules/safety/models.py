@@ -523,6 +523,12 @@ class HazardReport(BaseModel):
     __tablename__ = "hazard_reports"
     __table_args__ = (
         Index("uq_hazard_reports_hazard_no", "hazard_no", unique=True, postgresql_where=text("is_deleted = false")),
+        Index(
+            "uq_hazard_reports_feishu_record_id",
+            "feishu_record_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false AND feishu_record_id IS NOT NULL"),
+        ),
         {"schema": "safety"},
     )
 
@@ -591,7 +597,7 @@ class HazardReport(BaseModel):
     )
     verify_level_2_status: Mapped[str] = mapped_column(
         String(20), default="pending", server_default="pending", nullable=False,
-        comment="分管领导复核状态 (Bitable「分管领导复核」): pending/approved/rejected"
+        comment="分管领导复核状态 (Bitable「分管领导复核」): pending/approved/rejected/no_review_needed"
     )
     verify_level_3_status: Mapped[str] = mapped_column(
         String(20), default="pending", server_default="pending", nullable=False,

@@ -28,7 +28,7 @@ class AttachmentRuleEngine:
         errors = engine.validate(input_data, output)
         if errors:
             for e in errors:
-                print(f"ERROR: {e}")
+                logger.error("规则验证失败: %s", e)
     """
 
     def validate(

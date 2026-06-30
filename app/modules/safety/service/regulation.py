@@ -8,9 +8,10 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.storage import delete_object, is_enabled as minio_enabled
+from app.core.storage import delete_object
+from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.repository import SafetyRepository
-from app.platform.audit.service import record_audit_log
+from app.modules.safety.service._helpers import audit_log
 from app.platform.integrations.ai.client import AIOutputError, AIService
 
 logger = logging.getLogger(__name__)
@@ -38,19 +39,16 @@ class RegulationService:
         new_value: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        try:
-            await record_audit_log(
-                self.session,
-                action=action,
-                user_id=user_id,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                old_value=old_value,
-                new_value=new_value,
-                extra=extra,
-            )
-        except Exception:
-            logger.exception("审计日志记录失败 (%s:%s)", resource_type, action)
+        await audit_log(
+            self.session,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            user_id=user_id,
+            old_value=old_value,
+            new_value=new_value,
+            extra=extra,
+        )
 
     @staticmethod
     def _cleanup_file(file_path: str | None) -> None:

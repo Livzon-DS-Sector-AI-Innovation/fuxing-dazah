@@ -11,6 +11,7 @@
   ② 部门负责人    ← department → 部门 leader
   ③ 分管领导      ← department → 父部门 leader
   ④ 隐患发现人    ← discovered_by_name / discovered_by
+  ⑤ 分管安全员    ← department → DEPT_CONFIG safety_officer
 """
 
 from __future__ import annotations
@@ -234,6 +235,43 @@ class IdentityResolver:
         )
         return self._user_to_person(leader, parent_dept.name)
 
+    async def resolve_safety_officer(
+        self,
+        department_name: str,
+    ) -> ResolvedPerson | None:
+        """按部门名称查找分管安全员 → open_id。
+
+        查找链路（仅配置）：
+          1. DEPT_CONFIG → 命中且有 safety_officer → 用姓名 → resolve_by_name
+          2. 无配置 → 返回 None（不报错，部门可能暂未指定安全员）
+
+        Args:
+            department_name: 部门名称（如 HazardReport.department）
+
+        Returns:
+            ResolvedPerson | None
+        """
+        dept = await self._find_department_by_name(department_name)
+        if dept is None:
+            logger.warning(
+                "resolve_safety_officer: 未找到部门 %r", department_name
+            )
+            return None
+
+        config = DEPARTMENT_CONFIG.get(dept.name)
+        if not config or not config.get("safety_officer"):
+            logger.info(
+                "resolve_safety_officer: 部门 %r 未配置安全员", dept.name
+            )
+            return None
+
+        officer_name = config["safety_officer"]
+        logger.info(
+            "resolve_safety_officer: %r → config safety_officer %r",
+            department_name, officer_name,
+        )
+        return await self.resolve_by_name(officer_name, department_hint=dept.name)
+
     # ── 隐患模型便捷方法 ──────────────────────────────────────
 
     async def resolve_responsible_person(
@@ -286,6 +324,17 @@ class IdentityResolver:
             hazard.discovered_by_name,
             department_hint=hazard.department,
         )
+
+    async def resolve_hazard_safety_officer(
+        self, hazard: HazardReport,
+    ) -> ResolvedPerson | None:
+        """⑤ 分管安全员：hazard.department → DEPT_CONFIG safety_officer → open_id。"""
+        if not hazard.department:
+            logger.warning(
+                "hazard %s: department 为空", hazard.hazard_no,
+            )
+            return None
+        return await self.resolve_safety_officer(hazard.department)
 
     # ═══════════════════════════════════════════════════════════
     # 内部方法
