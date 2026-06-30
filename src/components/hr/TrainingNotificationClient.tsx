@@ -28,7 +28,6 @@ import {
   fetchTrainingLedgerPages,
   generateTrainingNotification,
   generateTrainingSignInSheet,
-  generateTrainingEvaluation,
   createTrainingLedger,
   createTrainingLedgerPage,
   sendTrainingNotification,
@@ -87,7 +86,6 @@ export default function TrainingNotificationClient() {
   const [nameToNumberMap, setNameToNumberMap] = useState<Record<string, string>>({})
   const [submittingWord, setSubmittingWord] = useState(false)
   const [submittingExcel, setSubmittingExcel] = useState(false)
-  const [submittingEval, setSubmittingEval] = useState(false)
   const [addingToLedger, setAddingToLedger] = useState(false)
   const [sendingNotify, setSendingNotify] = useState(false)
   const [trainerDept, setTrainerDept] = useState<string | undefined>(undefined)
@@ -245,38 +243,6 @@ export default function TrainingNotificationClient() {
       message.error(err.message || '生成失败')
     } finally {
       setSubmittingExcel(false)
-    }
-  }
-
-  const handleExportEvaluation = async () => {
-    const values = await form.validateFields()
-    setSubmittingEval(true)
-    try {
-      let durationHours: number | undefined = undefined
-      if (values.training_time && values.training_time.length === 2) {
-        const start = dayjs(values.training_time[0])
-        const end = dayjs(values.training_time[1])
-        const diffMinutes = end.diff(start, 'minute')
-        durationHours = Math.round(diffMinutes / 30) / 2
-      }
-
-      const payload = {
-        subject: values.subject,
-        training_date: values.training_date.format('YYYY-MM-DD'),
-        training_time_start: values.training_time ? dayjs(values.training_time[0]).format('HH:mm') : undefined,
-        training_time_end: values.training_time ? dayjs(values.training_time[1]).format('HH:mm') : undefined,
-        duration_hours: durationHours,
-        training_method: values.training_method,
-        trainer: values.trainer,
-        trainee_names: values.employee_names || [],
-        assessment_method: values.assessment_method,
-      }
-      await generateTrainingEvaluation(payload)
-      message.success('培训效果评估表已生成')
-    } catch (err: any) {
-      message.error(err.message || '生成失败')
-    } finally {
-      setSubmittingEval(false)
     }
   }
 
@@ -672,13 +638,6 @@ export default function TrainingNotificationClient() {
                 loading={submittingExcel}
               >
                 导出签到表
-              </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleExportEvaluation}
-                loading={submittingEval}
-              >
-                导出培训效果评估表
               </Button>
               <Button
                 type="default"

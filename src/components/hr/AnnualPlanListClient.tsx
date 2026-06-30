@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Row, Col, Popconfirm, Spin, Modal, Form, Select, InputNumber } from 'antd'
-import { PlusOutlined, DeleteOutlined, EditOutlined, FileTextOutlined } from '@ant-design/icons'
+import { App, Button, Card, Row, Col, Popconfirm, Spin, Modal, Form, Select, InputNumber, Upload } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, UploadOutlined } from '@ant-design/icons'
 import Link from 'next/link'
 import { AnnualTrainingPlan } from '@/types/hr'
 import { fetchAnnualTrainingPlans, fetchDepartments } from '@/lib/api/hr'
@@ -109,6 +109,19 @@ export default function AnnualPlanListClient() {
         <Button type="primary" icon={<PlusOutlined />} onClick={openModal}>
           新建年度计划
         </Button>
+        <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+          const fd = new FormData(); fd.append('file', file as File)
+          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+          try {
+            const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, { method: 'POST', body: fd, credentials: 'include' })
+            const d = await res.json()
+            if (res.ok) message.success(d.message)
+            else message.error(d.message || '上传失败')
+            loadPlans()
+          } catch { message.error('上传失败') }
+        }}>
+          <Button icon={<UploadOutlined />}>上传计划明细</Button>
+        </Upload>
       </div>
 
       {loading ? (
