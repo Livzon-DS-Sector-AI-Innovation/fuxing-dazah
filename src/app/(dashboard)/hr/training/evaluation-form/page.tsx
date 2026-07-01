@@ -14,6 +14,14 @@ export default function EvaluationFormPage() {
   const [pendingList, setPendingList] = useState<any[]>([])
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
+  // 实时监听表单字段
+  const watchedSubject = Form.useWatch('subject', form)
+  const watchedDate = Form.useWatch('training_date', form)
+  const watchedMethod = Form.useWatch('training_method', form)
+  const watchedTrainer = Form.useWatch('trainer', form)
+  const watchedAssessment = Form.useWatch('assessment_method', form)
+  const watchedExpected = Form.useWatch('expected_count', form)
+
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/hr/training-evaluations/pending`).then(r => r.json())
       .then(res => setPendingList(res.data || []))
@@ -131,14 +139,14 @@ export default function EvaluationFormPage() {
       {/* 实时预览 */}
       <Card title="📋 培训效果评估表预览" className="mt-4 print:break-before-page">
         <EvaluationPreview
-          topicStr={form.getFieldValue('subject') || ''}
-          dateStr={form.getFieldValue('training_date') || ''}
-          trainingMethodValue={form.getFieldValue('training_method') || ''}
-          trainerValue={form.getFieldValue('trainer') || ''}
-          assessmentMethodValue={form.getFieldValue('assessment_method') || ''}
+          topicStr={watchedSubject || ''}
+          dateStr={watchedDate || ''}
+          trainingMethodValue={watchedMethod || ''}
+          trainerValue={watchedTrainer || ''}
+          assessmentMethodValue={watchedAssessment || ''}
           deptValue=""
           traineeDepts={[]}
-          previewNames={Array(form.getFieldValue('expected_count') || 0).fill({})}
+          previewNames={Array(watchedExpected || 0).fill({})}
           evalDurationHours=""
         />
       </Card>

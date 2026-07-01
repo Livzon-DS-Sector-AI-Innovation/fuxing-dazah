@@ -162,13 +162,20 @@ export default function AnnualPlanDetailClient({
     }
   }
 
-  const handleDelete = (item: AnnualTrainingPlanItem) => {
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+
+  const handleDelete = async (item: AnnualTrainingPlanItem) => {
     if (item.id.startsWith('new-')) {
       setItems((prev) => prev.filter((i) => i.id !== item.id))
       setEditingId(null)
       return
     }
-    setItems((prev) => prev.filter((i) => i.id !== item.id))
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${planId}/items/${item.id}`, { method: 'DELETE', credentials: 'include' })
+      if (!res.ok) throw new Error('删除失败')
+      setItems((prev) => prev.filter((i) => i.id !== item.id))
+      message.success('已删除')
+    } catch { message.error('删除失败') }
   }
 
   const updateField = (field: keyof AnnualTrainingPlanItem, value: any) => {

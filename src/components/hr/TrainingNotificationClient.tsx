@@ -326,6 +326,18 @@ export default function TrainingNotificationClient() {
               source_type: 'notification',
             })
           }
+          // 同步写入评估补录表（培训内容+部门+应到人数）
+          try {
+            await fetch(`${API_BASE}/api/v1/hr/training-evaluations/upsert`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                training_content: subject,
+                department: department,
+                expected_count: targets.length,
+              }),
+            })
+          } catch {}
           message.success(
             `已成功为 ${targets.map((t) => t.name).join('、')} 添加培训台账记录`
           )

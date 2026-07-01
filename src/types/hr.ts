@@ -631,6 +631,8 @@ export interface ExamGenerateResponse {
   data: {
     choice_questions: ChoiceQuestion[]
     true_false_questions: TrueFalseQuestion[]
+    multi_choice_questions?: ChoiceQuestion[]
+    fill_blank_questions?: TrueFalseQuestion[]
   }
 }
 
@@ -641,6 +643,8 @@ export interface ExamExportData {
   assessment_date: string
   choice_questions: ChoiceQuestion[]
   true_false_questions: TrueFalseQuestion[]
+  multi_choice_questions?: ChoiceQuestion[]
+  fill_blank_questions?: TrueFalseQuestion[]
 }
 
 // ─── AnnualTrainingPlan Types ───

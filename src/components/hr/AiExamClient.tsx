@@ -52,6 +52,8 @@ export default function AiExamClient() {
   // 题目数据
   const [choiceQuestions, setChoiceQuestions] = useState<ChoiceQuestion[]>([])
   const [trueFalseQuestions, setTrueFalseQuestions] = useState<TrueFalseQuestion[]>([])
+  const [multiQuestions, setMultiQuestions] = useState<ChoiceQuestion[]>([])
+  const [fillQuestions, setFillQuestions] = useState<TrueFalseQuestion[]>([])
 
   // 导出状态
   const [exporting, setExporting] = useState(false)
@@ -61,8 +63,10 @@ export default function AiExamClient() {
   const [choiceCount, setChoiceCount] = useState(5)
   const [tfEnabled, setTfEnabled] = useState(true)
   const [tfCount, setTfCount] = useState(5)
-  const [qaEnabled, setQaEnabled] = useState(false)
-  const [qaCount, setQaCount] = useState(3)
+  const [multiEnabled, setMultiEnabled] = useState(true)
+  const [multiCount, setMultiCount] = useState(3)
+  const [fillEnabled, setFillEnabled] = useState(true)
+  const [fillCount, setFillCount] = useState(3)
 
   const handleUploadChange = (info: { fileList: UploadFile[] }) => {
     setFileList(info.fileList.slice(-1)) // 只保留最后一个文件
@@ -79,18 +83,20 @@ export default function AiExamClient() {
       const config = {
         choice_count: choiceEnabled ? choiceCount : 0,
         true_false_count: tfEnabled ? tfCount : 0,
-        qa_count: qaEnabled ? qaCount : 0,
+        multi_choice_count: multiEnabled ? multiCount : 0,
+        fill_blank_count: fillEnabled ? fillCount : 0,
       }
       const res: ExamGenerateResponse = await generateExamQuestions(
         fileList[0].originFileObj,
         config
       )
-      if (res.data?.choice_questions) {
-        setChoiceQuestions(res.data.choice_questions)
-      }
-      if (res.data?.true_false_questions) {
-        setTrueFalseQuestions(res.data.true_false_questions)
-      }
+      if (res.data?.choice_questions) setChoiceQuestions(res.data.choice_questions)
+      if (res.data?.true_false_questions) setTrueFalseQuestions(res.data.true_false_questions)
+      if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
+      console.log('API返回:', res.data)
+      console.log('多选:', res.data?.multi_choice_questions?.length, '填空:', res.data?.fill_blank_questions?.length)
+      if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
+      if (res.data?.fill_blank_questions) setFillQuestions(res.data.fill_blank_questions)
       message.success('试卷题目生成成功')
     } catch (err: any) {
       message.error(err.message || '出题失败')
@@ -108,7 +114,7 @@ export default function AiExamClient() {
       message.warning('请输入出卷人')
       return
     }
-    if (choiceQuestions.length === 0 && trueFalseQuestions.length === 0) {
+    if (choiceQuestions.length === 0 && trueFalseQuestions.length === 0 && multiQuestions.length === 0 && fillQuestions.length === 0) {
       message.warning('请先生成题目')
       return
     }
@@ -122,6 +128,8 @@ export default function AiExamClient() {
         assessment_date: assessmentDate,
         choice_questions: choiceQuestions,
         true_false_questions: trueFalseQuestions,
+        multi_choice_questions: multiQuestions,
+        fill_blank_questions: fillQuestions,
       }
       const blob = await exportExam(data)
       const url = window.URL.createObjectURL(blob)
@@ -242,9 +250,14 @@ export default function AiExamClient() {
               {tfEnabled && <InputNumber min={1} max={20} value={tfCount} onChange={v => setTfCount(v || 1)} size="small" style={{ width: 60 }} />}
             </Space>
             <Space>
-              <Switch checked={qaEnabled} onChange={setQaEnabled} size="small" />
-              <span>简答题</span>
-              {qaEnabled && <InputNumber min={1} max={10} value={qaCount} onChange={v => setQaCount(v || 1)} size="small" style={{ width: 60 }} />}
+              <Switch checked={multiEnabled} onChange={setMultiEnabled} size="small" />
+              <span>多选题</span>
+              {multiEnabled && <InputNumber min={1} max={10} value={multiCount} onChange={v => setMultiCount(v || 1)} size="small" style={{ width: 60 }} />}
+            </Space>
+            <Space>
+              <Switch checked={fillEnabled} onChange={setFillEnabled} size="small" />
+              <span>填空题</span>
+              {fillEnabled && <InputNumber min={1} max={10} value={fillCount} onChange={v => setFillCount(v || 1)} size="small" style={{ width: 60 }} />}
             </Space>
           </Space>
 
@@ -262,7 +275,7 @@ export default function AiExamClient() {
       </Card>
 
       {/* ─── 题目展示与编辑区域 ─── */}
-      {(choiceQuestions.length > 0 || trueFalseQuestions.length > 0) && (
+      {(choiceQuestions.length > 0 || trueFalseQuestions.length > 0 || multiQuestions.length > 0 || fillQuestions.length > 0) && (
         <Card
           title="试卷预览（可直接编辑）"
           className="shadow-sm"
@@ -380,11 +393,82 @@ export default function AiExamClient() {
               </>
             )}
           </Spin>
+
+            {/* 多选题 */}
+            {multiQuestions.length > 0 && (
+              <>
+                <Divider />
+                <Title level={5}>三、多选题（共{multiQuestions.length * 10}分，每题10分）</Title>
+                <div className="space-y-4">
+                  {multiQuestions.map((item, index) => (
+                    <div key={index} className="border border-gray-800 p-3 rounded">
+                      <div className="flex items-start gap-2 mb-2">
+                        <Text className="font-bold whitespace-nowrap mt-1">{index + 1}.</Text>
+                        <Input.TextArea value={item.question} onChange={(e) => {
+                          const next = [...multiQuestions]
+                          next[index] = { ...next[index], question: e.target.value }
+                          setMultiQuestions(next)
+                        }} autoSize={{ minRows: 1, maxRows: 4 }} className="flex-1" />
+                      </div>
+                      {item.options?.map((opt, oi) => (
+                        <div key={oi} className="pl-6 flex items-center gap-2 mb-1">
+                          <Text className="whitespace-nowrap">{opt.label}.</Text>
+                          <Input value={opt.text} onChange={(e) => {
+                            const next = [...multiQuestions]
+                            const opts = [...next[index].options!]
+                            opts[oi] = { ...opts[oi], text: e.target.value }
+                            next[index] = { ...next[index], options: opts }
+                            setMultiQuestions(next)
+                          }} className="flex-1" size="small" />
+                        </div>
+                      ))}
+                      <div className="pl-6 pb-2">
+                        <Text>答案：</Text>
+                        <Input value={item.answer || ''} onChange={(e) => {
+                          const next = [...multiQuestions]
+                          next[index] = { ...next[index], answer: e.target.value }
+                          setMultiQuestions(next)
+                        }} placeholder="A,B" style={{ width: 120 }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {/* 填空题 */}
+            {fillQuestions.length > 0 && (
+              <>
+                <Divider />
+                <Title level={5}>四、填空题（共{fillQuestions.length * 10}分，每题10分）</Title>
+                <div className="space-y-4">
+                  {fillQuestions.map((item, index) => (
+                    <div key={index} className="border border-gray-800 p-3 rounded">
+                      <div className="flex items-start gap-2 mb-2">
+                        <Text className="font-bold whitespace-nowrap mt-1">{index + 1}.</Text>
+                        <Input.TextArea value={item.question} onChange={(e) => {
+                          const next = [...fillQuestions]
+                          next[index] = { ...next[index], question: e.target.value }
+                          setFillQuestions(next)
+                        }} autoSize={{ minRows: 1, maxRows: 4 }} className="flex-1" />
+                      </div>
+                      <div className="pl-6">
+                        <Text>答案：</Text>
+                        <Input value={item.answer || ''} onChange={(e) => {
+                          const next = [...fillQuestions]
+                          next[index] = { ...next[index], answer: e.target.value }
+                          setFillQuestions(next)
+                        }} placeholder="参考答案" style={{ width: 200 }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
         </Card>
       )}
 
       {/* ─── 空状态 ─── */}
-      {choiceQuestions.length === 0 && trueFalseQuestions.length === 0 && !generating && (
+      {choiceQuestions.length === 0 && trueFalseQuestions.length === 0 && multiQuestions.length === 0 && fillQuestions.length === 0 && !generating && (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <FileTextOutlined className="text-5xl mb-4" />
           <p>上传培训文件并点击「AI 出题」生成试卷</p>
