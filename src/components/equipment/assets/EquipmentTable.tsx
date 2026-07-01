@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useEffect, useRef, type CSSProperties } from 'react'
 import { App, Table, Space, Input, Select, Button } from 'antd'
-import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, EyeOutlined } from '@ant-design/icons'
+import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, ImportOutlined, EyeOutlined } from '@ant-design/icons'
 import { Equipment, EquipmentStatus } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
@@ -27,12 +27,13 @@ const statusOptions = Object.keys(statusConfig).map(value => ({ label: value, va
 interface EquipmentTableProps {
   loading?: boolean
   onPageChange: (page: number, pageSize: number) => void
+  onImportClick?: () => void
   /** 变化时重置分页到第一页 */
   resetKey: number
 }
 
 
-export function EquipmentTable({ loading = false, onPageChange, resetKey }: EquipmentTableProps) {
+export function EquipmentTable({ loading = false, onPageChange, onImportClick, resetKey }: EquipmentTableProps) {
   const { message, modal } = App.useApp()
   const {
     equipments, total,
@@ -146,6 +147,9 @@ export function EquipmentTable({ loading = false, onPageChange, resetKey }: Equi
         <Input placeholder="搜索设备编号或名称" prefix={<SearchOutlined style={{ color: '#a4a097' }} />}
           style={{ width: 240 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} allowClear />
         <div style={{ flex: 1 }} />
+        {hasPermission('equipment:asset:import') && (
+          <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
+        )}
         {hasPermission('equipment:asset:create') && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEquipmentDrawer()}>新增设备</Button>
         )}
