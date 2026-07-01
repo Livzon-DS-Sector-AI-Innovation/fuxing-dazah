@@ -439,3 +439,45 @@ export async function updateClaimTimeoutConfig(data: { emergency?: number; high?
   revalidatePath('/equipment')
   return result
 }
+
+// ==================== Excel 导入 ====================
+export interface ImportRowError {
+  row: number
+  message: string
+}
+
+export interface ImportResult {
+  imported: number
+  skipped: number
+  errors: ImportRowError[]
+  warnings: ImportRowError[]
+}
+
+export async function downloadImportTemplate(): Promise<string> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${API_BASE_URL}/api/v1/equipment/equipments/import/template`, {
+    headers: authHeaders,
+  })
+  if (!res.ok) throw new Error('下载模板失败')
+  const blob = await res.blob()
+  const arrayBuffer = await blob.arrayBuffer()
+  return Buffer.from(arrayBuffer).toString('base64')
+}
+
+export async function importEquipments(formData: FormData): Promise<ImportResult> {
+  const authHeaders = await getAuthHeaders()
+  // 构建新的 FormData，避免 Next.js 序列化问题
+  const res = await fetch(`${API_BASE_URL}/api/v1/equipment/equipments/import`, {
+    method: 'POST',
+    headers: authHeaders,
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).message || '导入失败')
+  }
+  const json = await res.json()
+  const data = json.data ?? json
+  revalidatePath('/equipment')
+  return data as ImportResult
+}

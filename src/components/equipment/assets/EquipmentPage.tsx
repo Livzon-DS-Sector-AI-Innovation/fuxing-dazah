@@ -13,6 +13,7 @@ import { EquipmentTable } from './EquipmentTable'
 import { CategoryTree } from '../shared/CategoryTree'
 import { LocationTree } from '../shared/LocationTree'
 import { EquipmentDrawer } from './EquipmentDrawer'
+import { EquipmentImportModal } from './EquipmentImportModal'
 import { CategoryDrawer } from '../shared/CategoryDrawer'
 import { LocationDrawer } from '../shared/LocationDrawer'
 import { RepairDrawer } from '../maintenance/RepairDrawer'
@@ -24,6 +25,7 @@ interface EquipmentPageProps {
   initialTotal: number
   initialStatistics: EquipmentStatistics
   initialDepartments: import('@/lib/api/equipment').DepartmentOption[]
+  initialUserDepartmentId?: string | null
 }
 
 const SIDEBAR_WIDTH = 280
@@ -35,6 +37,7 @@ export function EquipmentPage({
   initialTotal,
   initialStatistics,
   initialDepartments,
+  initialUserDepartmentId,
 }: EquipmentPageProps) {
   const {
     categories,
@@ -61,6 +64,7 @@ export function EquipmentPage({
   } = useEquipmentStore()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [importModalOpen, setImportModalOpen] = useState(false)
   const [resetKey, setResetKey] = useState(0)
 
   // 初始化 store 数据（包含 SSR 数据）
@@ -244,13 +248,23 @@ export function EquipmentPage({
 
             {/* 表格区域 */}
             <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
-              <EquipmentTable loading={loading} resetKey={resetKey} onPageChange={(p, ps) => fetchData(p, ps)} />
+              <EquipmentTable
+                loading={loading}
+                resetKey={resetKey}
+                onPageChange={(p, ps) => fetchData(p, ps)}
+                onImportClick={() => setImportModalOpen(true)}
+              />
             </div>
           </div>
         </div>
 
         {/* 抽屉组件 */}
-        <EquipmentDrawer onRefresh={() => { fetchData(1, 20); setResetKey(k => k + 1) }} />
+        <EquipmentDrawer onRefresh={() => { fetchData(1, 20); setResetKey(k => k + 1) }} defaultDepartmentId={initialUserDepartmentId} />
+        <EquipmentImportModal
+          open={importModalOpen}
+          onClose={() => setImportModalOpen(false)}
+          onImported={() => { fetchData(1, 20); setResetKey(k => k + 1) }}
+        />
         <CategoryDrawer onRefresh={refreshCategoriesAndLocations} />
         <LocationDrawer onRefresh={refreshCategoriesAndLocations} />
         <RepairDrawer

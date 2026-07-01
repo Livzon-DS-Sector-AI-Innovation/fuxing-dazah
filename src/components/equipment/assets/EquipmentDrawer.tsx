@@ -57,9 +57,10 @@ interface StaffOption {
 
 interface EquipmentDrawerProps {
   onRefresh?: () => void
+  defaultDepartmentId?: string | null
 }
 
-export function EquipmentDrawer({ onRefresh }: EquipmentDrawerProps) {
+export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDrawerProps) {
   const [form] = Form.useForm()
   const { message } = App.useApp()
   const [submitting, setSubmitting] = useState(false)
@@ -141,6 +142,11 @@ export function EquipmentDrawer({ onRefresh }: EquipmentDrawerProps) {
       } else {
         form.resetFields()
         setStaffOptions([])
+        // 新建设备时预填登录用户所在部门，负责人由 handleDepartmentChange 自动填入部门负责人
+        if (defaultDepartmentId) {
+          form.setFieldsValue({ department_id: defaultDepartmentId })
+          handleDepartmentChange(defaultDepartmentId)
+        }
       }
     }
   }, [equipmentDrawerOpen, editingEquipment, form])
@@ -154,13 +160,11 @@ export function EquipmentDrawer({ onRefresh }: EquipmentDrawerProps) {
     const dept = departments.find(d => d.id === deptId)
     if (dept?.leader_id) {
       form.setFieldsValue({ responsible_person_id: dept.leader_id })
-      // 同时确保 leader_id 在 staffOptions 中可见
-      if (!staffOptions.some(o => o.value === dept.leader_id)) {
-        setStaffOptions(prev => [...prev, {
-          label: `${dept.leader_name ?? ''}${dept.name ? ` - ${dept.name}` : ''}`,
-          value: dept.leader_id!,
-        }])
-      }
+      // 使用 functional updater 避免 stale closure：始终替换 leader 选项
+      setStaffOptions(prev => {
+        const label = `${dept.leader_name ?? ''}${dept.name ? ` - ${dept.name}` : ''}`
+        return [...prev.filter(o => o.value !== dept.leader_id), { label, value: dept.leader_id! }]
+      })
     } else {
       form.setFieldsValue({ responsible_person_id: undefined })
     }

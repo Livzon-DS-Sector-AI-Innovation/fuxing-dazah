@@ -3,6 +3,7 @@ import { EquipmentPage } from '@/components/equipment'
 import { fetchCategoryTree, fetchLocationTree, fetchEquipments, fetchEquipmentStatistics, fetchDepartments } from '@/lib/api/equipment'
 import type { DepartmentOption } from '@/lib/api/equipment'
 import { EquipmentCategory, Location, Equipment, EquipmentStatistics } from '@/types/equipment'
+import { getCurrentUser } from '@/actions/auth'
 
 // 强制动态渲染：不在构建时预渲染，每次请求都实时从后端获取数据
 export const dynamic = 'force-dynamic'
@@ -13,6 +14,13 @@ const defaultStatistics: EquipmentStatistics = {
   by_status: {} as Record<string, number>,
   by_category: {} as Record<string, number>,
   by_location: {} as Record<string, number>,
+}
+
+/** 根据用户部门名称匹配部门列表中的 ID */
+function matchUserDepartment(departments: DepartmentOption[], userDeptName: string | null): string | null {
+  if (!userDeptName) return null
+  const dept = departments.find(d => d.name === userDeptName)
+  return dept?.id ?? null
 }
 
 export default async function EquipmentPageWrapper() {
@@ -30,6 +38,7 @@ export default async function EquipmentPageWrapper() {
     fetchEquipments({ page: 1, page_size: 20 }),
     fetchEquipmentStatistics(),
     fetchDepartments(),
+    getCurrentUser(),
   ])
 
   if (results[0].status === 'fulfilled') {
@@ -59,6 +68,12 @@ export default async function EquipmentPageWrapper() {
     console.warn('加载部门列表失败:', results[4].reason)
   }
 
+  // 获取当前用户部门，匹配部门 ID 用于新建设备时预填
+  let userDepartmentId: string | null = null
+  if (results[5].status === 'fulfilled' && results[5].value) {
+    userDepartmentId = matchUserDepartment(departments, results[5].value.department)
+  }
+
   return (
     <EquipmentPage
       initialCategories={categories}
@@ -67,6 +82,7 @@ export default async function EquipmentPageWrapper() {
       initialTotal={total}
       initialStatistics={statistics}
       initialDepartments={departments}
+      initialUserDepartmentId={userDepartmentId}
     />
   )
 }

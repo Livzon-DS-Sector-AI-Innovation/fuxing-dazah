@@ -11,6 +11,7 @@ export { StatsCards } from './assets/StatsCards'
 export { EquipmentTable } from './assets/EquipmentTable'
 export { EquipmentDrawer } from './assets/EquipmentDrawer'
 export { EquipmentDetailDrawer } from './assets/EquipmentDetailDrawer'
+export { EquipmentImportModal } from './assets/EquipmentImportModal'
 
 // ==================== maintenance（维修维护） ====================
 export { MaintenancePage } from './maintenance/MaintenancePage'
