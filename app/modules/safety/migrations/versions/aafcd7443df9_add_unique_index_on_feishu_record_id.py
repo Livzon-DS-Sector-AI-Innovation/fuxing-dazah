@@ -6,6 +6,8 @@
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -15,15 +17,28 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _index_exists(index_name: str, table: str, schema: str) -> bool:
+    conn = op.get_bind()
+    row = conn.execute(
+        sa.text(
+            "SELECT 1 FROM pg_indexes "
+            "WHERE schemaname = :schema AND tablename = :table AND indexname = :index"
+        ),
+        {"schema": schema, "table": table, "index": index_name},
+    ).first()
+    return row is not None
+
+
 def upgrade() -> None:
-    op.create_index(
-        "uq_hazard_reports_feishu_record_id",
-        "hazard_reports",
-        ["feishu_record_id"],
-        unique=True,
-        schema="safety",
-        postgresql_where="is_deleted = false AND feishu_record_id IS NOT NULL",
-    )
+    if not _index_exists("uq_hazard_reports_feishu_record_id", "hazard_reports", "safety"):
+        op.create_index(
+            "uq_hazard_reports_feishu_record_id",
+            "hazard_reports",
+            ["feishu_record_id"],
+            unique=True,
+            schema="safety",
+            postgresql_where="is_deleted = false AND feishu_record_id IS NOT NULL",
+        )
 
 
 def downgrade() -> None:
