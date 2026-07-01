@@ -1,3 +1,5 @@
+import { Suspense } from 'react'
+import { Spin } from 'antd'
 import TrainingNotificationClient from '@/components/hr/TrainingNotificationClient'
 
 export default function TrainingNotificationPage() {
@@ -12,7 +14,9 @@ export default function TrainingNotificationPage() {
         </p>
       </div>
 
-      <TrainingNotificationClient />
+      <Suspense fallback={<div className="flex justify-center py-20"><Spin size="large" /></div>}>
+        <TrainingNotificationClient />
+      </Suspense>
     </div>
   )
 }
