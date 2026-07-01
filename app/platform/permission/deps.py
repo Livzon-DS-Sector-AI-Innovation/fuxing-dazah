@@ -8,7 +8,6 @@ from fastapi import Depends
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.core.exceptions import AppException, ForbiddenException
 from app.platform.identity.deps import CurrentUser
@@ -64,13 +63,13 @@ def require_permission(*codes: str) -> Callable:
 
 async def require_admin(
     user: User = Depends(require_user),
-    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """要求用户是管理员（配置文件指定 或 拥有 super_admin 角色）。"""
-    if user.employee_no in settings.ADMIN_EMPLOYEE_NOS:
-        return user
-    # 也检查是否被分配了 super_admin 角色
+    """要求用户拥有 super_admin 角色。
+
+    ADMIN_EMPLOYEE_NOS 仅用于启动引导（bootstrap），运行时以角色为准。
+    超管可以移除其他超管的角色，被移除者立即失去管理权限。
+    """
     user_perms = await get_user_permissions(str(user.id), db)
     if "permission:role:manage" in user_perms:
         return user

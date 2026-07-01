@@ -148,8 +148,12 @@ async def complete_work_order_by_no(
         detail = repair_detail or "通过飞书机器人完成"
         data = WorkOrderComplete(repair_detail=detail)
 
+        from app.modules.equipment.deps import EquipmentAccessContext
+
+        ctx = EquipmentAccessContext(user=user, data_scope="all")
+
         try:
-            completed_wo = await complete_work_order(db, wo.id, data)
+            completed_wo = await complete_work_order(db, wo.id, data, ctx)
             await db.commit()
         except Exception as e:
             logger.exception("完成工单失败: %s", e)

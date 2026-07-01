@@ -316,7 +316,11 @@ async def operate_work_order(
         repair_detail: 维修过程描述，action=complete 时必需
     """
     db = get_db()
-    await resolve_user(db, operator_id)
+    user = await resolve_user(db, operator_id)
+
+    from app.modules.equipment.deps import EquipmentAccessContext
+
+    ctx = EquipmentAccessContext(user=user, data_scope="all")
 
     if action not in ("start", "complete"):
         raise ValueError(f"无效的操作类型 '{action}'，可选值：start / complete")
@@ -325,7 +329,7 @@ async def operate_work_order(
     wo = await get_work_order_by_id(db, wo_uuid)
 
     if action == "start":
-        result = await start_work_order(db, wo.id)
+        result = await start_work_order(db, wo.id, ctx)
         return {
             "success": True,
             "work_order_no": result.work_order_no,
@@ -339,7 +343,7 @@ async def operate_work_order(
     from app.modules.equipment.schemas.work_order import WorkOrderComplete
 
     data = WorkOrderComplete(repair_detail=repair_detail.strip())
-    result = await complete_work_order(db, wo.id, data)
+    result = await complete_work_order(db, wo.id, data, ctx)
     return {
         "success": True,
         "work_order_no": result.work_order_no,
@@ -481,6 +485,10 @@ async def list_inspection_tasks(
     db = get_db()
     user = await resolve_user(db, operator_id)
 
+    from app.modules.equipment.deps import EquipmentAccessContext
+
+    ctx = EquipmentAccessContext(user=user, data_scope="all")
+
     if status:
         valid_statuses = {"待执行", "执行中", "已完成", "已关闭"}
         if status not in valid_statuses:
@@ -490,6 +498,7 @@ async def list_inspection_tasks(
 
     tasks, _total = await get_inspection_tasks(
         db,
+        ctx,
         assigned_to=user.id,
         status=status,
         page=1,
@@ -524,7 +533,11 @@ async def update_inspection_task(
         remark: 备注说明，action=close 时作为关闭原因
     """
     db = get_db()
-    await resolve_user(db, operator_id)
+    user = await resolve_user(db, operator_id)
+
+    from app.modules.equipment.deps import EquipmentAccessContext
+
+    ctx = EquipmentAccessContext(user=user, data_scope="all")
 
     if action not in ("start", "complete", "close"):
         raise ValueError(f"无效的操作类型 '{action}'，可选值：start / complete / close")
@@ -535,9 +548,9 @@ async def update_inspection_task(
     old_status = task.status
 
     if action == "start":
-        result = await start_inspection_task(db, task_uuid)
+        result = await start_inspection_task(db, task_uuid, ctx)
     elif action == "complete":
-        result = await complete_inspection_task(db, task_uuid)
+        result = await complete_inspection_task(db, task_uuid, ctx)
     else:
         result = await close_inspection_task(db, task_uuid, remark=remark)
 

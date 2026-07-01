@@ -24,11 +24,11 @@ class EquipmentCategory(BaseModel):
 
     __tablename__ = "equipment_categories"
     __table_args__ = (
-        # 部分唯一索引：仅对未删除的记录做 code 唯一性检查
-        # 解决软删除后同名 code 无法再次删除的问题
+        # 部分唯一索引：仅对未删除的记录做 (code, department_id) 唯一性检查
         Index(
-            "uq_equipment_categories_code",
+            "uq_equipment_categories_code_dept",
             "code",
+            "department_id",
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
@@ -40,6 +40,9 @@ class EquipmentCategory(BaseModel):
     )
     code: Mapped[str] = mapped_column(
         String(50), comment="分类代码"
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="归属部门ID，逻辑引用 identity.departments.id"
     )
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("equipment.equipment_categories.id"),
@@ -67,10 +70,11 @@ class Location(BaseModel):
 
     __tablename__ = "locations"
     __table_args__ = (
-        # 部分唯一索引：仅对未删除的记录做 code 唯一性检查
+        # 部分唯一索引：仅对未删除的记录做 (code, department_id) 唯一性检查
         Index(
-            "uq_locations_code",
+            "uq_locations_code_dept",
             "code",
+            "department_id",
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
@@ -82,6 +86,9 @@ class Location(BaseModel):
     )
     code: Mapped[str] = mapped_column(
         String(50), comment="位置代码"
+    )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="归属部门ID，逻辑引用 identity.departments.id"
     )
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("equipment.locations.id"),

@@ -222,3 +222,20 @@ class EquipmentStatistics(BaseModel):
     by_status: dict[str, int]
     by_category: dict[str, int]
     by_location: dict[str, int]
+
+
+# ==================== Excel 导入 ====================
+class ImportRowError(BaseModel):
+    """单行导入错误"""
+
+    row: int = Field(..., description="Excel 行号（从 2 开始，第 1 行为表头）")
+    message: str = Field(..., description="错误描述")
+
+
+class EquipmentImportResponse(BaseModel):
+    """Excel 导入结果"""
+
+    imported: int = Field(..., description="成功导入数量")
+    skipped: int = Field(..., description="跳过数量")
+    errors: list[ImportRowError] = Field(default_factory=list, description="错误明细")
+    warnings: list[ImportRowError] = Field(default_factory=list, description="警告明细")

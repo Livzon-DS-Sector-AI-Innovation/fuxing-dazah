@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import service
+from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
 from app.modules.equipment.schemas import (
     CalibrationPlanCreate,
     CalibrationPlanResponse,
@@ -16,8 +17,6 @@ from app.modules.equipment.schemas import (
     CalibrationRecordCreate,
     CalibrationRecordResponse,
 )
-from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
 
 router = APIRouter()
 
@@ -27,9 +26,11 @@ router = APIRouter()
 async def create_calibration_plan(
     data: CalibrationPlanCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:create")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:create"),
+    ),
 ) -> JSONResponse:
-    plan = await service.create_calibration_plan(db, data)
+    plan = await service.create_calibration_plan(db, data, ctx)
     return success_response(data=CalibrationPlanResponse.model_validate(plan))
 
 
@@ -40,10 +41,12 @@ async def list_calibration_plans(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     plans, total = await service.get_calibration_plans(
-        db, equipment_id=equipment_id, status=status,
+        db, ctx=ctx, equipment_id=equipment_id, status=status,
         page=page, page_size=page_size,
     )
     return paginated_response(
@@ -56,9 +59,11 @@ async def list_calibration_plans(
 async def get_overdue_plans(
     days: int = Query(30, ge=1, description="提前天数"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
-    plans = await service.get_overdue_calibration_plans(db, days)
+    plans = await service.get_overdue_calibration_plans(db, ctx, days)
     return success_response(
         data=[CalibrationPlanResponse.model_validate(p) for p in plans]
     )
@@ -68,7 +73,9 @@ async def get_overdue_plans(
 async def get_calibration_plan(
     plan_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     plan = await service.get_calibration_plan_by_id(db, plan_id)
     return success_response(data=CalibrationPlanResponse.model_validate(plan))
@@ -79,9 +86,11 @@ async def update_calibration_plan(
     plan_id: uuid.UUID,
     data: CalibrationPlanUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:update"),
+    ),
 ) -> JSONResponse:
-    plan = await service.update_calibration_plan(db, plan_id, data)
+    plan = await service.update_calibration_plan(db, plan_id, data, ctx)
     return success_response(data=CalibrationPlanResponse.model_validate(plan))
 
 
@@ -89,9 +98,11 @@ async def update_calibration_plan(
 async def delete_calibration_plan(
     plan_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:delete")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:delete"),
+    ),
 ) -> JSONResponse:
-    await service.delete_calibration_plan(db, plan_id)
+    await service.delete_calibration_plan(db, plan_id, ctx)
     return success_response(message="删除成功")
 
 
@@ -100,9 +111,11 @@ async def delete_calibration_plan(
 async def create_calibration_record(
     data: CalibrationRecordCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:create")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:create"),
+    ),
 ) -> JSONResponse:
-    record = await service.create_calibration_record(db, data)
+    record = await service.create_calibration_record(db, data, ctx)
     return success_response(data=CalibrationRecordResponse.model_validate(record))
 
 
@@ -113,10 +126,12 @@ async def list_calibration_records(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     records, total = await service.get_calibration_records(
-        db, equipment_id=equipment_id, plan_id=plan_id,
+        db, ctx=ctx, equipment_id=equipment_id, plan_id=plan_id,
         page=page, page_size=page_size,
     )
     return paginated_response(
@@ -129,7 +144,9 @@ async def list_calibration_records(
 async def get_calibration_record(
     record_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:maintenance:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
 ) -> JSONResponse:
     record = await service.get_calibration_record_by_id(db, record_id)
     return success_response(data=CalibrationRecordResponse.model_validate(record))

@@ -11,11 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment import repository as repo
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import MaintenancePlan
 from app.modules.equipment.schemas import (
     MaintenancePlanCreate,
     MaintenancePlanUpdate,
 )
+from app.modules.equipment.service.data_scope import verify_write_ownership
 from app.modules.equipment.service.work_order import (
     generate_work_order_no,
 )
@@ -70,6 +72,7 @@ def _add_months(d: date_type, months: int) -> date_type:
 async def create_maintenance_plan(
     db: AsyncSession,
     data: MaintenancePlanCreate,
+    ctx: EquipmentAccessContext,
 ) -> MaintenancePlan:
     """创建维护计划"""
     # 校验 equipment_id 和 category_id 互斥（schema 已有，这里做二次保险）
@@ -107,6 +110,7 @@ async def get_maintenance_plan_by_id(
 
 async def get_maintenance_plans(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     equipment_id: uuid.UUID | None = None,
     category_id: uuid.UUID | None = None,
     status: str | None = None,
@@ -117,6 +121,7 @@ async def get_maintenance_plans(
     """获取维护计划列表"""
     return await repo.get_maintenance_plans(
         db,
+        ctx=ctx,
         equipment_id=equipment_id,
         category_id=category_id,
         status=status,
@@ -130,9 +135,11 @@ async def update_maintenance_plan(
     db: AsyncSession,
     plan_id: uuid.UUID,
     data: MaintenancePlanUpdate,
+    ctx: EquipmentAccessContext,
 ) -> MaintenancePlan:
     """更新维护计划"""
     plan = await get_maintenance_plan_by_id(db, plan_id)
+    await verify_write_ownership(ctx, plan, "created_by", "user_id")
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -160,19 +167,22 @@ async def update_maintenance_plan(
 async def delete_maintenance_plan(
     db: AsyncSession,
     plan_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> bool:
     """删除维护计划"""
-    await get_maintenance_plan_by_id(db, plan_id)
+    plan = await get_maintenance_plan_by_id(db, plan_id)
+    await verify_write_ownership(ctx, plan, "created_by", "user_id")
     return await repo.delete_maintenance_plan(db, plan_id)
 
 
 async def get_overdue_maintenance_plans(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     days: int = 30,
 ) -> list[MaintenancePlan]:
     """查询到期/逾期的维护计划"""
     threshold = date_type.today() + timedelta(days=days)
-    return await repo.get_maintenance_plans_due(db, threshold)
+    return await repo.get_maintenance_plans_due(db, ctx, threshold)
 
 
 async def generate_due_work_orders(

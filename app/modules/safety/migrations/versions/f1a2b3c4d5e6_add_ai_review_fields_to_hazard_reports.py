@@ -4,22 +4,39 @@ Revision ID: f1a2b3c4d5e6
 Revises: e1k2m3n4o5p6
 Create Date: 2026-06-24 15:00:00.000000
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'f1a2b3c4d5e6'
-down_revision: Union[str, None] = 'e1k2m3n4o5p6'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = 'e1k2m3n4o5p6'
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def _column_exists(table: str, column: str, schema: str) -> bool:
+    conn = op.get_bind()
+    row = conn.execute(
+        sa.text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = :schema AND table_name = :table AND column_name = :column"
+        ),
+        {"schema": schema, "table": table, "column": column},
+    ).first()
+    return row is not None
+
+
+def _add_column_if_missing(table: str, column: sa.Column, *, schema: str) -> None:
+    if not _column_exists(table, column.name, schema):
+        op.add_column(table, column, schema=schema)
 
 
 def upgrade() -> None:
-    op.add_column(
+    _add_column_if_missing(
         "hazard_reports",
         sa.Column(
             "ai_review_result",
@@ -29,7 +46,7 @@ def upgrade() -> None:
         ),
         schema="safety",
     )
-    op.add_column(
+    _add_column_if_missing(
         "hazard_reports",
         sa.Column(
             "ai_review_status",
@@ -40,7 +57,7 @@ def upgrade() -> None:
         ),
         schema="safety",
     )
-    op.add_column(
+    _add_column_if_missing(
         "hazard_reports",
         sa.Column(
             "ai_review_completed_at",

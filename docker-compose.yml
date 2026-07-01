@@ -34,9 +34,9 @@ services:
     command: >
       sh -c "
         echo '=== 同步部门 ===' &&
-        uv run python -X utf8 scripts/tmp/sync_lizhu_departments.py &&
+        uv run python -X utf8 scripts/init_feishu/sync_lizhu_departments.py &&
         echo '=== 同步人员 ===' &&
-        uv run python -X utf8 scripts/tmp/sync_lizhu_members.py &&
+        uv run python -X utf8 scripts/init_feishu/sync_lizhu_members.py &&
         echo '=== 初始化完成 ==='
       "
 

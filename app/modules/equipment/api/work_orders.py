@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import service
+from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
 from app.modules.equipment.schemas import (
     MaterialConsumeRequest,
     MaterialConsumeResponse,
@@ -22,8 +23,6 @@ from app.modules.equipment.schemas import (
     WorkOrderUpdate,
     WorkOrderVerify,
 )
-from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +86,11 @@ router = APIRouter()
 async def create_work_order(
     data: WorkOrderCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:create")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:create"),
+    ),
 ) -> JSONResponse:
-    wo = await service.create_work_order(db, data, user.id)
+    wo = await service.create_work_order(db, data, ctx)
     return success_response(data=_to_response(wo))
 
 
@@ -98,9 +99,11 @@ async def update_work_order(
     work_order_id: uuid.UUID,
     data: WorkOrderUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
-    wo = await service.update_work_order(db, work_order_id, data)
+    wo = await service.update_work_order(db, work_order_id, data, ctx)
     return success_response(data=_to_response(wo))
 
 
@@ -114,10 +117,12 @@ async def list_work_orders(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:read"),
+    ),
 ) -> JSONResponse:
     work_orders, total = await service.get_work_orders(
-        db, status=status, exclude_status=exclude_status,
+        db, ctx, status=status, exclude_status=exclude_status,
         equipment_id=equipment_id,
         priority=priority, order_type=order_type,
         page=page, page_size=page_size,
@@ -132,10 +137,12 @@ async def list_work_orders(
 async def get_work_order_statistics(
     exclude_status: str | None = Query(None, description="排除状态"),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:stats:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:stats:read"),
+    ),
 ) -> JSONResponse:
     stats = await service.get_work_order_statistics(
-        db, exclude_status=exclude_status,
+        db, ctx, exclude_status=exclude_status,
     )
     return success_response(data=WorkOrderStatistics.model_validate(stats))
 
@@ -144,7 +151,9 @@ async def get_work_order_statistics(
 async def get_work_order(
     work_order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:read"),
+    ),
 ) -> JSONResponse:
     wo = await service.get_work_order_by_id(db, work_order_id)
     return success_response(data=_to_response(wo))
@@ -155,9 +164,11 @@ async def assign_work_order(
     work_order_id: uuid.UUID,
     data: WorkOrderAssign,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
-    wo = await service.assign_work_order(db, work_order_id, data.assignee_id)
+    wo = await service.assign_work_order(db, work_order_id, data.assignee_id, ctx)
     return success_response(data=_to_response(wo))
 
 
@@ -165,9 +176,11 @@ async def assign_work_order(
 async def start_work_order(
     work_order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
-    wo = await service.start_work_order(db, work_order_id)
+    wo = await service.start_work_order(db, work_order_id, ctx)
     # 网页点击开始时飞书通知维修人（非关键路径）
     asyncio.ensure_future(_notify_start(wo))
     return success_response(data=_to_response(wo))
@@ -178,9 +191,11 @@ async def complete_work_order(
     work_order_id: uuid.UUID,
     data: WorkOrderComplete,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
-    wo = await service.complete_work_order(db, work_order_id, data)
+    wo = await service.complete_work_order(db, work_order_id, data, ctx)
     return success_response(data=_to_response(wo))
 
 
@@ -189,9 +204,11 @@ async def verify_work_order(
     work_order_id: uuid.UUID,
     data: WorkOrderVerify,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:approve")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:approve"),
+    ),
 ) -> JSONResponse:
-    wo = await service.verify_work_order(db, work_order_id, user.id, data)
+    wo = await service.verify_work_order(db, work_order_id, ctx, data)
     return success_response(data=_to_response(wo))
 
 
@@ -199,9 +216,11 @@ async def verify_work_order(
 async def close_work_order(
     work_order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
-    wo = await service.close_work_order(db, work_order_id)
+    wo = await service.close_work_order(db, work_order_id, ctx)
     return success_response(data=_to_response(wo))
 
 
@@ -210,10 +229,12 @@ async def consume_materials(
     work_order_id: uuid.UUID,
     data: MaterialConsumeRequest,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:update")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:update"),
+    ),
 ) -> JSONResponse:
     items = [item.model_dump() for item in data.items]
-    transactions = await service.consume_materials(db, work_order_id, items)
+    transactions = await service.consume_materials(db, work_order_id, items, ctx)
     return success_response(
         data=[MaterialConsumeResponse.model_validate(t) for t in transactions]
     )
@@ -223,7 +244,9 @@ async def consume_materials(
 async def get_material_consumptions(
     work_order_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("equipment:work_order:read")),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:work_order:read"),
+    ),
 ) -> JSONResponse:
     from app.modules.equipment import repository as repo
 

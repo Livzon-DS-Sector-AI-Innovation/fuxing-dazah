@@ -251,6 +251,7 @@ async def _handle_card_action_async(
 
     from app.core.database import async_session_factory
     from app.modules.equipment import repository as repo
+    from app.modules.equipment.deps import EquipmentAccessContext
     from app.modules.equipment.feishu.notification import send_user_card
     from app.modules.equipment.schemas import WorkOrderVerify
     from app.modules.equipment.service.work_order import verify_work_order
@@ -303,7 +304,8 @@ async def _handle_card_action_async(
                 result=result,  # type: ignore[arg-type]
                 remark=f"通过飞书卡片{label}",
             )
-            await verify_work_order(db, wo.id, user.id, verify_data)
+            ctx = EquipmentAccessContext(user=user, data_scope="all")
+            await verify_work_order(db, wo.id, ctx, verify_data)
             await db.commit()
         except Exception as e:
             logger.exception("飞书卡片验收失败: %s", e)

@@ -7,6 +7,7 @@ from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.equipment import Equipment
 from app.modules.equipment.models.inspection import (
     InspectionPhoto,
@@ -23,6 +24,7 @@ from app.modules.equipment.models.inspection_route_location import (
 from app.modules.equipment.models.inspection_template import (
     InspectionRecord,
 )
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 
 
 # ═══════════ 路线 ═══════════
@@ -75,6 +77,7 @@ async def get_route_by_id(
 
 async def get_routes(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     is_active: bool | None = None,
     location_id: uuid.UUID | None = None,
     keyword: str | None = None,
@@ -99,6 +102,9 @@ async def get_routes(
     count_stmt = select(func.count(InspectionRoute.id)).where(
         and_(*conditions)
     )
+    count_stmt = apply_equipment_scope(
+        count_stmt, ctx, InspectionRoute.created_by, "user_id"
+    )
     total = (await db.execute(count_stmt)).scalar_one()
 
     stmt = (
@@ -111,6 +117,9 @@ async def get_routes(
         .order_by(InspectionRoute.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
+    )
+    stmt = apply_equipment_scope(
+        stmt, ctx, InspectionRoute.created_by, "user_id"
     )
     result = await db.execute(stmt)
     return list(result.scalars().all()), total
@@ -296,6 +305,7 @@ async def get_task_by_id(
 
 async def get_tasks(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     status: str | None = None,
     exclude_status: str | None = None,
     route_id: uuid.UUID | None = None,
@@ -332,6 +342,9 @@ async def get_tasks(
     count_stmt = select(func.count(InspectionTask.id)).where(
         and_(*conditions)
     )
+    count_stmt = apply_equipment_scope(
+        count_stmt, ctx, InspectionTask.created_by, "user_id"
+    )
     total = (await db.execute(count_stmt)).scalar_one()
 
     stmt = (
@@ -351,6 +364,7 @@ async def get_tasks(
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
+    stmt = apply_equipment_scope(stmt, ctx, InspectionTask.created_by, "user_id")
     result = await db.execute(stmt)
     return list(result.scalars().all()), total
 
@@ -514,7 +528,6 @@ async def set_route_locations(
     existing_locs = (await db.execute(
         select(RouteLocation).where(RouteLocation.route_id == route_id)
     )).scalars().all()
-    existing_loc_ids = {r.id for r in existing_locs}
     existing_by_loc_id: dict[uuid.UUID, RouteLocation] = {}
     for r in existing_locs:
         if r.location_id not in existing_by_loc_id or not r.is_deleted:

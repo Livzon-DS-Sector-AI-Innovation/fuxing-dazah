@@ -7,12 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import (
     Equipment,
     EquipmentCategory,
     EquipmentCategoryLink,
     Location,
 )
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 from app.platform.identity.models import Department, User
 
 
@@ -26,12 +28,15 @@ async def exists_category_by_code(
     db: AsyncSession,
     code: str,
     exclude_id: uuid.UUID | None = None,
+    department_id: uuid.UUID | None = None,
 ) -> bool:
-    """Check if category code exists."""
+    """Check if category code exists, optionally scoped to a department."""
     query = select(EquipmentCategory.id).where(
         EquipmentCategory.code == code,
         EquipmentCategory.is_deleted == False,  # noqa: E712
     )
+    if department_id is not None:
+        query = query.where(EquipmentCategory.department_id == department_id)
     if exclude_id:
         query = query.where(EquipmentCategory.id != exclude_id)
     result = await db.execute(query.limit(1))
@@ -42,12 +47,15 @@ async def exists_location_by_code(
     db: AsyncSession,
     code: str,
     exclude_id: uuid.UUID | None = None,
+    department_id: uuid.UUID | None = None,
 ) -> bool:
-    """Check if location code exists."""
+    """Check if location code exists, optionally scoped to a department."""
     query = select(Location.id).where(
         Location.code == code,
         Location.is_deleted == False,  # noqa: E712
     )
+    if department_id is not None:
+        query = query.where(Location.department_id == department_id)
     if exclude_id:
         query = query.where(Location.id != exclude_id)
     result = await db.execute(query.limit(1))
@@ -82,11 +90,17 @@ async def get_equipment_category_by_id(
 async def get_equipment_categories(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[EquipmentCategory]:
-    """获取设备分类列表"""
+    """获取设备分类列表，可按部门范围过滤"""
     query = select(EquipmentCategory).where(
         EquipmentCategory.is_deleted == False  # noqa: E712
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            EquipmentCategory.department_id.in_(ctx.visible_department_ids)
+        )
     if parent_id is not None:
         query = query.where(EquipmentCategory.parent_id == parent_id)
     else:
@@ -96,14 +110,23 @@ async def get_equipment_categories(
     return list(result.scalars().all())
 
 
-async def get_equipment_category_tree(db: AsyncSession) -> list[EquipmentCategory]:
-    """获取设备分类树形结构"""
-    result = await db.execute(
+async def get_equipment_category_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[EquipmentCategory]:
+    """获取设备分类树形结构，可按部门范围过滤"""
+    query = (
         select(EquipmentCategory)
         .where(EquipmentCategory.is_deleted == False)  # noqa: E712
         .options(selectinload(EquipmentCategory.children))
         .order_by(EquipmentCategory.code)
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            EquipmentCategory.department_id.in_(ctx.visible_department_ids)
+        )
+    result = await db.execute(query)
     categories = list(result.scalars().all())
 
     category_map: dict[uuid.UUID, EquipmentCategory] = {
@@ -182,9 +205,15 @@ async def get_location_by_id(
 async def get_locations(
     db: AsyncSession,
     parent_id: uuid.UUID | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[Location]:
-    """获取位置列表"""
+    """获取位置列表，可按部门范围过滤"""
     query = select(Location).where(Location.is_deleted == False)  # noqa: E712
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            Location.department_id.in_(ctx.visible_department_ids)
+        )
     if parent_id is not None:
         query = query.where(Location.parent_id == parent_id)
     else:
@@ -194,14 +223,23 @@ async def get_locations(
     return list(result.scalars().all())
 
 
-async def get_location_tree(db: AsyncSession) -> list[Location]:
-    """获取位置树形结构"""
-    result = await db.execute(
+async def get_location_tree(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext | None = None,
+) -> list[Location]:
+    """获取位置树形结构，可按部门范围过滤"""
+    query = (
         select(Location)
         .where(Location.is_deleted == False)  # noqa: E712
         .options(selectinload(Location.children))
         .order_by(Location.code)
     )
+    # 部门范围过滤
+    if ctx and not ctx.is_unrestricted and ctx.visible_department_ids:
+        query = query.where(
+            Location.department_id.in_(ctx.visible_department_ids)
+        )
+    result = await db.execute(query)
     locations = list(result.scalars().all())
 
     location_map: dict[uuid.UUID, Location] = {loc.id: loc for loc in locations}
@@ -373,6 +411,7 @@ async def get_equipment_by_no(
 
 async def get_equipments(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     category_id: uuid.UUID | None = None,
     location_id: uuid.UUID | None = None,
     department_id: uuid.UUID | None = None,
@@ -390,6 +429,9 @@ async def get_equipments(
         )
         .where(Equipment.is_deleted == False)  # noqa: E712
     )
+
+    # 数据范围过滤
+    query = apply_equipment_scope(query, ctx, Equipment.department_id, "department_id")
 
     if category_id:
         category_ids = await _get_category_child_ids(db, category_id)
@@ -563,43 +605,67 @@ async def get_max_equipment_no_by_category(
     return result.scalar_one_or_none()
 
 
-async def get_equipment_statistics(db: AsyncSession) -> dict[str, Any]:
-    """获取设备统计"""
+async def get_equipment_statistics(
+    db: AsyncSession, ctx: EquipmentAccessContext,
+) -> dict[str, Any]:
+    """获取设备统计（按数据范围过滤）"""
     # 总数
-    total_result = await db.execute(
-        select(func.count()).where(Equipment.is_deleted == False)  # noqa: E712
+    total_query = select(func.count()).where(
+        Equipment.is_deleted == False  # noqa: E712
     )
+    total_query = apply_equipment_scope(
+        total_query, ctx, Equipment.department_id, "department_id",
+    )
+    total_result = await db.execute(total_query)
     total = total_result.scalar() or 0
 
     # 按状态统计
-    status_result = await db.execute(
+    status_query = (
         select(Equipment.status, func.count())
         .where(Equipment.is_deleted == False)  # noqa: E712
         .group_by(Equipment.status)
     )
+    status_query = apply_equipment_scope(
+        status_query, ctx, Equipment.department_id, "department_id",
+    )
+    status_result = await db.execute(status_query)
     by_status = {row[0]: row[1] for row in status_result.all()}
 
     # 按分类统计（通过联结表）
-    category_result = await db.execute(
-        select(EquipmentCategory.name, func.count(func.distinct(EquipmentCategoryLink.equipment_id)))
+    category_query = (
+        select(
+            EquipmentCategory.name,
+            func.count(func.distinct(EquipmentCategoryLink.equipment_id)),
+        )
         .select_from(EquipmentCategoryLink)
         .join(Equipment, Equipment.id == EquipmentCategoryLink.equipment_id)
-        .join(EquipmentCategory, EquipmentCategory.id == EquipmentCategoryLink.category_id)
+        .join(
+            EquipmentCategory,
+            EquipmentCategory.id == EquipmentCategoryLink.category_id,
+        )
         .where(
             Equipment.is_deleted == False,  # noqa: E712
             EquipmentCategoryLink.is_deleted == False,  # noqa: E712
         )
         .group_by(EquipmentCategory.name)
     )
+    category_query = apply_equipment_scope(
+        category_query, ctx, Equipment.department_id, "department_id",
+    )
+    category_result = await db.execute(category_query)
     by_category = {row[0]: row[1] for row in category_result.all()}
 
     # 按位置统计
-    location_result = await db.execute(
+    location_query = (
         select(Location.name, func.count())
         .join(Equipment, Equipment.location_id == Location.id)
         .where(Equipment.is_deleted == False)  # noqa: E712
         .group_by(Location.name)
     )
+    location_query = apply_equipment_scope(
+        location_query, ctx, Equipment.department_id, "department_id",
+    )
+    location_result = await db.execute(location_query)
     by_location = {row[0]: row[1] for row in location_result.all()}
 
     return {

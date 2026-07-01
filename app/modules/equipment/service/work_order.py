@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment import repository as repo
+from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import WorkOrder
 from app.modules.equipment.schemas import (
     WorkOrderComplete,
@@ -18,6 +19,7 @@ from app.modules.equipment.schemas import (
     WorkOrderUpdate,
     WorkOrderVerify,
 )
+from app.modules.equipment.service.data_scope import verify_write_ownership
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +93,7 @@ async def _try_restore_equipment_status(
 async def create_work_order(
     db: AsyncSession,
     data: WorkOrderCreate,
-    reporter_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """创建维修工单"""
     equipment = await repo.get_equipment_by_id(db, data.equipment_id)
@@ -111,7 +113,7 @@ async def create_work_order(
 
         wo_data = data.model_dump()
         wo_data["work_order_no"] = wo_no
-        wo_data["reporter_id"] = reporter_id
+        wo_data["reporter_id"] = ctx.user.id
         wo_data["status"] = "待处理"
         wo_data["original_equipment_status"] = original_status
 
@@ -145,9 +147,11 @@ async def update_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
     data: WorkOrderUpdate,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """更新工单信息"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
 
     update_data = data.model_dump(exclude_unset=True)
     if not update_data:
@@ -164,9 +168,11 @@ async def assign_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
     assignee_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """指派维修人（不改变工单状态，仅记录指派人）"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
 
     wo.assignee_id = assignee_id
     wo.assigned_at = datetime.now(UTC)
@@ -189,9 +195,11 @@ async def assign_work_order(
 async def start_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """开始执行"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
     _validate_transition(wo.status, "执行中")
 
     wo.status = "执行中"
@@ -204,9 +212,11 @@ async def complete_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
     data: WorkOrderComplete,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """提交完成"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
 
     is_repair = wo.order_type in ("故障维修", "校准", "异常处理")
     target = "待验收" if is_repair else "已完成"
@@ -507,15 +517,16 @@ async def _notify_rejection(
 async def verify_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
-    verifier_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
     data: WorkOrderVerify,
 ) -> WorkOrder:
     """验收工单"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
     if wo.order_type not in ("故障维修", "校准", "异常处理"):
         raise AppException(message=f"工单类型 '{wo.order_type}' 不支持验收")
 
-    wo.verified_by = verifier_id
+    wo.verified_by = ctx.user.id
     wo.verified_at = datetime.now(UTC)
     wo.verification_result = data.result
     wo.verification_remark = data.remark
@@ -552,9 +563,11 @@ async def verify_work_order(
 async def close_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """关闭工单"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
     _validate_transition(wo.status, "已关闭")
 
     wo.status = "已关闭"
@@ -570,6 +583,7 @@ async def close_work_order(
 
 async def get_work_orders(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     status: str | None = None,
     equipment_id: uuid.UUID | None = None,
     priority: str | None = None,
@@ -580,7 +594,7 @@ async def get_work_orders(
 ) -> tuple[list[WorkOrder], int]:
     """获取工单列表"""
     return await repo.get_work_orders(
-        db,
+        db, ctx,
         status=status,
         equipment_id=equipment_id,
         priority=priority,
@@ -593,11 +607,12 @@ async def get_work_orders(
 
 async def get_work_order_statistics(
     db: AsyncSession,
+    ctx: EquipmentAccessContext,
     exclude_status: str | None = None,
 ) -> dict[str, object]:
-    """获取工单统计"""
+    """获取工单统计（按数据范围过滤）"""
     return await repo.get_work_order_statistics(
-        db, exclude_status=exclude_status,
+        db, ctx, exclude_status=exclude_status,
     )
 
 
@@ -612,7 +627,7 @@ async def get_work_order_by_id(
 async def claim_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
-    user_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
 ) -> WorkOrder:
     """维修人员自主抢单（不改变工单状态，仅记录指派人）"""
     wo = await _get_work_order(db, work_order_id)
@@ -622,7 +637,7 @@ async def claim_work_order(
     if wo.assignee_id is not None:
         raise AppException(message="该工单已被其他人接单")
 
-    wo.assignee_id = user_id
+    wo.assignee_id = ctx.user.id
     wo.assigned_at = datetime.now(UTC)
     await db.flush()
     return await repo.get_work_order_by_id(db, wo.id)
@@ -632,9 +647,11 @@ async def consume_materials(
     db: AsyncSession,
     work_order_id: uuid.UUID,
     items: list[dict[str, Any]],
+    ctx: EquipmentAccessContext,
 ) -> list[Any]:
     """工单领料"""
     wo = await _get_work_order(db, work_order_id)
+    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
 
     if wo.status in ("已完成", "已关闭"):
         raise AppException(message="工单已完成或已关闭，不能领料")
