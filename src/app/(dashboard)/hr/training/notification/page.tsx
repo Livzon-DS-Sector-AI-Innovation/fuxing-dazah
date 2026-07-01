@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import TrainingNotificationClient from '@/components/hr/TrainingNotificationClient'
 
 export default function TrainingNotificationPage() {
@@ -12,7 +13,9 @@ export default function TrainingNotificationPage() {
         </p>
       </div>
 
-      <TrainingNotificationClient />
+      <Suspense fallback={<div>加载中...</div>}>
+        <TrainingNotificationClient />
+      </Suspense>
     </div>
   )
 }

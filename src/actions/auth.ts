@@ -1,6 +1,6 @@
 'use server'
 
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import type { User, ImpersonationStatus } from '@/types/user'
@@ -56,7 +56,12 @@ export async function startImpersonate(targetUserId: string): Promise<void> {
   if (!data?.token) throw new Error('服务端未返回代理 token')
 
   // 服务端设置 httpOnly cookie
-  const isHttps = process.env.NODE_ENV === 'production'
+  // 通过 x-forwarded-proto 判断实际协议，而非 NODE_ENV。
+  // Docker 内网部署通常是 HTTP，NODE_ENV=production 但协议是 http，
+  // secure: true 会导致浏览器拒绝存储 cookie。
+  const headersList = await headers()
+  const proto = headersList.get('x-forwarded-proto') || 'http'
+  const isHttps = proto === 'https'
   cookieStore.set('impersonate_token', data.token, {
     httpOnly: true,
     secure: isHttps,

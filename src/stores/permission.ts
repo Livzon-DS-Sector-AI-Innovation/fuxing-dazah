@@ -6,11 +6,13 @@ interface PermissionState {
   roles: string[]
   dataScopes: Record<string, string>
   isLoaded: boolean
+  loadError: boolean
   setPermissionData: (data: {
     permissions: string[]
     roles: string[]
     dataScopes: Record<string, string>
   }) => void
+  setLoadError: () => void
   hasPermission: (...codes: string[]) => boolean
   reset: () => void
 }
@@ -20,6 +22,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
   roles: [],
   dataScopes: {},
   isLoaded: false,
+  loadError: false,
 
   setPermissionData: (data) =>
     set({
@@ -27,7 +30,10 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
       roles: data.roles,
       dataScopes: data.dataScopes,
       isLoaded: true,
+      loadError: false,
     }),
+
+  setLoadError: () => set({ loadError: true }),
 
   hasPermission: (...codes: string[]) => {
     const { permissions } = get()
@@ -40,5 +46,6 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
       roles: [],
       dataScopes: {},
       isLoaded: false,
+      loadError: false,
     }),
 }))
