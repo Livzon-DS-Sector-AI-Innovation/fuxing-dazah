@@ -35,7 +35,7 @@ interface InspectionStore {
   executingTaskId: string | null
   executingPlanType: string
   executingRouteDetail: InspectionRouteDetail | null
-  executingTemplateItems: InspectionTemplateItem[]
+  executingTemplateItems: Record<string, InspectionTemplateItem[]>
   executingTemplateName: string
   executingEquipmentId: string | null
   executingEquipmentName: string
@@ -47,7 +47,7 @@ interface InspectionStore {
     taskId: string,
     planType: string,
     routeDetail: InspectionRouteDetail | null,
-    templateItems: InspectionTemplateItem[],
+    templateItems: Record<string, InspectionTemplateItem[]>,
     templateName: string,
     equipmentId?: string | null,
     equipmentName?: string,
@@ -151,7 +151,7 @@ export const useInspectionStore = create<InspectionStore>()((set) => ({
   executingTaskId: null,
   executingPlanType: '',
   executingRouteDetail: null,
-  executingTemplateItems: [],
+  executingTemplateItems: {},
   executingTemplateName: '',
   executingEquipmentId: null,
   executingEquipmentName: '',
@@ -176,7 +176,7 @@ export const useInspectionStore = create<InspectionStore>()((set) => ({
     executingTaskId: null,
     executingPlanType: '',
     executingRouteDetail: null,
-    executingTemplateItems: [],
+    executingTemplateItems: {},
     executingTemplateName: '',
     executingEquipmentId: null,
     executingEquipmentName: '',

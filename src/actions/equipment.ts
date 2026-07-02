@@ -466,10 +466,11 @@ export async function downloadImportTemplate(): Promise<string> {
 
 export async function importEquipments(formData: FormData): Promise<ImportResult> {
   const authHeaders = await getAuthHeaders()
-  // 构建新的 FormData，避免 Next.js 序列化问题
+  // 文件上传不能设 Content-Type，fetch 会自动加 multipart/form-data + boundary
+  const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
   const res = await fetch(`${API_BASE_URL}/api/v1/equipment/equipments/import`, {
     method: 'POST',
-    headers: authHeaders,
+    headers: uploadHeaders,
     body: formData,
   })
   if (!res.ok) {

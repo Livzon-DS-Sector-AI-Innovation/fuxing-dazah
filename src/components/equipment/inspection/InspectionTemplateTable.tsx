@@ -46,13 +46,13 @@ export function InspectionTemplateTable({ onRefresh, categories }: Props) {
       title: '操作', key: 'action', width: 220, fixed: 'end',
       render: (_: unknown, r: InspectionTemplate) => (
         <Space size={12}>
-          {hasPermission('equipment:inspection:update') && (
+          {hasPermission('equipment:maintenance:update') && (
           <span role="button" onClick={() => openInspectionItemDrawer(r.id)} style={linkPurple}><UnorderedListOutlined />检查项</span>
           )}
-          {hasPermission('equipment:inspection:update') && (
+          {hasPermission('equipment:maintenance:update') && (
           <span role="button" onClick={() => openInspectionTemplateDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
           )}
-          {hasPermission('equipment:inspection:delete') && (
+          {hasPermission('equipment:maintenance:delete') && (
           <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
           )}
         </Space>

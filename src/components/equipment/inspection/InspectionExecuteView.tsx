@@ -203,7 +203,7 @@ export function InspectionExecuteView({ onClose }: Props) {
         <EquipmentCheckCard
           key={cur.equipment_id}
           equipmentId={cur.equipment_id} equipmentName={cur.equipment_name} equipmentNo={cur.equipment_no}
-          templateItems={executingTemplateItems} photos={curPhotos}
+          templateItems={executingTemplateItems[cur.equipment_id] || []} photos={curPhotos}
           onAddPhoto={f => addPhoto(cur.equipment_id, f)} onRemovePhoto={i => rmPhoto(cur.equipment_id, i)}
           onSubmit={submitCheck} disabled={done.has(cur.equipment_id)}
         />
