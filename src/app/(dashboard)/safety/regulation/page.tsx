@@ -27,6 +27,7 @@ import {
   SearchOutlined,
   EditOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   UploadOutlined,
   FileTextOutlined,
   RobotOutlined,
@@ -42,7 +43,6 @@ import {
   createRegulation,
   updateRegulation,
   deleteRegulation,
-  uploadRegulationDocument,
   getRevisions,
   createRevision,
   deleteRevision,
@@ -311,27 +311,31 @@ export default function RegulationPage() {
     }
   }
 
-  const handleUploadDoc = async (id: string, file: File) => {
+  const handleDownloadPdf = async (record: OperationRegulation) => {
     try {
-      const response = await uploadRegulationDocument(id, file)
-      if (response.code === 200) {
-        message.success('文档上传成功')
-        loadRegulations()
-      } else {
-        message.error(response.message || '上传失败')
+      const res = await fetch(`/api/v1/safety/regulations/${record.id}/export`, {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null)
+        message.error(errorData?.message || '导出 PDF 失败')
+        return
       }
+      const blob = await res.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const safeName = record.regulation_name || record.regulation_no || '操规'
+      a.download = `${safeName}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(url)
+      message.success('PDF 下载成功')
     } catch {
-      message.error('上传失败')
+      message.error('下载失败')
     }
   }
-
-  const regulationUploadProps = (id: string): UploadProps => ({
-    showUploadList: false,
-    beforeUpload: async (file) => {
-      await handleUploadDoc(id, file)
-      return false
-    },
-  })
 
   // ---- Revision Handlers ----
 
@@ -559,24 +563,37 @@ export default function RegulationPage() {
       fixed: 'right',
       render: (_, record) => (
         <Space size={12}>
-          <Upload {...regulationUploadProps(record.id)}>
-            <span role="button" style={$muted}>
-              <UploadOutlined />上传
+          <Tooltip title={record.content ? '下载标准化操规 PDF' : '该操规尚未生成标准化内容，无法下载 PDF'}>
+            <span
+              role="button"
+              style={record.content ? $muted : { ...$muted, opacity: 0.4, cursor: 'not-allowed' }}
+              onClick={() => {
+                if (record.content) {
+                  handleDownloadPdf(record)
+                } else {
+                  message.warning('该操规尚未生成标准化内容，无法下载 PDF')
+                }
+              }}
+            >
+              <DownloadOutlined />下载
             </span>
-          </Upload>
+          </Tooltip>
           <span role="button" style={$link} onClick={() => handleEditRegulation(record)}>
             <EditOutlined />编辑
           </span>
-          <Tooltip title="查看/新建修订记录">
+          <Tooltip title={record.content ? '在线修订操规内容' : '该操规尚未生成标准化内容，无法在线修订'}>
             <span
               role="button"
-              style={$link}
+              style={record.content ? $link : { ...$link, opacity: 0.4, cursor: 'not-allowed' }}
               onClick={() => {
-                setActiveTab('revisions')
-                setRevisionQueryParams({ page: 1 })
+                if (record.content) {
+                  router.push(`/safety/regulation/revise/${record.id}`)
+                } else {
+                  message.warning('该操规尚未生成标准化内容，请先生成后再修订')
+                }
               }}
             >
-              <AimOutlined />修订
+              <HistoryOutlined />修订
             </span>
           </Tooltip>
           {record.content ? (
@@ -976,7 +993,7 @@ export default function RegulationPage() {
         title={editingRegulation ? '编辑操规' : '新建操规'}
         open={regDrawerOpen}
         onClose={() => setRegDrawerOpen(false)}
-        width={480}
+        size={480}
         destroyOnHidden
         extra={
           <Space>
@@ -1031,7 +1048,7 @@ export default function RegulationPage() {
         title="新建修订记录"
         open={revDrawerOpen}
         onClose={() => setRevDrawerOpen(false)}
-        width={480}
+        size={480}
         destroyOnHidden
         extra={
           <Space>

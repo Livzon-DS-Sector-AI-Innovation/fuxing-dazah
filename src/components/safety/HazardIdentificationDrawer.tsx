@@ -134,7 +134,7 @@ export default function HazardIdentificationDrawer({ open, onClose, onDone }: Pr
       onClose={handleClose}
       placement="right"
       size="large"
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { padding: '16px 24px 24px' } }}
     >
       {/* 表单卡片 — 与隐患登记 HazardInspectionForm 视觉对齐 */}

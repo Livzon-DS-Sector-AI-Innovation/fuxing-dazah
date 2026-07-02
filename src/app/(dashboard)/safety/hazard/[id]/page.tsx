@@ -30,6 +30,7 @@ import {
   CloseOutlined,
   SaveOutlined,
   CloseCircleOutlined,
+  MinusCircleOutlined,
   RobotOutlined,
   ExclamationCircleOutlined,
   ClockCircleOutlined,
@@ -607,12 +608,13 @@ export default function HazardLedgerDetailPage() {
   const v1 = record.verify_level_1_status
   const v2 = record.verify_level_2_status
   const v3 = record.verify_level_3_status
-  const v1Done = v1 === 'approved' || v1 === 'rejected'
-  const v2Done = v2 === 'approved' || v2 === 'rejected'
+  const v1Done = v1 === 'approved' || v1 === 'rejected' || v1 === 'no_review_needed'
+  const v2Done = v2 === 'approved' || v2 === 'rejected' || v2 === 'no_review_needed'
   const v3Done = v3 === 'approved' || v3 === 'rejected'
 
   // 当前待复核级别：仅当整改状态为「已回复」或某级已通过时，尚未复核的
   // 最低级别才是当前可操作级别。rejected / ai_reviewing 等状态下不应出现复核入口。
+  // 「无需整改」场景允许 L3 复核（v1/v2=no_review_needed, v3=pending）。
   const currentLevel = (() => {
     if (!rStatus || rStatus === 'pending' || rStatus === 'in_progress' || rStatus === 'rejected' || rStatus === 'ai_reviewing') return null
     if (!v1Done) return 1
@@ -1054,6 +1056,7 @@ export default function HazardLedgerDetailPage() {
       const isCurrent = currentLevel === level
       const isApproved = status === 'approved'
       const isRejected = status === 'rejected'
+      const isSkipped = status === 'no_review_needed'
 
       let color = '#c8c4be'
       let icon: React.ReactNode = (
@@ -1070,6 +1073,9 @@ export default function HazardLedgerDetailPage() {
       if (isApproved) {
         color = '#1aae39'
         icon = <CheckCircleOutlined style={{ fontSize: 16 }} />
+      } else if (isSkipped) {
+        color = '#c8c4be'
+        icon = <MinusCircleOutlined style={{ fontSize: 16 }} />
       } else if (isRejected) {
         color = '#e03131'
         icon = <CloseCircleOutlined style={{ fontSize: 16 }} />
@@ -1080,6 +1086,7 @@ export default function HazardLedgerDetailPage() {
 
       let statusTag: React.ReactNode = <StatusPill color="#787671" bg="#f0eeec">待开始</StatusPill>
       if (isApproved) statusTag = pillSuccess('已通过')
+      else if (isSkipped) statusTag = <StatusPill color="#787671" bg="#f0eeec">无需复核</StatusPill>
       else if (isRejected) statusTag = pillError('已驳回')
       else if (isCurrent) statusTag = pillInfo('待复核')
 

@@ -23,7 +23,7 @@ export default function HazardRegistrationDrawer({ open, onClose, onDone }: Prop
       onClose={onClose}
       placement="right"
       size="large"
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { padding: '16px 24px 24px' } }}
     >
       <HazardInspectionFlow variant="drawer" onDone={onDone} />

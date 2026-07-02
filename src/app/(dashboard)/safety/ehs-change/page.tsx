@@ -616,7 +616,7 @@ export default function EhsChangePage() {
         title={selectedChange ? `变更详情 - ${selectedChange.change_no}` : '变更详情'}
         open={drawerOpen}
         onClose={() => { setDrawerOpen(false); setSelectedChange(null) }}
-        width={800}
+        size={800}
         extra={
           selectedChange ? (
             <Space>

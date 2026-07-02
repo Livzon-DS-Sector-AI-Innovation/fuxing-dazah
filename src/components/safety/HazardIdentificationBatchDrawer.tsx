@@ -202,7 +202,7 @@ export default function HazardIdentificationBatchDrawer({
       onClose={handleClose}
       placement="right"
       size="large"
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { padding: '16px 24px 24px' } }}
     >
       {/* Steps indicator */}

@@ -13,6 +13,7 @@ import {
   RightOutlined,
   DownOutlined,
   DeleteOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
 
 import { T } from '@/components/safety/shared-styles'
@@ -265,7 +266,7 @@ function parseMarkdownTable(md: string): MarkdownTable | null {
     const trimmed = line.trim()
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
       // Skip separator lines like |---|---|
-      if (/^\|[\s\-:]+\|$/.test(trimmed)) continue
+      if (/^\|([-:\s]+\|)+$/.test(trimmed)) continue
       tableLines.push(trimmed)
     } else if (tableLines.length > 0) {
       // Table ended — stop scanning
@@ -304,7 +305,7 @@ function splitAroundTable(md: string): { before: string; table: MarkdownTable | 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim()
     if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
-      if (/^\|[\s\-:]+\|$/.test(trimmed)) continue // skip separator
+      if (/^\|([-:\s]+\|)+$/.test(trimmed)) continue // skip separator
       if (tableStart === -1) tableStart = i
       tableEnd = i
     } else if (tableStart !== -1) {
@@ -880,6 +881,10 @@ interface SopContentEditorProps {
   content: string
   onBack: () => void
   onSaved: () => void
+  /** Revision mode: shows revision opinion field and calls reviseRegulation on save */
+  revisionMode?: boolean
+  /** Custom save handler (revision mode). If provided, replaces default save behavior. */
+  onReviseSave?: (content: string, revisionOpinion: string) => Promise<void>
 }
 
 /* ─────── component ─────── */
@@ -890,6 +895,8 @@ export default function SopContentEditor({
   content: initialContent,
   onBack,
   onSaved,
+  revisionMode = false,
+  onReviseSave,
 }: SopContentEditorProps) {
   /* ── state ── */
   const [headerMeta, setHeaderMeta] = useState<HeaderMeta>({ ...DEFAULT_META })
@@ -902,6 +909,7 @@ export default function SopContentEditor({
   const [justSaved, setJustSaved] = useState(false)
   const [isDirty, setIsDirty] = useState(false)
   const [collapsedKeys, setCollapsedKeys] = useState<Record<string, boolean>>({})
+  const [revisionOpinion, setRevisionOpinion] = useState('')
 
   const { message } = App.useApp()
 
@@ -1047,16 +1055,22 @@ export default function SopContentEditor({
   const handleSave = useCallback(async () => {
     setSaving(true)
     try {
-      const { updateSopContent, updateRegulation } = await import('@/actions/safety')
-      await updateSopContent(regulationId, fullContent, 'reviewed')
-      if (sopName !== regulationName) {
-        await updateRegulation(regulationId, { regulation_name: sopName })
+      if (revisionMode && onReviseSave) {
+        // Revision mode: delegate to custom save handler
+        await onReviseSave(fullContent, revisionOpinion)
+        setJustSaved(true); setIsDirty(false); onSaved()
+      } else {
+        const { updateSopContent, updateRegulation } = await import('@/actions/safety')
+        await updateSopContent(regulationId, fullContent, 'reviewed')
+        if (sopName !== regulationName) {
+          await updateRegulation(regulationId, { regulation_name: sopName })
+        }
+        setJustSaved(true); setIsDirty(false); onSaved()
       }
-      setJustSaved(true); setIsDirty(false); onSaved()
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '保存失败')
     } finally { setSaving(false) }
-  }, [regulationId, fullContent, onSaved, sopName, regulationName])
+  }, [regulationId, fullContent, onSaved, sopName, regulationName, revisionMode, onReviseSave, revisionOpinion])
 
   const handleExport = useCallback(async () => {
     setExporting(true)
@@ -1767,8 +1781,11 @@ export default function SopContentEditor({
           </div>
           <div style={S.sopName}>{sopName || regulationName}</div>
           <div style={S.badge}>
-            <ThunderboltOutlined style={{ fontSize: 11 }} />
-            AI 生成
+            {revisionMode ? (
+              <><HistoryOutlined style={{ fontSize: 11 }} /> 修订模式</>
+            ) : (
+              <><ThunderboltOutlined style={{ fontSize: 11 }} /> AI 生成</>
+            )}
           </div>
         </div>
 
@@ -1807,25 +1824,57 @@ export default function SopContentEditor({
               border: `1px solid ${TOKENS.hairline}`, color: TOKENS.ink, background: TOKENS.canvas,
             }}
           >
-            仅保存
+            {revisionMode ? '保存修订' : '仅保存'}
           </Button>
-          <Button
-            type="primary"
-            icon={<DownloadOutlined />}
-            onClick={handleSaveAndExport}
-            loading={saving || exporting}
-            disabled={!fullContent.trim()}
-            size="small"
-            style={{
-              height: 32, paddingLeft: 14, paddingRight: 14, fontSize: 13, fontWeight: 500,
-              borderRadius: RADIUS.sm, background: TOKENS.primary, borderColor: TOKENS.primary,
-              boxShadow: 'none',
-            }}
-          >
-            保存并导出 PDF
-          </Button>
+          {!revisionMode && (
+            <Button
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={handleSaveAndExport}
+              loading={saving || exporting}
+              disabled={!fullContent.trim()}
+              size="small"
+              style={{
+                height: 32, paddingLeft: 14, paddingRight: 14, fontSize: 13, fontWeight: 500,
+                borderRadius: RADIUS.sm, background: TOKENS.primary, borderColor: TOKENS.primary,
+                boxShadow: 'none',
+              }}
+            >
+              保存并导出 PDF
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* ═══ REVISION OPINION BAR ═══ */}
+      {revisionMode && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+          padding: '10px 24px', background: '#fefce8',
+          borderBottom: `1px solid #fde68a`,
+          flexShrink: 0,
+        }}>
+          <span style={{
+            fontSize: 13, fontWeight: 600, color: '#92400e',
+            whiteSpace: 'nowrap', paddingTop: 6,
+          }}>
+            修订意见
+          </span>
+          <input
+            value={revisionOpinion}
+            onChange={(e) => { setRevisionOpinion(e.target.value); markDirty() }}
+            placeholder="请描述本次修订的内容和原因（如：更新灭菌锅压力参数、补充酸碱配置安全要求等）"
+            style={{
+              flex: 1, border: '1px solid #fde68a', borderRadius: 6,
+              padding: '6px 12px', fontSize: 13, outline: 'none',
+              color: TOKENS.ink, background: '#ffffff',
+              fontFamily: 'inherit',
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = '#f59e0b' }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = '#fde68a' }}
+          />
+        </div>
+      )}
 
       {/* ═══ MAIN: PAPER VIEW ═══ */}
       <div style={S.mainArea} className={`sop-paper-scroll ${animStyles.scrollBar}`}>

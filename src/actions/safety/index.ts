@@ -892,6 +892,30 @@ export async function exportSopPdf(regulationId: string): Promise<ApiResponse<Bl
   return { code: 0, message: 'ok', data: blob }
 }
 
+export async function reviseRegulation(
+  regulationId: string,
+  content: string,
+  revisionOpinion?: string,
+  reviserName?: string,
+) {
+  const response = await fetchApi<{
+    regulation_id: string
+    revision_id: string
+    revision_no: string
+    regulation_name: string
+    status: string
+  }>(`/safety/regulations/${regulationId}/revise`, {
+    method: 'POST',
+    body: JSON.stringify({
+      content,
+      revision_opinion: revisionOpinion || null,
+      reviser_name: reviserName || null,
+    }),
+  })
+  revalidatePath('/safety/regulation')
+  return response
+}
+
 // ============ RegulationRevision Actions ============
 
 export async function getRevisions(params: RegulationRevisionQueryParams = {}) {

@@ -780,7 +780,7 @@ export default function OccupationalHealthPage() {
         title={`监测详情 - ${selectedMonitor?.monitor_no || ''}`}
         open={monitorDrawerOpen}
         onClose={() => setMonitorDrawerOpen(false)}
-        width={800}
+        size={800}
       >
         {selectedMonitor && (
           <Tabs
@@ -925,7 +925,7 @@ export default function OccupationalHealthPage() {
         title={`体检详情 - ${selectedExam?.exam_no || ''}`}
         open={examDrawerOpen}
         onClose={() => setExamDrawerOpen(false)}
-        width={800}
+        size={800}
       >
         {selectedExam && (
           <Tabs

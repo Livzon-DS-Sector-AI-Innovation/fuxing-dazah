@@ -39,11 +39,26 @@ export default function HazardVerifyModal({
   const { message } = App.useApp()
 
   // 自动确定当前复核级别
+  // 优先按整改状态判断，对边界情况（无需整改、一般隐患跳过L2）结合复核字段精确判断
   const detectLevel = (): number => {
     if (!record) return 1
-    if (record.rectification_status === 'level2_approved') return 3
-    if (record.rectification_status === 'level1_approved') return 2
-    if (record.rectification_status === 'replied') return 1
+    const rstatus = record.rectification_status
+    const v1 = record.verify_level_1_status || 'pending'
+    const v2 = record.verify_level_2_status || 'pending'
+    const v3 = record.verify_level_3_status || 'pending'
+
+    // 「无需整改」场景：L1/L2 已跳过，直接到 L3
+    if (rstatus === 'no_rectification_needed') {
+      if (v3 === 'pending') return 3
+      return 3 // fallback
+    }
+
+    // 一般隐患 L1 通过后 L2 自动跳过 → L3
+    if (rstatus === 'level2_approved' && v2 === 'no_review_needed') return 3
+    if (rstatus === 'level2_approved') return 3
+
+    if (rstatus === 'level1_approved') return 2
+    if (rstatus === 'replied') return 1
     return 1
   }
 

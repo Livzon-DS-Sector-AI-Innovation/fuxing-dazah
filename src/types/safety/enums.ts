@@ -515,6 +515,7 @@ export const VERIFY_LEVEL_STATUS_OPTIONS = [
   { value: 'pending', label: '待复核', color: 'default' },
   { value: 'approved', label: '已通过', color: 'success' },
   { value: 'rejected', label: '已驳回', color: 'error' },
+  { value: 'no_review_needed', label: '无需复核', color: 'default' },
 ]
 
 export const HAZARD_STATUS_OPTIONS = [

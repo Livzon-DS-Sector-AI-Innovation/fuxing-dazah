@@ -567,6 +567,21 @@ export default function HazardLedgerPage() {
         </span>
       )
     }
+    if (record.rectification_status === 'no_rectification_needed') {
+      // AI 判定无需整改：L1/L2 已跳过，L3 待闭环
+      if (record.verify_level_3_status === 'pending') {
+        return (
+          <span
+            role="button"
+            onClick={() => handleVerifyLevel(record)}
+            style={actionLink('#5645d4')}
+          >
+            <SafetyCertificateOutlined />三级复核
+          </span>
+        )
+      }
+      return <Text type="secondary">-</Text>
+    }
     if (record.rectification_status === 'level1_approved') {
       const nextLabel = record.hazard_level === 'general' ? '三级复核' : '二级复核'
       return (
@@ -835,7 +850,9 @@ export default function HazardLedgerPage() {
                 ? '#d9f3e1'
                 : lv.status === 'rejected'
                   ? '#fde0ec'
-                  : '#f0eeec'
+                  : lv.status === 'no_review_needed'
+                    ? '#e8e6e1'
+                    : '#f0eeec'
               return (
                 <span
                   key={lv.label}
