@@ -351,7 +351,7 @@ async def import_equipments(
         )
     try:
         file_bytes = await file.read()
-        result = await service.import_equipments_from_excel(db, file_bytes)
+        result = await service.import_equipments_from_excel(db, file_bytes, ctx=ctx)
         await db.commit()
         return success_response(data=result.model_dump())
     except ValueError as e:

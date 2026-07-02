@@ -303,6 +303,28 @@ async def get_task_by_id(
     return result.scalar_one_or_none()
 
 
+async def get_task_by_no(
+    db: AsyncSession, task_no: str
+) -> InspectionTask | None:
+    """根据任务编号（如 IT-20260630-0001）查找任务。"""
+    stmt = (
+        select(InspectionTask)
+        .options(
+            selectinload(InspectionTask.route)
+            .selectinload(InspectionRoute.locations_rel)
+            .selectinload(RouteLocation.equipments),
+            selectinload(InspectionTask.equipment),
+            selectinload(InspectionTask.assignee),
+        )
+        .where(
+            InspectionTask.task_no == task_no,
+            InspectionTask.is_deleted == False,  # noqa: E712
+        )
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_tasks(
     db: AsyncSession,
     ctx: EquipmentAccessContext,
@@ -511,6 +533,20 @@ async def get_equipment_names_by_ids(
     if not equipment_ids:
         return {}
     stmt = select(Equipment.id, Equipment.name).where(
+        Equipment.id.in_(equipment_ids),
+        Equipment.is_deleted == False,  # noqa: E712
+    )
+    result = await db.execute(stmt)
+    return {row[0]: row[1] for row in result.all()}
+
+
+async def get_equipment_nos_by_ids(
+    db: AsyncSession, equipment_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """根据设备ID列表批量获取设备编号映射"""
+    if not equipment_ids:
+        return {}
+    stmt = select(Equipment.id, Equipment.equipment_no).where(
         Equipment.id.in_(equipment_ids),
         Equipment.is_deleted == False,  # noqa: E712
     )

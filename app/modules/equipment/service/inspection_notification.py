@@ -190,7 +190,7 @@ def _build_card_content(
     # 检查项目
     lines.append("")
     lines.append("---")
-    lines.append("**📋 检查项目：**")
+    lines.append("**📋 所有检查项目：**")
     lines.append("")
 
     if items:
@@ -205,14 +205,6 @@ def _build_card_content(
             lines.append(f"> 还有 {len(items) - 20} 项，请在系统中查看")
     else:
         lines.append("请在系统中查看检查项目详情")
-
-    # 引导提示
-    lines.append("")
-    lines.append("---")
-    lines.append("**💡 开始巡检：**")
-    lines.append("到达设备现场后，回复「**开始**」进入逐台引导模式。")
-    lines.append("或直接发送设备照片，AI 将自动识别检查项。")
-    lines.append("回复「**帮助**」查看完整命令列表。")
 
     return "\n".join(lines)
 

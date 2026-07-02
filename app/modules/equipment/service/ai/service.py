@@ -61,7 +61,7 @@ async def analyze_inspection_photo(
         raise AppException(message="任务未在执行中状态，不能进行 AI 分析")
 
     # 2. 获取检查模板项（支持多模板合并）
-    items = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await _get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(message="该设备没有关联检查项，请先在系统中配置")
 
@@ -151,7 +151,7 @@ async def parse_manual_submission(
         raise AppException(message="任务未在执行中状态，不能提交检查结果")
 
     # 获取检查模板项
-    items = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await _get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(message="该设备没有关联检查项，请先在系统中配置")
 
@@ -235,16 +235,19 @@ async def _get_task(db: AsyncSession, task_id: uuid.UUID) -> InspectionTask:
 
 async def _get_inspection_items(
     db: AsyncSession, task: InspectionTask, equipment_id: uuid.UUID
-) -> list[InspectionTemplateItem]:
+) -> tuple[list[InspectionTemplateItem], dict[uuid.UUID, str]]:
     """获取巡检检查项 — 统一处理线路巡检和设备巡检的多模板合并。
 
     线路巡检：从 route → locations → equipment → templates 链获取
     设备巡检（新）：从 task.equipment_templates 按设备匹配
     设备巡检（旧）：从 task.template_ids 扁平列表（兼容）
+
+    返回 (检查项列表, item_id → template_name 映射)。
+    template_name 预收集避免调用方通过 relationship 懒加载触发 MissingGreenlet。
     """
     all_items: list[InspectionTemplateItem] = []
-    seen_names: set[str] = set()
     template_ids: set[uuid.UUID] = set()
+    item_template_names: dict[uuid.UUID, str] = {}
 
     if task.route_id:
         # 线路巡检：找到该设备在路线中的所有模板绑定
@@ -294,12 +297,14 @@ async def _get_inspection_items(
         )
         template = result.scalar_one_or_none()
         if template and template.items:
+            tpl_name = template.name
             for item in sorted(template.items, key=lambda x: x.sort_order):
-                if item.item_name not in seen_names:
-                    seen_names.add(item.item_name)
-                    all_items.append(item)
+                # ponytail: 不去重 — 同名检查项来自不同模板时 agent 需要看到全部
+                # 通过 template_item_id 区分，避免提交时定位到错误的检查项
+                all_items.append(item)
+                item_template_names[item.id] = tpl_name
 
-    return all_items
+    return all_items, item_template_names
 
 
 async def get_inspection_items_for_session(
@@ -307,7 +312,7 @@ async def get_inspection_items_for_session(
 ) -> list[dict]:
     """获取检查项列表（供飞书会话使用），返回轻量 dict 列表。"""
     task = await _get_task(db, task_id)
-    items = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await _get_inspection_items(db, task, equipment_id)
     return [
         {
             "template_item_id": str(item.id),

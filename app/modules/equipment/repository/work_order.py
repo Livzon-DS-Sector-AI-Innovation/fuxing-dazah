@@ -259,7 +259,11 @@ async def get_user_work_orders(
 
     result = await db.execute(
         select(WorkOrder)
-        .options(selectinload(WorkOrder.equipment))
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+        )
         .where(
             or_(
                 WorkOrder.assignee_id == user_id,

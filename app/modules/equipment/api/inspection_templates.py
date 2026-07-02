@@ -35,7 +35,7 @@ async def create_inspection_template(
         require_equipment_access("equipment:maintenance:create"),
     ),
 ) -> JSONResponse:
-    template = await service.create_inspection_template(db, data)
+    template = await service.create_inspection_template(db, data, ctx=ctx)
     return success_response(
         data=InspectionTemplateResponse.model_validate(template)
     )
@@ -62,6 +62,7 @@ async def list_inspection_templates(
         keyword=keyword,
         page=page,
         page_size=page_size,
+        ctx=ctx,
     )
     return paginated_response(
         data=[
@@ -81,7 +82,9 @@ async def get_inspection_template(
         require_equipment_access("equipment:maintenance:read"),
     ),
 ) -> JSONResponse:
-    template = await service.get_inspection_template_by_id(db, template_id)
+    template = await service.get_inspection_template_by_id(
+        db, template_id, ctx=ctx
+    )
     return success_response(
         data=InspectionTemplateResponse.model_validate(template)
     )
@@ -96,7 +99,9 @@ async def update_inspection_template(
         require_equipment_access("equipment:maintenance:update"),
     ),
 ) -> JSONResponse:
-    template = await service.update_inspection_template(db, template_id, data)
+    template = await service.update_inspection_template(
+        db, template_id, data, ctx=ctx
+    )
     return success_response(
         data=InspectionTemplateResponse.model_validate(template)
     )
@@ -110,7 +115,7 @@ async def delete_inspection_template(
         require_equipment_access("equipment:maintenance:delete"),
     ),
 ) -> JSONResponse:
-    await service.delete_inspection_template(db, template_id)
+    await service.delete_inspection_template(db, template_id, ctx=ctx)
     return success_response(message="删除成功")
 
 
@@ -124,7 +129,7 @@ async def add_template_item(
         require_equipment_access("equipment:maintenance:create"),
     ),
 ) -> JSONResponse:
-    await service.add_template_item(db, template_id, data)
+    await service.add_template_item(db, template_id, data, ctx=ctx)
     return success_response(message="添加成功")
 
 
@@ -137,7 +142,7 @@ async def update_template_item(
         require_equipment_access("equipment:maintenance:update"),
     ),
 ) -> JSONResponse:
-    await service.update_template_item(db, item_id, data)
+    await service.update_template_item(db, item_id, data, ctx=ctx)
     return success_response(message="修改成功")
 
 
@@ -149,7 +154,7 @@ async def delete_template_item(
         require_equipment_access("equipment:maintenance:delete"),
     ),
 ) -> JSONResponse:
-    await service.delete_template_item(db, item_id)
+    await service.delete_template_item(db, item_id, ctx=ctx)
     return success_response(message="删除成功")
 
 

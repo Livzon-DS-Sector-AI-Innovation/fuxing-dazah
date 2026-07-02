@@ -488,6 +488,7 @@ def generate_template_bytes() -> io.BytesIO:
 async def import_equipments_from_excel(
     db: AsyncSession,
     file_bytes: bytes,
+    ctx: EquipmentAccessContext | None = None,
 ) -> EquipmentImportResponse:
     """从 Excel 文件字节流导入设备"""
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
@@ -622,6 +623,19 @@ async def import_equipments_from_excel(
                 skipped += 1
                 continue
 
+            # 部门权限校验：非超管只能导入自己可见部门的设备
+            if ctx and not ctx.is_unrestricted:
+                if (
+                    not ctx.visible_department_ids
+                    or department_id not in ctx.visible_department_ids
+                ):
+                    errors.append(ImportRowError(
+                        row=row_num,
+                        message=f"归属部门「{dept_name}」不在您的数据权限范围内",
+                    ))
+                    skipped += 1
+                    continue
+
             # 负责人不存在
             responsible_person_id = user_map.get(person_name)
             if not responsible_person_id:
@@ -650,41 +664,44 @@ async def import_equipments_from_excel(
                 ))
                 importance = "低"
 
-            # 创建装备
+            # 创建装备（使用 SAVEPOINT 隔离每行，避免一行失败导致整个事务损坏）
             raw_pd = row[COL_PRODUCTION_DATE] if COL_PRODUCTION_DATE < len(row) else None
             raw_cd = row[COL_COMMISSIONING_DATE] if COL_COMMISSIONING_DATE < len(row) else None
             raw_we = row[COL_WARRANTY_EXPIRE] if COL_WARRANTY_EXPIRE < len(row) else None
             raw_av = row[COL_ASSET_VALUE] if COL_ASSET_VALUE < len(row) else None
             raw_dy = row[COL_DEPRECIATION_YEARS] if COL_DEPRECIATION_YEARS < len(row) else None
 
-            equipment = Equipment(
-                equipment_no=eq_no,
-                name=name,
-                location_id=location_id,
-                status=status,
-                importance=importance,
-                model=values[COL_MODEL],
-                specification=values[COL_SPECIFICATION],
-                manufacturer=values[COL_MANUFACTURER],
-                supplier=values[COL_SUPPLIER],
-                production_date=_parse_date(raw_pd),
-                commissioning_date=_parse_date(raw_cd),
-                description=values[COL_DESCRIPTION],
-                warranty_expire_date=_parse_date(raw_we),
-                asset_value=_parse_float(raw_av),
-                depreciation_years=_parse_int(raw_dy),
-                department_id=department_id,
-                responsible_person_id=responsible_person_id,
-            )
-            db.add(equipment)
-            await db.flush()
+            async with db.begin_nested():
+                equipment = Equipment(
+                    equipment_no=eq_no,
+                    name=name,
+                    location_id=location_id,
+                    status=status,
+                    importance=importance,
+                    model=values[COL_MODEL],
+                    specification=values[COL_SPECIFICATION],
+                    manufacturer=values[COL_MANUFACTURER],
+                    supplier=values[COL_SUPPLIER],
+                    production_date=_parse_date(raw_pd),
+                    commissioning_date=_parse_date(raw_cd),
+                    description=values[COL_DESCRIPTION],
+                    warranty_expire_date=_parse_date(raw_we),
+                    asset_value=_parse_float(raw_av),
+                    depreciation_years=_parse_int(raw_dy),
+                    department_id=department_id,
+                    responsible_person_id=responsible_person_id,
+                    created_by=ctx.user.id if ctx else None,
+                    updated_by=ctx.user.id if ctx else None,
+                )
+                db.add(equipment)
+                await db.flush()
 
-            # 关联分类
-            db.add(EquipmentCategoryLink(
-                equipment_id=equipment.id,
-                category_id=category_id,
-            ))
-            await db.flush()
+                # 关联分类
+                db.add(EquipmentCategoryLink(
+                    equipment_id=equipment.id,
+                    category_id=category_id,
+                ))
+                await db.flush()
 
             existing_nos.add(eq_no)
             imported += 1
@@ -695,7 +712,6 @@ async def import_equipments_from_excel(
                 message=f"导入异常: {e}",
             ))
             skipped += 1
-            await db.rollback()
             logger.warning("导入行 %d 失败: %s", row_num, e)
 
     return EquipmentImportResponse(

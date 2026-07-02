@@ -1,1 +1,12 @@
-{"permissions":{"allow":["Bash(python3 *)","Bash(uv run python *)","Read(/Users/chenjiangyue/Downloads/*)"]}}
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(uv run python *)",
+      "Read(/Users/chenjiangyue/Downloads/*)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "dazah"
+  ]
+}

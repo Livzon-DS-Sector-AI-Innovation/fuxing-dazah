@@ -11,8 +11,11 @@ from typing import Any
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 
+from app.platform.mcp.logging_middleware import MCPToolLoggingMiddleware
+
 # 全局 FastMCP 实例
 mcp = FastMCP("dazah-mcp")
+mcp.add_middleware(MCPToolLoggingMiddleware())
 
 
 def create_mcp_server() -> FastMCP:

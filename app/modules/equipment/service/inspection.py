@@ -1,5 +1,6 @@
 """Inspection service: business logic for routes, tasks, photos."""
 
+import base64
 import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -17,6 +18,7 @@ from app.core.storage import delete_object, upload_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
+from app.modules.equipment.models.equipment import Equipment
 from app.modules.equipment.models.inspection import (
     InspectionPhoto,
     InspectionRoute,
@@ -25,6 +27,7 @@ from app.modules.equipment.models.inspection import (
 )
 from app.modules.equipment.models.inspection_route_location import (
     RouteLocation,
+    RouteLocationEquipment,
 )
 from app.modules.equipment.models.inspection_template import InspectionRecord
 from app.modules.equipment.models.work_order import WorkOrder
@@ -479,6 +482,39 @@ async def submit_equipment_check(
             message="任务未在'执行中'状态，不能提交检查结果"
         )
 
+    # 校验设备是否存在且属于此任务
+    eq_result = await db.execute(
+        select(Equipment).where(
+            Equipment.id == equipment_id, Equipment.is_deleted == False  # noqa: E712
+        )
+    )
+    if not eq_result.scalar_one_or_none():
+        raise NotFoundException(resource="设备", resource_id=str(equipment_id))
+
+    if task.route_id:
+        # 线路巡检：校验设备在路线上
+        rle_result = await db.execute(
+            select(RouteLocationEquipment).join(RouteLocation).where(
+                RouteLocation.route_id == task.route_id,
+                RouteLocationEquipment.equipment_id == equipment_id,
+                RouteLocationEquipment.is_deleted == False,  # noqa: E712
+                RouteLocation.is_deleted == False,  # noqa: E712
+            )
+        )
+        if not rle_result.scalar_one_or_none():
+            raise AppException(
+                message=f"设备 {equipment_id} 不属于此巡检路线，请确认设备ID是否正确"
+            )
+    elif task.equipment_ids:
+        if str(equipment_id) not in task.equipment_ids:
+            raise AppException(
+                message=f"设备 {equipment_id} 不在此巡检任务中，请确认设备ID是否正确"
+            )
+    elif task.equipment_id and task.equipment_id != equipment_id:
+        raise AppException(
+            message=f"设备 {equipment_id} 不匹配此巡检任务的设备"
+        )
+
     for r in records:
         r["task_id"] = str(task_id)
         r["equipment_id"] = str(equipment_id)
@@ -546,7 +582,7 @@ async def skip_equipment_check(
         )
 
     # 获取该设备的检查项
-    items = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await _get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(
             message="该设备没有关联检查项，无法跳过"
@@ -642,6 +678,118 @@ async def delete_photo(
         os.remove(photo.file_path)
 
     return await repo.delete_photo(db, photo_id)
+
+
+async def save_photo_from_path(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    file_path: str,
+) -> InspectionPhoto:
+    """从本地文件路径保存巡检照片到 MinIO（或本地）和数据库。"""
+    from pathlib import Path
+
+    p = Path(file_path)
+    if not p.exists():
+        raise AppException(message=f"照片文件不存在: {file_path}")
+
+    content = p.read_bytes()
+    filename = f"{uuid.uuid4()}_{p.name}"
+
+    if minio_enabled():
+        object_key = f"inspection/{filename}"
+        upload_object(
+            module="equipment",
+            object_key=object_key,
+            data=content,
+            length=len(content),
+            content_type="image/jpeg",
+        )
+        stored_path = object_key
+    else:
+        file_dest = os.path.normpath(os.path.join(_UPLOAD_DIR, filename))
+        if not file_dest.startswith(os.path.normpath(_UPLOAD_DIR)):
+            raise AppException(message="非法文件路径")
+        with open(file_dest, "wb") as f:
+            f.write(content)
+        stored_path = file_dest
+
+    photo_data = {
+        "task_id": str(task_id),
+        "equipment_id": str(equipment_id),
+        "file_name": p.name,
+        "file_path": stored_path,
+        "file_size": len(content),
+    }
+    return await repo.create_photo(db, photo_data)
+
+
+async def save_photo_from_base64(
+    db: AsyncSession,
+    task_id: uuid.UUID,
+    equipment_id: uuid.UUID,
+    image_b64: str,
+    filename: str = "",
+) -> InspectionPhoto:
+    """从 base64 编码保存巡检照片到 MinIO（或本地）和数据库。"""
+    MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+
+    # Validate base64
+    try:
+        content = base64.b64decode(image_b64, validate=True)
+    except Exception as e:
+        raise AppException(message=f"图片 base64 解码失败：{e}")
+
+    if len(content) > MAX_SIZE:
+        raise AppException(
+            message=f"图片大小 {len(content) / 1024 / 1024:.1f}MB 超过上限 10MB"
+        )
+
+    if len(content) < 64:
+        raise AppException(message="图片数据过小，可能不是有效图片")
+
+    # Basic image format check (magic bytes)
+    magic = content[:4]
+    valid_magics = {
+        b"\xff\xd8\xff": "jpg",       # JPEG
+        b"\x89PNG": "png",             # PNG
+        b"RIFF": "webp",              # WEBP
+        b"BM": "bmp",                 # BMP
+    }
+    ext = "jpg"
+    for magic_bytes, fmt in valid_magics.items():
+        if magic.startswith(magic_bytes):
+            ext = fmt
+            break
+
+    fname = filename or f"{uuid.uuid4()}.{ext}"
+
+    if minio_enabled():
+        object_key = f"inspection/{fname}"
+        upload_object(
+            module="equipment",
+            object_key=object_key,
+            data=content,
+            length=len(content),
+            content_type="image/jpeg",
+        )
+        stored_path = object_key
+    else:
+        file_dest = os.path.normpath(os.path.join(_UPLOAD_DIR, fname))
+        if not file_dest.startswith(os.path.normpath(_UPLOAD_DIR)):
+            raise AppException(message="非法文件路径")
+        with open(file_dest, "wb") as f:
+            f.write(content)
+        stored_path = file_dest
+
+    photo_data = {
+        "task_id": str(task_id),
+        "equipment_id": str(equipment_id),
+        "file_name": fname,
+        "file_path": stored_path,
+        "file_size": len(content),
+    }
+    return await repo.create_photo(db, photo_data)
 
 
 # ═══════════ 历史 ═══════════
