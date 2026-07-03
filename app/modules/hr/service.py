@@ -316,6 +316,47 @@ class EmployeeService:
         "birth_year", "birth_month", "birth_day", "age", "work_years",
     }
 
+    # 常见日期格式（按优先级从高到低排序）
+    _DATE_FORMATS: list[str] = [
+        "%Y-%m-%d",       # 2024-01-15
+        "%Y/%m/%d",       # 2024/01/15
+        "%Y.%m.%d",       # 2024.01.15
+        "%Y年%m月%d日",    # 2024年01月15日
+        "%Y%m%d",         # 20240115
+        "%Y-%m-%d %H:%M:%S",       # 2024-01-15 00:00:00
+        "%Y/%m/%d %H:%M:%S",       # 2024/01/15 00:00:00
+        "%d/%m/%Y",       # 15/01/2024
+        "%m/%d/%Y",       # 01/15/2024
+    ]
+
+    @staticmethod
+    def _parse_date_value(val: object) -> date | None:
+        """将各种格式的日期值统一转换为 date 对象。返回 None 表示无法解析。"""
+        from datetime import date as date_cls, datetime as datetime_cls
+
+        if isinstance(val, datetime_cls):
+            return val.date()
+        if isinstance(val, date_cls):
+            return val
+        if isinstance(val, (int, float)):
+            # Excel 日期序列号（以 1899-12-30 为第 0 天）
+            try:
+                from datetime import timedelta
+                excel_epoch = date_cls(1899, 12, 30)
+                return excel_epoch + timedelta(days=int(val))
+            except (ValueError, OverflowError):
+                return None
+        if isinstance(val, str):
+            val = val.strip()
+            if not val:
+                return None
+            for fmt in EmployeeService._DATE_FORMATS:
+                try:
+                    return datetime_cls.strptime(val, fmt).date()
+                except ValueError:
+                    continue
+        return None
+
     async def upload_employees(self, file_bytes: bytes) -> dict:
         """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, errors}。"""
         from io import BytesIO
@@ -353,10 +394,11 @@ class EmployeeService:
                         continue
                     if isinstance(val, str):
                         val = val.strip()
-                    if field_name in self._DATE_FIELDS and isinstance(val, str):
-                        val = date.fromisoformat(val)
-                    elif field_name in self._DATE_FIELDS and isinstance(val, datetime):
-                        val = val.date()
+                    if field_name in self._DATE_FIELDS:
+                        parsed = self._parse_date_value(val)
+                        if parsed is None:
+                            continue  # 无法解析的日期跳过
+                        val = parsed
                     elif field_name in self._INT_FIELDS:
                         try:
                             val = int(float(str(val)))
@@ -372,12 +414,7 @@ class EmployeeService:
 
                 existing = await self.repo.get_by_employee_number(data["employee_number"])
                 if existing:
-                    if "department" in data and data["department"] != existing.department:
-                        existing.department = data["department"]
-                        await self.repo.session.flush()
-                    if "position" in data and data["position"] != existing.position:
-                        existing.position = data["position"]
-                        await self.repo.session.flush()
+                    await self.repo.upsert_by_employee_number(data)
                     updated += 1
                 else:
                     if "hire_date" not in data:
