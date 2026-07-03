@@ -23,10 +23,10 @@ EMPLOYEES_PER_PAGE = 15
 
 def _find_template() -> Path:
     candidates = [
-        Path("员工培训教育管理规程/7.5培训签到表.docx"),
-        Path("../员工培训教育管理规程/7.5培训签到表.docx"),
+        Path("assets/hr/7.5培训签到表.docx"),
+        Path("../assets/hr/7.5培训签到表.docx"),
         Path(__file__).resolve().parent.parent.parent.parent
-        / "员工培训教育管理规程"
+        / "assets/hr"
         / "7.5培训签到表.docx",
     ]
     for p in candidates:

@@ -12,10 +12,10 @@ from app.modules.hr.models import Employee
 
 def _find_template() -> Path:
     candidates = [
-        Path("员工培训教育管理规程/7.3新员工入职培训记录.docx"),
-        Path("../员工培训教育管理规程/7.3新员工入职培训记录.docx"),
+        Path("assets/hr/7.3新员工入职培训记录.docx"),
+        Path("../assets/hr/7.3新员工入职培训记录.docx"),
         Path(__file__).resolve().parent.parent.parent.parent
-        / "员工培训教育管理规程"
+        / "assets/hr"
         / "7.3新员工入职培训记录.docx",
     ]
     for p in candidates:

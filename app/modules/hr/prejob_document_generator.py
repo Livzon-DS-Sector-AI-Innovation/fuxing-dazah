@@ -11,10 +11,10 @@ from app.modules.hr.models import Employee
 def _find_template() -> Path:
     """Locate the xlsx template, trying several path candidates."""
     candidates = [
-        Path("员工培训教育管理规程/7.4岗前培训计划.xlsx"),
-        Path("../员工培训教育管理规程/7.4岗前培训计划.xlsx"),
+        Path("assets/hr/7.4岗前培训计划.xlsx"),
+        Path("../assets/hr/7.4岗前培训计划.xlsx"),
         Path(__file__).resolve().parent.parent.parent.parent
-        / "员工培训教育管理规程"
+        / "assets/hr"
         / "7.4岗前培训计划.xlsx",
     ]
     for p in candidates:

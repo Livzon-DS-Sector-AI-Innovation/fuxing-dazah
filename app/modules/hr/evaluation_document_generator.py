@@ -38,10 +38,10 @@ class TrainingEvaluationInput(BaseModel):
 
 def _find_template() -> Path:
     candidates = [
-        Path("员工培训教育管理规程/7.11培训效果评估表.docx"),
-        Path("../员工培训教育管理规程/7.11培训效果评估表.docx"),
+        Path("assets/hr/7.11培训效果评估表.docx"),
+        Path("../assets/hr/7.11培训效果评估表.docx"),
         Path(__file__).resolve().parent.parent.parent.parent
-        / "员工培训教育管理规程"
+        / "assets/hr"
         / "7.11培训效果评估表.docx",
     ]
     for p in candidates:

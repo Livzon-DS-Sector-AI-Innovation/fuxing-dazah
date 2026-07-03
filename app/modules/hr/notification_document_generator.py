@@ -26,10 +26,10 @@ class TrainingNotificationInput(BaseModel):
 
 def _find_template() -> Path:
     candidates = [
-        Path("员工培训教育管理规程/7.4培训通知书.docx"),
-        Path("../员工培训教育管理规程/7.4培训通知书.docx"),
+        Path("assets/hr/7.4培训通知书.docx"),
+        Path("../assets/hr/7.4培训通知书.docx"),
         Path(__file__).resolve().parent.parent.parent.parent
-        / "员工培训教育管理规程"
+        / "assets/hr"
         / "7.4培训通知书.docx",
     ]
     for p in candidates:
