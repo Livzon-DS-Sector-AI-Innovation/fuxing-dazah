@@ -81,6 +81,20 @@ export async function deleteEmployee(id: string) {
   return res.json()
 }
 
+export async function uploadEmployeesAction(formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, {
+    method: 'POST',
+    // 不设置 Content-Type，让 fetch 自动生成带 boundary 的 multipart/form-data
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '上传员工名单失败')
+  }
+  revalidatePath('/hr/profile')
+  return res.json()
+}
+
 // ─── Feishu Sync Actions ───
 
 export async function syncFromFeishuAction() {

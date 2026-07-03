@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { App, Button, Select, Tabs, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
 import { Employee, Department } from '@/types/hr'
-import { fetchEmployeesAction } from '@/actions/hr'
+import { fetchEmployeesAction, uploadEmployeesAction } from '@/actions/hr'
 import { fetchDepartments } from '@/lib/api/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeTable from './EmployeeTable'
@@ -34,7 +34,7 @@ export default function EmployeeProfileClient({
   initialTotal,
   initialDepartment,
   fetchAction }: EmployeeProfileClientProps) {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
@@ -134,14 +134,20 @@ export default function EmployeeProfileClient({
         </h1>
         <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({file}) => {
           const fd = new FormData(); fd.append('file', file as File)
-          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
           try {
-            const res = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, {method:'POST', body: fd, credentials: 'include'})
-            const d = await res.json()
-            if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-            else message.error(d.message || '上传失败')
+            const d = await uploadEmployeesAction(fd)
+            const { created, updated, errors } = d.data
+            if (errors && errors.length > 0) {
+              modal.warning({
+                title: `上传完成：新增${created}，更新${updated}，但有${errors.length}行出错`,
+                content: <ul style={{maxHeight:300, overflow:'auto', paddingLeft:18}}>{errors.map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>,
+                width: 500,
+              })
+            } else {
+              message.success(`上传完成：新增${created}，更新${updated}`)
+            }
             handleRefresh()
-          } catch { message.error('上传失败') }
+          } catch (err: any) { message.error(err.message || '上传失败') }
         }}>
           <Button icon={<UploadOutlined />}>上传人员名单</Button>
         </Upload>
