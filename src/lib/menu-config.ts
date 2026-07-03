@@ -216,6 +216,8 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/quality",
     permissions: ["quality:*:read"],
     children: [
+      { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
+      { key: "lc-calc", label: "📊 计算表", path: "/quality/calculator" },
       { key: "inspection", label: "质量检验", path: "/quality/inspection" },
       { key: "deviation", label: "偏差管理", path: "/quality/deviation" },
       { key: "capa", label: "CAPA管理", path: "/quality/capa" },

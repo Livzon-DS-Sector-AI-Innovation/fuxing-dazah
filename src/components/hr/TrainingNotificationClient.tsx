@@ -80,6 +80,7 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
 }
 
 export default function TrainingNotificationClient() {
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])

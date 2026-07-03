@@ -1,0 +1,172 @@
+<!DOCTYPE html><html lang="zh-CN"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>液相计算表</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'PingFang SC','Microsoft YaHei',sans-serif;background:#e8e8e8;padding:10px}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:6px 10px;background:#fff;border:1px solid #ccc;font-size:12px}
+.bar select{padding:4px 8px;border:1px solid #999;font-size:12px;min-width:260px}
+.bar input{padding:4px 6px;border:1px solid #999;font-size:12px;width:130px}
+.bar button{padding:4px 12px;border:1px solid #999;font-size:12px;background:#f0f0f0;cursor:pointer}
+.bar .pri{background:#1a73e8;color:#fff;border-color:#1a73e8}
+
+.xls{background:#fff;border:1px solid #999;overflow-x:auto}
+table{border-collapse:collapse;font-size:10.5px;font-family:'Microsoft YaHei','PingFang SC',Consolas,monospace}
+td,th{border:1px solid #b0b0b0;padding:2px 5px;height:20px;text-align:center;vertical-align:middle;white-space:nowrap}
+th{background:#f2f2f2;font-weight:600;font-size:10px}
+.h1{font-size:13px;font-weight:700;padding:4px;background:#fff}
+.lf{text-align:left;font-weight:600;background:#f8f8f8}
+.lb{text-align:left;font-weight:500}
+.rt{text-align:right;font-family:Consolas,monospace}
+.gr{color:#999;font-size:10px}
+.sec{text-align:left;font-weight:700;background:#eaf4ff;font-size:11px;padding:3px 5px}
+.st{text-align:left;font-weight:600;background:#fff8e1}
+.sv{text-align:right;font-family:Consolas,monospace;background:#fff8e1;font-size:10.5px}
+.big{font-size:16px;font-weight:700;color:#1a73e8;text-align:center;vertical-align:middle;min-width:80px}
+input.inp{width:90px;border:1px solid #b0b0b0;padding:1px 4px;font-size:10.5px;text-align:right;font-family:Consolas,monospace;background:#fff}
+input.inp:focus{outline:none;border-color:#1a73e8;background:#fffff0}
+input.res{width:75px;border:1px solid #d0d0d0;padding:1px 4px;font-size:10.5px;text-align:right;font-family:Consolas,monospace;background:#f8f8f8;font-weight:600}
+.r-ok{color:#006000}.r-ot{color:#d97706}.r-ng{color:#c00}
+</style></head><body>
+<div class="bar">
+  <select id="s" onchange="onTpl()"><option value="">选择模板</option></select>
+  批号 <input id="b" placeholder="HAF2606019A">
+  <button onclick="clr()">清空</button><button class="pri" onclick="exp()">导出</button>
+  <b id="vd" style="font-size:13px"></b>
+</div>
+<div class="xls" id="xls"></div>
+
+<script>
+const TPL=[{id:'vanco-usp',p:'盐酸万古霉素',s:'USP',f:'EX-HA-5246-001',
+  imps:[
+    {id:'RS1',lb:'杂质RS1（ARS1）',lim:0.0035,oh:0.003,oa:0.0032},{id:'RS2',lb:'杂质RS2（ARS2）',lim:0.012,oh:0.008,oa:0.011},
+    {id:'RS3',lb:'杂质RS3（ARS3）',lim:0.013,oh:0.012,oa:0.012},{id:'RS4',lb:'杂质RS4（ARS4）',lim:0.0075,oh:0.007,oa:0.011},
+    {id:'B1',lb:'杂质B1（AB1）',lim:0.03,oh:0.02,oa:0.027},{id:'A',lb:'杂质A（AA）',lim:0.03,oh:0.02,oa:0.027},
+    {id:'RS5',lb:'杂质RS5（ARS5）',lim:0.0045,oh:0.0044,oa:0.0054},{id:'RS6',lb:'杂质RS6（ARS6）',lim:0.014,oh:0.01,oa:0.013},
+    {id:'RS7',lb:'杂质RS7（ARS7）',lim:0.009,oh:0.008,oa:0.0081},{id:'B2',lb:'杂质B2（AB2）',lim:0.03,oh:0.02,oa:0.027},
+    {id:'D',lb:'杂质D（AD）',lim:0.03,oh:0.01,oa:0.027},{id:'C',lb:'杂质C（AC）',lim:0.03,oh:0.005,oa:0.027}
+  ],vb:0.93,tot:0.07,
+  demo:{totalA:26961730,totalA2:26974189,mainA:25774287,mainA2:25790550,RS1:55229,RS12:55155,RS2:86578,RS22:86114,RS3:199398,RS32:199295,RS4:108358,RS42:107616,B1:99902,B12:100031,A:175686,A2:176102,RS5:51918,RS52:49662,RS6:108001,RS62:108097,RS7:114787,RS72:114792,B2:16087,B22:16016,D:38334,D2:38203,C:13075,C2:13004,at:1187443,at2:1183639,ax:48257,ax2:48922,ab:1039129,ab2:1040166}
+}];
+let C=null;
+const IN=(id,s='')=>`<input id="i_${id}${s}" class="inp" type="number" step="1" oninput="c()">`;
+const OU=id=>`<input id="o_${id}" class="res" readonly>`;
+function rnd(v){if(!v)return 0;const e=Math.floor(Math.log10(Math.abs(v)));return Math.round(v/Math.pow(10,e-1))*Math.pow(10,e-1)}
+function pct(v,d){if(v==null)return'-';const p=v*100;if(d!=null)return p.toFixed(d)+'%';return p<0.1?p.toFixed(3)+'%':p.toFixed(2)+'%'}
+
+(function(){const s=document.getElementById('s');TPL.forEach((t,i)=>{const o=document.createElement('option');o.value=i;o.text=t.p+' — '+t.s+' ('+t.f+')';s.appendChild(o)});s.value='0';onTpl()})();
+function onTpl(){const i=document.getElementById('s').value;if(i==='')return;C=TPL[parseInt(i)];build();if(C.demo)ld()}
+
+function build(){
+  const t=C,im=t.imps;
+  // 最终结果占位列 (rowspan=4, 大字号)
+  const FR=id=>`<td class="big" rowspan="4" id="fr_${id}">-</td>`;
+
+  let R='<table>';
+  // 标题
+  R+=`<tr><td colspan="15" class="h1">${t.p}${t.s}含量与有关物质计算表 &nbsp; <span style="font-size:10px;color:#999;font-weight:400">${t.f}</span></td></tr>`;
+  // 批号+标准头
+  R+=`<tr><td class="lf" colspan="2">批号：<span id="db" style="font-weight:700">-</span></td><td colspan="9"></td><td class="st" style="font-weight:700">合格标准</td><td class="st" style="font-weight:700">OOT(HAF)</td><td class="st" style="font-weight:700">OOT(HAA)</td></tr>`;
+  // 表头
+  R+=`<tr><td class="lf">供试液</td><td class="lf">峰面积项</td><td colspan="4">第一份</td><td colspan="4">第二份</td><td></td><td class="st">项目</td><td class="sv">限度</td><td class="sv">HAF</td><td class="sv">HAA</td></tr>`;
+
+  // 供试液A — 标准按原表顺序（含OOT阈值）
+  const E=[['万古霉素B',t.vb,t.voh,t.voa],['杂质A',0.03,0.02,0.027],['杂质B',0.03,0.02,0.027],['杂质C',0.03,0.005,0.027],['杂质D',0.03,0.01,0.027]];
+  im.forEach(f=>E.push([f.lb.split('（')[0].replace('杂质',''),f.lim,f.oh||'',f.oa||'']));
+  E.push(null,null,null,['任何未知杂质',0.005,0.004,0.0045],null,null,['总杂质',t.tot,'','']);
+  const ST=i=>{const e=i<E.length?E[i]:null;return e?`<td class="st">${e[0]||''}</td><td class="sv">${e[1]!=null?e[1]:''}</td><td class="sv">${e[2]||''}</td><td class="sv">${e[3]||''}</td>`:'<td colspan="4"></td>'};
+
+  R+=`<tr><td class="lf" rowspan="16">供试液A</td><td class="lb">总峰面积</td><td colspan="4" class="rt">${IN('totalA')}</td><td colspan="4" class="rt">${IN('totalA2')}</td><td></td>${ST(0)}</tr>`;
+  R+=`<tr><td class="lb">主峰面积</td><td colspan="4" class="rt">${IN('mainA')}</td><td colspan="4" class="rt">${IN('mainA2')}</td><td></td>${ST(1)}</tr>`;
+  im.forEach((f,i)=>R+=`<tr><td class="lb">${f.lb}</td><td colspan="4" class="rt">${IN(f.id)}</td><td colspan="4" class="rt">${IN(f.id,'2')}</td><td></td>${ST(i+2)}</tr>`);
+  R+=`<tr><td class="lb">杂质总峰面积（At）</td><td colspan="4" class="rt">${IN('at')}</td><td colspan="4" class="rt">${IN('at2')}</td><td></td>${ST(im.length+2)}</tr>`;
+  R+=`<tr><td class="lb">任何未知杂质（Ax）</td><td colspan="4" class="rt">${IN('ax')}</td><td colspan="4" class="rt">${IN('ax2')}</td><td></td>${ST(im.length+3)}</tr>`;
+  R+=`<tr><td class="lf">供试液B</td><td class="lb">主峰面积（Ab）</td><td colspan="4" class="rt">${IN('ab')}</td><td colspan="4" class="rt">${IN('ab2')}</td><td colspan="5"></td></tr>`;
+
+  // ═══ 计算区（右侧带大号最终结果%）═══
+  // VB
+  R+=`<tr><td class="sec" colspan="14">Vancomycin B％ = 25×Ab/(25×Ab+At)</td>${FR('vb')}</tr>`;
+  R+=`<tr><td class="lf">Vancomycin<br>B％</td><td class="lb">第一份＝</td><td class="gr">25×Ab</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt">25</td><td class="gr">×</td><td class="rt" id="vb_a1">-</td><td class="gr">＝</td><td>${OU('vb_v1')}</td><td>${OU('vb_r1')}</td><td></td><td></td><td></td></tr>`;
+  R+=`<tr><td></td><td class="gr" colspan="3">25×Ab+At</td><td class="rt">25</td><td class="gr">×</td><td class="rt" id="vb_ab1">-</td><td class="gr">＋</td><td class="rt" id="vb_at1">-</td><td class="gr">＝</td><td class="rt" id="vb_d1">-</td><td></td><td></td><td></td></tr>`;
+  R+=`<tr><td></td><td class="lb">第二份＝</td><td class="gr">25×Ab</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt">25</td><td class="gr">×</td><td class="rt" id="vb_a2">-</td><td class="gr">＝</td><td>${OU('vb_v2')}</td><td>${OU('vb_r2')}</td><td></td><td></td><td></td></tr>`;
+
+  // 杂质
+  R+=`<tr><td class="sec" colspan="14">各杂质％ = 峰面积/(25×Ab+At)</td></tr>`;
+  im.forEach(f=>{
+    const vn=f.id.startsWith('RS')?'ARS'+f.id.slice(2):f.id.startsWith('B')?'AB'+f.id.slice(1):'A'+f.id;
+    R+=`<tr><td class="sec" colspan="14">杂质${f.id}％</td>${FR(f.id)}</tr>`;
+    R+=`<tr><td class="lf">杂质${f.id}％</td><td class="lb">第一份＝</td><td class="gr">${vn}</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt" id="v_${f.id}1">-</td><td class="gr">＝</td><td class="rt" id="d_${f.id}1">-</td><td class="gr">＝</td><td>${OU(f.id+'_v1')}</td><td>${OU(f.id+'_r1')}</td><td></td><td></td><td></td></tr>`;
+    R+=`<tr><td></td><td class="gr" colspan="3">25×Ab+At</td><td class="rt">25</td><td class="gr">×</td><td class="rt" id="aa_${f.id}1">-</td><td class="gr">＋</td><td class="rt" id="at_${f.id}1">-</td><td class="gr">＝</td><td class="rt" id="den_${f.id}1">-</td><td></td><td></td><td></td></tr>`;
+    R+=`<tr><td></td><td class="lb">第二份＝</td><td class="gr">${vn}</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt" id="v_${f.id}2">-</td><td class="gr">＝</td><td class="rt" id="d_${f.id}2">-</td><td class="gr">＝</td><td>${OU(f.id+'_v2')}</td><td>${OU(f.id+'_r2')}</td><td></td><td></td><td></td></tr>`;
+  });
+
+  // 任何未知杂质
+  R+=`<tr><td class="sec" colspan="14">任何未知杂质％ = Ax/(25×Ab+At)</td>${FR('ax')}</tr>`;
+  R+=`<tr><td class="lf">未知杂质％</td><td class="lb">第一份＝</td><td class="gr">AX</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt" id="v_ax1">-</td><td class="gr">＝</td><td class="rt" id="d_ax1">-</td><td class="gr">＝</td><td>${OU('ax_v1')}</td><td>${OU('ax_r1')}</td><td></td><td></td><td></td></tr>`;
+  R+=`<tr><td></td><td class="gr" colspan="3">25×Ab+At</td><td class="rt">25</td><td class="gr">×</td><td class="rt" id="aa_ax1">-</td><td class="gr">＋</td><td class="rt" id="at_ax1">-</td><td class="gr">＝</td><td class="rt" id="den_ax1">-</td><td></td><td></td><td></td></tr>`;
+  R+=`<tr><td></td><td class="lb">第二份＝</td><td class="gr">AX</td><td class="gr">×100%</td><td class="gr">＝</td><td class="rt" id="v_ax2">-</td><td class="gr">＝</td><td class="rt" id="d_ax2">-</td><td class="gr">＝</td><td>${OU('ax_v2')}</td><td>${OU('ax_r2')}</td><td></td><td></td><td></td></tr>`;
+
+  // 总杂质
+  R+=`<tr><td class="sec" colspan="14">总杂质％ = 1 − Vb</td>${FR('tot')}</tr>`;
+  R+=`<tr><td class="lf">总杂质％</td><td class="lb">第一份＝</td><td class="gr" colspan="3">1 − Vb</td><td class="rt">1</td><td class="gr">−</td><td class="rt" id="tot_v1d">-</td><td class="gr">＝</td><td>${OU('tot1')}</td><td></td><td></td><td></td><td></td></tr>`;
+  R+=`<tr><td></td><td class="lb">第二份＝</td><td class="gr" colspan="3">1 − Vb</td><td class="rt">1</td><td class="gr">−</td><td class="rt" id="tot_v2d">-</td><td class="gr">＝</td><td>${OU('tot2')}</td><td></td><td></td><td></td><td></td></tr>`;
+
+  // 签名
+  R+=`<tr><td class="lf" colspan="7" style="padding:4px 6px">检验人：________年____月____日</td><td class="lf" colspan="8" style="padding:4px 6px">复核人：________年____月____日</td></tr>`;
+  R+=`<tr><td colspan="15" style="color:#666;font-size:10px;padding:3px">注意：1、蓝色字体为超趋势；2、红色字体为不符合标准</td></tr>`;
+  R+='</table>';
+  document.getElementById('xls').innerHTML=R;
+}
+
+function c(){if(!C)return;const t=C;const g=id=>parseFloat(document.getElementById('i_'+id)?.value)||0;
+  const a1=g('ab'),a2=g('ab2'),t1=g('at'),t2=g('at2'),d1=25*a1+t1,d2=25*a2+t2;
+  document.getElementById('db').textContent=document.getElementById('b').value||'-';
+  const S=(id,v,c)=>{const e=document.getElementById(id);if(e){e.textContent=v!=null?v.toLocaleString():'-';if(c)e.className=c}};
+  const O=(id,v,d,op,l,oh,oa)=>{const e=document.getElementById('o_'+id);if(!e)return true;e.value=v.toFixed(d);const ok=l&&l>0?(op==='≥'?v>=l:v<=l):true;const oo=(oh&&v>oh)||(oa&&v>oa);e.className='res '+(oo?'r-ot':ok?'r-ok':'r-ng');return ok};
+  const FR=(id,txt)=>{const e=document.getElementById('fr_'+id);if(e)e.textContent=txt};
+
+  let allOK=true;
+
+  // VB
+  S('vb_a1',a1,'rt');S('vb_ab1',a1);S('vb_at1',t1);S('vb_d1',d1,'rt');
+  S('vb_a2',a2,'rt');S('vb_ab2',a2);S('vb_at2',t2);S('vb_d2',d2,'rt');
+  const vb1=d1>0?25*a1/d1:0,vb2=d2>0?25*a2/d2:0,vb1r=+(vb1.toFixed(3)),vb2r=+(vb2.toFixed(3));
+  O('vb_v1',vb1,6);O('vb_r1',vb1r,3,'≥',t.vb,t.voh,t.voa);O('vb_v2',vb2,6);O('vb_r2',vb2r,3,'≥',t.vb,t.voh,t.voa);
+  if(vb1r<t.vb||vb2r<t.vb)allOK=false;
+  FR('vb',pct((vb1r+vb2r)/2,2));
+
+  // 杂质
+  t.imps.forEach(f=>{
+    const p1=d1>0?g(f.id)/d1:0,p2=d2>0?g(f.id+'2')/d2:0;
+    S('v_'+f.id+'1',g(f.id),'rt');S('d_'+f.id+'1',d1,'rt');S('aa_'+f.id+'1',a1);S('at_'+f.id+'1',t1);S('den_'+f.id+'1',d1,'rt');
+    S('v_'+f.id+'2',g(f.id+'2'),'rt');S('d_'+f.id+'2',d2,'rt');S('aa_'+f.id+'2',a2);S('at_'+f.id+'2',t2);S('den_'+f.id+'2',d2,'rt');
+    O(f.id+'_v1',p1,6);O(f.id+'_r1',rnd(p1),6,'≤',f.lim,f.oh,f.oa);O(f.id+'_v2',p2,6);O(f.id+'_r2',rnd(p2),6,'≤',f.lim,f.oh,f.oa);
+    if(rnd(p1)>f.lim||rnd(p2)>f.lim)allOK=false;
+    const avg=(rnd(p1)+rnd(p2))/2, dp=avg*100<0.1?3:2;
+    FR(f.id,pct(avg,dp));
+  });
+
+  // 未知杂质
+  const ax1=d1>0?g('ax')/d1:0,ax2=d2>0?g('ax2')/d2:0;
+  S('v_ax1',g('ax'),'rt');S('d_ax1',d1,'rt');S('aa_ax1',a1);S('at_ax1',t1);S('den_ax1',d1,'rt');
+  S('v_ax2',g('ax2'),'rt');S('d_ax2',d2,'rt');S('aa_ax2',a2);S('at_ax2',t2);S('den_ax2',d2,'rt');
+  O('ax_v1',ax1,6);O('ax_r1',rnd(ax1),6,'≤',0.005,0.004,0.0045);O('ax_v2',ax2,6);O('ax_r2',rnd(ax2),6,'≤',0.005,0.004,0.0045);
+  const axAvg=(rnd(ax1)+rnd(ax2))/2, axD=axAvg*100<0.1?3:2;
+  FR('ax',pct(axAvg,axD));
+
+  // 总杂质
+  S('tot_v1d',vb1r,'rt');S('tot_v2d',vb2r,'rt');
+  const T1=1-vb1r,T2=1-vb2r;
+  O('tot1',T1,6);O('tot2',T2,6);
+  FR('tot',pct((T1+T2)/2,1));
+  if(rnd(T1)>t.tot)allOK=false;
+
+  document.getElementById('vd').innerHTML=allOK?'✅ 全部合格':'❌ 不合格';
+  document.getElementById('vd').style.color=allOK?'#006000':'#c00';
+}
+
+function ld(){const d=C.demo;Object.entries(d).forEach(([k,v])=>{const e=document.getElementById('i_'+k);if(e)e.value=v});document.getElementById('b').value='HAF2606019A';c()}
+function clr(){document.querySelectorAll('input.inp').forEach(e=>e.value='');document.querySelectorAll('input.res').forEach(e=>e.value='');document.getElementById('vd').innerHTML=''}
+function exp(){const d={tpl:C.id,batch:document.getElementById('b').value,time:new Date().toISOString(),in:{}};document.querySelectorAll('input.inp').forEach(e=>{if(e.value)d.in[e.id.replace('i_','')]=+e.value});const bl=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(bl);a.download=C.id+'.json';a.click()}
+</script>
+</body></html>
