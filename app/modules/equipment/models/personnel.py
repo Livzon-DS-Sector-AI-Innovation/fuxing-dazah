@@ -2,7 +2,7 @@
 
 import uuid as _uuid
 
-from sqlalchemy import Boolean, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,13 +14,19 @@ class EquipmentRole(BaseModel):
 
     __tablename__ = "equipment_role"
     __table_args__ = (
-        UniqueConstraint("code", name="uq_equipment_role_code"),
+        # 部分唯一索引：仅对未删除的记录做角色编码唯一性检查
+        Index(
+            "uq_equipment_role_code",
+            "code",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         Index("ix_equipment_role_scope_deleted", "scope", "is_deleted"),
         {"schema": "equipment"},
     )
 
     name: Mapped[str] = mapped_column(String(100), comment="角色名称")
-    code: Mapped[str] = mapped_column(String(50), unique=True, comment="角色编码")
+    code: Mapped[str] = mapped_column(String(50), comment="角色编码")
     description: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="角色描述"
     )
@@ -75,9 +81,12 @@ class EquipmentPersonnelRole(BaseModel):
 
     __tablename__ = "equipment_personnel_role"
     __table_args__ = (
-        UniqueConstraint(
+        # 部分唯一索引：仅对未删除的记录做人员+角色唯一性检查
+        Index(
+            "uq_equipment_personnel_role",
             "personnel_id", "role_id",
-            name="uq_equipment_personnel_role",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )
@@ -95,9 +104,12 @@ class EquipmentPersonnelCategory(BaseModel):
 
     __tablename__ = "equipment_personnel_category"
     __table_args__ = (
-        UniqueConstraint(
+        # 部分唯一索引：仅对未删除的记录做人员+角色+分类唯一性检查
+        Index(
+            "uq_equipment_personnel_category",
             "personnel_id", "role_id", "category_id",
-            name="uq_equipment_personnel_category",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )

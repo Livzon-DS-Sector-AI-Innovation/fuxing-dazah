@@ -11,7 +11,6 @@ from sqlalchemy import (
     Index,
     String,
     Text,
-    UniqueConstraint,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -116,9 +115,12 @@ class EquipmentCategoryLink(BaseModel):
 
     __tablename__ = "equipment_category_links"
     __table_args__ = (
-        UniqueConstraint(
+        # 部分唯一索引：仅对未删除的记录做设备+分类唯一性检查
+        Index(
+            "uq_equipment_category_links",
             "equipment_id", "category_id",
-            name="uq_equipment_category_links",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )
@@ -144,8 +146,12 @@ class Equipment(BaseModel):
 
     __tablename__ = "equipments"
     __table_args__ = (
-        UniqueConstraint(
-            "equipment_no", "is_deleted", name="uq_equipments_equipment_no"
+        # 部分唯一索引：仅对未删除的记录做 equipment_no 唯一性检查
+        Index(
+            "uq_equipments_equipment_no",
+            "equipment_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         CheckConstraint(
             "status IN ('在用', '备用', '维修中', '停用', '报废')",

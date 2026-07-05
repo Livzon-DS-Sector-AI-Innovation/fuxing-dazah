@@ -11,10 +11,11 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Text,
-    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,10 +37,12 @@ class WorkOrder(BaseModel):
 
     __tablename__ = "work_orders"
     __table_args__ = (
-        UniqueConstraint(
+        # 部分唯一索引：仅对未删除的记录做 work_order_no 唯一性检查
+        Index(
+            "uq_work_orders_work_order_no",
             "work_order_no",
-            "is_deleted",
-            name="uq_work_orders_work_order_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         CheckConstraint(
             "order_type IN ('故障维修', '计划维护', '校准', '异常处理', '日常维护')",

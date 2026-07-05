@@ -11,11 +11,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
-    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,8 +35,12 @@ class InspectionRoute(BaseModel):
 
     __tablename__ = "inspection_routes"
     __table_args__ = (
-        UniqueConstraint(
-            "name", "is_deleted", name="uq_inspection_routes_name"
+        # 部分唯一索引：仅对未删除的记录做路线名称唯一性检查
+        Index(
+            "uq_inspection_routes_name",
+            "name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )
@@ -65,9 +70,12 @@ class InspectionRouteSchedule(BaseModel):
 
     __tablename__ = "inspection_route_schedules"
     __table_args__ = (
-        UniqueConstraint(
-            "route_id", "cron_expression", "is_deleted",
-            name="uq_route_schedules_route_cron_deleted",
+        # 部分唯一索引：仅对未删除的记录做路线+cron唯一性检查
+        Index(
+            "uq_route_schedules_route_cron_deleted",
+            "route_id", "cron_expression",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )
@@ -102,11 +110,12 @@ class InspectionRouteEquipment(BaseModel):
 
     __tablename__ = "inspection_route_equipments"
     __table_args__ = (
-        UniqueConstraint(
-            "route_id",
-            "equipment_id",
-            "is_deleted",
-            name="uq_route_equipments_route_equipment",
+        # 部分唯一索引：仅对未删除的记录做路线+设备唯一性检查
+        Index(
+            "uq_route_equipments_route_equipment",
+            "route_id", "equipment_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         {"schema": "equipment"},
     )
@@ -135,8 +144,12 @@ class InspectionTask(BaseModel):
 
     __tablename__ = "inspection_tasks"
     __table_args__ = (
-        UniqueConstraint(
-            "task_no", "is_deleted", name="uq_inspection_tasks_task_no"
+        # 部分唯一索引：仅对未删除的记录做任务编号唯一性检查
+        Index(
+            "uq_inspection_tasks_task_no",
+            "task_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
         ),
         CheckConstraint(
             "status IN ('待执行', '执行中', '已完成', '已关闭')",

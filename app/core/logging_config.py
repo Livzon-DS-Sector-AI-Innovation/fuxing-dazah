@@ -44,6 +44,7 @@ _MODULE_PREFIX_MAP: dict[str, str] = {
     "app.modules.equipment": "equipment",
     "app.modules.energy": "energy",
     "app.modules.hr": "hr",
+    "app.platform.audit": "audit",
     "app.platform": "platform",
     "app.core": "core",
 }

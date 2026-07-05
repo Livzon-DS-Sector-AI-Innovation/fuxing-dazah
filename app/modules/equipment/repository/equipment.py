@@ -333,18 +333,6 @@ async def create_equipment(
     # 提取 category_ids，不传给 Equipment 构造
     cids = category_ids or data.pop("category_ids", [])
 
-    # 清理同 equipment_no 的已软删除记录，避免重复添加→删除→添加→删除时违反唯一约束
-    equipment_no = data.get("equipment_no")
-    if equipment_no:
-        deleted_result = await db.execute(
-            select(Equipment).where(
-                Equipment.equipment_no == equipment_no,
-                Equipment.is_deleted == True,  # noqa: E712
-            )
-        )
-        for old in deleted_result.scalars().all():
-            await db.delete(old)
-
     equipment = Equipment(**data)
     db.add(equipment)
     await db.flush()

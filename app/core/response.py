@@ -19,6 +19,7 @@ def error_response(
     message: str = "请求错误",
     detail: Any = None,
     status_code: int = 400,
+    request_id: str | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "code": status_code,
@@ -26,6 +27,8 @@ def error_response(
     }
     if detail:
         body["detail"] = detail
+    if request_id:
+        body["request_id"] = request_id
     return JSONResponse(content=body, status_code=status_code)
 
 

@@ -197,6 +197,11 @@ logger.info("MCP server mounted at /mcp")
 
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
+    if exc.status_code >= 500:
+        logger.exception(
+            "HTTP %d on %s %s: %s",
+            exc.status_code, request.method, request.url.path, exc.message,
+        )
     return error_response(
         message=exc.message,
         detail=exc.detail_msg,
@@ -208,6 +213,11 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
 async def http_exception_handler(
     request: Request, exc: StarletteHTTPException
 ) -> JSONResponse:
+    if exc.status_code >= 500:
+        logger.exception(
+            "HTTP %d on %s %s: %s",
+            exc.status_code, request.method, request.url.path, exc.detail,
+        )
     return error_response(
         message=str(exc.detail),
         status_code=exc.status_code,
@@ -224,6 +234,21 @@ async def validation_exception_handler(
         message="请求参数校验失败",
         detail=detail,
         status_code=422,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None)
+    logger.exception(
+        "Unhandled exception on %s %s [request_id=%s]: %s",
+        request.method, request.url.path, request_id, exc,
+    )
+    return error_response(
+        message="服务内部错误",
+        detail=f"请联系管理员，错误编号: {request_id}" if request_id else None,
+        status_code=500,
+        request_id=request_id,
     )
 
 

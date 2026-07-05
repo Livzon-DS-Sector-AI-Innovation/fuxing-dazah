@@ -50,8 +50,10 @@ def upgrade() -> None:
                     nullable=False,
                     existing_server_default=sa.text('false'),
                     schema='hr')
-    op.create_index('ix_sop_catalog_category', 'sop_catalog', ['category'], unique=False, schema='hr')
-    op.create_index('ix_sop_catalog_department', 'sop_catalog', ['department'], unique=False, schema='hr')
+    op.execute("CREATE INDEX IF NOT EXISTS ix_sop_catalog_category ON hr.sop_catalog (category)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_sop_catalog_department ON hr.sop_catalog (department)")
+    op.execute("ALTER TABLE hr.sop_catalog DROP CONSTRAINT IF EXISTS sop_catalog_updated_by_fkey")
+    op.execute("ALTER TABLE hr.sop_catalog DROP CONSTRAINT IF EXISTS sop_catalog_created_by_fkey")
     op.create_foreign_key(None, 'sop_catalog', 'users', ['updated_by'], ['id'], source_schema='hr', referent_schema='identity')
     op.create_foreign_key(None, 'sop_catalog', 'users', ['created_by'], ['id'], source_schema='hr', referent_schema='identity')
 
@@ -93,18 +95,20 @@ def upgrade() -> None:
                     nullable=False,
                     existing_server_default=sa.text('false'),
                     schema='hr')
-    op.create_index('ix_trainers_department', 'trainers', ['department'], unique=False, schema='hr')
-    op.create_index('ix_trainers_name', 'trainers', ['name'], unique=False, schema='hr')
+    op.execute("CREATE INDEX IF NOT EXISTS ix_trainers_department ON hr.trainers (department)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_trainers_name ON hr.trainers (name)")
+    op.execute("ALTER TABLE hr.trainers DROP CONSTRAINT IF EXISTS trainers_updated_by_fkey")
+    op.execute("ALTER TABLE hr.trainers DROP CONSTRAINT IF EXISTS trainers_created_by_fkey")
     op.create_foreign_key(None, 'trainers', 'users', ['updated_by'], ['id'], source_schema='hr', referent_schema='identity')
     op.create_foreign_key(None, 'trainers', 'users', ['created_by'], ['id'], source_schema='hr', referent_schema='identity')
 
 
 def downgrade() -> None:
     # --- hr.trainers (reverse) ---
-    op.drop_constraint(None, 'trainers', schema='hr', type_='foreignkey')
-    op.drop_constraint(None, 'trainers', schema='hr', type_='foreignkey')
-    op.drop_index('ix_trainers_name', table_name='trainers', schema='hr')
-    op.drop_index('ix_trainers_department', table_name='trainers', schema='hr')
+    op.execute("ALTER TABLE hr.trainers DROP CONSTRAINT IF EXISTS trainers_updated_by_fkey")
+    op.execute("ALTER TABLE hr.trainers DROP CONSTRAINT IF EXISTS trainers_created_by_fkey")
+    op.execute("DROP INDEX IF EXISTS hr.ix_trainers_name")
+    op.execute("DROP INDEX IF EXISTS hr.ix_trainers_department")
     op.alter_column('trainers', 'is_deleted',
                     existing_type=sa.BOOLEAN(),
                     nullable=True,
@@ -146,10 +150,10 @@ def downgrade() -> None:
                     schema='hr')
 
     # --- hr.sop_catalog (reverse) ---
-    op.drop_constraint(None, 'sop_catalog', schema='hr', type_='foreignkey')
-    op.drop_constraint(None, 'sop_catalog', schema='hr', type_='foreignkey')
-    op.drop_index('ix_sop_catalog_department', table_name='sop_catalog', schema='hr')
-    op.drop_index('ix_sop_catalog_category', table_name='sop_catalog', schema='hr')
+    op.execute("ALTER TABLE hr.sop_catalog DROP CONSTRAINT IF EXISTS sop_catalog_updated_by_fkey")
+    op.execute("ALTER TABLE hr.sop_catalog DROP CONSTRAINT IF EXISTS sop_catalog_created_by_fkey")
+    op.execute("DROP INDEX IF EXISTS hr.ix_sop_catalog_department")
+    op.execute("DROP INDEX IF EXISTS hr.ix_sop_catalog_category")
     op.alter_column('sop_catalog', 'is_deleted',
                     existing_type=sa.BOOLEAN(),
                     nullable=True,
