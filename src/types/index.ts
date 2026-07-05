@@ -1,2 +1,2 @@
-export * from './equipment'
+export * from './equipment/index'
 export * from './energy'

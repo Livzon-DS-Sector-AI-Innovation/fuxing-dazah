@@ -26,23 +26,23 @@ export function MaterialConsumeDrawer({ workOrderId, spareParts, onRefresh }: Ma
   }, [open, form])
 
   const handleSubmit = async () => {
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    const items = (values.items || []).filter(
+      (item: { spare_part_id?: string; quantity?: number }) => item.spare_part_id && item.quantity
+    )
+    if (items.length === 0) {
+      message.warning('请至少添加一条领料记录')
+      return
+    }
     try {
-      const values = await form.validateFields()
-      const items = (values.items || []).filter(
-        (item: { spare_part_id?: string; quantity?: number }) => item.spare_part_id && item.quantity
-      )
-      if (items.length === 0) {
-        message.warning('请至少添加一条领料记录')
-        return
-      }
       setLoading(true)
       const data: MaterialConsumeInput = { items }
-      await consumeMaterials(workOrderId, data)
+      const result = await consumeMaterials(workOrderId, data)
+      if (!result.success) { message.error(result.error); return }
       message.success('领料成功')
       setOpen(false)
       onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
     } finally {
       setLoading(false)
     }

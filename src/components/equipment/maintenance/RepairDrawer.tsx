@@ -46,9 +46,10 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
   }, [repairDrawerOpen, repairEquipmentId, form, selectedEquipment?.importance])
 
   const handleSubmit = async () => {
+    let values: any
+    try { values = await form.validateFields() } catch { return }
     try {
       setSubmitting(true)
-      const values = await form.validateFields()
       const data: CreateWorkOrderInput = {
         equipment_id: repairEquipmentId!,
         order_type: '故障维修',
@@ -57,8 +58,9 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         fault_description: values.fault_description || undefined,
         responsible_person_id: values.responsible_person_id,
       }
-      const result = await createWorkOrder(data)
-      const workOrderId = (result as { id?: string } | null)?.id
+      const createResult = await createWorkOrder(data)
+      if (!createResult.success) { message.error(createResult.error); return }
+      const workOrderId = (createResult.data as { id?: string })?.id
 
       if (!workOrderId) {
         message.error('工单创建失败，请稍后重试')
@@ -72,14 +74,13 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
             formData.append('files', file.originFileObj)
           }
         })
-        await uploadWorkOrderImages(workOrderId, formData)
+        const uploadResult = await uploadWorkOrderImages(workOrderId, formData)
+        if (!uploadResult.success) { message.error(uploadResult.error); return }
       }
 
       message.success('报修工单已提交')
       closeRepairDrawer()
       onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
     } finally {
       setSubmitting(false)
     }

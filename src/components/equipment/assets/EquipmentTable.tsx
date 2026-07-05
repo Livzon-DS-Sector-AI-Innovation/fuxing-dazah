@@ -83,13 +83,13 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick, r
       okText: '确认', cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
-        try {
-          await deleteEquipment(record.id)
-          message.success('删除设备成功')
-          onPageChange(localPage, localPageSize)
-        } catch (error: any) {
-          message.error(error?.message || '删除设备失败')
+        const result = await deleteEquipment(record.id)
+        if (!result.success) {
+          message.error(result.error)
+          return
         }
+        message.success('删除设备成功')
+        onPageChange(localPage, localPageSize)
       },
     })
   }, [modal, message, onPageChange, localPage, localPageSize])

@@ -36,23 +36,28 @@ export function LocationDrawer({ onRefresh }: { onRefresh?: () => void }) {
   }, [locationDrawerOpen, editingLocation, form])
 
   const handleSubmit = async () => {
+    let values: any
     try {
-      const values = await form.validateFields()
-      setSubmitting(true)
-
+      values = await form.validateFields()
+    } catch {
+      return
+    }
+    setSubmitting(true)
+    try {
+      const result = editingLocation
+        ? await updateLocation(editingLocation.id, values)
+        : await createLocation(values)
+      if (!result.success) {
+        message.error(result.error)
+        return
+      }
       if (editingLocation) {
-        await updateLocation(editingLocation.id, values)
         message.success('更新位置成功')
       } else {
-        await createLocation(values)
         message.success('创建位置成功')
       }
       closeLocationDrawer()
       onRefresh?.()
-    } catch (err: any) {
-      // Ant Design validation errors have an errorFields property
-      if (err?.errorFields) return
-      message.error('操作失败')
     } finally {
       setSubmitting(false)
     }

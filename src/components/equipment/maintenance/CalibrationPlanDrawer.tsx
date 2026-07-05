@@ -42,36 +42,35 @@ export function CalibrationPlanDrawer({ equipments, onRefresh }: CalibrationPlan
   }, [calibrationPlanDrawerOpen, editingCalibrationPlan, form])
 
   const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      if (editingCalibrationPlan) {
-        const data: UpdateCalibrationPlanInput = {
-          calibration_type: values.calibration_type,
-          cycle_months: values.cycle_months,
-          last_calibration_date: values.last_calibration_date ? values.last_calibration_date.format('YYYY-MM-DD') : undefined,
-          responsible_person_id: values.responsible_person_id || undefined,
-          remark: values.remark || undefined,
-          status: values.status,
-        }
-        await updateCalibrationPlan(editingCalibrationPlan.id, data)
-        message.success('更新成功')
-      } else {
-        const data: CreateCalibrationPlanInput = {
-          equipment_id: values.equipment_id,
-          calibration_type: values.calibration_type,
-          cycle_months: values.cycle_months,
-          last_calibration_date: values.last_calibration_date ? values.last_calibration_date.format('YYYY-MM-DD') : undefined,
-          responsible_person_id: values.responsible_person_id || undefined,
-          remark: values.remark || undefined,
-        }
-        await createCalibrationPlan(data)
-        message.success('创建成功')
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    if (editingCalibrationPlan) {
+      const data: UpdateCalibrationPlanInput = {
+        calibration_type: values.calibration_type,
+        cycle_months: values.cycle_months,
+        last_calibration_date: values.last_calibration_date ? values.last_calibration_date.format('YYYY-MM-DD') : undefined,
+        responsible_person_id: values.responsible_person_id || undefined,
+        remark: values.remark || undefined,
+        status: values.status,
       }
-      closeCalibrationPlanDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
+      const result = await updateCalibrationPlan(editingCalibrationPlan.id, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('更新成功')
+    } else {
+      const data: CreateCalibrationPlanInput = {
+        equipment_id: values.equipment_id,
+        calibration_type: values.calibration_type,
+        cycle_months: values.cycle_months,
+        last_calibration_date: values.last_calibration_date ? values.last_calibration_date.format('YYYY-MM-DD') : undefined,
+        responsible_person_id: values.responsible_person_id || undefined,
+        remark: values.remark || undefined,
+      }
+      const result = await createCalibrationPlan(data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('创建成功')
     }
+    closeCalibrationPlanDrawer()
+    onRefresh?.()
   }
 
   return (

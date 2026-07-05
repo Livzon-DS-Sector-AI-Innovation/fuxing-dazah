@@ -25,7 +25,12 @@ export function EquipmentImportModal({ open, onClose, onImported }: EquipmentImp
   const handleDownloadTemplate = async () => {
     setDownloading(true)
     try {
-      const base64 = await downloadImportTemplate()
+      const res = await downloadImportTemplate()
+      if (!res.success) {
+        message.error(res.error)
+        return
+      }
+      const base64 = res.data!
       const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
       const blob = new Blob([bytes], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -36,8 +41,6 @@ export function EquipmentImportModal({ open, onClose, onImported }: EquipmentImp
       a.download = '设备台账导入模板.xlsx'
       a.click()
       URL.revokeObjectURL(url)
-    } catch {
-      message.error('下载模板失败')
     } finally {
       setDownloading(false)
     }
@@ -51,13 +54,15 @@ export function EquipmentImportModal({ open, onClose, onImported }: EquipmentImp
       const formData = new FormData()
       formData.append('file', fileList[0].originFileObj as File)
       const res = await importEquipments(formData)
-      setResult(res)
-      if (res.imported > 0) {
-        message.success(`成功导入 ${res.imported} 条记录`)
+      if (!res.success) {
+        message.error(res.error)
+        return
+      }
+      setResult(res.data!)
+      if (res.data!.imported > 0) {
+        message.success(`成功导入 ${res.data!.imported} 条记录`)
         onImported()
       }
-    } catch (err: any) {
-      message.error(err?.message || '导入失败')
     } finally {
       setUploading(false)
     }

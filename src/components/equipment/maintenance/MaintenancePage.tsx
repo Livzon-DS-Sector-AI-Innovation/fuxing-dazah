@@ -88,12 +88,12 @@ export function MaintenancePage({
   const { message: configMsg } = App.useApp()
 
   const handleSaveConfig = async () => {
-    try {
-      await updateClaimTimeoutConfig(claimTimeoutConfig)
-      configMsg.success('超时配置保存成功')
-    } catch (error: any) {
-      configMsg.error(error?.message || '保存配置失败')
+    const result = await updateClaimTimeoutConfig(claimTimeoutConfig)
+    if (!result.success) {
+      configMsg.error(result.error)
+      return
     }
+    configMsg.success('超时配置保存成功')
   }
 
   // 设备列表和分类（客户端回退）

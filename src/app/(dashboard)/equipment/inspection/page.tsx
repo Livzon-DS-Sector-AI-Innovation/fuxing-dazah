@@ -7,7 +7,7 @@ import type { InspectionTemplate, EquipmentCategory } from '@/types/equipment'
 
 export default async function InspectionPageWrapper() {
   let templates: InspectionTemplate[] = []
-  let equipments: { id: string; name: string; equipment_no: string }[] = []
+  let equipments: { id: string; name: string; equipment_no: string; location_id: string }[] = []
   let categories: EquipmentCategory[] = []
   let locations: { id: string; name: string; code: string }[] = []
 
@@ -23,6 +23,7 @@ export default async function InspectionPageWrapper() {
       id: e.id,
       name: e.name,
       equipment_no: e.equipment_no,
+      location_id: e.location_id,
     }))
     categories = categoriesResult || []
     locations = (locationsResult || []).map(l => ({

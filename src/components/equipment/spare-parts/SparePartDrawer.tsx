@@ -36,40 +36,41 @@ export function SparePartDrawer({ onRefresh }: SparePartDrawerProps) {
   }, [sparePartDrawerOpen, editingSparePart, form])
 
   const handleSubmit = async () => {
+    let values: any
     try {
-      const values = await form.validateFields()
-      if (editingSparePart) {
-        const data: UpdateSparePartInput = {
-          code: values.code,
-          name: values.name,
-          specification: values.specification || undefined,
-          unit: values.unit,
-          category: values.category || undefined,
-          default_supplier: values.default_supplier || undefined,
-          unit_price: values.unit_price ?? undefined,
-          is_active: values.is_active,
-        }
-        await updateSparePart(editingSparePart.id, data)
-        message.success('更新成功')
-      } else {
-        const data: CreateSparePartInput = {
-          code: values.code,
-          name: values.name,
-          specification: values.specification || undefined,
-          unit: values.unit,
-          category: values.category || undefined,
-          default_supplier: values.default_supplier || undefined,
-          unit_price: values.unit_price ?? undefined,
-          is_active: values.is_active,
-        }
-        await createSparePart(data)
-        message.success('创建成功')
+      values = await form.validateFields()
+    } catch { return }
+    if (editingSparePart) {
+      const data: UpdateSparePartInput = {
+        code: values.code,
+        name: values.name,
+        specification: values.specification || undefined,
+        unit: values.unit,
+        category: values.category || undefined,
+        default_supplier: values.default_supplier || undefined,
+        unit_price: values.unit_price ?? undefined,
+        is_active: values.is_active,
       }
-      closeSparePartDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
+      const result = await updateSparePart(editingSparePart.id, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('更新成功')
+    } else {
+      const data: CreateSparePartInput = {
+        code: values.code,
+        name: values.name,
+        specification: values.specification || undefined,
+        unit: values.unit,
+        category: values.category || undefined,
+        default_supplier: values.default_supplier || undefined,
+        unit_price: values.unit_price ?? undefined,
+        is_active: values.is_active,
+      }
+      const result = await createSparePart(data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('创建成功')
     }
+    closeSparePartDrawer()
+    onRefresh?.()
   }
 
   return (

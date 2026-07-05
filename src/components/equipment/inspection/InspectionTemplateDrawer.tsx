@@ -35,17 +35,20 @@ export function InspectionTemplateDrawer({ categories, onRefresh }: Props) {
   }, [inspectionTemplateDrawerOpen, editingInspectionTemplate, form])
 
   const handleSubmit = async () => {
+    let v: any
     try {
-      const v = await form.validateFields()
-      if (editingInspectionTemplate) {
-        await updateInspectionTemplate(editingInspectionTemplate.id, { name: v.name, description: v.description || undefined, equipment_category_id: v.equipment_category_id || undefined, is_active: v.is_active })
-        message.success('更新成功')
-      } else {
-        await createInspectionTemplate({ name: v.name, description: v.description || undefined, equipment_category_id: v.equipment_category_id || undefined, is_active: false })
-        message.success('创建成功')
-      }
-      closeInspectionTemplateDrawer(); onRefresh?.()
-    } catch (e: unknown) { if ((e as { message?: string })?.message) message.error((e as { message: string }).message) }
+      v = await form.validateFields()
+    } catch { return }
+    if (editingInspectionTemplate) {
+      const result = await updateInspectionTemplate(editingInspectionTemplate.id, { name: v.name, description: v.description || undefined, equipment_category_id: v.equipment_category_id || undefined, is_active: v.is_active })
+      if (!result.success) { message.error(result.error); return }
+      message.success('更新成功')
+    } else {
+      const result = await createInspectionTemplate({ name: v.name, description: v.description || undefined, equipment_category_id: v.equipment_category_id || undefined, is_active: false })
+      if (!result.success) { message.error(result.error); return }
+      message.success('创建成功')
+    }
+    closeInspectionTemplateDrawer(); onRefresh?.()
   }
 
   return (

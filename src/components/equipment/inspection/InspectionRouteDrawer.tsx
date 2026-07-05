@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { App, Drawer, Form, Input } from 'antd'
 import { EnvironmentOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
-import { createInspectionRoute, updateInspectionRoute } from '@/actions/inspection'
+import { createInspectionRoute, updateInspectionRoute } from '@/actions/equipment'
 
 const C = {
   navy: '#0a1530',

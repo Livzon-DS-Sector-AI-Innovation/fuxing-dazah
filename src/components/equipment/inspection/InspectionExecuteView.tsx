@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react'
 import { App, Progress, Typography } from 'antd'
 import { ArrowLeftOutlined, CheckOutlined, CameraOutlined, AimOutlined, RobotOutlined, EnvironmentOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
-import { submitEquipmentCheck, uploadInspectionPhoto, completeInspectionTask, analyzeInspectionPhoto } from '@/actions/inspection'
+import { submitEquipmentCheck, uploadInspectionPhoto, completeInspectionTask, analyzeInspectionPhoto } from '@/actions/equipment'
 import type { InspectionRecordItem, InspectionAIItemResult } from '@/types/inspection'
 import type { InspectionTemplateItem } from '@/types/equipment'
 

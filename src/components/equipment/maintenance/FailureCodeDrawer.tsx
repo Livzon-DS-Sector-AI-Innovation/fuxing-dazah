@@ -41,30 +41,29 @@ export function FailureCodeDrawer({ onRefresh }: FailureCodeDrawerProps) {
   }, [failureCodeDrawerOpen, editingFailureCode, form])
 
   const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      if (editingFailureCode) {
-        const data: UpdateFailureCodeInput = {
-          code: values.code, name: values.name,
-          description: values.description || undefined,
-          sort_order: values.sort_order, is_active: values.is_active,
-        }
-        await updateFailureCode(failureCodeDrawerType, editingFailureCode.id, data)
-        message.success('更新成功')
-      } else {
-        const data: CreateFailureCodeInput = {
-          code: values.code, name: values.name,
-          description: values.description || undefined,
-          sort_order: values.sort_order, is_active: values.is_active,
-        }
-        await createFailureCode(failureCodeDrawerType, data)
-        message.success('创建成功')
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    if (editingFailureCode) {
+      const data: UpdateFailureCodeInput = {
+        code: values.code, name: values.name,
+        description: values.description || undefined,
+        sort_order: values.sort_order, is_active: values.is_active,
       }
-      closeFailureCodeDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
+      const result = await updateFailureCode(failureCodeDrawerType, editingFailureCode.id, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('更新成功')
+    } else {
+      const data: CreateFailureCodeInput = {
+        code: values.code, name: values.name,
+        description: values.description || undefined,
+        sort_order: values.sort_order, is_active: values.is_active,
+      }
+      const result = await createFailureCode(failureCodeDrawerType, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('创建成功')
     }
+    closeFailureCodeDrawer()
+    onRefresh?.()
   }
 
   const title = `${editingFailureCode ? '编辑' : '新增'}${typeLabels[failureCodeDrawerType] || '故障代码'}`

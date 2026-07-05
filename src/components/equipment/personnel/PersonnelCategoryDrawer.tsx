@@ -10,10 +10,10 @@ import {
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchCategories } from '@/lib/api/equipment'
-import { assignCategories } from '@/actions/equipment-personnel'
+import { assignCategories } from '@/actions/equipment'
 import type {
   EquipmentRole, CategoryAssignItem, PersonnelCategoryInfo,
-} from '@/types/equipment-personnel'
+} from '@/types/equipment'
 import type { EquipmentCategory } from '@/types/equipment'
 
 const { Text } = Typography

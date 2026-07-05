@@ -1,6 +1,6 @@
 import type {
   EquipmentRole, Personnel, PersonnelListResponse, Candidate,
-} from '@/types/equipment-personnel'
+} from '@/types/equipment'
 import { apiGet, apiFetchPaginated } from '@/lib/http-client'
 
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'

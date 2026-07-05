@@ -5,7 +5,7 @@ import { App, Button, Space, Table, Tooltip } from 'antd'
 import { PlayCircleOutlined, CloseCircleOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useInspectionStore } from '@/stores/inspection'
-import { startInspectionTask, closeInspectionTask } from '@/actions/inspection'
+import { startInspectionTask, closeInspectionTask } from '@/actions/equipment'
 import {
   fetchInspectionTasks, fetchInspectionRouteById,
   fetchInspectionTemplateByIdClient, fetchInspectionTaskById,

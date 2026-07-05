@@ -6,8 +6,8 @@ import {
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { createRole, updateRole, deleteRole } from '@/actions/equipment-personnel'
-import type { EquipmentRole, CreateRoleInput, UpdateRoleInput } from '@/types/equipment-personnel'
+import { createRole, updateRole, deleteRole } from '@/actions/equipment'
+import type { EquipmentRole, CreateRoleInput, UpdateRoleInput } from '@/types/equipment'
 
 const { Text } = Typography
 

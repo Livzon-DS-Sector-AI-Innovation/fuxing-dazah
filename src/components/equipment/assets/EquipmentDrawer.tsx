@@ -171,9 +171,14 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
   }
 
   const handleSubmit = async () => {
+    let values: any
     try {
-      const values = await form.validateFields()
-      setSubmitting(true)
+      values = await form.validateFields()
+    } catch {
+      return
+    }
+    setSubmitting(true)
+    try {
       const submitData = {
         ...values,
         production_date: values.production_date
@@ -184,19 +189,20 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           : undefined,
       }
 
+      const result = editingEquipment
+        ? await updateEquipment(editingEquipment.id, submitData)
+        : await createEquipment(submitData)
+      if (!result.success) {
+        message.error(result.error)
+        return
+      }
       if (editingEquipment) {
-        await updateEquipment(editingEquipment.id, submitData)
         message.success('更新设备成功')
       } else {
-        await createEquipment(submitData)
         message.success('创建设备成功')
       }
       closeEquipmentDrawer()
       onRefresh?.()
-    } catch (err: any) {
-      // Ant Design validation errors have an errorFields property
-      if (err?.errorFields) return
-      message.error('操作失败')
     } finally {
       setSubmitting(false)
     }

@@ -6,10 +6,10 @@ import { PlusOutlined, DeleteOutlined, ClockCircleOutlined, UserOutlined } from 
 import { useInspectionStore } from '@/stores/inspection'
 import { fetchRouteSchedules } from '@/lib/api/inspection'
 import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
-import { createSchedule, updateSchedule, deleteSchedule } from '@/actions/inspection'
+import { createSchedule, updateSchedule, deleteSchedule } from '@/actions/equipment'
 import { PersonnelSelect } from '@/components/equipment'
 import type { InspectionRouteSchedule } from '@/types/inspection'
-import type { Personnel } from '@/types/equipment-personnel'
+import type { Personnel } from '@/types/equipment'
 
 const C = {
   navy: '#0a1530',

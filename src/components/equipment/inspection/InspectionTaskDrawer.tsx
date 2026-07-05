@@ -5,12 +5,12 @@ import { App, Avatar, Card, DatePicker, Drawer, Form, Select, Tag, Typography } 
 import { UserOutlined, CheckSquareOutlined, CalendarOutlined } from '@ant-design/icons'
 import { PersonnelSelect } from '@/components/equipment'
 import { useInspectionStore } from '@/stores/inspection'
-import { createInspectionTask } from '@/actions/inspection'
+import { createInspectionTask } from '@/actions/equipment'
 import { fetchInspectionRoutes } from '@/lib/api/inspection'
 import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import type { InspectionTemplate } from '@/types/equipment'
 import type { InspectionRoute } from '@/types/inspection'
-import type { Personnel } from '@/types/equipment-personnel'
+import type { Personnel } from '@/types/equipment'
 import dayjs from 'dayjs'
 
 const { Text } = Typography

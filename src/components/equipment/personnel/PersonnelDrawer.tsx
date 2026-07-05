@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { App, Button, Drawer, Select, Typography, Avatar, Space } from 'antd'
 import { UserOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { addPersonnel } from '@/actions/equipment-personnel'
-import type { EquipmentRole } from '@/types/equipment-personnel'
+import { addPersonnel } from '@/actions/equipment'
+import type { EquipmentRole } from '@/types/equipment'
 
 const { Text } = Typography
 

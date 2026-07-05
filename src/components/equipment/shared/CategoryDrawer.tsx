@@ -37,23 +37,28 @@ export function CategoryDrawer({ onRefresh }: { onRefresh?: () => void }) {
   }, [categoryDrawerOpen, editingCategory, form])
 
   const handleSubmit = async () => {
+    let values: any
     try {
-      const values = await form.validateFields()
-      setSubmitting(true)
-
+      values = await form.validateFields()
+    } catch {
+      return
+    }
+    setSubmitting(true)
+    try {
+      const result = editingCategory
+        ? await updateCategory(editingCategory.id, values)
+        : await createCategory(values)
+      if (!result.success) {
+        message.error(result.error)
+        return
+      }
       if (editingCategory) {
-        await updateCategory(editingCategory.id, values)
         message.success('更新分类成功')
       } else {
-        await createCategory(values)
         message.success('创建分类成功')
       }
       closeCategoryDrawer()
       onRefresh?.()
-    } catch (err: any) {
-      // Ant Design validation errors have an errorFields property
-      if (err?.errorFields) return
-      message.error('操作失败')
     } finally {
       setSubmitting(false)
     }

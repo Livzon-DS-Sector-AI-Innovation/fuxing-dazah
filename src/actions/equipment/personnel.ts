@@ -5,7 +5,7 @@ import { getAuthHeaders } from '@/lib/auth'
 import type {
   CreateRoleInput, UpdateRoleInput, AddPersonnelInput,
   AssignRolesInput, AssignCategoriesInput,
-} from '@/types/equipment-personnel'
+} from '@/types/equipment'
 
 const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 

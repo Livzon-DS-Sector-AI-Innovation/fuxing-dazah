@@ -191,13 +191,13 @@ export function CategoryTree({ categories, onRefresh }: CategoryTreeProps) {
   } = useEquipmentStore()
 
   const handleDelete = async (node: TreeNodeData) => {
-    try {
-      await deleteCategory(node.id)
-      message.success('删除分类成功')
-      onRefresh?.()
-    } catch (error: any) {
-      message.error(error?.message || '删除分类失败')
+    const result = await deleteCategory(node.id)
+    if (!result.success) {
+      message.error(result.error)
+      return
     }
+    message.success('删除分类成功')
+    onRefresh?.()
   }
 
   const handleEdit = (node: TreeNodeData) => {

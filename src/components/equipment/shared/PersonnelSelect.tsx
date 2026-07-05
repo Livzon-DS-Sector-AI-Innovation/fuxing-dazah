@@ -2,7 +2,7 @@
 
 import { Avatar, Select, Typography } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
-import type { Personnel } from '@/types/equipment-personnel'
+import type { Personnel } from '@/types/equipment'
 import type { SelectProps } from 'antd'
 
 const { Text } = Typography

@@ -54,24 +54,22 @@ export function CalibrationRecordDrawer({ calibrationPlans, onRefresh }: Calibra
   }
 
   const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      const data: CreateCalibrationRecordInput = {
-        calibration_plan_id: values.calibration_plan_id,
-        calibration_date: values.calibration_date.format('YYYY-MM-DD'),
-        calibration_type: values.calibration_type,
-        result: values.result,
-        certificate_no: values.certificate_no || undefined,
-        calibrated_by: values.calibrated_by || undefined,
-        remark: values.remark || undefined,
-      }
-      await createCalibrationRecord(data)
-      message.success('创建校准记录成功')
-      closeCalibrationRecordDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    const data: CreateCalibrationRecordInput = {
+      calibration_plan_id: values.calibration_plan_id,
+      calibration_date: values.calibration_date.format('YYYY-MM-DD'),
+      calibration_type: values.calibration_type,
+      result: values.result,
+      certificate_no: values.certificate_no || undefined,
+      calibrated_by: values.calibrated_by || undefined,
+      remark: values.remark || undefined,
     }
+    const result = await createCalibrationRecord(data)
+    if (!result.success) { message.error(result.error); return }
+    message.success('创建校准记录成功')
+    closeCalibrationRecordDrawer()
+    onRefresh?.()
   }
 
   return (

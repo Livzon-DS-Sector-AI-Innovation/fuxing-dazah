@@ -33,8 +33,9 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
       title: '确认删除', content: '确定要删除此维护计划吗？',
       okText: '确认', cancelText: '取消', okButtonProps: { danger: true },
       onOk: async () => {
-        try { await deleteMaintenancePlan(r.id); message.success('删除成功'); onRefresh?.() }
-        catch (error: any) { message.error(error?.message || '删除失败') }
+        const result = await deleteMaintenancePlan(r.id)
+        if (!result.success) { message.error(result.error); return }
+        message.success('删除成功'); onRefresh?.()
       },
     })
   }, [modal, message, onRefresh])

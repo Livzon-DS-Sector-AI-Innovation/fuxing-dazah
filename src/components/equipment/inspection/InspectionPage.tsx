@@ -25,7 +25,7 @@ import { usePermission } from '@/hooks/usePermission'
 
 interface Props {
   initialTemplates: InspectionTemplate[]
-  initialEquipments: { id: string; name: string; equipment_no: string }[]
+  initialEquipments: { id: string; name: string; equipment_no: string; location_id: string }[]
   initialCategories: EquipmentCategory[]
   initialLocations: { id: string; name: string; code: string }[]
 }

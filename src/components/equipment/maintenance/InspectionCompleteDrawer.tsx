@@ -43,21 +43,19 @@ export function InspectionCompleteDrawer({ onRefresh }: InspectionCompleteDrawer
   }, [inspectionCompleteDrawerOpen, completingTemplateItems, form])
 
   const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      const records: InspectionRecordItem[] = values.records.map((row) => ({
-        item_id: row.id,
-        result: row.result,
-        actual_value: row.actual_value || undefined,
-        remark: row.remark || undefined,
-      }))
-      await completeInspection(completingWorkOrderId!, { records })
-      message.success('巡检完成')
-      closeInspectionCompleteDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
-    }
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    const records: InspectionRecordItem[] = values.records.map((row: any) => ({
+      item_id: row.id,
+      result: row.result,
+      actual_value: row.actual_value || undefined,
+      remark: row.remark || undefined,
+    }))
+    const result = await completeInspection(completingWorkOrderId!, { records })
+    if (!result.success) { message.error(result.error); return }
+    message.success('巡检完成')
+    closeInspectionCompleteDrawer()
+    onRefresh?.()
   }
 
   const columns: ColumnsType<InspectionRow> = [

@@ -68,38 +68,36 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
   }, [workOrderDrawerOpen, initialValues])
 
   const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields()
-      if (isEditing && editingWorkOrder) {
-        const data: UpdateWorkOrderInput = {
-          equipment_id: values.equipment_id,
-          order_type: values.order_type,
-          priority: values.priority,
-          status: values.status,
-          fault_symptom_id: values.fault_symptom_id || undefined,
-          fault_description: values.fault_description || undefined,
-          responsible_person_id: values.responsible_person_id || undefined,
-        }
-        await updateWorkOrder(editingWorkOrder.id, data)
-        message.success('更新工单成功')
-      } else {
-        const data: CreateWorkOrderInput = {
-          equipment_id: values.equipment_id,
-          order_type: values.order_type,
-          priority: values.priority,
-          fault_symptom_id: values.fault_symptom_id || undefined,
-          fault_description: values.fault_description || undefined,
-          responsible_person_id: values.responsible_person_id || undefined,
-        }
-        await createWorkOrder(data)
-        message.success('创建工单成功')
+    let values: any
+    try { values = await form.validateFields() } catch { return }
+    if (isEditing && editingWorkOrder) {
+      const data: UpdateWorkOrderInput = {
+        equipment_id: values.equipment_id,
+        order_type: values.order_type,
+        priority: values.priority,
+        status: values.status,
+        fault_symptom_id: values.fault_symptom_id || undefined,
+        fault_description: values.fault_description || undefined,
+        responsible_person_id: values.responsible_person_id || undefined,
       }
-      closeWorkOrderDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.errorFields) return
-      if (error?.message) message.error(error.message)
+      const result = await updateWorkOrder(editingWorkOrder.id, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('更新工单成功')
+    } else {
+      const data: CreateWorkOrderInput = {
+        equipment_id: values.equipment_id,
+        order_type: values.order_type,
+        priority: values.priority,
+        fault_symptom_id: values.fault_symptom_id || undefined,
+        fault_description: values.fault_description || undefined,
+        responsible_person_id: values.responsible_person_id || undefined,
+      }
+      const result = await createWorkOrder(data)
+      if (!result.success) { message.error(result.error); return }
+      message.success('创建工单成功')
     }
+    closeWorkOrderDrawer()
+    onRefresh?.()
   }
 
   return (

@@ -93,27 +93,20 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
       okText: '确认指派',
       cancelText: '取消',
       onOk: async () => {
-        if (!assigneeId) { message.warning('请选择维修人员'); throw new Error('请选择维修人员') }
-        try {
-          await assignWorkOrder(wo.id, { assignee_id: assigneeId })
-          message.success('指派成功')
-          await refreshDetail(wo.id)
-        } catch (error: any) {
-          message.error(error?.message || '指派失败')
-          throw error
-        }
+        if (!assigneeId) { message.warning('请选择维修人员'); return }
+        const result = await assignWorkOrder(wo.id, { assignee_id: assigneeId })
+        if (!result.success) { message.error(result.error); return }
+        message.success('指派成功')
+        await refreshDetail(wo.id)
       },
     })
   }
 
   const handleStart = async () => {
-    try {
-      await startWorkOrder(wo.id)
-      message.success('已开始维修')
-      await refreshDetail(wo.id)
-    } catch (error: any) {
-      message.error(error?.message || '操作失败')
-    }
+    const result = await startWorkOrder(wo.id)
+    if (!result.success) { message.error(result.error); return }
+    message.success('已开始维修')
+    await refreshDetail(wo.id)
   }
 
   const handleComplete = () => {
@@ -154,23 +147,21 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
       okText: '提交',
       cancelText: '取消',
       onOk: async () => {
-        if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); throw new Error() }
-        try {
-          // 先上传图片
-          if (fileListRef.length > 0) {
-            const formData = new FormData()
-            fileListRef.forEach(f => {
-              const file = (f as any).originFileObj || f
-              if (file instanceof File) formData.append('files', file)
-            })
-            await uploadWorkOrderImages(wo.id, formData)
-          }
-          await completeWorkOrder(wo.id, { repair_detail: repairDetail })
-          message.success('已提交验收')
-          await refreshDetail(wo.id)
-        } catch (error: any) {
-          message.error(error?.message || '操作失败')
+        if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); return }
+        // 先上传图片
+        if (fileListRef.length > 0) {
+          const formData = new FormData()
+          fileListRef.forEach(f => {
+            const file = (f as any).originFileObj || f
+            if (file instanceof File) formData.append('files', file)
+          })
+          const uploadResult = await uploadWorkOrderImages(wo.id, formData)
+          if (!uploadResult.success) { message.error(uploadResult.error); return }
         }
+        const result = await completeWorkOrder(wo.id, { repair_detail: repairDetail })
+        if (!result.success) { message.error(result.error); return }
+        message.success('已提交验收')
+        await refreshDetail(wo.id)
       },
     })
   }
@@ -193,36 +184,27 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
       cancelText: '取消',
       okButtonProps: result === '不合格' ? { danger: true } : {},
       onOk: async () => {
-        if (result === '不合格' && !remark.trim()) { message.warning('请填写不通过原因'); throw new Error() }
-        try {
-          await verifyWorkOrder(wo.id, { result, remark: remark || undefined })
-          message.success(result === '合格' ? '验收通过' : '已打回重修')
-          await refreshDetail(wo.id)
-        } catch (error: any) {
-          message.error(error?.message || '操作失败')
-        }
+        if (result === '不合格' && !remark.trim()) { message.warning('请填写不通过原因'); return }
+        const actionResult = await verifyWorkOrder(wo.id, { result, remark: remark || undefined })
+        if (!actionResult.success) { message.error(actionResult.error); return }
+        message.success(result === '合格' ? '验收通过' : '已打回重修')
+        await refreshDetail(wo.id)
       },
     })
   }
 
   const handleClose = async () => {
-    try {
-      await closeWorkOrder(wo.id)
-      message.success('工单已关闭')
-      await refreshDetail(wo.id)
-    } catch (error: any) {
-      message.error(error?.message || '操作失败')
-    }
+    const result = await closeWorkOrder(wo.id)
+    if (!result.success) { message.error(result.error); return }
+    message.success('工单已关闭')
+    await refreshDetail(wo.id)
   }
 
   const handleClaim = async () => {
-    try {
-      await claimWorkOrder(wo.id)
-      message.success('抢单成功')
-      await refreshDetail(wo.id)
-    } catch (error: any) {
-      message.error(error?.message || '抢单失败')
-    }
+    const result = await claimWorkOrder(wo.id)
+    if (!result.success) { message.error(result.error); return }
+    message.success('抢单成功')
+    await refreshDetail(wo.id)
   }
 
   const timelineItems = []

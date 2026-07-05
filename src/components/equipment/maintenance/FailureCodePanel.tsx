@@ -32,13 +32,10 @@ export function FailureCodePanel({ onRefresh }: FailureCodePanelProps) {
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
-        try {
-          await deleteFailureCode(path, record.id)
-          message.success('删除成功')
-          onRefresh?.()
-        } catch (error: any) {
-          message.error(error?.message || '删除失败')
-        }
+        const result = await deleteFailureCode(path, record.id)
+        if (!result.success) { message.error(result.error); return }
+        message.success('删除成功')
+        onRefresh?.()
       },
     })
   }, [modal, message, onRefresh])

@@ -5,7 +5,7 @@ import {
   UserOutlined, IdcardOutlined, BankOutlined,
   PhoneOutlined, AimOutlined,
 } from '@ant-design/icons'
-import type { Personnel } from '@/types/equipment-personnel'
+import type { Personnel } from '@/types/equipment'
 
 const { Text } = Typography
 

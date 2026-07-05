@@ -27,12 +27,20 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
   }, [mode, itemsCount, initialValues, form])
 
   const submit = async () => {
-    try { setS(true); const v = await form.validateFields()
-      if (mode === 'create') { await createInspectionTemplateItem(templateId, { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }); message.success('已添加') }
-      else { await updateInspectionTemplateItem(mode, { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }); message.success('已更新') }
+    let v: any
+    try {
+      v = await form.validateFields()
+    } catch { return }
+    setS(true)
+    try {
+      const data = { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }
+      const result = mode === 'create'
+        ? await createInspectionTemplateItem(templateId, data)
+        : await updateInspectionTemplateItem(mode, data)
+      if (!result.success) { message.error(result.error); return }
+      message.success(mode === 'create' ? '已添加' : '已更新')
       onSuccess()
-    } catch (e: unknown) { if ((e as { errorFields?: unknown[] })?.errorFields) return; message.error((e as Error).message || '操作失败') }
-    finally { setS(false) }
+    } finally { setS(false) }
   }
 
   return (
@@ -79,7 +87,12 @@ export function InspectionItemDrawer() {
   const startEdit = (item: InspectionTemplateItem) => { setEditingData(item); setFormMode(item.id) }
   const cancelEdit = () => { setFormMode(null); setEditingData(null) }
   const onFormSuccess = () => { setFormMode(null); setEditingData(null); load() }
-  const handleDelete = async (item: InspectionTemplateItem) => { try { await deleteInspectionTemplateItem(item.id); message.success('已删除'); await load() } catch (e: unknown) { message.error((e as Error).message || '删除失败') } }
+  const handleDelete = async (item: InspectionTemplateItem) => {
+    const result = await deleteInspectionTemplateItem(item.id)
+    if (!result.success) { message.error(result.error); return }
+    message.success('已删除')
+    await load()
+  }
 
   const editInit: ItemFormValues | undefined = editingData && formMode === editingData.id ? {
     item_name: editingData.item_name, item_description: editingData.item_description || '', expected_result: editingData.expected_result || '', check_method: editingData.check_method || '', sort_order: editingData.sort_order,

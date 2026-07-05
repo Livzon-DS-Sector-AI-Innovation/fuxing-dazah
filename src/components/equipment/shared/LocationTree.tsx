@@ -191,13 +191,13 @@ export function LocationTree({ locations, onRefresh }: LocationTreeProps) {
   } = useEquipmentStore()
 
   const handleDelete = async (node: TreeNodeData) => {
-    try {
-      await deleteLocation(node.id)
-      message.success('删除位置成功')
-      onRefresh?.()
-    } catch (error: any) {
-      message.error(error?.message || '删除位置失败')
+    const result = await deleteLocation(node.id)
+    if (!result.success) {
+      message.error(result.error)
+      return
     }
+    message.success('删除位置成功')
+    onRefresh?.()
   }
 
   const handleEdit = (node: TreeNodeData) => {

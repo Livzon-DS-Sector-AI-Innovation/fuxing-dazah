@@ -25,20 +25,20 @@ export function StockInboundDrawer({ onRefresh }: StockInboundDrawerProps) {
 
   const handleSubmit = async () => {
     if (!stockInboundSparePartId) return
+    let values: any
     try {
-      const values = await form.validateFields()
-      const data: StockInboundInput = {
-        quantity: values.quantity,
-        warehouse_location: values.warehouse_location || undefined,
-        remark: values.remark || undefined,
-      }
-      await stockInbound(stockInboundSparePartId, data)
-      message.success('入库成功')
-      closeStockInboundDrawer()
-      onRefresh?.()
-    } catch (error: any) {
-      if (error?.message) message.error(error.message)
+      values = await form.validateFields()
+    } catch { return }
+    const data: StockInboundInput = {
+      quantity: values.quantity,
+      warehouse_location: values.warehouse_location || undefined,
+      remark: values.remark || undefined,
     }
+    const result = await stockInbound(stockInboundSparePartId, data)
+    if (!result.success) { message.error(result.error); return }
+    message.success('入库成功')
+    closeStockInboundDrawer()
+    onRefresh?.()
   }
 
   return (
