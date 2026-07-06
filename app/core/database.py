@@ -15,7 +15,14 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
-    connect_args={"server_settings": {"search_path": _search_path}},
+    pool_recycle=1800,  # 30 分钟后强制回收连接，防止残留脏事务
+    connect_args={
+        "server_settings": {
+            "search_path": _search_path,
+            # 防御性超时：idle in transaction 超过 10 分钟自动断开，防止连接泄漏
+            "idle_in_transaction_session_timeout": "600000",
+        }
+    },
 )
 
 async_session_factory = async_sessionmaker(

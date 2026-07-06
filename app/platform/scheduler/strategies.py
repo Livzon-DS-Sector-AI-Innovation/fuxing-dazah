@@ -7,6 +7,7 @@ and cron-expression evaluation.
 from __future__ import annotations
 
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from croniter import croniter  # type: ignore[import-untyped]
 
@@ -26,7 +27,7 @@ def is_due(
         now: Current time; defaults to ``datetime.now()`` in the local timezone.
     """
     if now is None:
-        now = datetime.now().astimezone()
+        now = datetime.now(ZoneInfo(schedule.timezone))
 
     match schedule.strategy:
         case ScheduleStrategy.CRON:

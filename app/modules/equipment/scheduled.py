@@ -27,7 +27,7 @@ class InspectionScheduleGenerator(TaskGenerator):
 
     name = "equipment.inspection_schedules"
     schedule = ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=30,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=180,
     )
 
     async def find_due(self, session):
