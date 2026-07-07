@@ -18,11 +18,7 @@ stop_maintenance_plan_flag = asyncio.Event()
 
 
 async def maintenance_plan_loop() -> None:
-    """每天 00:05 CST 扫描到期的维护计划并自动生成工单。
-
-    选择 00:05 而非 00:00 是为了避开飞书成员同步（00:00）的执行窗口，
-    减少并发数据库连接压力。
-    """
+    """每天 08:00 CST 扫描到期的维护计划并自动生成工单。"""
     settings = get_settings()
     if not settings.MAINTENANCE_PLAN_AUTO_ENABLED:
         logger.info(
@@ -30,18 +26,18 @@ async def maintenance_plan_loop() -> None:
         )
         return
 
-    logger.info("维护计划自动生成任务已启动（每天 00:05 CST）")
+    logger.info("维护计划自动生成任务已启动（每天 08:00 CST）")
 
     while not stop_maintenance_plan_flag.is_set():
-        # 计算到下一个 00:05 CST 的等待秒数
+        # 计算到下一个 08:00 CST 的等待秒数
         now = datetime.now(CST)
         next_run = (now + timedelta(days=1)).replace(
-            hour=0, minute=5, second=0, microsecond=0,
+            hour=8, minute=0, second=0, microsecond=0,
         )
-        # 如果当前时间还没过今天的 00:05，则设为今天
-        if now.hour == 0 and now.minute < 5:
+        # 如果当前时间还没过今天的 08:00，则设为今天
+        if now.hour < 8:
             next_run = now.replace(
-                hour=0, minute=5, second=0, microsecond=0,
+                hour=8, minute=0, second=0, microsecond=0,
             )
         wait_seconds = (next_run - now).total_seconds()
 
@@ -70,12 +66,16 @@ async def maintenance_plan_loop() -> None:
 
         try:
             async with async_session_factory() as db:
+                from app.modules.equipment.service.maintenance_config import (
+                    get_advance_days_config,
+                )
                 from app.modules.equipment.service.maintenance_plan import (
                     generate_due_work_orders,
                 )
 
+                advance_config = await get_advance_days_config(db)
                 created_count, skipped_count = await generate_due_work_orders(
-                    db
+                    db, advance_days=advance_config.advance_days
                 )
                 await db.commit()
 
