@@ -159,7 +159,7 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
         </Form.Item>
         <div style={{ display: 'flex', gap: 16 }}>
           <Form.Item name="frequency" label="维护频率" rules={[{ required: true, message: '请输入频率' }]} style={{ flex: 1 }}>
-            <InputNumber min={1} max={365} style={{ width: '100%' }} placeholder="请输入数值" />
+            <InputNumber min={1} max={365} precision={0} style={{ width: '100%' }} placeholder="请输入整数" />
           </Form.Item>
           <Form.Item name="frequency_unit" label="频率单位" rules={[{ required: true, message: '请选择单位' }]} style={{ flex: 1 }}>
             <Select options={[
@@ -170,7 +170,7 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
             ]} />
           </Form.Item>
         </div>
-        <Form.Item name="last_maintenance_date" label="上次维护日期">
+        <Form.Item name="last_maintenance_date" label="上次维护日期" rules={[{ required: true, message: '请选择上次维护日期' }]}>
           <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="选择日期" />
         </Form.Item>
         <Form.Item name="executor_id" label="执行人" rules={[{ required: true, message: '请选择执行人' }]}>

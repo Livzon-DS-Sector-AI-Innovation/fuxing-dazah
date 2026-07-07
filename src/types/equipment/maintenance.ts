@@ -34,7 +34,7 @@ export interface CreateMaintenancePlanInput {
   plan_type?: MaintenancePlanType
   frequency: number
   frequency_unit: FrequencyUnit
-  last_maintenance_date?: string
+  last_maintenance_date: string
   executor_id?: string
   maintenance_content?: string
   remark?: string

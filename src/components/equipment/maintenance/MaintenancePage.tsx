@@ -17,8 +17,9 @@ import {
   fetchEquipmentsClient,
   fetchCategoriesClient,
   fetchClaimTimeoutConfigClient,
+  fetchAdvanceDaysConfigClient,
 } from '@/lib/api/equipment-client'
-import { updateClaimTimeoutConfig } from '@/actions/equipment'
+import { updateClaimTimeoutConfig, updateAdvanceDaysConfig } from '@/actions/equipment'
 import { EquipmentCategory } from '@/types/equipment'
 import { WorkOrderStatsCards } from './WorkOrderStatsCards'
 import { WorkOrderTable } from './WorkOrderTable'
@@ -85,6 +86,13 @@ export function MaintenancePage({
     fetchClaimTimeoutConfigClient().then(setClaimTimeoutConfig).catch(() => {})
   }, [])
 
+  // 维护计划提前天数配置
+  const [advanceDays, setAdvanceDays] = useState(0)
+
+  useEffect(() => {
+    fetchAdvanceDaysConfigClient().then(c => setAdvanceDays(c.advance_days)).catch(() => {})
+  }, [])
+
   const { message: configMsg } = App.useApp()
 
   const handleSaveConfig = async () => {
@@ -94,6 +102,15 @@ export function MaintenancePage({
       return
     }
     configMsg.success('超时配置保存成功')
+  }
+
+  const handleSaveAdvanceDays = async () => {
+    const result = await updateAdvanceDaysConfig(advanceDays)
+    if (!result.success) {
+      configMsg.error(result.error)
+      return
+    }
+    configMsg.success('提前天数配置保存成功')
   }
 
   // 设备列表和分类（客户端回退）
@@ -316,6 +333,36 @@ export function MaintenancePage({
       label: '维护计划',
       children: (
         <div>
+          <Collapse
+            style={{ marginBottom: 16 }}
+            items={[{
+              key: 'advance-days-config',
+              label: '维护计划自动创建配置',
+              children: (
+                <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+                  <div>
+                    <span style={{ fontSize: 13, color: '#5645d4', fontWeight: 500, marginRight: 8 }}>
+                      提前
+                    </span>
+                    <Space.Compact>
+                      <InputNumber
+                        min={1} max={364}
+                        value={advanceDays}
+                        onChange={(v) => setAdvanceDays(v || 0)}
+                      />
+                      <Button disabled>天</Button>
+                    </Space.Compact>
+                    <span style={{ fontSize: 13, color: '#787671', marginLeft: 8 }}>
+                      自动创建计划维护工单
+                    </span>
+                  </div>
+                  {hasPermission('equipment:maintenance:update') && (
+                    <Button type="primary" onClick={handleSaveAdvanceDays}>保存配置</Button>
+                  )}
+                </div>
+              ),
+            }]}
+          />
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-semibold" style={{ fontSize: 18, color: '#1a1a1a', lineHeight: 1.4, margin: 0 }}>
               维护计划列表

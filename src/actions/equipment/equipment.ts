@@ -457,6 +457,16 @@ export async function updateClaimTimeoutConfig(data: { emergency?: number; high?
   return result
 }
 
+// ==================== 维护计划提前天数配置 ====================
+export async function updateAdvanceDaysConfig(advance_days: number): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/config/advance-days`, {
+    method: 'PUT',
+    body: JSON.stringify({ advance_days }),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
 // ==================== Excel 导入 ====================
 export interface ImportRowError {
   row: number

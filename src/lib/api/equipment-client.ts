@@ -11,7 +11,7 @@ import {
   MaintenancePlanFilters, MaintenancePlanListResponse, MaintenancePlan,
   InspectionTemplateFilters, InspectionTemplateListResponse, InspectionTemplate,
   MaterialRecord,
-  ClaimTimeoutConfig, Maintainer, WorkOrderImage,
+  ClaimTimeoutConfig, AdvanceDaysConfig, Maintainer, WorkOrderImage,
 } from '@/types/equipment'
 import { apiGet, apiFetchPaginated } from '@/lib/http-client'
 
@@ -146,6 +146,10 @@ export async function fetchWorkOrderImagesClient(workOrderId: string): Promise<W
 
 export async function fetchClaimTimeoutConfigClient(): Promise<ClaimTimeoutConfig> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/maintenance/config/claim-timeout`)
+}
+
+export async function fetchAdvanceDaysConfigClient(): Promise<AdvanceDaysConfig> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/maintenance/config/advance-days`)
 }
 
 export async function fetchDepartmentsClient(): Promise<import('@/types/equipment').DepartmentOption[]> {

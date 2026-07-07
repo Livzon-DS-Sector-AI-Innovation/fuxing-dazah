@@ -38,3 +38,8 @@ export interface DepartmentOption {
   leader_user_id: string | null
   leader_id: string | null
 }
+
+// ==================== 维护计划提前天数配置 ====================
+export interface AdvanceDaysConfig {
+  advance_days: number
+}
