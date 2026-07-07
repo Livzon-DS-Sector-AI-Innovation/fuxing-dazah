@@ -91,7 +91,6 @@ export async function uploadEmployeesAction(formData: FormData) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '上传员工名单失败')
   }
-  revalidatePath('/hr/profile')
   return res.json()
 }
 
@@ -404,7 +403,6 @@ export async function uploadAnnualPlanAction(formData: FormData) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '上传年度培训计划失败')
   }
-  revalidatePath('/hr/training/annual-plan')
   return res.json()
 }
 
@@ -438,7 +436,6 @@ export async function uploadTrainersAction(formData: FormData) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '上传内训师失败')
   }
-  revalidatePath('/hr/training/trainers')
   return res.json()
 }
 
@@ -450,7 +447,6 @@ export async function deleteTrainerAction(id: string) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '删除内训师失败')
   }
-  revalidatePath('/hr/training/trainers')
   return res.json()
 }
 
@@ -462,7 +458,6 @@ export async function clearTrainersAction() {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '清空内训师台账失败')
   }
-  revalidatePath('/hr/training/trainers')
   return res.json()
 }
 
@@ -476,7 +471,6 @@ export async function deleteDepartureRecordAction(id: string) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '删除离职记录失败')
   }
-  revalidatePath('/hr/departure')
   return res.json()
 }
 
