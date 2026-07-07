@@ -395,6 +395,19 @@ export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanI
   return res.json()
 }
 
+export async function uploadAnnualPlanAction(formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '上传年度培训计划失败')
+  }
+  revalidatePath('/hr/training/annual-plan')
+  return res.json()
+}
+
 // ─── 招聘候选人（待后端实现）───
 
 export async function createCandidateAction(_formData: FormData): Promise<{ data: any }> {
