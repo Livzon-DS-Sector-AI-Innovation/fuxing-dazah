@@ -228,15 +228,6 @@ class EmployeeResponse(EmployeeBase):
     updated_at: datetime | None = None
 
 
-class SyncStatusResponse(BaseModel):
-    local_total: int
-    feishu_total: int
-    synced_count: int
-    unsynced_count: int
-    conflict_count: int
-    last_sync_at: datetime | None = None
-
-
 class TrainingSignInSheetInput(BaseModel):
     training_date: date = Field(..., description="培训日期")
     training_time_start: str | None = Field(None, max_length=32, description="培训开始时间")
@@ -264,23 +255,6 @@ class TrainingNotificationInput(BaseModel):
     assessment_method: str | None = Field(None, max_length=32, description="考核方式")
     content: str | None = Field(None, max_length=512, description="培训内容")
     trainee_names: list[str] = Field(default_factory=list, description="培训人员姓名列表")
-    issuer_department: str | None = Field(None, max_length=64, description="落款部门")
-    issue_date: date | None = Field(None, description="落款日期")
-
-
-class TrainingNotifyInput(BaseModel):
-    """Send training notification via Feishu IM."""
-
-    employee_numbers: list[str] = Field(..., description="受训人员工号列表")
-    department: str | None = Field(None, max_length=64, description="主办部门")
-    subject: str = Field(..., max_length=128, description="培训主题")
-    training_date: date = Field(..., description="培训日期")
-    training_time_start: str | None = Field(None, max_length=32, description="培训开始时间")
-    training_time_end: str | None = Field(None, max_length=32, description="培训结束时间")
-    location: str | None = Field(None, max_length=128, description="培训地点")
-    trainer: str | None = Field(None, max_length=64, description="培训师")
-    content: str | None = Field(None, max_length=512, description="培训内容")
-    training_method: str | None = Field(None, max_length=32, description="培训方式")
     issuer_department: str | None = Field(None, max_length=64, description="落款部门")
     issue_date: date | None = Field(None, description="落款日期")
 

@@ -53,7 +53,6 @@ from app.modules.hr.schemas import (
     TrainingLedgerResponse,
     TrainingLedgerUpdate,
     TrainingNotificationInput,
-    TrainingNotifyInput,
     TrainingSignInSheetInput,
     TrainerResponse,
     TrainerListResponse,
@@ -196,33 +195,6 @@ async def upload_employees(
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
 
 
-@router.post("/employees/sync-from-feishu", summary="从飞书多维表格同步员工数据")
-async def sync_employees_from_feishu(
-    service: EmployeeService = Depends(get_employee_service),
-):
-    """手动触发：从飞书多维表格拉取全部员工数据并 upsert 到本地 PG。"""
-    stats = await service.sync_from_feishu()
-    msg = (
-        f"同步完成：新增 {stats['created']} 条，"
-        f"更新 {stats['updated']} 条，失败 {stats['failed']} 条"
-    )
-    return success_response(
-        data=stats,
-        message=msg,
-    )
-
-
-@router.get("/employees/sync-status", summary="飞书同步状态")
-async def get_employee_sync_status(
-    service: EmployeeService = Depends(get_employee_service),
-):
-    """查看本地与飞书的数据同步统计。"""
-    status = await service.get_sync_status()
-    return success_response(
-        data=status.model_dump(mode="json"),
-    )
-
-
 @router.get("/employees/by-number/{employee_number}", summary="根据工号查询员工")
 async def get_employee_by_number(
     employee_number: str,
@@ -265,39 +237,6 @@ async def delete_employee(
 ):
     await service.delete_employee(employee_id)
     return success_response(message="员工删除成功")
-
-
-@router.post("/employees/{employee_id}/sync-to-feishu", summary="同步单个员工到飞书")
-async def sync_employee_to_feishu(
-    employee_id: UUID,
-    service: EmployeeService = Depends(get_employee_service),
-):
-    """将本地单个员工强制同步到飞书多维表格。"""
-    record_id = await service.sync_to_feishu(employee_id)
-    return success_response(
-        data={"feishu_record_id": record_id},
-        message="员工已同步到飞书",
-    )
-
-
-@router.post("/webhook/feishu-approval", summary="飞书审批完成回调")
-async def feishu_approval_webhook(
-    payload: dict,
-    service: EmployeeService = Depends(get_employee_service),
-):
-    """接收飞书审批完成通知，更新员工状态为在职。"""
-    employee_number = payload.get("employee_number")
-    if not employee_number:
-        return success_response(message="缺少工号")
-
-    try:
-        employee = await service.approve_employee(employee_number)
-        return success_response(
-            data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
-            message="员工审批通过，状态已更新为在职",
-        )
-    except Exception as e:
-        return success_response(message=f"审批处理失败: {str(e)}")
 
 
 @router.get(
@@ -458,17 +397,6 @@ async def export_training_sign_in_sheet(
             "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=utf-8''{quote('培训签到表_' + safe_date + '.docx')}"
         },
     )
-
-
-@router.post("/training-notifications/send", summary="发送培训通知到飞书")
-async def send_training_notification(
-    payload: TrainingNotifyInput,
-    service: EmployeeService = Depends(get_employee_service),
-):
-    """根据填写的培训信息，向受训人员发送飞书单聊消息。"""
-    result = await service.notify_training(payload)
-    msg = f"发送完成：成功 {result['sent']} 人，失败 {result['failed']} 人"
-    return success_response(data=result, message=msg)
 
 
 @router.post("/training-notification", summary="生成培训通知")
@@ -805,33 +733,6 @@ async def list_onboarding_records(
     )
 
 
-@router.post("/onboarding-records/sync-from-feishu", summary="从飞书同步老厂入职台账")
-async def sync_onboarding_from_feishu(
-    service: OnboardingRecordService = Depends(get_onboarding_service),
-):
-    """手动触发：从飞书多维表格拉取全部老厂入职数据并 upsert 到本地 PG。"""
-    stats = await service.sync_from_feishu()
-    msg = (
-        f"同步完成：新增 {stats['created']} 条，"
-        f"更新 {stats['updated']} 条，失败 {stats['failed']} 条"
-    )
-    return success_response(
-        data=stats,
-        message=msg,
-    )
-
-
-@router.get("/onboarding-records/sync-status", summary="老厂入职台账同步状态")
-async def get_onboarding_sync_status(
-    service: OnboardingRecordService = Depends(get_onboarding_service),
-):
-    """查看本地与飞书的数据同步统计。"""
-    status = await service.get_sync_status()
-    return success_response(
-        data=status.model_dump(mode="json"),
-    )
-
-
 @router.get("/onboarding-records/{record_id}", summary="入职记录详情")
 async def get_onboarding_record(
     record_id: UUID,
@@ -920,33 +821,6 @@ async def delete_departure_record(
 ):
     await service.delete_record(record_id)
     return success_response(message="离职台账记录删除成功")
-
-
-@router.post("/departure-records/sync-from-feishu", summary="从飞书同步老厂离职台账")
-async def sync_departure_from_feishu(
-    service: DepartureRecordService = Depends(get_departure_service),
-):
-    """手动触发：从飞书多维表格拉取全部老厂离职数据并 upsert 到本地 PG。"""
-    stats = await service.sync_from_feishu()
-    msg = (
-        f"同步完成：新增 {stats['created']} 条，"
-        f"更新 {stats['updated']} 条，失败 {stats['failed']} 条"
-    )
-    return success_response(
-        data=stats,
-        message=msg,
-    )
-
-
-@router.get("/departure-records/sync-status", summary="老厂离职台账同步状态")
-async def get_departure_sync_status(
-    service: DepartureRecordService = Depends(get_departure_service),
-):
-    """查看本地与飞书的数据同步统计。"""
-    status = await service.get_sync_status()
-    return success_response(
-        data=status.model_dump(mode="json"),
-    )
 
 
 # ─── TrainingLedger Routes ───

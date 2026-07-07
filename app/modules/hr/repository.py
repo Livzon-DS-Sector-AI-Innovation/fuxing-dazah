@@ -21,7 +21,6 @@ from app.modules.hr.models import (
     TrainingLedgerPage,
 )
 
-
 class EmployeeRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -170,16 +169,6 @@ class EmployeeRepository:
             await self.session.refresh(new_emp)
             return new_emp
 
-    async def get_feishu_record_map(self) -> dict[str, str]:
-        """Return {employee_number: feishu_record_id} for all non-deleted employees."""
-        result = await self.session.execute(
-            select(Employee.employee_number, Employee.feishu_record_id).where(
-                Employee.is_deleted.is_(False),
-                Employee.feishu_record_id.isnot(None),
-            )
-        )
-        return {row[0]: row[1] for row in result.all()}
-
     async def count_total(self) -> int:
         result = await self.session.execute(
             select(func.count()).where(Employee.is_deleted.is_(False))
@@ -286,19 +275,9 @@ class EmployeeRepository:
         rows = result.all()
         return [row[0] for row in rows if row[0] is not None]
 
-    async def count_synced(self) -> int:
-        result = await self.session.execute(
-            select(func.count()).where(
-                Employee.is_deleted.is_(False),
-                Employee.feishu_record_id.isnot(None),
-            )
-        )
-        return result.scalar() or 0
-
     async def soft_delete(self, employee: Employee) -> None:
         employee.is_deleted = True
         await self.session.flush()
-
 
 class DepartmentRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -357,7 +336,6 @@ class DepartmentRepository:
         department.is_deleted = True
         await self.session.flush()
 
-
 class TeamRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -414,7 +392,6 @@ class TeamRepository:
     async def soft_delete(self, team: Team) -> None:
         team.is_deleted = True
         await self.session.flush()
-
 
 class OffboardingRecordRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -475,7 +452,6 @@ class OffboardingRecordRepository:
         record.is_deleted = True
         await self.session.flush()
 
-
 class OnboardingRecordRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -484,15 +460,6 @@ class OnboardingRecordRepository:
         result = await self.session.execute(
             select(OnboardingRecord).where(
                 OnboardingRecord.id == record_id,
-                OnboardingRecord.is_deleted.is_(False),
-            )
-        )
-        return result.scalar_one_or_none()
-
-    async def get_by_feishu_record_id(self, feishu_record_id: str) -> OnboardingRecord | None:
-        result = await self.session.execute(
-            select(OnboardingRecord).where(
-                OnboardingRecord.feishu_record_id == feishu_record_id,
                 OnboardingRecord.is_deleted.is_(False),
             )
         )
@@ -550,46 +517,15 @@ class OnboardingRecordRepository:
         await self.session.refresh(record)
         return record
 
-    async def upsert_by_feishu_record_id(self, data: dict) -> OnboardingRecord:
-        """Create or update onboarding record by feishu_record_id (used for Feishu sync)."""
-        rid = data.get("feishu_record_id")
-        if not rid:
-            raise ValueError("feishu_record_id is required for upsert")
-
-        record = await self.get_by_feishu_record_id(rid)
-        if record:
-            for key, value in data.items():
-                if key != "id" and value is not None:
-                    setattr(record, key, value)
-            await self.session.flush()
-            await self.session.refresh(record)
-            return record
-        else:
-            new_record = OnboardingRecord(**{k: v for k, v in data.items() if v is not None})
-            self.session.add(new_record)
-            await self.session.flush()
-            await self.session.refresh(new_record)
-            return new_record
-
     async def count_total(self) -> int:
         result = await self.session.execute(
             select(func.count()).where(OnboardingRecord.is_deleted.is_(False))
         )
         return result.scalar() or 0
 
-    async def count_synced(self) -> int:
-        result = await self.session.execute(
-            select(func.count()).where(
-                OnboardingRecord.is_deleted.is_(False),
-                OnboardingRecord.feishu_record_id.isnot(None),
-            )
-        )
-        return result.scalar() or 0
-
     async def soft_delete(self, record: OnboardingRecord) -> None:
         record.is_deleted = True
         await self.session.flush()
-
 
 class DepartureRecordRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -599,15 +535,6 @@ class DepartureRecordRepository:
         result = await self.session.execute(
             select(DepartureRecord).where(
                 DepartureRecord.id == record_id,
-                DepartureRecord.is_deleted.is_(False),
-            )
-        )
-        return result.scalar_one_or_none()
-
-    async def get_by_feishu_record_id(self, feishu_record_id: str) -> DepartureRecord | None:
-        result = await self.session.execute(
-            select(DepartureRecord).where(
-                DepartureRecord.feishu_record_id == feishu_record_id,
                 DepartureRecord.is_deleted.is_(False),
             )
         )
@@ -663,46 +590,15 @@ class DepartureRecordRepository:
         await self.session.refresh(record)
         return record
 
-    async def upsert_by_feishu_record_id(self, data: dict) -> DepartureRecord:
-        """Create or update departure record by feishu_record_id (used for Feishu sync)."""
-        rid = data.get("feishu_record_id")
-        if not rid:
-            raise ValueError("feishu_record_id is required for upsert")
-
-        record = await self.get_by_feishu_record_id(rid)
-        if record:
-            for key, value in data.items():
-                if key != "id" and value is not None:
-                    setattr(record, key, value)
-            await self.session.flush()
-            await self.session.refresh(record)
-            return record
-        else:
-            new_record = DepartureRecord(**{k: v for k, v in data.items() if v is not None})
-            self.session.add(new_record)
-            await self.session.flush()
-            await self.session.refresh(new_record)
-            return new_record
-
     async def count_total(self) -> int:
         result = await self.session.execute(
             select(func.count()).where(DepartureRecord.is_deleted.is_(False))
         )
         return result.scalar() or 0
 
-    async def count_synced(self) -> int:
-        result = await self.session.execute(
-            select(func.count()).where(
-                DepartureRecord.is_deleted.is_(False),
-                DepartureRecord.feishu_record_id.isnot(None),
-            )
-        )
-        return result.scalar() or 0
-
     async def soft_delete(self, record: DepartureRecord) -> None:
         record.is_deleted = True
         await self.session.flush()
-
 
 class TrainingLedgerRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -777,7 +673,6 @@ class TrainingLedgerRepository:
         )
         return result.scalar_one_or_none()
 
-
 class TrainingLedgerPageRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -811,7 +706,6 @@ class TrainingLedgerPageRepository:
         await self.session.flush()
         await self.session.refresh(page)
         return page
-
 
 class AnnualTrainingPlanRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -874,7 +768,6 @@ class AnnualTrainingPlanRepository:
     async def soft_delete(self, plan: AnnualTrainingPlan) -> None:
         plan.is_deleted = True
         await self.session.flush()
-
 
 class AnnualTrainingPlanItemRepository:
     def __init__(self, session: AsyncSession) -> None:
