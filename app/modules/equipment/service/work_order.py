@@ -285,9 +285,10 @@ async def _update_maintenance_plan_on_completion(
     if not plan:
         return
 
-    # 分类级计划不在此推进日期——不同设备完成时间各异，
-    # 由 scheduler 的 generate_due_work_orders 统一管理周期
+    # 分类级计划：只重置 last_generated_date，不推进日期（日期由 scheduler 管理）
     if plan.category_id:
+        plan.last_generated_date = None
+        await db.flush()
         return
 
     today = date_type.today()
@@ -295,7 +296,7 @@ async def _update_maintenance_plan_on_completion(
     plan.next_maintenance_date = _calculate_next_maintenance_date(
         today, plan.frequency, plan.frequency_unit
     )
-    # last_generated_date 保持旧值，让 scheduler 下个周期自然触发
+    plan.last_generated_date = None  # 重置防重锁，让下个周期正常触发
     await db.flush()
 
 
