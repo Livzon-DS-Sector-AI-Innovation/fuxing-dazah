@@ -320,6 +320,91 @@ class EmployeeService:
             sort_order=sort_order,
         )
 
+    # ── 年度培训计划上传 ──
+
+    _PLAN_COLUMN_MAP: dict[str, str] = {
+        "年度": "year",
+        "年份": "year",
+        "部门": "department",
+        "月份": "month",
+        "培训人数": "trainee_count",
+        "课时": "duration_hours",
+        "培训内容及使用教材": "content_and_textbook",
+        "培训内容": "content_and_textbook",
+        "培训对象": "target_audience",
+        "参加岗位/参加人数": "position_and_count",
+        "培训方式": "training_method",
+        "培训学时": "training_hours",
+        "确认者": "confirmer",
+    }
+
+    async def upload_annual_plan(self, file_bytes: bytes) -> dict:
+        """从 Excel 批量导入年度培训计划，按年度+部门自动分类。"""
+        from io import BytesIO
+        from openpyxl import load_workbook
+        from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
+
+        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            raise ValueError("文件为空")
+        header = [str(c).strip() if c else "" for c in rows[0]]
+        col_map = {idx: self._PLAN_COLUMN_MAP[h] for idx, h in enumerate(header) if h in self._PLAN_COLUMN_MAP}
+
+        plan_cache: dict[tuple, AnnualTrainingPlan] = {}
+        created, updated, errors = 0, 0, []
+
+        for row_idx, row in enumerate(rows[1:], start=2):
+            if all(c is None for c in row):
+                continue
+            try:
+                data = {}
+                for ci, fn in col_map.items():
+                    v = row[ci] if ci < len(row) else None
+                    if v is None or (isinstance(v, str) and v.strip() == ""):
+                        continue
+                    if isinstance(v, str):
+                        v = v.strip()
+                    if fn == "year":
+                        v = int(float(str(v)))
+                    if fn in ("trainee_count",):
+                        v = int(float(str(v)))
+                    data[fn] = v
+
+                dept = data.get("department", "")
+                year = data.get("year", 2026)
+                if not dept:
+                    errors.append(f"第{row_idx}行: 缺少部门"); continue
+
+                # 找或创建年度计划
+                cache_key = (year, dept)
+                plan = plan_cache.get(cache_key)
+                if not plan:
+                    q = select(AnnualTrainingPlan).where(
+                        AnnualTrainingPlan.year == year,
+                        AnnualTrainingPlan.department == dept,
+                        AnnualTrainingPlan.is_deleted == False,
+                    )
+                    r = await self.repo.session.execute(q)
+                    plan = r.scalar_one_or_none()
+                    if not plan:
+                        plan = AnnualTrainingPlan(year=year, department=dept, status="草稿")
+                        self.repo.session.add(plan)
+                        await self.repo.session.flush()
+                    plan_cache[cache_key] = plan
+
+                # 添加计划项
+                item_data = {k: v for k, v in data.items() if k not in ("year", "department")}
+                item = AnnualTrainingPlanItem(plan_id=plan.id, **item_data)
+                self.repo.session.add(item)
+                await self.repo.session.flush()
+                created += 1
+            except Exception as e:
+                errors.append(f"第{row_idx}行: {e}")
+
+        return {"created": created, "updated": updated, "errors": errors}
+
 class DepartmentService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = DepartmentRepository(session)
