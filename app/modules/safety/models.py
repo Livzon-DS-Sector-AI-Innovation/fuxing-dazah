@@ -7,6 +7,7 @@ from enum import Enum as PyEnum
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -1267,6 +1268,7 @@ class SafetyKnowledgeArticle(BaseModel):
     __tablename__ = "knowledge_articles"
     __table_args__ = {"schema": "safety"}
 
+    # ── Columns present in DB ──
     title: Mapped[str] = mapped_column(String(255), nullable=False, comment="文章标题")
     summary: Mapped[str | None] = mapped_column(Text, nullable=True, comment="摘要")
     content: Mapped[str | None] = mapped_column(Text, nullable=True, comment="正文内容")
@@ -1287,16 +1289,19 @@ class SafetyKnowledgeArticle(BaseModel):
     attachment_original_name: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="附件原始文件名"
     )
-    # ── AI 知识增强字段 ──
-    knowledge_card: Mapped[dict | None] = mapped_column(
-        JSON, nullable=True, comment="AI 知识卡片 JSON（结构化法规摘要，供 AI 识别注入 prompt）"
-    )
-    card_generated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, comment="知识卡片生成时间"
-    )
-    card_version: Mapped[int] = mapped_column(
-        Integer, default=1, server_default="1", nullable=False, comment="知识卡片版本号"
-    )
+
+    article_no: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="文档编号")
+    feishu_record_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True, comment="飞书Bitable记录ID")
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="来源/出处")
+    author: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="作者/发布单位")
+    publish_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, comment="发布日期")
+    implementation_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, comment="实施日期")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False, comment="版本号")
+    superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, comment="被替代为（指向新版本文档）")
+    knowledge_card: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="知识卡片JSON")
+    card_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="卡片生成时间")
+    card_version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False, comment="知识卡片版本号")
 
 
 # ==================== 风险作业报备 ====================

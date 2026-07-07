@@ -1283,6 +1283,9 @@ class SafetyRepository:
                 | SafetyKnowledgeArticle.summary.ilike(like)
                 | SafetyKnowledgeArticle.content.ilike(like)
                 | SafetyKnowledgeArticle.tags.ilike(like)
+                | SafetyKnowledgeArticle.article_no.ilike(like)
+                | SafetyKnowledgeArticle.source.ilike(like)
+                | SafetyKnowledgeArticle.author.ilike(like)
             )
 
         count_query = select(func.count(SafetyKnowledgeArticle.id)).where(
@@ -1299,6 +1302,9 @@ class SafetyRepository:
                 | SafetyKnowledgeArticle.summary.ilike(like)
                 | SafetyKnowledgeArticle.content.ilike(like)
                 | SafetyKnowledgeArticle.tags.ilike(like)
+                | SafetyKnowledgeArticle.article_no.ilike(like)
+                | SafetyKnowledgeArticle.source.ilike(like)
+                | SafetyKnowledgeArticle.author.ilike(like)
             )
 
         total = await self.session.scalar(count_query)
@@ -1314,6 +1320,16 @@ class SafetyRepository:
         query = select(SafetyKnowledgeArticle).where(
             SafetyKnowledgeArticle.id == article_id,
             SafetyKnowledgeArticle.is_deleted == False,
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_knowledge_article_by_feishu_id(
+        self, feishu_record_id: str
+    ) -> SafetyKnowledgeArticle | None:
+        """按飞书记录ID查询知识库文章（含已删除，用于同步匹配）"""
+        query = select(SafetyKnowledgeArticle).where(
+            SafetyKnowledgeArticle.feishu_record_id == feishu_record_id,
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -1357,6 +1373,140 @@ class SafetyRepository:
         )
         result = await self.session.execute(query)
         return result.rowcount > 0
+
+    async def get_article_by_no(
+        self, article_no: str
+    ) -> SafetyKnowledgeArticle | None:
+        """按文档编号查询（用于唯一性检查）"""
+        query = select(SafetyKnowledgeArticle).where(
+            SafetyKnowledgeArticle.article_no == article_no,
+            SafetyKnowledgeArticle.is_deleted == False,
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def check_similar_articles(
+        self, title: str
+    ) -> list[SafetyKnowledgeArticle]:
+        """按标题模糊匹配检测相似文档（快速筛查）"""
+        like = f"%{title.strip()}%"
+        query = (
+            select(SafetyKnowledgeArticle)
+            .where(
+                SafetyKnowledgeArticle.is_deleted == False,
+                SafetyKnowledgeArticle.title.ilike(like),
+            )
+            .limit(5)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_article_versions(
+        self, article_id: uuid.UUID
+    ) -> list[SafetyKnowledgeArticle]:
+        """获取版本链（同一文档的所有版本）。
+
+        语义：旧版本.superseded_by_id → 新版本.id
+        从当前文档出发，双向遍历完整版本链，返回按 version 升序排列的列表。
+        """
+        current = await self.get_knowledge_article_by_id(article_id)
+        if not current:
+            return []
+
+        chain: list[SafetyKnowledgeArticle] = [current]
+        visited: set[uuid.UUID] = {current.id}
+
+        # 1. Walk backward: find older versions (docs whose superseded_by_id
+        #    points to any doc already in the chain)
+        changed = True
+        while changed:
+            changed = False
+            superseded_ids = [a.id for a in chain]
+            stmt = select(SafetyKnowledgeArticle).where(
+                SafetyKnowledgeArticle.superseded_by_id.in_(superseded_ids),
+                SafetyKnowledgeArticle.is_deleted == False,
+            )
+            result = await self.session.execute(stmt)
+            for older in result.scalars().all():
+                if older.id not in visited:
+                    visited.add(older.id)
+                    chain.append(older)
+                    changed = True
+
+        # 2. Walk forward: find newer versions (docs that the current docs'
+        #    superseded_by_id fields point to)
+        for article in list(chain):
+            if article.superseded_by_id and article.superseded_by_id not in visited:
+                newer = await self.get_knowledge_article_by_id(article.superseded_by_id)
+                if newer and newer.id not in visited:
+                    visited.add(newer.id)
+                    chain.append(newer)
+
+        # Sort by version ascending (oldest first), then by created_at
+        chain.sort(
+            key=lambda a: (a.version or 1, a.created_at or datetime.min)
+        )
+
+        return chain
+
+    async def search_by_keywords(
+        self,
+        keywords: list[str],
+        skip: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[SafetyKnowledgeArticle], int]:
+        """按关键词列表搜索文章（用于语义搜索）"""
+        like_clauses = []
+        for kw in keywords:
+            like = f"%{kw}%"
+            like_clauses.append(
+                SafetyKnowledgeArticle.title.ilike(like)
+                | SafetyKnowledgeArticle.summary.ilike(like)
+                | SafetyKnowledgeArticle.content.ilike(like)
+                | SafetyKnowledgeArticle.tags.ilike(like)
+                | SafetyKnowledgeArticle.source.ilike(like)
+                | SafetyKnowledgeArticle.author.ilike(like)
+            )
+
+        base_where = SafetyKnowledgeArticle.is_deleted == False
+        combined = base_where
+        for clause in like_clauses:
+            combined = combined & clause
+
+        query = select(SafetyKnowledgeArticle).where(combined)
+        count_query = select(func.count(SafetyKnowledgeArticle.id)).where(combined)
+
+        total = await self.session.scalar(count_query)
+        query = (
+            query.offset(skip)
+            .limit(limit)
+            .order_by(SafetyKnowledgeArticle.created_at.desc())
+        )
+        result = await self.session.execute(query)
+        items = list(result.scalars().all())
+        return items, total or 0
+
+    async def get_max_article_seq_for_date(
+        self, prefix: str, date_str: str
+    ) -> int:
+        """获取指定前缀和日期的最大序号（用于自动编号）"""
+        pattern = f"{prefix}-{date_str}-%"
+        query = select(SafetyKnowledgeArticle.article_no).where(
+            SafetyKnowledgeArticle.article_no.ilike(pattern),
+            SafetyKnowledgeArticle.is_deleted == False,
+        )
+        result = await self.session.execute(query)
+        existing = result.scalars().all()
+        max_seq = 0
+        for no in existing:
+            if no:
+                try:
+                    seq = int(no.rsplit("-", 1)[-1])
+                    if seq > max_seq:
+                        max_seq = seq
+                except (ValueError, IndexError):
+                    pass
+        return max_seq
 
     # ==================== 八大特殊作业报备 Operations ====================
 

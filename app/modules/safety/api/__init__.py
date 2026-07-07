@@ -25,6 +25,7 @@ from app.modules.safety.api.special_operation_reports import (
 from app.modules.safety.api.special_ops_permits import special_ops_permits_router
 from app.modules.safety.api.special_ops_personnel import special_ops_personnel_router
 from app.modules.safety.api.trainings import trainings_router
+from app.modules.safety.knowledge.graph_api import graph_router
 
 router = APIRouter()
 
@@ -39,6 +40,7 @@ router.include_router(files_router)
 router.include_router(hazard_identifications_router)
 router.include_router(hazards_router)
 router.include_router(knowledge_router)
+router.include_router(graph_router)
 router.include_router(oh_hazard_monitors_router)
 router.include_router(oh_health_exams_router)
 router.include_router(regulations_router)

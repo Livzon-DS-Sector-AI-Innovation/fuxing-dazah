@@ -4,6 +4,8 @@
 与全局 platform/integrations/feishu 完全隔离，不影响其他模块。
 """
 
+# 触发 @on_event 装饰器注册（知识库 Bitable 事件处理器）
+from app.modules.safety.feishu import knowledge_bitable_handler  # noqa: F401
 from app.modules.safety.feishu.bitable_id_mapper import (
     get_bitable_open_id,
     get_bitable_person_value,

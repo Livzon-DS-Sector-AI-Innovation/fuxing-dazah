@@ -464,3 +464,46 @@ class SafetyBitableClient:
             field = data.get("data", {}).get("field", {})
             logger.info("Bitable update_field 成功: field_id=%s", field_id)
             return field
+
+    async def list_tables(
+        self,
+        page_size: int = 100,
+        page_token: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """列出应用下的所有数据表。
+
+        返回 [{"table_id": "...", "name": "...", "revision": 0}, ...]。
+        自动处理分页。
+        """
+        token = await self._token()
+        all_items: list[dict[str, Any]] = []
+        pt = page_token
+
+        async with httpx.AsyncClient(timeout=15) as http:
+            while True:
+                params: dict[str, Any] = {"page_size": page_size}
+                if pt:
+                    params["page_token"] = pt
+                resp = await http.get(
+                    f"{BITABLE_BASE}/apps/{self.app_token}/tables",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                data = resp.json()
+                if data.get("code") != 0:
+                    logger.error(
+                        "Bitable list_tables 失败: code=%s msg=%s",
+                        data.get("code"), data.get("msg"),
+                    )
+                    return []
+                result = data.get("data", {})
+                items = result.get("items", [])
+                all_items.extend(items)
+                if not result.get("has_more"):
+                    break
+                pt = result.get("page_token")
+                if not pt:
+                    break
+
+        logger.info("Bitable list_tables 完成: %d 个表", len(all_items))
+        return all_items
