@@ -235,12 +235,19 @@ class EmployeeService:
 
         result = await self.repo.create(employee)
 
-        # Sync to Feishu
-        rid = await self.bitable.create(self._to_bitable_fields(result))
-        if rid:
-            result.feishu_record_id = rid
-            result.feishu_synced_at = date.today()
-            await self.repo.update(result)
+        # Sync to Feishu（不阻塞员工创建）
+        try:
+            rid = await self.bitable.create(self._to_bitable_fields(result))
+            if rid:
+                result.feishu_record_id = rid
+                result.feishu_synced_at = date.today()
+                await self.repo.update(result)
+        except Exception as e:
+            logger.warning(
+                "Failed to sync employee %s to Feishu: %s",
+                data.employee_number,
+                e,
+            )
 
         return result
 
@@ -407,6 +414,10 @@ class EmployeeService:
                     elif field_name == "qualifications":
                         val = [v.strip() for v in str(val).split(",") if v.strip()]
                     data[field_name] = val
+
+                # 必填字段默认值
+                data.setdefault("position", "")
+                data.setdefault("department", "")
 
                 if "employee_number" not in data:
                     errors.append(f"第{row_idx}行: 缺少工号")
