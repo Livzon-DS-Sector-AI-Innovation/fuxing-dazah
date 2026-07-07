@@ -73,6 +73,8 @@ from app.modules.equipment.schemas.inspection_template import (
     InspectionTemplateUpdate,
 )
 from app.modules.equipment.schemas.maintenance_config import (
+    AdvanceDaysConfig,
+    AdvanceDaysUpdateRequest,
     ClaimTimeoutConfig,
     ClaimTimeoutUpdateRequest,
 )
@@ -212,6 +214,8 @@ __all__ = [
     "EquipmentSparePartCreate",
     "EquipmentSparePartResponse",
     # maintenance config
+    "AdvanceDaysConfig",
+    "AdvanceDaysUpdateRequest",
     "ClaimTimeoutConfig",
     "ClaimTimeoutUpdateRequest",
     # inspection

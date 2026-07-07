@@ -19,3 +19,15 @@ class ClaimTimeoutUpdateRequest(BaseModel):
     high: int | None = Field(default=None, ge=1, le=1440)
     medium: int | None = Field(default=None, ge=1, le=1440)
     low: int | None = Field(default=None, ge=1, le=1440)
+
+
+class AdvanceDaysConfig(BaseModel):
+    """维护计划提前创建工单天数配置"""
+
+    advance_days: int = Field(default=0, ge=0, le=364, description="提前天数，0=当天触发")
+
+
+class AdvanceDaysUpdateRequest(BaseModel):
+    """更新提前天数配置请求"""
+
+    advance_days: int = Field(..., ge=1, le=364, description="提前天数，1-364")
