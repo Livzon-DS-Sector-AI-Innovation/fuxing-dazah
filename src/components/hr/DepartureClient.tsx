@@ -1,14 +1,16 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker } from 'antd'
+import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker, Popconfirm } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
   EyeOutlined,
-  PlusOutlined } from '@ant-design/icons'
+  PlusOutlined,
+  DeleteOutlined } from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
 import { fetchDepartureRecords, fetchDepartments } from '@/lib/api/hr'
+import { deleteDepartureRecordAction } from '@/actions/hr'
 
 interface DepartureClientProps {
   initialRecords: DepartureRecord[]
@@ -212,7 +214,7 @@ export default function DepartureClient({
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 160,
       fixed: 'right',
       render: (_: any, record: DepartureRecord) => (
         <Space size="small">
@@ -224,6 +226,22 @@ export default function DepartureClient({
           >
             详情
           </Button>
+          <Popconfirm
+            title="确认删除？"
+            onConfirm={async () => {
+              try {
+                await deleteDepartureRecordAction(record.id)
+                message.success('已删除')
+                loadData()
+              } catch (err: any) {
+                message.error(err.message || '删除失败')
+              }
+            }}
+          >
+            <Button type="text" size="small" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
         </Space>
       ) },
   ]

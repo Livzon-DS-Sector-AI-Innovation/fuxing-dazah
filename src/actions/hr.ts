@@ -408,6 +408,78 @@ export async function uploadAnnualPlanAction(formData: FormData) {
   return res.json()
 }
 
+// ─── 内训师 Actions ───
+
+export async function fetchTrainersAction(params?: {
+  keyword?: string
+  department?: string
+  page?: number
+  page_size?: number
+}) {
+  const searchParams = new URLSearchParams()
+  if (params?.keyword) searchParams.set('keyword', params.keyword)
+  if (params?.department) searchParams.set('department', params.department)
+  searchParams.set('page', String(params?.page || 1))
+  searchParams.set('page_size', String(params?.page_size || 50))
+
+  const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${searchParams.toString()}`, {
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取内训师列表失败')
+  return res.json()
+}
+
+export async function uploadTrainersAction(formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '上传内训师失败')
+  }
+  revalidatePath('/hr/training/trainers')
+  return res.json()
+}
+
+export async function deleteTrainerAction(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/trainers/${id}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除内训师失败')
+  }
+  revalidatePath('/hr/training/trainers')
+  return res.json()
+}
+
+export async function clearTrainersAction() {
+  const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '清空内训师台账失败')
+  }
+  revalidatePath('/hr/training/trainers')
+  return res.json()
+}
+
+// ─── 离职台账 Actions ───
+
+export async function deleteDepartureRecordAction(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${id}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除离职记录失败')
+  }
+  revalidatePath('/hr/departure')
+  return res.json()
+}
+
 // ─── 招聘候选人（待后端实现）───
 
 export async function createCandidateAction(_formData: FormData): Promise<{ data: any }> {

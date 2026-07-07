@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Table, Input, Select, Space, Tag, Upload } from 'antd'
-import { SearchOutlined, UploadOutlined } from '@ant-design/icons'
+import { App, Button, Card, Table, Input, Select, Space, Tag, Upload, Popconfirm, Modal } from 'antd'
+import { SearchOutlined, UploadOutlined, DeleteOutlined, ClearOutlined } from '@ant-design/icons'
+import { fetchTrainersAction, uploadTrainersAction, deleteTrainerAction, clearTrainersAction } from '@/actions/hr'
 
 export default function TrainersPage() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -14,44 +15,81 @@ export default function TrainersPage() {
   const [dept, setDept] = useState<string | undefined>()
   const [depts, setDepts] = useState<{value:string,label:string}[]>([])
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`).then(r => r.json())
-      .then(res => setDepts((res.data||[]).map((d:string) => ({value:d,label:d}))))
+    fetchTrainersAction({ page_size: 200 })
+      .then(res => {
+        const dset = new Set<string>()
+        ;(res.data || []).forEach((t: any) => { if (t.department) dset.add(t.department) })
+        setDepts(Array.from(dset).map(d => ({ value: d, label: d })))
+      })
+      .catch(() => {})
   }, [])
 
   const load = async (p = 1) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ page: String(p), page_size: '50' })
-      if (keyword) params.set('keyword', keyword)
-      if (dept) params.set('department', dept)
-      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${params.toString()}`)
-      const d = await res.json()
-      setData(d.data || [])
-      setTotal(d.meta?.total || 0)
+      const res = await fetchTrainersAction({
+        keyword: keyword || undefined,
+        department: dept,
+        page: p,
+        page_size: 50,
+      })
+      setData(res.data || [])
+      setTotal(res.meta?.total || 0)
+    } catch (err: any) {
+      message.error(err.message || '加载失败')
     } finally { setLoading(false) }
   }
 
   useEffect(() => { load(page) }, [page, dept])
 
+  const handleDelete = async (id: string, name: string) => {
+    try {
+      await deleteTrainerAction(id)
+      message.success(`已删除：${name}`)
+      load(page)
+    } catch (err: any) {
+      message.error(err.message || '删除失败')
+    }
+  }
+
+  const handleClear = async () => {
+    try {
+      await clearTrainersAction()
+      message.success('已清空全部内训师记录')
+      load(1)
+    } catch (err: any) {
+      message.error(err.message || '清空失败')
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold">内训师台账</h1>
-        <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
-          const fd = new FormData(); fd.append('file', file as File)
-          try {
-            const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, { method: 'POST', body: fd, credentials: 'include' })
-            const d = await res.json()
-            if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-            else message.error(d.message || '上传失败')
-            load(1)
-          } catch { message.error('上传失败') }
-        }}>
-          <Button icon={<UploadOutlined />}>上传内训师</Button>
-        </Upload>
+        <Space>
+          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            const fd = new FormData(); fd.append('file', file as File)
+            try {
+              const d = await uploadTrainersAction(fd)
+              if (d.data?.errors && d.data.errors.length > 0) {
+                modal.warning({
+                  title: `上传完成：${d.message}，但有${d.data.errors.length}项出错`,
+                  content: <ul style={{maxHeight:300, overflow:'auto', paddingLeft:18}}>{d.data.errors.map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>,
+                  width: 500,
+                })
+              } else {
+                message.success(d.message)
+              }
+              load(1)
+            } catch (err: any) { message.error(err.message || '上传失败') }
+          }}>
+            <Button icon={<UploadOutlined />}>上传内训师</Button>
+          </Upload>
+          <Popconfirm title="确认清空全部内训师记录？此操作不可恢复" onConfirm={handleClear}>
+            <Button danger icon={<ClearOutlined />}>清空台账</Button>
+          </Popconfirm>
+        </Space>
       </div>
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
@@ -70,6 +108,13 @@ export default function TrainersPage() {
             { title: '培训管理员', dataIndex: 'admin', width: 100 },
             { title: '一级培训师', dataIndex: 'is_level1', width: 120,
               render: (v: boolean) => v ? <Tag color="blue">一级培训师</Tag> : <Tag>-</Tag> },
+            {
+              title: '操作', width: 80, render: (_: any, record: any) => (
+                <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id, record.name)}>
+                  <Button type="link" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              ),
+            },
           ]} />
       </Card>
     </div>
