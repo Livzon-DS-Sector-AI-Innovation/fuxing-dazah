@@ -8,7 +8,10 @@ from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.equipment import service
 from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
-from app.modules.equipment.schemas import ClaimTimeoutUpdateRequest
+from app.modules.equipment.schemas import (
+    AdvanceDaysUpdateRequest,
+    ClaimTimeoutUpdateRequest,
+)
 
 router = APIRouter()
 
@@ -33,4 +36,27 @@ async def update_claim_timeout(
     ),
 ) -> JSONResponse:
     config = await service.update_claim_timeout_config(db, data)
+    return success_response(data=config)
+
+
+@router.get("/advance-days", summary="获取维护计划提前创建天数")
+async def get_advance_days(
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:read"),
+    ),
+) -> JSONResponse:
+    config = await service.get_advance_days_config(db)
+    return success_response(data=config)
+
+
+@router.put("/advance-days", summary="更新维护计划提前创建天数")
+async def update_advance_days(
+    data: AdvanceDaysUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:maintenance:update"),
+    ),
+) -> JSONResponse:
+    config = await service.update_advance_days_config(db, data)
     return success_response(data=config)

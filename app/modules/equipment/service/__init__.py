@@ -101,7 +101,9 @@ from app.modules.equipment.service.inspection_template import (
     update_template_item,
 )
 from app.modules.equipment.service.maintenance_config import (
+    get_advance_days_config,
     get_claim_timeout_config,
+    update_advance_days_config,
     update_claim_timeout_config,
 )
 from app.modules.equipment.service.maintenance_plan import (
@@ -259,7 +261,9 @@ __all__ = [
     "update_work_order",
     "verify_work_order",
     # maintenance config
+    "get_advance_days_config",
     "get_claim_timeout_config",
+    "update_advance_days_config",
     "update_claim_timeout_config",
     # work order image
     "upload_images",
