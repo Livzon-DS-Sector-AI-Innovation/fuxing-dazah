@@ -83,6 +83,7 @@ async def create_maintenance_plan(
         )
 
     plan_data = data.model_dump()
+    plan_data["created_by"] = ctx.user.id
 
     # 自动计算下次维护日期
     if data.last_maintenance_date:
@@ -187,16 +188,21 @@ async def get_overdue_maintenance_plans(
 
 async def generate_due_work_orders(
     db: AsyncSession,
+    advance_days: int = 0,
 ) -> tuple[int, int]:
     """扫描到期维护计划，自动创建"计划维护"工单。
+
+    Args:
+        advance_days: 提前天数，默认 0（仅扫描今天到期）。
 
     Returns:
         (created_count, skipped_count) 元组
     """
     today = date_type.today()
+    threshold = today + timedelta(days=advance_days)
 
     # 查询所有到期的启用计划
-    due_plans = await repo.get_maintenance_plans_due(db, today)
+    due_plans = await repo.get_maintenance_plans_due(db, threshold)
 
     created_count = 0
     skipped_count = 0
@@ -317,6 +323,7 @@ async def generate_due_work_orders(
                     plan.frequency,
                     plan.frequency_unit,
                 )
+                plan.last_generated_date = plan.next_maintenance_date
             await db.flush()
         else:
             skipped_count += 1
