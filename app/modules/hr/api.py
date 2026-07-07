@@ -1454,6 +1454,41 @@ async def list_trainers(
     )
 
 
+@router.delete("/trainers/{trainer_id}", summary="删除内训师")
+async def delete_trainer(
+    trainer_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import HrTrainer
+
+    result = await session.execute(
+        select(HrTrainer).where(HrTrainer.id == trainer_id, HrTrainer.is_deleted == False)
+    )
+    trainer = result.scalar_one_or_none()
+    if not trainer:
+        raise HTTPException(404, "内训师不存在")
+    trainer.is_deleted = True
+    trainer.deleted_at = func.now()
+    await session.flush()
+    return success_response(message="删除成功")
+
+
+@router.delete("/trainers", summary="清空内训师台账")
+async def clear_trainers(
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import HrTrainer
+    from sqlalchemy import update as sql_update
+
+    await session.execute(
+        sql_update(HrTrainer)
+        .where(HrTrainer.is_deleted == False)
+        .values(is_deleted=True, deleted_at=func.now())
+    )
+    await session.flush()
+    return success_response(message="清空成功")
+
+
 # ─── SOP Catalog Routes ───
 
 @router.post("/sop-catalog/upload", summary="上传SOP目录")

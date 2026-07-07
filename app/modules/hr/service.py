@@ -614,6 +614,7 @@ class OnboardingRecordService:
 class DepartureRecordService:
     def __init__(self, session: AsyncSession) -> None:
         self.repo = DepartureRecordRepository(session)
+        self.employee_repo = EmployeeRepository(session)
 
     async def get_record(self, record_id: UUID) -> DepartureRecord:
         record = await self.repo.get_by_id(record_id)
@@ -644,7 +645,15 @@ class DepartureRecordService:
 
     async def create_record(self, data: DepartureRecordCreate) -> DepartureRecord:
         record = DepartureRecord(**data.model_dump())
-        return await self.repo.create(record)
+        record = await self.repo.create(record)
+
+        # 自动将对应员工状态更新为离职（按姓名+部门匹配）
+        employee = await self.employee_repo.get_by_name_and_department(data.name, data.department)
+        if employee and employee.status != "离职":
+            employee.status = "离职"
+            await self.employee_repo.update(employee)
+
+        return record
 
     async def update_record(self, record_id: UUID, data: DepartureRecordUpdate) -> DepartureRecord:
         record = await self.get_record(record_id)

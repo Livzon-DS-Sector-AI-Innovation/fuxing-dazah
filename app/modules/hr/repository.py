@@ -77,8 +77,8 @@ class EmployeeRepository:
         if status:
             stmt = stmt.where(Employee.status == status)
         else:
-            # 默认排除待审批员工，只有显式筛选时才显示
-            stmt = stmt.where(Employee.status != "待审批")
+            # 默认排除待审批和离职员工，只有显式筛选时才显示
+            stmt = stmt.where(Employee.status != "待审批", Employee.status != "离职")
         if keyword:
             stmt = stmt.where(
                 Employee.name.ilike(f"{keyword}%")
@@ -151,6 +151,17 @@ class EmployeeRepository:
         await self.session.flush()
         await self.session.refresh(employee)
         return employee
+
+    async def get_by_name_and_department(self, name: str, department: str) -> Employee | None:
+        """按姓名+部门精确匹配一位员工。"""
+        result = await self.session.execute(
+            select(Employee).where(
+                Employee.name == name,
+                Employee.department == department,
+                Employee.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def upsert_by_employee_number(self, data: dict) -> Employee:
         """Create or update employee by employee_number (used for Feishu sync)."""
