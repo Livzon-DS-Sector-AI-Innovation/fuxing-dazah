@@ -1540,6 +1540,44 @@ async def list_sop_catalog(
     )
 
 
+@router.get("/sop-catalog/departments", summary="SOP目录部门列表")
+async def list_sop_catalog_departments(
+    session: AsyncSession = Depends(get_db),
+):
+    """返回 SOP 目录中所有不重复的部门名称。"""
+    from app.modules.hr.models import SopCatalog
+
+    result = await session.execute(
+        select(SopCatalog.department)
+        .where(SopCatalog.is_deleted == False, SopCatalog.department.isnot(None))
+        .distinct()
+        .order_by(SopCatalog.department)
+    )
+    departments = [row[0] for row in result.all()]
+    return success_response(data=departments)
+
+
+@router.get("/sop-catalog/categories", summary="SOP目录分类列表")
+async def list_sop_catalog_categories(
+    department: str | None = Query(None, description="按部门筛选"),
+    session: AsyncSession = Depends(get_db),
+):
+    """返回 SOP 目录中所有不重复的分类名称，可按部门筛选。"""
+    from app.modules.hr.models import SopCatalog
+
+    stmt = (
+        select(SopCatalog.category)
+        .where(SopCatalog.is_deleted == False, SopCatalog.category.isnot(None))
+        .distinct()
+        .order_by(SopCatalog.category)
+    )
+    if department:
+        stmt = stmt.where(SopCatalog.department == department)
+    result = await session.execute(stmt)
+    categories = [row[0] for row in result.all()]
+    return success_response(data=categories)
+
+
 # ─── Dept Training Personnel ───
 
 @router.get("/dept-training-personnel", summary="部门培训人员列表")
