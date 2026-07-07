@@ -261,7 +261,7 @@ class EmployeeService:
                     if "hire_date" not in data:
                         data["hire_date"] = date.today()
                     if "status" not in data:
-                        data["status"] = "待审批"
+                        data["status"] = "在职"
                     await self.repo.upsert_by_employee_number(data)
                     created += 1
             except Exception as e:
