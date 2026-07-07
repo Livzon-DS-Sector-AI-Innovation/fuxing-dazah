@@ -9,6 +9,8 @@ interface KnowledgeState {
   queryParams: SafetyKnowledgeArticleQueryParams
   total: number
   loading: boolean
+  selectedRowKeys: string[]
+  cardStatusFilter: string | undefined
   setItems: (items: SafetyKnowledgeArticle[]) => void
   setCurrentItem: (item: SafetyKnowledgeArticle | null) => void
   setQueryParams: (params: Partial<SafetyKnowledgeArticleQueryParams>) => void
@@ -17,15 +19,19 @@ interface KnowledgeState {
   addItem: (item: SafetyKnowledgeArticle) => void
   updateItem: (id: string, updates: Partial<SafetyKnowledgeArticle>) => void
   removeItem: (id: string) => void
+  setSelectedRowKeys: (keys: string[]) => void
+  setCardStatusFilter: (filter: string | undefined) => void
   reset: () => void
 }
 
 const initialState = {
   items: [] as SafetyKnowledgeArticle[],
   currentItem: null as SafetyKnowledgeArticle | null,
-  queryParams: { page: 1, page_size: 20 } as SafetyKnowledgeArticleQueryParams,
+  queryParams: { page: 1, page_size: 200 } as SafetyKnowledgeArticleQueryParams,
   total: 0,
   loading: false,
+  selectedRowKeys: [] as string[],
+  cardStatusFilter: undefined as string | undefined,
 }
 
 export const useKnowledgeStore = create<KnowledgeState>((set) => ({
@@ -50,6 +56,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set) => ({
       items: state.items.filter((a) => a.id !== id),
       currentItem: state.currentItem?.id === id ? null : state.currentItem,
     })),
+  setSelectedRowKeys: (selectedRowKeys) => set({ selectedRowKeys }),
+  setCardStatusFilter: (cardStatusFilter) => set({ cardStatusFilter }),
 
   reset: () => set(initialState),
 }))

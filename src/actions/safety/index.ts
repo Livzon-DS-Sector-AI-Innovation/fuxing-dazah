@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 // 注意：以下 revalidatePath 调用指向的页面路径部分仍在开发中，待对应页面创建后将自动生效
-import { fetchApi, uploadPhoto, getAuthHeaders } from './_helpers'
+import { getAuthHeaders } from '@/lib/auth'
+import { fetchApi, uploadPhoto } from './_helpers'
 import { API_BASE, buildQueryString } from './_utils'
 import type {
   Accident,
@@ -30,6 +31,12 @@ import type {
   SafetyKnowledgeArticle,
   SafetyKnowledgeArticleFormData,
   SafetyKnowledgeArticleQueryParams,
+  ParseDocumentResponse,
+  DuplicateCheckRequest,
+  DuplicateCheckResponse,
+  NewVersionResponse,
+  VersionChainItem,
+  SemanticSearchResult,
   SafetyTraining,
   SafetyTrainingFormData,
   SafetyTrainingQueryParams,
@@ -62,6 +69,15 @@ import type {
   OhHealthExam,
   OhHealthExamFormData,
   OhHealthExamQueryParams,
+  // knowledge
+  GenerateCardResponse,
+  AgentUsageStats,
+  BatchGenerateCardsResponse,
+  GeneratePptRequest,
+  GeneratePptResponse,
+  GenerateSummaryResponse,
+  PptHistoryResponse,
+  SyncKnowledgeResponse,
 } from '@/types/safety'
 
 // ============ SafetyCheck Actions ============
@@ -1202,6 +1218,129 @@ export async function publishKnowledgeArticle(id: string) {
 
 export async function archiveKnowledgeArticle(id: string) {
   const response = await fetchApi<SafetyKnowledgeArticle>(`/safety/knowledge-articles/${id}/archive`, { method: 'POST' })
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+// ── AI 智能解析 ──
+
+export async function parseKnowledgeDocument(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+  const headers = await getAuthHeaders()
+  // Remove Content-Type so browser sets multipart boundary
+  delete (headers as Record<string, string>)['Content-Type']
+  const res = await fetch(`${API_BASE}/safety/knowledge-articles/parse`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  return res.json() as Promise<ApiResponse<ParseDocumentResponse>>
+}
+
+export async function batchParseKnowledgeDocuments(files: File[]) {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('files', file))
+  const headers = await getAuthHeaders()
+  delete (headers as Record<string, string>)['Content-Type']
+  const res = await fetch(`${API_BASE}/safety/knowledge-articles/batch-parse`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  return res.json() as Promise<ApiResponse<ParseDocumentResponse[]>>
+}
+
+// ── 附件上传 ──
+
+export async function uploadKnowledgeAttachment(articleId: string, file: File) {
+  return uploadPhoto(`/safety/knowledge-articles/${articleId}/upload`, file)
+}
+
+// ── 重复检测 ──
+
+export async function checkDuplicateArticle(data: DuplicateCheckRequest) {
+  return fetchApi<DuplicateCheckResponse>('/safety/knowledge-articles/check-duplicate', {
+    method: 'POST', body: JSON.stringify(data),
+  })
+}
+
+// ── 版本管理 ──
+
+export async function getArticleVersions(id: string) {
+  return fetchApi<VersionChainItem[]>(`/safety/knowledge-articles/${id}/versions`)
+}
+
+export async function createNewArticleVersion(id: string) {
+  const response = await fetchApi<NewVersionResponse>(`/safety/knowledge-articles/${id}/new-version`, { method: 'POST' })
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+// ── 语义搜索 ──
+
+export async function semanticSearchArticles(q: string, page = 1, page_size = 20) {
+  const params = new URLSearchParams({ q, page: String(page), page_size: String(page_size) })
+  return fetchApi<SemanticSearchResult[]>(`/safety/knowledge-articles/semantic-search?${params.toString()}`)
+}
+
+// ── 知识卡片管理 ──
+
+export async function generateKnowledgeCard(articleId: string) {
+  const response = await fetchApi<GenerateCardResponse>(
+    `/safety/knowledge-articles/${articleId}/generate-card`,
+    { method: 'POST' }
+  )
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+export async function getAgentUsageStats(articleId: string) {
+  return fetchApi<AgentUsageStats>(`/safety/knowledge-articles/${articleId}/agent-stats`)
+}
+
+export async function batchGenerateKnowledgeCards(articleIds: string[]) {
+  const response = await fetchApi<BatchGenerateCardsResponse>(
+    '/safety/knowledge-articles/batch/generate-cards',
+    { method: 'POST', body: JSON.stringify({ article_ids: articleIds }) }
+  )
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+// ── AI PPT 生成 ──
+
+export async function generatePpt(articleId: string, data: GeneratePptRequest) {
+  const response = await fetchApi<GeneratePptResponse>(
+    `/safety/knowledge-articles/${articleId}/generate-ppt`,
+    { method: 'POST', body: JSON.stringify(data) }
+  )
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+export async function getPptHistory(articleId: string) {
+  return fetchApi<PptHistoryResponse>(`/safety/knowledge-articles/${articleId}/ppt-history`)
+}
+
+// ── AI 摘要生成 ──
+
+export async function generateSummary(articleId: string) {
+  const response = await fetchApi<GenerateSummaryResponse>(
+    `/safety/knowledge-articles/${articleId}/generate-summary`,
+    { method: 'POST' }
+  )
+  revalidatePath('/safety/knowledge-base')
+  return response
+}
+
+// ── Bitable 同步 ──
+
+export async function syncKnowledgeArticles() {
+  const response = await fetchApi<SyncKnowledgeResponse>(
+    '/safety/knowledge-articles/sync',
+    { method: 'POST' }
+  )
   revalidatePath('/safety/knowledge-base')
   return response
 }

@@ -2,9 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { getAuthHeaders } from '@/lib/auth'
-import { API_BASE, buildQueryString } from './_utils'
-
-export { getAuthHeaders }
+import { API_BASE } from './_utils'
 
 export async function fetchApi<T>(
   endpoint: string,
@@ -22,7 +20,7 @@ export async function fetchApi<T>(
     return {
       code: -1,
       message: `网络请求失败，无法连接到后端服务 (${API_BASE}${endpoint})`,
-      data: undefined as unknown as T,
+      data: null as unknown as T,
     }
   }
 
@@ -38,14 +36,14 @@ export async function fetchApi<T>(
         errorMessage = errorBody.substring(0, 200)
       }
     } catch { /* 无法读取响应体 */ }
-    return { code: response.status, message: errorMessage, data: undefined as unknown as T }
+    return { code: response.status, message: errorMessage, data: null as unknown as T }
   }
 
   try {
     return await response.json()
   } catch {
     const text = await response.text().catch(() => '无法读取响应')
-    return { code: -1, message: `响应解析失败: ${text.substring(0, 200)}`, data: undefined as unknown as T }
+    return { code: -1, message: `响应解析失败: ${text.substring(0, 200)}`, data: null as unknown as T }
   }
 }
 

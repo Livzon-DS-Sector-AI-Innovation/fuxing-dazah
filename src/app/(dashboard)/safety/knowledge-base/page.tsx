@@ -1,134 +1,184 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { App, Button, Input, Select, Modal, Tooltip } from 'antd'
 import {
-  Table,
-  Button,
-  Space,
-  Input,
-  Select,
-  Modal,
-  Form,
-  DatePicker,
-  message,
-  Tag,
-  Card,
-  Row,
-  Col,
-  Typography,
-  Descriptions,
-} from 'antd'
-import type { ColumnsType } from 'antd/es/table'
-import {
-  PlusOutlined,
   SearchOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  SendOutlined,
-  InboxOutlined,
-  FileTextOutlined,
-  EyeOutlined,
+  RobotOutlined,
+  SyncOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
-import { useSafetyStore } from '@/stores/safety'
 import {
   getKnowledgeArticles,
-  getKnowledgeArticle,
-  createKnowledgeArticle,
-  updateKnowledgeArticle,
   deleteKnowledgeArticle,
   publishKnowledgeArticle,
   archiveKnowledgeArticle,
+  createNewArticleVersion,
+  semanticSearchArticles,
+  generateKnowledgeCard,
+  batchGenerateKnowledgeCards,
+  generatePpt,
+  generateSummary,
+  syncKnowledgeArticles,
 } from '@/actions/safety'
-import type {
-  SafetyKnowledgeArticle,
-  SafetyKnowledgeArticleFormData,
-} from '@/types/safety'
-import {
-  KNOWLEDGE_CATEGORY_OPTIONS,
-} from '@/types/safety'
-import dayjs from 'dayjs'
-
-const { Text } = Typography
+import DocumentCardGrid from '@/components/safety/DocumentCardGrid'
+import KnowledgeSidebar from '@/components/safety/KnowledgeSidebar'
+import KnowledgeDetailDrawer from '@/components/safety/KnowledgeDetailDrawer'
+import KnowledgeFormModal from '@/components/safety/KnowledgeFormModal'
+import { useKnowledgeStore } from '@/stores/safety'
+import type { SafetyKnowledgeArticle } from '@/types/safety'
+import { filterByMenuKey, computeMenuCounts } from '@/components/safety/knowledgeConstants'
 
 export default function KnowledgeBasePage() {
-  const [form] = Form.useForm()
-  const [editForm] = Form.useForm()
-  const [loading, setLoading] = useState(false)
-  const [modalVisible, setModalVisible] = useState(false)
-  const [detailVisible, setDetailVisible] = useState(false)
-  const [editingRecord, setEditingRecord] = useState<SafetyKnowledgeArticle | null>(null)
-  const [detailRecord, setDetailRecord] = useState<SafetyKnowledgeArticle | null>(null)
+  // ── Antd App hook ──────────────────────────────────
+  const { message } = App.useApp()
+  const router = useRouter()
+
+  // ── Store ──────────────────────────────────────────
+  const {
+    items,
+    total,
+    queryParams,
+    loading,
+    selectedRowKeys,
+    setItems,
+    setTotal,
+    setQueryParams,
+    setLoading,
+    updateItem,
+    removeItem,
+    setSelectedRowKeys,
+  } = useKnowledgeStore()
+
+  // ── Local state ────────────────────────────────────
   const [searchText, setSearchText] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [categoryFilter, setCategoryFilter] = useState<string | undefined>()
+  const [cardStatusFilter, setCardStatusFilter] = useState<string | undefined>()
+  const [smartSearch, setSmartSearch] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [selectedMenuKey, setSelectedMenuKey] = useState<string | null>(null)
+  const [menuCounts, setMenuCounts] = useState<Map<string, number>>(new Map())
+  const [syncing, setSyncing] = useState(false)
 
-  const {
-    articles,
-    articleTotal,
-    articleQueryParams,
-    setArticles,
-    setArticleTotal,
-    setArticleQueryParams,
-    addArticle,
-    updateArticle: updateArticleInStore,
-    removeArticle,
-  } = useSafetyStore()
+  // Modal/Drawer visibility
+  const [formOpen, setFormOpen] = useState(false)
+  const [editingRecord, setEditingRecord] = useState<SafetyKnowledgeArticle | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
-  const loadData = async () => {
+  // ── Data loading ───────────────────────────────────
+  const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const response = await getKnowledgeArticles({
-        ...articleQueryParams,
-        status: statusFilter,
-        category: categoryFilter,
-        keyword: searchText || undefined,
-      })
-      if (response.code === 200) {
-        setArticles(response.data)
-        setArticleTotal(response.meta?.total || 0)
+      // 卡片模式使用较大的 page_size 以支持单页浏览
+      const pageSize = queryParams.page_size || 200
+      let response
+      if (smartSearch && searchText) {
+        response = await semanticSearchArticles(searchText, queryParams.page || 1, pageSize)
+      } else {
+        response = await getKnowledgeArticles({
+          page: queryParams.page || 1,
+          page_size: pageSize,
+          status: statusFilter,
+          category: categoryFilter,
+          keyword: searchText || undefined,
+        })
       }
-    } catch {
+      if (response.code === 200) {
+        const data = response.data as SafetyKnowledgeArticle[]
+        const totalCount = response.meta?.total || 0
+
+        // 计算菜单计数（基于原始数据，不受筛选影响）
+        setMenuCounts(computeMenuCounts(data))
+
+        // Client-side filters
+        let filtered = data
+        // 菜单分类筛选
+        if (selectedMenuKey) {
+          filtered = filterByMenuKey(filtered, selectedMenuKey)
+        }
+        // 知识卡片状态筛选
+        if (cardStatusFilter === 'has_card') {
+          filtered = filtered.filter((a) => a.knowledge_card != null)
+        } else if (cardStatusFilter === 'no_card') {
+          filtered = filtered.filter((a) => !a.knowledge_card)
+        }
+
+        setItems(filtered)
+        setTotal(cardStatusFilter || selectedMenuKey ? filtered.length : totalCount)
+        setLoadError(null) // 清除之前的错误
+      } else {
+        // 诊断：显示后端返回的具体错误
+        const errMsg = response.message || `请求失败 (code=${response.code})`
+        console.error('[知识库] API 返回非 200:', response)
+        setLoadError(errMsg)
+        message.error(errMsg)
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.error('[知识库] 请求异常:', err)
+      setLoadError(errMsg || '加载知识库列表失败')
       message.error('加载知识库列表失败')
     } finally {
       setLoading(false)
     }
-  }
+  }, [queryParams.page, queryParams.page_size, statusFilter, categoryFilter, cardStatusFilter, smartSearch, searchText, selectedMenuKey, setItems, setLoading, setTotal])
 
   useEffect(() => {
     loadData()
-  }, [articleQueryParams.page, articleQueryParams.page_size, statusFilter, categoryFilter])
+  }, [loadData])
 
   const handleSearch = () => {
-    setArticleQueryParams({ page: 1 })
+    setQueryParams({ page: 1 })
     loadData()
   }
 
-  const handleAdd = () => {
-    setEditingRecord(null)
-    form.resetFields()
-    setModalVisible(true)
+  // ── Card selection ─────────────────────────────────
+  const handleSelectCard = (id: string) => {
+    setSelectedRowKeys(
+      selectedRowKeys.includes(id)
+        ? selectedRowKeys.filter((k) => k !== id)
+        : [...selectedRowKeys, id]
+    )
   }
 
-  const handleEdit = (record: SafetyKnowledgeArticle) => {
-    setEditingRecord(record)
-    editForm.setFieldsValue({
-      ...record,
-      publish_date: record.publish_date ? dayjs(record.publish_date) : undefined,
-    })
-    setModalVisible(true)
-  }
+  // ── Menu selection ────────────────────────────────
+  const handleMenuSelect = useCallback((key: string) => {
+    setSelectedMenuKey(key)
+    setQueryParams({ page: 1 })
+  }, [setQueryParams])
 
-  const handleViewDetail = async (record: SafetyKnowledgeArticle) => {
+  // ── Sync ──────────────────────────────────────────
+  const handleSync = async () => {
+    setSyncing(true)
     try {
-      const response = await getKnowledgeArticle(record.id)
-      if (response.code === 200) {
-        setDetailRecord(response.data)
-        setDetailVisible(true)
-        updateArticleInStore(record.id, response.data)
+      const res = await syncKnowledgeArticles()
+      if (res.code === 200 && res.data) {
+        message.success(
+          `同步完成：创建 ${res.data.created}，更新 ${res.data.updated}，删除 ${res.data.deleted}`
+        )
+        loadData()
+      } else {
+        message.error(res.message || '同步失败')
       }
     } catch {
-      message.error('获取详情失败')
+      message.error('同步请求失败')
+    } finally {
+      setSyncing(false)
     }
+  }
+
+  // ── CRUD actions ───────────────────────────────────
+  const handleEdit = (record: SafetyKnowledgeArticle) => {
+    setEditingRecord(record)
+    setFormOpen(true)
+  }
+
+  const handleViewDetail = (record: SafetyKnowledgeArticle) => {
+    setDetailId(record.id)
+    setDetailOpen(true)
   }
 
   const handleDelete = (id: string) => {
@@ -137,222 +187,354 @@ export default function KnowledgeBasePage() {
       content: '确定要删除该知识文档吗？',
       onOk: async () => {
         const response = await deleteKnowledgeArticle(id)
-        if (response.code === 200) { message.success('删除成功'); removeArticle(id) }
-        else { message.error(response.message || '删除失败') }
+        if (response.code === 200) {
+          message.success('删除成功')
+          removeItem(id)
+        } else {
+          message.error(response.message || '删除失败')
+        }
       },
     })
   }
 
-  const handleSubmit = async () => {
-    try {
-      const values = editingRecord ? await editForm.validateFields() : await form.validateFields()
-      const formattedValues = {
-        ...values,
-        publish_date: values.publish_date ? values.publish_date.toISOString() : undefined,
-      }
-
-      if (editingRecord) {
-        const response = await updateKnowledgeArticle(editingRecord.id, formattedValues)
-        if (response.code === 200) { message.success('更新成功'); updateArticleInStore(editingRecord.id, response.data); setModalVisible(false) }
-        else { message.error(response.message || '更新失败') }
-      } else {
-        const response = await createKnowledgeArticle(formattedValues as SafetyKnowledgeArticleFormData)
-        if (response.code === 200) { message.success('创建成功'); addArticle(response.data); setModalVisible(false); form.resetFields() }
-        else { message.error(response.message || '创建失败') }
-      }
-    } catch { console.error('表单验证失败') }
-  }
-
   const handlePublish = async (id: string) => {
     const response = await publishKnowledgeArticle(id)
-    if (response.code === 200) { message.success('发布成功'); updateArticleInStore(id, response.data) }
-    else { message.error(response.message || '发布失败') }
+    if (response.code === 200) {
+      message.success('发布成功')
+      updateItem(id, response.data)
+    } else {
+      message.error(response.message || '发布失败')
+    }
   }
 
   const handleArchive = async (id: string) => {
     const response = await archiveKnowledgeArticle(id)
-    if (response.code === 200) { message.success('已归档'); updateArticleInStore(id, response.data) }
-    else { message.error(response.message || '归档失败') }
+    if (response.code === 200) {
+      message.success('已归档')
+      updateItem(id, response.data)
+    } else {
+      message.error(response.message || '归档失败')
+    }
   }
 
-  const columns: ColumnsType<SafetyKnowledgeArticle> = [
-    { title: '编号', dataIndex: 'article_no', key: 'article_no', width: 130 },
-    { title: '标题', dataIndex: 'title', key: 'title', width: 250, ellipsis: true },
-    {
-      title: '分类', dataIndex: 'category', key: 'category', width: 120,
-      render: (c: string) => { const opt = KNOWLEDGE_CATEGORY_OPTIONS.find(o => o.value === c); return <Tag>{opt?.label || c}</Tag> },
-    },
-    { title: '来源', dataIndex: 'source', key: 'source', width: 150, ellipsis: true },
-    { title: '作者', dataIndex: 'author', key: 'author', width: 100 },
-    {
-      title: '发布日期', dataIndex: 'publish_date', key: 'publish_date', width: 110,
-      render: (d: string) => d ? dayjs(d).format('YYYY-MM-DD') : '-',
-    },
-    {
-      title: '浏览', dataIndex: 'view_count', key: 'view_count', width: 70,
-    },
-    {
-      title: '状态', dataIndex: 'status', key: 'status', width: 80,
-      render: (s: string) => {
-        const colors: Record<string, string> = { draft: 'default', published: 'green', archived: 'default' }
-        const labels: Record<string, string> = { draft: '草稿', published: '已发布', archived: '已归档' }
-        return <Tag color={colors[s]}>{labels[s] || s}</Tag>
-      },
-    },
-    {
-      title: '操作', key: 'action', width: 240, fixed: 'right',
-      render: (_, record) => (
-        <Space size="small">
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleViewDetail(record)}>查看</Button>
-          {record.status === 'draft' && (
-            <Button type="link" size="small" icon={<SendOutlined />} onClick={() => handlePublish(record.id)}>发布</Button>
-          )}
-          {record.status === 'published' && (
-            <Button type="link" size="small" icon={<InboxOutlined />} onClick={() => handleArchive(record.id)}>归档</Button>
-          )}
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
-        </Space>
-      ),
-    },
-  ]
+  const handleNewVersion = async (article: SafetyKnowledgeArticle) => {
+    const response = await createNewArticleVersion(article.id)
+    if (response.code === 200 && response.data) {
+      message.success(`已创建新版本 v${response.data.new_article.version}`)
+      setDetailId(response.data.new_article.id)
+      loadData()
+    } else {
+      message.error(response.message || '创建新版本失败')
+    }
+  }
 
-  const formContent = (
-    <>
-      <Row gutter={16}>
-        <Col span={12}>
-          <Form.Item name="article_no" label="文档编号" rules={[{ required: true }]}>
-            <Input placeholder="自动生成或手动输入" />
-          </Form.Item>
-        </Col>
-        <Col span={12}>
-          <Form.Item name="category" label="知识分类" rules={[{ required: true }]}>
-            <Select options={KNOWLEDGE_CATEGORY_OPTIONS.map(o => ({ value: o.value, label: o.label }))} placeholder="请选择分类" />
-          </Form.Item>
-        </Col>
-      </Row>
-      <Form.Item name="title" label="文档标题" rules={[{ required: true }]}>
-        <Input placeholder="请输入文档标题" />
-      </Form.Item>
-      <Form.Item name="summary" label="摘要">
-        <Input.TextArea rows={2} placeholder="请输入摘要" />
-      </Form.Item>
-      <Form.Item name="content" label="正文内容">
-        <Input.TextArea rows={6} placeholder="请输入正文内容" />
-      </Form.Item>
-      <Row gutter={16}>
-        <Col span={12}>
-          <Form.Item name="tags" label="标签">
-            <Input placeholder="多个以逗号分隔" />
-          </Form.Item>
-        </Col>
-        <Col span={12}>
-          <Form.Item name="publish_date" label="发布日期">
-            <DatePicker style={{ width: '100%' }} />
-          </Form.Item>
-        </Col>
-      </Row>
-      <Row gutter={16}>
-        <Col span={12}>
-          <Form.Item name="source" label="来源">
-            <Input placeholder="请输入来源/出处" />
-          </Form.Item>
-        </Col>
-        <Col span={12}>
-          <Form.Item name="author" label="作者">
-            <Input placeholder="请输入作者/发布单位" />
-          </Form.Item>
-        </Col>
-      </Row>
-      <Form.Item name="notes" label="备注">
-        <Input.TextArea rows={2} placeholder="请输入备注" />
-      </Form.Item>
-    </>
-  )
+  const handleFormSuccess = () => {
+    setFormOpen(false)
+    setEditingRecord(null)
+    loadData()
+  }
 
-  return (
-    <div className="p-6">
-      <Card
-        title="安全知识库"
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
-            新建文档
-          </Button>
+  const handleGenerateCard = async (articleId: string) => {
+    const res = await generateKnowledgeCard(articleId)
+    if (res.code === 200 && res.data) {
+      message.success(res.data.message || '知识卡片生成成功')
+      loadData()
+    } else {
+      message.error(res.message || '生成失败')
+    }
+  }
+
+  const handleBatchGenerateCards = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning('请先选择文档')
+      return
+    }
+    Modal.confirm({
+      title: '批量生成知识卡片',
+      content: `确认为选中的 ${selectedRowKeys.length} 份文档生成知识卡片吗？`,
+      onOk: async () => {
+        const res = await batchGenerateKnowledgeCards(selectedRowKeys)
+        if (res.code === 200 && res.data) {
+          const d = res.data
+          message.success(`成功 ${d.success_count} 份，失败 ${d.failed_count} 份`)
+          setSelectedRowKeys([])
+          loadData()
+        } else {
+          message.error(res.message || '批量生成失败')
         }
+      },
+    })
+  }
+
+  const handleGeneratePpt = async (articleId: string) => {
+    const res = await generatePpt(articleId, { template: 'training', style: 'professional' })
+    if (res.code === 200 && res.data) {
+      message.success(res.data.message || 'PPT 生成成功')
+      if (res.data.download_url) {
+        window.open(`/api/v1/safety/files/${encodeURIComponent(res.data.download_url)}`, '_blank')
+      }
+    } else {
+      message.error(res.message || 'PPT 生成失败')
+    }
+  }
+
+  const handleGenerateSummary = async (articleId: string) => {
+    const res = await generateSummary(articleId)
+    if (res.code === 200 && res.data) {
+      message.success(res.data.message || '摘要生成成功')
+      loadData()
+    } else {
+      message.error(res.message || '摘要生成失败')
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────
+  return (
+    <div style={{ display: 'flex', margin: -24, height: 'calc(100vh - 64px)' }}>
+      {/* ── Left Sidebar ── */}
+      <KnowledgeSidebar
+        selectedKey={selectedMenuKey}
+        onSelect={handleMenuSelect}
+        counts={menuCounts}
+        loading={loading}
+      />
+
+      {/* ── Right Content ── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 24, minWidth: 0 }}>
+        {/* ── Header ── */}
+        <div style={{ marginBottom: 24 }}>
+        <h2
+          style={{
+            fontSize: 22,
+            fontWeight: 600,
+            color: '#1a1a1a',
+            margin: 0,
+            marginBottom: 4,
+            lineHeight: 1.3,
+          }}
+        >
+          文档处理中枢
+        </h2>
+        <p
+          style={{
+            fontSize: 14,
+            color: '#787671',
+            margin: 0,
+            lineHeight: 1.5,
+          }}
+        >
+          法规标准 · 知识卡片 · Agent 注入 · 智能检索
+        </p>
+      </div>
+
+      {/* ── 持久化错误诊断 ── */}
+      {loadError && (
+        <div
+          style={{
+            marginBottom: 20,
+            padding: '12px 16px',
+            background: '#fff2f0',
+            border: '1px solid #ffccc7',
+            borderRadius: 8,
+            fontSize: 13,
+            color: '#a8071a',
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}
+        >
+          <strong style={{ fontSize: 14 }}>⚠️ API 请求失败</strong>
+          <br />
+          {loadError}
+          <br />
+          <button
+            type="button"
+            onClick={() => { setLoadError(null); loadData(); }}
+            style={{
+              marginTop: 8,
+              cursor: 'pointer',
+              background: '#a8071a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 4,
+              padding: '4px 12px',
+              fontSize: 12,
+            }}
+          >
+            重试
+          </button>
+        </div>
+      )}
+
+      {/* ── White Card Container ── */}
+      <div
+        style={{
+          background: '#ffffff',
+          borderRadius: 12,
+          border: '1px solid #e5e3df',
+          padding: '16px 20px',
+        }}
       >
-        <Row gutter={16} className="mb-4">
-          <Col span={6}>
-            <Input placeholder="搜索标题/内容/标签" prefix={<SearchOutlined />}
-              value={searchText} onChange={e => setSearchText(e.target.value)} onPressEnter={handleSearch} />
-          </Col>
-          <Col span={5}>
-            <Select placeholder="知识分类" allowClear value={categoryFilter}
-              onChange={v => { setCategoryFilter(v); setArticleQueryParams({ page: 1 }) }}
-              style={{ width: '100%' }}
-              options={KNOWLEDGE_CATEGORY_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
-          </Col>
-          <Col span={5}>
-            <Select placeholder="状态" allowClear value={statusFilter}
-              onChange={v => { setStatusFilter(v); setArticleQueryParams({ page: 1 }) }}
-              style={{ width: '100%' }}
-              options={[
-                { value: 'draft', label: '草稿' },
-                { value: 'published', label: '已发布' },
-                { value: 'archived', label: '已归档' },
-              ]} />
-          </Col>
-          <Col span={3}>
-            <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>查询</Button>
-          </Col>
-        </Row>
+        {/* ── Filter Bar ── */}
+        <div
+          style={{
+            marginBottom: 16,
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <Select
+            placeholder="状态"
+            allowClear
+            value={statusFilter}
+            onChange={(v) => {
+              setStatusFilter(v)
+              setQueryParams({ page: 1 })
+            }}
+            style={{ width: 100 }}
+            options={[
+              { value: 'draft', label: '草稿' },
+              { value: 'published', label: '已发布' },
+              { value: 'archived', label: '已归档' },
+            ]}
+          />
+          <Select
+            placeholder="卡片状态"
+            allowClear
+            value={cardStatusFilter}
+            onChange={(v) => {
+              setCardStatusFilter(v)
+              setQueryParams({ page: 1 })
+            }}
+            style={{ width: 120 }}
+            options={[
+              { value: 'has_card', label: '有知识卡片' },
+              { value: 'no_card', label: '无知识卡片' },
+            ]}
+          />
+          <Input
+            placeholder={smartSearch ? '如"防爆区域电气安全相关标准"' : '搜索标题/内容/标签'}
+            prefix={<SearchOutlined style={{ color: '#a4a097' }} />}
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onPressEnter={handleSearch}
+            allowClear
+            style={{ width: 240 }}
+          />
 
-        <Table columns={columns} dataSource={articles} rowKey="id" loading={loading} scroll={{ x: 1300 }}
-          pagination={{
-            current: articleQueryParams.page, pageSize: articleQueryParams.page_size, total: articleTotal,
-            showSizeChanger: true, showTotal: t => `共 ${t} 条`,
-            onChange: (page, pageSize) => setArticleQueryParams({ page, page_size: pageSize }),
-          }} />
-      </Card>
+          {/* Smart search toggle */}
+          <Tooltip title={smartSearch ? '智能搜索（AI 解析查询意图）' : '关键词搜索'}>
+            <button
+              type="button"
+              onClick={() => setSmartSearch(!smartSearch)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer',
+                background: smartSearch ? '#e6e0f5' : 'transparent',
+                border: smartSearch ? '1px solid #d6b6f6' : '1px solid transparent',
+                borderRadius: 20,
+                padding: '2px 10px',
+                fontSize: 12,
+                fontWeight: smartSearch ? 600 : 400,
+                color: smartSearch ? '#7b3ff2' : '#a4a097',
+                transition: 'all 0.15s ease',
+                lineHeight: '20px',
+              }}
+            >
+              AI
+            </button>
+          </Tooltip>
 
-      <Modal title={editingRecord ? '编辑文档' : '新建文档'} open={modalVisible}
-        onOk={handleSubmit} onCancel={() => setModalVisible(false)} width={800} okText="确认" cancelText="取消">
-        <Form form={editingRecord ? editForm : form} layout="vertical">
-          {formContent}
-        </Form>
-      </Modal>
+          <div style={{ flex: 1 }} />
 
-      <Modal title="文档详情" open={detailVisible} width={800}
-        onCancel={() => { setDetailVisible(false); setDetailRecord(null) }}
-        footer={<Button onClick={() => { setDetailVisible(false); setDetailRecord(null) }}>关闭</Button>}>
-        {detailRecord && (
-          <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="编号">{detailRecord.article_no}</Descriptions.Item>
-            <Descriptions.Item label="分类">
-              <Tag>{KNOWLEDGE_CATEGORY_OPTIONS.find(o => o.value === detailRecord.category)?.label}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="标题" span={2}>{detailRecord.title}</Descriptions.Item>
-            <Descriptions.Item label="摘要" span={2}>{detailRecord.summary || '-'}</Descriptions.Item>
-            <Descriptions.Item label="来源">{detailRecord.source || '-'}</Descriptions.Item>
-            <Descriptions.Item label="作者">{detailRecord.author || '-'}</Descriptions.Item>
-            <Descriptions.Item label="发布日期">
-              {detailRecord.publish_date ? dayjs(detailRecord.publish_date).format('YYYY-MM-DD') : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="浏览次数">{detailRecord.view_count}</Descriptions.Item>
-            <Descriptions.Item label="标签" span={2}>{detailRecord.tags || '-'}</Descriptions.Item>
-            <Descriptions.Item label="正文内容" span={2}>
-              <div className="whitespace-pre-wrap">{detailRecord.content || '-'}</div>
-            </Descriptions.Item>
-            <Descriptions.Item label="附件">
-              {detailRecord.attachment_original_name || '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={{ draft: 'default', published: 'green', archived: 'default' }[detailRecord.status]}>
-                {{ draft: '草稿', published: '已发布', archived: '已归档' }[detailRecord.status]}
-              </Tag>
-            </Descriptions.Item>
-          </Descriptions>
+          <Button
+            icon={<ApartmentOutlined />}
+            onClick={() => router.push('/safety/knowledge-base/graph')}
+          >
+            知识图谱
+          </Button>
+
+          <Button
+            icon={<SyncOutlined spin={syncing} />}
+            onClick={handleSync}
+            loading={syncing}
+          >
+            同步
+          </Button>
+
+          <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
+            查询
+          </Button>
+        </div>
+
+        {/* ── Batch Operations Bar ── */}
+        {selectedRowKeys.length > 0 && (
+          <div
+            style={{
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '8px 12px',
+              background: '#f6f5f4',
+              borderRadius: 8,
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
+              已选 {selectedRowKeys.length} 项
+            </span>
+            <Button
+              size="small"
+              icon={<RobotOutlined />}
+              onClick={handleBatchGenerateCards}
+            >
+              批量生成卡片
+            </Button>
+            <Button size="small" onClick={() => setSelectedRowKeys([])}>
+              取消选择
+            </Button>
+          </div>
         )}
-      </Modal>
+
+        {/* ── Card Grid ── */}
+        <DocumentCardGrid
+          articles={items}
+          loading={loading}
+          selectedCardIds={selectedRowKeys}
+          onSelectCard={handleSelectCard}
+          onArticleClick={handleViewDetail}
+          onEdit={handleEdit}
+          onGenerateCard={handleGenerateCard}
+          onGeneratePpt={handleGeneratePpt}
+          onGenerateSummary={handleGenerateSummary}
+        />
+      </div>
+
+      {/* ── Modals & Drawer ── */}
+      <KnowledgeFormModal
+        open={formOpen}
+        editingRecord={editingRecord}
+        onClose={() => {
+          setFormOpen(false)
+          setEditingRecord(null)
+        }}
+        onSuccess={handleFormSuccess}
+      />
+
+      <KnowledgeDetailDrawer
+        articleId={detailId}
+        open={detailOpen}
+        onClose={() => {
+          setDetailOpen(false)
+          setDetailId(null)
+        }}
+        onNewVersion={handleNewVersion}
+      />
+      </div>
     </div>
   )
 }
