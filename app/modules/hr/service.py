@@ -209,46 +209,7 @@ class EmployeeService:
         employee = Employee(**data.model_dump())
         employee.status = "在职"
 
-        # 根据手机号获取飞书 open_id（非阻塞，失败仅记录日志）
-        if data.phone:
-            try:
-                from app.modules.hr.feishu.im import FeishuIM
-
-                im = FeishuIM()
-                # 飞书接口要求手机号带 +86 区号
-                mobile = data.phone if data.phone.startswith("+") else f"+86{data.phone}"
-                mapping = await im.batch_get_open_ids_by_mobile([mobile])
-                open_id = mapping.get(mobile) or mapping.get(data.phone)
-                if open_id:
-                    employee.feishu_open_id = open_id
-                    logger.info(
-                        "Fetched feishu_open_id for employee %s: %s",
-                        data.employee_number,
-                        open_id,
-                    )
-            except Exception as e:
-                logger.warning(
-                    "Failed to fetch feishu open_id for phone %s: %s",
-                    data.phone,
-                    e,
-                )
-
         result = await self.repo.create(employee)
-
-        # Sync to Feishu（不阻塞员工创建）
-        try:
-            rid = await self.bitable.create(self._to_bitable_fields(result))
-            if rid:
-                result.feishu_record_id = rid
-                result.feishu_synced_at = date.today()
-                await self.repo.update(result)
-        except Exception as e:
-            logger.warning(
-                "Failed to sync employee %s to Feishu: %s",
-                data.employee_number,
-                e,
-            )
-
         return result
 
     # ── Excel 列名 → 模型字段名 映射 ──
