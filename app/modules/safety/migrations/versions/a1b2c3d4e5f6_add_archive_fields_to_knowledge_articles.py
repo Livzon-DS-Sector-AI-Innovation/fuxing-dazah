@@ -1,7 +1,7 @@
 """add archive fields to knowledge_articles
 
 Revision ID: a1b2c3d4e5f6
-Revises: 9f07a63b6eb4
+Revises: 5ed72e04c090
 Create Date: 2026-07-02 10:00:00.000000
 """
 from collections.abc import Sequence
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'a1b2c3d4e5f6'
-down_revision: str | None = '9f07a63b6eb4'
+down_revision: str | None = '5ed72e04c090'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
