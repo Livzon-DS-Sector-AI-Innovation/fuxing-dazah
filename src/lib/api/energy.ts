@@ -18,121 +18,89 @@ import {
   AlertRecord,
   ProcessRecordInput,
   RecordQueryParams,
+  CollectHistoryItem,
+  CollectHistoryParams,
+  TrendDataPoint,
 } from '@/types/energy'
+import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/http-client'
 
-const API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
+// Server Actions 调用后端用绝对 URL，客户端调用用相对 URL（经 Next.js rewrites 代理）
+const SERVER_API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
+const CLIENT_API_BASE = ''
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  // TODO: 添加认证头（等待 @/lib/auth 模块实现）
-  // const token = await getServerToken()
-  return fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      // Authorization: `Bearer ${token}`,
-      ...options.headers,
-    },
-  })
+// ── 趋势数据字段映射（后端 timestamp/energy_type/total_value → 前端 time/type/value）──
+function mapTrendData(trend: any[]): TrendDataPoint[] {
+  return (trend || []).map((item: any) => ({
+    time: item.timestamp || item.time || '',
+    type: item.energy_type || item.type || '',
+    value: item.total_value ?? item.value ?? 0,
+  }))
 }
 
-/** 解包 paginated_response: {code, data, meta} → {items, total, page, page_size} */
-async function unwrapPaginated<T>(res: Response): Promise<PaginatedResponse<T>> {
-  const json = await res.json()
+async function unwrapOverview(res: any): Promise<EnergyOverviewData> {
   return {
-    items: json.data ?? [],
-    total: json.meta?.total ?? 0,
-    page: json.meta?.page ?? 1,
-    page_size: json.meta?.page_size ?? 20,
+    summary: res.summary,
+    trend: mapTrendData(res.trend),
+    distribution: res.distribution || [],
   }
 }
 
-/** 解包 success_response: {code, data} → data */
-async function unwrapData<T>(res: Response): Promise<T> {
-  const json = await res.json()
-  return json.data
-}
-
-// 平台列表
+// ── 平台信息 ──
 export interface PlatformInfo {
   code: string
   name: string
 }
 
 export async function fetchPlatforms(): Promise<PlatformInfo[]> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/platforms`)
-  if (!res.ok) throw new Error('获取平台列表失败')
-  const json = await res.json()
-  return json.data
+  return apiGet<PlatformInfo[]>(`${SERVER_API_BASE}/api/v1/energy/platforms`)
 }
 
 export async function fetchPlatformsClient(): Promise<PlatformInfo[]> {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/platforms`
-  )
-  if (!res.ok) throw new Error('获取平台列表失败')
-  const json = await res.json()
-  return json.data
+  return apiGet<PlatformInfo[]>(`${CLIENT_API_BASE}/api/v1/energy/platforms`)
 }
 
-// 数据源配置 API
+// ── 数据源配置（Server Actions）──
+
 export async function fetchEnergyDevices(
   params: DeviceQueryParams = {}
 ): Promise<PaginatedResponse<EnergyDeviceConfig>> {
   const searchParams = new URLSearchParams()
   if (params.keyword) searchParams.set('keyword', params.keyword)
   if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
   if (params.workshop) searchParams.set('workshop', params.workshop)
-  if (params.is_enabled !== undefined)
-    searchParams.set('is_enabled', String(params.is_enabled))
+  if (params.is_enabled !== undefined) searchParams.set('is_enabled', String(params.is_enabled))
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/devices?${searchParams.toString()}`
+  return apiFetchPaginated<EnergyDeviceConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/devices?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取数据源列表失败')
-  return unwrapPaginated(res)
 }
 
-export async function fetchEnergyDeviceById(
-  id: string
-): Promise<EnergyDeviceConfig> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/devices/${id}`)
-  if (!res.ok) throw new Error('获取数据源详情失败')
-  return unwrapData(res)
+export async function fetchEnergyDeviceById(id: string): Promise<EnergyDeviceConfig> {
+  return apiGet<EnergyDeviceConfig>(`${SERVER_API_BASE}/api/v1/energy/devices/${id}`)
 }
 
 export async function createEnergyDevice(
   data: CreateDeviceInput
 ): Promise<EnergyDeviceConfig> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/devices`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('创建数据源失败')
-  return unwrapData(res)
+  return apiPost<EnergyDeviceConfig>(`${SERVER_API_BASE}/api/v1/energy/devices`, data)
 }
 
 export async function updateEnergyDevice(
   id: string,
   data: UpdateDeviceInput
 ): Promise<EnergyDeviceConfig> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/devices/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('更新数据源失败')
-  return unwrapData(res)
+  return apiPut<EnergyDeviceConfig>(`${SERVER_API_BASE}/api/v1/energy/devices/${id}`, data)
 }
 
 export async function deleteEnergyDevice(id: string): Promise<void> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/devices/${id}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) throw new Error('删除数据源失败')
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/devices/${id}`)
 }
 
-// 能耗数据 API
+// ── 能耗数据（Server Actions）──
+
 export async function fetchEnergyData(
   params: DataQueryParams = {}
 ): Promise<PaginatedResponse<EnergyData>> {
@@ -145,11 +113,9 @@ export async function fetchEnergyData(
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/data?${searchParams.toString()}`
+  return apiFetchPaginated<EnergyData>(
+    `${SERVER_API_BASE}/api/v1/energy/data?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取能耗数据失败')
-  return unwrapPaginated(res)
 }
 
 export async function fetchEnergyOverview(
@@ -160,23 +126,21 @@ export async function fetchEnergyOverview(
   if (params.end_time) searchParams.set('end_time', params.end_time)
   if (params.energy_type) searchParams.set('energy_type', params.energy_type)
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
+  const res = await apiGet<any>(
+    `${SERVER_API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取能源总览失败')
-  return unwrapData(res)
+  return unwrapOverview(res)
 }
 
-// 数据采集 API
+// ── 数据采集（Server Actions）──
+
 export async function triggerCollect(
   platformCode?: string
 ): Promise<{ message: string }> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/collect/trigger`, {
-    method: 'POST',
-    body: JSON.stringify({ platform_code: platformCode ?? null }),
-  })
-  if (!res.ok) throw new Error('触发采集失败')
-  return unwrapData(res)
+  return apiPost<{ message: string }>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/trigger`,
+    { platform_code: platformCode ?? null }
+  )
 }
 
 export async function fetchCollectLogs(
@@ -188,37 +152,36 @@ export async function fetchCollectLogs(
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/collect/logs?${searchParams.toString()}`
+  return apiFetchPaginated<CollectLog>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/logs?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取采集日志失败')
-  return unwrapPaginated(res)
 }
 
-// 客户端 API 函数（用于 React Query）
+export async function fetchCollectLogDetail(
+  id: string
+): Promise<CollectLogDetail> {
+  return apiGet<CollectLogDetail>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/logs/${id}/detail`
+  )
+}
+
+// ── 客户端 API（React Query / 浏览器直接调用，相对路径走 Next.js rewrites）──
+
 export async function fetchEnergyDevicesClient(
   params: DeviceQueryParams = {}
 ): Promise<PaginatedResponse<EnergyDeviceConfig>> {
   const searchParams = new URLSearchParams()
   if (params.keyword) searchParams.set('keyword', params.keyword)
   if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
   if (params.workshop) searchParams.set('workshop', params.workshop)
-  if (params.is_enabled !== undefined)
-    searchParams.set('is_enabled', String(params.is_enabled))
+  if (params.is_enabled !== undefined) searchParams.set('is_enabled', String(params.is_enabled))
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/devices?${searchParams.toString()}`
+  return apiFetchPaginated<EnergyDeviceConfig>(
+    `${CLIENT_API_BASE}/api/v1/energy/devices?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取数据源列表失败')
-  const json = await res.json()
-  return {
-    items: json.data ?? [],
-    total: json.meta?.total ?? 0,
-    page: json.meta?.page ?? 1,
-    page_size: json.meta?.page_size ?? 20,
-  }
 }
 
 export async function fetchEnergyDataClient(
@@ -233,17 +196,9 @@ export async function fetchEnergyDataClient(
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/data?${searchParams.toString()}`
+  return apiFetchPaginated<EnergyData>(
+    `${CLIENT_API_BASE}/api/v1/energy/data?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取能耗数据失败')
-  const json = await res.json()
-  return {
-    items: json.data ?? [],
-    total: json.meta?.total ?? 0,
-    page: json.meta?.page ?? 1,
-    page_size: json.meta?.page_size ?? 20,
-  }
 }
 
 export async function fetchEnergyOverviewClient(
@@ -254,15 +209,61 @@ export async function fetchEnergyOverviewClient(
   if (params.end_time) searchParams.set('end_time', params.end_time)
   if (params.energy_type) searchParams.set('energy_type', params.energy_type)
 
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/overview?${searchParams.toString()}`
+  const res = await apiGet<any>(
+    `${CLIENT_API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取能源总览失败')
-  const json = await res.json()
-  return json.data
+  return unwrapOverview(res)
 }
 
-// 预警规则 API
+export async function fetchCollectLogDetailClient(
+  id: string
+): Promise<CollectLogDetail> {
+  return apiGet<CollectLogDetail>(
+    `${CLIENT_API_BASE}/api/v1/energy/collect/logs/${id}/detail`
+  )
+}
+
+export async function fetchCollectLogsClient(
+  params: LogQueryParams = {}
+): Promise<PaginatedResponse<CollectLog>> {
+  const searchParams = new URLSearchParams()
+  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
+  if (params.status) searchParams.set('status', params.status)
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.page_size) searchParams.set('page_size', String(params.page_size))
+
+  return apiFetchPaginated<CollectLog>(
+    `${CLIENT_API_BASE}/api/v1/energy/collect/logs?${searchParams.toString()}`
+  )
+}
+
+export async function fetchCollectHistoryClient(
+  params: CollectHistoryParams
+): Promise<PaginatedResponse<CollectHistoryItem>> {
+  const searchParams = new URLSearchParams()
+  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
+  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  searchParams.set('start_date', params.start_date)
+  searchParams.set('end_date', params.end_date)
+  if (params.device_config_id) searchParams.set('device_config_id', params.device_config_id)
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.page_size) searchParams.set('page_size', String(params.page_size))
+
+  return apiFetchPaginated<CollectHistoryItem>(
+    `${CLIENT_API_BASE}/api/v1/energy/collect/history?${searchParams.toString()}`
+  )
+}
+
+export async function fetchVisualizationData(energyType?: string) {
+  const searchParams = new URLSearchParams()
+  if (energyType) searchParams.set('energy_type', energyType)
+  return apiGet<Record<string, { fields: any[]; records: any[] }>>(
+    `${CLIENT_API_BASE}/api/v1/energy/visualization/data?${searchParams.toString()}`
+  )
+}
+
+// ── 预警规则（Server Actions）──
+
 export async function fetchAlertRules(
   params: RuleQueryParams = {}
 ): Promise<PaginatedResponse<AlertRule>> {
@@ -273,45 +274,29 @@ export async function fetchAlertRules(
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/alerts/rules?${searchParams.toString()}`
+  return apiFetchPaginated<AlertRule>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/rules?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取预警规则失败')
-  return unwrapPaginated(res)
 }
 
 export async function fetchAlertRuleById(id: string): Promise<AlertRule> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/alerts/rules/${id}`)
-  if (!res.ok) throw new Error('获取预警规则详情失败')
-  return unwrapData(res)
+  return apiGet<AlertRule>(`${SERVER_API_BASE}/api/v1/energy/alerts/rules/${id}`)
 }
 
 export async function createAlertRule(data: CreateRuleInput): Promise<AlertRule> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/alerts/rules`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('创建预警规则失败')
-  return unwrapData(res)
+  return apiPost<AlertRule>(`${SERVER_API_BASE}/api/v1/energy/alerts/rules`, data)
 }
 
 export async function updateAlertRule(id: string, data: UpdateRuleInput): Promise<AlertRule> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/alerts/rules/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) throw new Error('更新预警规则失败')
-  return unwrapData(res)
+  return apiPut<AlertRule>(`${SERVER_API_BASE}/api/v1/energy/alerts/rules/${id}`, data)
 }
 
 export async function deleteAlertRule(id: string): Promise<void> {
-  const res = await fetchWithAuth(`${API_BASE}/api/v1/energy/alerts/rules/${id}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) throw new Error('删除预警规则失败')
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/alerts/rules/${id}`)
 }
 
-// 预警记录 API
+// ── 预警记录（Server Actions）──
+
 export async function fetchAlertRecords(
   params: RecordQueryParams = {}
 ): Promise<PaginatedResponse<AlertRecord>> {
@@ -324,66 +309,36 @@ export async function fetchAlertRecords(
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/alerts/records?${searchParams.toString()}`
+  return apiFetchPaginated<AlertRecord>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/records?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取预警记录失败')
-  return unwrapPaginated(res)
 }
 
 export async function processAlertRecord(
   id: string,
   data: ProcessRecordInput
 ): Promise<AlertRecord> {
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/alerts/records/${id}/process`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    }
+  return apiPut<AlertRecord>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/records/${id}/process`,
+    data
   )
-  if (!res.ok) throw new Error('处理预警记录失败')
-  return unwrapData(res)
 }
 
-export async function fetchCollectLogDetail(
-  id: string
-): Promise<CollectLogDetail> {
-  const res = await fetchWithAuth(
-    `${API_BASE}/api/v1/energy/collect/logs/${id}/detail`
-  )
-  if (!res.ok) throw new Error('获取采集日志详情失败')
-  return unwrapData(res)
-}
+// ── 采集历史（Server Actions）──
 
-export async function fetchCollectLogDetailClient(
-  id: string
-): Promise<CollectLogDetail> {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/collect/logs/${id}/detail`
-  )
-  if (!res.ok) throw new Error('获取采集日志详情失败')
-  return unwrapData(res)
-}
-
-export async function fetchCollectLogsClient(
-  params: LogQueryParams = {}
-): Promise<PaginatedResponse<CollectLog>> {
+export async function fetchCollectHistory(
+  params: CollectHistoryParams
+): Promise<PaginatedResponse<CollectHistoryItem>> {
   const searchParams = new URLSearchParams()
   if (params.platform_code) searchParams.set('platform_code', params.platform_code)
-  if (params.status) searchParams.set('status', params.status)
+  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  searchParams.set('start_date', params.start_date)
+  searchParams.set('end_date', params.end_date)
+  if (params.device_config_id) searchParams.set('device_config_id', params.device_config_id)
   if (params.page) searchParams.set('page', String(params.page))
   if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/energy/collect/logs?${searchParams.toString()}`
+  return apiFetchPaginated<CollectHistoryItem>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/history?${searchParams.toString()}`
   )
-  if (!res.ok) throw new Error('获取采集日志失败')
-  const json = await res.json()
-  return {
-    items: json.data ?? [],
-    total: json.meta?.total ?? 0,
-    page: json.meta?.page ?? 1,
-    page_size: json.meta?.page_size ?? 20,
-  }
 }

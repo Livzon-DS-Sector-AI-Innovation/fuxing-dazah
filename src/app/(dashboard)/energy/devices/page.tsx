@@ -108,9 +108,13 @@ export default function DevicesPage() {
           value={deviceFilters.energy_type}
           onChange={(value) => setDeviceFilters({ energy_type: value, page: 1 })}
           options={[
-            { label: '电力', value: 'electricity' },
-            { label: '水', value: 'water' },
-            { label: '气体', value: 'gas' },
+            { label: '电耗数据',   value: 'electricity' },
+            { label: '水耗数据',   value: 'water' },
+            { label: '蒸汽数据',   value: 'steam' },
+            { label: '冷量数据',   value: 'cooling' },
+            { label: '压缩空气数据', value: 'compressed_air' },
+            { label: '氮气数据',   value: 'nitrogen' },
+            { label: '天然气数据', value: 'natural_gas' },
           ]}
         />
 

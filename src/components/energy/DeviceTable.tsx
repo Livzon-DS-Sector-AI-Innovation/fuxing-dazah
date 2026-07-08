@@ -2,11 +2,11 @@
 
 import { useCallback } from 'react'
 import { App, Table, Button } from 'antd'
-import { EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { EditOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { EnergyDeviceConfig, EnergyType } from '@/types/energy'
 import { useEnergyStore } from '@/stores/energy'
-import { deleteEnergyDevice } from '@/actions/energy'
+import { deleteEnergyDevice, updateEnergyDevice } from '@/actions/energy'
 import { PermissionGuard } from '@/components/permission/PermissionGuard'
 
 // ── 轻奢 Pill 样式（全圆角、半透明底色、轻字重） ──
@@ -25,9 +25,13 @@ const luxuryPill = (color: string, bg: string) =>
   } as const)
 
 const energyTypeConfig: Record<EnergyType, ReturnType<typeof luxuryPill>> = {
-  electricity: luxuryPill('#0075de', '#dcecfa'),
-  water: luxuryPill('#1aae39', '#d9f3e1'),
-  gas: luxuryPill('#dd5b00', '#ffe8d4'),
+  electricity:    luxuryPill('#0075de', '#dcecfa'),
+  water:          luxuryPill('#1aae39', '#d9f3e1'),
+  steam:          luxuryPill('#dd5b00', '#ffe8d4'),
+  cooling:        luxuryPill('#722ed1', '#f4ebfa'),
+  compressed_air: luxuryPill('#2f54eb', '#e8ecfc'),
+  nitrogen:       luxuryPill('#fa541c', '#ffede8'),
+  natural_gas:    luxuryPill('#faad14', '#fffbe6'),
 }
 
 const monitorConfig: Record<string, ReturnType<typeof luxuryPill>> = {
@@ -146,29 +150,33 @@ export function DeviceTable({
   total = 0,
   onRefresh,
 }: DeviceTableProps) {
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
   const { deviceFilters, setDeviceFilters, openDeviceDrawer } = useEnergyStore()
 
-  const handleDelete = useCallback(
-    (record: EnergyDeviceConfig) => {
-      modal.confirm({
-        title: '确认删除',
-        content: `确定要删除数据源 "${record.device_name}" 吗？`,
-        okText: '确认',
-        cancelText: '取消',
-        okButtonProps: { danger: true },
-        onOk: async () => {
-          try {
-            await deleteEnergyDevice(record.id)
-            message.success('删除成功')
-            onRefresh()
-          } catch (error: any) {
-            message.error(error?.message || '删除失败')
-          }
-        },
-      })
+  const handleToggle = useCallback(
+    async (record: EnergyDeviceConfig) => {
+      try {
+        await updateEnergyDevice(record.id, { is_enabled: !record.is_enabled })
+        message.success(record.is_enabled ? '已禁用' : '已启用')
+        onRefresh()
+      } catch (error: any) {
+        message.error(error?.message || '操作失败')
+      }
     },
-    [modal, message, onRefresh],
+    [message, onRefresh],
+  )
+
+  const handleDelete = useCallback(
+    async (record: EnergyDeviceConfig) => {
+      try {
+        await deleteEnergyDevice(record.id)
+        message.success('删除成功')
+        onRefresh()
+      } catch (error: any) {
+        message.error(error?.message || '删除失败')
+      }
+    },
+    [message, onRefresh],
   )
 
   const columns: TableColumnsType<EnergyDeviceConfig> = [
@@ -197,8 +205,13 @@ export function DeviceTable({
       key: 'energy_type',
       width: 90,
       render: (type: EnergyType) => {
-        const s = energyTypeConfig[type]
-        return <span style={s}>{type === 'electricity' ? '电力' : type === 'water' ? '水' : '气体'}</span>
+        const s = energyTypeConfig[type] ?? {}
+        const label = {
+          electricity: '电耗', water: '水耗', steam: '蒸汽',
+          cooling: '冷量', compressed_air: '压缩空气', nitrogen: '氮气',
+          natural_gas: '天然气',
+        }[type] ?? type
+        return <span style={s}>{label}</span>
       },
     },
     {
@@ -245,10 +258,20 @@ export function DeviceTable({
     {
       title: '',
       key: 'action',
-      width: 72,
+      width: 100,
       render: (_: unknown, record: EnergyDeviceConfig) => (
         <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
           <PermissionGuard permission="energy:device:manage">
+            <Button
+              type="text"
+              size="small"
+              icon={record.is_enabled ? <StopOutlined /> : <CheckCircleOutlined />}
+              onClick={() => handleToggle(record)}
+              style={{ color: record.is_enabled ? '#dd5b00' : '#1aae39' }}
+              aria-label={record.is_enabled ? '禁用' : '启用'}
+            >
+              {record.is_enabled ? '禁用' : '启用'}
+            </Button>
             <Button
               type="text"
               size="small"

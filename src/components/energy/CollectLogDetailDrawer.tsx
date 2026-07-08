@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { Drawer, Table, Spin, Empty, App, Button } from 'antd'
 import {
-  ClockCircleOutlined,
   InfoCircleOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons'
@@ -37,9 +36,13 @@ const statusConfig: Record<CollectStatus, ReturnType<typeof luxuryPill>> = {
 }
 
 const energyTypeConfig: Record<string, ReturnType<typeof luxuryPill>> = {
-  electricity: luxuryPill('#0075de', '#dcecfa'),
-  water: luxuryPill('#1aae39', '#d9f3e1'),
-  gas: luxuryPill('#dd5b00', '#ffe8d4'),
+  electricity:    luxuryPill('#0075de', '#dcecfa'),
+  water:          luxuryPill('#1aae39', '#d9f3e1'),
+  steam:          luxuryPill('#dd5b00', '#ffe8d4'),
+  cooling:        luxuryPill('#722ed1', '#f4ebfa'),
+  compressed_air: luxuryPill('#2f54eb', '#e8ecfc'),
+  nitrogen:       luxuryPill('#fa541c', '#ffede8'),
+  natural_gas:    luxuryPill('#faad14', '#fffbe6'),
 }
 
 // ── 表格样式 ──
@@ -169,15 +172,23 @@ export function CollectLogDetailDrawer({
   useEffect(() => {
     if (!open || !logId) return
 
+    let cancelled = false
     setLoading(true)
     setDetail(null)
     fetchCollectLogDetailClient(logId)
-      .then(setDetail)
-      .catch((err) => {
-        console.error('获取采集日志详情失败:', err)
-        message.error('获取采集日志详情失败')
+      .then((data) => {
+        if (!cancelled) setDetail(data)
       })
-      .finally(() => setLoading(false))
+      .catch((err) => {
+        if (!cancelled) {
+          console.error('获取采集日志详情失败:', err)
+          message.error('获取采集日志详情失败')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [open, logId])
 
   const deviceColumns: TableColumnsType<CollectLogDeviceDetail> = [
@@ -213,14 +224,12 @@ export function CollectLogDetailDrawer({
       width: 70,
       render: (type: string) => {
         const s = energyTypeConfig[type]
-        const label =
-          type === 'electricity'
-            ? '电力'
-            : type === 'water'
-              ? '水'
-              : type === 'gas'
-                ? '气体'
-                : type
+        const labelMap: Record<string, string> = {
+          electricity: '电耗', water: '水耗', steam: '蒸汽',
+          cooling: '冷量', compressed_air: '压缩空气', nitrogen: '氮气',
+          natural_gas: '天然气',
+        }
+        const label = labelMap[type] ?? type
         return s ? <span style={s}>{label}</span> : label
       },
     },
@@ -249,15 +258,26 @@ export function CollectLogDetailDrawer({
       title: '数据时间',
       dataIndex: 'data_timestamp',
       key: 'data_timestamp',
-      width: 180,
-      render: (text: string) =>
-        text ? (
+      width: 210,
+      render: (text: string, record: CollectLogDeviceDetail) => {
+        if (!text) return '-'
+        const start = new Date(text)
+        const end = record.data_time_range_end
+          ? new Date(record.data_time_range_end)
+          : new Date(start.getTime() + 60 * 60 * 1000)
+        const timeOpts: Intl.DateTimeFormatOptions = {
+          hour: '2-digit',
+          minute: '2-digit',
+        }
+        return (
           <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
-            {new Date(text).toLocaleString('zh-CN')}
+            {start.toLocaleDateString('zh-CN')}{' '}
+            {start.toLocaleTimeString('zh-CN', timeOpts)}
+            {' ～ '}
+            {end.toLocaleTimeString('zh-CN', timeOpts)}
           </span>
-        ) : (
-          '-'
-        ),
+        )
+      },
     },
   ]
 
@@ -329,6 +349,40 @@ export function CollectLogDetailDrawer({
             <InfoRow label="采集时间">
               {new Date(detail.collect_time).toLocaleString('zh-CN')}
             </InfoRow>
+
+            {/* 水务时间间隔告警：采集时间与数据时间 > 60 分钟时显示 */}
+            {detail.time_range_start &&
+              (() => {
+                const collectTime = new Date(detail.collect_time).getTime()
+                const dataTime = new Date(detail.time_range_start).getTime()
+                const gapMinutes = Math.abs(collectTime - dataTime) / 1000 / 60
+                if (gapMinutes > 60) {
+                  return (
+                    <div
+                      style={{
+                        marginTop: 8,
+                        marginBottom: 12,
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        background: '#fff8e6',
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                        color: '#dd5b00',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 6,
+                      }}
+                    >
+                      <span style={{ flexShrink: 0 }}>⚠️</span>
+                      <span>
+                        采集执行时间与数据归属时间相差 {Math.round(gapMinutes)}{' '}
+                        分钟，可能由定时采集延迟或补采历史数据导致，请关注数据时效性
+                      </span>
+                    </div>
+                  )
+                }
+                return null
+              })()}
 
             <InfoRow label="应采 / 成功">
               <span style={{ fontVariantNumeric: 'tabular-nums' }}>

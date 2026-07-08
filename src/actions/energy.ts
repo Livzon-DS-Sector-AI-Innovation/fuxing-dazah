@@ -1,5 +1,6 @@
 'use server'
 
+import '@/lib/http-server'  // 初始化服务端 token getter
 import { revalidatePath } from 'next/cache'
 import {
   fetchEnergyDevices,
@@ -18,6 +19,7 @@ import {
   deleteAlertRule as apiDeleteAlertRule,
   fetchAlertRecords,
   processAlertRecord as apiProcessAlertRecord,
+  fetchCollectHistory,
 } from '@/lib/api/energy'
 import {
   CreateDeviceInput,
@@ -31,6 +33,7 @@ import {
   ProcessRecordInput,
   RuleQueryParams,
   RecordQueryParams,
+  CollectHistoryParams,
 } from '@/types/energy'
 
 // 数据源配置 Server Actions
@@ -114,4 +117,9 @@ export async function processAlertRecord(id: string, data: ProcessRecordInput) {
   const result = await apiProcessAlertRecord(id, data)
   revalidatePath('/energy/alerts')
   return result
+}
+
+// 采集历史 Server Action
+export async function getCollectHistory(params: CollectHistoryParams) {
+  return fetchCollectHistory(params)
 }

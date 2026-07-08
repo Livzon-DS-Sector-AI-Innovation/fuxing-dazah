@@ -61,6 +61,21 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "devices", label: "数据源配置", path: "/energy/devices" },
       { key: "alerts", label: "预警管理", path: "/energy/alerts" },
       { key: "collect-logs", label: "采集日志", path: "/energy/collect-logs" },
+      { key: "collect-history", label: "采集历史", path: "/energy/collect-history" },
+      { key: "visualization", label: "可视化视图", path: "/energy/visualization" },
+    ],
+  },
+  {
+    key: "meter",
+    label: "仪表管理",
+    icon: "gauge",
+    path: "/meter",
+    permissions: ["meter:*:read"],
+    children: [
+      { key: "overview", label: "仪表总览", path: "/meter" },
+      { key: "instruments", label: "标准计量器具", path: "/meter/instruments" },
+      { key: "gas-detectors", label: "有毒有害可燃探测器", path: "/meter/gas-detectors" },
+      { key: "departments", label: "部门管理", path: "/meter/departments" },
     ],
   },
 

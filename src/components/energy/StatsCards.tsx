@@ -1,10 +1,14 @@
 'use client'
 
-import { Skeleton } from 'antd'
+import { Skeleton, Tooltip } from 'antd'
 import {
   ThunderboltOutlined,
   CloudOutlined,
   FireOutlined,
+  ExperimentOutlined,
+  CompressOutlined,
+  BugOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons'
 import { EnergyStatistics } from '@/types/energy'
 
@@ -20,7 +24,7 @@ interface StatCardDef {
 const cards: StatCardDef[] = [
   {
     key: 'total_electricity',
-    title: '电力消耗',
+    title: '电耗数据',
     suffix: 'kWh',
     icon: <ThunderboltOutlined />,
     color: '#0075de',
@@ -28,19 +32,51 @@ const cards: StatCardDef[] = [
   },
   {
     key: 'total_water',
-    title: '水消耗',
+    title: '水耗数据',
     suffix: 'm³',
     icon: <CloudOutlined />,
     color: '#1aae39',
     tint: '#d9f3e1',
   },
   {
-    key: 'total_gas',
-    title: '气体消耗',
-    suffix: 'm³',
+    key: 'total_steam',
+    title: '蒸汽数据',
+    suffix: 't',
     icon: <FireOutlined />,
     color: '#dd5b00',
     tint: '#ffe8d4',
+  },
+  {
+    key: 'total_cooling',
+    title: '冷量数据',
+    suffix: 'kW',
+    icon: <ExperimentOutlined />,
+    color: '#722ed1',
+    tint: '#f4ebfa',
+  },
+  {
+    key: 'total_compressed_air',
+    title: '压缩空气数据',
+    suffix: 'Nm³',
+    icon: <CompressOutlined />,
+    color: '#2f54eb',
+    tint: '#e8ecfc',
+  },
+  {
+    key: 'total_nitrogen',
+    title: '氮气数据',
+    suffix: 'Nm³',
+    icon: <BugOutlined />,
+    color: '#fa541c',
+    tint: '#ffede8',
+  },
+  {
+    key: 'total_natural_gas',
+    title: '天然气数据',
+    suffix: 'Nm³',
+    icon: <DashboardOutlined />,
+    color: '#faad14',
+    tint: '#fffbeb',
   },
 ]
 
@@ -103,28 +139,36 @@ export function StatsCards({ statistics, loading = false }: StatsCardsProps) {
             {loading ? (
               <Skeleton.Input active size="small" style={{ width: 100, height: 22 }} />
             ) : (
-              <div
-                style={{
-                  fontSize: 26,
-                  fontWeight: 500,
-                  color: '#1a1a1a',
-                  lineHeight: 1.2,
-                  letterSpacing: '-0.3px',
-                  fontVariantNumeric: 'tabular-nums',
-                }}
+              <Tooltip
+                title={
+                  c.key === 'total_water' && statistics[c.key] === 0
+                    ? '当前统计值为 0，可能是零值采集数据，建议检查采集日志确认水表读数'
+                    : undefined
+                }
               >
-                {formatValue(statistics[c.key])}
-                <span
+                <div
                   style={{
-                    fontSize: 14,
-                    fontWeight: 400,
-                    color: '#a4a097',
-                    marginLeft: 4,
+                    fontSize: 26,
+                    fontWeight: 500,
+                    color: '#1a1a1a',
+                    lineHeight: 1.2,
+                    letterSpacing: '-0.3px',
+                    fontVariantNumeric: 'tabular-nums',
                   }}
                 >
-                  {c.suffix}
-                </span>
-              </div>
+                  {formatValue(statistics[c.key])}
+                  <span
+                    style={{
+                      fontSize: 14,
+                      fontWeight: 400,
+                      color: '#a4a097',
+                      marginLeft: 4,
+                    }}
+                  >
+                    {c.suffix}
+                  </span>
+                </div>
+              </Tooltip>
             )}
             <div
               style={{

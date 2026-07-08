@@ -16,7 +16,7 @@ import {
   OffboardingRecordListResponse,
 } from '@/types/hr'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || 'http://127.0.0.1:8000'
+const API_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:8000'
 
 export async function fetchEmployeesAction(
   params?: {
@@ -91,6 +91,7 @@ export async function uploadEmployeesAction(formData: FormData) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '上传员工名单失败')
   }
+  revalidatePath('/hr/profile')
   return res.json()
 }
 
@@ -391,86 +392,6 @@ export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanI
     throw new Error(err.message || '更新年度计划明细失败')
   }
   revalidatePath('/hr/training/annual-plan')
-  return res.json()
-}
-
-export async function uploadAnnualPlanAction(formData: FormData) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, {
-    method: 'POST',
-    body: formData,
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '上传年度培训计划失败')
-  }
-  return res.json()
-}
-
-// ─── 内训师 Actions ───
-
-export async function fetchTrainersAction(params?: {
-  keyword?: string
-  department?: string
-  page?: number
-  page_size?: number
-}) {
-  const searchParams = new URLSearchParams()
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  if (params?.department) searchParams.set('department', params.department)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 50))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取内训师列表失败')
-  return res.json()
-}
-
-export async function uploadTrainersAction(formData: FormData) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, {
-    method: 'POST',
-    body: formData,
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '上传内训师失败')
-  }
-  return res.json()
-}
-
-export async function deleteTrainerAction(id: string) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/trainers/${id}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '删除内训师失败')
-  }
-  return res.json()
-}
-
-export async function clearTrainersAction() {
-  const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '清空内训师台账失败')
-  }
-  return res.json()
-}
-
-// ─── 离职台账 Actions ───
-
-export async function deleteDepartureRecordAction(id: string) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${id}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '删除离职记录失败')
-  }
   return res.json()
 }
 

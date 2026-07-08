@@ -1,5 +1,12 @@
 // 能源类型枚举
-export type EnergyType = 'electricity' | 'water' | 'gas'
+export type EnergyType =
+  | 'electricity'
+  | 'water'
+  | 'steam'
+  | 'cooling'
+  | 'compressed_air'
+  | 'nitrogen'
+  | 'natural_gas'
 
 // 监控级别
 export type MonitorLevel = 'normal' | 'important' | 'urgent'
@@ -57,6 +64,7 @@ export interface UpdateDeviceInput {
 
 // 设备查询参数
 export interface DeviceQueryParams {
+  platform_code?: string
   keyword?: string
   energy_type?: EnergyType
   workshop?: string
@@ -94,6 +102,12 @@ export interface DataQueryParams {
 export interface EnergyStatistics {
   total_electricity: number
   total_water: number
+  total_steam: number
+  total_cooling: number
+  total_compressed_air: number
+  total_nitrogen: number
+  total_natural_gas: number
+  /** @deprecated 保留向后兼容，始终为 0 */
   total_gas: number
 }
 
@@ -134,6 +148,7 @@ export interface CollectLogDeviceDetail {
   value: number
   unit: string
   data_timestamp: string
+  data_time_range_end?: string  // 数据覆盖时段终点（整点+1h）
 }
 
 // 采集日志详情（含设备数据）
@@ -307,6 +322,27 @@ export interface DistributionDataPoint {
 // 设备排行数据
 export interface DeviceRankItem {
   device_name: string
+  value: number
+  unit: string
+}
+
+// 采集历史查询参数
+export interface CollectHistoryParams {
+  platform_code?: string   // 默认 zhiheng
+  energy_type?: string     // 默认 water
+  device_config_id?: string
+  start_date: string       // YYYY-MM-DD
+  end_date: string         // YYYY-MM-DD
+  page?: number
+  page_size?: number
+}
+
+// 采集历史列表行
+export interface CollectHistoryItem {
+  device_name: string
+  platform_device_code: string
+  energy_type: 'water'
+  timestamp: string    // ISO datetime
   value: number
   unit: string
 }

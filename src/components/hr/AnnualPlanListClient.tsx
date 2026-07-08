@@ -6,12 +6,12 @@ import { PlusOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, UploadOut
 import Link from 'next/link'
 import { AnnualTrainingPlan } from '@/types/hr'
 import { fetchAnnualTrainingPlans, fetchDepartments } from '@/lib/api/hr'
-import { createAnnualTrainingPlan, deleteAnnualTrainingPlan, uploadAnnualPlanAction } from '@/actions/hr'
+import { createAnnualTrainingPlan, deleteAnnualTrainingPlan } from '@/actions/hr'
 
 const YEAR_OPTIONS = [2024, 2025, 2026, 2027, 2028]
 
 export default function AnnualPlanListClient() {
-  const { message, modal } = App.useApp()
+  const { message } = App.useApp()
   const [plans, setPlans] = useState<AnnualTrainingPlan[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedYear, setSelectedYear] = useState<number | undefined>(2026)
@@ -111,19 +111,14 @@ export default function AnnualPlanListClient() {
         </Button>
         <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
           const fd = new FormData(); fd.append('file', file as File)
+          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
           try {
-            const d = await uploadAnnualPlanAction(fd)
-            if (d.data?.errors && d.data.errors.length > 0) {
-              modal.warning({
-                title: `上传完成：${d.message}，但有${d.data.errors.length}项出错`,
-                content: <ul style={{maxHeight:300, overflow:'auto', paddingLeft:18}}>{d.data.errors.map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>,
-                width: 500,
-              })
-            } else {
-              message.success(d.message)
-            }
+            const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, { method: 'POST', body: fd, credentials: 'include' })
+            const d = await res.json()
+            if (res.ok) message.success(d.message)
+            else message.error(d.message || '上传失败')
             loadPlans()
-          } catch (err: any) { message.error(err.message || '上传失败') }
+          } catch { message.error('上传失败') }
         }}>
           <Button icon={<UploadOutlined />}>上传计划明细</Button>
         </Upload>

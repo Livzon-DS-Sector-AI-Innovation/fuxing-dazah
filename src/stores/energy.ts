@@ -4,6 +4,7 @@ import {
   DeviceQueryParams,
   DataQueryParams,
   LogQueryParams,
+  CollectHistoryParams,
 } from '@/types/energy'
 
 interface EnergyState {
@@ -21,6 +22,11 @@ interface EnergyState {
   logFilters: LogQueryParams
   setLogFilters: (filters: Partial<LogQueryParams>) => void
   resetLogFilters: () => void
+
+  // 采集历史筛选
+  collectHistoryFilters: CollectHistoryParams
+  setCollectHistoryFilters: (filters: Partial<CollectHistoryParams>) => void
+  resetCollectHistoryFilters: () => void
 
   // 总览页面状态
   overviewTimeRange: 'today' | 'week' | 'month'
@@ -78,6 +84,16 @@ const defaultLogFilters: LogQueryParams = {
   page_size: 10,
 }
 
+// 采集历史筛选默认值：start_date / end_date 默认为今天
+const todayStr = new Date().toISOString().slice(0, 10)
+const defaultCollectHistoryFilters: CollectHistoryParams = {
+  device_config_id: undefined,
+  start_date: todayStr,
+  end_date: todayStr,
+  page: 1,
+  page_size: 10,
+}
+
 export const useEnergyStore = create<EnergyState>((set) => ({
   // 数据源配置筛选
   deviceFilters: defaultDeviceFilters,
@@ -102,6 +118,15 @@ export const useEnergyStore = create<EnergyState>((set) => ({
       logFilters: { ...state.logFilters, ...filters },
     })),
   resetLogFilters: () => set({ logFilters: defaultLogFilters }),
+
+  // 采集历史筛选
+  collectHistoryFilters: defaultCollectHistoryFilters,
+  setCollectHistoryFilters: (filters) =>
+    set((state) => ({
+      collectHistoryFilters: { ...state.collectHistoryFilters, ...filters },
+    })),
+  resetCollectHistoryFilters: () =>
+    set({ collectHistoryFilters: defaultCollectHistoryFilters }),
 
   // 总览页面状态
   overviewTimeRange: 'today',

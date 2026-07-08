@@ -12,14 +12,11 @@ import {
   Button,
   Space,
   Spin,
-  Tag,
 } from 'antd'
 import {
   ApiOutlined,
   EnvironmentOutlined,
-  ClockCircleOutlined,
   SettingOutlined,
-  NumberOutlined,
 } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
 import {
@@ -42,8 +39,8 @@ interface DeviceDrawerProps {
 
 const DEFAULT_VALUES = {
   platform_code: 'zhiheng',
-  energy_type: 'water',
-  unit: 'm³',
+  energy_type: 'electricity',
+  unit: 'kWh',
   collection_interval: 60,
   monitor_level: 'normal',
   is_enabled: true,
@@ -83,6 +80,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const [loading, setLoading] = useState(false)
   const [platforms, setPlatforms] = useState<PlatformOption[]>([])
   const [platformsLoading, setPlatformsLoading] = useState(false)
+  const [departments, setDepartments] = useState<{ id: string; name: string }[]>([])
+  const [departmentsLoading, setDepartmentsLoading] = useState(false)
 
   const {
     deviceDrawerOpen,
@@ -103,7 +102,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     } catch {
       setPlatforms([
         { code: 'zhiheng', name: '智恒水耗平台' },
-        { code: 'platform_b', name: '平台B（待接入）' },
+        { code: 'platform_b', name: '智能电气系统' },
         { code: 'platform_c', name: '平台C（待接入）' },
       ])
     } finally {
@@ -111,9 +110,25 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     }
   }
 
+  const loadDepartments = async () => {
+    setDepartmentsLoading(true)
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/energy/departments`
+      )
+      const json = await res.json()
+      setDepartments(json.data ?? [])
+    } catch {
+      setDepartments([])
+    } finally {
+      setDepartmentsLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (deviceDrawerOpen) {
       loadPlatforms()
+      loadDepartments()
       if (isEdit && deviceDrawerId) {
         loadDeviceData(deviceDrawerId)
       } else {
@@ -290,7 +305,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               style={{ marginBottom: 24 }}
             >
               <Input
-                placeholder="单个水表 ID 或水表公式"
+                placeholder="单个水表/电表 ID 或公式"
                 style={{ height: 44, borderRadius: 8 }}
               />
             </Form.Item>
@@ -326,9 +341,13 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
             >
               <Select
                 options={[
-                  { label: '电力', value: 'electricity' },
-                  { label: '水', value: 'water' },
-                  { label: '气体', value: 'gas' },
+                  { label: '电耗数据',   value: 'electricity' },
+                  { label: '水耗数据',   value: 'water' },
+                  { label: '蒸汽数据',   value: 'steam' },
+                  { label: '冷量数据',   value: 'cooling' },
+                  { label: '压缩空气数据', value: 'compressed_air' },
+                  { label: '氮气数据',   value: 'nitrogen' },
+                  { label: '天然气数据', value: 'natural_gas' },
                 ]}
                 style={{ height: 44 }}
               />
@@ -341,12 +360,18 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                   所属车间
                 </span>
               }
-              rules={[{ required: true, message: '请输入所属车间' }]}
+              rules={[{ required: true, message: '请选择所属车间' }]}
               style={{ marginBottom: 16 }}
             >
-              <Input
-                placeholder="如：发酵车间、提炼车间"
-                style={{ height: 44, borderRadius: 8 }}
+              <Select
+                placeholder="选择部门"
+                loading={departmentsLoading}
+                showSearch
+                options={departments.map((d) => ({
+                  label: d.name,
+                  value: d.name,
+                }))}
+                style={{ height: 44 }}
               />
             </Form.Item>
 
@@ -403,6 +428,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                 <InputNumber
                   min={1}
                   max={1440}
+                  disabled={isEdit}
                   placeholder="60"
                   suffix="分钟"
                   style={{ width: '100%', height: 44 }}
