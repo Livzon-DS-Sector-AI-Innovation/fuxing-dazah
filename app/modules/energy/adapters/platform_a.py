@@ -2,6 +2,8 @@
 
 从智恒平台获取指定水表（EMTRNUM）在目标小时的累计流量数据。
 ``platform_device_code`` 支持单水表ID和公式表达式（+/- 组合多水表）。
+
+API 地址优先使用设备配置中的 ``api_endpoint``，为空时回退到默认地址。
 """
 
 from __future__ import annotations
@@ -9,16 +11,23 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
 from app.modules.energy.adapters.base import BasePlatformAdapter, CollectResult
+from app.modules.energy.adapters.formula_utils import (
+    eval_formula,
+    has_formula,
+    parse_formula_ids,
+    resolve_api_url,
+)
 
 logger = logging.getLogger(__name__)
 
-API_URL = (
+# 默认 API 地址（设备配置中 api_endpoint 为空时使用）
+DEFAULT_API_URL = (
     "http://cxc.qhzl.net:8090"
     "/WebServices/YiChunWebServer.asmx/GetSiteDataByTime"
 )
@@ -26,49 +35,7 @@ UNIT_CODE = "lzfxyy"
 PAGE_SIZE = 20000
 MAX_PAGES = 50
 # 中国标准时间 UTC+8
-CST = timezone(__import__("datetime").timedelta(hours=8))
-
-# 公式分隔符：按 + 或 - 拆分
-_FORMULA_SPLIT_RE = re.compile(r"([+-])")
-
-
-def _parse_meter_ids(device_code: str) -> list[str]:
-    """从单个设备编码中提取所有独立的水表ID（EMTRNUM）。
-
-    如果 ``device_code`` 是公式（含 + 或 -），则拆分提取每个操作数；
-    否则视为单水表ID返回。
-    """
-    tokens = _FORMULA_SPLIT_RE.split(device_code.strip())
-    ids: list[str] = []
-    for token in tokens:
-        t = token.strip()
-        if t and t not in ("+", "-"):
-            ids.append(t)
-    return ids
-
-
-def _has_formula(device_code: str) -> bool:
-    return "+" in device_code or "-" in device_code
-
-
-def _eval_formula(formula: str, meter_values: dict[str, float]) -> float:
-    """根据已聚合的水表值计算公式结果。"""
-    tokens = _FORMULA_SPLIT_RE.split(formula.strip())
-    result = 0.0
-    operator = "+"
-    for token in tokens:
-        t = token.strip()
-        if t == "+":
-            operator = "+"
-        elif t == "-":
-            operator = "-"
-        elif t:
-            value = meter_values.get(t, 0.0)
-            if operator == "+":
-                result += value
-            else:
-                result -= value
-    return result
+CST = timezone(timedelta(hours=8))
 
 
 class ZhihengWaterAdapter(BasePlatformAdapter):
@@ -86,31 +53,44 @@ class ZhihengWaterAdapter(BasePlatformAdapter):
         # 1. 收集所有独立的水表ID
         all_meter_ids: set[str] = set()
         for code in device_codes:
-            all_meter_ids.update(_parse_meter_ids(code))
+            all_meter_ids.update(parse_formula_ids(code))
 
-        # 2. 构造日期参数（目标小时所在日期）
-        beg_date = target_hour.strftime("%Y-%m-%d")
+        # 2. 构造日期参数：API 需要足够跨度且 endDate 不超过当天。
+        beg_date = (target_hour - timedelta(days=2)).strftime("%Y-%m-%d")
         end_date = target_hour.strftime("%Y-%m-%d")
 
-        # 3. 逐个水表请求 API，按目标小时聚合
+        # 3. 确定 API 地址：优先使用设备配置的 api_endpoint
+        api_url = resolve_api_url(api_endpoint, DEFAULT_API_URL)
+
+        # 4. 逐个水表请求 API，按目标小时聚合
         meter_values: dict[str, float] = {}
+        meter_errors: set[str] = set()
         async with httpx.AsyncClient(timeout=30.0) as client:
             for meter_id in sorted(all_meter_ids):
                 try:
                     meter_values[meter_id] = await _fetch_meter_hourly(
-                        client, meter_id, beg_date, end_date, target_hour
+                        client, meter_id, beg_date, end_date, target_hour, api_url
                     )
                 except Exception:
                     logger.exception(
                         "获取水表 %s 数据失败，默认值 0", meter_id
                     )
                     meter_values[meter_id] = 0.0
+                    meter_errors.add(meter_id)
 
-        # 4. 按公式求值，生成采集结果
+        # 所有水表均失败 → 抛出异常，避免将无效零值写入数据库
+        if meter_errors and meter_errors == all_meter_ids:
+            raise RuntimeError(
+                f"智恒 API 所有水表均请求失败，"
+                f"跳过本次采集以免写入无效零值。"
+                f"失败的水表: {sorted(meter_errors)}"
+            )
+
+        # 5. 按公式求值，生成采集结果
         results: list[CollectResult] = []
         for code in device_codes:
-            if _has_formula(code):
-                value = _eval_formula(code, meter_values)
+            if has_formula(code):
+                value = eval_formula(code, meter_values)
             else:
                 value = meter_values.get(code, 0.0)
 
@@ -133,44 +113,115 @@ async def _fetch_meter_hourly(
     beg_date: str,
     end_date: str,
     target_hour: datetime,
+    api_url: str,
 ) -> float:
-    """分页获取指定水表数据，筛选目标小时记录并求和 AANALOGFLOW。"""
+    """分页获取指定水表数据，筛选目标小时记录并求和 AANALOGFLOW。
+
+    单页请求失败时记录 warning 并继续下一页，不因个别网络抖动丢失已累计数据。
+    """
     total_value = 0.0
     page = 1
     fetched = 0
+    matched_count = 0
 
     while True:
-        response = await client.post(
-            API_URL,
-            data={
-                "unitCode": UNIT_CODE,
-                "nRow": str(PAGE_SIZE),
-                "nPage": str(page),
-                "begDate": beg_date,
-                "endDate": end_date,
-                "whereEmtrm": emtrnum,
-            },
+        try:
+            response = await client.post(
+                api_url,
+                data={
+                    "unitCode": UNIT_CODE,
+                    "nRow": str(PAGE_SIZE),
+                    "nPage": str(page),
+                    "begDate": beg_date,
+                    "endDate": end_date,
+                    "whereEmtrm": emtrnum,
+                },
+            )
+            response.raise_for_status()
+
+            payload = _extract_json(response.text)
+            records = payload.get("syncData") or []  # API 可能返回 null
+            total_count = int(payload.get("nCount", 0))
+
+            # 筛选目标小时的数据
+            for record in records:
+                try:
+                    if _record_matches_hour(record, target_hour):
+                        raw_flow = record.get("AANALOGFLOW")
+                        flow_value = float(raw_flow) if raw_flow is not None else 0.0
+                        total_value += flow_value
+                        matched_count += 1
+                        logger.debug(
+                            "水表 %s 匹配记录[%d] RecordDate=%s AANALOGFLOW=%s → %.4f",
+                            emtrnum,
+                            matched_count,
+                            record.get("RecordDate") or record.get("RecordTime"),
+                            raw_flow,
+                            flow_value,
+                        )
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        "水表 %s AANALOGFLOW 解析异常: %s, record=%s",
+                        emtrnum,
+                        e,
+                        record,
+                    )
+                    continue
+
+            fetched += len(records)
+            if fetched >= total_count:
+                break
+            page += 1
+            if page > MAX_PAGES:
+                logger.warning("水表 %s 分页超过 %d 页，强制停止", emtrnum, MAX_PAGES)
+                break
+
+        except httpx.HTTPStatusError:
+            logger.exception(
+                "智恒 API HTTP 错误: emtrnum=%s, page=%d", emtrnum, page
+            )
+            page += 1
+            if page > MAX_PAGES:
+                logger.warning(
+                    "水表 %s 分页请求连续失败已达上限 %d 页，停止", emtrnum, MAX_PAGES
+                )
+                break
+            continue
+        except (json.JSONDecodeError, RuntimeError) as e:
+            logger.warning(
+                "智恒 API 响应解析错误: emtrnum=%s, page=%d, error=%s",
+                emtrnum,
+                page,
+                e,
+            )
+            page += 1
+            if page > MAX_PAGES:
+                break
+            continue
+
+    logger.debug(
+        "水表 %s: %d 条记录, 目标小时匹配 %d 条, 合计=%.4f",
+        emtrnum, fetched, matched_count, total_value,
+    )
+
+    # 水务零值采集告警：记录完整原始数据便于溯源
+    if total_value == 0.0 and matched_count > 0:
+        logger.warning(
+            "水表 %s 目标小时 %s 采集值为 0（匹配 %d 条记录但 AANALOGFLOW 全部为 0），"
+            "请确认水表读数是否正常。",
+            emtrnum,
+            target_hour.isoformat(),
+            matched_count,
         )
-        response.raise_for_status()
+    elif total_value == 0.0:
+        logger.warning(
+            "水表 %s 目标小时 %s 采集值为 0（%d 条记录中无匹配目标小时的记录），"
+            "请检查 API 数据时间是否与目标小时对齐。",
+            emtrnum,
+            target_hour.isoformat(),
+            fetched,
+        )
 
-        payload = _extract_json(response.text)
-        records = payload.get("syncData", [])
-        total_count = int(payload.get("nCount", 0))
-
-        # 筛选目标小时的数据
-        for record in records:
-            if _record_matches_hour(record, target_hour):
-                total_value += float(record.get("AANALOGFLOW", 0))
-
-        fetched += len(records)
-        if fetched >= total_count:
-            break
-        page += 1
-        if page > MAX_PAGES:
-            logger.warning("水表 %s 分页超过 %d 页，强制停止", emtrnum, MAX_PAGES)
-            break
-
-    logger.debug("水表 %s: %d 条记录, 目标小时合计=%.4f", emtrnum, fetched, total_value)
     return total_value
 
 
@@ -185,23 +236,36 @@ def _extract_json(text: str) -> dict[str, Any]:
 def _record_matches_hour(record: dict[str, Any], target_hour: datetime) -> bool:
     """判断记录是否属于目标小时。
 
-    尝试从 record 中提取时间字段（优先 RecordDate，其次 RecordTime）。
+    智恒 API 时间字段为 POSTDATE，格式为 "2026/6/25 12:00:00"（斜杠分隔，无前导零）。
+    兼容多种可能的时间字段和格式。
+    解析失败时返回 False 并记录 debug 日志，便于排查 API 数据格式变更。
     """
-    time_str = record.get("RecordDate") or record.get("RecordTime")
-    if time_str:
+    # 智恒 API 主时间字段：POSTDATE，备选 RecordDate / RecordTime
+    time_str = record.get("POSTDATE") or record.get("RecordDate") or record.get("RecordTime")
+    if not time_str:
+        return False
+    for fmt in (
+        "%Y/%m/%d %H:%M:%S",   # 智恒格式: 2026/6/25 12:00:00
+        "%Y-%m-%d %H:%M:%S",   # 标准格式: 2026-06-25 12:00:00
+        "%Y/%m/%d",            # 仅日期（斜杠）
+        "%Y-%m-%d",            # 仅日期（横杠）
+    ):
         try:
-            # 常见格式: "2026-06-08 09:00:00"
-            record_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            record_time = datetime.strptime(time_str, fmt)
+            break
         except ValueError:
-            try:
-                # 也可能只有日期 "2026-06-08"
-                record_time = datetime.strptime(time_str, "%Y-%m-%d")
-            except ValueError:
-                return False
-        return (
-            record_time.year == target_hour.year
-            and record_time.month == target_hour.month
-            and record_time.day == target_hour.day
-            and record_time.hour == target_hour.hour
+            continue
+    else:
+        logger.debug(
+            "无法解析水表记录时间字段: POSTDATE=%s, RecordDate=%s, RecordTime=%s",
+            record.get("POSTDATE"),
+            record.get("RecordDate"),
+            record.get("RecordTime"),
         )
-    return False
+        return False
+    return (
+        record_time.year == target_hour.year
+        and record_time.month == target_hour.month
+        and record_time.day == target_hour.day
+        and record_time.hour == target_hour.hour
+    )

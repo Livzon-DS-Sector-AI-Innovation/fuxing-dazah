@@ -29,7 +29,15 @@ from app.shared.base_model import BaseModel
 class EnergyType(enum.StrEnum):
     ELECTRICITY = "electricity"
     WATER = "water"
-    GAS = "gas"
+    STEAM = "steam"
+    COOLING = "cooling"
+    COMPRESSED_AIR = "compressed_air"
+    NITROGEN = "nitrogen"
+    NATURAL_GAS = "natural_gas"
+
+# CHECK 约束中使用的能源类型列表（与 EnergyType 枚举保持同步）
+_ALL_ENERGY_TYPES = "', '".join(e.value for e in EnergyType)
+ENERGY_TYPE_CHECK = f"energy_type IN ('{_ALL_ENERGY_TYPES}')"
 
 
 class MonitorLevel(enum.StrEnum):
@@ -56,7 +64,7 @@ class EnergyDeviceConfig(BaseModel):
             name="uq_energy_device_config_platform_device",
         ),
         CheckConstraint(
-            "energy_type IN ('electricity', 'water', 'gas')",
+            ENERGY_TYPE_CHECK,
             name="ck_energy_device_config_energy_type",
         ),
         CheckConstraint(
@@ -80,7 +88,7 @@ class EnergyDeviceConfig(BaseModel):
         String(200), nullable=False, comment="设备名称"
     )
     energy_type: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="能源类型: electricity/water/gas"
+        String(20), nullable=False, comment="能源类型: electricity/water/steam/cooling/compressed_air/nitrogen/natural_gas"
     )
     api_endpoint: Mapped[str] = mapped_column(
         String(500), nullable=False, comment="API 路径"
@@ -221,7 +229,7 @@ class EnergyAlertRule(BaseModel):
     __tablename__ = "energy_alert_rules"
     __table_args__ = (
         CheckConstraint(
-            "energy_type IN ('electricity', 'water', 'gas')",
+            ENERGY_TYPE_CHECK,
             name="ck_energy_alert_rule_energy_type",
         ),
         CheckConstraint(

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.energy.models import (
@@ -16,6 +17,7 @@ from app.modules.energy.models import (
     EnergyData,
     EnergyDeviceConfig,
 )
+from app.platform.identity.models import Department
 
 # ── 设备配置 ──
 
@@ -23,10 +25,10 @@ from app.modules.energy.models import (
 async def create_device_config(
     db: AsyncSession, data: dict[str, Any]
 ) -> EnergyDeviceConfig:
-    obj = EnergyDeviceConfig(**data)
-    db.add(obj)
-    await db.flush()
-    return obj
+    """创建设备配置（使用原始 INSERT 避免 BaseModel FK 解析异常）。"""
+    stmt = pg_insert(EnergyDeviceConfig).values(**data).returning(EnergyDeviceConfig)
+    result = await db.execute(stmt)
+    return result.scalar_one()
 
 
 async def get_device_config_by_id(
@@ -69,6 +71,7 @@ async def list_device_configs(
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0
 
+    query = query.order_by(EnergyDeviceConfig.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     return list(result.scalars().all()), total
@@ -77,28 +80,56 @@ async def list_device_configs(
 async def update_device_config(
     db: AsyncSession, config_id: UUID, data: dict[str, Any]
 ) -> EnergyDeviceConfig | None:
-    obj = await get_device_config_by_id(db, config_id)
-    if obj is None:
-        return None
-    for key, value in data.items():
-        setattr(obj, key, value)
-    await db.flush()
-    # Re-fetch via select to avoid MissingGreenlet (禁止 db.refresh)
+    """更新设备配置（使用原始 SQL 避免 BaseModel FK 解析异常）。"""
     result = await db.execute(
-        select(EnergyDeviceConfig).where(
+        sa_update(EnergyDeviceConfig)
+        .where(
             EnergyDeviceConfig.id == config_id,
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
         )
+        .values(**data)
+        .returning(EnergyDeviceConfig)
     )
     return result.scalar_one_or_none()
 
 
 async def delete_device_config(db: AsyncSession, config_id: UUID) -> bool:
-    obj = await get_device_config_by_id(db, config_id)
+    """软删除设备配置（处理重复添加→删除的隐形约束冲突）。"""
+    # 先查出要删除的设备信息
+    obj = await db.scalar(
+        select(EnergyDeviceConfig).where(
+            EnergyDeviceConfig.id == config_id,
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+    )
     if obj is None:
         return False
-    obj.is_deleted = True
-    await db.flush()
+
+    # 若已有同编码的已删除记录，先将其编码改名释放唯一约束槽位
+    existing_deleted = await db.scalar(
+        select(EnergyDeviceConfig).where(
+            EnergyDeviceConfig.platform_code == obj.platform_code,
+            EnergyDeviceConfig.platform_device_code == obj.platform_device_code,
+            EnergyDeviceConfig.is_deleted == True,  # noqa: E712
+            EnergyDeviceConfig.id != config_id,
+        )
+    )
+    if existing_deleted is not None:
+        await db.execute(
+            sa_update(EnergyDeviceConfig)
+            .where(EnergyDeviceConfig.id == existing_deleted.id)
+            .values(platform_device_code=f"{existing_deleted.platform_device_code}__del_{existing_deleted.id}")
+        )
+
+    # 软删除当前设备
+    await db.execute(
+        sa_update(EnergyDeviceConfig)
+        .where(
+            EnergyDeviceConfig.id == config_id,
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True)
+    )
     return True
 
 
@@ -172,8 +203,6 @@ async def upsert_energy_data(
     unit: str,
     platform_raw_data: dict[str, Any] | None = None,
 ) -> EnergyData:
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-
     stmt = pg_insert(EnergyData).values(
         device_config_id=device_config_id,
         timestamp=timestamp,
@@ -183,11 +212,39 @@ async def upsert_energy_data(
     )
     stmt = stmt.on_conflict_do_update(
         constraint="uq_energy_data_device_timestamp",
-        set_={"value": value, "platform_raw_data": platform_raw_data},
+        set_={
+            "value": value,
+            "platform_raw_data": platform_raw_data,
+            "collected_at": func.now(),
+        },
     )
     returning_stmt = stmt.returning(EnergyData)
     result = await db.execute(returning_stmt)
     return result.scalar_one()
+
+
+async def backfill_energy_data_unit(db: AsyncSession) -> int:
+    """将历史能耗数据的 unit 回填为设备配置中的计量单位。
+
+    返回更新行数。
+    """
+    stmt = (
+        sa_update(EnergyData)
+        .where(
+            EnergyData.is_deleted == False,  # noqa: E712
+            EnergyData.unit
+            != select(EnergyDeviceConfig.unit)
+            .where(EnergyDeviceConfig.id == EnergyData.device_config_id)
+            .scalar_subquery(),
+        )
+        .values(
+            unit=select(EnergyDeviceConfig.unit)
+            .where(EnergyDeviceConfig.id == EnergyData.device_config_id)
+            .scalar_subquery()
+        )
+    )
+    result = await db.execute(stmt)
+    return result.rowcount  # type: ignore[no-any-return]
 
 
 async def list_energy_data(
@@ -278,6 +335,54 @@ async def get_energy_statistics(
     ]
 
 
+# ── 采集历史 ──
+
+
+async def list_collect_history(
+    db: AsyncSession,
+    *,
+    platform_code: str = "zhiheng",
+    energy_type: str | None = None,
+    device_config_id: UUID | None = None,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[tuple[EnergyData, EnergyDeviceConfig]], int]:
+    """查询采集历史（EnergyData + EnergyDeviceConfig 关联）。
+
+    默认 platform='zhiheng'；energy_type 为 None 时不做能源类型过滤。
+    """
+    query = (
+        select(EnergyData, EnergyDeviceConfig)
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyData.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.platform_code == platform_code,
+        )
+    )
+    if energy_type is not None:
+        query = query.where(EnergyDeviceConfig.energy_type == energy_type)
+    if device_config_id:
+        query = query.where(EnergyData.device_config_id == device_config_id)
+    if start_time:
+        query = query.where(EnergyData.timestamp >= start_time)
+    if end_time:
+        query = query.where(EnergyData.timestamp <= end_time)
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    query = query.order_by(EnergyData.timestamp.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    return list(result.all()), total
+
+
 # ── 采集日志 ──
 
 
@@ -360,10 +465,10 @@ async def get_overview_trend(
 async def create_collect_log(
     db: AsyncSession, data: dict[str, Any]
 ) -> EnergyCollectLog:
-    obj = EnergyCollectLog(**data)
-    db.add(obj)
-    await db.flush()
-    return obj
+    """写入采集日志（使用原始 INSERT 避免 BaseModel FK 解析异常）。"""
+    stmt = pg_insert(EnergyCollectLog).values(**data).returning(EnergyCollectLog)
+    result = await db.execute(stmt)
+    return result.scalar_one()
 
 
 async def list_collect_logs(
@@ -409,8 +514,6 @@ async def get_collect_log_detail(
     if log is None:
         return None, []
 
-    from datetime import timedelta
-
     window_start = log.collect_time - timedelta(seconds=time_window_seconds)
     window_end = log.collect_time + timedelta(seconds=time_window_seconds)
 
@@ -440,15 +543,9 @@ async def get_collect_log_detail(
 async def create_alert_rule(
     db: AsyncSession, data: dict[str, Any]
 ) -> EnergyAlertRule:
-    obj = EnergyAlertRule(**data)
-    db.add(obj)
-    await db.flush()
-    result = await db.execute(
-        select(EnergyAlertRule).where(
-            EnergyAlertRule.id == obj.id,
-            EnergyAlertRule.is_deleted == False,  # noqa: E712
-        )
-    )
+    """创建预警规则（使用原始 INSERT 避免 BaseModel FK 解析异常）。"""
+    stmt = pg_insert(EnergyAlertRule).values(**data).returning(EnergyAlertRule)
+    result = await db.execute(stmt)
     return result.scalar_one()
 
 
@@ -495,28 +592,30 @@ async def list_alert_rules(
 async def update_alert_rule(
     db: AsyncSession, rule_id: UUID, data: dict[str, Any]
 ) -> EnergyAlertRule | None:
-    obj = await get_alert_rule_by_id(db, rule_id)
-    if obj is None:
-        return None
-    for key, value in data.items():
-        setattr(obj, key, value)
-    await db.flush()
+    """更新预警规则（使用原始 SQL 避免 BaseModel FK 解析异常）。"""
     result = await db.execute(
-        select(EnergyAlertRule).where(
+        sa_update(EnergyAlertRule)
+        .where(
             EnergyAlertRule.id == rule_id,
             EnergyAlertRule.is_deleted == False,  # noqa: E712
         )
+        .values(**data)
+        .returning(EnergyAlertRule)
     )
     return result.scalar_one_or_none()
 
 
 async def delete_alert_rule(db: AsyncSession, rule_id: UUID) -> bool:
-    obj = await get_alert_rule_by_id(db, rule_id)
-    if obj is None:
-        return False
-    obj.is_deleted = True
-    await db.flush()
-    return True
+    """软删除预警规则（使用原始 SQL 避免 BaseModel FK 解析异常）。"""
+    result = await db.execute(
+        sa_update(EnergyAlertRule)
+        .where(
+            EnergyAlertRule.id == rule_id,
+            EnergyAlertRule.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True)
+    )
+    return result.rowcount > 0
 
 
 # ── 预警记录 ──
@@ -525,15 +624,9 @@ async def delete_alert_rule(db: AsyncSession, rule_id: UUID) -> bool:
 async def create_alert_record(
     db: AsyncSession, data: dict[str, Any]
 ) -> EnergyAlertRecord:
-    obj = EnergyAlertRecord(**data)
-    db.add(obj)
-    await db.flush()
-    result = await db.execute(
-        select(EnergyAlertRecord).where(
-            EnergyAlertRecord.id == obj.id,
-            EnergyAlertRecord.is_deleted == False,  # noqa: E712
-        )
-    )
+    """创建预警记录（使用原始 INSERT 避免 BaseModel FK 解析异常）。"""
+    stmt = pg_insert(EnergyAlertRecord).values(**data).returning(EnergyAlertRecord)
+    result = await db.execute(stmt)
     return result.scalar_one()
 
 
@@ -586,16 +679,29 @@ async def list_alert_records(
 async def update_alert_record(
     db: AsyncSession, record_id: UUID, data: dict[str, Any]
 ) -> EnergyAlertRecord | None:
-    obj = await get_alert_record_by_id(db, record_id)
-    if obj is None:
-        return None
-    for key, value in data.items():
-        setattr(obj, key, value)
-    await db.flush()
+    """更新预警记录（使用原始 SQL 避免 BaseModel FK 解析异常）。"""
     result = await db.execute(
-        select(EnergyAlertRecord).where(
+        sa_update(EnergyAlertRecord)
+        .where(
             EnergyAlertRecord.id == record_id,
             EnergyAlertRecord.is_deleted == False,  # noqa: E712
         )
+        .values(**data)
+        .returning(EnergyAlertRecord)
     )
     return result.scalar_one_or_none()
+
+
+# ── 部门列表（供数据源配置下拉使用） ──
+
+
+async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
+    result = await db.execute(
+        select(Department.feishu_department_id, Department.name)
+        .where(
+            Department.is_deleted == False,  # noqa: E712
+            Department.status_is_deleted == False,  # noqa: E712
+        )
+        .order_by(Department.order, Department.name)
+    )
+    return [{"id": row.feishu_department_id, "name": row.name} for row in result.all()]

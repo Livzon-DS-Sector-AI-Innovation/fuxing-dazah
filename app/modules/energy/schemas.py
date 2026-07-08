@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Field
 
 StrUUID = Annotated[str, BeforeValidator(str)]
-EnergyType = Literal["electricity", "water", "gas"]
+EnergyType = Literal["electricity", "water", "steam", "cooling", "compressed_air", "nitrogen", "natural_gas"]
 MonitorLevel = Literal["normal", "important", "urgent"]
 CollectStatus = Literal["success", "partial", "failed"]
 
@@ -106,7 +106,10 @@ class CollectLogDeviceDetail(BaseModel):
     energy_type: str = Field(description="能源类型")
     value: float = Field(description="采集值")
     unit: str = Field(description="计量单位")
-    data_timestamp: datetime = Field(description="数据时间点")
+    data_timestamp: datetime = Field(description="数据时间点（整点小时起点）")
+    data_time_range_end: datetime | None = Field(
+        default=None, description="数据覆盖时段终点（整点小时+1h）"
+    )
 
 
 class CollectLogDetailResponse(BaseModel):

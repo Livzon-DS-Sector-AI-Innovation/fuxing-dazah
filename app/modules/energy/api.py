@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.response import paginated_response, success_response
+from app.core.response import error_response, paginated_response, success_response
 from app.modules.energy import service
 from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.schemas import (
@@ -49,6 +50,55 @@ async def list_platforms(
         for code, adapter in ADAPTERS.items()
     ]
     return success_response(data)
+
+
+@router.get("/departments", summary="获取部门列表（供数据源配置所属车间下拉使用）")
+async def list_departments(
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    data = await service.list_departments(db)
+    return success_response(data)
+
+
+@router.get("/visualization/data", summary="获取能耗可视化数据（飞书多维表格，Redis 缓存 5min）")
+async def get_visualization_data(
+    energy_type: str | None = Query(default=None, description="能源类型，不传返回全部"),
+) -> JSONResponse:
+    import json
+
+    from app.core.redis import cache_get, cache_set
+    from app.modules.energy.feishu.bitable_client import EnergyBitableClient, TABLE_MAP
+
+    if energy_type and energy_type not in TABLE_MAP:
+        return error_response(f"未知能源类型: {energy_type}", status_code=400)
+
+    cache_key = f"viz:{energy_type or 'all'}"
+
+    # ── Redis 缓存 ──
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return success_response(json.loads(cached))
+
+    # ── 缓存未命中，从飞书拉取 ──
+    tables = {energy_type: TABLE_MAP[energy_type]} if energy_type else TABLE_MAP
+
+    import asyncio
+    async def _fetch(et: str, tid: str) -> tuple[str, dict[str, Any]]:
+        client = EnergyBitableClient(tid)
+        return et, {
+            "fields": await client.list_fields(),
+            "records": await client.fetch_all_records(),
+        }
+
+    result: dict[str, Any] = {}
+    tasks = [_fetch(et, tid) for et, tid in tables.items()]
+    for coro in asyncio.as_completed(tasks):
+        et, data = await coro
+        result[et] = data
+
+    await cache_set(cache_key, json.dumps(result, ensure_ascii=False), ex=300)
+
+    return success_response(result)
 
 
 # ── 设备配置 ──
@@ -218,6 +268,30 @@ async def get_collect_log_detail(
 ) -> JSONResponse:
     result = await service.get_collect_log_detail(db, log_id)
     return success_response(result)
+
+
+@collect_router.get("/history", summary="查询采集历史")
+async def list_collect_history(
+    platform_code: str = Query(default="zhiheng", description="平台标识"),
+    energy_type: str | None = Query(default=None, description="能源类型，不传则不过滤"),
+    device_config_id: UUID | None = Query(default=None, description="数据源ID"),
+    start_date: str = Query(..., description="开始日期(YYYY-MM-DD)"),
+    end_date: str = Query(..., description="结束日期(YYYY-MM-DD)"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=20, ge=1, le=100, description="每页条数"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items, total = await service.get_collect_history(
+        db,
+        platform_code=platform_code,
+        energy_type=energy_type,
+        device_config_id=device_config_id,
+        start_date=start_date,
+        end_date=end_date,
+        page=page,
+        page_size=page_size,
+    )
+    return paginated_response(items, page, page_size, total)
 
 
 # ── 能源总览 ──

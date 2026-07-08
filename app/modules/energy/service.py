@@ -111,6 +111,16 @@ def get_target_hour() -> datetime:
     return now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
 
 
+async def _safe_create_collect_log(
+    db: AsyncSession, data: dict[str, Any]
+) -> None:
+    """写入采集日志，失败不抛异常（不影响能耗数据入库）。"""
+    try:
+        await repo.create_collect_log(db, data)
+    except Exception:
+        logger.exception("采集日志写入失败（不影响能耗数据）: %s", data.get("platform_code"))
+
+
 async def trigger_collection(
     db: AsyncSession, request: CollectTriggerRequest
 ) -> dict[str, Any]:
@@ -120,7 +130,8 @@ async def trigger_collection(
     if request.platform_code:
         platform_codes = [request.platform_code]
     else:
-        platform_codes = list(ADAPTERS.keys())
+        # 从数据库获取所有已启用设备的平台（非硬编码 ADAPTERS.keys()）
+        platform_codes = await repo.get_distinct_enabled_platforms(db)
 
     results: dict[str, Any] = {}
     for platform_code in platform_codes:
@@ -162,17 +173,43 @@ async def trigger_collection(
                     device_config_id=device.id,
                     timestamp=cr.timestamp,
                     value=cr.value,
-                    unit=cr.unit,
+                    unit=device.unit,
                     platform_raw_data=cr.raw_data,
                 )
                 success_count += 1
+
+                # 零值采集告警（所有能源类型，不阻断流程）
+                if cr.value == 0:
+                    logger.warning(
+                        "能耗设备零值采集: device=%s(%s), energy_type=%s, "
+                        "timestamp=%s, value=0",
+                        device.device_name,
+                        device.platform_device_code,
+                        device.energy_type,
+                        cr.timestamp.isoformat(),
+                    )
+
+                # 时间区间校验：采集时间与数据时间差值不应超过 24h
+                now_cst = datetime.now(CST)
+                time_gap_minutes = abs(
+                    (now_cst - cr.timestamp).total_seconds() / 60
+                )
+                if time_gap_minutes > 24 * 60:
+                    logger.warning(
+                        "采集时间与数据时间间隔过大: device=%s(%s), gap=%.0f分钟, "
+                        "data_timestamp=%s",
+                        device.device_name,
+                        device.platform_device_code,
+                        time_gap_minutes,
+                        cr.timestamp.isoformat(),
+                    )
 
             status = (
                 "success"
                 if success_count == len(device_codes)
                 else "partial"
             )
-            await repo.create_collect_log(
+            await _safe_create_collect_log(
                 db,
                 {
                     "platform_code": platform_code,
@@ -190,25 +227,34 @@ async def trigger_collection(
 
         except Exception as e:
             logger.exception("采集失败: platform=%s", platform_code)
-            await repo.create_collect_log(
+            await _safe_create_collect_log(
                 db,
                 {
                     "platform_code": platform_code,
                     "collect_time": datetime.now(),
                     "status": "failed",
-                    "device_count": len(device_codes),
+                    "device_count": len(device_codes) if device_codes else 0,
                     "success_count": 0,
                     "error_message": str(e),
                 },
             )
             results[platform_code] = {
                 "status": "failed",
-                "device_count": len(device_codes),
+                "device_count": len(device_codes) if device_codes else 0,
                 "success_count": 0,
                 "error": str(e),
             }
 
     return results
+
+
+async def backfill_energy_data_unit(db: AsyncSession) -> int:
+    """将历史能耗数据的计量单位回填为设备配置值。"""
+    return await repo.backfill_energy_data_unit(db)
+
+
+async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
+    return await repo.list_departments(db)
 
 
 async def list_energy_data(
@@ -281,6 +327,9 @@ async def get_collect_log_detail(
     time_range_end: datetime | None = None
 
     for energy_data, device_config in rows:
+        # timestamp 是整点小时，实际数据覆盖范围为 [timestamp, timestamp + 1h)
+        data_start = energy_data.timestamp
+        data_end = energy_data.timestamp + timedelta(hours=1)
         devices.append({
             "device_name": device_config.device_name,
             "platform_device_code": device_config.platform_device_code,
@@ -288,11 +337,18 @@ async def get_collect_log_detail(
             "value": float(energy_data.value),
             "unit": energy_data.unit,
             "data_timestamp": energy_data.timestamp,
+            "data_time_range_end": data_end,
         })
-        if time_range_start is None or energy_data.timestamp < time_range_start:
-            time_range_start = energy_data.timestamp
-        if time_range_end is None or energy_data.timestamp > time_range_end:
-            time_range_end = energy_data.timestamp
+        if time_range_start is None or data_start < time_range_start:
+            time_range_start = data_start
+        if time_range_end is None or data_end > time_range_end:
+            time_range_end = data_end
+
+    # 确保 time_range_end 至少比 time_range_start 晚 1 小时，
+    # 避免所有设备数据时间戳相同时起止时刻一致的展示 bug
+    if time_range_start is not None and time_range_end is not None:
+        if time_range_end <= time_range_start:
+            time_range_end = time_range_start + timedelta(hours=1)
 
     return {
         "id": str(log.id),
@@ -319,11 +375,27 @@ async def get_overview(
     energy_type: str | None = None,
 ) -> dict[str, Any]:
     summary_rows = await repo.get_overview_summary(db, start_time, end_time)
-    summary: dict[str, float] = {"electricity": 0, "water": 0, "gas": 0}
+    # 动态汇总 + 所有类型默认 0（前端 StatsCards 依赖全量 key）
+    # 与 EnergyType 枚举保持同步
+    _ALL_TYPE_CODES = [
+        "electricity", "water", "steam",
+        "cooling", "compressed_air", "nitrogen",
+        "natural_gas",
+    ]
+    summary: dict[str, float] = {et: 0.0 for et in _ALL_TYPE_CODES}
+    seen_units: dict[str, set[str]] = {et: set() for et in _ALL_TYPE_CODES}
     for row in summary_rows:
         et = row["energy_type"]
-        if et in summary:
-            summary[et] = row["total_value"]
+        summary[et] = summary.get(et, 0) + row["total_value"]
+        seen_units.setdefault(et, set()).add(row["unit"])
+    # 同能源类型存在多种计量单位时告警
+    for et, units in seen_units.items():
+        if len(units) > 1:
+            logger.warning(
+                "能源类型 %s 在查询范围内存在多种计量单位: %s，合计值可能不准确",
+                et,
+                units,
+            )
 
     trend_rows = await repo.get_overview_trend(
         db, start_time, end_time, energy_type=energy_type
@@ -337,12 +409,14 @@ async def get_overview(
         energy_type=energy_type,
     )
 
+    # 向后兼容：total_gas 始终为 0（已被 total_steam 替代）
+    result_summary: dict[str, float] = {
+        f"total_{et}": val for et, val in summary.items()
+    }
+    result_summary.setdefault("total_gas", 0.0)
+
     return {
-        "summary": {
-            "total_electricity": summary["electricity"],
-            "total_water": summary["water"],
-            "total_gas": summary["gas"],
-        },
+        "summary": result_summary,
         "trend": trend_rows,
         "distribution": distribution_rows,
     }
@@ -446,3 +520,50 @@ async def process_alert_record(
     )
     assert result is not None
     return result
+
+
+# ── 采集历史 ──
+
+
+async def get_collect_history(
+    db: AsyncSession,
+    *,
+    platform_code: str = "zhiheng",
+    energy_type: str | None = None,
+    device_config_id: UUID | None = None,
+    start_date: str,
+    end_date: str,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[dict[str, Any]], int]:
+    """查询采集历史（默认 platform=zhiheng；energy_type=None 不做过滤）。"""
+    day_start = datetime.fromisoformat(start_date).replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=CST
+    )
+    day_end = datetime.fromisoformat(end_date).replace(
+        hour=23, minute=59, second=59, microsecond=999999, tzinfo=CST
+    )
+
+    rows, total = await repo.list_collect_history(
+        db,
+        platform_code=platform_code,
+        energy_type=energy_type,
+        device_config_id=device_config_id,
+        start_time=day_start,
+        end_time=day_end,
+        page=page,
+        page_size=page_size,
+    )
+
+    items: list[dict[str, Any]] = []
+    for energy_data, device_config in rows:
+        items.append({
+            "device_name": device_config.device_name,
+            "platform_device_code": device_config.platform_device_code,
+            "energy_type": device_config.energy_type,
+            "timestamp": energy_data.timestamp.isoformat(),
+            "value": float(energy_data.value),
+            "unit": energy_data.unit,
+        })
+
+    return items, total

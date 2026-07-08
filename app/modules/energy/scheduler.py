@@ -81,7 +81,17 @@ async def _do_collect(
 
     device_codes = [d.platform_device_code for d in devices]
     device_map = {d.platform_device_code: d for d in devices}
-    # 使用第一个设备的 api_endpoint
+    # 取设备配置的 api_endpoint：优先第一个非空值，所有设备一致时直接使用
+    api_endpoints = {
+        d.api_endpoint.strip() for d in devices if d.api_endpoint and d.api_endpoint.strip()
+    }
+    if len(api_endpoints) > 1:
+        logger.warning(
+            "平台 %s 下存在多个不同的 api_endpoint: %s，将使用 %s",
+            platform_code,
+            api_endpoints,
+            devices[0].api_endpoint,
+        )
     api_endpoint = devices[0].api_endpoint
 
     total_success = 0
@@ -110,23 +120,55 @@ async def _do_collect(
                 device_config_id=device.id,
                 timestamp=cr.timestamp,
                 value=cr.value,
-                unit=cr.unit,
+                unit=device.unit,
                 platform_raw_data=cr.raw_data,
             )
             total_success += 1
 
+            # 零值采集告警（所有能源类型，不阻断流程）
+            if cr.value == 0:
+                logger.warning(
+                    "能耗设备零值采集: device=%s(%s), energy_type=%s, "
+                    "timestamp=%s, value=0, raw_data=%s",
+                    device.device_name,
+                    device.platform_device_code,
+                    device.energy_type,
+                    cr.timestamp.isoformat(),
+                    cr.raw_data,
+                )
+
+            # 时间区间校验：采集时间与数据时间差值不应超过 24h
+            now_cst = datetime.now(CST)
+            time_gap_minutes = abs(
+                (now_cst - cr.timestamp).total_seconds() / 60
+            )
+            if time_gap_minutes > 24 * 60:
+                logger.warning(
+                    "采集时间与数据时间间隔过大: device=%s(%s), gap=%.0f分钟, "
+                    "data_timestamp=%s",
+                    device.device_name,
+                    device.platform_device_code,
+                    time_gap_minutes,
+                    cr.timestamp.isoformat(),
+                )
+
     status = "success" if total_success >= expected else "partial"
 
-    await repo.create_collect_log(
-        db,
-        {
-            "platform_code": platform_code,
-            "collect_time": datetime.now(CST),
-            "status": status,
-            "device_count": expected,
-            "success_count": total_success,
-        },
-    )
+    try:
+        await repo.create_collect_log(
+            db,
+            {
+                "platform_code": platform_code,
+                "collect_time": datetime.now(CST),
+                "status": status,
+                "device_count": expected,
+                "success_count": total_success,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "平台 %s 采集日志写入失败（不影响能耗数据）", platform_code
+        )
 
     logger.info(
         "自动采集完成: platform=%s, status=%s, success=%d/%d",
@@ -142,6 +184,7 @@ async def energy_collection_loop() -> None:
 
     每 TICK_INTERVAL 秒检查一次，对到达 collection_interval 的设备触发采集。
     支持补采：若设备上次采集时间距今超过 collection_interval，补采缺失的整点数据。
+    各平台独立事务，一个平台采集失败不影响其他平台。
     """
     settings = get_settings()
     if not settings.ENERGY_AUTO_COLLECT_ENABLED:
@@ -167,51 +210,58 @@ async def energy_collection_loop() -> None:
         try:
             async with async_session_factory() as db:
                 platforms = await repo.get_distinct_enabled_platforms(db)
+            # 释放查询会话，各平台独立采集
 
-                for platform_code in platforms:
-                    devices = await repo.get_enabled_devices_by_platform(
-                        db, platform_code
-                    )
-                    if not devices:
-                        continue
+            for platform_code in platforms:
+                try:
+                    async with async_session_factory() as db:
+                        devices = await repo.get_enabled_devices_by_platform(
+                            db, platform_code
+                        )
+                        if not devices:
+                            continue
 
-                    # 筛选到达采集间隔的设备
-                    devices_due: list[EnergyDeviceConfig] = []
-                    oldest_last: datetime | None = None
+                        # 筛选到达采集间隔的设备
+                        devices_due: list[EnergyDeviceConfig] = []
+                        oldest_last: datetime | None = None
 
-                    for device in devices:
-                        latest = await repo.get_latest_energy_data(db, device.id)
-                        if latest is None:
-                            devices_due.append(device)
-                        else:
-                            ref_time = latest.collected_at
-                            elapsed = (
-                                datetime.now(CST) - ref_time
-                            ).total_seconds() / 60
-                            if elapsed >= device.collection_interval:
+                        for device in devices:
+                            latest = await repo.get_latest_energy_data(db, device.id)
+                            if latest is None:
                                 devices_due.append(device)
-                                if oldest_last is None or ref_time < oldest_last:
-                                    oldest_last = ref_time
+                            else:
+                                ref_time = latest.collected_at
+                                elapsed = (
+                                    datetime.now(CST) - ref_time
+                                ).total_seconds() / 60
+                                if elapsed >= device.collection_interval:
+                                    devices_due.append(device)
+                                    if oldest_last is None or ref_time < oldest_last:
+                                        oldest_last = ref_time
 
-                    if not devices_due:
-                        continue
+                        if not devices_due:
+                            continue
 
-                    target_hours = _get_target_hours_since(oldest_last)
-                    if not target_hours:
-                        continue
+                        target_hours = _get_target_hours_since(oldest_last)
+                        if not target_hours:
+                            continue
 
-                    logger.info(
-                        "触发自动采集: platform=%s, devices=%d, hours=%d",
+                        logger.info(
+                            "触发自动采集: platform=%s, devices=%d, hours=%d",
+                            platform_code,
+                            len(devices_due),
+                            len(target_hours),
+                        )
+
+                        await _do_collect(
+                            db, platform_code, devices_due, target_hours
+                        )
+                        await db.commit()
+                except Exception:
+                    logger.exception(
+                        "平台 %s 自动采集循环异常，跳过本轮继续下一个平台",
                         platform_code,
-                        len(devices_due),
-                        len(target_hours),
                     )
-
-                    await _do_collect(
-                        db, platform_code, devices_due, target_hours
-                    )
-
-                await db.commit()
 
         except Exception:
             logger.exception("能耗自动采集循环异常")
