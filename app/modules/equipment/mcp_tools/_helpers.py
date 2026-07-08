@@ -1,6 +1,7 @@
 """MCP Tools 共享辅助函数。
 
-提供 user 解析、设备/工单/模板解析、ORM→字典转换等。
+提供设备/工单/模板解析、ORM→字典转换等。
+用户解析相关已移至 app.platform.identity.mcp_tools。
 """
 
 from __future__ import annotations
@@ -33,36 +34,11 @@ from app.modules.equipment.repository.work_order import (
 from app.modules.equipment.service import (
     get_work_order_by_id,
 )
-from app.platform.identity.models import User
-from app.platform.identity.repository import UserRepository
-
-
-async def resolve_user(db: AsyncSession, operator_id: str) -> User:
-    """将 operator_id 解析为 User 对象。"""
-    try:
-        uid = uuid.UUID(operator_id)
-        user = await db.get(User, uid)
-        if user and not user.is_deleted:
-            return user
-    except ValueError:
-        pass
-
-    repo = UserRepository()
-    user = await repo.get_by_feishu_user_id(db, operator_id)
-    if user:
-        return user
-
-    users, total = await repo.list_all(db, keyword=operator_id, limit=10)
-    if total == 1:
-        return users[0]
-    if total > 1:
-        raise ValueError(f"找到多个匹配用户（{total}人），请提供更精确的 user_id")
-
-    raise ValueError(f"未找到用户：{operator_id}")
 
 
 def _wo_to_dict(wo: Any) -> dict[str, Any]:
     """WorkOrder ORM → 字典"""
+    image_count = len(wo.images) if wo.images is not None else 0
     return {
         "id": str(wo.id),
         "work_order_no": wo.work_order_no,
@@ -70,11 +46,16 @@ def _wo_to_dict(wo: Any) -> dict[str, Any]:
         "status": wo.status,
         "priority": wo.priority,
         "equipment_name": wo.equipment.name if wo.equipment else "",
+        "equipment_no": wo.equipment.equipment_no if wo.equipment else "",
         "fault_description": wo.fault_description or "",
+        "repair_detail": wo.repair_detail or "",
         "assignee_name": wo.assignee.name if wo.assignee else "",
         "reporter_name": wo.reporter.name if wo.reporter else "",
+        "responsible_person_name": wo.responsible_person.name if wo.responsible_person else "",
         "created_at": wo.created_at.isoformat() if wo.created_at else "",
         "started_at": wo.started_at.isoformat() if wo.started_at else "",
+        "completed_at": wo.completed_at.isoformat() if wo.completed_at else "",
+        "image_count": image_count,
     }
 
 
@@ -244,15 +225,3 @@ async def _resolve_template(db: AsyncSession, identifier: str) -> Any:
     raise ValueError(f"未找到模板「{identifier}」，请提供有效的模板名称或 UUID。")
 
 
-def _user_to_dict(u: User) -> dict[str, Any]:
-    """User ORM → 字典"""
-    return {
-        "id": str(u.id),
-        "name": u.name,
-        "employee_no": u.employee_no or "",
-        "department": u.department or "",
-        "position": u.position or "",
-        "email": u.email or "",
-        "mobile": u.mobile or "",
-        "feishu_user_id": u.feishu_user_id or "",
-    }

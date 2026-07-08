@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +24,7 @@ from app.modules.equipment.service.data_scope import verify_write_ownership
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
+_CST = timezone(timedelta(hours=8))
 
 _VALID_TRANSITIONS: dict[str, list[str]] = {
     "待处理": ["执行中", "已关闭"],
@@ -37,7 +38,7 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
 async def generate_work_order_no(db: AsyncSession) -> str:
     """生成工单号：WO-{yyyyMMdd}-{seq:04d}"""
     max_no = await repo.get_max_work_order_no(db)
-    today = datetime.now().strftime("%Y%m%d")
+    today = datetime.now(_CST).strftime("%Y%m%d")
     if max_no:
         seq_str = max_no.split("-")[-1]
         seq = int(seq_str) + 1
@@ -218,7 +219,7 @@ async def complete_work_order(
     wo = await _get_work_order(db, work_order_id)
     await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
 
-    is_repair = wo.order_type in ("故障维修", "校准", "异常处理")
+    is_repair = wo.order_type in ("故障维修", "校准", "异常处理", "计划维护")
     target = "待验收" if is_repair else "已完成"
     _validate_transition(wo.status, target)
 
@@ -263,6 +264,12 @@ async def complete_work_order(
                 work_order_id=str(wo.id),
                 image_paths=img_paths,
             ))
+        else:
+            logger.warning(
+                "工单 %s 进入待验收，但未找到责任人飞书账号，跳过通知 "
+                "(responsible_person_id=%s)",
+                wo.work_order_no, wo.responsible_person_id,
+            )
 
     return await repo.get_work_order_by_id(db, wo.id)
 
@@ -357,8 +364,8 @@ async def _notify_new_work_order(
         from sqlalchemy import select as sa_select
 
         from app.core.database import async_session_factory
-        from app.modules.equipment.feishu.notification import send_user_card
         from app.platform.identity.models import User
+        from app.platform.integrations.feishu.notification import send_user_card
 
         async with async_session_factory() as session:
             result = await session.execute(
@@ -376,7 +383,7 @@ async def _notify_new_work_order(
             )
             return
 
-        title = f"🔔 新工单 - {work_order_no}"
+        title = f"【设备】🔔 新工单 — {work_order_no}"
         lines = [
             f"**工单编号：**{work_order_no}",
             f"**关联设备：**{equipment_name}",
@@ -391,6 +398,7 @@ async def _notify_new_work_order(
             open_id=user.feishu_user_id,
             title=title,
             content=content,
+            receive_id_type="user_id",
         )
         if ok:
             logger.info(
@@ -422,8 +430,8 @@ async def _notify_assignment(
         from sqlalchemy import select as sa_select
 
         from app.core.database import async_session_factory
-        from app.modules.equipment.feishu.notification import send_user_card
         from app.platform.identity.models import User
+        from app.platform.integrations.feishu.notification import send_user_card
 
         async with async_session_factory() as session:
             result = await session.execute(
@@ -441,7 +449,7 @@ async def _notify_assignment(
             )
             return
 
-        title = f"📋 新任务指派 - {work_order_no}"
+        title = f"【设备】📋 新任务指派 — {work_order_no}"
         lines = [
             f"**工单编号：**{work_order_no}",
             f"**关联设备：**{equipment_name}",
@@ -456,6 +464,7 @@ async def _notify_assignment(
             open_id=user.feishu_user_id,
             title=title,
             content=content,
+            receive_id_type="user_id",
         )
         if ok:
             logger.info(
@@ -483,9 +492,9 @@ async def _notify_rejection(
     非关键路径：发送失败只记日志，不影响主流程。
     """
     try:
-        from app.modules.equipment.feishu.notification import send_user_card
+        from app.platform.integrations.feishu.notification import send_user_card
 
-        title = f"↩️ 工单退回 - {work_order_no}"
+        title = f"【设备】↩️ 工单退回 — {work_order_no}"
         lines = [
             f"**工单编号：**{work_order_no}",
             f"**关联设备：**{equipment_name}",
@@ -500,6 +509,7 @@ async def _notify_rejection(
             open_id=feishu_user_id,
             title=title,
             content=content,
+            receive_id_type="user_id",
         )
         if ok:
             logger.info(
@@ -524,7 +534,7 @@ async def verify_work_order(
     """验收工单"""
     wo = await _get_work_order(db, work_order_id)
     await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
-    if wo.order_type not in ("故障维修", "校准", "异常处理"):
+    if wo.order_type not in ("故障维修", "校准", "异常处理", "计划维护"):
         raise AppException(message=f"工单类型 '{wo.order_type}' 不支持验收")
 
     wo.verified_by = ctx.user.id
@@ -536,12 +546,11 @@ async def verify_work_order(
         _validate_transition(wo.status, "已完成")
         wo.status = "已完成"
     else:
-        # 打回重修
+        # 打回重修：保留原始维修时间戳（用于审计和工时统计）
         _validate_transition(wo.status, "执行中")
         wo.status = "执行中"
-        wo.started_at = None
-        wo.completed_at = None
-        wo.actual_duration = None
+        # ponytail: 不重置 started_at/completed_at/actual_duration，
+        # 保留首次维修耗时用于审计。下次提交时自然覆盖。
 
     await db.flush()
     wo = await repo.get_work_order_by_id(db, wo.id)
@@ -564,11 +573,12 @@ async def verify_work_order(
 async def close_work_order(
     db: AsyncSession,
     work_order_id: uuid.UUID,
-    ctx: EquipmentAccessContext,
+    ctx: EquipmentAccessContext | None = None,
 ) -> WorkOrder:
     """关闭工单"""
     wo = await _get_work_order(db, work_order_id)
-    await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
+    if ctx:
+        await verify_write_ownership(ctx, wo, "reporter_id", "user_id")
     _validate_transition(wo.status, "已关闭")
 
     wo.status = "已关闭"

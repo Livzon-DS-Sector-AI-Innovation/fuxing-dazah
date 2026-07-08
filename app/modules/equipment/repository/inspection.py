@@ -1,7 +1,7 @@
 """Inspection repository: data access for routes, tasks, photos."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from app.modules.equipment.models.inspection_template import (
 )
 from app.modules.equipment.service.data_scope import apply_equipment_scope
 
+_CST = timezone(timedelta(hours=8))
 
 # ═══════════ 路线 ═══════════
 async def create_route(
@@ -249,7 +250,7 @@ async def get_route_equipments(
 
 # ═══════════ 任务 ═══════════
 async def get_max_task_no(db: AsyncSession) -> str | None:
-    today = datetime.now().strftime("%Y%m%d")
+    today = datetime.now(_CST).strftime("%Y%m%d")
     prefix = f"IT-{today}-"
     stmt = (
         select(InspectionTask.task_no)
@@ -404,6 +405,28 @@ async def get_task_equipment_completed_ids(
     )
     result = await db.execute(stmt)
     return {row[0] for row in result.all()}
+
+
+async def get_stale_completed_tasks(
+    db: AsyncSession, cutoff: datetime,
+) -> list[InspectionTask]:
+    """Return tasks eligible for auto-close.
+
+    Conditions: status='已完成', overall_result='正常',
+    completed_at <= cutoff, is_deleted=False.
+    """
+    stmt = (
+        select(InspectionTask)
+        .where(
+            InspectionTask.status == "已完成",
+            InspectionTask.overall_result == "正常",
+            InspectionTask.completed_at <= cutoff,
+            InspectionTask.is_deleted == False,  # noqa: E712
+        )
+        .order_by(InspectionTask.completed_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
 
 
 # ═══════════ 巡检记录 ═══════════

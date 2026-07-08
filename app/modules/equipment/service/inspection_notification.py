@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.modules.equipment import repository as repo
-from app.modules.equipment.feishu.notification import send_user_card
 from app.modules.equipment.models.inspection import InspectionTask
 from app.platform.integrations.feishu.message import send_group_card
+from app.platform.integrations.feishu.notification import send_user_card
 
 if TYPE_CHECKING:
     from app.modules.equipment.models.equipment import Equipment
@@ -256,7 +256,7 @@ async def send_inspection_start_notification(
                     "equipment": eq_list,
                 })
 
-        title = f"🔍 巡检任务已开始 - {task.task_no}"
+        title = f"【设备】🔍 巡检任务 — {task.task_no}"
         content = _build_card_content(task, equipment_names, items, locations_info)
 
         # 1) DM 通知巡检人员
@@ -270,6 +270,7 @@ async def send_inspection_start_notification(
                 open_id=task.assignee.feishu_user_id,
                 title=title,
                 content=content,
+                receive_id_type="user_id",
             )
             if dm_ok:
                 logger.info(
@@ -344,7 +345,7 @@ async def send_work_order_notification(
         return
 
     try:
-        title = f"⚠️ 异常处理工单通知 - {work_order.work_order_no}"
+        title = f"【设备】⚠️ 巡检异常工单 — {work_order.work_order_no}"
         lines = [
             f"**工单编号：**{work_order.work_order_no}",
             f"**设备名称：**{equipment.name}",
@@ -361,6 +362,7 @@ async def send_work_order_notification(
             open_id=responsible_user_id,
             title=title,
             content=content,
+            receive_id_type="user_id",
         )
         if ok:
             logger.info(

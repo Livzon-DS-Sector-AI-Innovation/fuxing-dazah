@@ -1,6 +1,7 @@
 """Inspection service: business logic for routes, tasks, photos."""
 
 import base64
+import logging
 import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -35,6 +36,8 @@ from app.modules.equipment.schemas.inspection import (
     InspectionScheduleResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+
+logger = logging.getLogger(__name__)
 
 _UPLOAD_DIR = "uploads/inspection"
 _MAX_RETRIES = 3
@@ -123,7 +126,7 @@ async def set_route_locations(
 
 # ═══════════ 任务 ═══════════
 async def _generate_task_no(db: AsyncSession) -> str:
-    today = datetime.now().strftime("%Y%m%d")
+    today = datetime.now(_CN_TZ).strftime("%Y%m%d")
     max_no = await repo.get_max_task_no(db)
     if max_no:
         seq = int(max_no.split("-")[-1]) + 1
@@ -420,31 +423,39 @@ async def _create_anomaly_work_order(
         desc_parts.append(f"{item_name}—{remark}" if remark else item_name)
     fault_description = "巡检发现异常：" + "；".join(desc_parts)
 
-    # 生成工单号
-    wo_no = await repo.get_max_work_order_no(db)
-    today = datetime.now().strftime("%Y%m%d")
-    if wo_no:
-        seq = int(wo_no.split("-")[-1]) + 1
-    else:
-        seq = 1
-    new_wo_no = f"WO-{today}-{seq:04d}"
+    # 生成工单号 + 创建工单（含并发重试）
+    wo: WOModel | None = None
+    for attempt in range(_MAX_RETRIES):
+        wo_no = await repo.get_max_work_order_no(db)
+        today = datetime.now(_CN_TZ).strftime("%Y%m%d")
+        if wo_no:
+            seq = int(wo_no.split("-")[-1]) + 1
+        else:
+            seq = 1
+        new_wo_no = f"WO-{today}-{seq:04d}"
 
-    # 创建工单
-    wo = WOModel(
-        work_order_no=new_wo_no,
-        equipment_id=equipment_id,
-        order_type="异常处理",
-        priority=equipment.importance,
-        status="待处理",
-        responsible_person_id=responsible_user_id,
-        reporter_id=task.assigned_to,
-        fault_description=fault_description,
-        inspection_task_id=task.id,
-        original_equipment_status=equipment.status,
-    )
-    db.add(wo)
-    # 异常处理工单不自动改设备状态（问题可能只是仪表偏差，设备仍在运行）
-    await db.flush()
+        wo = WOModel(
+            work_order_no=new_wo_no,
+            equipment_id=equipment_id,
+            order_type="异常处理",
+            priority=equipment.importance,
+            status="待处理",
+            responsible_person_id=responsible_user_id,
+            reporter_id=task.assigned_to,
+            fault_description=fault_description,
+            inspection_task_id=task.id,
+            original_equipment_status=equipment.status,
+        )
+        db.add(wo)
+        # 异常处理工单不自动改设备状态（问题可能只是仪表偏差，设备仍在运行）
+        try:
+            await db.flush()
+            break
+        except IntegrityError:
+            if attempt < _MAX_RETRIES - 1:
+                await db.rollback()
+                continue
+            raise
 
     # 发送飞书通知（非关键路径）
     responsible_user_id_str: str | None = None
@@ -667,13 +678,18 @@ async def delete_photo(
     if not photo:
         raise NotFoundException("照片", str(photo_id))
 
+    # 验证所有权：通过关联的巡检任务验证用户是否有写权限
+    if ctx:
+        task = await _get_task(db, photo.task_id)
+        await verify_write_ownership(ctx, task, "created_by", "user_id")
+
     if minio_enabled():
         # MinIO 模式：从对象存储删除
         try:
             delete_object("equipment", photo.file_path)
         except Exception:
-            # 删除 MinIO 文件失败不阻塞数据库操作
-            pass
+            # 删除 MinIO 文件失败不阻塞数据库操作，但记录日志方便排查
+            logger.exception("删除 MinIO 文件失败: %s", photo.file_path)
     elif os.path.exists(photo.file_path):
         os.remove(photo.file_path)
 

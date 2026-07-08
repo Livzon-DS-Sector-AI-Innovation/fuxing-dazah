@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+from app.platform.identity import (  # noqa: E402
+    mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
+)
 from app.platform.mcp.middleware import build_mcp_middleware  # noqa: E402
 from app.platform.mcp.server import get_mcp_app  # noqa: E402
 
@@ -74,13 +77,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         set_main_loop(asyncio.get_running_loop())
         start_ws_client()
 
-    # ── 设备模块飞书 WebSocket 长连接（独立交互机器人，原生 WebSocket） ──
-    equipment_ws_task: asyncio.Task | None = None
-    if settings.EQUIPMENT_FEISHU_APP_ID and settings.EQUIPMENT_FEISHU_APP_SECRET:
-        from app.modules.equipment.feishu.ws_client import start_equipment_ws
-
-        equipment_ws_task = asyncio.create_task(start_equipment_ws())
-
     # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
     from app.modules.safety.feishu.event_client import start_ws, stop_ws
 
@@ -106,9 +102,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_engine = SchedulerEngine(scheduler_registry)
 
     from app.modules.equipment.scheduled import (
+        AUTO_CLOSE_TASK,
         InspectionScheduleGenerator,
     )
     scheduler_registry.register_generator(InspectionScheduleGenerator())
+    scheduler_registry.register_task(AUTO_CLOSE_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 
@@ -142,13 +140,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await asyncio.wait_for(scheduler_engine_task, timeout=10)
     except (TimeoutError, asyncio.CancelledError):
         pass
-
-    # 停止设备模块 WebSocket
-    if equipment_ws_task:
-        from app.modules.equipment.feishu.ws_client import stop_equipment_ws
-
-        await stop_equipment_ws()
-        equipment_ws_task.cancel()
 
     member_task.cancel()
     timeout_task.cancel()

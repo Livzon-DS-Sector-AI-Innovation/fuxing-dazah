@@ -32,14 +32,14 @@ async def _notify_start(wo) -> None:
     try:
         if not wo.assignee:
             return
-        from app.modules.equipment.feishu.notification import send_user_card
+        from app.platform.integrations.feishu.notification import send_user_card
 
         user = wo.assignee
         if not user.feishu_user_id:
             return
 
         eq_name = wo.equipment.name if wo.equipment else ""
-        title = f"🔧 开始维修 - {wo.work_order_no}"
+        title = f"【设备】🔧 维修已开始 — {wo.work_order_no}"
         lines = [
             f"**工单编号：**{wo.work_order_no}",
             f"**关联设备：**{eq_name}",
@@ -53,6 +53,7 @@ async def _notify_start(wo) -> None:
             open_id=user.feishu_user_id,
             title=title,
             content=content,
+            receive_id_type="user_id",
         )
     except Exception:
         logger.exception("开始维修通知异常: %s", wo.work_order_no)

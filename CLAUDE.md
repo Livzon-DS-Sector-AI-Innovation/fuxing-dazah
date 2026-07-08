@@ -7,6 +7,7 @@
 目标是让各模块在统一平台能力下独立演进，并保留审计、身份扩展、外部系统集成能力。不要把项目改成微服务，也不要引入与当前需求无关的复杂架构。
 
 技术栈：Python 3.12+、FastAPI、SQLAlchemy 2.0 async、PostgreSQL、Redis、Alembic、Pydantic v2、uv、pytest、ruff、mypy、MinIO。
+MCP：模型上下文协议，用于给Agent智能体工具调用能力，操作系统资源。
 
 涉及不确定的新 API 或库写法时，先查最新官方文档或 Context7，再实现。
 

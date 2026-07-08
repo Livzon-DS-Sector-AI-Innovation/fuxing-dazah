@@ -1,7 +1,7 @@
 """Work order repository functions."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -11,6 +11,8 @@ from sqlalchemy.orm import selectinload
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import WorkOrder
 from app.modules.equipment.service.data_scope import apply_equipment_scope
+
+_CST = timezone(timedelta(hours=8))
 
 
 async def create_work_order(
@@ -51,7 +53,7 @@ async def get_work_order_by_id(
 
 async def get_max_work_order_no(db: AsyncSession) -> str | None:
     """获取当天最大工单号"""
-    today = datetime.now().strftime("%Y%m%d")
+    today = datetime.now(_CST).strftime("%Y%m%d")
     pattern = f"WO-{today}-%"
     result = await db.execute(
         select(WorkOrder.work_order_no)
@@ -263,6 +265,8 @@ async def get_user_work_orders(
             selectinload(WorkOrder.equipment),
             selectinload(WorkOrder.assignee),
             selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
         )
         .where(
             or_(
@@ -318,3 +322,24 @@ async def count_open_fault_work_orders(
         )
     )
     return result.scalar() or 0
+
+
+async def get_stale_completed_work_orders(
+    db: AsyncSession, cutoff: datetime,
+) -> list[WorkOrder]:
+    """Return work orders eligible for auto-close.
+
+    Conditions: status='已完成', completed_at <= cutoff,
+    is_deleted=False.
+    """
+    stmt = (
+        select(WorkOrder)
+        .where(
+            WorkOrder.status == "已完成",
+            WorkOrder.completed_at <= cutoff,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.completed_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())

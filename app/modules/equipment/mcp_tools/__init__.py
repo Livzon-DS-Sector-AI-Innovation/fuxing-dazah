@@ -10,9 +10,7 @@ from app.modules.equipment.mcp_tools._helpers import (  # noqa: F401
     _resolve_equipment,
     _resolve_template,
     _resolve_work_order,
-    _user_to_dict,
     _wo_to_dict,
-    resolve_user,
 )
 from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
     get_inspection_check_items,
@@ -25,5 +23,4 @@ from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
 from app.modules.equipment.mcp_tools.work_order import (  # noqa: F401
     list_work_orders,
     operate_work_order,
-    query_user,
 )

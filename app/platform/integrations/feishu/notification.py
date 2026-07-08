@@ -72,14 +72,16 @@ async def send_user_card(
     title: str,
     content: str,
     elements: list[dict] | None = None,
+    receive_id_type: str = "open_id",
 ) -> bool:
     """发送卡片消息给单个用户（DM）。
 
     Args:
-        open_id: 飞书 open_id（应用维度的用户标识，如 "ou_xxx"）
+        open_id: 飞书用户标识（含义由 receive_id_type 决定）
         title: 卡片标题
         content: 卡片正文（支持 markdown）
         elements: 额外的卡片元素（按钮、分割线等）
+        receive_id_type: 接收者 ID 类型，"open_id"（默认）或 "user_id"
 
     Returns:
         True 表示发送成功，False 表示失败（不抛异常）
@@ -112,7 +114,7 @@ async def send_user_card(
 
         req = (
             CreateMessageRequest.builder()
-            .receive_id_type("open_id")
+            .receive_id_type(receive_id_type)
             .request_body(
                 CreateMessageRequestBody.builder()
                 .receive_id(open_id)

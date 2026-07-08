@@ -6,7 +6,7 @@ import base64
 import uuid
 from typing import Any
 
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools.base import ToolResult
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -14,7 +14,6 @@ from app.modules.equipment.mcp_tools._helpers import (
     _get_template_item_map,
     _it_to_dict,
     _resolve_equipment,
-    resolve_user,
 )
 from app.modules.equipment.models.inspection_route_location import (
     RouteLocation,
@@ -45,6 +44,7 @@ from app.modules.equipment.service.inspection import (
 from app.modules.equipment.service.inspection import (
     start_task as start_inspection_task,
 )
+from app.platform.identity.mcp_tools import resolve_user
 from app.platform.mcp.deps import get_db
 from app.platform.mcp.server import mcp
 
@@ -489,7 +489,7 @@ async def list_inspection_tasks(
                 for eid in r["equipment_ids"]
             ]
             if names:
-                r["equipment_name"] = "、".join(names[:3])
+                r["equipment_name"] = "、".join(n for n in names[:3] if n)
                 if len(names) > 3:
                     r["equipment_name"] += f" 等{len(names)}台"
             if nos:

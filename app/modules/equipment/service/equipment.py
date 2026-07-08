@@ -126,6 +126,18 @@ async def delete_equipment_category(
     if equipment_count > 0:
         raise AppException(message="该分类下存在关联设备，无法删除")
 
+    template_count = await repo.count_inspection_templates_by_category(db, category_id)
+    if template_count > 0:
+        raise AppException(message="该分类下存在关联巡检模板，无法删除")
+
+    plan_count = await repo.count_maintenance_plans_by_category(db, category_id)
+    if plan_count > 0:
+        raise AppException(message="该分类下存在关联维护计划，无法删除")
+
+    personnel_count = await repo.count_personnel_assignments_by_category(db, category_id)
+    if personnel_count > 0:
+        raise AppException(message="该分类下存在关联人员角色，无法删除")
+
     return await repo.delete_equipment_category(db, category_id)
 
 
@@ -220,6 +232,10 @@ async def delete_location(
     equipment_count = await repo.count_equipments_by_location(db, location_id)
     if equipment_count > 0:
         raise AppException(message="该位置下存在关联设备，无法删除")
+
+    route_count = await repo.count_route_locations_by_location(db, location_id)
+    if route_count > 0:
+        raise AppException(message="该位置下存在关联巡检路线，无法删除")
 
     return await repo.delete_location(db, location_id)
 

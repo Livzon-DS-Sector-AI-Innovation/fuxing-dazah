@@ -14,6 +14,10 @@ from app.modules.equipment.models import (
     EquipmentCategoryLink,
     Location,
 )
+from app.modules.equipment.models.inspection_route_location import RouteLocation
+from app.modules.equipment.models.inspection_template import InspectionTemplate
+from app.modules.equipment.models.maintenance_plan import MaintenancePlan
+from app.modules.equipment.models.personnel import EquipmentPersonnelCategory
 from app.modules.equipment.service.data_scope import apply_equipment_scope
 from app.platform.identity.models import Department, User
 
@@ -570,6 +574,70 @@ async def count_equipments_by_location(
         .where(
             Equipment.location_id == location_id,
             Equipment.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def count_inspection_templates_by_category(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+) -> int:
+    """统计指定分类下的巡检模板数量"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(InspectionTemplate)
+        .where(
+            InspectionTemplate.equipment_category_id == category_id,
+            InspectionTemplate.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def count_maintenance_plans_by_category(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+) -> int:
+    """统计指定分类下的维护计划数量"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(MaintenancePlan)
+        .where(
+            MaintenancePlan.category_id == category_id,
+            MaintenancePlan.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def count_personnel_assignments_by_category(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+) -> int:
+    """统计指定分类下的人员角色分配数量"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(EquipmentPersonnelCategory)
+        .where(
+            EquipmentPersonnelCategory.category_id == category_id,
+            EquipmentPersonnelCategory.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def count_route_locations_by_location(
+    db: AsyncSession,
+    location_id: uuid.UUID,
+) -> int:
+    """统计指定位置下的巡检路线地点数量"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(RouteLocation)
+        .where(
+            RouteLocation.location_id == location_id,
+            RouteLocation.is_deleted == False,  # noqa: E712
         )
     )
     return result.scalar() or 0

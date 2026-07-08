@@ -59,11 +59,6 @@ class Settings(BaseSettings):
     SAFETY_FEISHU_APP_ID: str = ""
     SAFETY_FEISHU_APP_SECRET: str = ""
 
-    # Feishu 设备模块交互机器人（独立应用凭证）
-    EQUIPMENT_FEISHU_APP_ID: str = ""
-    EQUIPMENT_FEISHU_APP_SECRET: str = ""
-    EQUIPMENT_FEISHU_WS_ENABLED: bool = True
-
     # Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10
