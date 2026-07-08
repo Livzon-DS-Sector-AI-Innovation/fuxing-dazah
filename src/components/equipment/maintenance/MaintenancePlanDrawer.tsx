@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Drawer, Form, Input, Select, InputNumber, DatePicker, Button, Space, Radio } from 'antd'
+import { App, Drawer, Form, Input, Select, InputNumber, DatePicker, Button, Space, Radio, TreeSelect } from 'antd'
 import dayjs from 'dayjs'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createMaintenancePlan, updateMaintenancePlan } from '@/actions/equipment'
@@ -22,6 +22,20 @@ interface Equipment {
 interface MaintenancePlanDrawerProps {
   equipments: Equipment[]
   onRefresh?: () => void
+}
+
+interface TreeNode {
+  title: string
+  value: string
+  children?: TreeNode[]
+}
+
+function toTreeData(categories: EquipmentCategory[]): TreeNode[] {
+  return categories.map((c) => ({
+    title: `${c.code} - ${c.name}`,
+    value: c.id,
+    children: c.children ? toTreeData(c.children) : undefined,
+  }))
 }
 
 export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlanDrawerProps) {
@@ -144,8 +158,12 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
               </Form.Item>
             ) : (
               <Form.Item name="category_id" label="关联分类" rules={[{ required: true, message: '请选择分类' }]}>
-                <Select placeholder="选择分类" showSearch optionFilterProp="label"
-                  options={categories.map((c) => ({ label: `${c.code} - ${c.name}`, value: c.id }))}
+                <TreeSelect
+                  placeholder="选择分类"
+                  treeDefaultExpandAll
+                  showSearch
+                  filterTreeNode={(input, node) => String(node?.title ?? '').includes(input)}
+                  treeData={toTreeData(categories)}
                 />
               </Form.Item>
             )}

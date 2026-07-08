@@ -30,7 +30,7 @@ import {
   batchExtractDates as apiBatchExtractDates,
   batchCreateInstruments as apiBatchCreateInstruments,
   batchCreateGasDetectors as apiBatchCreateGasDetectors,
-  fetchDepartments,
+  fetchMeterDepartments,
   createDepartment as apiCreateDepartment,
   updateDepartment as apiUpdateDepartment,
   deleteDepartment as apiDeleteDepartment,
@@ -335,7 +335,7 @@ export async function batchCreateGasDetectors(items: GasDetectorBatchCreateItem[
 // ── 部门管理 ──
 
 export async function getDepartments(source?: string) {
-  return fetchDepartments(source)
+  return fetchMeterDepartments(source)
 }
 
 export async function createDepartment(data: DepartmentCreate) {

@@ -363,7 +363,7 @@ export async function batchCreateGasDetectors(
 
 // ── 部门管理 ──
 
-export async function fetchDepartments(source?: string): Promise<DepartmentItem[]> {
+export async function fetchMeterDepartments(source?: string): Promise<DepartmentItem[]> {
   const url = source ? `${SERVER_API}${BASE}/departments?source=${source}` : `${SERVER_API}${BASE}/departments`
   return apiGet<DepartmentItem[]>(url)
 }

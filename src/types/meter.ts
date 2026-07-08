@@ -189,6 +189,9 @@ export interface GasDetectorFilter {
   installation_type?: string
   installation_location?: string
   medium?: string
+  calibration_factor?: string
+  manufacturer_supplier?: string
+  manufacturer?: string
   detection_unit?: string
   calibration_result?: string
   next_calibration_before?: string
@@ -330,6 +333,9 @@ export interface GasDetectorFilterOptions {
   installation_type: string[]
   installation_location: string[]
   medium: string[]
+  calibration_factor: string[]
+  manufacturer_supplier: string[]
+  manufacturer: string[]
   detection_unit: string[]
   calibration_result: string[]
 }

@@ -184,6 +184,18 @@ export async function deleteDepartment(id: string) {
   return res.json()
 }
 
+export async function deleteDepartureRecordAction(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${id}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除离职记录失败')
+  }
+  revalidatePath('/hr/departure')
+  return res.json()
+}
+
 // ─── Team Actions ───
 
 export async function fetchTeamsAction(
