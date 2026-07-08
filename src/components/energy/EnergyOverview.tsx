@@ -27,6 +27,11 @@ export function EnergyOverview() {
   const [statistics, setStatistics] = useState<EnergyStatistics>({
     total_electricity: 0,
     total_water: 0,
+    total_steam: 0,
+    total_cooling: 0,
+    total_compressed_air: 0,
+    total_nitrogen: 0,
+    total_natural_gas: 0,
     total_gas: 0,
   })
   const [trendData, setTrendData] = useState<TrendDataPoint[]>([])
@@ -170,9 +175,13 @@ export function EnergyOverview() {
           }}
           options={[
             { label: '全部能源', value: 'all' },
-            { label: '电力', value: 'electricity' },
-            { label: '水', value: 'water' },
-            { label: '气体', value: 'gas' },
+            { label: '电耗数据',   value: 'electricity' },
+            { label: '水耗数据',   value: 'water' },
+            { label: '蒸汽数据',   value: 'steam' },
+            { label: '冷量数据',   value: 'cooling' },
+            { label: '压缩空气数据', value: 'compressed_air' },
+            { label: '氮气数据',   value: 'nitrogen' },
+            { label: '天然气数据', value: 'natural_gas' },
           ]}
         />
 

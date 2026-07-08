@@ -25,6 +25,16 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '10mb',
     },
   },
+
+  // 开发环境代理 API 请求到后端，避免跨端口 cookie 问题
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'http://localhost:8000/api/:path*',
+      },
+    ]
+  },
 };
 
 export default nextConfig;
