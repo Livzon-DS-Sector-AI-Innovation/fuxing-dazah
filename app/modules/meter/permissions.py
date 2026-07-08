@@ -1,0 +1,81 @@
+"""仪表管理模块权限声明。
+
+本文件由权限系统启动时自动发现并同步到数据库。
+"""
+
+from app.platform.permission.registry import PermissionDef
+
+PERMISSIONS: list[PermissionDef] = [
+    PermissionDef(
+        code="meter:*:read",
+        name="读取仪表管理数据",
+        module="meter",
+        resource="*",
+        action="read",
+        description="查看标准计量器具和有毒有害可燃探测器台账",
+    ),
+    PermissionDef(
+        code="meter:instrument:read",
+        name="读取标准计量器具",
+        module="meter",
+        resource="instrument",
+        action="read",
+        description="查看标准计量器具台账",
+    ),
+    PermissionDef(
+        code="meter:instrument:create",
+        name="创建标准计量器具",
+        module="meter",
+        resource="instrument",
+        action="create",
+        description="新增标准计量器具记录",
+    ),
+    PermissionDef(
+        code="meter:instrument:update",
+        name="更新标准计量器具",
+        module="meter",
+        resource="instrument",
+        action="update",
+        description="编辑标准计量器具记录",
+    ),
+    PermissionDef(
+        code="meter:instrument:delete",
+        name="删除标准计量器具",
+        module="meter",
+        resource="instrument",
+        action="delete",
+        description="删除标准计量器具记录",
+    ),
+    PermissionDef(
+        code="meter:gas-detector:read",
+        name="读取有毒有害可燃探测器",
+        module="meter",
+        resource="gas-detector",
+        action="read",
+        description="查看有毒有害可燃探测器台账",
+    ),
+    PermissionDef(
+        code="meter:gas-detector:create",
+        name="创建有毒有害可燃探测器",
+        module="meter",
+        resource="gas-detector",
+        action="create",
+        description="新增有毒有害可燃探测器记录",
+    ),
+    PermissionDef(
+        code="meter:gas-detector:update",
+        name="更新有毒有害可燃探测器",
+        module="meter",
+        resource="gas-detector",
+        action="update",
+        description="编辑有毒有害可燃探测器记录",
+    ),
+    PermissionDef(
+        code="meter:gas-detector:delete",
+        name="删除有毒有害可燃探测器",
+        module="meter",
+        resource="gas-detector",
+        action="delete",
+        description="删除有毒有害可燃探测器记录",
+    ),
+]
