@@ -1,7 +1,7 @@
 """add_meter_schema_instrument_records_and_gas_detector_records
 
 Revision ID: 00eeb8dd4525
-Revises: d9e76710a2e4
+Revises: e22654fa1b3c
 Create Date: 2026-07-01 08:38:59.481480
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '00eeb8dd4525'
-down_revision: Union[str, None] = 'd9e76710a2e4'
+down_revision: Union[str, None] = 'e22654fa1b3c'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
