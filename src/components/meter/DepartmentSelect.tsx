@@ -10,9 +10,10 @@ interface Props {
   onChange?: (value: string) => void
   placeholder?: string
   source: 'instrument' | 'gas_detector'
+  allowAdd?: boolean
 }
 
-export function DepartmentSelect({ value, onChange, placeholder = '选择部门', source }: Props) {
+export function DepartmentSelect({ value, onChange, placeholder = '选择部门', source, allowAdd = true }: Props) {
   const { message } = App.useApp()
   const [departments, setDepartments] = useState<string[]>([])
   const [adding, setAdding] = useState(false)
@@ -38,33 +39,35 @@ export function DepartmentSelect({ value, onChange, placeholder = '选择部门'
   const dropdownRender = (menu: React.ReactNode) => (
     <>
       {menu}
-      <div style={{ borderTop: '1px solid #f0f0f0', padding: 4 }}>
-        {adding ? (
-          <Space style={{ padding: '4px 8px', width: '100%' }}>
-            <Input
+      {allowAdd && (
+        <div style={{ borderTop: '1px solid #f0f0f0', padding: 4 }}>
+          {adding ? (
+            <Space style={{ padding: '4px 8px', width: '100%' }}>
+              <Input
+                size="small"
+                placeholder="输入新部门名称"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onPressEnter={handleAdd}
+                autoFocus
+                style={{ flex: 1 }}
+              />
+              <Button size="small" type="text" icon={<CheckOutlined />} onClick={handleAdd} />
+              <Button size="small" type="text" icon={<CloseOutlined />} onClick={() => { setAdding(false); setNewName('') }} />
+            </Space>
+          ) : (
+            <Button
+              type="link"
               size="small"
-              placeholder="输入新部门名称"
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              onPressEnter={handleAdd}
-              autoFocus
-              style={{ flex: 1 }}
-            />
-            <Button size="small" type="text" icon={<CheckOutlined />} onClick={handleAdd} />
-            <Button size="small" type="text" icon={<CloseOutlined />} onClick={() => { setAdding(false); setNewName('') }} />
-          </Space>
-        ) : (
-          <Button
-            type="link"
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => setAdding(true)}
-            style={{ width: '100%', textAlign: 'left' }}
-          >
-            新增部门
-          </Button>
-        )}
-      </div>
+              icon={<PlusOutlined />}
+              onClick={() => setAdding(true)}
+              style={{ width: '100%', textAlign: 'left' }}
+            >
+              新增部门
+            </Button>
+          )}
+        </div>
+      )}
     </>
   )
 

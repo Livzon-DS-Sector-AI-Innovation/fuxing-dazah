@@ -313,6 +313,7 @@ export function BatchCreateModal({ open, source, onClose }: Props) {
               value={department || undefined}
               onChange={handleDeptChange}
               source={source}
+              allowAdd={false}
             />
             <Select
               placeholder="从已有记录复制模板"
