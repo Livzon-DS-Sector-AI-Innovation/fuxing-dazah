@@ -4,15 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
+from app.core import time as app_time
 from app.core.config import get_settings
 from app.core.database import async_session_factory
 
 logger = logging.getLogger(__name__)
-
-# 中国标准时间 UTC+8
-CST = timezone(timedelta(hours=8))
 
 stop_maintenance_plan_flag = asyncio.Event()
 
@@ -30,7 +28,7 @@ async def maintenance_plan_loop() -> None:
 
     while not stop_maintenance_plan_flag.is_set():
         # 计算到下一个 08:00 CST 的等待秒数
-        now = datetime.now(CST)
+        now = app_time.now()
         next_run = (now + timedelta(days=1)).replace(
             hour=8, minute=0, second=0, microsecond=0,
         )

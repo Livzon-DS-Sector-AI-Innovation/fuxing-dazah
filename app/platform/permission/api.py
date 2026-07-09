@@ -236,11 +236,14 @@ async def get_user_permissions_endpoint(
         scope = await _repo.get_effective_data_scope(db, user_id, module_code)
         data_scopes[module_code] = scope
 
+    resource_scopes = await _repo.get_user_resource_scopes(db, user_id)
+
     out = UserPermissionOut(
         user_id=user_id,
         user_name=user.name,
         roles=roles_out,
         permissions=sorted(perm_codes),
         data_scopes=data_scopes,
+        resource_scopes=resource_scopes,
     )
     return success_response(data=out.model_dump(mode="json"))

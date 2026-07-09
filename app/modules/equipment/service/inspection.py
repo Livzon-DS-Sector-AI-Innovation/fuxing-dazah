@@ -4,8 +4,7 @@ import base64
 import logging
 import os
 import uuid
-from datetime import UTC, date, datetime, timedelta
-from datetime import timezone as dt_timezone
+from datetime import date, datetime
 
 from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import UploadFile
@@ -14,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import time as app_time
 from app.core.exceptions import AppException, NotFoundException
 from app.core.storage import delete_object, upload_object
 from app.core.storage import is_enabled as minio_enabled
@@ -126,7 +126,7 @@ async def set_route_locations(
 
 # ═══════════ 任务 ═══════════
 async def _generate_task_no(db: AsyncSession) -> str:
-    today = datetime.now(_CN_TZ).strftime("%Y%m%d")
+    today = app_time.now().strftime("%Y%m%d")
     max_no = await repo.get_max_task_no(db)
     if max_no:
         seq = int(max_no.split("-")[-1]) + 1
@@ -289,7 +289,7 @@ async def start_task(
     await verify_write_ownership(ctx, task, "created_by", "user_id")
     _validate_transition(task.status, "执行中")
     task.status = "执行中"
-    task.started_at = datetime.now(UTC)
+    task.started_at = app_time.now()
     await db.flush()
     refreshed = await _refetch_task(db, task_id)
 
@@ -314,7 +314,7 @@ async def complete_task(
     has_abnormal = any(r.result == "异常" for r in records)
     task.overall_result = "异常" if has_abnormal else "正常"
     task.status = "已完成"
-    task.completed_at = datetime.now(UTC)
+    task.completed_at = app_time.now()
     await db.flush()
     return await _refetch_task(db, task_id)
 
@@ -338,7 +338,7 @@ async def submit_route_check(
     task.overall_result = overall_result
     task.route_summary = route_summary
     task.status = "已完成"
-    task.completed_at = datetime.now(UTC)
+    task.completed_at = app_time.now()
     await db.flush()
     return await _refetch_task(db, task_id)
 
@@ -378,7 +378,7 @@ async def close_task(
         )
 
     task.status = "已关闭"
-    task.closed_at = datetime.now(UTC)
+    task.closed_at = app_time.now()
     task.closure_remark = remark
     await db.flush()
     return await _refetch_task(db, task_id)
@@ -427,7 +427,7 @@ async def _create_anomaly_work_order(
     wo: WOModel | None = None
     for attempt in range(_MAX_RETRIES):
         wo_no = await repo.get_max_work_order_no(db)
-        today = datetime.now(_CN_TZ).strftime("%Y%m%d")
+        today = app_time.now().strftime("%Y%m%d")
         if wo_no:
             seq = int(wo_no.split("-")[-1]) + 1
         else:
@@ -889,8 +889,6 @@ async def get_task_detail(
 
 # ═══════════ 定时任务 ═══════════
 
-_CN_TZ = dt_timezone(timedelta(hours=8))
-
 
 def compute_next_cron(
     expression: str, from_time: datetime | None = None,
@@ -899,12 +897,12 @@ def compute_next_cron(
 
     Raises ValueError if *expression* is not a valid cron string.
     """
-    base = from_time or datetime.now(_CN_TZ)
+    base = from_time or app_time.now()
     naive = base.replace(tzinfo=None)
     is_six = len(expression.split()) == 6
     cron = croniter(expression, naive, second_at_beginning=is_six)
     next_naive: datetime = cron.get_next(datetime)
-    return next_naive.replace(tzinfo=_CN_TZ)
+    return next_naive.replace(tzinfo=app_time.APP_TZ)
 
 
 def _validate_cron(expression: str) -> None:

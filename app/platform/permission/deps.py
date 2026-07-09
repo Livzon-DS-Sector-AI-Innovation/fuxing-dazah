@@ -85,9 +85,13 @@ async def apply_data_scope(
     module: str,
     db: AsyncSession,
     model,  # ORM model class with created_by column
+    resource: str | None = None,
 ):
-    """根据用户角色在该模块的数据范围，自动注入 WHERE 过滤条件。"""
-    scope = await _repo.get_effective_data_scope(db, user.id, module)
+    """根据用户角色在该模块的数据范围，自动注入 WHERE 过滤条件。
+
+    resource 指定时仅计算拥有该 module+resource 权限的角色范围。
+    """
+    scope = await _repo.get_effective_data_scope(db, user.id, module, resource)
 
     if scope == "all":
         return query

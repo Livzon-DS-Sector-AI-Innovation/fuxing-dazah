@@ -143,21 +143,6 @@ async def send_work_order_card(
     return await send_group_card(chat_id, title, content, elements)
 
 
-async def send_claim_notification(
-    work_order_no: str, claimer_name: str
-) -> bool:
-    """工单被抢后通知群聊"""
-    chat_id = settings.FEISHU_EQUIPMENT_CHAT_ID
-    if not chat_id:
-        return False
-
-    return await send_group_card(
-        chat_id,
-        title="✅ 工单已被接单",
-        content=f"**{claimer_name}** 已接单 **{work_order_no}**",
-    )
-
-
 async def send_timeout_notification(
     work_order_no: str, equipment_name: str, leader_name: str
 ) -> bool:

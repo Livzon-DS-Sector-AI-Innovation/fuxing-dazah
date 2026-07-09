@@ -1,12 +1,13 @@
 """Inspection repository: data access for routes, tasks, photos."""
 
 import uuid
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime
 
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import time as app_time
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models.equipment import Equipment
 from app.modules.equipment.models.inspection import (
@@ -26,7 +27,6 @@ from app.modules.equipment.models.inspection_template import (
 )
 from app.modules.equipment.service.data_scope import apply_equipment_scope
 
-_CST = timezone(timedelta(hours=8))
 
 # ═══════════ 路线 ═══════════
 async def create_route(
@@ -250,7 +250,7 @@ async def get_route_equipments(
 
 # ═══════════ 任务 ═══════════
 async def get_max_task_no(db: AsyncSession) -> str | None:
-    today = datetime.now(_CST).strftime("%Y%m%d")
+    today = app_time.now().strftime("%Y%m%d")
     prefix = f"IT-{today}-"
     stmt = (
         select(InspectionTask.task_no)
@@ -846,7 +846,7 @@ async def get_due_schedules(
     db: AsyncSession,
 ) -> list[InspectionRouteSchedule]:
     """Find enabled schedules with active routes where next_trigger_at <= now."""
-    now = datetime.now(UTC)
+    now = app_time.now()
     result = await db.execute(
         select(InspectionRouteSchedule)
         .join(InspectionRoute)

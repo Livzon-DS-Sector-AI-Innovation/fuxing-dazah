@@ -147,7 +147,6 @@ from app.modules.equipment.service.spare_part import (
 )
 from app.modules.equipment.service.work_order import (
     assign_work_order,
-    claim_work_order,
     close_work_order,
     complete_work_order,
     consume_materials,
@@ -248,7 +247,6 @@ __all__ = [
     "update_spare_part",
     # work order
     "assign_work_order",
-    "claim_work_order",
     "close_work_order",
     "complete_work_order",
     "consume_materials",

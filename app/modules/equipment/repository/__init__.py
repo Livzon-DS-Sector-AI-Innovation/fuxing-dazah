@@ -107,7 +107,6 @@ from app.modules.equipment.repository.maintenance_config import (
 from app.modules.equipment.repository.maintenance_plan import (
     create_maintenance_plan,
     delete_maintenance_plan,
-    exists_unclosed_work_order_for_plan,
     get_equipment_ids_by_category,
     get_maintenance_plan_by_id,
     get_maintenance_plans,
@@ -212,7 +211,6 @@ __all__ = [
     "exists_failure_code_by_code",
     "exists_location_by_code",
     "exists_unclosed_work_order",
-    "exists_unclosed_work_order_for_plan",
     "get_department_info",
     "get_department_leader_user_id",
     "get_departments_for_select",

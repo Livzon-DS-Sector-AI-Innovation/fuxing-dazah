@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import time as app_time
 from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
@@ -182,7 +183,7 @@ async def get_overdue_maintenance_plans(
     days: int = 30,
 ) -> list[MaintenancePlan]:
     """查询到期/逾期的维护计划"""
-    threshold = date_type.today() + timedelta(days=days)
+    threshold = app_time.today() + timedelta(days=days)
     return await repo.get_maintenance_plans_due(db, ctx, threshold)
 
 
@@ -198,11 +199,11 @@ async def generate_due_work_orders(
     Returns:
         (created_count, skipped_count) 元组
     """
-    today = date_type.today()
+    today = app_time.today()
     threshold = today + timedelta(days=advance_days)
 
-    # 查询所有到期的启用计划
-    due_plans = await repo.get_maintenance_plans_due(db, threshold)
+    # 查询所有到期的启用计划（系统级，ctx=None 扫全部）
+    due_plans = await repo.get_maintenance_plans_due(db, None, threshold)
 
     created_count = 0
     skipped_count = 0
@@ -236,18 +237,6 @@ async def generate_due_work_orders(
             skipped_count += 1
             continue
 
-        # 检查该计划是否已有未关闭工单（提前到循环外，避免 N 次重复查询）
-        has_unclosed = await repo.exists_unclosed_work_order_for_plan(
-            db, plan.id
-        )
-        if has_unclosed:
-            logger.info(
-                "维护计划 %s (%s) 已有未关闭工单，跳过",
-                plan.id, plan.plan_name,
-            )
-            skipped_count += 1
-            continue
-
         # 批量查询所有目标设备（避免 N+1）
         from app.modules.equipment.models.equipment import Equipment
 
@@ -258,6 +247,16 @@ async def generate_due_work_orders(
             )
         )
         eq_map = {e.id: e for e in eq_result.scalars().all()}
+
+        # 解析执行人的飞书 user_id（用于通知）
+        executor_feishu_id: str | None = None
+        if plan.executor_id:
+            from app.platform.identity.models import User
+
+            user_result = await db.execute(
+                select(User.feishu_user_id).where(User.id == plan.executor_id)
+            )
+            executor_feishu_id = user_result.scalar_one_or_none()
 
         any_created = False
         for eq_id in equipment_ids:
@@ -289,12 +288,17 @@ async def generate_due_work_orders(
                     "reporter_id": None,  # 系统自动生成，无报修人
                     "maintenance_plan_id": plan.id,
                     "responsible_person_id": plan.executor_id,
+                    # 执行人自动作为维修人（指派人），与手动派工保持一致
+                    "assignee_id": plan.executor_id,
+                    "assigned_at": (
+                        app_time.now() if plan.executor_id else None
+                    ),
                     "planned_start_date": plan.next_maintenance_date,
                     "original_equipment_status": equipment.status,
                 }
                 try:
                     async with db.begin_nested():
-                        await repo.create_work_order(db, wo_data)
+                        wo = await repo.create_work_order(db, wo_data)
                     created_count += 1
                     any_created = True
                     logger.info(
@@ -303,6 +307,16 @@ async def generate_due_work_orders(
                         plan.plan_name,
                         equipment.name,
                     )
+
+                    # 飞书通知执行人（非关键路径）
+                    if executor_feishu_id:
+                        from app.modules.equipment.service.inspection_notification import (
+                            send_work_order_notification,
+                        )
+
+                        await send_work_order_notification(
+                            wo, equipment, None, executor_feishu_id,
+                        )
                     break
                 except IntegrityError:
                     if attempt < _MAX_RETRIES - 1:

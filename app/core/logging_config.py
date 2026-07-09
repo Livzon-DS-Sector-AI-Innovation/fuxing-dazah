@@ -32,9 +32,10 @@ import logging
 import logging.config
 import os
 from contextvars import ContextVar
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
+
+from app.core.time import APP_TZ
 
 # ── request_id 上下文（由 app.platform.audit.middleware.AuditMiddleware 设置）──
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
@@ -45,6 +46,7 @@ _MODULE_PREFIX_MAP: dict[str, str] = {
     "app.modules.equipment": "equipment",
     "app.modules.energy": "energy",
     "app.modules.hr": "hr",
+    "app.modules.meter": "meter",
     "app.platform.audit": "audit",
     "app.platform": "platform",
     "app.core": "core",
@@ -155,7 +157,7 @@ class ConsoleFormatter(logging.Formatter):
     }
     _RESET = "\033[0m"
     _DIM = "\033[2m"
-    _TZ = ZoneInfo("Asia/Shanghai")
+    _TZ = APP_TZ
 
     def formatTime(  # noqa: N802
         self, record: logging.LogRecord, datefmt: str | None = None
@@ -184,9 +186,11 @@ class JsonFormatter(logging.Formatter):
     """生产环境 JSON Lines 格式，便于日志聚合系统（ELK / Loki / SLS）采集。
 
     输出示例：
-        {"timestamp":"2026-06-24T10:30:15.123456Z","level":"INFO","logger":"...",
+        {"timestamp":"2026-06-24T18:30:15.123456+08:00","level":"INFO","logger":"...",
          "module":"safety","message":"...","request_id":"3f8a2b1c"}
     """
+
+    _TZ = APP_TZ
 
     def formatTime(  # noqa: N802 — 覆盖 logging.Formatter.formatTime
         self, record: logging.LogRecord, datefmt: str | None = None
@@ -197,7 +201,7 @@ class JsonFormatter(logging.Formatter):
         上也能正常工作（Windows CRT 的 strftime 不支持 %f，Python 3.12 也未做
         兼容处理，直到 3.13 才在 logging.Formatter.formatTime 中内置 %f 支持）。
         """
-        ct = datetime.fromtimestamp(record.created, tz=UTC)
+        ct = datetime.fromtimestamp(record.created, tz=self._TZ)
         if datefmt:
             return ct.strftime(datefmt)
         return ct.isoformat()
@@ -205,7 +209,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         rid: str = getattr(record, "request_id", "-")
         log_entry: dict[str, Any] = {
-            "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S.%fZ"),
+            "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S.%f+08:00"),
             "level": record.levelname,
             "logger": record.name,
             "module": _short_module_name(record.name),

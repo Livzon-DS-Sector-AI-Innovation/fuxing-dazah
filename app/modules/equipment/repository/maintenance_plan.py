@@ -115,10 +115,13 @@ async def delete_maintenance_plan(
 
 async def get_maintenance_plans_due(
     db: AsyncSession,
-    ctx: EquipmentAccessContext,
+    ctx: EquipmentAccessContext | None,
     threshold: date_type,
 ) -> list[MaintenancePlan]:
-    """查询到期/逾期的维护计划"""
+    """查询到期/逾期的维护计划。
+
+    ctx 为 None 表示系统级调用（定时任务），扫描全部计划、不做数据权限过滤。
+    """
     query = (
         select(MaintenancePlan)
         .options(
@@ -131,29 +134,13 @@ async def get_maintenance_plans_due(
             MaintenancePlan.next_maintenance_date <= threshold,
         )
     )
-    query = apply_equipment_scope(query, ctx, MaintenancePlan.created_by, "user_id")
+    if ctx is not None:
+        query = apply_equipment_scope(
+            query, ctx, MaintenancePlan.created_by, "user_id"
+        )
     query = query.order_by(MaintenancePlan.next_maintenance_date)
     result = await db.execute(query)
     return list(result.scalars().all())
-
-
-async def exists_unclosed_work_order_for_plan(
-    db: AsyncSession,
-    maintenance_plan_id: uuid.UUID,
-) -> bool:
-    """检查某维护计划是否已有未关闭的工单（防重复生成）"""
-    from app.modules.equipment.models.work_order import WorkOrder
-
-    result = await db.execute(
-        select(func.count())
-        .select_from(WorkOrder)
-        .where(
-            WorkOrder.maintenance_plan_id == maintenance_plan_id,
-            WorkOrder.status.notin_(["已完成", "已关闭"]),
-            WorkOrder.is_deleted == False,  # noqa: E712
-        )
-    )
-    return (result.scalar() or 0) > 0
 
 
 async def get_equipment_ids_by_category(

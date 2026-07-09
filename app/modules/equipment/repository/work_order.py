@@ -1,18 +1,17 @@
 """Work order repository functions."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core import time as app_time
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import WorkOrder
 from app.modules.equipment.service.data_scope import apply_equipment_scope
-
-_CST = timezone(timedelta(hours=8))
 
 
 async def create_work_order(
@@ -53,7 +52,7 @@ async def get_work_order_by_id(
 
 async def get_max_work_order_no(db: AsyncSession) -> str | None:
     """获取当天最大工单号"""
-    today = datetime.now(_CST).strftime("%Y%m%d")
+    today = app_time.now().strftime("%Y%m%d")
     pattern = f"WO-{today}-%"
     result = await db.execute(
         select(WorkOrder.work_order_no)

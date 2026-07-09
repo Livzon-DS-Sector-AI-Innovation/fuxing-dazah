@@ -144,14 +144,22 @@ def require_equipment_access(*codes: str):
         ctx: EquipmentAccessContext = Depends(
             require_equipment_access("equipment:asset:read")
         )
+
+    从首个权限码中解析 resource（如 "equipment:inspection:read" → "inspection"），
+    传递给数据范围计算，确保只有拥有该 resource 权限的角色参与范围合并。
     """
     perm_dep = require_permission(*codes)
+
+    # 从第一个权限码解析 resource，格式: "module:resource:action"
+    _resource = codes[0].split(":")[1] if codes and ":" in codes[0] else None
 
     async def _dependency(
         user: User = Depends(perm_dep),
         db: AsyncSession = Depends(get_db),
     ) -> EquipmentAccessContext:
-        scope = await _perm_repo.get_effective_data_scope(db, user.id, "equipment")
+        scope = await _perm_repo.get_effective_data_scope(
+            db, user.id, "equipment", resource=_resource,
+        )
         dept_user_ids = await _resolve_department_user_ids(db, user, scope)
         visible_dept_ids = await _resolve_visible_department_ids(db, user, scope)
         return EquipmentAccessContext(

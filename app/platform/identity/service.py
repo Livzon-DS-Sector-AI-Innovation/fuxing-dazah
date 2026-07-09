@@ -45,6 +45,12 @@ class IdentityService:
         feishu_user_id = getattr(body, "user_id", "") or ""
 
         user = await self._user_repo.get_by_feishu_open_id(session, feishu_open_id)
+
+        # 换 Feishu App 后 open_id 会变，但 feishu_user_id 不变，
+        # 回退按 feishu_user_id 查找已有用户并更新 open_id，避免 UniqueViolationError
+        if user is None and feishu_user_id:
+            user = await self._user_repo.get_by_feishu_user_id(session, feishu_user_id)
+
         if user is None:
             user = await self._user_repo.create(
                 session,
@@ -57,6 +63,7 @@ class IdentityService:
                 avatar_url=getattr(body, "avatar_url", None),
             )
         else:
+            user.feishu_open_id = feishu_open_id or user.feishu_open_id
             user.name = body.name or user.name
             user.email = getattr(body, "email", None) or user.email
             user.mobile = getattr(body, "mobile", None) or user.mobile

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from sqlalchemy import select
 
+from app.core import time as app_time
 from app.core.database import async_session_factory
 from app.core.exceptions import AppException
 from app.modules.equipment.deps import EquipmentAccessContext
@@ -30,8 +31,6 @@ from app.platform.scheduler import (
 
 logger = logging.getLogger(__name__)
 
-_CST = timezone(timedelta(hours=8))
-
 
 class InspectionScheduleGenerator(TaskGenerator):
     """Scan inspection_route_schedules and auto-create/start tasks."""
@@ -45,7 +44,7 @@ class InspectionScheduleGenerator(TaskGenerator):
         return await get_due_schedules(session)
 
     async def execute_one(self, session, item) -> None:
-        now = datetime.now(_CST)
+        now = app_time.now()
 
         if not item.assigned_to:
             logger.warning(
@@ -99,7 +98,7 @@ class InspectionScheduleGenerator(TaskGenerator):
 
 async def _auto_close_stale() -> None:
     """Daily cleanup: archive completed tasks and work orders older than 3 days."""
-    cutoff = datetime.now(_CST) - timedelta(days=3)
+    cutoff = app_time.now() - timedelta(days=3)
 
     async with async_session_factory() as session:
         # ── Inspection tasks ──

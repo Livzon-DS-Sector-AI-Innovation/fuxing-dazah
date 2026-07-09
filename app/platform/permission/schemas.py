@@ -93,3 +93,4 @@ class UserPermissionOut(BaseModel):
     roles: list[UserRoleOut]
     permissions: list[str]
     data_scopes: dict[str, str]
+    resource_scopes: dict[str, str] = {}

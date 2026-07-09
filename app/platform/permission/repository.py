@@ -213,12 +213,38 @@ class PermissionRepository:
             )
         await db.flush()
 
+    async def _get_resource_role_ids(
+        self, db: AsyncSession, user_id: uuid.UUID, module: str, resource: str
+    ) -> set[uuid.UUID]:
+        """返回用户在该 module+resource 下有至少一条权限的角色 ID 集合。
+
+        用于 get_effective_data_scope 过滤无关角色，避免其他角色的数据范围污染。
+        """
+        stmt = (
+            select(UserRole.role_id)
+            .join(RolePermission, RolePermission.role_id == UserRole.role_id)
+            .join(Permission, Permission.id == RolePermission.permission_id)
+            .where(
+                UserRole.user_id == user_id,
+                Permission.module == module,
+                Permission.resource == resource,
+                Permission.is_deleted == False,  # noqa: E712
+            )
+            .distinct()
+        )
+        result = await db.execute(stmt)
+        return set(result.scalars())
+
     async def get_effective_data_scope(
-        self, db: AsyncSession, user_id: uuid.UUID, module: str
+        self, db: AsyncSession, user_id: uuid.UUID, module: str,
+        resource: str | None = None,
     ) -> str:
         """获取用户在某模块的有效数据范围（取最宽松）。
 
         优先级: all > department_and_children > department > self_only
+
+        当 resource 指定时，仅计算拥有该 module+resource 权限的角色，
+        避免无关角色的数据范围污染目标资源。
         """
         scope_priority = {
             "all": 4,
@@ -232,6 +258,16 @@ class PermissionRepository:
             return "self_only"
 
         role_ids = [ur.role_id for ur in user_roles]
+
+        # 按 resource 过滤：只保留确实有该资源权限的角色
+        if resource:
+            relevant_role_ids = await self._get_resource_role_ids(
+                db, user_id, module, resource
+            )
+            if not relevant_role_ids:
+                return "self_only"
+            role_ids = [rid for rid in role_ids if rid in relevant_role_ids]
+
         stmt = select(Role).where(
             Role.id.in_(role_ids),
             Role.is_deleted == False,  # noqa: E712
@@ -306,5 +342,42 @@ class PermissionRepository:
                     best_priority = priority
                     best_scope = scope
             result[mod] = best_scope
+
+        return result
+
+    async def get_user_resource_scopes(
+        self, db: AsyncSession, user_id: uuid.UUID,
+    ) -> dict[str, str]:
+        """获取用户在每个 (module:resource) 维度的有效数据范围。
+
+        key 格式: "module:resource"，如 "equipment:inspection"
+        仅包含用户确实有权限的 module+resource 组合，
+        且仅统计拥有该 resource 权限的角色。
+        """
+        # 1. 获取用户所有 distinct (module, resource) 组合
+        stmt = (
+            select(Permission.module, Permission.resource)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .where(
+                UserRole.user_id == user_id,
+                Permission.is_deleted == False,  # noqa: E712
+            )
+            .distinct()
+        )
+        pair_result = await db.execute(stmt)
+        pairs = list(pair_result.all())
+
+        if not pairs:
+            return {}
+
+        # 2. 对每个 pair 调用资源级数据范围计算
+        result: dict[str, str] = {}
+        for module, resource in pairs:
+            key = f"{module}:{resource}"
+            scope = await self.get_effective_data_scope(
+                db, user_id, module, resource=resource,
+            )
+            result[key] = scope
 
         return result

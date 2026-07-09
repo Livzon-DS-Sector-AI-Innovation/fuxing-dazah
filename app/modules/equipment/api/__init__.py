@@ -3,7 +3,6 @@
 from app.modules.equipment.api.calibration import (
     router as calibration_router,
 )
-from app.modules.equipment.api.claim import router as claim_router
 from app.modules.equipment.api.config import router as config_router
 from app.modules.equipment.api.equipment import (
     router as equipment_router,
@@ -58,7 +57,6 @@ router.include_router(
     prefix="/maintenance/inspection-templates",
 )
 router.include_router(images_router, prefix="/maintenance/work-orders")
-router.include_router(claim_router, prefix="/maintenance/work-orders")
 router.include_router(config_router, prefix="/maintenance/config")
 router.include_router(maintainers_router, prefix="/maintenance/staff")
 router.include_router(personnel_router, prefix="/personnel")

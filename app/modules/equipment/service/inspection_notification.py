@@ -323,17 +323,17 @@ async def send_inspection_start_notification(
 async def send_work_order_notification(
     work_order: "WorkOrder",
     equipment: "Equipment",
-    task: InspectionTask,
-    responsible_user_id: str | None,
+    task: InspectionTask | None = None,
+    responsible_user_id: str | None = None,
 ) -> None:
-    """向工单负责人发送飞书异常工单通知。
+    """向工单负责人发送飞书工单通知（巡检异常 / 计划维护通用）。
 
     非关键路径：发送失败只记日志，不影响主流程。
 
     Args:
         work_order: 新创建的工单
         equipment: 关联设备
-        task: 来源巡检任务
+        task: 来源巡检任务（计划维护工单时为 None）
         responsible_user_id: 负责人的 feishu_user_id（可为 None）
     """
     if not responsible_user_id:
@@ -345,17 +345,30 @@ async def send_work_order_notification(
         return
 
     try:
-        title = f"【设备】⚠️ 巡检异常工单 — {work_order.work_order_no}"
-        lines = [
-            f"**工单编号：**{work_order.work_order_no}",
-            f"**设备名称：**{equipment.name}",
-            f"**设备编号：**{equipment.equipment_no}",
-            f"**优先级：**{work_order.priority}",
-            f"**异常描述：**{work_order.fault_description or '-'}",
-            f"**来源巡检：**{task.task_no}",
-            "",
-            "请及时处理该工单。",
-        ]
+        if task is not None:
+            title = f"【设备】⚠️ 巡检异常工单 — {work_order.work_order_no}"
+            lines = [
+                f"**工单编号：**{work_order.work_order_no}",
+                f"**设备名称：**{equipment.name}",
+                f"**设备编号：**{equipment.equipment_no}",
+                f"**优先级：**{work_order.priority}",
+                f"**异常描述：**{work_order.fault_description or '-'}",
+                f"**来源巡检：**{task.task_no}",
+                "",
+                "请及时处理该工单。",
+            ]
+        else:
+            title = f"【设备】🔧 计划维护工单 — {work_order.work_order_no}"
+            lines = [
+                f"**工单编号：**{work_order.work_order_no}",
+                f"**设备名称：**{equipment.name}",
+                f"**设备编号：**{equipment.equipment_no}",
+                f"**工单类型：**{work_order.order_type}",
+                f"**优先级：**{work_order.priority}",
+                f"**计划维护日期：**{work_order.planned_start_date or '-'}",
+                "",
+                "请及时处理该工单。",
+            ]
         content = "\n".join(lines)
 
         ok = await send_user_card(
