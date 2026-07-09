@@ -12,6 +12,7 @@ from app.modules.quality import router as quality_router
 from app.modules.registration import router as registration_router
 from app.modules.research import router as research_router
 from app.modules.safety import router as safety_router
+from app.modules.meter import router as meter_router
 from app.modules.warehouse import router as warehouse_router
 from app.platform.identity.api import (
     dept_router,
@@ -56,4 +57,5 @@ api_router.include_router(
     tags=["注册管理"],
 )
 api_router.include_router(quality_router, prefix="/quality", tags=["质量管理"])
+api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
 api_router.include_router(permission_router, prefix="/permission", tags=["权限管理"])

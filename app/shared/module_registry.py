@@ -118,6 +118,14 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         owner_hint="QA/QC 负责人",
         description="偏差、CAPA、检验、放行、变更和质量体系数据入口。",
     ),
+    ModuleDefinition(
+        code="meter",
+        name="仪表管理",
+        path="/meter",
+        db_schema="meter",
+        owner_hint="仪表/计量负责人",
+        description="计量器具台账、有毒有害可燃探测器、检测报告和检定到期提醒。",
+    ),
 )
 
 MODULES_BY_CODE = {module.code: module for module in BUSINESS_MODULES}

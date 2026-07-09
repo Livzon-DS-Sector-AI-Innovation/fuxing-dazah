@@ -1,7 +1,7 @@
 """drop meter ai_config table
 
 Revision ID: ba23d2002af6
-Revises: e22654fa1b3c
+Revises: 00eeb8dd4525
 Create Date: 2026-07-06 16:33:24.728996
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'ba23d2002af6'
-down_revision: Union[str, None] = 'e22654fa1b3c'
+down_revision: Union[str, None] = '00eeb8dd4525'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

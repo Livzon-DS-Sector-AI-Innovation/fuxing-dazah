@@ -1,7 +1,7 @@
 """add_remark_to_instrument_and_gas_detector
 
 Revision ID: 717564ddd4e0
-Revises: e22654fa1b3c
+Revises: 00eeb8dd4525
 Create Date: 2026-07-07 16:34:12.039844
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '717564ddd4e0'
-down_revision: Union[str, None] = 'e22654fa1b3c'
+down_revision: Union[str, None] = '00eeb8dd4525'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
