@@ -284,13 +284,13 @@ export function GasDetectorTable() {
       onFilter: () => true,
     },
     {
-      title: '制造商/供应商', dataIndex: 'manufacturer_supplier', width: 140, ellipsis: true,
+      title: '传感器出厂日期', dataIndex: 'manufacturer_supplier', width: 140, ellipsis: true,
       filteredValue: columnFilters.manufacturer_supplier ? [columnFilters.manufacturer_supplier] : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.manufacturer_supplier,
         columnFilters.manufacturer_supplier,
         (v) => setColumnFilter('manufacturer_supplier', v),
-        '选择制造商/供应商',
+        '选择传感器出厂日期',
       ),
       onFilter: () => true,
     },
@@ -384,7 +384,7 @@ export function GasDetectorTable() {
               department: '部门', instrument_name: '器具名称', detection_model: '检测型号',
               product_number: '产品编号', installation_type: '安装方式',
               installation_location: '安装位置', medium: '介质',
-              calibration_factor: '标定系数', manufacturer_supplier: '制造商/供应商',
+              calibration_factor: '标定系数', manufacturer_supplier: '传感器出厂日期',
               manufacturer: '制造单位', detection_unit: '检测单位',
               calibration_result: '检定结论',
             }

@@ -123,7 +123,7 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
           <Input placeholder="如：空气1:1" />
         </Form.Item>
 
-        <Form.Item name="manufacturer_supplier" label="制造商/供应商">
+        <Form.Item name="manufacturer_supplier" label="传感器出厂日期">
           <Input placeholder="制造商" />
         </Form.Item>
 
