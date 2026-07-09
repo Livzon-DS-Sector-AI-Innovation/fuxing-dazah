@@ -1,15 +1,19 @@
-import { getFullGraph } from '@/actions/safety/knowledge-graph'
-import KnowledgeGraphPanel from '@/components/safety/KnowledgeGraphPanel'
+import KnowledgeGraphTree from '@/components/safety/KnowledgeGraphTree'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 120
 
-export default async function KnowledgeGraphPage() {
-  // 初始数据获取 (Server Component)
-  // 实际渲染由 Client Component 接管
+export default function KnowledgeGraphPage() {
   return (
-    <div style={{ width: '100%', height: 'calc(100vh - 64px)', position: 'relative' }}>
-      <KnowledgeGraphPanel />
+    <div
+      style={{
+        display: 'flex',
+        margin: -24,
+        height: 'calc(100vh - 64px)',
+      }}
+    >
+      {/* 目录树 (全宽，详情面板由树组件内部管理) */}
+      <KnowledgeGraphTree />
     </div>
   )
 }

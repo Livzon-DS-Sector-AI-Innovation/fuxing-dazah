@@ -182,6 +182,8 @@ export enum KnowledgeCategory {
   EMERGENCY_PLANS = 'emergency_plans',
   SDS = 'sds',
   TRAINING_MATERIALS = 'training_materials',
+  EQUIPMENT_MANUALS = 'equipment_manuals',
+  RISK_ASSESSMENT_STANDARDS = 'risk_assessment_standards',
   OTHER = 'other',
 }
 
@@ -193,6 +195,8 @@ export const KNOWLEDGE_CATEGORY_OPTIONS = [
   { value: KnowledgeCategory.EMERGENCY_PLANS, label: '应急预案' },
   { value: KnowledgeCategory.SDS, label: 'SDS/MSDS' },
   { value: KnowledgeCategory.TRAINING_MATERIALS, label: '培训资料' },
+  { value: KnowledgeCategory.EQUIPMENT_MANUALS, label: '设备说明书' },
+  { value: KnowledgeCategory.RISK_ASSESSMENT_STANDARDS, label: '风险评估标准' },
   { value: KnowledgeCategory.OTHER, label: '其他' },
 ]
 

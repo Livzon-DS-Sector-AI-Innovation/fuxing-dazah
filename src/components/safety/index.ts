@@ -36,11 +36,11 @@ export { default as DocumentProcessingMenu } from './DocumentProcessingMenu'
 export { default as PptGeneratorPanel } from './PptGeneratorPanel'
 export { default as DocumentCard } from './DocumentCard'
 export { default as DocumentCardGrid } from './DocumentCardGrid'
+export { default as InfoQueryChat } from './InfoQueryChat'
 export { default as KnowledgeSidebar } from './KnowledgeSidebar'
-export { default as KnowledgeGraphPanel } from './KnowledgeGraphPanel'
-export { default as KnowledgeGraphToolbar } from './KnowledgeGraphToolbar'
+export { default as KnowledgeGraphTree } from './KnowledgeGraphTree'
 export { default as KnowledgeGraphDetail } from './KnowledgeGraphDetail'
-export { default as KnowledgeGraphLegend } from './KnowledgeGraphLegend'
+export { default as KnowledgeGraphTreeNode } from './KnowledgeGraphTreeNode'
 export {
   BT_CATEGORY_STYLE,
   FALLBACK_STYLE,

@@ -194,6 +194,7 @@ export const moduleMenus: ModuleMenu[] = [
         path: "",
         children: [
           { key: "knowledge-base", label: "安全知识库", path: "/safety/knowledge-base" },
+          { key: "info-query", label: "信息查询", path: "/safety/info-query" },
           { key: "compliance-eval", label: "合规性评价记录", path: "", disabled: true },
         ],
       },

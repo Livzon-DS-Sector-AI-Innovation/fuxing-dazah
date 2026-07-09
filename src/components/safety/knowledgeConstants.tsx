@@ -92,7 +92,7 @@ export const KNOWLEDGE_MENU: KnowledgeMenuGroup[] = [
     emoji: '📘',
     sourceValue: '设备说明书库',
     children: [
-      { key: 'all:equipment_manuals', label: '全部设备说明书', emoji: '📘', count: 0, disabled: true },
+      { key: 'all:equipment_manuals', label: '全部设备说明书', emoji: '📘', count: 0 },
     ],
   },
   {

@@ -200,3 +200,28 @@ export interface SyncKnowledgeResponse {
   total_bitable: number
   total_platform: number
 }
+
+// ============ Info Query (RAG Chat) Types ============
+
+export interface InfoQueryMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface InfoQueryRequest {
+  query: string
+  history?: InfoQueryMessage[]
+}
+
+export interface InfoQuerySource {
+  doc_title: string
+  article_ref: string
+  chunk_text: string
+  doc_category: string
+  feishu_url: string
+}
+
+export interface InfoQueryResponse {
+  answer: string
+  sources: InfoQuerySource[]
+}

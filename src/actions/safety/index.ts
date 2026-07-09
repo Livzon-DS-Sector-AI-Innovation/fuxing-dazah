@@ -1893,3 +1893,16 @@ export async function updateExamAbnormalityStatus(id: string, index: number, sta
   revalidatePath('/safety/occupational-health')
   return res
 }
+
+// ============ Info Query (RAG Chat) ============
+
+export async function queryKnowledgeChat(query: string, history?: { role: string; content: string }[]) {
+  const res = await fetchApi<{ answer: string; sources: { doc_title: string; article_ref: string; chunk_text: string; doc_category: string; feishu_url: string }[] }>(
+    '/safety/knowledge/chat',
+    {
+      method: 'POST',
+      body: JSON.stringify({ query, history: history || [] }),
+    },
+  )
+  return res
+}
