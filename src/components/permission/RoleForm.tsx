@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Drawer, Form, Input, Select, Button, App, Divider, Grid } from 'antd'
+import { Drawer, Form, Input, Select, Button, App, Divider, Grid, Tag } from 'antd'
+import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { PermissionTree } from './PermissionTree'
 import { createRole, updateRole } from '@/actions/permission'
 import type { Role, PermissionModuleGroup, DataScope } from '@/types/permission'
@@ -30,9 +31,20 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [checkedPermIds, setCheckedPermIds] = useState<string[]>([])
+  const [scopeOverrides, setScopeOverrides] = useState<{ module: string; scope: DataScope }[]>([])
   const isEdit = !!role
   const screens = useBreakpoint()
   const isMobile = !screens.md
+
+  // 可用模块列表（从 permissionGroups 提取）
+  const moduleOptions = useMemo(
+    () =>
+      permissionGroups.map((g) => ({
+        value: g.module,
+        label: `${g.module_name} (${g.module})`,
+      })),
+    [permissionGroups],
+  )
 
   useEffect(() => {
     if (open) {
@@ -44,9 +56,16 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
           data_scope: role.data_scope,
         })
         setCheckedPermIds(role.permission_ids)
+        setScopeOverrides(
+          Object.entries(role.data_scope_overrides).map(([mod, scope]) => ({
+            module: mod,
+            scope: scope as DataScope,
+          })),
+        )
       } else {
         form.resetFields()
         setCheckedPermIds([])
+        setScopeOverrides([])
       }
     }
   }, [open, role, form])
@@ -54,12 +73,27 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
   const handleSubmit = async () => {
     const values = await form.validateFields()
     setLoading(true)
+
+    // 构建 data_scope_overrides dict
+    const data_scope_overrides: Record<string, DataScope> = {}
+    for (const ov of scopeOverrides) {
+      if (ov.module) data_scope_overrides[ov.module] = ov.scope
+    }
+
     try {
       if (isEdit && role) {
-        await updateRole(role.id, { ...values, permission_ids: checkedPermIds })
+        await updateRole(role.id, {
+          ...values,
+          permission_ids: checkedPermIds,
+          data_scope_overrides,
+        })
         message.success('角色更新成功')
       } else {
-        await createRole({ ...values, permission_ids: checkedPermIds })
+        await createRole({
+          ...values,
+          permission_ids: checkedPermIds,
+          data_scope_overrides,
+        })
         message.success('角色创建成功')
       }
       onSuccess?.()
@@ -127,6 +161,68 @@ export function RoleForm({ open, onClose, onSuccess, role, permissionGroups }: P
         >
           <Select options={DATA_SCOPE_OPTIONS} />
         </Form.Item>
+
+        {/* 按模块覆盖数据范围 */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>按模块覆盖数据范围</span>
+            <Button
+              type="link"
+              icon={<PlusOutlined />}
+              size="small"
+              onClick={() => setScopeOverrides([...scopeOverrides, { module: '', scope: 'department' }])}
+            >
+              添加覆盖
+            </Button>
+          </div>
+          {scopeOverrides.length === 0 && (
+            <p style={{ color: 'var(--color-muted)', fontSize: 13 }}>
+              不覆盖则使用默认数据范围。可为特定模块设置不同的数据访问级别。
+            </p>
+          )}
+          {scopeOverrides.map((ov, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: 'flex',
+                gap: 8,
+                alignItems: 'center',
+                marginBottom: 8,
+              }}
+            >
+              <Select
+                placeholder="选择模块"
+                value={ov.module || undefined}
+                onChange={(v) => {
+                  const next = [...scopeOverrides]
+                  next[idx] = { ...next[idx], module: v }
+                  setScopeOverrides(next)
+                }}
+                options={moduleOptions.filter(
+                  (m) => !scopeOverrides.some((o, i) => i !== idx && o.module === m.value),
+                )}
+                style={{ flex: 1 }}
+                showSearch
+              />
+              <Select
+                value={ov.scope}
+                onChange={(v) => {
+                  const next = [...scopeOverrides]
+                  next[idx] = { ...next[idx], scope: v }
+                  setScopeOverrides(next)
+                }}
+                options={DATA_SCOPE_OPTIONS}
+                style={{ width: 140 }}
+              />
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => setScopeOverrides(scopeOverrides.filter((_, i) => i !== idx))}
+              />
+            </div>
+          ))}
+        </div>
 
         <Divider />
 

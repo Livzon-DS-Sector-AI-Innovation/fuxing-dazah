@@ -63,6 +63,7 @@ export interface UserPermissionDetail {
   roles: UserRole[]
   permissions: string[]
   data_scopes: Record<string, DataScope>
+  resource_scopes: Record<string, DataScope>
 }
 
 export interface AssignRoleInput {

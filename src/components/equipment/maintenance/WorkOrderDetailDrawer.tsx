@@ -6,10 +6,9 @@ import type { UploadFile } from 'antd'
 import {
   ClockCircleOutlined, UserOutlined, ToolOutlined, UploadOutlined,
   CheckCircleOutlined, CloseCircleOutlined, StopOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons'
 import { useEquipmentStore } from '@/stores/equipment'
-import { assignWorkOrder, startWorkOrder, completeWorkOrder, verifyWorkOrder, closeWorkOrder, claimWorkOrder, uploadWorkOrderImages } from '@/actions/equipment'
+import { assignWorkOrder, startWorkOrder, completeWorkOrder, verifyWorkOrder, closeWorkOrder, uploadWorkOrderImages } from '@/actions/equipment'
 import { WorkOrderStatus, WorkOrderPriority, Personnel } from '@/types/equipment'
 import { fetchWorkOrderByIdClient } from '@/lib/api/equipment-client'
 import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
@@ -200,13 +199,6 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
     await refreshDetail(wo.id)
   }
 
-  const handleClaim = async () => {
-    const result = await claimWorkOrder(wo.id)
-    if (!result.success) { message.error(result.error); return }
-    message.success('抢单成功')
-    await refreshDetail(wo.id)
-  }
-
   const timelineItems = []
   if (wo.reported_at) {
     timelineItems.push({
@@ -351,7 +343,6 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
             <>
               <Button type="primary" onClick={handleStart}>开始执行</Button>
               <Button onClick={handleAssign}>指派维修人</Button>
-              <Button icon={<ThunderboltOutlined />} onClick={handleClaim}>抢单</Button>
             </>
           )}
           {wo.status === '执行中' && hasPermission('equipment:work_order:update') && <Button type="primary" onClick={handleComplete}>提交完成</Button>}

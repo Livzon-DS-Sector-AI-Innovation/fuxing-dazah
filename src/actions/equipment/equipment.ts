@@ -438,15 +438,6 @@ export async function deleteWorkOrderImage(workOrderId: string, imageId: string)
   return result
 }
 
-// ==================== 抢单 ====================
-export async function claimWorkOrder(id: string): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/${id}/claim`, {
-    method: 'PUT',
-  })
-  if (result.success) revalidatePath('/equipment')
-  return result
-}
-
 // ==================== 配置 ====================
 export async function updateClaimTimeoutConfig(data: { emergency?: number; high?: number; medium?: number; low?: number }): Promise<ActionResult> {
   const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/config/claim-timeout`, {

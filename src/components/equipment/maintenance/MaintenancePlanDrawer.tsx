@@ -191,7 +191,7 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
         <Form.Item name="last_maintenance_date" label="上次维护日期" rules={[{ required: true, message: '请选择上次维护日期' }]}>
           <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="选择日期" />
         </Form.Item>
-        <Form.Item name="executor_id" label="执行人" rules={[{ required: true, message: '请选择执行人' }]}>
+        <Form.Item name="executor_id" label="执行人（及工单责任人和维修人）" rules={[{ required: true, message: '请选择执行人' }]}>
           <PersonnelSelect personnel={personnel} placeholder="选择执行人" />
         </Form.Item>
         {editingMaintenancePlan && (

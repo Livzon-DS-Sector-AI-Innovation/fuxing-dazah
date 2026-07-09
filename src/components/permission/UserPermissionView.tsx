@@ -239,21 +239,32 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
           )}
         </div>
 
-        {/* Data Scopes */}
+        {/* Data Scopes (resource-level) */}
         <div
           className="p-4 rounded-[12px] border"
           style={{ borderColor: 'var(--color-hairline)' }}
         >
           <span className="text-[13px] font-medium text-[var(--color-charcoal)] mb-3 block">
-            数据范围
+            数据范围（按资源）
           </span>
           <div className="flex flex-wrap gap-2">
-            {Object.entries(userDetail.data_scopes).map(([mod, scope]) => (
-              <Tag key={mod} style={{ borderRadius: 6, fontSize: 12, margin: 0 }}>
-                <span className="font-medium">{mod}</span>
-                : {SCOPE_LABELS[scope] || scope}
-              </Tag>
-            ))}
+            {Object.entries(userDetail.resource_scopes).length > 0 ? (
+              Object.entries(userDetail.resource_scopes).map(([key, scope]) => (
+                <Tag key={key} style={{ borderRadius: 6, fontSize: 12, margin: 0 }}>
+                  <code className="text-[11px]">{key}</code>
+                  <span className="ml-1.5 text-[var(--color-steel)]">
+                    {SCOPE_LABELS[scope] || scope}
+                  </span>
+                </Tag>
+              ))
+            ) : (
+              Object.entries(userDetail.data_scopes).map(([mod, scope]) => (
+                <Tag key={mod} style={{ borderRadius: 6, fontSize: 12, margin: 0 }}>
+                  <span className="font-medium">{mod}</span>
+                  : {SCOPE_LABELS[scope] || scope}
+                </Tag>
+              ))
+            )}
           </div>
         </div>
 
