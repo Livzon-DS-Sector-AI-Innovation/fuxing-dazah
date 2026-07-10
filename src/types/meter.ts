@@ -108,6 +108,8 @@ export interface InstrumentFilter {
   color_marking?: string
   next_calibration_before?: string
   next_calibration_after?: string
+  calibration_date_before?: string
+  calibration_date_after?: string
   keyword?: string
   page?: number
   page_size?: number
@@ -196,6 +198,8 @@ export interface GasDetectorFilter {
   calibration_result?: string
   next_calibration_before?: string
   next_calibration_after?: string
+  calibration_date_before?: string
+  calibration_date_after?: string
   keyword?: string
   page?: number
   page_size?: number

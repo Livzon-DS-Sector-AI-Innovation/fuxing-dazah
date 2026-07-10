@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, type Key } from 'react'
-import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm } from 'antd'
+import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm, DatePicker } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { GasDetectorRecord, GasDetectorFilter, GasDetectorFilterOptions } from '@/types/meter'
@@ -11,7 +11,7 @@ import { ReportDialog } from './ReportDialog'
 import { BatchUploadDialog } from './BatchUploadDialog'
 import { BatchCreateModal } from './BatchCreateModal'
 import { LedgerImportModal } from './LedgerImportModal'
-import dayjs from 'dayjs'
+import dayjs, { Dayjs } from 'dayjs'
 
 /** 筛选下拉框通用渲染 */
 function renderFilterDropdown(
@@ -20,7 +20,7 @@ function renderFilterDropdown(
   setValue: (v: string | undefined) => void,
   placeholder: string,
 ) {
-  return ({ setSelectedKeys, selectedKeys }: { setSelectedKeys: (keys: Key[]) => void; selectedKeys: Key[] }) => (
+  return ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; selectedKeys: Key[]; confirm: () => void; clearFilters?: () => void }) => (
     <div style={{ padding: 8, minWidth: 200 }}>
       <Select
         allowClear
@@ -56,6 +56,51 @@ const GAS_DETECTOR_FILTER_KEY: Record<string, keyof GasDetectorFilter> = {
   manufacturer: 'manufacturer',
   detection_unit: 'detection_unit',
   calibration_result: 'calibration_result',
+  calibration_date_before: 'calibration_date_before',
+  calibration_date_after: 'calibration_date_after',
+  next_calibration_before: 'next_calibration_before',
+  next_calibration_after: 'next_calibration_after',
+}
+
+/** 单个日期筛选下拉面板 */
+function renderDateFilterDropdown(
+  currentValue: string | undefined,
+  onApply: (value: string | undefined) => void,
+) {
+  let selected: Dayjs | null = currentValue ? dayjs(currentValue) : null
+  return ({ setSelectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; confirm: () => void; clearFilters?: () => void }) => (
+    <div style={{ padding: 8, minWidth: 200 }}>
+      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>起始日期</div>
+      <DatePicker
+        style={{ width: '100%' }}
+        key={currentValue || '__empty__'}
+        defaultValue={selected}
+        onChange={(d) => { selected = d }}
+      />
+      <div style={{ marginTop: 8 }}>
+        <Space>
+          <Button
+            type="primary"
+            size="small"
+            onClick={() => {
+              const value = selected?.format('YYYY-MM-DD')
+              setSelectedKeys(value ? [value] : [])
+              onApply(value)
+              confirm()
+            }}
+          >确定</Button>
+          <Button
+            size="small"
+            onClick={() => {
+              setSelectedKeys([])
+              onApply(undefined)
+              if (clearFilters) clearFilters()
+            }}
+          >重置</Button>
+        </Space>
+      </div>
+    </div>
+  )
 }
 
 export function GasDetectorTable() {
@@ -79,6 +124,7 @@ export function GasDetectorTable() {
 
   // 列头筛选状态（服务端筛选）
   const [columnFilters, setColumnFilters] = useState<Record<string, string | undefined>>({})
+  const [dateFilters, setDateFilters] = useState<Record<string, string | undefined>>({})
   const [filterOptions, setFilterOptions] = useState<GasDetectorFilterOptions>({
     department: [], instrument_name: [], detection_model: [], product_number: [],
     installation_type: [], installation_location: [], medium: [], calibration_factor: [],
@@ -97,6 +143,11 @@ export function GasDetectorTable() {
     setPage(1)
   }, [])
 
+  const setDateFilter = useCallback((field: string, value: string | undefined) => {
+    setDateFilters(prev => ({ ...prev, [field]: value }))
+    setPage(1)
+  }, [])
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
@@ -104,6 +155,11 @@ export function GasDetectorTable() {
       if (keyword) params.keyword = keyword
       // 合并列头筛选条件
       for (const [field, value] of Object.entries(columnFilters)) {
+        const key = GAS_DETECTOR_FILTER_KEY[field]
+        if (key && value) (params as Record<string, unknown>)[key] = value
+      }
+      // 合并日期筛选条件
+      for (const [field, value] of Object.entries(dateFilters)) {
         const key = GAS_DETECTOR_FILTER_KEY[field]
         if (key && value) (params as Record<string, unknown>)[key] = value
       }
@@ -115,7 +171,7 @@ export function GasDetectorTable() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, columnFilters, message])
+  }, [page, pageSize, keyword, columnFilters, dateFilters, message])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -172,6 +228,10 @@ export function GasDetectorTable() {
       const filterParams: GasDetectorFilter = {}
       if (keyword) filterParams.keyword = keyword
       for (const [field, value] of Object.entries(columnFilters)) {
+        const key = GAS_DETECTOR_FILTER_KEY[field]
+        if (key && value) (filterParams as Record<string, unknown>)[key] = value
+      }
+      for (const [field, value] of Object.entries(dateFilters)) {
         const key = GAS_DETECTOR_FILTER_KEY[field]
         if (key && value) (filterParams as Record<string, unknown>)[key] = value
       }
@@ -319,6 +379,12 @@ export function GasDetectorTable() {
     {
       title: '检定时间', dataIndex: 'calibration_date', width: 110,
       render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD') : '-',
+      filteredValue: null,
+      filterDropdown: renderDateFilterDropdown(
+        dateFilters.calibration_date_after,
+        (v) => setDateFilter('calibration_date_after', v),
+      ),
+      onFilter: () => true,
     },
     {
       title: '下次检定', dataIndex: 'next_calibration_date', width: 110,
@@ -328,6 +394,12 @@ export function GasDetectorTable() {
         const overdue = d.isBefore(dayjs())
         return <span style={{ color: overdue ? '#e03131' : undefined }}>{d.format('YYYY-MM-DD')}</span>
       },
+      filteredValue: null,
+      filterDropdown: renderDateFilterDropdown(
+        dateFilters.next_calibration_after,
+        (v) => setDateFilter('next_calibration_after', v),
+      ),
+      onFilter: () => true,
     },
     {
       title: '检定结论', dataIndex: 'calibration_result', width: 80,
@@ -396,6 +468,19 @@ export function GasDetectorTable() {
               >{labels[field] || field}: {value}</Tag>
             )
           })}
+          {/* 日期筛选标签 */}
+          {dateFilters.calibration_date_after && (
+            <Tag
+              closable
+              onClose={() => setDateFilter('calibration_date_after', undefined)}
+            >检定时间 ≥ {dateFilters.calibration_date_after}</Tag>
+          )}
+          {dateFilters.next_calibration_after && (
+            <Tag
+              closable
+              onClose={() => setDateFilter('next_calibration_after', undefined)}
+            >下次检定 ≥ {dateFilters.next_calibration_after}</Tag>
+          )}
         </Space>
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增探测器</Button>
