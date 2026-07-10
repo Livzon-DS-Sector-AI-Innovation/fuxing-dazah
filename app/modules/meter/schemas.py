@@ -160,6 +160,8 @@ class InstrumentFilter(PageParams):
     color_marking: str | None = Field(default=None, description="彩色标志（精确匹配）")
     next_calibration_before: date | None = Field(default=None, description="下次检定日期在此日期之前")
     next_calibration_after: date | None = Field(default=None, description="下次检定日期在此日期之后")
+    calibration_date_before: date | None = Field(default=None, description="检定日期在此日期之前")
+    calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索（匹配资产编号、器具名称、型号）")
 
 
@@ -278,6 +280,8 @@ class GasDetectorFilter(PageParams):
     manufacturer: str | None = Field(default=None, description="制造单位（精确匹配）")
     next_calibration_before: date | None = Field(default=None, description="下次检定日期在此日期之前")
     next_calibration_after: date | None = Field(default=None, description="下次检定日期在此日期之后")
+    calibration_date_before: date | None = Field(default=None, description="检定日期在此日期之前")
+    calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索")
 
 

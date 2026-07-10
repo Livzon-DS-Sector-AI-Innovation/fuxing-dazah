@@ -94,6 +94,8 @@ async def list_instruments(
     color_marking: str | None = None,
     next_calibration_before: date | None = None,
     next_calibration_after: date | None = None,
+    calibration_date_before: date | None = None,
+    calibration_date_after: date | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -139,6 +141,10 @@ async def list_instruments(
         query = query.where(InstrumentRecord.next_calibration_date <= next_calibration_before)
     if next_calibration_after:
         query = query.where(InstrumentRecord.next_calibration_date >= next_calibration_after)
+    if calibration_date_before:
+        query = query.where(InstrumentRecord.calibration_date <= calibration_date_before)
+    if calibration_date_after:
+        query = query.where(InstrumentRecord.calibration_date >= calibration_date_after)
     if keyword:
         query = query.where(
             InstrumentRecord.asset_number.ilike(f"%{keyword}%")
@@ -328,6 +334,8 @@ async def list_gas_detectors(
     manufacturer: str | None = None,
     next_calibration_before: date | None = None,
     next_calibration_after: date | None = None,
+    calibration_date_before: date | None = None,
+    calibration_date_after: date | None = None,
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -363,6 +371,10 @@ async def list_gas_detectors(
         query = query.where(GasDetectorRecord.next_calibration_date <= next_calibration_before)
     if next_calibration_after:
         query = query.where(GasDetectorRecord.next_calibration_date >= next_calibration_after)
+    if calibration_date_before:
+        query = query.where(GasDetectorRecord.calibration_date <= calibration_date_before)
+    if calibration_date_after:
+        query = query.where(GasDetectorRecord.calibration_date >= calibration_date_after)
     if keyword:
         query = query.where(
             GasDetectorRecord.instrument_name.ilike(f"%{keyword}%")
