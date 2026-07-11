@@ -1,9 +1,9 @@
 """Inspection repository: data access for routes, tasks, photos."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, case, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -859,3 +859,274 @@ async def get_due_schedules(
         )
     )
     return list(result.scalars().all())
+
+
+# ═══════════ 数据分析聚合查询 ═══════════
+
+
+async def get_trend_data(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    item_ids: list[uuid.UUID],
+    from_date: date,
+    to_date: date,
+) -> list[dict]:
+    """参数趋势时序：每检查项一条序列，每日期一个数据点。
+
+    时间轴用记录自身 created_at（读数提交时刻，恒有值），
+    不依赖任务 completed_at（任务未整体完成时为 NULL，会漏掉在检数据）。
+    """
+    from app.modules.equipment.models.inspection_template import (
+        InspectionRecord,
+        InspectionTemplateItem,
+    )
+
+    rec_date = func.date(InspectionRecord.created_at)
+    subq = (
+        select(
+            InspectionRecord.template_item_id,
+            rec_date.label("date"),
+            func.max(InspectionRecord.numeric_value).label("value"),
+            func.max(InspectionRecord.result).label("result"),
+        )
+        .where(
+            InspectionRecord.equipment_id == equipment_id,
+            # item_ids 为空时不过滤，返回该设备全部数值型参数（默认全选）
+            *([InspectionRecord.template_item_id.in_(item_ids)] if item_ids else []),
+            InspectionRecord.numeric_value.isnot(None),
+            InspectionRecord.is_deleted == False,  # noqa: E712
+            rec_date >= from_date,
+            rec_date <= to_date,
+        )
+        .group_by(InspectionRecord.template_item_id, rec_date)
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            InspectionTemplateItem.id,
+            InspectionTemplateItem.item_name,
+            InspectionTemplateItem.unit,
+            subq.c.date,
+            subq.c.value,
+            subq.c.result,
+        )
+        .join(subq, InspectionTemplateItem.id == subq.c.template_item_id)
+        .where(InspectionTemplateItem.is_deleted == False)  # noqa: E712
+        .order_by(InspectionTemplateItem.sort_order, subq.c.date)
+    )
+
+    rows = (await db.execute(stmt)).all()
+
+    series_map: dict[uuid.UUID, dict] = {}
+    for row in rows:
+        tid = row.id
+        if tid not in series_map:
+            series_map[tid] = {
+                "template_item_id": str(tid),
+                "item_name": row.item_name,
+                "unit": row.unit or "",
+                "data_points": [],
+            }
+        series_map[tid]["data_points"].append({
+            "date": str(row.date),
+            "value": row.value,
+            "result": row.result,
+        })
+
+    return list(series_map.values())
+
+
+async def get_anomaly_stats(
+    db: AsyncSession,
+    from_date: date,
+    to_date: date,
+) -> dict:
+    """异常热力统计：设备排行、检查项排行、月度趋势。"""
+    from app.modules.equipment.models.equipment import Equipment
+    from app.modules.equipment.models.inspection import InspectionTask
+    from app.modules.equipment.models.inspection_template import (
+        InspectionRecord,
+        InspectionTemplateItem,
+    )
+
+    base = (
+        select(
+            InspectionRecord.equipment_id,
+            InspectionRecord.template_item_id,
+            InspectionRecord.result,
+            func.date(InspectionTask.completed_at).label("date"),
+        )
+        .join(InspectionTask, InspectionRecord.task_id == InspectionTask.id)
+        .where(
+            InspectionRecord.is_deleted == False,  # noqa: E712
+            InspectionTask.is_deleted == False,    # noqa: E712
+            InspectionTask.completed_at >= from_date,
+            InspectionTask.completed_at <= to_date,
+        )
+        .subquery()
+    )
+
+    # 设备排行 TOP10
+    eq_stmt = (
+        select(
+            base.c.equipment_id,
+            Equipment.name,
+            Equipment.equipment_no,
+            func.count().label("total"),
+            func.sum(case((base.c.result == "异常", 1), else_=0)).label("abnormal"),
+        )
+        .join(Equipment, base.c.equipment_id == Equipment.id)
+        .group_by(base.c.equipment_id, Equipment.name, Equipment.equipment_no)
+        .having(func.count() >= 1)
+        .order_by(func.sum(case((base.c.result == "异常", 1), else_=0)).desc())
+        .limit(10)
+    )
+    eq_rows = (await db.execute(eq_stmt)).all()
+    equipment_ranking = [
+        {
+            "equipment_id": str(r.equipment_id),
+            "equipment_name": r.name or "",
+            "equipment_no": r.equipment_no or "",
+            "total_count": r.total,
+            "abnormal_count": r.abnormal or 0,
+            "anomaly_rate": round((r.abnormal or 0) / r.total * 100, 1) if r.total else 0,
+        }
+        for r in eq_rows
+    ]
+
+    # 检查项排行 TOP10
+    item_stmt = (
+        select(
+            InspectionTemplateItem.id,
+            InspectionTemplateItem.item_name,
+            func.count().label("total"),
+            func.sum(case((base.c.result == "异常", 1), else_=0)).label("abnormal"),
+        )
+        .join(
+            InspectionTemplateItem,
+            base.c.template_item_id == InspectionTemplateItem.id,
+        )
+        .group_by(InspectionTemplateItem.id, InspectionTemplateItem.item_name)
+        .having(func.count() >= 1)
+        .order_by(func.sum(case((base.c.result == "异常", 1), else_=0)).desc())
+        .limit(10)
+    )
+    item_rows = (await db.execute(item_stmt)).all()
+    item_ranking = [
+        {
+            "template_item_id": str(r.id),
+            "item_name": r.item_name,
+            "template_name": "",
+            "total_count": r.total,
+            "abnormal_count": r.abnormal or 0,
+            "anomaly_rate": round((r.abnormal or 0) / r.total * 100, 1) if r.total else 0,
+        }
+        for r in item_rows
+    ]
+
+    # 月度趋势
+    month_stmt = (
+        select(
+            func.to_char(func.date_trunc("month", base.c.date), "YYYY-MM").label("month"),
+            func.count().label("total"),
+            func.sum(case((base.c.result == "正常", 1), else_=0)).label("normal"),
+            func.sum(case((base.c.result == "异常", 1), else_=0)).label("abnormal"),
+            func.sum(case((base.c.result == "跳过", 1), else_=0)).label("skip"),
+        )
+        .group_by(text("month"))
+        .order_by(text("month"))
+    )
+    month_rows = (await db.execute(month_stmt)).all()
+    monthly_trend = [
+        {
+            "month": r.month,
+            "normal": r.normal or 0,
+            "abnormal": r.abnormal or 0,
+            "skip": r.skip or 0,
+            "total": r.total,
+        }
+        for r in month_rows
+    ]
+
+    return {
+        "equipment_ranking": equipment_ranking,
+        "item_ranking": item_ranking,
+        "monthly_trend": monthly_trend,
+    }
+
+
+async def get_analytics_equipment_list(
+    db: AsyncSession,
+    keyword: str | None = None,
+) -> list[dict]:
+    """可选设备列表：只返回有数值型检查项且有巡检记录的设备。"""
+    from app.modules.equipment.models.equipment import Equipment
+    from app.modules.equipment.models.inspection import InspectionTask
+    from app.modules.equipment.models.inspection_template import (
+        InspectionRecord,
+        InspectionTemplateItem,
+    )
+
+    eq_stmt = (
+        select(
+            Equipment.id,
+            Equipment.name,
+            Equipment.equipment_no,
+            func.max(InspectionTask.completed_at).label("latest"),
+        )
+        .select_from(Equipment)
+        .join(InspectionRecord, Equipment.id == InspectionRecord.equipment_id)
+        .join(
+            InspectionTemplateItem,
+            InspectionRecord.template_item_id == InspectionTemplateItem.id,
+        )
+        .join(InspectionTask, InspectionRecord.task_id == InspectionTask.id)
+        .where(
+            InspectionRecord.numeric_value.isnot(None),
+            InspectionTemplateItem.data_type == "numeric",
+            InspectionRecord.is_deleted == False,   # noqa: E712
+            InspectionTemplateItem.is_deleted == False,  # noqa: E712
+            InspectionTask.is_deleted == False,     # noqa: E712
+        )
+    )
+    if keyword:
+        eq_stmt = eq_stmt.where(
+            Equipment.name.ilike(f"%{keyword}%")
+            | Equipment.equipment_no.ilike(f"%{keyword}%")
+        )
+    eq_stmt = eq_stmt.group_by(Equipment.id, Equipment.name, Equipment.equipment_no)
+
+    rows = (await db.execute(eq_stmt)).all()
+
+    equipments = [
+        {
+            "equipment_id": str(r.id),
+            "equipment_name": r.name,
+            "equipment_no": r.equipment_no or "",
+            "numeric_item_count": 0,  # 由调用方填充
+            "latest_inspection_date": str(r.latest.date()) if r.latest else "",
+        }
+        for r in rows
+    ]
+
+    # 补充每台设备的数值型检查项数量
+    for eq in equipments:
+        count_stmt = (
+            select(func.count())
+            .select_from(InspectionRecord)
+            .join(
+                InspectionTemplateItem,
+                InspectionRecord.template_item_id == InspectionTemplateItem.id,
+            )
+            .where(
+                InspectionRecord.equipment_id == uuid.UUID(eq["equipment_id"]),
+                InspectionRecord.numeric_value.isnot(None),
+                InspectionTemplateItem.data_type == "numeric",
+                InspectionRecord.is_deleted == False,   # noqa: E712
+                InspectionTemplateItem.is_deleted == False,  # noqa: E712
+            )
+        )
+        eq["numeric_item_count"] = (await db.execute(count_stmt)).scalar() or 0
+
+    return equipments

@@ -1,7 +1,8 @@
 """Inspection schemas."""
 
 import uuid
-from datetime import datetime
+from datetime import date as DateType, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -351,3 +352,95 @@ class InspectionTaskDetailResponse(InspectionTaskResponse):
 
     records: list[InspectionRecordResponse] = Field(default_factory=list)
     photos: list[InspectionPhotoResponse] = Field(default_factory=list)
+
+
+# ==================== 巡检分析 ====================
+
+
+class TrendDataPoint(BaseModel):
+    """趋势图单个数据点"""
+
+    date: DateType = Field(..., description="日期")
+    value: Decimal | None = Field(None, description="数值")
+    result: str = Field(..., description="当日结果：正常/异常/跳过")
+
+
+class TrendSeries(BaseModel):
+    """单条参数趋势序列"""
+
+    template_item_id: str = Field(..., description="检查项ID")
+    item_name: str = Field(..., description="检查项名称")
+    unit: str = Field("", description="单位")
+    data_points: list[TrendDataPoint] = Field(default_factory=list, description="数据点列表")
+
+
+class TrendResponse(BaseModel):
+    """趋势图响应"""
+
+    equipment_name: str = Field("", description="设备名称")
+    equipment_no: str = Field("", description="设备编号")
+    series: list[TrendSeries] = Field(default_factory=list, description="参数趋势序列列表")
+
+
+class TrendQuery(BaseModel):
+    """趋势查询参数"""
+
+    equipment_id: uuid.UUID = Field(..., description="设备ID")
+    item_ids: list[uuid.UUID] = Field(..., min_length=1, description="检查项ID列表")
+    from_date: DateType = Field(default_factory=lambda: DateType.today(), description="开始日期")
+    to_date: DateType = Field(default_factory=lambda: DateType.today(), description="结束日期")
+
+
+class AnomalyRankingItem(BaseModel):
+    """异常排行项（equipment_ranking 和 item_ranking 共用）"""
+
+    equipment_id: str | None = Field(None, description="设备ID")
+    equipment_name: str = Field("", description="设备名称")
+    equipment_no: str = Field("", description="设备编号")
+    template_item_id: str | None = Field(None, description="检查项ID")
+    item_name: str = Field("", description="检查项名称")
+    template_name: str = Field("", description="模板名称")
+    total_count: int = Field(0, ge=0, description="总检查次数")
+    abnormal_count: int = Field(0, ge=0, description="异常次数")
+    anomaly_rate: float = Field(0.0, ge=0, le=100, description="异常率(%)")
+
+
+class AnomalyMonthlyItem(BaseModel):
+    """月度异常趋势项"""
+
+    month: str = Field(..., description="月份（YYYY-MM）")
+    normal: int = Field(0, ge=0, description="正常数")
+    abnormal: int = Field(0, ge=0, description="异常数")
+    skip: int = Field(0, ge=0, description="跳过数")
+    total: int = Field(0, ge=0, description="总数")
+
+
+class AnomalyResponse(BaseModel):
+    """异常热力响应"""
+
+    equipment_ranking: list[AnomalyRankingItem] = Field(default_factory=list, description="设备异常率 TOP10")
+    item_ranking: list[AnomalyRankingItem] = Field(default_factory=list, description="检查项异常率 TOP10")
+    monthly_trend: list[AnomalyMonthlyItem] = Field(default_factory=list, description="月度异常趋势")
+
+
+class AnomalyQuery(BaseModel):
+    """异常查询参数"""
+
+    from_date: DateType = Field(default_factory=lambda: DateType.today(), description="开始日期")
+    to_date: DateType = Field(default_factory=lambda: DateType.today(), description="结束日期")
+
+
+class EquipmentListItem(BaseModel):
+    """可选设备列表项"""
+
+    equipment_id: str = Field(..., description="设备ID")
+    equipment_name: str = Field("", description="设备名称")
+    equipment_no: str = Field("", description="设备编号")
+    numeric_item_count: int = Field(0, description="数值型检查项数量")
+    latest_inspection_date: str = Field("", description="最近巡检日期")
+
+
+class EquipmentListResponse(BaseModel):
+    """可选设备列表响应"""
+
+    equipments: list[EquipmentListItem] = Field(default_factory=list, description="设备列表")

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.shared.base_model import BaseModel
@@ -73,6 +74,15 @@ class InspectionTemplateItem(BaseModel):
     check_method: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="检查方法"
     )
+    data_type: Mapped[str] = mapped_column(
+        String(10),
+        default="text",
+        server_default="text",
+        comment="数据类型：text/numeric",
+    )
+    unit: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="单位（仅 numeric 有意义），如 ℃/MPa/A"
+    )
     sort_order: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", comment="排序序号"
     )
@@ -115,6 +125,9 @@ class InspectionRecord(BaseModel):
     )
     actual_value: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="实际值"
+    )
+    numeric_value: Mapped[Decimal | None] = mapped_column(
+        Numeric, nullable=True, comment="数值型检查项解析后的实测值"
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"

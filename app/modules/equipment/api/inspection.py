@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import date, timedelta
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -17,7 +18,9 @@ from app.modules.equipment.deps import (
     require_equipment_access,
 )
 from app.modules.equipment.schemas.inspection import (
+    AnomalyResponse,
     EquipmentCheckResult,
+    EquipmentListResponse,
     InspectionAIAnalyzeRequest,
     InspectionAIItemResult,
     InspectionPhotoResponse,
@@ -38,6 +41,7 @@ from app.modules.equipment.schemas.inspection import (
     RouteLocationEquipmentResponse,
     RouteLocationResponse,
     RouteLocationsBatch,
+    TrendResponse,
 )
 from app.modules.equipment.service import inspection as inspection_svc
 
@@ -745,3 +749,58 @@ async def delete_schedule(
         raise NotFoundException("定时任务", str(schedule_id))
     await inspection_svc.delete_schedule(db, schedule_id)
     return success_response(None)
+
+
+# ═══════════ 巡检数据分析 ═══════════
+
+
+@router.get("/analytics/trend", summary="参数趋势分析", response_model=TrendResponse)
+async def analytics_trend(
+    equipment_id: uuid.UUID = Query(..., description="设备ID"),
+    item_ids: str = Query(default="", description="检查项ID列表，逗号分隔；为空返回该设备全部数值型参数"),
+    from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
+    to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    _: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:inspection:read"),
+    ),
+):
+    """查询设备指定检查项在时间段内的数值趋势，用于绘制折线图。"""
+    items = [uuid.UUID(s.strip()) for s in item_ids.split(",") if s.strip()]
+    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
+    td = date.fromisoformat(to_date) if to_date else date.today()
+
+    return await inspection_svc.get_trend(db, equipment_id, items, fd, td)
+
+
+@router.get("/analytics/anomaly", summary="异常热力分析", response_model=AnomalyResponse)
+async def analytics_anomaly(
+    from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
+    to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    _: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:inspection:read"),
+    ),
+):
+    """查询设备异常率排行、检查项异常率排行和月度异常趋势。"""
+    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
+    td = date.fromisoformat(to_date) if to_date else date.today()
+
+    return await inspection_svc.get_anomaly(db, fd, td)
+
+
+@router.get(
+    "/analytics/equipment-list",
+    summary="可选设备列表",
+    response_model=EquipmentListResponse,
+)
+async def analytics_equipment_list(
+    keyword: str = Query(default="", description="搜索关键词"),
+    db: AsyncSession = Depends(get_db),
+    _: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:inspection:read"),
+    ),
+):
+    """查询有数值型巡检数据的设备列表，供趋势图设备选择器使用。"""
+    kw = keyword.strip() if keyword else None
+    return await inspection_svc.get_equipment_list(db, kw)

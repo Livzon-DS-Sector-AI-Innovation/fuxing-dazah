@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -18,6 +19,10 @@ class InspectionTemplateItemCreate(BaseModel):
     check_method: str | None = Field(
         default=None, max_length=100, description="检查方法"
     )
+    data_type: str = Field(
+        default="text", pattern=r"^(text|numeric)$", description="数据类型：text/numeric"
+    )
+    unit: str | None = Field(default=None, max_length=20, description="单位（仅 numeric 有意义）")
     sort_order: int = Field(default=0, ge=0, description="排序序号")
 
 
@@ -34,6 +39,10 @@ class InspectionTemplateItemUpdate(BaseModel):
     check_method: str | None = Field(
         default=None, max_length=100, description="检查方法"
     )
+    data_type: str | None = Field(
+        default=None, pattern=r"^(text|numeric)$", description="数据类型：text/numeric"
+    )
+    unit: str | None = Field(default=None, max_length=20, description="单位（仅 numeric 有意义）")
     sort_order: int | None = Field(default=None, ge=0, description="排序序号")
 
 
@@ -47,6 +56,8 @@ class InspectionTemplateItemResponse(BaseModel):
     expected_result: str | None
     check_method: str | None
     sort_order: int
+    data_type: str
+    unit: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -125,6 +136,7 @@ class InspectionRecordResponse(BaseModel):
     template_item_id: uuid.UUID
     result: str
     actual_value: str | None
+    numeric_value: Decimal | None = None
     remark: str | None
     created_at: datetime
 

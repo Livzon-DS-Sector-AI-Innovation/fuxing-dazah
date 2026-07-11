@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import UploadFile
@@ -49,6 +50,14 @@ _VALID_TRANSITIONS: dict[str, list[str]] = {
     "已完成": ["已关闭"],
     "已关闭": [],
 }
+
+
+def _parse_numeric_value(s: str | None) -> Decimal | None:
+    """严格解析数值型实测值：空→None；纯数字→Decimal；其余→抛 InvalidOperation。"""
+    s = (s or "").strip()
+    if not s:
+        return None
+    return Decimal(s)
 
 
 # ═══════════ 路线 ═══════════
@@ -539,6 +548,56 @@ async def submit_equipment_check(
         ):
             raise AppException(message="检查项异常时必须填写实际值或备注")
 
+    # 数值型检查项：严格解析 actual_value → numeric_value，脏值阻断
+    from app.modules.equipment.models.inspection_template import (
+        InspectionTemplateItem,
+    )
+
+    item_ids = [
+        uuid.UUID(r["template_item_id"])
+        if isinstance(r["template_item_id"], str)
+        else r["template_item_id"]
+        for r in records
+        if r.get("template_item_id")
+    ]
+    type_result = await db.execute(
+        select(
+            InspectionTemplateItem.id,
+            InspectionTemplateItem.item_name,
+            InspectionTemplateItem.data_type,
+            InspectionTemplateItem.unit,
+        ).where(InspectionTemplateItem.id.in_(item_ids))
+    )
+    type_map = {
+        row.id: (row.item_name, row.data_type, row.unit)
+        for row in type_result.all()
+    }
+
+    for r in records:
+        tid = r.get("template_item_id")
+        if not tid:
+            continue
+        tid_uuid = uuid.UUID(tid) if isinstance(tid, str) else tid
+        info = type_map.get(tid_uuid)
+        if not info:
+            continue
+        item_name, data_type, unit = info
+        if data_type != "numeric":
+            continue
+        try:
+            r["numeric_value"] = _parse_numeric_value(r.get("actual_value"))
+        except InvalidOperation:
+            unit_hint = (
+                f"（单位 {unit} 已在检查项配置中，无需重复填写）" if unit else ""
+            )
+            raise AppException(
+                message=(
+                    f"提交失败：检查项「{item_name}」的实测值"
+                    f"「{r.get('actual_value')}」无法解析为数字，"
+                    f"请填写纯数字{unit_hint}。"
+                )
+            )
+
     # 替换旧记录：先软删除同设备的已有记录，再创建新记录
     await repo.soft_delete_records_by_task_equipment(db, task_id, equipment_id)
     created_records = await repo.create_inspection_records(db, records)
@@ -984,3 +1043,126 @@ async def delete_schedule(
     if not await repo.delete_schedule(db, schedule_id):
         raise NotFoundException("定时任务", str(schedule_id))
     return True
+
+
+# ═══════════ 巡检数据分析 ═══════════
+
+from app.modules.equipment.repository.inspection import (  # noqa: E402
+    get_analytics_equipment_list,
+    get_anomaly_stats,
+    get_trend_data,
+)
+from app.modules.equipment.schemas.inspection import (  # noqa: E402
+    AnomalyMonthlyItem,
+    AnomalyRankingItem,
+    AnomalyResponse,
+    EquipmentListItem,
+    EquipmentListResponse,
+    TrendDataPoint,
+    TrendResponse,
+    TrendSeries,
+)
+
+
+async def get_trend(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    item_ids: list[uuid.UUID],
+    from_date: date,
+    to_date: date,
+) -> TrendResponse:
+    """参数趋势分析"""
+    from app.modules.equipment.repository.equipment import get_equipment_by_id
+
+    eq = await get_equipment_by_id(db, equipment_id)
+    rows = await get_trend_data(db, equipment_id, item_ids, from_date, to_date)
+
+    series = []
+    for s in rows:
+        dps = [
+            TrendDataPoint(
+                date=date.fromisoformat(dp["date"]),
+                value=dp["value"],
+                result=dp["result"],
+            )
+            for dp in s["data_points"]
+        ]
+        series.append(
+            TrendSeries(
+                template_item_id=s["template_item_id"],
+                item_name=s["item_name"],
+                unit=s["unit"],
+                data_points=dps,
+            )
+        )
+
+    return TrendResponse(
+        equipment_name=eq.name if eq else "",
+        equipment_no=eq.equipment_no if eq else "",
+        series=series,
+    )
+
+
+async def get_anomaly(
+    db: AsyncSession,
+    from_date: date,
+    to_date: date,
+) -> AnomalyResponse:
+    """异常热力分析"""
+    data = await get_anomaly_stats(db, from_date, to_date)
+
+    return AnomalyResponse(
+        equipment_ranking=[
+            AnomalyRankingItem(
+                equipment_id=r["equipment_id"],
+                equipment_name=r["equipment_name"],
+                equipment_no=r.get("equipment_no", ""),
+                total_count=r["total_count"],
+                abnormal_count=r["abnormal_count"],
+                anomaly_rate=r["anomaly_rate"],
+            )
+            for r in data["equipment_ranking"]
+        ],
+        item_ranking=[
+            AnomalyRankingItem(
+                template_item_id=r["template_item_id"],
+                item_name=r["item_name"],
+                template_name=r.get("template_name", ""),
+                total_count=r["total_count"],
+                abnormal_count=r["abnormal_count"],
+                anomaly_rate=r["anomaly_rate"],
+            )
+            for r in data["item_ranking"]
+        ],
+        monthly_trend=[
+            AnomalyMonthlyItem(
+                month=r["month"],
+                normal=r["normal"],
+                abnormal=r["abnormal"],
+                skip=r["skip"],
+                total=r["total"],
+            )
+            for r in data["monthly_trend"]
+        ],
+    )
+
+
+async def get_equipment_list(
+    db: AsyncSession,
+    keyword: str | None = None,
+) -> EquipmentListResponse:
+    """可选设备列表"""
+    data = await get_analytics_equipment_list(db, keyword)
+
+    return EquipmentListResponse(
+        equipments=[
+            EquipmentListItem(
+                equipment_id=r["equipment_id"],
+                equipment_name=r["equipment_name"],
+                equipment_no=r.get("equipment_no", ""),
+                numeric_item_count=r["numeric_item_count"],
+                latest_inspection_date=r.get("latest_inspection_date", ""),
+            )
+            for r in data
+        ],
+    )

@@ -78,7 +78,8 @@ async def submit_inspection(
         check_items: 检查项列表，每项包含：
             - item_name: 检查项目名称（必需）
             - result: 检查结果，可选值：正常 / 异常 / 跳过（必需）
-            - actual_value: 实测值（可选）
+            - actual_value: 实测值（可选）。数值型检查项只填纯数字（如 25.3），
+              勿带单位/文字，否则会被拒绝并要求重填。
             - remark: 备注（可选）
     """
     db = get_db()
@@ -735,6 +736,8 @@ async def get_inspection_check_items(
 
     支持线路巡检（路线→地点→设备→模板链）和设备巡检（equipment_templates映射）。
 
+    数值型检查项（data_type=numeric）须提交纯数字实测值，单位已在配置中，勿混入 actual_value。
+
     Args:
         task_no: 巡检任务编号（如 IT-20260630-0001）
         equipment: 设备编号（如 EQ-001）或 UUID
@@ -768,6 +771,8 @@ async def get_inspection_check_items(
             "template_item_id": str(item.id),
             "item_name": item.item_name,
             "expected_result": item.expected_result or "",
+            "data_type": item.data_type,
+            "unit": item.unit or "",
             "sort_order": item.sort_order,
             "template_name": tpl_names.get(item.id, ""),
         }
@@ -783,7 +788,12 @@ async def get_inspection_check_items(
         for item in item_dicts:
             std = f"（标准：{item['expected_result']}）" if item["expected_result"] else ""
             tpl = f" [{item['template_name']}]" if item["template_name"] else ""
-            lines.append(f"{item['sort_order'] + 1}. {item['item_name']}{std}{tpl}")
+            if item["data_type"] == "numeric":
+                unit_label = f"·单位{item['unit']}" if item["unit"] else ""
+                type_hint = f"（数值{unit_label}，请填纯数字）"
+            else:
+                type_hint = ""
+            lines.append(f"{item['sort_order'] + 1}. {item['item_name']}{type_hint}{std}{tpl}")
         content = "\n".join(lines)
 
     return ToolResult(
