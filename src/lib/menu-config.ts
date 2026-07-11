@@ -42,7 +42,10 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/equipment",
     permissions: ["equipment:*:read"],
     children: [
-      { key: "stats", label: "设备仪表盘", path: "/equipment/stats" },
+      { key: "stats", label: "设备仪表盘", path: "/equipment/stats", children: [
+        { key: "stats-dashboard", label: "仪表盘概览", path: "/equipment/stats" },
+        { key: "stats-analytics", label: "巡检分析", path: "/equipment/stats/analytics" },
+      ] },
       { key: "assets", label: "设备台账", path: "/equipment/assets" },
       { key: "maintenance", label: "维护保养", path: "/equipment/maintenance" },
       { key: "inspection", label: "设备巡检", path: "/equipment/inspection" },

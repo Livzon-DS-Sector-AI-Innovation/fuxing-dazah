@@ -21,6 +21,8 @@ export interface InspectionTemplateItem {
   item_description: string | null
   expected_result: string | null
   check_method: string | null
+  data_type: string
+  unit: string | null
   sort_order: number
   created_at: string
   updated_at: string
@@ -46,6 +48,8 @@ export interface CreateInspectionTemplateItemInput {
   item_description?: string
   expected_result?: string
   check_method?: string
+  data_type?: string
+  unit?: string
   sort_order?: number
 }
 
@@ -54,6 +58,8 @@ export interface UpdateInspectionTemplateItemInput {
   item_description?: string
   expected_result?: string
   check_method?: string
+  data_type?: string
+  unit?: string
   sort_order?: number
 }
 

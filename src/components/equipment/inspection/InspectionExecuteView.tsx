@@ -350,6 +350,7 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
                   <Text strong style={{ fontSize: 13 }}>{item.item_name}</Text>
                 </div>
                 {item.expected_result && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 2, marginLeft: 28 }}>标准值：{item.expected_result}</Text>}
+                {item.data_type === 'numeric' && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginLeft: 28, color: C.purple }}>数值型{item.unit ? ` · 单位 ${item.unit}` : ''} · 请填写纯数字</Text>}
                 {item.item_description && <Text type="secondary" style={{ fontSize: 11, display: 'block', marginLeft: 28 }}>{item.item_description}</Text>}
               </div>
               <select value={formVals[i]?.result || '正常'} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], result: e.target.value } }))}
@@ -358,7 +359,7 @@ function EquipmentCheckCard({ equipmentId, equipmentName, equipmentNo, templateI
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginLeft: 28 }}>
-              <input placeholder="实际值" value={formVals[i]?.actual_value || ''} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], actual_value: e.target.value } }))}
+              <input placeholder={item.data_type === 'numeric' ? '纯数字实测值' : '实际值'} value={formVals[i]?.actual_value || ''} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], actual_value: e.target.value } }))}
                 disabled={disabled} style={{ flex: 1, borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }} />
               <input placeholder="备注" value={formVals[i]?.remark || ''} onChange={e => setFormVals(prev => ({ ...prev, [i]: { ...prev[i], remark: e.target.value } }))}
                 disabled={disabled} style={{ flex: 1, borderRadius: 6, border: `1px solid ${C.hairline}`, padding: '4px 8px', fontSize: 12, fontFamily: 'inherit' }} />

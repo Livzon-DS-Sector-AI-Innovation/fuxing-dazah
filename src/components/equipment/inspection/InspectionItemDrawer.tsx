@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { App, Drawer, Button, Table, Form, Input, InputNumber, Typography, Empty, Popconfirm } from 'antd'
+import { App, Drawer, Button, Table, Form, Input, InputNumber, Select, Typography, Empty, Popconfirm } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined, OrderedListOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -13,7 +13,7 @@ import type { InspectionTemplateItem } from '@/types/equipment'
 const { Text } = Typography
 const C = { navy: '#0a1530', purple: '#5645d4', ink: '#1a1a1a', slate: '#5d5b54', stone: '#a4a097', hairline: '#e5e3df', hairlineSoft: '#ede9e4', surface: '#f6f5f4', surfaceSoft: '#fafaf9', canvas: '#ffffff' }
 
-interface ItemFormValues { item_name: string; item_description: string; expected_result: string; check_method: string; sort_order: number }
+interface ItemFormValues { item_name: string; item_description: string; expected_result: string; check_method: string; data_type: string; unit: string; sort_order: number }
 
 function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCancel }: {
   mode: 'create' | string; templateId: string; itemsCount: number; initialValues?: ItemFormValues; onSuccess: () => void; onCancel: () => void
@@ -21,8 +21,9 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
   const { message } = App.useApp()
   const [form] = Form.useForm<ItemFormValues>()
   const [s, setS] = useState(false)
+  const watchDataType = Form.useWatch('data_type', form)
   useEffect(() => {
-    if (mode === 'create') { form.resetFields(); form.setFieldsValue({ sort_order: itemsCount, item_name: '', item_description: '', expected_result: '', check_method: '' }) }
+    if (mode === 'create') { form.resetFields(); form.setFieldsValue({ sort_order: itemsCount, item_name: '', item_description: '', expected_result: '', check_method: '', data_type: 'numeric', unit: '' }) }
     else if (initialValues) form.setFieldsValue(initialValues)
   }, [mode, itemsCount, initialValues, form])
 
@@ -33,7 +34,7 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
     } catch { return }
     setS(true)
     try {
-      const data = { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, sort_order: v.sort_order }
+      const data = { item_name: v.item_name, item_description: v.item_description || undefined, expected_result: v.expected_result || undefined, check_method: v.check_method || undefined, data_type: v.data_type || 'numeric', unit: v.data_type === 'numeric' ? (v.unit || undefined) : undefined, sort_order: v.sort_order }
       const result = mode === 'create'
         ? await createInspectionTemplateItem(templateId, data)
         : await updateInspectionTemplateItem(mode, data)
@@ -50,6 +51,12 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
           <Form.Item name="item_name" label="检查项名称" rules={[{ required: true, message: '请输入' }]}><Input placeholder="如：温度检查" style={{ borderRadius: 8 }} /></Form.Item>
           <Form.Item name="sort_order" label="排序"><InputNumber min={0} style={{ width: '100%', borderRadius: 8 }} /></Form.Item>
+          <Form.Item name="data_type" label="数据类型" rules={[{ required: true, message: '请选择' }]}>
+            <Select options={[{ label: '文本', value: 'text' }, { label: '数值', value: 'numeric' }]} style={{ borderRadius: 8 }} />
+          </Form.Item>
+          {watchDataType === 'numeric' && (
+            <Form.Item name="unit" label="单位"><Input placeholder="如：℃、MPa、A" style={{ borderRadius: 8 }} /></Form.Item>
+          )}
           <Form.Item name="item_description" label="描述"><Input placeholder="检查项描述" style={{ borderRadius: 8 }} /></Form.Item>
           <Form.Item name="expected_result" label="预期结果"><Input placeholder="如：20-30℃之间" style={{ borderRadius: 8 }} /></Form.Item>
           <Form.Item name="check_method" label="检查方法"><Input placeholder="如：目视/仪表读数" style={{ borderRadius: 8 }} /></Form.Item>
@@ -95,15 +102,20 @@ export function InspectionItemDrawer() {
   }
 
   const editInit: ItemFormValues | undefined = editingData && formMode === editingData.id ? {
-    item_name: editingData.item_name, item_description: editingData.item_description || '', expected_result: editingData.expected_result || '', check_method: editingData.check_method || '', sort_order: editingData.sort_order,
+    item_name: editingData.item_name, item_description: editingData.item_description || '', expected_result: editingData.expected_result || '', check_method: editingData.check_method || '', data_type: editingData.data_type || 'numeric', unit: editingData.unit || '', sort_order: editingData.sort_order,
   } : undefined
 
   const cols: ColumnsType<InspectionTemplateItem> = [
     { title: '#', dataIndex: 'sort_order', width: 44 },
-    { title: '检查项名称', dataIndex: 'item_name', width: 160, render: (n: string) => <Text strong style={{ fontSize: 13 }}>{n}</Text> },
-    { title: '描述', dataIndex: 'item_description', width: 160, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
-    { title: '预期结果', dataIndex: 'expected_result', width: 140, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
-    { title: '检查方法', dataIndex: 'check_method', width: 120, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '检查项名称', dataIndex: 'item_name', width: 140, render: (n: string) => <Text strong style={{ fontSize: 13 }}>{n}</Text> },
+    { title: '类型', dataIndex: 'data_type', width: 72,
+      render: (v: string) => v === 'numeric'
+        ? <span style={{ padding: '1px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600, background: '#e6e0f5', color: '#5645d4' }}>数值</span>
+        : <span style={{ fontSize: 11, color: C.stone }}>文本</span> },
+    { title: '单位', dataIndex: 'unit', width: 64, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '描述', dataIndex: 'item_description', width: 120, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '预期结果', dataIndex: 'expected_result', width: 120, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
+    { title: '检查方法', dataIndex: 'check_method', width: 100, render: (v: string | null) => v || <span style={{ color: C.stone }}>—</span> },
     { title: '操作', key: 'a', width: 120, fixed: 'end' as const,
       render: (_: unknown, r: InspectionTemplateItem) => (
         <div style={{ display: 'flex', gap: 10 }}>
