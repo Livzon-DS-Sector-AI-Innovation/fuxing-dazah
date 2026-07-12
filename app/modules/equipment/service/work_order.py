@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,7 +123,7 @@ async def create_work_order(
             if data.order_type == "故障维修":
                 await _update_equipment_status(db, data.equipment_id, "维修中")
             # eager re-fetch，避免返回对象触发懒加载 MissingGreenlet
-            result = await repo.get_work_order_by_id(db, work_order.id)
+            result = cast(WorkOrder, await repo.get_work_order_by_id(db, work_order.id))
             # 飞书通知设备责任人（异步，非关键路径）
             if equipment.responsible_person_id:
                 asyncio.ensure_future(_notify_new_work_order(
@@ -161,7 +161,7 @@ async def update_work_order(
         setattr(wo, field, value)
 
     await db.flush()
-    return await repo.get_work_order_by_id(db, wo.id)
+    return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
 
 async def assign_work_order(
@@ -177,7 +177,7 @@ async def assign_work_order(
     wo.assignee_id = assignee_id
     wo.assigned_at = app_time.now()
     await db.flush()
-    wo = await repo.get_work_order_by_id(db, wo.id)
+    wo = cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
     # 飞书通知被指派人
     equipment = wo.equipment
@@ -208,7 +208,7 @@ async def start_work_order(
     wo.status = "执行中"
     wo.started_at = app_time.now()
     await db.flush()
-    return await repo.get_work_order_by_id(db, wo.id)
+    return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
 
 async def complete_work_order(
@@ -273,7 +273,7 @@ async def complete_work_order(
                 wo.work_order_no, wo.responsible_person_id,
             )
 
-    return await repo.get_work_order_by_id(db, wo.id)
+    return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
 
 async def _update_maintenance_plan_on_completion(
@@ -555,7 +555,7 @@ async def verify_work_order(
         # 保留首次维修耗时用于审计。下次提交时自然覆盖。
 
     await db.flush()
-    wo = await repo.get_work_order_by_id(db, wo.id)
+    wo = cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
     # 退回时飞书通知维修人
     if data.result == "不合格" and wo.assignee:
@@ -591,7 +591,7 @@ async def close_work_order(
         await _try_restore_equipment_status(db, wo.equipment_id)
 
     # eager re-fetch
-    return await repo.get_work_order_by_id(db, wo.id)
+    return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
 
 async def get_work_orders(

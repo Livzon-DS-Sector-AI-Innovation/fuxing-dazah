@@ -1,6 +1,7 @@
 """Spare part service: business logic for spare parts and stock."""
 
 import uuid
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -161,7 +162,7 @@ async def outbound_stock(
             message=f"库存不足，当前库存 {stock.current_qty}，出库数量 {quantity}"
         )
 
-    stock = await repo.update_stock_qty(db, spare_part_id, -quantity)
+    stock = cast(SparePartStock, await repo.update_stock_qty(db, spare_part_id, -quantity))
     if not stock:
         raise NotFoundException("库存记录", str(spare_part_id))
 
@@ -195,7 +196,7 @@ async def adjust_stock(
     diff = data.new_qty - stock.current_qty
 
     if diff != 0:
-        stock = await repo.update_stock_qty(db, spare_part_id, diff)
+        stock = cast(SparePartStock, await repo.update_stock_qty(db, spare_part_id, diff))
         if not stock:
             raise NotFoundException("库存记录", str(spare_part_id))
 
@@ -223,8 +224,8 @@ async def get_stock_warnings(
     for spare_part, stock in warnings:
         result.append(
             StockWarningResponse(
-                spare_part=spare_part,
-                stock=stock,
+                spare_part=spare_part,  # pyright: ignore[reportArgumentType]
+                stock=stock,  # pyright: ignore[reportArgumentType]
                 shortage=stock.safety_qty - stock.current_qty,
             )
         )

@@ -14,13 +14,11 @@ from app.modules.equipment.deps import (
     require_equipment_access,
 )
 from app.modules.equipment.schemas import (
-    InspectionCompleteRequest,
     InspectionTemplateCreate,
     InspectionTemplateItemCreate,
     InspectionTemplateItemUpdate,
     InspectionTemplateResponse,
     InspectionTemplateUpdate,
-    WorkOrderResponse,
 )
 
 router = APIRouter()
@@ -157,16 +155,3 @@ async def delete_template_item(
     await service.delete_template_item(db, item_id, ctx=ctx)
     return success_response(message="删除成功")
 
-
-# ---------- 巡检执行 ----------
-@router.post("/complete/{work_order_id}", summary="提交巡检结果")
-async def complete_inspection(
-    work_order_id: uuid.UUID,
-    data: InspectionCompleteRequest,
-    db: AsyncSession = Depends(get_db),
-    ctx: EquipmentAccessContext = Depends(
-        require_equipment_access("equipment:maintenance:update"),
-    ),
-) -> JSONResponse:
-    wo = await service.complete_inspection(db, work_order_id, data)
-    return success_response(data=WorkOrderResponse.model_validate(wo))

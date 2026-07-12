@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import logging
 import secrets
+from typing import Any
 
 import jwt
 from fastapi import APIRouter, Depends, Query, Request
@@ -114,7 +115,7 @@ async def sso_callback(
 async def get_current_user_info(
     user: CurrentUser = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, Any]:
     """Return the current authenticated user's profile with permissions."""
     if user is None:
         from fastapi import HTTPException
@@ -150,7 +151,7 @@ async def get_current_user_info(
 
 
 def _build_department_tree(
-    depts: list, parent_id: str | None = None,
+    depts: list[Any], parent_id: str | None = None,
 ) -> list[DepartmentTreeNode]:
     """递归构建部门树。"""
     result: list[DepartmentTreeNode] = []
@@ -243,7 +244,7 @@ async def list_personnel(
         limit=limit,
     )
 
-    items = [PersonnelItem.model_validate(u).model_dump() for u in users]
+    items = [PersonnelItem.model_validate(u) for u in users]
     resp = PersonnelListResponse(
         items=items,
         total=total,

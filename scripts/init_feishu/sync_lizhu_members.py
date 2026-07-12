@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
@@ -25,7 +26,7 @@ _TARGET_ID = os.environ.get("FEISHU_SYNC_MEMBER_DEPT_ID", "od-071212463565ebca26
 CONCURRENCY = 10
 
 
-async def _get_client_and_token(settings: Settings):
+async def _get_client_and_token(settings: Settings) -> tuple[Any, str]:
     client = (
         lark.Client.builder()
         .app_id(settings.FEISHU_APP_ID)
@@ -56,12 +57,12 @@ async def _get_client_and_token(settings: Settings):
 
 
 async def _fetch_dept_users(
-    client, token: str, dept_id: str, dept_name: str,
-) -> tuple[list[dict], str, int]:
+    client: Any, token: str, dept_id: str, dept_name: str,
+) -> tuple[list[dict[str, Any]], str, int]:
     """获取某部门直属成员，返回 (用户列表, 部门名, 用户数)"""
     from lark_oapi.api.contact.v3 import FindByDepartmentUserRequest
 
-    users: list[dict] = []
+    users: list[dict[str, Any]] = []
     page_token = ""
     while True:
         req = (
@@ -101,7 +102,7 @@ async def _fetch_dept_users(
     return users, dept_name, len(users)
 
 
-async def main():
+async def main() -> None:
     settings = Settings()
     if not settings.FEISHU_APP_ID:
         print("❌ 未配置 FEISHU_APP_ID", file=sys.stderr)
@@ -127,7 +128,7 @@ async def main():
 
     # 构建 parent 索引
     id_to_dept = {d.feishu_department_id: d for d in all_db_depts}
-    children_of: dict[str, list] = {}
+    children_of: dict[str, list[Any]] = {}
     for d in all_db_depts:
         pid = d.parent_feishu_department_id or ""
         children_of.setdefault(pid, []).append(d)
@@ -140,7 +141,7 @@ async def main():
     print(f"目标: {target.name} ({target.member_count} 人)")
 
     # BFS 收集目标部门及其全部子部门
-    depts: list = [target]
+    depts: list[Any] = [target]
     queue = [target.feishu_department_id]
     while queue:
         pid = queue.pop(0)
@@ -162,7 +163,7 @@ async def main():
     start = time.time()
     lock = asyncio.Lock()
 
-    async def _fetch_one(dept):
+    async def _fetch_one(dept: Any) -> tuple[list[dict[str, Any]], str, int]:
         nonlocal done
         async with sem:
             result = await _fetch_dept_users(
@@ -189,7 +190,7 @@ async def main():
 
     # 4. 去重
     seen_uids: set[str] = set()
-    all_users: list[dict] = []
+    all_users: list[dict[str, Any]] = []
     fetch_total = 0
     for users, dept_name, count in results:
         fetch_total += count

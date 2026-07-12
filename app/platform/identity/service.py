@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+from typing import Any
 
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -112,7 +113,7 @@ class IdentityService:
             algorithm="HS256",
         )
 
-    def verify_jwt(self, token: str) -> dict:
+    def verify_jwt(self, token: str) -> dict[str, Any]:
         return jwt.decode(
             token,
             self._settings.SECRET_KEY,
@@ -138,7 +139,7 @@ class IdentityService:
             algorithm="HS256",
         )
 
-    def decode_impersonate_jwt(self, token: str) -> dict | None:
+    def decode_impersonate_jwt(self, token: str) -> dict[str, Any] | None:
         """解析代理 JWT，验证签名和过期。返回 payload 或 None。"""
         try:
             return jwt.decode(

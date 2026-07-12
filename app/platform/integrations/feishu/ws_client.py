@@ -7,6 +7,7 @@
 import asyncio
 import logging
 import threading
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ _stop_flags: dict[str, threading.Event] = {}
 def start_ws_client(
     app_id: str | None = None,
     app_secret: str | None = None,
-    event_handler=None,
+    event_handler: Any = None,
     name: str = "feishu-ws",
 ) -> None:
     """启动飞书 WebSocket 长连接（非阻塞，在后台线程运行）。
@@ -77,7 +78,7 @@ def stop_ws_client(name: str | None = None) -> None:
 def _run_ws_in_thread(
     app_id: str,
     app_secret: str,
-    event_handler,
+    event_handler: Any,
     name: str,
     stop_flag: threading.Event,
 ) -> None:

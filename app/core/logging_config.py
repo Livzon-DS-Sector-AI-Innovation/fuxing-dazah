@@ -93,9 +93,9 @@ def _resolve_log_level(level_str: str, fallback: str = "WARNING") -> int:
     无效输入回退到 fallback，避免 getattr(logging, "INVALID") 导致启动崩溃。
     """
     try:
-        return getattr(logging, level_str.upper())
+        return int(getattr(logging, level_str.upper()))
     except AttributeError:
-        return getattr(logging, fallback.upper())
+        return int(getattr(logging, fallback.upper()))
 
 
 # ═══════════════════════════════════════════════════════════════

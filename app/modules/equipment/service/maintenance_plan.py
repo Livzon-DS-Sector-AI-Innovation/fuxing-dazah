@@ -4,6 +4,7 @@ import logging
 import uuid
 from datetime import date as date_type
 from datetime import timedelta
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -96,7 +97,7 @@ async def create_maintenance_plan(
 
     plan = await repo.create_maintenance_plan(db, plan_data)
     # 创建后 re-fetch 加载关联数据
-    return await repo.get_maintenance_plan_by_id(db, plan.id)
+    return cast(MaintenancePlan, await repo.get_maintenance_plan_by_id(db, plan.id))
 
 
 async def get_maintenance_plan_by_id(

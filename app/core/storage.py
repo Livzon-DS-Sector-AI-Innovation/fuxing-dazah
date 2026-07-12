@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import logging
 from io import BytesIO
+from typing import TYPE_CHECKING
 
 from app.core.config import get_settings
 
+if TYPE_CHECKING:
+    from minio import Minio
+
 logger = logging.getLogger(__name__)
 
-_client: "Minio | None" = None  # type: ignore[name-defined]
+_client: Minio | None = None
 _enabled: bool | None = None
 _known_buckets: set[str] = set()
 
@@ -44,7 +48,7 @@ def _init() -> None:
         )
 
 
-def _get_client() -> "Minio | None":  # type: ignore[name-defined]
+def _get_client() -> Minio | None:
     _init()
     return _client if _enabled else None
 
@@ -91,7 +95,7 @@ def upload_object(
     return object_key
 
 
-def get_object(module: str, object_key: str) -> "tuple[bytes, str] | None":  # type: ignore[name-defined]
+def get_object(module: str, object_key: str) -> tuple[bytes, str] | None:
     """读取对象，返回 (data, content_type)；不存在返回 None。"""
     client = _get_client()
     if client is None:

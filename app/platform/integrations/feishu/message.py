@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 from app.core.config import get_settings
 
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def _get_feishu_client():
+async def _get_feishu_client() -> Any:
     import lark_oapi as lark
 
     return (
@@ -22,7 +23,7 @@ async def _get_feishu_client():
     )
 
 
-async def _get_tenant_token(client) -> str:
+async def _get_tenant_token(client: Any) -> str:
     import json as _json
 
     from lark_oapi.api.auth.v3 import (
@@ -46,8 +47,8 @@ async def _get_tenant_token(client) -> str:
             f"Failed to get tenant token: code={resp.code}, msg={resp.msg}",
         )
     if resp.raw and resp.raw.content:
-        data = _json.loads(resp.raw.content.decode("utf-8"))
-        return data.get("tenant_access_token", "")
+        data: dict[str, Any] = _json.loads(resp.raw.content.decode("utf-8"))
+        return str(data.get("tenant_access_token", ""))
     raise RuntimeError("Empty tenant token response")
 
 
@@ -55,7 +56,7 @@ async def send_group_card(
     chat_id: str,
     title: str,
     content: str,
-    elements: list[dict] | None = None,
+    elements: list[dict[str, Any]] | None = None,
 ) -> bool:
     """发送卡片消息到群聊"""
     try:
@@ -78,7 +79,7 @@ async def send_group_card(
             ],
         }
         if elements:
-            card["elements"].extend(elements)
+            card["elements"].extend(elements)  # type: ignore[attr-defined]
 
         card_json = json.dumps(card, ensure_ascii=False)
 

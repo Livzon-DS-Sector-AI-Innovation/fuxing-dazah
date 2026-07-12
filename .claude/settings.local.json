@@ -8,5 +8,8 @@
   },
   "enabledMcpjsonServers": [
     "dazah"
-  ]
+  ],
+  "worktree": {
+    "bgIsolation": "none"
+  }
 }

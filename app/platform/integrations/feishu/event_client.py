@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import ssl
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -18,7 +19,7 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 # 事件类型 → 处理器列表
-_handlers: dict[str, list] = {}
+_handlers: dict[str, list[Callable[..., Any]]] = {}
 _stop: asyncio.Event | None = None
 
 # 飞书 endpoint
@@ -26,9 +27,9 @@ FEISHU_DOMAIN = "https://open.feishu.cn"
 WS_ENDPOINT_URL = f"{FEISHU_DOMAIN}/callback/ws/endpoint"
 
 
-def on_event(event_type: str):
+def on_event(event_type: str) -> Callable[..., Any]:
     """装饰器：注册事件处理器。"""
-    def decorator(func):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         _handlers.setdefault(event_type, []).append(func)
         logger.info("注册飞书事件: type=%s handler=%s", event_type, func.__name__)
         return func
@@ -55,9 +56,9 @@ async def _get_ws_url(app_id: str, app_secret: str) -> str | None:
             json={"AppID": app_id, "AppSecret": app_secret},
         )
         if resp.status_code == 200:
-            data = resp.json()
+            data: dict[str, Any] = resp.json()
             if data.get("code") == 0:
-                url = data.get("data", {}).get("URL")
+                url: str | None = data.get("data", {}).get("URL")
                 logger.info("获取 WebSocket URL 成功: %s", url[:80] if url else "empty")
                 return url
             else:
@@ -105,15 +106,19 @@ async def start_ws() -> None:
                 while not _stop.is_set():
                     try:
                         message = await asyncio.wait_for(ws.recv(), timeout=120)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         continue
 
                     # 处理消息
                     if isinstance(message, bytes):
                         # protobuf 二进制帧 → 用 lark_oapi Frame 解析
                         try:
+                            from lark_oapi.ws.client import (
+                                HEADER_TYPE,
+                                MessageType,
+                                _get_by_key,
+                            )
                             from lark_oapi.ws.pb.pbbp2_pb2 import Frame
-                            from lark_oapi.ws.client import MessageType, HEADER_TYPE, _get_by_key
 
                             frame = Frame()
                             frame.ParseFromString(message)
@@ -156,7 +161,7 @@ async def start_ws() -> None:
 
         try:
             await asyncio.wait_for(_stop.wait(), timeout=10)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     logger.info("飞书 WebSocket 客户端已停止")

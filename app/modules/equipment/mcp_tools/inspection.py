@@ -762,9 +762,9 @@ async def get_inspection_check_items(
     except ValueError as e:
         return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
 
-    from app.modules.equipment.service.ai.service import _get_inspection_items
+    from app.modules.equipment.service.inspection import get_inspection_items
 
-    items, tpl_names = await _get_inspection_items(db, task, eq.id)
+    items, tpl_names = await get_inspection_items(db, task, eq.id)
 
     item_dicts = [
         {

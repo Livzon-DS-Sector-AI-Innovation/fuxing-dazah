@@ -2,29 +2,22 @@
 
 import json
 import uuid
+from typing import Any
 
 import httpx
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.core.exceptions import AppException, NotFoundException
-from app.modules.equipment.models.inspection import InspectionTask
-from app.modules.equipment.models.inspection_route_location import (
-    RouteEquipmentTemplate,
-    RouteLocation,
-    RouteLocationEquipment,
-)
-from app.modules.equipment.models.inspection_template import (
-    InspectionTemplate,
-    InspectionTemplateItem,
-)
+from app.core.exceptions import AppException
 from app.modules.equipment.service.ai.client import AIAnalysisError, QwenClient
 from app.modules.equipment.service.ai.prompts import (
     MANUAL_SUBMIT_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_manual_submit_user_prompt,
     build_user_prompt,
+)
+from app.modules.equipment.service.inspection import (
+    _get_task,
+    get_inspection_items,
 )
 
 
@@ -34,7 +27,7 @@ async def analyze_inspection_photo(
     equipment_id: uuid.UUID,
     image_base64: str,
     image_mime_type: str,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """对巡检照片进行 AI 分析，返回每个检查项的分析结果。
 
     支持线路巡检（路线→地点→设备→模板链）和设备巡检（多模板合并）。
@@ -61,7 +54,7 @@ async def analyze_inspection_photo(
         raise AppException(message="任务未在执行中状态，不能进行 AI 分析")
 
     # 2. 获取检查模板项（支持多模板合并）
-    items, _ = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(message="该设备没有关联检查项，请先在系统中配置")
 
@@ -105,7 +98,7 @@ async def analyze_inspection_photo(
 
     # 5. 将 AI 结果按顺序映射到模板检查项
     #    若 AI 返回数量不足，缺失项自动补"跳过"
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     for i, item in enumerate(items):
         ai_item = ai_items[i] if i < len(ai_items) else {}
         result_value = ai_item.get("result", "跳过")
@@ -133,7 +126,7 @@ async def parse_manual_submission(
     equipment_id: uuid.UUID,
     user_text: str,
     equipment_name: str = "",
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """使用 AI 解析巡检人员发送的非结构化手动提交文本。
 
     Args:
@@ -151,7 +144,7 @@ async def parse_manual_submission(
         raise AppException(message="任务未在执行中状态，不能提交检查结果")
 
     # 获取检查模板项
-    items, _ = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(message="该设备没有关联检查项，请先在系统中配置")
 
@@ -195,7 +188,7 @@ async def parse_manual_submission(
 
     # 映射回模板检查项
     item_map = {item["template_item_id"]: item for item in items_list}
-    results: list[dict] = []
+    results: list[dict[str, Any]] = []
     for ai_item in ai_items:
         tid = ai_item.get("template_item_id", "")
         item_info = item_map.get(tid, {})
@@ -218,101 +211,12 @@ async def parse_manual_submission(
 # ═══════════ 内部辅助 ═══════════
 
 
-async def _get_task(db: AsyncSession, task_id: uuid.UUID) -> InspectionTask:
-    """获取巡检任务。"""
-    result = await db.execute(
-        select(InspectionTask)
-        .where(
-            InspectionTask.id == task_id,
-            InspectionTask.is_deleted == False,  # noqa: E712
-        )
-    )
-    task = result.scalar_one_or_none()
-    if not task:
-        raise NotFoundException("巡检任务", str(task_id))
-    return task
-
-
-async def _get_inspection_items(
-    db: AsyncSession, task: InspectionTask, equipment_id: uuid.UUID
-) -> tuple[list[InspectionTemplateItem], dict[uuid.UUID, str]]:
-    """获取巡检检查项 — 统一处理线路巡检和设备巡检的多模板合并。
-
-    线路巡检：从 route → locations → equipment → templates 链获取
-    设备巡检（新）：从 task.equipment_templates 按设备匹配
-    设备巡检（旧）：从 task.template_ids 扁平列表（兼容）
-
-    返回 (检查项列表, item_id → template_name 映射)。
-    template_name 预收集避免调用方通过 relationship 懒加载触发 MissingGreenlet。
-    """
-    all_items: list[InspectionTemplateItem] = []
-    template_ids: set[uuid.UUID] = set()
-    item_template_names: dict[uuid.UUID, str] = {}
-
-    if task.route_id:
-        # 线路巡检：找到该设备在路线中的所有模板绑定
-        loc_stmt = select(RouteLocation).where(
-            RouteLocation.route_id == task.route_id,
-            RouteLocation.is_deleted == False,  # noqa: E712
-        )
-        locs = (await db.execute(loc_stmt)).scalars().all()
-
-        for loc in locs:
-            eq_stmt = select(RouteLocationEquipment).where(
-                RouteLocationEquipment.route_location_id == loc.id,
-                RouteLocationEquipment.equipment_id == equipment_id,
-                RouteLocationEquipment.is_deleted == False,  # noqa: E712
-            )
-            route_eqs = (await db.execute(eq_stmt)).scalars().all()
-            for req in route_eqs:
-                tpl_stmt = select(RouteEquipmentTemplate).where(
-                    RouteEquipmentTemplate.route_equipment_id == req.id,
-                    RouteEquipmentTemplate.is_deleted == False,  # noqa: E712
-                )
-                tpls = (await db.execute(tpl_stmt)).scalars().all()
-                for tpl in tpls:
-                    template_ids.add(tpl.template_id)
-
-    elif task.equipment_templates:
-        # 新方式：从设备-模板映射中获取该设备绑定的模板
-        eq_id_str = str(equipment_id)
-        tpl_ids = task.equipment_templates.get(eq_id_str, [])
-        for tid_str in tpl_ids:
-            template_ids.add(uuid.UUID(tid_str))
-
-    elif task.template_ids:
-        # 兼容旧数据：扁平模板列表（所有模板应用于所有设备）
-        for tid_str in task.template_ids:
-            tid = uuid.UUID(tid_str) if isinstance(tid_str, str) else tid_str
-            template_ids.add(tid)
-
-    for tid in template_ids:
-        result = await db.execute(
-            select(InspectionTemplate)
-            .options(selectinload(InspectionTemplate.items))
-            .where(
-                InspectionTemplate.id == tid,
-                InspectionTemplate.is_deleted == False,  # noqa: E712
-            )
-        )
-        template = result.scalar_one_or_none()
-        if template and template.items:
-            tpl_name = template.name
-            for item in sorted(template.items, key=lambda x: x.sort_order):
-                # ponytail: 不去重 — 同名检查项来自不同模板时 agent 需要看到全部
-                # 通过 template_item_id 区分，避免提交时定位到错误的检查项
-                all_items.append(item)
-                item_template_names[item.id] = tpl_name
-
-    return all_items, item_template_names
-
-
 async def get_inspection_items_for_session(
     db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """获取检查项列表（供飞书会话使用），返回轻量 dict 列表。"""
     task = await _get_task(db, task_id)
-    items, _ = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await get_inspection_items(db, task, equipment_id)
     return [
         {
             "template_item_id": str(item.id),

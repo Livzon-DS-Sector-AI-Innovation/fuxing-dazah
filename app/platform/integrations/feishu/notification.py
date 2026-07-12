@@ -9,6 +9,7 @@
 
 import json
 import logging
+from typing import Any
 
 from app.core.config import get_settings
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
-async def _get_client():
+async def _get_client() -> Any:
     """获取 lark-oapi 客户端实例"""
     import lark_oapi as lark
 
@@ -30,7 +31,7 @@ async def _get_client():
     )
 
 
-async def _get_tenant_token(client) -> str:
+async def _get_tenant_token(client: Any) -> str:
     """获取 tenant_access_token"""
     import json as _json
 
@@ -59,8 +60,8 @@ async def _get_tenant_token(client) -> str:
             f"Failed to get tenant token: code={resp.code}, msg={resp.msg}"
         )
     if resp.raw and resp.raw.content:
-        data = _json.loads(resp.raw.content.decode("utf-8"))
-        token = data.get("tenant_access_token", "")
+        data: dict[str, Any] = _json.loads(resp.raw.content.decode("utf-8"))
+        token: str = data.get("tenant_access_token", "")
         logger.info("Tenant token obtained successfully")
         return token
     logger.error("Empty tenant token response")
@@ -71,7 +72,7 @@ async def send_user_card(
     open_id: str,
     title: str,
     content: str,
-    elements: list[dict] | None = None,
+    elements: list[dict[str, Any]] | None = None,
     receive_id_type: str = "open_id",
 ) -> bool:
     """发送卡片消息给单个用户（DM）。
@@ -107,7 +108,7 @@ async def send_user_card(
             ],
         }
         if elements:
-            card["elements"].extend(elements)
+            card["elements"].extend(elements)  # type: ignore[attr-defined]
 
         card_json = json.dumps(card, ensure_ascii=False)
         logger.info("send_user_card: card JSON length=%d", len(card_json))
@@ -148,7 +149,7 @@ async def build_card(
     title: str,
     content: str,
     header_template: str = "orange",
-    elements: list[dict] | None = None,
+    elements: list[dict[str, Any]] | None = None,
 ) -> str:
     """构建飞书卡片 JSON 字符串。
 
@@ -174,5 +175,5 @@ async def build_card(
         ],
     }
     if elements:
-        card["elements"].extend(elements)
+        card["elements"].extend(elements)  # type: ignore[attr-defined]
     return json.dumps(card, ensure_ascii=False)

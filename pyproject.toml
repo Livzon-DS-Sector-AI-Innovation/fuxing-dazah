@@ -49,10 +49,20 @@ line-length = 88
 select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+reportOptionalMemberAccess = "none"
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "lark_oapi.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -64,4 +74,5 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
     "ruff>=0.15.14",
+    "types-openpyxl>=3.1.5",
 ]

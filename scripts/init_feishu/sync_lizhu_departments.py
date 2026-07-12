@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import time
+from typing import Any
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
@@ -15,7 +16,7 @@ os.environ["SECRET_KEY"] = "scripts-manual-run"
 
 import lark_oapi as lark  # noqa: E402
 from sqlalchemy import select  # noqa: E402
-from tqdm.asyncio import tqdm  # noqa: E402
+from tqdm.asyncio import tqdm  # type: ignore[import-untyped]  # noqa: E402
 
 from app.core.config import Settings  # noqa: E402
 from app.core.database import async_session_factory  # noqa: E402
@@ -26,7 +27,7 @@ _DEPT_ID = os.environ.get("FEISHU_SYNC_ROOT_DEPT_ID", "od-071212463565ebca263941
 CONCURRENCY = 15
 
 
-async def _get_client_and_token(settings: Settings):
+async def _get_client_and_token(settings: Settings) -> tuple[Any, str]:
     client = (
         lark.Client.builder()
         .app_id(settings.FEISHU_APP_ID)
@@ -57,12 +58,12 @@ async def _get_client_and_token(settings: Settings):
 
 
 async def _fetch_children(
-    client, token: str, parent_id: str,
-) -> list[dict]:
+    client: Any, token: str, parent_id: str,
+) -> list[dict[str, Any]]:
     """获取某部门所有直接子部门"""
     from lark_oapi.api.contact.v3 import ListDepartmentRequest
 
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
     page_token = ""
     while True:
         req = (
@@ -104,7 +105,7 @@ async def _fetch_children(
     return items
 
 
-async def main():
+async def main() -> None:
     settings = Settings()
     if not settings.FEISHU_APP_ID:
         print("❌ 未配置 FEISHU_APP_ID")
@@ -134,7 +135,7 @@ async def main():
 
     # 并发 BFS
     sem = asyncio.Semaphore(CONCURRENCY)
-    all_depts: list[dict] = [{
+    all_depts: list[dict[str, Any]] = [{
         "department_id": _DEPT_ID, "name": root_name,
         "parent_department_id": "",
         "leader_user_id": root_info.get("leader_user_id", "") or "",
@@ -148,7 +149,7 @@ async def main():
 
     while queue:
         # 并发拉取当前层所有父部门的子部门
-        async def _fetch_one(pid):
+        async def _fetch_one(pid: str) -> list[dict[str, Any]]:
             async with sem:
                 return await _fetch_children(client, token, pid)
 

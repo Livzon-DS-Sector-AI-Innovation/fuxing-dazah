@@ -13,7 +13,7 @@ from typing import Any
 # ═══════════════════════════════════════════════════════════════
 
 
-class ScheduleStrategy(str, enum.Enum):
+class ScheduleStrategy(enum.StrEnum):
     """How a scheduled task determines its next fire time."""
 
     CRON = "cron"

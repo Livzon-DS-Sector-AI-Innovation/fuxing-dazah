@@ -164,7 +164,7 @@ class PermissionRepository:
         )
         result = await db.execute(stmt)
         await db.flush()
-        return result.rowcount > 0
+        return result.rowcount > 0  # type: ignore[attr-defined,no-any-return]
 
     # ── 用户权限查询（合并所有角色） ──
 

@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +36,7 @@ _repo = PermissionRepository()
 async def list_permissions(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     permissions = await _repo.list_permissions(db)
     grouped: dict[str, list[PermissionOut]] = {}
     for p in permissions:
@@ -65,7 +66,7 @@ async def list_permissions(
 async def list_roles(
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     roles = await _repo.list_roles(db)
     result = []
     for role in roles:
@@ -103,7 +104,7 @@ async def create_role(
     data: CreateRoleInput,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     role = await _service.create_role(db, data)
     perm_ids = await _repo.get_role_permission_ids(db, role.id)
     overrides = await _repo.get_role_data_scope_overrides(db, role.id)
@@ -128,7 +129,7 @@ async def update_role(
     data: UpdateRoleInput,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     role = await _service.update_role(db, role_id, data)
     perm_ids = await _repo.get_role_permission_ids(db, role.id)
     overrides = await _repo.get_role_data_scope_overrides(db, role.id)
@@ -152,7 +153,7 @@ async def delete_role(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     await _service.delete_role(db, role_id)
     return success_response(message="角色删除成功")
 
@@ -162,7 +163,7 @@ async def get_user_roles(
     user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     user_roles = await _repo.get_user_roles(db, user_id)
     result = []
     for ur in user_roles:
@@ -186,7 +187,7 @@ async def assign_user_role(
     data: AssignRoleInput,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     await _service.assign_role_to_user(db, user_id, data.role_id, data.department_id)
     return success_response(message="角色分配成功")
 
@@ -197,7 +198,7 @@ async def remove_user_role(
     role_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     await _service.remove_role_from_user(db, user_id, role_id)
     return success_response(message="角色移除成功")
 
@@ -207,7 +208,7 @@ async def get_user_permissions_endpoint(
     user_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     _admin: User = Depends(require_admin),
-):
+) -> JSONResponse:
     user_stmt = select(User).where(User.id == user_id)
     user_result = await db.execute(user_stmt)
     user = user_result.scalar_one_or_none()

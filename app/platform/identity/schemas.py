@@ -92,10 +92,13 @@ class PersonnelItem(BaseModel):
         if v is None:
             return None
         if isinstance(v, list):
-            return v
+            return [str(x) for x in v]
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                result = json.loads(v)
+                if isinstance(result, list):
+                    return [str(x) for x in result]
+                return None
             except (json.JSONDecodeError, TypeError):
                 return None
         return None

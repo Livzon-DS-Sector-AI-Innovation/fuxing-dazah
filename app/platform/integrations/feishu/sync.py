@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 
@@ -20,7 +21,7 @@ stop_member_sync_flag = asyncio.Event()
 stop_timeout_flag = asyncio.Event()
 
 
-async def _get_feishu_client_and_token():
+async def _get_feishu_client_and_token() -> tuple[Any, str]:
     """获取 lark client 和 tenant token"""
     import lark_oapi as lark
 
@@ -55,7 +56,7 @@ async def _get_feishu_client_and_token():
     return client, token
 
 
-async def _bfs_departments_under(client, token: str, root_id: str) -> list[dict]:
+async def _bfs_departments_under(client: Any, token: str, root_id: str) -> list[dict[str, Any]]:
     """BFS 并发获取指定部门下所有子部门（含自身）"""
     from lark_oapi.api.contact.v3 import GetDepartmentRequest
 
@@ -72,7 +73,7 @@ async def _bfs_departments_under(client, token: str, root_id: str) -> list[dict]
     root_info = json.loads(raw).get("data", {}).get("department", {})
     root_name = root_info.get("name", "") or root_id
 
-    all_depts: list[dict] = [{
+    all_depts: list[dict[str, Any]] = [{
         "department_id": root_id,
         "name": root_name,
         "parent_department_id": "",
@@ -97,7 +98,7 @@ async def _bfs_departments_under(client, token: str, root_id: str) -> list[dict]
 
     # BFS: concurrent per level
     while queue:
-        async def _fetch_one(pid):
+        async def _fetch_one(pid: str) -> list[dict[str, Any]]:
             async with sem:
                 return await _fetch_children(client, token, pid)
 
@@ -115,11 +116,11 @@ async def _bfs_departments_under(client, token: str, root_id: str) -> list[dict]
     return all_depts
 
 
-async def _fetch_children(client, token: str, parent_id: str) -> list[dict]:
+async def _fetch_children(client: Any, token: str, parent_id: str) -> list[dict[str, Any]]:
     """获取某部门的所有直接子部门"""
     from lark_oapi.api.contact.v3 import ListDepartmentRequest
 
-    items: list[dict] = []
+    items: list[dict[str, Any]] = []
     page_token = ""
     while True:
         req = (
@@ -162,12 +163,12 @@ async def _fetch_children(client, token: str, parent_id: str) -> list[dict]:
 
 
 async def _fetch_dept_users(
-    client, token: str, dept_id: str,
-) -> list[dict]:
+    client: Any, token: str, dept_id: str,
+) -> list[dict[str, Any]]:
     """获取某部门的直属成员"""
     from lark_oapi.api.contact.v3 import FindByDepartmentUserRequest
 
-    all_users: list[dict] = []
+    all_users: list[dict[str, Any]] = []
     page_token = ""
     while True:
         req = (
@@ -210,7 +211,7 @@ async def _fetch_dept_users(
 # ── Public sync entry points ────────────────────────────────────────
 
 
-async def sync_departments(root_dept_id: str) -> dict:
+async def sync_departments(root_dept_id: str) -> dict[str, Any]:
     """同步指定根部门下的全部组织架构到数据库。返回 {dept_count, elapsed}。"""
     import time as _time
 
@@ -261,7 +262,7 @@ async def sync_departments(root_dept_id: str) -> dict:
     return {"dept_count": len(depts), "elapsed": round(elapsed, 1)}
 
 
-async def sync_members(target_dept_id: str) -> dict:
+async def sync_members(target_dept_id: str) -> dict[str, Any]:
     """同步指定部门及其子部门的全部成员到数据库（并发）。"""
     import time as _time
 
@@ -278,7 +279,7 @@ async def sync_members(target_dept_id: str) -> dict:
     # 并发拉取每个部门的成员
     sem = asyncio.Semaphore(10)
 
-    async def _fetch_one(dept):
+    async def _fetch_one(dept: dict[str, Any]) -> Any:
         async with sem:
             return await _fetch_dept_users(client, token, dept["department_id"]), dept
 
@@ -287,7 +288,7 @@ async def sync_members(target_dept_id: str) -> dict:
 
     # 去重
     seen_uids: set[str] = set()
-    all_users: list[dict] = []
+    all_users: list[dict[str, Any]] = []
     for users, dept in results:
         for u in users:
             uid = u["user_id"]

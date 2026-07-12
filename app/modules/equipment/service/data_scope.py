@@ -6,6 +6,8 @@
 - personnel_dept: 匹配人员表的 department 字符串路径（人员管理）
 """
 
+from typing import Any
+
 from sqlalchemy import Select, false
 
 from app.core.exceptions import ForbiddenException
@@ -13,11 +15,11 @@ from app.modules.equipment.deps import EquipmentAccessContext
 
 
 def apply_equipment_scope(
-    query: Select,
+    query: Select[Any],
     ctx: EquipmentAccessContext,
-    model_field,  # noqa: ANN001 - SQLAlchemy InstrumentedAttribute
+    model_field: Any,  # SQLAlchemy InstrumentedAttribute
     mode: str = "department_id",
-) -> Select:
+) -> Select[Any]:
     """根据数据范围给查询添加 WHERE 条件。
 
     Args:
@@ -64,7 +66,7 @@ def apply_equipment_scope(
 
 async def verify_write_ownership(
     ctx: EquipmentAccessContext,
-    resource,  # noqa: ANN001 - ORM object
+    resource: Any,  # ORM object
     field: str = "department_id",
     mode: str = "department_id",
 ) -> None:

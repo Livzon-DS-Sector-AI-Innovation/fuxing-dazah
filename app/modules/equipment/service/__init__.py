@@ -91,7 +91,6 @@ from app.modules.equipment.service.inspection import (
 )
 from app.modules.equipment.service.inspection_template import (
     add_template_item,
-    complete_inspection,
     create_inspection_template,
     delete_inspection_template,
     delete_template_item,
@@ -213,7 +212,6 @@ __all__ = [
     # failure code
     "FailureCodeModel",
     "add_template_item",
-    "complete_inspection",
     "create_failure_code",
     "create_inspection_template",
     "delete_failure_code",
@@ -226,6 +224,26 @@ __all__ = [
     "update_failure_code",
     "update_inspection_template",
     "update_template_item",
+    # inspection
+    "close_inspection_task",
+    "complete_inspection_task",
+    "create_inspection_task",
+    "create_route",
+    "delete_inspection_photo",
+    "delete_route",
+    "get_history",
+    "get_inspection_task_by_id",
+    "get_inspection_tasks",
+    "get_route_by_id",
+    "get_routes",
+    "get_task_detail",
+    "get_task_photos",
+    "set_route_locations",
+    "skip_equipment_check",
+    "start_inspection_task",
+    "submit_equipment_check",
+    "update_route",
+    "upload_inspection_photo",
     # maintenance plan
     "create_maintenance_plan",
     "delete_maintenance_plan",

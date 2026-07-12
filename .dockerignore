@@ -30,3 +30,4 @@ logs/
 # 文档
 *.md
 !CLAUDE.md
+.claude

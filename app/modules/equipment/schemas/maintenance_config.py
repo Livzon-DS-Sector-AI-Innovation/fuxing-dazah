@@ -30,4 +30,6 @@ class AdvanceDaysConfig(BaseModel):
 class AdvanceDaysUpdateRequest(BaseModel):
     """更新提前天数配置请求"""
 
-    advance_days: int = Field(..., ge=1, le=364, description="提前天数，1-364")
+    advance_days: int = Field(
+        ..., ge=0, le=364, description="提前天数，0-364，0=当天触发"
+    )

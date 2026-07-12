@@ -1,6 +1,7 @@
 """Equipment personnel service."""
 
 import uuid
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -455,7 +456,7 @@ async def refresh_feishu(db: AsyncSession) -> FeishuRefreshResult:
     user_map = {u.id: u for u in users_result.scalars().all()}
 
     for p in rows:
-        user = user_map.get(p.user_id)
+        user = user_map.get(cast(uuid.UUID, p.user_id))
         if not user:
             result.unmatched += 1
             continue

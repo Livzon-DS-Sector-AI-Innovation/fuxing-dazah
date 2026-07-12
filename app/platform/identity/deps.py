@@ -91,7 +91,7 @@ async def get_current_user(
         return real_user
 
     # ── 4. 切换到目标用户上下文 ──
-    target_user._impersonated_by = real_user.id
+    target_user._impersonated_by = real_user.id  # type: ignore[attr-defined]
     logger.info(
         "Impersonation active: admin=%s(%s) -> target=%s(%s)",
         real_user.name, real_user.id, target_user.name, target_user.id,

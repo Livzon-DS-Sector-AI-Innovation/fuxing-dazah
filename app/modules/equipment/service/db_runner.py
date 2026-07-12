@@ -5,14 +5,12 @@
 """
 
 import asyncio
-import functools
 import threading
-from typing import Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-T = TypeVar("T")
 
-
-async def run_db(fn: Callable[[], Awaitable[T]]) -> T:
+async def run_db[T](fn: Callable[[], Awaitable[T]]) -> T:
     """在独立线程的新事件循环中运行 async DB 操作。
 
     Args:
@@ -46,8 +44,8 @@ async def run_db(fn: Callable[[], Awaitable[T]]) -> T:
 
 
 # 预绑定 async_session_factory，减少样板代码
-async def run_db_session(
-    fn: Callable[..., Awaitable[T]], *args, **kwargs
+async def run_db_session[T](
+    fn: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
 ) -> T:
     """run_db 的快捷版 — 自动传入 async_session_factory。
 

@@ -2,16 +2,13 @@
 
 import uuid
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, NotFoundException
+from app.core.exceptions import NotFoundException
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import EquipmentAccessContext
-from app.modules.equipment.models import InspectionRecord, InspectionTemplate
-from app.modules.equipment.models.work_order import WorkOrder
+from app.modules.equipment.models import InspectionTemplate
 from app.modules.equipment.schemas import (
-    InspectionCompleteRequest,
     InspectionTemplateCreate,
     InspectionTemplateItemCreate,
     InspectionTemplateItemUpdate,
@@ -147,46 +144,3 @@ async def delete_template_item(
         await verify_write_ownership(ctx, template, "created_by", mode="user_id")
     return await repo.delete_template_item(db, item_id)
 
-
-async def complete_inspection(
-    db: AsyncSession,
-    work_order_id: uuid.UUID,
-    data: InspectionCompleteRequest,
-) -> WorkOrder:
-    """提交巡检结果"""
-    from app.modules.equipment.models.work_order import WorkOrder as WorkOrderModel
-
-    # 获取工单
-    result = await db.execute(
-        select(WorkOrderModel).where(
-            WorkOrderModel.id == work_order_id,
-            WorkOrderModel.is_deleted == False,  # noqa: E712
-        )
-    )
-    wo = result.scalar_one_or_none()
-    if not wo:
-        raise NotFoundException("工单", str(work_order_id))
-
-    if wo.order_type != "巡检":
-        raise AppException(message="只有巡检工单才能提交巡检结果")
-
-    # 创建巡检记录
-    has_abnormal = False
-    for record_item in data.records:
-        if record_item.result == "异常":
-            has_abnormal = True
-
-        inspection_record = InspectionRecord(
-            work_order_id=work_order_id,
-            template_item_id=record_item.template_item_id,
-            result=record_item.result,
-            actual_value=record_item.actual_value,
-            remark=record_item.remark,
-        )
-        db.add(inspection_record)
-
-    # 计算巡检结果
-    wo.check_result = "异常" if has_abnormal else "正常"
-    await db.flush()
-    await db.refresh(wo)
-    return wo

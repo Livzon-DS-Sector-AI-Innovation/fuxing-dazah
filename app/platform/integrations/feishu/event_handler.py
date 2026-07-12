@@ -8,6 +8,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
@@ -29,7 +30,7 @@ def build_event_handler() -> lark.EventDispatcherHandler:
     return (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(_on_message_receive)
-        .register_p2_card_action_trigger(_on_card_action)
+        .register_p2_card_action_trigger(_on_card_action)  # pyright: ignore[reportArgumentType]
         .build()
     )
 
@@ -42,8 +43,8 @@ def _on_message_receive(data: P2ImMessageReceiveV1) -> None:
 
     message = event.message
     sender = event.sender
-    msg_type = message.message_type
-    message_id = message.message_id
+    msg_type = message.message_type or ""
+    message_id = message.message_id or ""
     chat_type = message.chat_type or ""
     sender_id = ""
 
@@ -107,7 +108,7 @@ def _on_card_action(data: P2CardActionTrigger) -> None:
         return
 
     # 新版 SDK: action.value 已经是 dict，无需手动解析 JSON
-    action_value = event.action.value if event.action else {}
+    action_value = (event.action.value if event.action else {}) or {}
     user_id = ""
     if event.operator:
         user_id = event.operator.user_id or ""
@@ -130,7 +131,7 @@ def _on_card_action(data: P2CardActionTrigger) -> None:
 
 async def _handle_card_action_async(
     *,
-    action_value: dict,
+    action_value: dict[str, Any],
     user_id: str,
 ) -> None:
     """处理验收卡片按钮点击。"""
@@ -181,13 +182,23 @@ async def _handle_card_action_async(
             logger.warning("卡片回调：未找到飞书用户 %s", user_id)
             return
 
-        # 查找工单
-        from app.modules.equipment import repository as equip_repo
+        # 查找工单 — FOR UPDATE 防并发重复验收
+        from app.modules.equipment.models.work_order import WorkOrder
 
-        wo = await equip_repo.get_work_order_by_id(db, _uuid.UUID(work_order_id))
+        wo = (
+            await db.execute(
+                sa_select(WorkOrder)
+                .where(
+                    WorkOrder.id == _uuid.UUID(work_order_id),
+                    WorkOrder.is_deleted == False,  # noqa: E712
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if not wo:
-            await send_user_card(
-                open_id=user.feishu_user_id,
+            if user.feishu_user_id:
+                await send_user_card(
+                    open_id=user.feishu_user_id,
                 title="❌ 工单不存在",
                 receive_id_type="user_id",
                 content=f"工单 {work_order_id} 不存在或已删除。",
@@ -195,8 +206,9 @@ async def _handle_card_action_async(
             return
 
         if wo.status != "待验收":
-            await send_user_card(
-                open_id=user.feishu_user_id,
+            if user.feishu_user_id:
+                await send_user_card(
+                    open_id=user.feishu_user_id,
                 title="⚠️ 无法验收",
                 receive_id_type="user_id",
                 content=(
@@ -209,7 +221,7 @@ async def _handle_card_action_async(
         label = "验收通过" if result == "合格" else "退回"
         try:
             verify_data = WorkOrderVerify(
-                result=result,  # type: ignore[arg-type]
+                result=result,
                 remark=f"通过飞书卡片{label}",
             )
             ctx = EquipmentAccessContext(user=user, data_scope="all")
@@ -217,8 +229,9 @@ async def _handle_card_action_async(
             await db.commit()
         except Exception as e:
             logger.exception("飞书卡片验收失败: %s", e)
-            await send_user_card(
-                open_id=user.feishu_user_id,
+            if user.feishu_user_id:
+                await send_user_card(
+                    open_id=user.feishu_user_id,
                 title="❌ 操作失败",
                 receive_id_type="user_id",
                 content=f"验收操作失败：{e}",
@@ -227,8 +240,9 @@ async def _handle_card_action_async(
 
         # ponytail: 操作反馈，只发关键信息
         eq_name = wo.equipment.name if wo.equipment else ""
-        await send_user_card(
-            open_id=user.feishu_user_id,
+        if user.feishu_user_id:
+            await send_user_card(
+                open_id=user.feishu_user_id,
             title=f"✅ {label}",
             receive_id_type="user_id",
             content=(

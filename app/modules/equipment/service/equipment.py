@@ -4,7 +4,7 @@ import io
 import logging
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 import openpyxl
 from sqlalchemy import select
@@ -325,7 +325,7 @@ async def update_equipment(
         await get_location_by_id(db, data.location_id)
 
     update_data = data.model_dump(exclude_unset=True)
-    return await repo.update_equipment(db, equipment_id, update_data)
+    return cast(Equipment, await repo.update_equipment(db, equipment_id, update_data))
 
 
 async def delete_equipment(
@@ -401,7 +401,7 @@ TEMPLATE_HEADERS = [
 ]
 
 
-def _cell_str(row, col: int) -> str | None:
+def _cell_str(row: tuple[Any, ...], col: int) -> str | None:
     val = row[col] if col < len(row) else None
     if val is None:
         return None
@@ -409,7 +409,7 @@ def _cell_str(row, col: int) -> str | None:
     return s if s else None
 
 
-def _parse_date(value) -> date | None:
+def _parse_date(value: Any) -> date | None:
     if value is None:
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
@@ -435,6 +435,7 @@ def generate_template_bytes() -> io.BytesIO:
 
     wb = openpyxl.Workbook()
     ws = wb.active
+    assert ws is not None  # 新建 Workbook 必有活动工作表
     ws.title = "设备台账"
 
     header_font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
@@ -738,7 +739,7 @@ async def import_equipments_from_excel(
     )
 
 
-def _parse_float(value) -> float | None:
+def _parse_float(value: Any) -> float | None:
     if value is None:
         return None
     try:
@@ -747,7 +748,7 @@ def _parse_float(value) -> float | None:
         return None
 
 
-def _parse_int(value) -> int | None:
+def _parse_int(value: Any) -> int | None:
     if value is None:
         return None
     try:

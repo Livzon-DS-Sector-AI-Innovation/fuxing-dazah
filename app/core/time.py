@@ -34,6 +34,8 @@ if __name__ == "__main__":
     # 自检：now() 必须带时区，today() 与 now().date() 一致
     n = now()
     assert n.tzinfo is not None, "now() 必须是 aware datetime"
-    assert n.utcoffset().total_seconds() == 8 * 3600, "偏移必须为 +08:00"
+    utc_offset = n.utcoffset()
+    assert utc_offset is not None
+    assert utc_offset.total_seconds() == 8 * 3600, "偏移必须为 +08:00"
     assert today() == n.date()
     print("ok", n.isoformat(), today().isoformat())

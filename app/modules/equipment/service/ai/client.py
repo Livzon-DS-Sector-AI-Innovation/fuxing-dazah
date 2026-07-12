@@ -1,6 +1,7 @@
 """千文 (Qwen) API 客户端 — OpenAI 兼容接口。"""
 
 import os
+from typing import Any, cast
 
 import httpx
 
@@ -22,9 +23,13 @@ class QwenClient:
         model: str | None = None,
         api_key: str | None = None,
     ):
-        self._base_url = base_url or os.getenv(
-            "EQUIPMENT_AI_BASE_URL",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        self._base_url = cast(
+            str,
+            base_url
+            or os.getenv(
+                "EQUIPMENT_AI_BASE_URL",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
         )
         self._model = model or os.getenv("EQUIPMENT_AI_MODEL", "qwen3.7-plus")
         self._api_key = api_key or os.getenv("EQUIPMENT_AI_API_KEY", "")
@@ -54,7 +59,7 @@ class QwenClient:
             user_prompt: 用户提示词
             temperature: 温度参数
         """
-        body: dict = {
+        body: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -91,7 +96,7 @@ class QwenClient:
             user_prompt: 用户提示词（含当前结果和修改说明）
             temperature: 温度参数
         """
-        body: dict = {
+        body: dict[str, Any] = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -104,7 +109,7 @@ class QwenClient:
 
         return await self._request(body)
 
-    async def _request(self, body: dict) -> str:
+    async def _request(self, body: dict[str, Any]) -> str:
         """发送请求到千文 API，返回响应文本。"""
         resp = await self._client.post("/chat/completions", json=body)
         if resp.is_error:
@@ -118,7 +123,7 @@ class QwenClient:
                 f"千文 API 返回错误 (HTTP {resp.status_code}): {detail}"
             )
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return cast(str, data["choices"][0]["message"]["content"])
 
     async def close(self) -> None:
         await self._client.aclose()

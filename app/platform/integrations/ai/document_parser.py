@@ -71,5 +71,5 @@ class DocumentParser:
 
     @staticmethod
     def _extract_txt(path: str) -> str:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()

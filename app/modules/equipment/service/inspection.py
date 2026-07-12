@@ -6,6 +6,7 @@ import os
 import uuid
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from croniter import croniter  # type: ignore[import-untyped]
 from fastapi import UploadFile
@@ -28,10 +29,15 @@ from app.modules.equipment.models.inspection import (
     InspectionTask,
 )
 from app.modules.equipment.models.inspection_route_location import (
+    RouteEquipmentTemplate,
     RouteLocation,
     RouteLocationEquipment,
 )
-from app.modules.equipment.models.inspection_template import InspectionRecord
+from app.modules.equipment.models.inspection_template import (
+    InspectionRecord,
+    InspectionTemplate,
+    InspectionTemplateItem,
+)
 from app.modules.equipment.models.work_order import WorkOrder
 from app.modules.equipment.schemas.inspection import (
     InspectionScheduleResponse,
@@ -62,7 +68,7 @@ def _parse_numeric_value(s: str | None) -> Decimal | None:
 
 # ═══════════ 路线 ═══════════
 async def create_route(
-    db: AsyncSession, data: dict, ctx: EquipmentAccessContext
+    db: AsyncSession, data: dict[str, Any], ctx: EquipmentAccessContext
 ) -> InspectionRoute:
     data["created_by"] = ctx.user.id
     return await repo.create_route(db, data)
@@ -98,7 +104,7 @@ async def get_routes(
 
 
 async def update_route(
-    db: AsyncSession, route_id: uuid.UUID, data: dict, ctx: EquipmentAccessContext
+    db: AsyncSession, route_id: uuid.UUID, data: dict[str, Any], ctx: EquipmentAccessContext
 ) -> InspectionRoute:
     route = await repo.get_route_by_id(db, route_id)
     if not route:
@@ -125,7 +131,7 @@ async def delete_route(
 async def set_route_locations(
     db: AsyncSession,
     route_id: uuid.UUID,
-    items: list[dict],
+    items: list[dict[str, Any]],
     ctx: EquipmentAccessContext,
 ) -> list[RouteLocation]:
     route = await get_route_by_id(db, route_id)
@@ -153,6 +159,80 @@ async def _get_task(
     return task
 
 
+async def get_inspection_items(
+    db: AsyncSession, task: InspectionTask, equipment_id: uuid.UUID
+) -> tuple[list[InspectionTemplateItem], dict[uuid.UUID, str]]:
+    """获取巡检检查项 — 统一处理线路巡检和设备巡检的多模板合并。
+
+    线路巡检：从 route → locations → equipment → templates 链获取
+    设备巡检（新）：从 task.equipment_templates 按设备匹配
+    设备巡检（旧）：从 task.template_ids 扁平列表（兼容）
+
+    返回 (检查项列表, item_id → template_name 映射)。
+    template_name 预收集避免调用方通过 relationship 懒加载触发 MissingGreenlet。
+    """
+    all_items: list[InspectionTemplateItem] = []
+    template_ids: set[uuid.UUID] = set()
+    item_template_names: dict[uuid.UUID, str] = {}
+
+    if task.route_id:
+        # 线路巡检：找到该设备在路线中的所有模板绑定
+        loc_stmt = select(RouteLocation).where(
+            RouteLocation.route_id == task.route_id,
+            RouteLocation.is_deleted == False,  # noqa: E712
+        )
+        locs = (await db.execute(loc_stmt)).scalars().all()
+
+        for loc in locs:
+            eq_stmt = select(RouteLocationEquipment).where(
+                RouteLocationEquipment.route_location_id == loc.id,
+                RouteLocationEquipment.equipment_id == equipment_id,
+                RouteLocationEquipment.is_deleted == False,  # noqa: E712
+            )
+            route_eqs = (await db.execute(eq_stmt)).scalars().all()
+            for req in route_eqs:
+                tpl_stmt = select(RouteEquipmentTemplate).where(
+                    RouteEquipmentTemplate.route_equipment_id == req.id,
+                    RouteEquipmentTemplate.is_deleted == False,  # noqa: E712
+                )
+                tpls = (await db.execute(tpl_stmt)).scalars().all()
+                for tpl in tpls:
+                    template_ids.add(tpl.template_id)
+
+    elif task.equipment_templates:
+        # 新方式：从设备-模板映射中获取该设备绑定的模板
+        eq_id_str = str(equipment_id)
+        tpl_ids = task.equipment_templates.get(eq_id_str, [])
+        for tid_str in tpl_ids:
+            template_ids.add(uuid.UUID(tid_str))
+
+    elif task.template_ids:
+        # 兼容旧数据：扁平模板列表（所有模板应用于所有设备）
+        for tid_str in task.template_ids:
+            tid = uuid.UUID(tid_str) if isinstance(tid_str, str) else tid_str
+            template_ids.add(tid)
+
+    for tid in template_ids:
+        result = await db.execute(
+            select(InspectionTemplate)
+            .options(selectinload(InspectionTemplate.items))
+            .where(
+                InspectionTemplate.id == tid,
+                InspectionTemplate.is_deleted == False,  # noqa: E712
+            )
+        )
+        template = result.scalar_one_or_none()
+        if template and template.items:
+            tpl_name = template.name
+            for item in sorted(template.items, key=lambda x: x.sort_order):
+                # ponytail: 不去重 — 同名检查项来自不同模板时 agent 需要看到全部
+                # 通过 template_item_id 区分，避免提交时定位到错误的检查项
+                all_items.append(item)
+                item_template_names[item.id] = tpl_name
+
+    return all_items, item_template_names
+
+
 def _validate_transition(current: str, target: str) -> None:
     allowed = _VALID_TRANSITIONS.get(current, [])
     if target not in allowed:
@@ -162,7 +242,7 @@ def _validate_transition(current: str, target: str) -> None:
 
 
 async def create_task(
-    db: AsyncSession, data: dict, ctx: EquipmentAccessContext
+    db: AsyncSession, data: dict[str, Any], ctx: EquipmentAccessContext
 ) -> InspectionTask:
     data["created_by"] = ctx.user.id
     plan_type = data.get("plan_type", "设备巡检")
@@ -480,6 +560,7 @@ async def _create_anomaly_work_order(
         send_work_order_notification,
     )
 
+    assert wo is not None  # 循环内必赋值或抛异常，循环后 wo 一定存在
     await send_work_order_notification(
         wo, equipment, task, responsible_user_id_str,
     )
@@ -491,7 +572,7 @@ async def submit_equipment_check(
     db: AsyncSession,
     task_id: uuid.UUID,
     equipment_id: uuid.UUID,
-    records: list[dict],
+    records: list[dict[str, Any]],
     ctx: EquipmentAccessContext | None = None,
 ) -> list[InspectionRecord]:
     task = await _get_task(db, task_id)
@@ -643,8 +724,6 @@ async def skip_equipment_check(
     先查该设备关联的模板检查项，为每项创建 result="跳过" 的记录。
     如果已有记录则覆盖（先删后建）。
     """
-    from app.modules.equipment.service.ai.service import _get_inspection_items
-
     task = await _get_task(db, task_id)
     if task.status != "执行中":
         raise AppException(
@@ -652,7 +731,7 @@ async def skip_equipment_check(
         )
 
     # 获取该设备的检查项
-    items, _ = await _get_inspection_items(db, task, equipment_id)
+    items, _ = await get_inspection_items(db, task, equipment_id)
     if not items:
         raise AppException(
             message="该设备没有关联检查项，无法跳过"
@@ -807,7 +886,7 @@ async def save_photo_from_base64(
     filename: str = "",
 ) -> InspectionPhoto:
     """从 base64 编码保存巡检照片到 MinIO（或本地）和数据库。"""
-    MAX_SIZE = 10 * 1024 * 1024  # 10 MB
+    max_size = 10 * 1024 * 1024  # 10 MB
 
     # Validate base64
     try:
@@ -815,7 +894,7 @@ async def save_photo_from_base64(
     except Exception as e:
         raise AppException(message=f"图片 base64 解码失败：{e}")
 
-    if len(content) > MAX_SIZE:
+    if len(content) > max_size:
         raise AppException(
             message=f"图片大小 {len(content) / 1024 / 1024:.1f}MB 超过上限 10MB"
         )
@@ -939,7 +1018,7 @@ async def get_history(
 
 async def get_task_detail(
     db: AsyncSession, task_id: uuid.UUID
-) -> dict:
+) -> dict[str, Any]:
     task = await _get_task(db, task_id)
     records = await repo.get_records_by_task(db, task_id)
     photos = await repo.get_photos_by_task(db, task_id)
@@ -991,12 +1070,14 @@ async def _batch_fetch_user_names(
 
 
 async def create_schedule(
-    db: AsyncSession, route_id: uuid.UUID, data: dict,
+    db: AsyncSession, route_id: uuid.UUID, data: dict[str, Any],
 ) -> InspectionRouteSchedule:
     await get_route_by_id(db, route_id)  # validate route exists
     _validate_cron(data["cron_expression"])
-    data["route_id"] = str(route_id)
-    data["assigned_to"] = str(data["assigned_to"])
+    # route_id / assigned_to 是真正的 UUID 列，直接存 UUID，不要 str()：
+    # 否则新建返回对象的这两个字段是 str，与模型声明 Mapped[uuid.UUID]
+    # 及幂等去重分支（re-fetch 出来是 UUID）类型不一致。
+    data["route_id"] = route_id
     data["next_trigger_at"] = compute_next_cron(data["cron_expression"])
     return await repo.create_schedule(db, data)
 
@@ -1024,7 +1105,7 @@ async def get_schedules_by_route(
 
 
 async def update_schedule(
-    db: AsyncSession, schedule_id: uuid.UUID, data: dict,
+    db: AsyncSession, schedule_id: uuid.UUID, data: dict[str, Any],
 ) -> InspectionRouteSchedule:
     schedule = await repo.get_schedule_by_id(db, schedule_id)
     if not schedule:
@@ -1113,7 +1194,7 @@ async def get_anomaly(
 
     return AnomalyResponse(
         equipment_ranking=[
-            AnomalyRankingItem(
+            AnomalyRankingItem(  # pyright: ignore[reportCallIssue]
                 equipment_id=r["equipment_id"],
                 equipment_name=r["equipment_name"],
                 equipment_no=r.get("equipment_no", ""),
@@ -1124,7 +1205,7 @@ async def get_anomaly(
             for r in data["equipment_ranking"]
         ],
         item_ranking=[
-            AnomalyRankingItem(
+            AnomalyRankingItem(  # pyright: ignore[reportCallIssue]
                 template_item_id=r["template_item_id"],
                 item_name=r["item_name"],
                 template_name=r.get("template_name", ""),
