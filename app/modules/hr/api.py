@@ -1756,17 +1756,8 @@ async def delete_trainer(
     trainer_id: UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    from app.modules.hr.models import HrTrainer
-
-    result = await session.execute(
-        select(HrTrainer).where(HrTrainer.id == trainer_id, HrTrainer.is_deleted == False)
-    )
-    trainer = result.scalar_one_or_none()
-    if not trainer:
-        raise HTTPException(404, "内训师不存在")
-    trainer.is_deleted = True
-    trainer.deleted_at = func.now()
-    await session.flush()
+    await session.execute(text("DELETE FROM hr.trainers WHERE id = :id"), {"id": trainer_id})
+    await session.commit()
     return success_response(message="删除成功")
 
 
@@ -1774,15 +1765,8 @@ async def delete_trainer(
 async def clear_trainers(
     session: AsyncSession = Depends(get_db),
 ):
-    from app.modules.hr.models import HrTrainer
-    from sqlalchemy import update as sql_update
-
-    await session.execute(
-        sql_update(HrTrainer)
-        .where(HrTrainer.is_deleted == False)
-        .values(is_deleted=True, deleted_at=func.now())
-    )
-    await session.flush()
+    await session.execute(text("DELETE FROM hr.trainers"))
+    await session.commit()
     return success_response(message="清空成功")
 
 
