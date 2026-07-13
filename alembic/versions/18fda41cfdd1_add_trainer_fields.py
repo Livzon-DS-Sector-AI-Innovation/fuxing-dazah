@@ -15,10 +15,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('trainers', sa.Column('is_level1', sa.String(16), nullable=True, comment='是否一级培训师'), schema='hr')
-    op.add_column('trainers', sa.Column('admin', sa.String(64), nullable=True, comment='培训管理员'), schema='hr')
+    op.execute("ALTER TABLE hr.trainers ADD COLUMN IF NOT EXISTS is_level1 VARCHAR(16)")
+    op.execute("ALTER TABLE hr.trainers ADD COLUMN IF NOT EXISTS admin VARCHAR(64)")
 
 
 def downgrade() -> None:
-    op.drop_column('trainers', 'admin', schema='hr')
-    op.drop_column('trainers', 'is_level1', schema='hr')
+    op.execute("ALTER TABLE hr.trainers DROP COLUMN IF EXISTS admin")
+    op.execute("ALTER TABLE hr.trainers DROP COLUMN IF EXISTS is_level1")
