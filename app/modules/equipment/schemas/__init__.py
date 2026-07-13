@@ -1,15 +1,5 @@
 """Equipment module schemas."""
 
-from app.modules.equipment.schemas.calibration import (
-    CalibrationPlanCreate,
-    CalibrationPlanResponse,
-    CalibrationPlanStatus,
-    CalibrationPlanUpdate,
-    CalibrationRecordCreate,
-    CalibrationRecordResponse,
-    CalibrationResult,
-    CalibrationType,
-)
 from app.modules.equipment.schemas.equipment import (
     EquipmentCategoryCreate,
     EquipmentCategoryResponse,
@@ -190,15 +180,6 @@ __all__ = [
     "WorkOrderVerify",
     "WorkOrderResponse",
     "WorkOrderStatistics",
-    # calibration
-    "CalibrationType",
-    "CalibrationResult",
-    "CalibrationPlanStatus",
-    "CalibrationPlanCreate",
-    "CalibrationPlanUpdate",
-    "CalibrationPlanResponse",
-    "CalibrationRecordCreate",
-    "CalibrationRecordResponse",
     # material consume
     "MaterialConsumeItem",
     "MaterialConsumeRequest",

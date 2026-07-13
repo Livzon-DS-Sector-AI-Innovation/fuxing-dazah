@@ -7,16 +7,22 @@ from typing import Any
 
 from fastmcp.tools.base import ToolResult
 
+from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment.mcp_tools._helpers import (
+    _resolve_equipment,
     _resolve_work_order,
     _wo_to_dict,
 )
 from app.modules.equipment.repository.work_order import (
     get_user_work_orders,
 )
+from app.modules.equipment.schemas import WorkOrderCreate
 from app.modules.equipment.service import (
     complete_work_order,
     start_work_order,
+)
+from app.modules.equipment.service import (
+    create_work_order as service_create_work_order,
 )
 from app.modules.equipment.service.work_order_image import (
     save_photo_from_base64,
@@ -360,5 +366,109 @@ async def submit_work_order_photos(
             "photo_count": success_count,
             "failed_count": failed_count,
             "failed_details": failed_details,
+        },
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Tool 4: 创建维护工单（故障维修 / 异常处理）
+# ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def create_work_order(
+    equipment: str,
+    order_type: str,
+    fault_description: str,
+    operator_id: str,
+    priority: str = "中",
+) -> ToolResult:
+    """
+    创建一个维护工单（故障维修或异常处理）。
+
+    Agent 替用户报修时使用：提供设备、工单类型、故障描述即可创建完整工单。
+    报修人为 operator_id 对应的用户，责任人默认取该设备的责任人。
+    工单创建后会自动飞书通知设备责任人。
+
+    Args:
+        equipment: 设备编号（如 EQ-001）或设备 UUID
+        order_type: 工单类型，必填，仅支持：故障维修 / 异常处理
+        fault_description: 故障或异常的详细描述
+        operator_id: 报修人（实际操作人）的 user_id 或姓名
+        priority: 优先级，可选值：紧急 / 高 / 中 / 低，默认「中」
+    """
+    db = get_db()
+    try:
+        user = await resolve_user(db, operator_id)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    if order_type not in ("故障维修", "异常处理"):
+        return ToolResult(
+            content=f"无效的工单类型「{order_type}」，本工具仅支持：故障维修 / 异常处理。",
+            structured_content={"error": f"无效工单类型：{order_type}"},
+            is_error=True,
+        )
+
+    if priority not in ("紧急", "高", "中", "低"):
+        return ToolResult(
+            content=f"无效的优先级「{priority}」，可选值：紧急 / 高 / 中 / 低。",
+            structured_content={"error": f"无效优先级：{priority}"},
+            is_error=True,
+        )
+
+    if not fault_description or not fault_description.strip():
+        return ToolResult(
+            content="创建工单需要提供 fault_description（故障/异常描述），请补充后重试。",
+            structured_content={"error": "缺少 fault_description"},
+            is_error=True,
+        )
+
+    try:
+        eq = await _resolve_equipment(db, equipment)
+    except ValueError as e:
+        return ToolResult(content=str(e), structured_content={"error": str(e)}, is_error=True)
+
+    from app.modules.equipment.deps import EquipmentAccessContext
+
+    ctx = EquipmentAccessContext(user=user, data_scope="all")
+
+    # 责任人兜底取设备责任人（service 不会自动填工单责任人）
+    data = WorkOrderCreate(
+        equipment_id=eq.id,
+        order_type=order_type,
+        priority=priority,
+        fault_description=fault_description.strip(),
+        responsible_person_id=eq.responsible_person_id,
+    )
+
+    try:
+        result = await service_create_work_order(db, data, ctx)
+    except (AppException, NotFoundException) as e:
+        return ToolResult(content=e.message, structured_content={"error": e.message}, is_error=True)
+
+    await db.commit()
+
+    responsible_set = result.responsible_person_id is not None
+    eq_name = eq.name
+    lines = [
+        f"工单 {result.work_order_no} 创建成功（{order_type} · {eq_name}）",
+        f"优先级：{priority}　报修人：{user.name}　状态：{result.status}",
+    ]
+    if responsible_set:
+        lines.append("已通知设备责任人处理。")
+    else:
+        lines.append("该设备未设置责任人，需先指派责任人才能开始执行。")
+
+    return ToolResult(
+        content="\n".join(lines),
+        structured_content={
+            "success": True,
+            "work_order_no": result.work_order_no,
+            "equipment_name": eq_name,
+            "order_type": order_type,
+            "priority": priority,
+            "status": result.status,
+            "responsible_person_set": responsible_set,
         },
     )

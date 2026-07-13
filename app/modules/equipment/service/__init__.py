@@ -5,17 +5,6 @@ from app.modules.equipment.service.ai.service import (
     get_inspection_items_for_session,
     parse_manual_submission,
 )
-from app.modules.equipment.service.calibration import (
-    create_calibration_plan,
-    create_calibration_record,
-    delete_calibration_plan,
-    get_calibration_plan_by_id,
-    get_calibration_plans,
-    get_calibration_record_by_id,
-    get_calibration_records,
-    get_overdue_calibration_plans,
-    update_calibration_plan,
-)
 from app.modules.equipment.service.data_scope import (
     apply_equipment_scope,
     verify_write_ownership,
@@ -176,16 +165,6 @@ __all__ = [
     # data scope
     "apply_equipment_scope",
     "verify_write_ownership",
-    # calibration
-    "create_calibration_plan",
-    "create_calibration_record",
-    "delete_calibration_plan",
-    "get_calibration_plan_by_id",
-    "get_calibration_plans",
-    "get_calibration_record_by_id",
-    "get_calibration_records",
-    "get_overdue_calibration_plans",
-    "update_calibration_plan",
     # equipment
     "create_equipment",
     "create_equipment_category",

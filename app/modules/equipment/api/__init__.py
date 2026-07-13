@@ -1,8 +1,5 @@
 """设备模块 API 路由入口."""
 
-from app.modules.equipment.api.calibration import (
-    router as calibration_router,
-)
 from app.modules.equipment.api.config import router as config_router
 from app.modules.equipment.api.equipment import (
     router as equipment_router,
@@ -45,9 +42,6 @@ router.include_router(
 )
 router.include_router(
     work_orders_router, prefix="/maintenance/work-orders"
-)
-router.include_router(
-    calibration_router, prefix="/maintenance/calibration"
 )
 router.include_router(
     maintenance_plans_router, prefix="/maintenance/plans"

@@ -12,6 +12,9 @@ from app.modules.equipment.mcp_tools._helpers import (  # noqa: F401
     _resolve_work_order,
     _wo_to_dict,
 )
+from app.modules.equipment.mcp_tools.equipment import (  # noqa: F401
+    search_equipments,
+)
 from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
     get_inspection_check_items,
     get_inspection_task_progress,
@@ -21,6 +24,7 @@ from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
     update_inspection_task,
 )
 from app.modules.equipment.mcp_tools.work_order import (  # noqa: F401
+    create_work_order,
     list_work_orders,
     operate_work_order,
 )

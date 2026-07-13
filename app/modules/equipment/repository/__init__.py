@@ -1,16 +1,5 @@
 """Equipment repository: re-export all public functions."""
 
-from app.modules.equipment.repository.calibration import (
-    create_calibration_plan,
-    create_calibration_record,
-    delete_calibration_plan,
-    get_calibration_plan_by_id,
-    get_calibration_plans,
-    get_calibration_plans_due,
-    get_calibration_record_by_id,
-    get_calibration_records,
-    update_calibration_plan,
-)
 from app.modules.equipment.repository.equipment import (
     count_equipments_by_category,
     count_equipments_by_location,
@@ -172,16 +161,6 @@ from app.modules.equipment.repository.work_order_image import (
 )
 
 __all__ = [
-    # calibration
-    "create_calibration_plan",
-    "create_calibration_record",
-    "delete_calibration_plan",
-    "get_calibration_plan_by_id",
-    "get_calibration_plans",
-    "get_calibration_plans_due",
-    "get_calibration_record_by_id",
-    "get_calibration_records",
-    "update_calibration_plan",
     # failure code
     "FailureCodeModel",
     "count_equipments_by_category",

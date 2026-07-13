@@ -1,9 +1,5 @@
 """Equipment ORM models."""
 
-from app.modules.equipment.models.calibration import (
-    CalibrationPlan,
-    CalibrationRecord,
-)
 from app.modules.equipment.models.equipment import (
     Equipment,
     EquipmentCategory,
@@ -49,8 +45,6 @@ from app.modules.equipment.models.work_order import WorkOrder
 from app.modules.equipment.models.work_order_image import WorkOrderImage
 
 __all__ = [
-    "CalibrationPlan",
-    "CalibrationRecord",
     "Equipment",
     "EquipmentCategory",
     "EquipmentCategoryLink",
