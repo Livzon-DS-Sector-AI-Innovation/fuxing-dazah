@@ -15,10 +15,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # SOP 和岗位培训数据量大（~8MB），alembic 逐行执行太慢
-    # 请在服务器上部署后手动执行：
-    #   psql -U postgres -d dazah -f scripts/seed_sop_data.sql
-    pass
+    seed_file = Path(__file__).parent.parent.parent / "scripts" / "seed_sop_data.sql"
+    if seed_file.exists():
+        with open(seed_file) as f:
+            sql = f.read()
+        for stmt in sql.split(';\n'):
+            stmt = stmt.strip()
+            if stmt and not stmt.startswith('--'):
+                try:
+                    op.execute(stmt)
+                except Exception:
+                    pass  # 已存在的跳过
 
 
 def downgrade() -> None:
