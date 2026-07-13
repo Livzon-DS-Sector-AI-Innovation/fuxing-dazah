@@ -8,6 +8,8 @@ import {
   createInstrument as apiCreateInstrument,
   updateInstrument as apiUpdateInstrument,
   deleteInstrument as apiDeleteInstrument,
+  batchDeleteInstruments as apiBatchDeleteInstruments,
+  fetchInstrumentIds as apiFetchInstrumentIds,
   fetchInstrumentDepartments,
   fetchInstrumentFilterOptions,
   fetchGasDetectors,
@@ -15,6 +17,8 @@ import {
   createGasDetector as apiCreateGasDetector,
   updateGasDetector as apiUpdateGasDetector,
   deleteGasDetector as apiDeleteGasDetector,
+  batchDeleteGasDetectors as apiBatchDeleteGasDetectors,
+  fetchGasDetectorIds as apiFetchGasDetectorIds,
   fetchGasDetectorDepartments,
   fetchGasDetectorFilterOptions,
   fetchMeterOverview,
@@ -47,7 +51,9 @@ import {
   GasDetectorUpdate,
   GasDetectorFilter,
   BatchCreateItem,
+  BatchCreateResult,
   GasDetectorBatchCreateItem,
+  BatchDeleteResponse,
   DepartmentCreate,
   DepartmentUpdate,
 } from '@/types/meter'
@@ -81,6 +87,16 @@ export async function deleteInstrument(id: string) {
   revalidatePath('/meter/instruments')
 }
 
+export async function batchDeleteInstruments(ids: string[]): Promise<BatchDeleteResponse> {
+  const result = await apiBatchDeleteInstruments(ids)
+  revalidatePath('/meter/instruments')
+  return result
+}
+
+export async function getInstrumentIds(params: InstrumentFilter = {}): Promise<string[]> {
+  return apiFetchInstrumentIds(params)
+}
+
 export async function getInstrumentDepartments() {
   return fetchInstrumentDepartments()
 }
@@ -112,6 +128,16 @@ export async function updateGasDetector(id: string, data: GasDetectorUpdate) {
 export async function deleteGasDetector(id: string) {
   await apiDeleteGasDetector(id)
   revalidatePath('/meter/gas-detectors')
+}
+
+export async function batchDeleteGasDetectors(ids: string[]): Promise<BatchDeleteResponse> {
+  const result = await apiBatchDeleteGasDetectors(ids)
+  revalidatePath('/meter/gas-detectors')
+  return result
+}
+
+export async function getGasDetectorIds(params: GasDetectorFilter = {}): Promise<string[]> {
+  return apiFetchGasDetectorIds(params)
 }
 
 export async function getGasDetectorDepartments() {
@@ -255,6 +281,7 @@ export async function exportInstrumentsExcel(filters: InstrumentFilter = {}): Pr
   if (filters.asset_number) sp.set('asset_number', filters.asset_number)
   if (filters.instrument_name) sp.set('instrument_name', filters.instrument_name)
   if (filters.model_spec) sp.set('model_spec', filters.model_spec)
+  if (filters.measurement_range) sp.set('measurement_range', filters.measurement_range)
   if (filters.accuracy_grade) sp.set('accuracy_grade', filters.accuracy_grade)
   if (filters.serial_number) sp.set('serial_number', filters.serial_number)
   if (filters.location) sp.set('location', filters.location)
@@ -265,6 +292,8 @@ export async function exportInstrumentsExcel(filters: InstrumentFilter = {}): Pr
   if (filters.color_marking) sp.set('color_marking', filters.color_marking)
   if (filters.next_calibration_before) sp.set('next_calibration_before', filters.next_calibration_before)
   if (filters.next_calibration_after) sp.set('next_calibration_after', filters.next_calibration_after)
+  if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
+  if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())
@@ -283,12 +312,20 @@ export async function exportGasDetectorsExcel(filters: GasDetectorFilter = {}): 
   if (filters.instrument_name) sp.set('instrument_name', filters.instrument_name)
   if (filters.detection_model) sp.set('detection_model', filters.detection_model)
   if (filters.product_number) sp.set('product_number', filters.product_number)
+  if (filters.measurement_range) sp.set('measurement_range', filters.measurement_range)
   if (filters.installation_type) sp.set('installation_type', filters.installation_type)
   if (filters.installation_location) sp.set('installation_location', filters.installation_location)
   if (filters.medium) sp.set('medium', filters.medium)
+  if (filters.calibration_factor) sp.set('calibration_factor', filters.calibration_factor)
+  if (filters.manufacturer_supplier) sp.set('manufacturer_supplier', filters.manufacturer_supplier)
+  if (filters.manufacturer) sp.set('manufacturer', filters.manufacturer)
+  if (filters.status) sp.set('status', filters.status)
+  if (filters.detection_unit) sp.set('detection_unit', filters.detection_unit)
   if (filters.calibration_result) sp.set('calibration_result', filters.calibration_result)
   if (filters.next_calibration_before) sp.set('next_calibration_before', filters.next_calibration_before)
   if (filters.next_calibration_after) sp.set('next_calibration_after', filters.next_calibration_after)
+  if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
+  if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())

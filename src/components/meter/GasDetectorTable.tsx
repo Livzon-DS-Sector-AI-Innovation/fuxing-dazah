@@ -1,38 +1,43 @@
 'use client'
 
 import { useCallback, useEffect, useState, type Key } from 'react'
-import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm, DatePicker } from 'antd'
+import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { GasDetectorRecord, GasDetectorFilter, GasDetectorFilterOptions } from '@/types/meter'
-import { deleteGasDetector, getGasDetectors, exportGasDetectorReports, exportGasDetectorsExcel, getGasDetectorFilterOptions } from '@/actions/meter'
+import { deleteGasDetector, getGasDetectors, exportGasDetectorReports, exportGasDetectorsExcel, getGasDetectorFilterOptions, batchDeleteGasDetectors, getGasDetectorIds } from '@/actions/meter'
 import { GasDetectorDrawer } from './GasDetectorDrawer'
 import { ReportDialog } from './ReportDialog'
 import { BatchUploadDialog } from './BatchUploadDialog'
 import { BatchCreateModal } from './BatchCreateModal'
 import { LedgerImportModal } from './LedgerImportModal'
-import dayjs, { Dayjs } from 'dayjs'
+import { GasDetectorDateFilterModal } from './GasDetectorDateFilterModal'
+import dayjs from 'dayjs'
 
-/** 筛选下拉框通用渲染 */
+/** 筛选下拉框通用渲染 — 多选模式 */
 function renderFilterDropdown(
   options: string[],
   selectedValue: string | undefined,
   setValue: (v: string | undefined) => void,
   placeholder: string,
 ) {
+  const selectedArr = selectedValue ? selectedValue.split(',').filter(Boolean) : []
   return ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; selectedKeys: Key[]; confirm: () => void; clearFilters?: () => void }) => (
-    <div style={{ padding: 8, minWidth: 200 }}>
+    <div style={{ padding: 8, minWidth: 220 }}>
       <Select
+        mode="multiple"
         allowClear
         showSearch
         placeholder={placeholder}
-        value={selectedKeys[0] ?? undefined}
-        onChange={(value) => {
-          const v = value as string | undefined
-          setSelectedKeys(v ? [v] : [])
-          setValue(v ?? undefined)
+        value={selectedArr}
+        onChange={(values) => {
+          const arr = values as string[]
+          const joined = arr.length > 0 ? arr.join(',') : undefined
+          setSelectedKeys(arr)
+          setValue(joined ?? undefined)
         }}
         style={{ width: '100%' }}
+        maxTagCount="responsive"
         options={options.map(v => ({ label: v, value: v }))}
         filterOption={(input, option) =>
           (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
@@ -48,12 +53,14 @@ const GAS_DETECTOR_FILTER_KEY: Record<string, keyof GasDetectorFilter> = {
   instrument_name: 'instrument_name',
   detection_model: 'detection_model',
   product_number: 'product_number',
+  measurement_range: 'measurement_range',
   installation_type: 'installation_type',
   installation_location: 'installation_location',
   medium: 'medium',
   calibration_factor: 'calibration_factor',
   manufacturer_supplier: 'manufacturer_supplier',
   manufacturer: 'manufacturer',
+  status: 'status',
   detection_unit: 'detection_unit',
   calibration_result: 'calibration_result',
   calibration_date_before: 'calibration_date_before',
@@ -62,49 +69,8 @@ const GAS_DETECTOR_FILTER_KEY: Record<string, keyof GasDetectorFilter> = {
   next_calibration_after: 'next_calibration_after',
 }
 
-/** 单个日期筛选下拉面板 */
-function renderDateFilterDropdown(
-  currentValue: string | undefined,
-  onApply: (value: string | undefined) => void,
-) {
-  let selected: Dayjs | null = currentValue ? dayjs(currentValue) : null
-  return ({ setSelectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; confirm: () => void; clearFilters?: () => void }) => (
-    <div style={{ padding: 8, minWidth: 200 }}>
-      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>起始日期</div>
-      <DatePicker
-        style={{ width: '100%' }}
-        key={currentValue || '__empty__'}
-        defaultValue={selected}
-        onChange={(d) => { selected = d }}
-      />
-      <div style={{ marginTop: 8 }}>
-        <Space>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => {
-              const value = selected?.format('YYYY-MM-DD')
-              setSelectedKeys(value ? [value] : [])
-              onApply(value)
-              confirm()
-            }}
-          >确定</Button>
-          <Button
-            size="small"
-            onClick={() => {
-              setSelectedKeys([])
-              onApply(undefined)
-              if (clearFilters) clearFilters()
-            }}
-          >重置</Button>
-        </Space>
-      </div>
-    </div>
-  )
-}
-
 export function GasDetectorTable() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [data, setData] = useState<GasDetectorRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -118,17 +84,22 @@ export function GasDetectorTable() {
   const [batchUploadOpen, setBatchUploadOpen] = useState(false)
   const [batchCreateOpen, setBatchCreateOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectAllAcrossPages, setSelectAllAcrossPages] = useState(false)
+  const [fetchingAllIds, setFetchingAllIds] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [importModalOpen, setImportModalOpen] = useState(false)
+  const [dateModalOpen, setDateModalOpen] = useState(false)
+  const [dateModalField, setDateModalField] = useState<'calibration_date' | 'next_calibration_date'>('calibration_date')
 
   // 列头筛选状态（服务端筛选）
   const [columnFilters, setColumnFilters] = useState<Record<string, string | undefined>>({})
   const [dateFilters, setDateFilters] = useState<Record<string, string | undefined>>({})
   const [filterOptions, setFilterOptions] = useState<GasDetectorFilterOptions>({
     department: [], instrument_name: [], detection_model: [], product_number: [],
+    measurement_range: [],
     installation_type: [], installation_location: [], medium: [], calibration_factor: [],
-    manufacturer_supplier: [], manufacturer: [], detection_unit: [], calibration_result: [],
+    manufacturer_supplier: [], manufacturer: [], status: [], detection_unit: [], calibration_result: [],
   })
 
   // 首次加载时获取全表筛选选项
@@ -252,10 +223,72 @@ export function GasDetectorTable() {
     }
   }
 
+  const buildFilterParams = useCallback((): GasDetectorFilter => {
+    const params: GasDetectorFilter = {}
+    if (keyword) params.keyword = keyword
+    for (const [field, value] of Object.entries(columnFilters)) {
+      const key = GAS_DETECTOR_FILTER_KEY[field]
+      if (key && value) (params as Record<string, unknown>)[key] = value
+    }
+    for (const [field, value] of Object.entries(dateFilters)) {
+      const key = GAS_DETECTOR_FILTER_KEY[field]
+      if (key && value) (params as Record<string, unknown>)[key] = value
+    }
+    return params
+  }, [keyword, columnFilters, dateFilters])
+
+  const handleSelectAllAcrossPages = async () => {
+    if (selectAllAcrossPages) {
+      setSelectAllAcrossPages(false)
+      setSelectedRowKeys([])
+      return
+    }
+    setFetchingAllIds(true)
+    try {
+      const ids = await getGasDetectorIds(buildFilterParams())
+      setSelectedRowKeys(ids)
+      setSelectAllAcrossPages(true)
+      message.success(`已选中 ${ids.length} 条记录`)
+    } catch {
+      message.error('获取全量 ID 失败')
+    } finally {
+      setFetchingAllIds(false)
+    }
+  }
+
+  const handleBatchDelete = () => {
+    const count = selectedRowKeys.length
+    modal.confirm({
+      title: '批量删除确认',
+      content: `确定要删除选中的 ${count} 条记录吗？此操作不可撤销。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const result = await batchDeleteGasDetectors(selectedRowKeys as string[])
+          message.success(`成功删除 ${result.deleted_count} 条记录`)
+          setSelectedRowKeys([])
+          setSelectAllAcrossPages(false)
+          fetchData()
+        } catch {
+          message.error('批量删除失败')
+        }
+      },
+    })
+  }
+
+  const statusTag = (status?: string) => {
+    if (status === '在用') return <Tag color="green">在用</Tag>
+    if (status === '超期') return <Tag color="orange">超期</Tag>
+    if (status === '停用') return <Tag color="red">停用</Tag>
+    return <Tag>{status || '-'}</Tag>
+  }
+
   const columns: TableColumnsType<GasDetectorRecord> = [
     {
       title: '部门', dataIndex: 'department', width: 120, ellipsis: true,
-      filteredValue: columnFilters.department ? [columnFilters.department] : null,
+      filteredValue: columnFilters.department ? columnFilters.department.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.department,
         columnFilters.department,
@@ -266,7 +299,7 @@ export function GasDetectorTable() {
     },
     {
       title: '器具名称', dataIndex: 'instrument_name', width: 180, ellipsis: true,
-      filteredValue: columnFilters.instrument_name ? [columnFilters.instrument_name] : null,
+      filteredValue: columnFilters.instrument_name ? columnFilters.instrument_name.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.instrument_name,
         columnFilters.instrument_name,
@@ -277,7 +310,7 @@ export function GasDetectorTable() {
     },
     {
       title: '检测型号', dataIndex: 'detection_model', width: 140, ellipsis: true,
-      filteredValue: columnFilters.detection_model ? [columnFilters.detection_model] : null,
+      filteredValue: columnFilters.detection_model ? columnFilters.detection_model.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.detection_model,
         columnFilters.detection_model,
@@ -286,10 +319,19 @@ export function GasDetectorTable() {
       ),
       onFilter: () => true,
     },
-    { title: '量程', dataIndex: 'measurement_range', width: 120, ellipsis: true },
+    { title: '量程', dataIndex: 'measurement_range', width: 120, ellipsis: true,
+      filteredValue: columnFilters.measurement_range ? columnFilters.measurement_range.split(',') : null,
+      filterDropdown: renderFilterDropdown(
+        filterOptions.measurement_range,
+        columnFilters.measurement_range,
+        (v) => setColumnFilter('measurement_range', v),
+        '选择量程',
+      ),
+      onFilter: () => true,
+    },
     {
       title: '产品编号', dataIndex: 'product_number', width: 120,
-      filteredValue: columnFilters.product_number ? [columnFilters.product_number] : null,
+      filteredValue: columnFilters.product_number ? columnFilters.product_number.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.product_number,
         columnFilters.product_number,
@@ -300,7 +342,7 @@ export function GasDetectorTable() {
     },
     {
       title: '安装方式', dataIndex: 'installation_type', width: 90,
-      filteredValue: columnFilters.installation_type ? [columnFilters.installation_type] : null,
+      filteredValue: columnFilters.installation_type ? columnFilters.installation_type.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.installation_type,
         columnFilters.installation_type,
@@ -312,7 +354,7 @@ export function GasDetectorTable() {
     },
     {
       title: '安装位置', dataIndex: 'installation_location', width: 180, ellipsis: true,
-      filteredValue: columnFilters.installation_location ? [columnFilters.installation_location] : null,
+      filteredValue: columnFilters.installation_location ? columnFilters.installation_location.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.installation_location,
         columnFilters.installation_location,
@@ -323,7 +365,7 @@ export function GasDetectorTable() {
     },
     {
       title: '使用介质', dataIndex: 'medium', width: 120, ellipsis: true,
-      filteredValue: columnFilters.medium ? [columnFilters.medium] : null,
+      filteredValue: columnFilters.medium ? columnFilters.medium.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.medium,
         columnFilters.medium,
@@ -334,7 +376,7 @@ export function GasDetectorTable() {
     },
     {
       title: '标定系数', dataIndex: 'calibration_factor', width: 100, ellipsis: true,
-      filteredValue: columnFilters.calibration_factor ? [columnFilters.calibration_factor] : null,
+      filteredValue: columnFilters.calibration_factor ? columnFilters.calibration_factor.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.calibration_factor,
         columnFilters.calibration_factor,
@@ -345,7 +387,7 @@ export function GasDetectorTable() {
     },
     {
       title: '传感器出厂日期', dataIndex: 'manufacturer_supplier', width: 140, ellipsis: true,
-      filteredValue: columnFilters.manufacturer_supplier ? [columnFilters.manufacturer_supplier] : null,
+      filteredValue: columnFilters.manufacturer_supplier ? columnFilters.manufacturer_supplier.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.manufacturer_supplier,
         columnFilters.manufacturer_supplier,
@@ -356,7 +398,7 @@ export function GasDetectorTable() {
     },
     {
       title: '制造单位', dataIndex: 'manufacturer', width: 140, ellipsis: true,
-      filteredValue: columnFilters.manufacturer ? [columnFilters.manufacturer] : null,
+      filteredValue: columnFilters.manufacturer ? columnFilters.manufacturer.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.manufacturer,
         columnFilters.manufacturer,
@@ -366,8 +408,20 @@ export function GasDetectorTable() {
       onFilter: () => true,
     },
     {
+      title: '状态', dataIndex: 'status', width: 80,
+      filteredValue: columnFilters.status ? columnFilters.status.split(',') : null,
+      filterDropdown: renderFilterDropdown(
+        filterOptions.status,
+        columnFilters.status,
+        (v) => setColumnFilter('status', v),
+        '选择状态',
+      ),
+      onFilter: () => true,
+      render: (_: unknown, r: GasDetectorRecord) => statusTag(r.status),
+    },
+    {
       title: '检测单位', dataIndex: 'detection_unit', width: 120, ellipsis: true,
-      filteredValue: columnFilters.detection_unit ? [columnFilters.detection_unit] : null,
+      filteredValue: columnFilters.detection_unit ? columnFilters.detection_unit.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.detection_unit,
         columnFilters.detection_unit,
@@ -379,10 +433,13 @@ export function GasDetectorTable() {
     {
       title: '检定时间', dataIndex: 'calibration_date', width: 110,
       render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD') : '-',
-      filteredValue: null,
-      filterDropdown: renderDateFilterDropdown(
-        dateFilters.calibration_date_after,
-        (v) => setDateFilter('calibration_date_after', v),
+      filteredValue: (dateFilters.calibration_date_after || dateFilters.calibration_date_before) ? [dateFilters.calibration_date_after || ''] : null,
+      filterDropdown: () => (
+        <div style={{ padding: 8, minWidth: 160 }}>
+          <Button type="link" size="small" onClick={() => { setDateModalField('calibration_date'); setDateModalOpen(true) }}>
+            日期筛选...
+          </Button>
+        </div>
       ),
       onFilter: () => true,
     },
@@ -394,16 +451,19 @@ export function GasDetectorTable() {
         const overdue = d.isBefore(dayjs())
         return <span style={{ color: overdue ? '#e03131' : undefined }}>{d.format('YYYY-MM-DD')}</span>
       },
-      filteredValue: null,
-      filterDropdown: renderDateFilterDropdown(
-        dateFilters.next_calibration_after,
-        (v) => setDateFilter('next_calibration_after', v),
+      filteredValue: (dateFilters.next_calibration_after || dateFilters.next_calibration_before) ? [dateFilters.next_calibration_after || ''] : null,
+      filterDropdown: () => (
+        <div style={{ padding: 8, minWidth: 160 }}>
+          <Button type="link" size="small" onClick={() => { setDateModalField('next_calibration_date'); setDateModalOpen(true) }}>
+            日期筛选...
+          </Button>
+        </div>
       ),
       onFilter: () => true,
     },
     {
       title: '检定结论', dataIndex: 'calibration_result', width: 80,
-      filteredValue: columnFilters.calibration_result ? [columnFilters.calibration_result] : null,
+      filteredValue: columnFilters.calibration_result ? columnFilters.calibration_result.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.calibration_result,
         columnFilters.calibration_result,
@@ -451,35 +511,39 @@ export function GasDetectorTable() {
             allowClear
           />
           {/* 已激活筛选标签 */}
-          {Object.entries(columnFilters).filter(([, v]) => v).map(([field, value]) => {
+          {Object.entries(columnFilters).filter(([, v]) => v).flatMap(([field, value]) => {
             const labels: Record<string, string> = {
               department: '部门', instrument_name: '器具名称', detection_model: '检测型号',
-              product_number: '产品编号', installation_type: '安装方式',
+              product_number: '产品编号', measurement_range: '量程', installation_type: '安装方式',
               installation_location: '安装位置', medium: '介质',
               calibration_factor: '标定系数', manufacturer_supplier: '传感器出厂日期',
-              manufacturer: '制造单位', detection_unit: '检测单位',
+              manufacturer: '制造单位', status: '状态', detection_unit: '检测单位',
               calibration_result: '检定结论',
             }
-            return (
+            const values = value!.split(',').filter(Boolean)
+            return values.map((v) => (
               <Tag
-                key={field}
+                key={`${field}-${v}`}
                 closable
-                onClose={() => setColumnFilter(field, undefined)}
-              >{labels[field] || field}: {value}</Tag>
-            )
+                onClose={() => {
+                  const newVals = values.filter(x => x !== v)
+                  setColumnFilter(field, newVals.length > 0 ? newVals.join(',') : undefined)
+                }}
+              >{labels[field] || field}: {v}</Tag>
+            ))
           })}
           {/* 日期筛选标签 */}
           {dateFilters.calibration_date_after && (
             <Tag
               closable
-              onClose={() => setDateFilter('calibration_date_after', undefined)}
-            >检定时间 ≥ {dateFilters.calibration_date_after}</Tag>
+              onClose={() => { setDateFilter('calibration_date_after', undefined); setDateFilter('calibration_date_before', undefined) }}
+            >检定时间: {dateFilters.calibration_date_after}{dateFilters.calibration_date_before && dateFilters.calibration_date_before !== dateFilters.calibration_date_after ? ` ~ ${dateFilters.calibration_date_before}` : ''}</Tag>
           )}
           {dateFilters.next_calibration_after && (
             <Tag
               closable
-              onClose={() => setDateFilter('next_calibration_after', undefined)}
-            >下次检定 ≥ {dateFilters.next_calibration_after}</Tag>
+              onClose={() => { setDateFilter('next_calibration_after', undefined); setDateFilter('next_calibration_before', undefined) }}
+            >下次检定: {dateFilters.next_calibration_after}{dateFilters.next_calibration_before && dateFilters.next_calibration_before !== dateFilters.next_calibration_after ? ` ~ ${dateFilters.next_calibration_before}` : ''}</Tag>
           )}
         </Space>
         <Space>
@@ -489,6 +553,19 @@ export function GasDetectorTable() {
           <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0} onClick={handleExportReports}>
             批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
           </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            onClick={handleBatchDelete}
+          >
+            批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+          </Button>
+          {selectedRowKeys.length > 0 && total > pageSize && (
+            <Button loading={fetchingAllIds} onClick={handleSelectAllAcrossPages}>
+              {selectAllAcrossPages ? `取消全选 (${selectedRowKeys.length})` : `全选所有 ${total} 条`}
+            </Button>
+          )}
           <Button icon={<FileExcelOutlined />} loading={exportingExcel} onClick={handleExportExcel}>导出Excel</Button>
           <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>
         </Space>
@@ -502,7 +579,10 @@ export function GasDetectorTable() {
         scroll={{ x: 1500 }}
         rowSelection={{
           selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys),
+          onChange: (keys) => {
+            setSelectedRowKeys(keys)
+            if (keys.length === 0) setSelectAllAcrossPages(false)
+          },
         }}
         pagination={{
           current: page,
@@ -545,6 +625,28 @@ export function GasDetectorTable() {
         open={importModalOpen}
         source="gas_detector"
         onClose={() => { setImportModalOpen(false); fetchData() }}
+      />
+
+      <GasDetectorDateFilterModal
+        open={dateModalOpen}
+        initialField={dateModalField}
+        columnFilters={columnFilters}
+        keyword={keyword}
+        onClose={() => setDateModalOpen(false)}
+        onConfirm={(params) => {
+          setDateFilter('calibration_date_after', undefined)
+          setDateFilter('calibration_date_before', undefined)
+          setDateFilter('next_calibration_after', undefined)
+          setDateFilter('next_calibration_before', undefined)
+          if (params.field === 'calibration_date') {
+            if (params.after) setDateFilter('calibration_date_after', params.after)
+            if (params.before) setDateFilter('calibration_date_before', params.before)
+          } else {
+            if (params.after) setDateFilter('next_calibration_after', params.after)
+            if (params.before) setDateFilter('next_calibration_before', params.before)
+          }
+          setDateModalOpen(false)
+        }}
       />
     </div>
   )

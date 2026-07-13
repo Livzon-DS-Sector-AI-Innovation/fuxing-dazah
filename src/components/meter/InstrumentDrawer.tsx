@@ -74,6 +74,7 @@ export function InstrumentDrawer({ open, record, onClose }: Props) {
   const statusOptions = [
     { label: '在用', value: '在用' },
     { label: '停用', value: '停用' },
+    { label: '超期', value: '超期' },
   ]
 
   return (

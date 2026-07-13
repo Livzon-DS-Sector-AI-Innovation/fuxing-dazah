@@ -3,37 +3,41 @@
 import { useCallback, useEffect, useState, type Key } from 'react'
 import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
-import { DatePicker } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { InstrumentRecord, InstrumentFilter, InstrumentFilterOptions } from '@/types/meter'
-import { deleteInstrument, getInstruments, exportInstrumentReports, exportInstrumentsExcel, getInstrumentFilterOptions } from '@/actions/meter'
+import { deleteInstrument, getInstruments, exportInstrumentReports, exportInstrumentsExcel, getInstrumentFilterOptions, batchDeleteInstruments, getInstrumentIds } from '@/actions/meter'
 import { InstrumentDrawer } from './InstrumentDrawer'
 import { ReportDialog } from './ReportDialog'
 import { BatchUploadDialog } from './BatchUploadDialog'
 import { BatchCreateModal } from './BatchCreateModal'
 import { LedgerImportModal } from './LedgerImportModal'
-import dayjs, { Dayjs } from 'dayjs'
+import { InstrumentDateFilterModal } from './InstrumentDateFilterModal'
+import dayjs from 'dayjs'
 
-/** 筛选下拉框通用渲染 */
+/** 筛选下拉框通用渲染 — 多选模式 */
 function renderFilterDropdown(
   options: string[],
   selectedValue: string | undefined,
   setValue: (v: string | undefined) => void,
   placeholder: string,
 ) {
+  const selectedArr = selectedValue ? selectedValue.split(',').filter(Boolean) : []
   return ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; selectedKeys: Key[]; confirm: () => void; clearFilters?: () => void }) => (
-    <div style={{ padding: 8, minWidth: 200 }}>
+    <div style={{ padding: 8, minWidth: 220 }}>
       <Select
+        mode="multiple"
         allowClear
         showSearch
         placeholder={placeholder}
-        value={selectedKeys[0] ?? undefined}
-        onChange={(value) => {
-          const v = value as string | undefined
-          setSelectedKeys(v ? [v] : [])
-          setValue(v ?? undefined)
+        value={selectedArr}
+        onChange={(values) => {
+          const arr = values as string[]
+          const joined = arr.length > 0 ? arr.join(',') : undefined
+          setSelectedKeys(arr)
+          setValue(joined ?? undefined)
         }}
         style={{ width: '100%' }}
+        maxTagCount="responsive"
         options={options.map(v => ({ label: v, value: v }))}
         filterOption={(input, option) =>
           (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
@@ -49,6 +53,7 @@ const INSTRUMENT_FILTER_KEY: Record<string, keyof InstrumentFilter> = {
   asset_number: 'asset_number',
   instrument_name: 'instrument_name',
   model_spec: 'model_spec',
+  measurement_range: 'measurement_range',
   accuracy_grade: 'accuracy_grade',
   serial_number: 'serial_number',
   location: 'location',
@@ -63,49 +68,8 @@ const INSTRUMENT_FILTER_KEY: Record<string, keyof InstrumentFilter> = {
   next_calibration_after: 'next_calibration_after',
 }
 
-/** 单个日期筛选下拉面板 */
-function renderDateFilterDropdown(
-  currentValue: string | undefined,
-  onApply: (value: string | undefined) => void,
-) {
-  let selected: Dayjs | null = currentValue ? dayjs(currentValue) : null
-  return ({ setSelectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; confirm: () => void; clearFilters?: () => void }) => (
-    <div style={{ padding: 8, minWidth: 200 }}>
-      <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>起始日期</div>
-      <DatePicker
-        style={{ width: '100%' }}
-        key={currentValue || '__empty__'}
-        defaultValue={selected}
-        onChange={(d) => { selected = d }}
-      />
-      <div style={{ marginTop: 8 }}>
-        <Space>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => {
-              const value = selected?.format('YYYY-MM-DD')
-              setSelectedKeys(value ? [value] : [])
-              onApply(value)
-              confirm()
-            }}
-          >确定</Button>
-          <Button
-            size="small"
-            onClick={() => {
-              setSelectedKeys([])
-              onApply(undefined)
-              if (clearFilters) clearFilters()
-            }}
-          >重置</Button>
-        </Space>
-      </div>
-    </div>
-  )
-}
-
 export function InstrumentTable() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const [data, setData] = useState<InstrumentRecord[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
@@ -119,15 +83,20 @@ export function InstrumentTable() {
   const [batchUploadOpen, setBatchUploadOpen] = useState(false)
   const [batchCreateOpen, setBatchCreateOpen] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectAllAcrossPages, setSelectAllAcrossPages] = useState(false)
+  const [fetchingAllIds, setFetchingAllIds] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [importModalOpen, setImportModalOpen] = useState(false)
+  const [dateModalOpen, setDateModalOpen] = useState(false)
+  const [dateModalField, setDateModalField] = useState<'calibration_date' | 'next_calibration_date'>('calibration_date')
 
   // 列头筛选状态（服务端筛选）
   const [columnFilters, setColumnFilters] = useState<Record<string, string | undefined>>({})
   const [dateFilters, setDateFilters] = useState<Record<string, string | undefined>>({})
   const [filterOptions, setFilterOptions] = useState<InstrumentFilterOptions>({
     department: [], asset_number: [], instrument_name: [], model_spec: [],
+    measurement_range: [],
     accuracy_grade: [], serial_number: [], location: [], manufacturer: [],
     status: [], calibration_unit: [], calibration_result: [], color_marking: [],
   })
@@ -247,6 +216,62 @@ export function InstrumentTable() {
     }
   }
 
+  // 构建当前筛选参数
+  const buildFilterParams = useCallback((): InstrumentFilter => {
+    const params: InstrumentFilter = {}
+    if (keyword) params.keyword = keyword
+    for (const [field, value] of Object.entries(columnFilters)) {
+      const key = INSTRUMENT_FILTER_KEY[field]
+      if (key && value) (params as Record<string, unknown>)[key] = value
+    }
+    for (const [field, value] of Object.entries(dateFilters)) {
+      const key = INSTRUMENT_FILTER_KEY[field]
+      if (key && value) (params as Record<string, unknown>)[key] = value
+    }
+    return params
+  }, [keyword, columnFilters, dateFilters])
+
+  const handleSelectAllAcrossPages = async () => {
+    if (selectAllAcrossPages) {
+      setSelectAllAcrossPages(false)
+      setSelectedRowKeys([])
+      return
+    }
+    setFetchingAllIds(true)
+    try {
+      const ids = await getInstrumentIds(buildFilterParams())
+      setSelectedRowKeys(ids)
+      setSelectAllAcrossPages(true)
+      message.success(`已选中 ${ids.length} 条记录`)
+    } catch {
+      message.error('获取全量 ID 失败')
+    } finally {
+      setFetchingAllIds(false)
+    }
+  }
+
+  const handleBatchDelete = () => {
+    const count = selectedRowKeys.length
+    modal.confirm({
+      title: '批量删除确认',
+      content: `确定要删除选中的 ${count} 条记录吗？此操作不可撤销。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const result = await batchDeleteInstruments(selectedRowKeys as string[])
+          message.success(`成功删除 ${result.deleted_count} 条记录`)
+          setSelectedRowKeys([])
+          setSelectAllAcrossPages(false)
+          fetchData()
+        } catch {
+          message.error('批量删除失败')
+        }
+      },
+    })
+  }
+
   const handleDrawerClose = () => {
     setDrawerOpen(false)
     setEditingRecord(null)
@@ -263,7 +288,7 @@ export function InstrumentTable() {
   const columns: TableColumnsType<InstrumentRecord> = [
     {
       title: '部门', dataIndex: 'department', width: 120, ellipsis: true,
-      filteredValue: columnFilters.department ? [columnFilters.department] : null,
+      filteredValue: columnFilters.department ? columnFilters.department.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.department,
         columnFilters.department,
@@ -274,7 +299,7 @@ export function InstrumentTable() {
     },
     {
       title: '资产编号', dataIndex: 'asset_number', width: 120,
-      filteredValue: columnFilters.asset_number ? [columnFilters.asset_number] : null,
+      filteredValue: columnFilters.asset_number ? columnFilters.asset_number.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.asset_number,
         columnFilters.asset_number,
@@ -285,7 +310,7 @@ export function InstrumentTable() {
     },
     {
       title: '器具名称', dataIndex: 'instrument_name', width: 160, ellipsis: true,
-      filteredValue: columnFilters.instrument_name ? [columnFilters.instrument_name] : null,
+      filteredValue: columnFilters.instrument_name ? columnFilters.instrument_name.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.instrument_name,
         columnFilters.instrument_name,
@@ -296,7 +321,7 @@ export function InstrumentTable() {
     },
     {
       title: '型号规格', dataIndex: 'model_spec', width: 100, ellipsis: true,
-      filteredValue: columnFilters.model_spec ? [columnFilters.model_spec] : null,
+      filteredValue: columnFilters.model_spec ? columnFilters.model_spec.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.model_spec,
         columnFilters.model_spec,
@@ -305,10 +330,19 @@ export function InstrumentTable() {
       ),
       onFilter: () => true,
     },
-    { title: '测量范围', dataIndex: 'measurement_range', width: 120, ellipsis: true },
+    { title: '测量范围', dataIndex: 'measurement_range', width: 120, ellipsis: true,
+      filteredValue: columnFilters.measurement_range ? columnFilters.measurement_range.split(',') : null,
+      filterDropdown: renderFilterDropdown(
+        filterOptions.measurement_range,
+        columnFilters.measurement_range,
+        (v) => setColumnFilter('measurement_range', v),
+        '选择测量范围',
+      ),
+      onFilter: () => true,
+    },
     {
       title: '精度等级', dataIndex: 'accuracy_grade', width: 80,
-      filteredValue: columnFilters.accuracy_grade ? [columnFilters.accuracy_grade] : null,
+      filteredValue: columnFilters.accuracy_grade ? columnFilters.accuracy_grade.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.accuracy_grade,
         columnFilters.accuracy_grade,
@@ -320,7 +354,7 @@ export function InstrumentTable() {
     { title: '检定周期(月)', dataIndex: 'calibration_cycle_months', width: 90 },
     {
       title: '彩色标志', dataIndex: 'color_marking', width: 80,
-      filteredValue: columnFilters.color_marking ? [columnFilters.color_marking] : null,
+      filteredValue: columnFilters.color_marking ? columnFilters.color_marking.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.color_marking,
         columnFilters.color_marking,
@@ -331,7 +365,7 @@ export function InstrumentTable() {
     },
     {
       title: '器具编号', dataIndex: 'serial_number', width: 110, ellipsis: true,
-      filteredValue: columnFilters.serial_number ? [columnFilters.serial_number] : null,
+      filteredValue: columnFilters.serial_number ? columnFilters.serial_number.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.serial_number,
         columnFilters.serial_number,
@@ -342,7 +376,7 @@ export function InstrumentTable() {
     },
     {
       title: '使用地点', dataIndex: 'location', width: 200, ellipsis: true,
-      filteredValue: columnFilters.location ? [columnFilters.location] : null,
+      filteredValue: columnFilters.location ? columnFilters.location.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.location,
         columnFilters.location,
@@ -353,7 +387,7 @@ export function InstrumentTable() {
     },
     {
       title: '制造商', dataIndex: 'manufacturer', width: 120, ellipsis: true,
-      filteredValue: columnFilters.manufacturer ? [columnFilters.manufacturer] : null,
+      filteredValue: columnFilters.manufacturer ? columnFilters.manufacturer.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.manufacturer,
         columnFilters.manufacturer,
@@ -364,7 +398,7 @@ export function InstrumentTable() {
     },
     {
       title: '状态', dataIndex: 'status', width: 80,
-      filteredValue: columnFilters.status ? [columnFilters.status] : null,
+      filteredValue: columnFilters.status ? columnFilters.status.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.status,
         columnFilters.status,
@@ -377,10 +411,13 @@ export function InstrumentTable() {
     {
       title: '检定日期', dataIndex: 'calibration_date', width: 110,
       render: (v: string) => v ? dayjs(v).format('YYYY-MM-DD') : '-',
-      filteredValue: null,
-      filterDropdown: renderDateFilterDropdown(
-        dateFilters.calibration_date_after,
-        (v) => setDateFilter('calibration_date_after', v),
+      filteredValue: (dateFilters.calibration_date_after || dateFilters.calibration_date_before) ? [dateFilters.calibration_date_after || ''] : null,
+      filterDropdown: () => (
+        <div style={{ padding: 8, minWidth: 160 }}>
+          <Button type="link" size="small" onClick={() => { setDateModalField('calibration_date'); setDateModalOpen(true) }}>
+            日期筛选...
+          </Button>
+        </div>
       ),
       onFilter: () => true,
     },
@@ -392,16 +429,19 @@ export function InstrumentTable() {
         const overdue = d.isBefore(dayjs())
         return <span style={{ color: overdue ? '#e03131' : undefined }}>{d.format('YYYY-MM-DD')}</span>
       },
-      filteredValue: null,
-      filterDropdown: renderDateFilterDropdown(
-        dateFilters.next_calibration_after,
-        (v) => setDateFilter('next_calibration_after', v),
+      filteredValue: (dateFilters.next_calibration_after || dateFilters.next_calibration_before) ? [dateFilters.next_calibration_after || ''] : null,
+      filterDropdown: () => (
+        <div style={{ padding: 8, minWidth: 160 }}>
+          <Button type="link" size="small" onClick={() => { setDateModalField('next_calibration_date'); setDateModalOpen(true) }}>
+            日期筛选...
+          </Button>
+        </div>
       ),
       onFilter: () => true,
     },
     {
       title: '检定单位', dataIndex: 'calibration_unit', width: 100, ellipsis: true,
-      filteredValue: columnFilters.calibration_unit ? [columnFilters.calibration_unit] : null,
+      filteredValue: columnFilters.calibration_unit ? columnFilters.calibration_unit.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.calibration_unit,
         columnFilters.calibration_unit,
@@ -412,7 +452,7 @@ export function InstrumentTable() {
     },
     {
       title: '检定结论', dataIndex: 'calibration_result', width: 80,
-      filteredValue: columnFilters.calibration_result ? [columnFilters.calibration_result] : null,
+      filteredValue: columnFilters.calibration_result ? columnFilters.calibration_result.split(',') : null,
       filterDropdown: renderFilterDropdown(
         filterOptions.calibration_result,
         columnFilters.calibration_result,
@@ -460,33 +500,37 @@ export function InstrumentTable() {
             allowClear
           />
           {/* 已激活筛选标签 */}
-          {Object.entries(columnFilters).filter(([, v]) => v).map(([field, value]) => {
+          {Object.entries(columnFilters).filter(([, v]) => v).flatMap(([field, value]) => {
             const labels: Record<string, string> = {
               department: '部门', asset_number: '资产编号', instrument_name: '器具名称',
-              model_spec: '型号', accuracy_grade: '精度', serial_number: '器具编号',
-              location: '地点', manufacturer: '制造商', status: '状态',
+              model_spec: '型号', measurement_range: '测量范围', accuracy_grade: '精度',
+              serial_number: '器具编号', location: '地点', manufacturer: '制造商', status: '状态',
               calibration_unit: '检定单位', calibration_result: '检定结论', color_marking: '彩色标志',
             }
-            return (
+            const values = value!.split(',').filter(Boolean)
+            return values.map((v) => (
               <Tag
-                key={field}
+                key={`${field}-${v}`}
                 closable
-                onClose={() => setColumnFilter(field, undefined)}
-              >{labels[field] || field}: {value}</Tag>
-            )
+                onClose={() => {
+                  const newVals = values.filter(x => x !== v)
+                  setColumnFilter(field, newVals.length > 0 ? newVals.join(',') : undefined)
+                }}
+              >{labels[field] || field}: {v}</Tag>
+            ))
           })}
           {/* 日期筛选标签 */}
           {dateFilters.calibration_date_after && (
             <Tag
               closable
-              onClose={() => setDateFilter('calibration_date_after', undefined)}
-            >检定日期 ≥ {dateFilters.calibration_date_after}</Tag>
+              onClose={() => { setDateFilter('calibration_date_after', undefined); setDateFilter('calibration_date_before', undefined) }}
+            >检定日期: {dateFilters.calibration_date_after}{dateFilters.calibration_date_before && dateFilters.calibration_date_before !== dateFilters.calibration_date_after ? ` ~ ${dateFilters.calibration_date_before}` : ''}</Tag>
           )}
           {dateFilters.next_calibration_after && (
             <Tag
               closable
-              onClose={() => setDateFilter('next_calibration_after', undefined)}
-            >下次检定 ≥ {dateFilters.next_calibration_after}</Tag>
+              onClose={() => { setDateFilter('next_calibration_after', undefined); setDateFilter('next_calibration_before', undefined) }}
+            >下次检定: {dateFilters.next_calibration_after}{dateFilters.next_calibration_before && dateFilters.next_calibration_before !== dateFilters.next_calibration_after ? ` ~ ${dateFilters.next_calibration_before}` : ''}</Tag>
           )}
         </Space>
         <Space>
@@ -496,6 +540,19 @@ export function InstrumentTable() {
           <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0} onClick={handleExportReports}>
             批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
           </Button>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            onClick={handleBatchDelete}
+          >
+            批量删除{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+          </Button>
+          {selectedRowKeys.length > 0 && total > pageSize && (
+            <Button loading={fetchingAllIds} onClick={handleSelectAllAcrossPages}>
+              {selectAllAcrossPages ? `取消全选 (${selectedRowKeys.length})` : `全选所有 ${total} 条`}
+            </Button>
+          )}
           <Button icon={<FileExcelOutlined />} loading={exportingExcel} onClick={handleExportExcel}>导出Excel</Button>
           <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>
           <BatchCreateModal open={batchCreateOpen} onClose={() => setBatchCreateOpen(false)} source="instrument" />
@@ -510,7 +567,10 @@ export function InstrumentTable() {
         scroll={{ x: 1600 }}
         rowSelection={{
           selectedRowKeys,
-          onChange: (keys) => setSelectedRowKeys(keys),
+          onChange: (keys) => {
+            setSelectedRowKeys(keys)
+            if (keys.length === 0) setSelectAllAcrossPages(false)
+          },
         }}
         pagination={{
           current: page,
@@ -547,6 +607,30 @@ export function InstrumentTable() {
         open={importModalOpen}
         source="instrument"
         onClose={() => { setImportModalOpen(false); fetchData() }}
+      />
+
+      <InstrumentDateFilterModal
+        open={dateModalOpen}
+        initialField={dateModalField}
+        columnFilters={columnFilters}
+        keyword={keyword}
+        onClose={() => setDateModalOpen(false)}
+        onConfirm={(params) => {
+          // 清空旧日期筛选
+          setDateFilter('calibration_date_after', undefined)
+          setDateFilter('calibration_date_before', undefined)
+          setDateFilter('next_calibration_after', undefined)
+          setDateFilter('next_calibration_before', undefined)
+          // 应用新筛选
+          if (params.field === 'calibration_date') {
+            if (params.after) setDateFilter('calibration_date_after', params.after)
+            if (params.before) setDateFilter('calibration_date_before', params.before)
+          } else {
+            if (params.after) setDateFilter('next_calibration_after', params.after)
+            if (params.before) setDateFilter('next_calibration_before', params.before)
+          }
+          setDateModalOpen(false)
+        }}
       />
     </div>
   )

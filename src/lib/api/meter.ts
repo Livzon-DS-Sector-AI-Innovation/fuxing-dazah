@@ -26,12 +26,15 @@ import {
   BatchCreateItem,
   BatchCreateResult,
   GasDetectorBatchCreateItem,
+  BatchDeleteRequest,
+  BatchDeleteResponse,
   DepartmentItem,
   DepartmentCreate,
   DepartmentUpdate,
   LedgerImportResult,
   PersonnelCandidate,
   MeterSettings,
+  DateStatsResponse,
 } from '@/types/meter'
 import { PaginatedResponse } from '@/types/energy'
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/http-client'
@@ -52,6 +55,7 @@ export async function fetchInstruments(
   if (params.asset_number) sp.set('asset_number', params.asset_number)
   if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
   if (params.model_spec) sp.set('model_spec', params.model_spec)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
   if (params.accuracy_grade) sp.set('accuracy_grade', params.accuracy_grade)
   if (params.serial_number) sp.set('serial_number', params.serial_number)
   if (params.location) sp.set('location', params.location)
@@ -79,6 +83,7 @@ export async function fetchInstrumentsClient(
   if (params.asset_number) sp.set('asset_number', params.asset_number)
   if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
   if (params.model_spec) sp.set('model_spec', params.model_spec)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
   if (params.accuracy_grade) sp.set('accuracy_grade', params.accuracy_grade)
   if (params.serial_number) sp.set('serial_number', params.serial_number)
   if (params.location) sp.set('location', params.location)
@@ -87,6 +92,10 @@ export async function fetchInstrumentsClient(
   if (params.calibration_unit) sp.set('calibration_unit', params.calibration_unit)
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.color_marking) sp.set('color_marking', params.color_marking)
+  if (params.next_calibration_before) sp.set('next_calibration_before', params.next_calibration_before)
+  if (params.next_calibration_after) sp.set('next_calibration_after', params.next_calibration_after)
+  if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
+  if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
@@ -110,6 +119,33 @@ export async function deleteInstrument(id: string): Promise<void> {
   return apiDelete<void>(`${SERVER_API}${BASE}/instruments/${id}`)
 }
 
+export async function batchDeleteInstruments(ids: string[]): Promise<BatchDeleteResponse> {
+  return apiPost<BatchDeleteResponse>(`${SERVER_API}${BASE}/instruments/batch-delete`, { ids })
+}
+
+export async function fetchInstrumentIds(params: InstrumentFilter = {}): Promise<string[]> {
+  const sp = new URLSearchParams()
+  if (params.department) sp.set('department', params.department)
+  if (params.asset_number) sp.set('asset_number', params.asset_number)
+  if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
+  if (params.model_spec) sp.set('model_spec', params.model_spec)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
+  if (params.accuracy_grade) sp.set('accuracy_grade', params.accuracy_grade)
+  if (params.serial_number) sp.set('serial_number', params.serial_number)
+  if (params.location) sp.set('location', params.location)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
+  if (params.calibration_unit) sp.set('calibration_unit', params.calibration_unit)
+  if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
+  if (params.color_marking) sp.set('color_marking', params.color_marking)
+  if (params.next_calibration_before) sp.set('next_calibration_before', params.next_calibration_before)
+  if (params.next_calibration_after) sp.set('next_calibration_after', params.next_calibration_after)
+  if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
+  if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  return apiGet<string[]>(`${SERVER_API}${BASE}/instruments/ids?${sp.toString()}`)
+}
+
 export async function fetchInstrumentDepartments(): Promise<string[]> {
   return apiGet<string[]>(`${SERVER_API}${BASE}/departments/instruments`)
 }
@@ -126,11 +162,14 @@ export async function fetchGasDetectors(
   if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
   if (params.detection_model) sp.set('detection_model', params.detection_model)
   if (params.product_number) sp.set('product_number', params.product_number)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
   if (params.installation_type) sp.set('installation_type', params.installation_type)
   if (params.installation_location) sp.set('installation_location', params.installation_location)
   if (params.medium) sp.set('medium', params.medium)
   if (params.calibration_factor) sp.set('calibration_factor', params.calibration_factor)
   if (params.manufacturer_supplier) sp.set('manufacturer_supplier', params.manufacturer_supplier)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
   if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.next_calibration_before) sp.set('next_calibration_before', params.next_calibration_before)
@@ -152,11 +191,20 @@ export async function fetchGasDetectorsClient(
   if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
   if (params.detection_model) sp.set('detection_model', params.detection_model)
   if (params.product_number) sp.set('product_number', params.product_number)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
   if (params.installation_type) sp.set('installation_type', params.installation_type)
   if (params.installation_location) sp.set('installation_location', params.installation_location)
   if (params.medium) sp.set('medium', params.medium)
+  if (params.calibration_factor) sp.set('calibration_factor', params.calibration_factor)
+  if (params.manufacturer_supplier) sp.set('manufacturer_supplier', params.manufacturer_supplier)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
   if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
+  if (params.next_calibration_before) sp.set('next_calibration_before', params.next_calibration_before)
+  if (params.next_calibration_after) sp.set('next_calibration_after', params.next_calibration_after)
+  if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
+  if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
@@ -178,6 +226,34 @@ export async function updateGasDetector(id: string, data: GasDetectorUpdate): Pr
 
 export async function deleteGasDetector(id: string): Promise<void> {
   return apiDelete<void>(`${SERVER_API}${BASE}/gas-detectors/${id}`)
+}
+
+export async function batchDeleteGasDetectors(ids: string[]): Promise<BatchDeleteResponse> {
+  return apiPost<BatchDeleteResponse>(`${SERVER_API}${BASE}/gas-detectors/batch-delete`, { ids })
+}
+
+export async function fetchGasDetectorIds(params: GasDetectorFilter = {}): Promise<string[]> {
+  const sp = new URLSearchParams()
+  if (params.department) sp.set('department', params.department)
+  if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
+  if (params.detection_model) sp.set('detection_model', params.detection_model)
+  if (params.product_number) sp.set('product_number', params.product_number)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
+  if (params.installation_type) sp.set('installation_type', params.installation_type)
+  if (params.installation_location) sp.set('installation_location', params.installation_location)
+  if (params.medium) sp.set('medium', params.medium)
+  if (params.calibration_factor) sp.set('calibration_factor', params.calibration_factor)
+  if (params.manufacturer_supplier) sp.set('manufacturer_supplier', params.manufacturer_supplier)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
+  if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
+  if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
+  if (params.next_calibration_before) sp.set('next_calibration_before', params.next_calibration_before)
+  if (params.next_calibration_after) sp.set('next_calibration_after', params.next_calibration_after)
+  if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
+  if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  return apiGet<string[]>(`${SERVER_API}${BASE}/gas-detectors/ids?${sp.toString()}`)
 }
 
 export async function fetchGasDetectorDepartments(): Promise<string[]> {
@@ -344,6 +420,58 @@ export async function fetchInstrumentFilterOptions(): Promise<InstrumentFilterOp
 
 export async function fetchGasDetectorFilterOptions(): Promise<GasDetectorFilterOptions> {
   return apiGet<GasDetectorFilterOptions>(`${SERVER_API}${BASE}/gas-detectors/filter-options`)
+}
+
+
+// ── 日期聚合统计 ──
+
+export async function fetchInstrumentDateStats(
+  field: string,
+  params: InstrumentFilter = {}
+): Promise<DateStatsResponse> {
+  const sp = new URLSearchParams()
+  sp.set('field', field)
+  if (params.department) sp.set('department', params.department)
+  if (params.asset_number) sp.set('asset_number', params.asset_number)
+  if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
+  if (params.model_spec) sp.set('model_spec', params.model_spec)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
+  if (params.accuracy_grade) sp.set('accuracy_grade', params.accuracy_grade)
+  if (params.serial_number) sp.set('serial_number', params.serial_number)
+  if (params.location) sp.set('location', params.location)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
+  if (params.calibration_unit) sp.set('calibration_unit', params.calibration_unit)
+  if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
+  if (params.color_marking) sp.set('color_marking', params.color_marking)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  const qs = sp.toString()
+  return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/instruments/date-stats?${qs}`)
+}
+
+export async function fetchGasDetectorDateStats(
+  field: string,
+  params: GasDetectorFilter = {}
+): Promise<DateStatsResponse> {
+  const sp = new URLSearchParams()
+  sp.set('field', field)
+  if (params.department) sp.set('department', params.department)
+  if (params.instrument_name) sp.set('instrument_name', params.instrument_name)
+  if (params.detection_model) sp.set('detection_model', params.detection_model)
+  if (params.product_number) sp.set('product_number', params.product_number)
+  if (params.measurement_range) sp.set('measurement_range', params.measurement_range)
+  if (params.installation_type) sp.set('installation_type', params.installation_type)
+  if (params.installation_location) sp.set('installation_location', params.installation_location)
+  if (params.medium) sp.set('medium', params.medium)
+  if (params.calibration_factor) sp.set('calibration_factor', params.calibration_factor)
+  if (params.manufacturer_supplier) sp.set('manufacturer_supplier', params.manufacturer_supplier)
+  if (params.manufacturer) sp.set('manufacturer', params.manufacturer)
+  if (params.status) sp.set('status', params.status)
+  if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
+  if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  const qs = sp.toString()
+  return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/gas-detectors/date-stats?${qs}`)
 }
 
 

@@ -38,6 +38,7 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
           calibration_result: record.calibration_result,
           calibration_date: record.calibration_date ? dayjs(record.calibration_date) : null,
           next_calibration_date: record.next_calibration_date ? dayjs(record.next_calibration_date) : null,
+          status: record.status,
         })
       } else {
         form.resetFields()
@@ -85,7 +86,7 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
         </Space>
       }
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" initialValues={{ status: '在用' }}>
         <Form.Item name="instrument_name" label="器具名称" rules={[{ required: true, message: '请输入器具名称' }]}>
           <Input placeholder="如：氧气检测仪(O2)" />
         </Form.Item>
@@ -129,6 +130,18 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
 
         <Form.Item name="manufacturer" label="制造单位">
           <Input placeholder="制造单位" />
+        </Form.Item>
+
+        <Form.Item name="status" label="状态">
+          <Select
+            allowClear
+            placeholder="选择状态"
+            options={[
+              { label: '在用', value: '在用' },
+              { label: '停用', value: '停用' },
+              { label: '超期', value: '超期' },
+            ]}
+          />
         </Form.Item>
 
         <Form.Item name="department" label="部门">

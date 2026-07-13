@@ -98,6 +98,7 @@ export interface InstrumentFilter {
   asset_number?: string
   instrument_name?: string
   model_spec?: string
+  measurement_range?: string
   accuracy_grade?: string
   serial_number?: string
   location?: string
@@ -133,6 +134,7 @@ export interface GasDetectorRecord {
   next_calibration_date?: string
   calibration_result?: string
   manufacturer?: string
+  status?: string
   department?: string
   sheet_name?: string
   remark?: string | null
@@ -160,6 +162,7 @@ export interface GasDetectorCreate {
   next_calibration_date?: string
   calibration_result?: string
   manufacturer?: string
+  status?: string
   department?: string
   remark?: string
 }
@@ -179,6 +182,7 @@ export interface GasDetectorUpdate {
   next_calibration_date?: string
   calibration_result?: string
   manufacturer?: string
+  status?: string
   department?: string
   remark?: string | null
 }
@@ -188,12 +192,14 @@ export interface GasDetectorFilter {
   instrument_name?: string
   detection_model?: string
   product_number?: string
+  measurement_range?: string
   installation_type?: string
   installation_location?: string
   medium?: string
   calibration_factor?: string
   manufacturer_supplier?: string
   manufacturer?: string
+  status?: string
   detection_unit?: string
   calibration_result?: string
   next_calibration_before?: string
@@ -319,6 +325,7 @@ export interface InstrumentFilterOptions {
   asset_number: string[]
   instrument_name: string[]
   model_spec: string[]
+  measurement_range: string[]
   accuracy_grade: string[]
   serial_number: string[]
   location: string[]
@@ -334,14 +341,40 @@ export interface GasDetectorFilterOptions {
   instrument_name: string[]
   detection_model: string[]
   product_number: string[]
+  measurement_range: string[]
   installation_type: string[]
   installation_location: string[]
   medium: string[]
   calibration_factor: string[]
   manufacturer_supplier: string[]
   manufacturer: string[]
+  status: string[]
   detection_unit: string[]
   calibration_result: string[]
+}
+
+// ── 日期聚合统计 ──
+
+export interface DateStatDay {
+  day: number
+  count: number
+}
+
+export interface DateStatMonth {
+  month: number
+  count: number
+  days: DateStatDay[]
+}
+
+export interface DateStatYear {
+  year: number
+  count: number
+  months: DateStatMonth[]
+}
+
+export interface DateStatsResponse {
+  field: string
+  years: DateStatYear[]
 }
 
 // ── 仪表总览 ──
@@ -394,6 +427,16 @@ export interface BatchCreateResult {
   results: BatchCreateRowResult[]
 }
 
+// ── 批量删除 ──
+
+export interface BatchDeleteRequest {
+  ids: string[]
+}
+
+export interface BatchDeleteResponse {
+  deleted_count: number
+}
+
 // ── 气体探测器批量新增 ──
 
 export interface GasDetectorBatchCreateItem {
@@ -411,6 +454,7 @@ export interface GasDetectorBatchCreateItem {
   detection_unit?: string | null
   next_calibration_date?: string | null
   manufacturer?: string | null
+  status?: string | null
   department: string
   remark?: string | null
 }
