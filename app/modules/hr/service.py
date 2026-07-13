@@ -580,8 +580,7 @@ class EmployeeService:
         return result
 
     async def delete_employee(self, employee_id: UUID) -> None:
-        employee = await self.get_employee(employee_id)
-        await self.repo.soft_delete(employee)
+        await self.repo.session.execute(text("DELETE FROM hr.employees WHERE id = :id"), {"id": employee_id})
 
     async def list_employees(
         self,
@@ -878,9 +877,7 @@ class DepartmentService:
         return result
 
     async def delete_department(self, department_id: UUID) -> None:
-        department = await self.get_department(department_id)
-        code = department.code
-        await self.repo.soft_delete(department)
+        await self.repo.session.execute(text("DELETE FROM hr.departments WHERE id = :id"), {"id": department_id})
 
     async def list_departments(
         self,
@@ -944,8 +941,7 @@ class TeamService:
         return result
 
     async def delete_team(self, team_id: UUID) -> None:
-        team = await self.get_team(team_id)
-        await self.repo.soft_delete(team)
+        await self.repo.session.execute(text("DELETE FROM hr.teams WHERE id = :id"), {"id": team_id})
 
     async def list_teams(
         self,
@@ -999,8 +995,7 @@ class OffboardingRecordService:
         return result
 
     async def delete_record(self, record_id: UUID) -> None:
-        record = await self.get_record(record_id)
-        await self.repo.soft_delete(record)
+        await self.repo.session.execute(text("DELETE FROM hr.offboarding_records WHERE id = :id"), {"id": record_id})
 
     async def list_records(
         self,
@@ -1055,9 +1050,7 @@ class OnboardingRecordService:
         )
 
     async def delete_record(self, record_id: UUID) -> None:
-        record = await self.get_record(record_id)
-        record.is_deleted = True
-        await self.repo.session.flush()
+        await self.repo.session.execute(text("DELETE FROM hr.onboarding_records WHERE id = :id"), {"id": record_id})
 
     async def _cleanup_old_records(self, days: int) -> None:
         """软删除超过 N 天的入职台账记录。"""
@@ -1119,8 +1112,7 @@ class DepartureRecordService:
         return await self.repo.update(record)
 
     async def delete_record(self, record_id: UUID) -> None:
-        record = await self.get_record(record_id)
-        await self.repo.soft_delete(record)
+        await self.repo.session.execute(text("DELETE FROM hr.departure_records WHERE id = :id"), {"id": record_id})
 
 class TrainingLedgerService:
     def __init__(self, session: AsyncSession) -> None:
@@ -1159,7 +1151,7 @@ class TrainingLedgerService:
 
     async def delete_record(self, record_id: UUID) -> None:
         record = await self.get_record(record_id)
-        await self.repo.soft_delete(record)
+        await self.repo.session.execute(text("DELETE FROM hr.training_ledgers WHERE id = :id"), {"id": record_id})
 
     async def list_records(
         self,
@@ -1252,8 +1244,7 @@ class AnnualTrainingPlanService:
         return await self.repo.update(plan)
 
     async def delete_plan(self, plan_id: UUID) -> None:
-        plan = await self.get_plan(plan_id)
-        await self.repo.soft_delete(plan)
+        await self.repo.session.execute(text("DELETE FROM hr.annual_training_plans WHERE id = :id"), {"id": plan_id})
 
     async def list_plans(
         self,

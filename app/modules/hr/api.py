@@ -625,27 +625,9 @@ async def delete_position_by_name(
     )).scalar_one_or_none()
     if not pos:
         raise HTTPException(404, "职位不存在")
-    pos.is_deleted = True
-
-    # 同时清除关联SOP条目
-    await session.execute(
-        select(SopCatalog).where(
-            SopCatalog.department == department,
-            SopCatalog.position_name == position_name,
-            SopCatalog.is_deleted == False,
-        )
-    )
-    sops = (await session.execute(
-        select(SopCatalog).where(
-            SopCatalog.department == department,
-            SopCatalog.position_name == position_name,
-            SopCatalog.is_deleted == False,
-        )
-    )).scalars().all()
-    for sop in sops:
-        sop.is_deleted = True
-
-    await session.flush()
+    await session.execute(text("DELETE FROM hr.sop_catalog WHERE department = :d AND position_name = :p"), {"d": department, "p": position_name})
+    await session.execute(text("DELETE FROM hr.positions WHERE id = :id"), {"id": pos.id})
+    await session.commit()
     return success_response(message="删除成功")
 
 
@@ -1783,8 +1765,8 @@ async def delete_sop_catalog_item(
     )).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "SOP条目不存在")
-    item.is_deleted = True
-    await session.flush()
+    await session.execute(text("DELETE FROM hr.sop_catalog WHERE id = :id"), {"id": item_id})
+    await session.commit()
     return success_response(message="删除成功")
 
 
