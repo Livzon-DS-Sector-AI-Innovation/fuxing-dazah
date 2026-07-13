@@ -195,6 +195,29 @@ async def upload_employees(
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
 
 
+@router.get("/roster", summary="下载花名册")
+async def download_roster(
+    department: str | None = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    """按部门下载员工花名册 Excel。"""
+    from app.modules.hr.roster_generator import generate_roster_sync
+    from app.modules.hr.models import Employee
+    r = await session.execute(
+        select(Employee).where(Employee.is_deleted == False, Employee.status != "离职").order_by(Employee.department, Employee.employee_number)
+    )
+    employees = [(e.name, e.department, e.gender or "", e.education or "", e.hire_date, e.status) for e in r.scalars().all()]
+    if department:
+        employees = [e for e in employees if e[1] == department]
+    buffer = generate_roster_sync(employees, department)
+    filename = f"花名册_{department or '全部'}.docx"
+    return StreamingResponse(
+        iter([buffer.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"}
+    )
+
+
 @router.get("/employees/by-number/{employee_number}", summary="根据工号查询员工")
 async def get_employee_by_number(
     employee_number: str,
@@ -537,6 +560,202 @@ async def delete_department(
     return success_response(message="部门删除成功")
 
 
+# ─── Position Routes ───
+
+@router.get("/positions", summary="职位列表（按部门筛选）")
+async def list_positions(
+    department: str | None = Query(None, description="部门名称筛选"),
+    session: AsyncSession = Depends(get_db),
+):
+    """返回职位列表，可按部门筛选。用于入职管理和员工档案的职位下拉选项。"""
+    from app.modules.hr.models import HrPosition
+
+    q = select(HrPosition).where(HrPosition.is_deleted == False)
+    if department:
+        q = q.where(HrPosition.department == department)
+    q = q.order_by(HrPosition.sort_order)
+
+    result = await session.execute(q)
+    rows = result.scalars().all()
+    data = [
+        {"id": str(r.id), "department": r.department, "name": r.name}
+        for r in rows
+    ]
+    return success_response(data=data)
+
+
+class PositionCreate(BaseModel):
+    department: str
+    name: str
+
+
+@router.post("/positions", summary="新建职位")
+async def create_position(
+    payload: PositionCreate,
+    session: AsyncSession = Depends(get_db),
+):
+    """手动新建一个职位，写入 hr.positions 表。"""
+    from app.modules.hr.models import HrPosition
+
+    pos = HrPosition(department=payload.department, name=payload.name)
+    session.add(pos)
+    await session.flush()
+    return success_response(
+        data={"id": str(pos.id), "department": pos.department, "name": pos.name},
+        message="职位创建成功",
+        status_code=201,
+    )
+
+
+@router.delete("/positions/by-name/{position_name}", summary="按名称删除职位")
+async def delete_position_by_name(
+    position_name: str,
+    department: str = Query(..., description="部门名称"),
+    session: AsyncSession = Depends(get_db),
+):
+    """删除指定部门和名称的职位，同时清除关联的 SOP 目录条目。"""
+    from app.modules.hr.models import HrPosition, SopCatalog
+
+    pos = (await session.execute(
+        select(HrPosition).where(
+            HrPosition.department == department,
+            HrPosition.name == position_name,
+            HrPosition.is_deleted == False,
+        )
+    )).scalar_one_or_none()
+    if not pos:
+        raise HTTPException(404, "职位不存在")
+    pos.is_deleted = True
+
+    # 同时清除关联SOP条目
+    await session.execute(
+        select(SopCatalog).where(
+            SopCatalog.department == department,
+            SopCatalog.position_name == position_name,
+            SopCatalog.is_deleted == False,
+        )
+    )
+    sops = (await session.execute(
+        select(SopCatalog).where(
+            SopCatalog.department == department,
+            SopCatalog.position_name == position_name,
+            SopCatalog.is_deleted == False,
+        )
+    )).scalars().all()
+    for sop in sops:
+        sop.is_deleted = True
+
+    await session.flush()
+    return success_response(message="删除成功")
+
+
+@router.get("/positions/departments", summary="职位表中所有部门")
+async def list_position_departments(
+    session: AsyncSession = Depends(get_db),
+):
+    """返回职位表中所有不重复的部门名称。"""
+    from app.modules.hr.models import HrPosition
+
+    result = await session.execute(
+        select(HrPosition.department)
+        .where(HrPosition.is_deleted == False)
+        .distinct()
+        .order_by(HrPosition.department)
+    )
+    return success_response(data=[row[0] for row in result.all()])
+
+
+# ─── Position Training Routes ───
+
+@router.get("/position-trainings", summary="岗位培训内容列表")
+async def list_position_trainings(
+    department: str | None = Query(None, description="部门筛选"),
+    position_name: str | None = Query(None, description="岗位名称筛选"),
+    session: AsyncSession = Depends(get_db),
+):
+    """按部门和岗位查询关联的培训内容（SOP/文件）。"""
+    from app.modules.hr.models import PositionTraining
+
+    q = select(PositionTraining).where(PositionTraining.is_deleted == False)
+    if department:
+        q = q.where(PositionTraining.department == department)
+    if position_name:
+        q = q.where(PositionTraining.position_name == position_name)
+    q = q.order_by(PositionTraining.department, PositionTraining.position_name, PositionTraining.sort_order)
+
+    result = await session.execute(q)
+    rows = result.scalars().all()
+    data = [
+        {
+            "id": str(r.id),
+            "position_name": r.position_name,
+            "department": r.department,
+            "variety": r.variety,
+            "training_category": r.training_category,
+            "trainer": r.trainer,
+            "training_method": r.training_method,
+            "sop_number": r.sop_number,
+            "file_name": r.file_name,
+        }
+        for r in rows
+    ]
+    return success_response(data=data)
+
+
+class PositionTrainingCreate(BaseModel):
+    department: str
+    position_name: str
+    training_category: str
+    sop_number: str | None = None
+    file_name: str
+
+
+@router.post("/position-trainings", summary="新建岗位培训内容")
+async def create_position_training(
+    payload: PositionTrainingCreate,
+    session: AsyncSession = Depends(get_db),
+):
+    """手动新建一条岗位培训关联记录。"""
+    from app.modules.hr.models import PositionTraining, SopCatalog
+
+    pt = PositionTraining(
+        department=payload.department,
+        position_name=payload.position_name,
+        training_category=payload.training_category,
+        sop_number=payload.sop_number,
+        file_name=payload.file_name,
+    )
+    session.add(pt)
+
+    # 同步写入 SOP 目录
+    sc = SopCatalog(
+        department=payload.department,
+        category=payload.training_category,
+        sop_number=payload.sop_number,
+        file_name=payload.file_name,
+        position_name=payload.position_name,
+    )
+    session.add(sc)
+
+    await session.flush()
+    return success_response(data={"id": str(pt.id)}, message="创建成功", status_code=201)
+
+
+@router.get("/position-trainings/departments", summary="岗位培训内容中的部门列表")
+async def list_pt_departments(
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import PositionTraining
+
+    result = await session.execute(
+        select(PositionTraining.department)
+        .where(PositionTraining.is_deleted == False)
+        .distinct()
+        .order_by(PositionTraining.department)
+    )
+    return success_response(data=[row[0] for row in result.all()])
+
+
 # ─── Team Routes ───
 
 @router.get("/teams", summary="班组列表")
@@ -742,6 +961,15 @@ async def get_onboarding_record(
     return success_response(
         data=OnboardingRecordResponse.model_validate(record).model_dump(mode="json"),
     )
+
+
+@router.delete("/onboarding-records/{record_id}", summary="删除入职台账记录")
+async def delete_onboarding_record(
+    record_id: UUID,
+    service: OnboardingRecordService = Depends(get_onboarding_service),
+):
+    await service.delete_record(record_id)
+    return success_response(message="删除成功")
 
 
 # ─── DepartureRecord Routes ───
@@ -1241,7 +1469,17 @@ async def delete_annual_training_plan_item(
     )).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "明细不存在")
-    item.is_deleted = True
+    # 同时物理删除关联的培训台账记录
+    if item.content_and_textbook:
+        from app.modules.hr.models import TrainingLedger
+        ledgers = (await session.execute(
+            select(TrainingLedger).where(
+                TrainingLedger.training_subject == item.content_and_textbook,
+            )
+        )).scalars().all()
+        for ledger in ledgers:
+            session.delete(ledger)
+    session.delete(item)
     await session.flush()
     return success_response(message="删除成功")
 
@@ -1371,6 +1609,28 @@ def _generate_annual_plan_excel(plan: dict, items: list[dict]) -> BytesIO:
     return buffer
 
 
+@router.post("/annual-training-plans/complete-by-content", summary="按培训内容标记完成")
+async def complete_plan_by_content(
+    payload: dict = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """根据培训内容标记所有匹配的年度计划明细为已完成。"""
+    from app.modules.hr.models import AnnualTrainingPlanItem
+    content = payload.get("content", "") if payload else ""
+    if not content:
+        raise HTTPException(400, "缺少培训内容")
+    items = (await session.execute(
+        select(AnnualTrainingPlanItem).where(
+            AnnualTrainingPlanItem.content_and_textbook == content,
+            AnnualTrainingPlanItem.is_deleted == False,
+        )
+    )).scalars().all()
+    for item in items:
+        item.tracking_status = "完成"
+    await session.flush()
+    return success_response(data={"updated": len(items)}, message=f"已标记 {len(items)} 条为完成")
+
+
 @router.get("/annual-training-plans/{plan_id}/export", summary="导出年度培训计划Excel")
 async def export_annual_training_plan(
     plan_id: UUID,
@@ -1425,6 +1685,7 @@ async def upload_trainers(
 async def list_trainers(
     department: str | None = Query(None),
     keyword: str | None = Query(None),
+    is_level1: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
@@ -1437,6 +1698,9 @@ async def list_trainers(
     if department:
         query = query.where(HrTrainer.department == department)
         count_q = count_q.where(HrTrainer.department == department)
+    if is_level1:
+        query = query.where(HrTrainer.is_level1 == is_level1)
+        count_q = count_q.where(HrTrainer.is_level1 == is_level1)
     if keyword:
         query = query.where(
             or_(HrTrainer.name.ilike(f"%{keyword}%"), HrTrainer.trainable_departments.ilike(f"%{keyword}%"))
@@ -1452,6 +1716,39 @@ async def list_trainers(
         data=[TrainerResponse.model_validate(r).model_dump(mode="json") for r in rows],
         page=page, page_size=page_size, total=total,
     )
+
+
+class TrainerCreate(BaseModel):
+    name: str
+    department: str | None = None
+    trainable_departments: str | None = None
+    qualification_scope: str | None = None
+    certification_date: date | None = None
+    confirmation_date: date | None = None
+    confirmation_reminder: date | None = None
+    is_level1: str | None = None
+    admin: str | None = None
+    remarks: str | None = None
+
+
+@router.post("/trainers", summary="新增内训师")
+async def create_trainer(payload: TrainerCreate, session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.models import HrTrainer
+    t = HrTrainer(**payload.model_dump())
+    session.add(t)
+    await session.flush()
+    return success_response(data=TrainerResponse.model_validate(t).model_dump(mode="json"), message="创建成功", status_code=201)
+
+
+@router.put("/trainers/{trainer_id}", summary="更新内训师")
+async def update_trainer(trainer_id: UUID, payload: TrainerCreate, session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.models import HrTrainer
+    t = (await session.execute(select(HrTrainer).where(HrTrainer.id == trainer_id, HrTrainer.is_deleted == False))).scalar_one_or_none()
+    if not t: raise HTTPException(404, "内训师不存在")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(t, k, v)
+    await session.flush()
+    return success_response(data=TrainerResponse.model_validate(t).model_dump(mode="json"), message="更新成功")
 
 
 @router.delete("/trainers/{trainer_id}", summary="删除内训师")
@@ -1490,6 +1787,22 @@ async def clear_trainers(
 
 
 # ─── SOP Catalog Routes ───
+
+@router.delete("/sop-catalog/{item_id}", summary="删除SOP目录条目")
+async def delete_sop_catalog_item(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import SopCatalog
+    item = (await session.execute(
+        select(SopCatalog).where(SopCatalog.id == item_id, SopCatalog.is_deleted == False)
+    )).scalar_one_or_none()
+    if not item:
+        raise HTTPException(404, "SOP条目不存在")
+    item.is_deleted = True
+    await session.flush()
+    return success_response(message="删除成功")
+
 
 @router.post("/sop-catalog/upload", summary="上传SOP目录")
 async def upload_sop_catalog(
@@ -1637,7 +1950,7 @@ async def list_training_evaluations(
     session: AsyncSession = Depends(get_db),
 ):
     tbl = "hr.training_evaluations"
-    cols = "id, training_content, training_date, trainer, expected_count, actual_count, excellent_count, qualified_count, unqualified_count, created_at"
+    cols = "id, training_content, training_date, trainer, expected_count, actual_count, excellent_count, qualified_count, unqualified_count, training_method, trainer_name, assessment_method, created_at"
     where = "WHERE is_deleted = false"
     if keyword:
         where += f" AND training_content ILIKE '%{keyword}%'"
@@ -1645,7 +1958,8 @@ async def list_training_evaluations(
     rows = (await session.execute(text(f"SELECT {cols} FROM {tbl} {where} ORDER BY created_at DESC LIMIT :l OFFSET :o"), {"l": page_size, "o": (page-1)*page_size})).fetchall()
     data = [{"id": r[0], "training_content": r[1], "training_date": str(r[2]) if r[2] else None, "trainer": r[3],
              "expected_count": r[4], "actual_count": r[5], "excellent_count": r[6], "qualified_count": r[7],
-             "unqualified_count": r[8], "created_at": str(r[9]) if r[9] else None} for r in rows]
+             "unqualified_count": r[8], "training_method": r[9], "trainer_name": r[10],
+             "assessment_method": r[11], "created_at": str(r[12]) if r[12] else None} for r in rows]
     from app.core.response import paginated_response
     return paginated_response(data=data, page=page, page_size=page_size, total=count)
 
@@ -1655,29 +1969,41 @@ async def upsert_training_evaluation(
     training_content: str = Form(...),
     department: str = Form(...),
     expected_count: int = Form(0),
+    training_method: str = Form(""),
+    trainer_name: str = Form(""),
+    assessment_method: str = Form(""),
     session: AsyncSession = Depends(get_db),
 ):
-    """从培训通知面板同步：按培训内容+部门 upsert，自动带入应到人数。"""
+    """从培训通知面板同步：按培训内容+部门 upsert。"""
     from app.modules.hr.models import TrainingLedger
-    # 检查是否已有同内容+部门的评估记录
     existing = (await session.execute(
         text("SELECT id FROM hr.training_evaluations WHERE training_content = :c AND department = :d AND is_deleted = false"),
         {"c": training_content, "d": department}
     )).fetchone()
     if existing:
         await session.execute(
-            text("UPDATE hr.training_evaluations SET expected_count = :n, updated_at = now() WHERE id = :id"),
-            {"n": expected_count, "id": existing[0]}
+            text("UPDATE hr.training_evaluations SET expected_count = :n, training_method = :tm, trainer_name = :tn, assessment_method = :am, updated_at = now() WHERE id = :id"),
+            {"n": expected_count, "id": existing[0], "tm": training_method, "tn": trainer_name, "am": assessment_method}
         )
         msg = "updated"
     else:
         await session.execute(
-            text("INSERT INTO hr.training_evaluations (id, training_content, department, expected_count) VALUES (gen_random_uuid(), :c, :d, :n)"),
-            {"c": training_content, "d": department, "n": expected_count}
+            text("INSERT INTO hr.training_evaluations (id, training_content, department, expected_count, training_method, trainer_name, assessment_method) VALUES (gen_random_uuid(), :c, :d, :n, :tm, :tn, :am)"),
+            {"c": training_content, "d": department, "n": expected_count, "tm": training_method, "tn": trainer_name, "am": assessment_method}
         )
         msg = "created"
     await session.commit()
     return success_response(data={"status": msg}, message="同步成功")
+
+
+@router.delete("/training-evaluations/{eval_id}", summary="删除评估补录记录")
+async def delete_training_evaluation(
+    eval_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    await session.execute(text("DELETE FROM hr.training_evaluations WHERE id = :id"), {"id": eval_id})
+    await session.commit()
+    return success_response(message="删除成功")
 
 
 @router.get("/training-evaluations/pending", summary="待评估的培训列表")

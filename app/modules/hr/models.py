@@ -73,7 +73,8 @@ class Employee(BaseModel):
     )
 
     # ─── Department & job ───
-    department: Mapped[str] = mapped_column(String(64), nullable=False, comment="部门")
+    department: Mapped[str] = mapped_column(String(64), nullable=False, comment="体现部门")
+    actual_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="实际部门")
     team: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="班组")
     position: Mapped[str] = mapped_column(String(64), nullable=False, comment="职位")
     job_category: Mapped[str | None] = mapped_column(
@@ -165,6 +166,9 @@ class Employee(BaseModel):
     major: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="专业"
     )
+    variety: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="品种"
+    )
 
     # ─── ID & address ───
     id_card: Mapped[str | None] = mapped_column(
@@ -252,6 +256,38 @@ class Employee(BaseModel):
     # ─── Sort order ───
     sort_order: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="Excel行序号"
+    )
+
+    # ─── Excel 导入扩展字段 ───
+    duty: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="职务"
+    )
+    dept_manager: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="部门管理者"
+    )
+    additional_manager: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="额外管理者"
+    )
+    report_grade: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="报表用职级"
+    )
+    dept_head_trainer: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="部门负责人/一级培训师"
+    )
+    safety_training_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="入职安全培训日期"
+    )
+    safety_training_score: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="入职安全培训成绩"
+    )
+    culture_training_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="企业文化培训日期"
+    )
+    gmp_training_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="GMP基础培训时间"
+    )
+    departure_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="离职时间"
     )
 
     # ─── Feishu sync metadata ───
@@ -726,6 +762,8 @@ class HrTrainer(BaseModel):
     certification_date: Mapped[date | None] = mapped_column(Date)
     confirmation_date: Mapped[date | None] = mapped_column(Date)
     confirmation_reminder: Mapped[date | None] = mapped_column(Date)
+    is_level1: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="是否一级培训师")
+    admin: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训管理员")
     remarks: Mapped[str | None] = mapped_column(Text)
     is_primary_trainer: Mapped[bool] = mapped_column(default=False, server_default="false")
     admin: Mapped[str | None] = mapped_column(String(64))
@@ -745,3 +783,61 @@ class SopCatalog(BaseModel):
     sop_number: Mapped[str | None] = mapped_column(String(64))
     category: Mapped[str | None] = mapped_column(String(128))
     department: Mapped[str | None] = mapped_column(String(128))
+    position_name: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="适用岗位")
+
+
+class HrPosition(BaseModel):
+    """部门职位表：按部门存储可选职位列表"""
+    __tablename__ = "positions"
+    __table_args__ = (
+        Index("ix_positions_department", "department"),
+        {"schema": "hr"},
+    )
+
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="部门名称"
+    )
+    name: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="职位名称"
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )
+
+
+class PositionTraining(BaseModel):
+    """岗位培训内容关联表：岗位 → 培训类别 → SOP/文件"""
+    __tablename__ = "position_trainings"
+    __table_args__ = (
+        Index("ix_pt_position", "position_name"),
+        Index("ix_pt_department", "department"),
+        {"schema": "hr"},
+    )
+
+    position_name: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="岗位名称"
+    )
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="所属部门"
+    )
+    variety: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="品种"
+    )
+    training_category: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="培训类别"
+    )
+    trainer: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="培训师"
+    )
+    training_method: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="培训方式"
+    )
+    sop_number: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="SOP编号"
+    )
+    file_name: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="文件名称"
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )

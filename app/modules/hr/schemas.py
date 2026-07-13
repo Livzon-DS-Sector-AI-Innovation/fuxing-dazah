@@ -70,11 +70,14 @@ class EmployeeBase(BaseModel):
     domain_account: str | None = Field(None, max_length=64, description="域账号")
 
     # Department & job
-    department: str = Field(..., max_length=64, description="部门")
+    department: str = Field(..., max_length=64, description="体现部门")
+    actual_department: str | None = Field(None, max_length=64, description="实际部门")
     team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
     job_category: str | None = Field(None, max_length=32, description="职类")
     level: str | None = Field(None, max_length=32, description="级别")
+    concurrent_departments: str | None = Field(None, max_length=256, description="兼任部门")
+    variety: str | None = Field(None, max_length=128, description="品种")
 
     # Qualifications
     qualifications: list[str] | None = Field(None, description="职称／职业资格")
@@ -151,6 +154,18 @@ class EmployeeBase(BaseModel):
     remarks: list[str] | None = Field(None, description="备注")
     status: str = Field("待审批", max_length=16, description="状态")
     sort_order: int | None = Field(None, description="Excel行序号")
+
+    # Excel 扩展字段
+    duty: str | None = Field(None, max_length=64, description="职务")
+    dept_manager: str | None = Field(None, max_length=64, description="部门管理者")
+    additional_manager: str | None = Field(None, max_length=64, description="额外管理者")
+    report_grade: str | None = Field(None, max_length=32, description="报表用职级")
+    dept_head_trainer: str | None = Field(None, max_length=64, description="部门负责人/一级培训师")
+    safety_training_date: date | None = Field(None, description="入职安全培训日期")
+    safety_training_score: str | None = Field(None, max_length=32, description="入职安全培训成绩")
+    culture_training_date: date | None = Field(None, description="企业文化培训日期")
+    gmp_training_date: date | None = Field(None, description="GMP基础培训时间")
+    departure_date: date | None = Field(None, description="离职时间")
 
 
 class EmployeeCreate(EmployeeBase):
@@ -334,7 +349,7 @@ class OffboardingRecordResponse(OffboardingRecordBase):
 class DepartureRecordBase(BaseModel):
     # Basic
     name: str = Field(..., max_length=64, description="姓名")
-    department: str = Field(..., max_length=64, description="部门")
+    department: str = Field(..., max_length=64, description="体现部门")
     team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="职位")
     job_category: str | None = Field(None, max_length=64, description="职类")
@@ -444,7 +459,7 @@ class OnboardingRecordBase(BaseModel):
     domain_account: str | None = Field(None, max_length=64, description="域账号")
 
     # Department & job
-    department: str = Field(..., max_length=64, description="部门")
+    department: str = Field(..., max_length=64, description="体现部门")
     team: str | None = Field(None, max_length=64, description="班组")
     position: str = Field(..., max_length=64, description="岗位")
     job_category: str | None = Field(None, max_length=32, description="职类")
@@ -654,7 +669,7 @@ class TrainingLedgerPageResponse(BaseModel):
 
 class AnnualTrainingPlanBase(BaseModel):
     year: int = Field(..., description="年度")
-    department: str = Field(..., max_length=64, description="部门")
+    department: str = Field(..., max_length=64, description="体现部门")
     status: str = Field("草稿", max_length=16, description="状态: 草稿, 已确认")
 
 
@@ -756,6 +771,7 @@ class TrainerResponse(BaseModel):
     confirmation_reminder: date | None = None
     remarks: str | None = None
     is_primary_trainer: bool = False
+    is_level1: str | None = None
     admin: str | None = None
     created_at: datetime | None = None
 
@@ -776,6 +792,7 @@ class SopCatalogResponse(BaseModel):
     sop_number: str | None = None
     category: str | None = None
     department: str | None = None
+    position_name: str | None = None
 
 
 class SopCatalogListResponse(BaseModel):

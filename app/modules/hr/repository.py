@@ -4,7 +4,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import asc, delete, desc, func, select
+from sqlalchemy import asc, delete, desc, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -31,13 +31,15 @@ class EmployeeRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_by_employee_number(self, employee_number: str) -> Employee | None:
-        result = await self.session.execute(
-            select(Employee).where(
-                Employee.employee_number == employee_number,
-                Employee.is_deleted.is_(False),
-            )
+    async def get_by_employee_number(
+        self, employee_number: str, *, include_deleted: bool = False
+    ) -> Employee | None:
+        stmt = select(Employee).where(
+            Employee.employee_number == employee_number,
         )
+        if not include_deleted:
+            stmt = stmt.where(Employee.is_deleted.is_(False))
+        result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def list_employees(
@@ -163,22 +165,57 @@ class EmployeeRepository:
         )
         return result.scalar_one_or_none()
 
-    async def upsert_by_employee_number(self, data: dict) -> Employee:
-        """Create or update employee by employee_number (used for Feishu sync)."""
-        emp = await self.get_by_employee_number(data["employee_number"])
-        if emp:
-            for key, value in data.items():
-                if key != "id" and value is not None:
-                    setattr(emp, key, value)
-            await self.session.flush()
-            await self.session.refresh(emp)
-            return emp
-        else:
-            new_emp = Employee(**{k: v for k, v in data.items() if v is not None})
-            self.session.add(new_emp)
-            await self.session.flush()
-            await self.session.refresh(new_emp)
-            return new_emp
+    async def upsert_by_employee_number(self, data: dict) -> bool:
+        """UPDATE-then-INSERT 策略：先 UPDATE，成功则完成；否则 INSERT。
+
+        UPDATE 永远不会触发 UniqueViolationError。
+        即使 INSERT 与并发请求产生极低概率的竞态，也会捕获异常后回退到 UPDATE。
+
+        UPDATE 使用原始 data（含 None → 设为 NULL），INSERT 过滤掉 None。
+        Returns True if a new record was created, False if updated.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        insert_data = {k: v for k, v in data.items() if v is not None}
+
+        # ── 构建 SET 子句（UPDATE 含 None 值 → NULL）──
+        skip_update = {"id", "employee_number", "created_at"}
+        set_parts = []
+        for c in data:  # 用原始 data，包含 None → NULL
+            if c not in skip_update:
+                set_parts.append(f"{c} = :{c}")
+        set_parts.append("is_deleted = false")
+        set_parts.append("updated_at = now()")
+
+        sql_update = text(
+            f"UPDATE hr.employees SET {', '.join(set_parts)} "
+            f"WHERE employee_number = :employee_number"
+        )
+
+        conn = await self.session.connection()
+
+        # ── Step 1: 先 UPDATE（含 None → NULL）──
+        result = await conn.execute(sql_update, data)
+        if result.rowcount and result.rowcount > 0:
+            return False  # 更新成功
+
+        # ── Step 2: 确认不存在，INSERT（过滤 None）──
+        columns = list(insert_data.keys())
+        col_names = "id, " + ", ".join(columns) + ", created_at"
+        placeholders = "gen_random_uuid(), " + ", ".join(f":{c}" for c in columns) + ", now()"
+        sql_insert = text(
+            f"INSERT INTO hr.employees ({col_names}) "
+            f"VALUES ({placeholders})"
+        )
+
+        try:
+            await conn.execute(sql_insert, insert_data)
+            return True
+        except IntegrityError:
+            # 极低概率竞态：UPDATE 后 INSERT 前，另一请求插入了同工号
+            # 此时回退到 UPDATE
+            await conn.execute(sql_update, data)
+            return False
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -487,8 +524,15 @@ class OnboardingRecordRepository:
         page_size: int = 20,
         sort_by: str = "created_at",
         sort_order: str = "desc",
+        days: int = 7,
     ) -> tuple[list[OnboardingRecord], int]:
+        from datetime import datetime, timedelta, timezone
         stmt = select(OnboardingRecord).where(OnboardingRecord.is_deleted.is_(False))
+
+        # 七天自动清空：只显示最近 N 天内创建的记录
+        if days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            stmt = stmt.where(OnboardingRecord.created_at >= cutoff)
 
         if department:
             stmt = stmt.where(OnboardingRecord.department == department)
