@@ -131,16 +131,17 @@ export default function TrainingNotificationClient() {
     }
   }, [searchParams])
 
-  // 培训师：选部门后加载该部门员工
+  // 培训师：从内训师台账加载
   const loadTrainerEmployees = async (dept: string) => {
     setTrainerDept(dept)
     form.setFieldsValue({ trainer: undefined })
     if (!dept) { setTrainerEmployees([]); return }
     try {
-      const res = await fetchEmployees({ department: dept, page_size: 200 })
-      setTrainerEmployees((res.data || []).map((e: any) => ({
-        value: e.name,
-        label: `${e.name} (${e.employee_number || ''})`,
+      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?department=${encodeURIComponent(dept)}&page_size=200`)
+      const d = await res.json()
+      setTrainerEmployees((d.data || []).map((t: any) => ({
+        value: t.name,
+        label: `${t.name} (${t.department})`,
       })))
     } catch { setTrainerEmployees([]) }
   }
@@ -329,16 +330,18 @@ export default function TrainingNotificationClient() {
           }
           // 同步写入评估补录表（培训内容+部门+应到人数）
           try {
+            const fd = new FormData()
+            fd.append('training_content', subject)
+            fd.append('department', department)
+            fd.append('expected_count', String(targets.length))
+            fd.append('training_method', method)
+            fd.append('trainer_name', trainerVal)
+            fd.append('assessment_method', values.assessment_method || '')
             await fetch(`${API_BASE}/api/v1/hr/training-evaluations/upsert`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                training_content: subject,
-                department: department,
-                expected_count: targets.length,
-              }),
+              body: fd,
             })
-          } catch {}
+          } catch { message.warning('评估补录同步失败，请手动录入') }
           message.success(
             `已成功为 ${targets.map((t) => t.name).join('、')} 添加培训台账记录`
           )

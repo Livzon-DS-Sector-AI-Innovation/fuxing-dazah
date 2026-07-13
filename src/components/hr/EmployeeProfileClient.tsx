@@ -3,19 +3,16 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { App, Button, Select, Tabs, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
+import { fetchEmployees, fetchDepartments } from '@/lib/api/hr'
 import { Employee, Department } from '@/types/hr'
-import { fetchEmployeesAction, uploadEmployeesAction } from '@/actions/hr'
-import { fetchDepartments } from '@/lib/api/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeTable from './EmployeeTable'
 import EmployeeForm from './EmployeeForm'
-import TurnoverAnalysisPanel from './TurnoverAnalysisPanel'
 
 interface EmployeeProfileClientProps {
   initialEmployees: Employee[]
   initialTotal: number
   initialDepartment?: string
-  fetchAction?: typeof fetchEmployeesAction
 }
 
 function useDebounce<T>(value: T, delay: number): T {
@@ -32,9 +29,9 @@ function useDebounce<T>(value: T, delay: number): T {
 export default function EmployeeProfileClient({
   initialEmployees,
   initialTotal,
-  initialDepartment,
-  fetchAction }: EmployeeProfileClientProps) {
+  initialDepartment }: EmployeeProfileClientProps) {
   const { message, modal } = App.useApp()
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
@@ -45,19 +42,16 @@ export default function EmployeeProfileClient({
   const [departments, setDepartments] = useState<Department[]>([])
 
   const { searchKeyword, filterStatus } = useHrStore()
-  const debouncedSearchKeyword = useDebounce(searchKeyword, 300)
 
   const activeDepartment =
     activeTab === 'all'
       ? ''
       : departments.find((d) => d.id === activeTab)?.name || ''
 
-  const doFetch = fetchAction || fetchEmployeesAction
-
   const loadData = useCallback(async () => {
     try {
-      const res = await doFetch({
-        keyword: debouncedSearchKeyword || undefined,
+      const res = await fetchEmployees({
+        keyword: searchKeyword || undefined,
         department: activeDepartment || undefined,
         status: filterStatus || undefined,
         page,
@@ -67,7 +61,7 @@ export default function EmployeeProfileClient({
     } catch (err: any) {
       message.error(err.message || '加载数据失败')
     }
-  }, [debouncedSearchKeyword, activeDepartment, filterStatus, page, pageSize, doFetch])
+  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize])
 
   const loadDepartments = useCallback(async () => {
     try {
@@ -112,7 +106,7 @@ export default function EmployeeProfileClient({
 
   useEffect(() => {
     loadData()
-  }, [debouncedSearchKeyword, activeDepartment, filterStatus, page, pageSize])
+  }, [searchKeyword, activeDepartment, filterStatus, page, pageSize])
 
   useEffect(() => {
     loadDepartments()
@@ -132,10 +126,15 @@ export default function EmployeeProfileClient({
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">
           员工档案
         </h1>
-        <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({file}) => {
+        <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={async (file) => {
           const fd = new FormData(); fd.append('file', file as File)
           try {
-            const d = await uploadEmployeesAction(fd)
+            const r = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, { method: 'POST', body: fd })
+            const d = await r.json()
+            if (!r.ok) {
+              const errMsg = d.message || d.detail || `HTTP ${r.status}`
+              throw new Error(errMsg)
+            }
             const { created, updated, errors } = d.data
             if (errors && errors.length > 0) {
               modal.warning({
@@ -147,7 +146,10 @@ export default function EmployeeProfileClient({
               message.success(`上传完成：新增${created}，更新${updated}`)
             }
             handleRefresh()
-          } catch (err: any) { message.error(err.message || '上传失败') }
+          } catch (err: any) {
+            message.error(err.message || '上传失败')
+          }
+          return false
         }}>
           <Button icon={<UploadOutlined />}>上传人员名单</Button>
         </Upload>
@@ -155,13 +157,11 @@ export default function EmployeeProfileClient({
           options={departments.map((d: any) => ({value: d.name, label: d.name}))}
           onChange={async (dept) => {
             if (!dept) return
-            const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
             const deptEncoded = encodeURIComponent(dept)
             window.open(`${API_BASE}/api/v1/hr/roster?department=${deptEncoded}`)
           }} />
       </div>
 
-      <TurnoverAnalysisPanel />
 
       <Tabs activeKey={activeTab} onChange={handleTabChange} type="card">
         {tabItems.map((dept) => (

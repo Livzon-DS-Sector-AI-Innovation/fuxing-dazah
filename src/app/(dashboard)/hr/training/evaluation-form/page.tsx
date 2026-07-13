@@ -23,23 +23,29 @@ export default function EvaluationFormPage() {
   const watchedExpected = Form.useWatch('expected_count', form)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/training-evaluations/pending`).then(r => r.json())
-      .then(res => setPendingList(res.data || []))
+    loadPending()
   }, [])
 
-  const handleSelect = (id: string) => {
-    const item = pendingList.find(p => p.id === id)
+  const loadPending = () => {
+    fetch(`${API_BASE}/api/v1/hr/training-evaluations/list?page_size=100`).then(r => r.json())
+      .then(res => setPendingList(res.data || []))
+  }
+
+  const handleSelect = (recordId: string) => {
+    const item = pendingList.find(p => p.id === recordId)
     if (!item) return
     form.setFieldsValue({
-      subject: item.content || '',
-      training_method: item.method || undefined,
-      trainee_names: item.audience || '',
-      assessment_method: item.remarks?.match(/考核方式:(\S+)/)?.[1] || undefined,
+      subject: item.training_content || '',
+      training_date: item.training_date || undefined,
+      training_method: item.training_method || undefined,
+      trainer: item.trainer_name || item.trainer || undefined,
+      assessment_method: item.assessment_method || undefined,
       expected_count: item.expected_count || 0,
       actual_count: item.expected_count || 0,
       exam_count: item.expected_count || 0,
+      eval_id: recordId,
     })
-    message.success(`已加载：${item.content?.substring(0,40)}（应到${item.expected_count}人）`)
+    message.success(`已加载：${(item.training_content || '').substring(0, 40)}`)
   }
 
   const handleGenerate = async () => {
@@ -71,10 +77,20 @@ export default function EvaluationFormPage() {
       a.download = `培训效果评估表_${payload.training_date||'nodate'}.xlsx`
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
       window.URL.revokeObjectURL(url)
-      message.success('评估表已生成，台账已更新')
-      // 刷新待评估列表
-      fetch(`${API_BASE}/api/v1/hr/training-evaluations/pending`).then(r => r.json())
-        .then(res => setPendingList(res.data || []))
+      message.success('评估表已生成')
+      // 标记年度计划对应项为已完成
+      if (vals.subject) {
+        fetch(`${API_BASE}/api/v1/hr/annual-training-plans/complete-by-content`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: vals.subject }),
+        }).catch(() => {})
+      }
+      // 删除已评估的记录
+      const evalId = form.getFieldValue('eval_id')
+      if (evalId) {
+        fetch(`${API_BASE}/api/v1/hr/training-evaluations/${evalId}`, { method: 'DELETE' }).catch(() => {})
+      }
+      loadPending()
     } catch (err: any) { message.error(err.message || '生成失败') }
     finally { setLoading(false) }
   }
@@ -90,10 +106,10 @@ export default function EvaluationFormPage() {
         <Alert type="info" showIcon message={`${pendingList.length} 条培训待评估，选择后自动填表`} />
       )}
 
-      <Card size="small" title="从年度计划选择（自动填表）">
+      <Card size="small" title="从台账记录选择（自动填表）">
         <Select showSearch placeholder="搜索培训内容..." allowClear
           filterOption={(input, option) => (option?.label as string||'').toLowerCase().includes(input.toLowerCase())}
-          options={pendingList.map(p => ({value:p.id, label:`[${p.department}] ${p.content?.substring(0,60)}`}))}
+          options={pendingList.map((p: any) => ({value:p.id, label:`[${p.training_content?.substring(0,60)}]`}))}
           onChange={handleSelect} style={{ width:'100%' }} />
       </Card>
 

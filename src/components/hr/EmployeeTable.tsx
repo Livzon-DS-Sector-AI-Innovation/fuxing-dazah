@@ -64,17 +64,23 @@ export default function EmployeeTable({
       width: 90,
       fixed: 'left' as const },
     {
-      title: '部门',
+      title: '体现部门',
       dataIndex: 'department',
       key: 'department',
-      width: 180 },
+      width: 160 },
+    {
+      title: '实际部门',
+      dataIndex: 'actual_department',
+      key: 'actual_department',
+      width: 140, ellipsis: true,
+      render: (v: string) => v || '-' },
     {
       title: '班组',
       dataIndex: 'team',
       key: 'team',
       width: 100 },
     {
-      title: '职位',
+      title: '体现岗位',
       dataIndex: 'position',
       key: 'position',
       width: 140 },
@@ -83,6 +89,12 @@ export default function EmployeeTable({
       dataIndex: 'concurrent_departments',
       key: 'concurrent_departments',
       width: 130,
+      render: (v: string) => v || '-' },
+    {
+      title: '兼任品种',
+      dataIndex: 'variety',
+      key: 'variety',
+      width: 100,
       render: (v: string) => v || '-' },
     {
       title: '性别',
@@ -206,7 +218,7 @@ export default function EmployeeTable({
   ]
 
   // Hide columns where ALL rows have empty values (except key & important columns)
-  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'position', 'concurrent_departments'])
+  const alwaysShow = new Set(['action', 'employee_number', 'name', 'department', 'actual_department', 'position', 'concurrent_departments', 'variety'])
   const columns = allColumns.filter(col => {
     if (alwaysShow.has(col.key as string)) return true
     return employees.some((emp: any) => {
@@ -218,11 +230,11 @@ export default function EmployeeTable({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-center">
-        <Input
+        <Input.Search
           placeholder="搜索姓名或工号"
           value={searchKeyword}
           onChange={(e) => setSearchKeyword(e.target.value)}
-          prefix={<SearchOutlined />}
+          onSearch={(val) => setSearchKeyword(val)}
           className="w-64"
           allowClear
         />
@@ -263,8 +275,10 @@ export default function EmployeeTable({
             <tbody>
               {[
                 ['工号', detailEmp.employee_number], ['姓名', detailEmp.name],
-                ['性别', detailEmp.gender], ['部门', detailEmp.department],
-                ['岗位', detailEmp.position], ['学历', detailEmp.education],
+                ['性别', detailEmp.gender], ['体现部门', detailEmp.department],
+                ['实际部门', detailEmp.actual_department],
+                ['体现岗位', detailEmp.position], ['兼任部门', detailEmp.concurrent_departments],
+                ['兼任品种', detailEmp.variety], ['学历', detailEmp.education],
                 ['毕业院校', detailEmp.school], ['专业', detailEmp.major],
                 ['毕业时间', detailEmp.graduation_date], ['入职日期', detailEmp.hire_date],
                 ['职类', detailEmp.job_category], ['级别', detailEmp.level],

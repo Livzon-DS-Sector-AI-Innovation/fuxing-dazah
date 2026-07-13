@@ -1,11 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Modal, Form, Input, Select, DatePicker, Tabs } from 'antd'
+import { App, Modal, Form, Input, Select, DatePicker, Tabs, Button, Space, Divider } from 'antd'
+import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee, EmployeeCreateInput, EmployeeUpdateInput, Department } from '@/types/hr'
 import { createEmployee, updateEmployee } from '@/actions/hr'
-import { fetchDepartments } from '@/lib/api/hr'
+import { fetchDepartments, fetchPositions, PositionOption } from '@/lib/api/hr'
 
 interface EmployeeFormProps {
   open: boolean
@@ -21,12 +22,21 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
   const [form] = Form.useForm()
   const isEdit = !!employee
   const [departments, setDepartments] = useState<Department[]>([])
+  const [positions, setPositions] = useState<PositionOption[]>([])
+  const [newPosModalOpen, setNewPosModalOpen] = useState(false)
+  const [newPosName, setNewPosName] = useState('')
+  const [newPosDept, setNewPosDept] = useState('')
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
   useEffect(() => {
     if (open) {
       fetchDepartments({ page_size: 100 })
         .then((res) => setDepartments(res.data))
         .catch(() => setDepartments([]))
+
+      fetchPositions()
+        .then(setPositions)
+        .catch(() => setPositions([]))
 
       if (employee) {
         const dateFields = [
@@ -49,6 +59,24 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
       }
     }
   }, [open, employee, form])
+
+  // 根据选中的部门筛选可选职位，并去掉部门前缀显示
+  const selectedDept = Form.useWatch('department', form)
+  const filteredPositions = selectedDept
+    ? positions.filter((p) => p.department === selectedDept)
+    : positions
+
+  const positionOptions = filteredPositions
+    .map((p) => {
+      const dept = p.department
+      let label = p.name
+      if (dept && label.startsWith(dept)) {
+        label = label.slice(dept.length)
+      }
+      return { value: p.name, label }
+    })
+    // 按 label 去重，重复的职位名只保留第一个
+    .filter((v, i, a) => a.findIndex((x) => x.label === v.label) === i)
 
   const handleSubmit = async () => {
     try {
@@ -86,13 +114,14 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
 
   const commonInput = (name: string, label: string, required?: boolean, rest?: any) => (
     <Form.Item name={name} label={label} rules={required ? [{ required: true, message: `请输入${label}` }] : undefined} {...rest}>
-      <Input placeholder={`请输入${label}`} />
+      <Input placeholder={`请输入${label}`} autoComplete="off" />
     </Form.Item>
   )
 
-  const commonSelect = (name: string, label: string, options: { value: string; label: string }[], required?: boolean) => (
+  const commonSelect = (name: string, label: string, options: { value: string; label: string }[], required?: boolean, showSearch?: boolean) => (
     <Form.Item name={name} label={label} rules={required ? [{ required: true, message: `请选择${label}` }] : undefined}>
-      <Select placeholder={`请选择${label}`} allowClear options={options} />
+      <Select placeholder={`请选择${label}`} allowClear showSearch={showSearch} options={options}
+        filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
     </Form.Item>
   )
 
@@ -112,23 +141,45 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
       cancelText="取消"
       width={860}
     >
-      <Form form={form} layout="vertical" className="mt-4">
+      <Form form={form} layout="vertical" className="mt-4" autoComplete="off">
         <Tabs defaultActiveKey="basic">
           <TabPane tab="基本信息" key="basic">
             <div className="grid grid-cols-3 gap-4">
               {commonInput('employee_number', '工号', true)}
               {commonInput('name', '姓名', true)}
               {commonInput('domain_account', '域账号')}
-              {commonSelect('department', '部门', departmentOptions, true)}
+              {commonSelect('department', '体现部门', departmentOptions, true)}
               {commonInput('team', '班组')}
-              {commonInput('position', '职位', true)}
+              <Form.Item name="position" label="体现岗位" rules={[{ required: true, message: '请选择岗位' }]}>
+                <Select placeholder="请选择岗位" allowClear showSearch
+                  filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  options={positionOptions}
+                  dropdownRender={(menu) => (
+                    <>
+                      {menu}
+                      <Divider style={{ margin: '8px 0' }} />
+                      <Button type="link" icon={<PlusOutlined />} style={{ width: '100%', textAlign: 'left' }}
+                        onClick={async () => {
+                          const dept = form.getFieldValue('department')
+                          if (!dept) { message.warning('请先选择部门'); return }
+                          setNewPosDept(dept)
+                          setNewPosName('')
+                          setNewPosModalOpen(true)
+                        }}>
+                        新建职位
+                      </Button>
+                    </>
+                  )} />
+              </Form.Item>
+              {commonInput('concurrent_departments', '兼任部门')}
+              {commonInput('variety', '兼任品种')}
               {commonSelect('job_category', '职类', [
                 { value: '管理', label: '管理' }, { value: '技术', label: '技术' },
                 { value: '操作', label: '操作' }, { value: '职能', label: '职能' },
               ])}
-              {commonSelect('level', '级别', [
-                { value: '高级', label: '高级' }, { value: '中级', label: '中级' },
-                { value: '初级', label: '初级' }, { value: '员级', label: '员级' },
+              {commonSelect('level', '职级', [
+                ...Array.from({length:12}, (_,i) => ({ value: `S${i+1}`, label: `S${i+1}` })),
+                ...Array.from({length:8}, (_,i) => ({ value: `M${i+1}`, label: `M${i+1}` })),
               ])}
               {commonSelect('gender', '性别', [
                 { value: '男', label: '男' }, { value: '女', label: '女' },
@@ -250,6 +301,38 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
           </TabPane>
         </Tabs>
       </Form>
+
+      <Modal title="新建职位" open={newPosModalOpen} onCancel={() => setNewPosModalOpen(false)}
+        onOk={async () => {
+          if (!newPosName.trim()) { message.warning('请输入职位名称'); return }
+          const fullName = newPosName.trim()
+          try {
+            const res = await fetch(`${API_BASE}/api/v1/hr/positions`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ department: newPosDept, name: fullName }),
+            })
+            if (res.ok) {
+              message.success('职位创建成功')
+              setNewPosModalOpen(false)
+              // 刷新职位列表并自动选中新职位
+              const data = await fetchPositions()
+              setPositions(data)
+              form.setFieldValue('position', fullName)
+            } else {
+              const d = await res.json()
+              message.error(d.message || '创建失败')
+            }
+          } catch { message.error('创建失败') }
+        }} okText="创建">
+        <div className="mt-4 space-y-3">
+          <div><strong>部门：</strong>{newPosDept}</div>
+          <div className="text-sm text-gray-500">部门：{newPosDept}</div>
+          <Input placeholder="输入职位名称（如：经理、主管、仪器组组员）" value={newPosName}
+            onChange={e => setNewPosName(e.target.value)} onPressEnter={() => {
+              // trigger onOk
+            }} />
+        </div>
+      </Modal>
     </Modal>
   )
 }

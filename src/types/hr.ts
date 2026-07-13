@@ -4,8 +4,12 @@ export interface Employee {
   name: string
   domain_account?: string
   department: string
+  actual_department?: string
   team?: string
   position: string
+  duty?: string
+  dept_manager?: string
+  report_grade?: string
   job_category?: string
   level?: string
   concurrent_departments?: string
@@ -33,6 +37,7 @@ export interface Employee {
   classification?: string
   school?: string
   major?: string
+  variety?: string
   id_card?: string
   id_card_expiry?: string
   id_card_address?: string
@@ -71,6 +76,7 @@ export interface EmployeeCreateInput {
   position: string
   job_category?: string
   level?: string
+  concurrent_departments?: string
   qualifications?: string[]
   qualification_type?: string
   gender?: string
@@ -91,6 +97,7 @@ export interface EmployeeCreateInput {
   classification?: string
   school?: string
   major?: string
+  variety?: string
   id_card?: string
   id_card_expiry?: string
   id_card_address?: string
@@ -125,6 +132,7 @@ export interface EmployeeUpdateInput {
   position?: string
   job_category?: string
   level?: string
+  concurrent_departments?: string
   qualifications?: string[]
   qualification_type?: string
   gender?: string
@@ -145,6 +153,7 @@ export interface EmployeeUpdateInput {
   classification?: string
   school?: string
   major?: string
+  variety?: string
   id_card?: string
   id_card_expiry?: string
   id_card_address?: string
@@ -205,6 +214,7 @@ export interface Department {
   name: string
   code: string
   description?: string
+  employee_count?: number
   created_at?: string
   updated_at?: string
 }

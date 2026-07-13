@@ -218,8 +218,19 @@ export default function TrainingLedgerClient({
 
   if (!employee && employeeNumber) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-        <p>未找到工号为 {employeeNumber} 的员工信息</p>
+      <div className="space-y-4">
+        <div className="flex flex-col items-center justify-center py-10 text-gray-400">
+          <p>未找到工号为 {employeeNumber} 的员工，请重新搜索</p>
+        </div>
+        <div className="max-w-md mx-auto">
+          <Select showSearch placeholder="输入工号或姓名搜索员工" style={{ width: '100%' }}
+            value={undefined}
+            filterOption={false}
+            onSearch={handleEmployeeSearch}
+            onChange={(val) => { window.location.href = `/hr/training/ledger?employee_number=${val}` }}
+            notFoundContent={searching ? <Spin size="small" /> : null}
+            options={searchOptions} />
+        </div>
       </div>
     )
   }

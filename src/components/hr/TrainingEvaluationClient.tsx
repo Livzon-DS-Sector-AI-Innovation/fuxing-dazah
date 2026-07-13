@@ -72,6 +72,15 @@ export default function TrainingEvaluationClient() {
         remarks: values.remarks,
       }
       await generateTrainingEvaluation(payload)
+      // 标记年度计划中对应培训为已完成
+      if (values.training_content) {
+        const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+        fetch(`${API_BASE}/api/v1/hr/annual-training-plans/complete-by-content`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: values.training_content }),
+        }).catch(() => {})
+      }
       message.success('培训效果评估表已生成')
     } catch (err: any) {
       message.error(err.message || '生成失败')

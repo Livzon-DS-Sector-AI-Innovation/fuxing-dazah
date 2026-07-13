@@ -393,6 +393,18 @@ export async function deleteAnnualTrainingPlan(id: string) {
   return res.json()
 }
 
+export async function uploadAnnualPlanAction(formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '上传年度培训计划失败')
+  }
+  return res.json()
+}
+
 export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanItemBatchUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}/items/batch`, {
     method: 'PUT',

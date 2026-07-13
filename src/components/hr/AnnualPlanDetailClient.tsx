@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   Input,
+  Tag,
   InputNumber,
   DatePicker,
   Select,
@@ -59,7 +60,16 @@ export default function AnnualPlanDetailClient({
     setLoading(true)
     try {
       const res = await fetchPlanItems(planId)
-      setItems(res.data || [])
+      const sorted = (res.data || []).sort((a: any, b: any) => {
+        // 已完成的排最底下
+        if (a.tracking_status === '完成' && b.tracking_status !== '完成') return 1
+        if (a.tracking_status !== '完成' && b.tracking_status === '完成') return -1
+        // 未完成的按月份排序
+        const ma = parseInt((a.month || '0').replace(/[^0-9]/g, '')) || 13
+        const mb = parseInt((b.month || '0').replace(/[^0-9]/g, '')) || 13
+        return ma - mb
+      })
+      setItems(sorted)
     } catch (err: any) {
       message.error('加载明细失败: ' + (err.message || '未知错误'))
     } finally {
@@ -255,19 +265,19 @@ export default function AnnualPlanDetailClient({
       <div id="print-area" className="print-area">
         <Card bordered={false} className="annual-plan-preview">
           <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed', minWidth: '1200px' }}>
+          <table className="w-full border-collapse text-sm" style={{ tableLayout: 'fixed', minWidth: '1800px' }}>
             <colgroup>
-              <col style={{ width: '35px' }} />
-              <col style={{ width: '90px' }} />
-              <col style={{ width: '280px' }} />
-              <col style={{ width: '170px' }} />
-              <col style={{ width: '140px' }} />
-              <col style={{ width: '65px' }} />
-              <col style={{ width: '65px' }} />
-              <col style={{ width: '90px' }} />
-              <col style={{ width: '55px' }} />
-              <col style={{ width: '130px' }} />
+              <col style={{ width: '50px' }} />
+              <col style={{ width: '150px' }} />
+              <col style={{ width: '400px' }} />
+              <col style={{ width: '220px' }} />
+              <col style={{ width: '200px' }} />
+              <col style={{ width: '100px' }} />
+              <col style={{ width: '100px' }} />
+              <col style={{ width: '150px' }} />
               <col style={{ width: '80px' }} />
+              <col style={{ width: '180px' }} />
+              <col style={{ width: '100px' }} />
             </colgroup>
             <tbody>
               {/* 第1行: 标题 */}
@@ -290,37 +300,37 @@ export default function AnnualPlanDetailClient({
               </tr>
               {/* 表头 */}
               <tr>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   序号
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   培训季度及课时
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   培训内容及使用教材
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   培训对象
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   授课单位及授课人
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   考核方式
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   培训跟踪
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   确认人/日期
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   状态
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center">
                   备注
                 </td>
-                <td className="bg-gray-50 font-medium border border-gray-300 px-1 py-2 text-center no-print">
+                <td className="bg-gray-50 font-medium border border-gray-300 px-2 py-2 text-center no-print">
                   操作
                 </td>
               </tr>
@@ -329,15 +339,15 @@ export default function AnnualPlanDetailClient({
                 const editing = isEditing(item)
                 const isBlank = item.id.startsWith('blank-')
                 return (
-                  <tr key={item.id}>
-                    <td className="border border-gray-300 px-1 py-2 text-center align-top" style={{ lineHeight: '1.6' }}>
+                  <tr key={item.id} style={{ background: item.tracking_status === '完成' ? '#f6ffed' : 'transparent' }}>
+                    <td className="border border-gray-300 px-2 py-2 text-center align-top" style={{ lineHeight: '1.6' }}>
                       <span>{idx + 1}</span>
                     </td>
                     <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <div className="space-y-1">
                           <select
-                            className="w-full text-xs border rounded px-1 py-0.5"
+                            className="w-full text-sm border rounded px-2 py-1"
                             value={editForm.month || ''}
                             onChange={(e) => updateField('month', e.target.value)}
                           >
@@ -406,7 +416,7 @@ export default function AnnualPlanDetailClient({
                     <td className="border border-gray-300 px-2 py-2 align-top text-center" style={{ lineHeight: '1.6' }}>
                       {editing ? (
                         <select
-                          className="w-full text-xs border rounded px-1 py-0.5"
+                          className="w-full text-sm border rounded px-2 py-1"
                           value={editForm.tracking_status || ''}
                           onChange={(e) => updateField('tracking_status', e.target.value)}
                         >
@@ -415,18 +425,21 @@ export default function AnnualPlanDetailClient({
                           <option value="未完成">未完成</option>
                         </select>
                       ) : (
-                        <span>{item.tracking_status ? `□${item.tracking_status}` : ''}</span>
+                        <span>{item.tracking_status === '完成'
+                          ? <Tag color="green">✓ 完成</Tag>
+                          : item.tracking_status === '未完成'
+                          ? <Tag color="red">✗ 未完成</Tag>
+                          : <Tag color="default">—</Tag>}</span>
                       )}
                     </td>
                     <td className="border border-gray-300 px-2 py-2 align-top" style={{ wordBreak: 'break-word', lineHeight: '1.6' }}>
                       {editing ? (
                         <div className="space-y-1">
-                          <Input
-                            size="small"
-                            placeholder="确认人"
-                            value={editForm.confirmer || ''}
-                            onChange={(e) => updateField('confirmer', e.target.value)}
-                          />
+                          <Select size="small" style={{ width: '100%' }} placeholder="选确认人" allowClear showSearch
+                            value={editForm.confirmer || undefined}
+                            onChange={(v) => updateField('confirmer', v)}
+                            options={trainerList.map(t => ({value:t,label:t}))}
+                            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
                           <DatePicker
                             size="small"
                             className="w-full"
@@ -461,7 +474,7 @@ export default function AnnualPlanDetailClient({
                         <span>{item.remarks || ''}</span>
                       )}
                     </td>
-                    <td className="border border-gray-300 px-1 py-2 text-center align-top no-print">
+                    <td className="border border-gray-300 px-2 py-2 text-center align-top no-print">
                       {isBlank ? null : editing ? (
                         <Space size="small" direction="vertical" className="w-full">
                           <Button

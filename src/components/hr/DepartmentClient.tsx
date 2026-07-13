@@ -2,10 +2,11 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { App, Button, Table, Space, Popconfirm, Input, Modal } from 'antd'
-import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons'
-import { Department } from '@/types/hr'
+import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions } from 'antd'
+import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { Department, Employee } from '@/types/hr'
 import { fetchDepartmentsAction, deleteDepartment } from '@/actions/hr'
+import { fetchEmployees } from '@/lib/api/hr'
 import DepartmentForm from './DepartmentForm'
 import TeamClient from './TeamClient'
 
@@ -32,6 +33,12 @@ export default function DepartmentClient({
   const [teamModalOpen, setTeamModalOpen] = useState(false)
   const [selectedDepartment, setSelectedDepartment] = useState<Department | null>(null)
 
+  // 展开行：部门员工列表
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [employeesByDept, setEmployeesByDept] = useState<Record<string, Employee[]>>({})
+  const [loadingEmployees, setLoadingEmployees] = useState<Set<string>>(new Set())
+  const [detailEmployee, setDetailEmployee] = useState<Employee | null>(null)
+
   const doFetch = fetchAction || fetchDepartmentsAction
 
   const loadData = useCallback(async () => {
@@ -56,6 +63,8 @@ export default function DepartmentClient({
   }
 
   const handleRefresh = () => {
+    setExpandedKeys(new Set())
+    setEmployeesByDept({})
     loadData()
   }
 
@@ -88,9 +97,65 @@ export default function DepartmentClient({
     setTeamModalOpen(true)
   }
 
+  // 加载部门下的员工
+  const loadEmployeesForDept = async (deptName: string) => {
+    if (employeesByDept[deptName]) return // 已加载过
+
+    setLoadingEmployees((prev) => new Set(prev).add(deptName))
+    try {
+      // 分页加载该部门全部员工
+      let allEmployees: Employee[] = []
+      let page = 1
+      const pageSize = 200
+      while (true) {
+        const res = await fetchEmployees({ department: deptName, page, page_size: pageSize })
+        const data = res.data || []
+        allEmployees = allEmployees.concat(data)
+        if (data.length < pageSize) break
+        page++
+      }
+      setEmployeesByDept((prev) => ({ ...prev, [deptName]: allEmployees }))
+    } catch {
+      message.error(`加载 ${deptName} 人员失败`)
+    } finally {
+      setLoadingEmployees((prev) => {
+        const next = new Set(prev)
+        next.delete(deptName)
+        return next
+      })
+    }
+  }
+
+  const handleExpand = (expanded: boolean, record: Department) => {
+    const next = new Set(expandedKeys)
+    if (expanded) {
+      next.add(record.id)
+      loadEmployeesForDept(record.name)
+    } else {
+      next.delete(record.id)
+    }
+    setExpandedKeys(next)
+  }
+
   useEffect(() => {
     loadData()
   }, [searchKeyword, page, pageSize])
+
+  const employeeColumns = [
+    { title: '工号', dataIndex: 'employee_number', width: 110 },
+    { title: '姓名', dataIndex: 'name', width: 100,
+      render: (name: string, record: Employee) => (
+        <a onClick={() => setDetailEmployee(record)}>{name}</a>
+      )},
+    { title: '职位', dataIndex: 'position', width: 140, ellipsis: true },
+    { title: '职级', dataIndex: 'level', width: 80 },
+    { title: '岗位类别', dataIndex: 'job_category', width: 80 },
+    { title: '状态', dataIndex: 'status', width: 80,
+      render: (s: string) => <Tag color={s === '在职' ? 'green' : s === '离职' ? 'red' : 'default'}>{s}</Tag> },
+    { title: '入职日期', dataIndex: 'hire_date', width: 110 },
+    { title: '手机', dataIndex: 'phone', width: 120, ellipsis: true },
+    { title: '员工性质', dataIndex: 'status_category', width: 90 },
+  ]
 
   const columns = [
     {
@@ -187,6 +252,31 @@ export default function DepartmentClient({
         dataSource={departments}
         rowKey="id"
         loading={loading}
+        expandable={{
+          expandedRowKeys: Array.from(expandedKeys),
+          onExpand: handleExpand,
+          expandedRowRender: (record: Department) => {
+            const employees = employeesByDept[record.name]
+            const isLoading = loadingEmployees.has(record.name)
+            return (
+              <div className="py-2">
+                <div className="text-sm text-gray-500 mb-2">
+                  <UserOutlined className="mr-1" />
+                  {record.name} — 共 {employees ? employees.length : record.employee_count || 0} 人
+                </div>
+                <Table
+                  columns={employeeColumns}
+                  dataSource={employees || []}
+                  rowKey="id"
+                  loading={isLoading}
+                  size="small"
+                  pagination={false}
+                  scroll={{ x: 900 }}
+                />
+              </div>
+            )
+          },
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -214,6 +304,33 @@ export default function DepartmentClient({
             departmentId={selectedDepartment.id}
             departmentName={selectedDepartment.name}
           />
+        )}
+      </Modal>
+
+      <Modal title={`${detailEmployee?.name || ''} - 详细资料`} open={!!detailEmployee}
+        onCancel={() => setDetailEmployee(null)} footer={null} width={700}>
+        {detailEmployee && (
+          <Descriptions bordered size="small" column={2}>
+            <Descriptions.Item label="工号">{detailEmployee.employee_number}</Descriptions.Item>
+            <Descriptions.Item label="姓名">{detailEmployee.name}</Descriptions.Item>
+            <Descriptions.Item label="部门">{detailEmployee.department}</Descriptions.Item>
+            <Descriptions.Item label="职务">{detailEmployee.duty}</Descriptions.Item>
+            <Descriptions.Item label="岗位">{detailEmployee.position}</Descriptions.Item>
+            <Descriptions.Item label="职级">{detailEmployee.level}</Descriptions.Item>
+            <Descriptions.Item label="岗位类别">{detailEmployee.job_category}</Descriptions.Item>
+            <Descriptions.Item label="性别">{detailEmployee.gender}</Descriptions.Item>
+            <Descriptions.Item label="学历">{detailEmployee.education}</Descriptions.Item>
+            <Descriptions.Item label="毕业院校">{detailEmployee.school}</Descriptions.Item>
+            <Descriptions.Item label="专业">{detailEmployee.major}</Descriptions.Item>
+            <Descriptions.Item label="入职日期">{detailEmployee.hire_date}</Descriptions.Item>
+            <Descriptions.Item label="员工性质">{detailEmployee.status_category}</Descriptions.Item>
+            <Descriptions.Item label="状态">{detailEmployee.status}</Descriptions.Item>
+            <Descriptions.Item label="手机">{detailEmployee.phone}</Descriptions.Item>
+            <Descriptions.Item label="域账号">{detailEmployee.domain_account}</Descriptions.Item>
+            <Descriptions.Item label="部门管理者">{detailEmployee.dept_manager}</Descriptions.Item>
+            <Descriptions.Item label="报表用职级">{detailEmployee.report_grade}</Descriptions.Item>
+            <Descriptions.Item label="出生年月">{detailEmployee.birth_year}/{detailEmployee.birth_month}/{detailEmployee.birth_day}</Descriptions.Item>
+          </Descriptions>
         )}
       </Modal>
 

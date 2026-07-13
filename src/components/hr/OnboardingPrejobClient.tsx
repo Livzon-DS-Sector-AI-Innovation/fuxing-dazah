@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Select, Space, Input } from 'antd'
+import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
 import {
   fetchOnboardingRecords,
@@ -18,18 +19,12 @@ export default function OnboardingPrejobClient() {
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   const [downloadingWord, setDownloadingWord] = useState(false)
-  const [allSops, setAllSops] = useState<any[]>([])
   const [selectedSops, setSelectedSops] = useState<any[]>([])
-  const [sopSearch, setSopSearch] = useState('')
   const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
-  const [sopDept, setSopDept] = useState('')
-  const [sopCat, setSopCat] = useState('')
-  const [sopDepts, setSopDepts] = useState<{value:string,label:string}[]>([])
-  const [sopCats, setSopCats] = useState<{value:string,label:string}[]>([])
 
   useEffect(() => {
     setLoading(true)
-    fetchOnboardingRecords({ page_size: 50 })
+    fetchOnboardingRecords({ page_size: 200 })
       .then((res) => setEmployees(res.data || []))
       .catch((err) => message.error('加载入职台账失败: ' + (err.message || '未知错误')))
       .finally(() => setLoading(false))
@@ -50,30 +45,53 @@ export default function OnboardingPrejobClient() {
 
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
-  // 加载部门和分类列表
+  // 选中员工后，根据岗位自动加载关联培训大类
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`).then(r => r.json())
-      .then(res => setSopDepts((res.data||[]).map((d:string) => ({value:d,label:d}))))
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/categories`).then(r => r.json())
-      .then(res => setSopCats((res.data||[]).map((c:string) => ({value:c,label:c}))))
+    if (!selectedEmployee) return
+    const pos = selectedEmployee.position
+    if (!pos) return
+
+    fetch(`${API_BASE}/api/v1/hr/position-trainings?position_name=${encodeURIComponent(pos)}`)
+      .then(r => r.json())
+      .then(res => {
+        const items: any[] = res.data || []
+        if (items.length === 0) {
+          message.info(`岗位「${pos}」暂无关联培训内容`)
+          return
+        }
+        // 按培训类别去重，每个大类只取一条作为代表
+        const seen = new Set<string>()
+        const categories: any[] = []
+        for (const item of items) {
+          const cat = item.training_category
+          if (cat && !seen.has(cat)) {
+            seen.add(cat)
+            categories.push({
+              id: cat,
+              sop_number: '',
+              file_name: cat,
+              department: item.department,
+              category: cat,
+              trainer: item.trainer,
+              training_method: item.training_method,
+            })
+          }
+        }
+        setSelectedSops(categories)
+        message.success(`已根据岗位「${pos}」加载 ${categories.length} 个培训大类`)
+      })
+      .catch(() => message.error('加载培训内容失败'))
+  }, [selectedEmployeeId])
+
+  // 加载培训师列表
+  useEffect(() => {
     fetch(`http://localhost:8000/api/v1/hr/trainers?page_size=200`).then(r => r.json())
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
   }, [])
 
-  // 按条件加载 SOP 列表
-  useEffect(() => {
-    const params = new URLSearchParams({ page_size: '200' })
-    if (sopDept) params.set('department', sopDept)
-    if (sopCat) params.set('category', sopCat)
-    if (sopSearch) params.set('keyword', sopSearch)
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog?${params.toString()}`)
-      .then(r => r.json())
-      .then(res => setAllSops(res.data || []))
-      .catch(() => setAllSops([]))
-  }, [sopDept, sopCat, sopSearch])
-
   const [sopMethods, setSopMethods] = useState<Record<string, string>>({})
   const [sopTrainers, setSopTrainers] = useState<Record<string, string>>({})
+  const [sopPlanDates, setSopPlanDates] = useState<Record<string, string>>({})
 
   const updateSopMethod = (sopId: string, method: string) => {
     setSopMethods(prev => ({ ...prev, [sopId]: method }))
@@ -178,51 +196,6 @@ export default function OnboardingPrejobClient() {
             </table>
           </Card>
 
-          {/* ===== SOP 选择面板（打印时隐藏） ===== */}
-          <Card className="no-print" title="SOP 目录（点击勾选加入培训计划）" size="small">
-            <Space wrap style={{ marginBottom: 12 }}>
-              <Select placeholder="部门" allowClear value={sopDept||undefined}
-                onChange={v => { setSopDept(v||''); setSopCat('') }}
-                options={sopDepts} style={{ width: 200 }} showSearch
-                filterOption={(input, option) => (option?.label||'').toLowerCase().includes(input.toLowerCase())} />
-              <Select placeholder="分类" allowClear value={sopCat||undefined}
-                onChange={v => setSopCat(v||'')}
-                options={sopCats} style={{ width: 200 }} />
-              <Input.Search placeholder="搜索编号或名称" value={sopSearch}
-                onChange={e => setSopSearch(e.target.value)} style={{ width: 260 }} allowClear />
-            </Space>
-            <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 4 }}>
-              {allSops.slice(0, 200).map(sop => {
-                const sel = selectedSops.find(s => s.id === sop.id)
-                return (
-                  <div key={sop.id} onClick={() => toggleSop(sop)}
-                    style={{ padding: '6px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0',
-                      background: sel ? '#e6f4ff' : 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input type="checkbox" checked={!!sel} readOnly style={{ flexShrink: 0 }} />
-                    <span style={{ fontSize: 12, color: '#999', flexShrink: 0 }}>{sop.sop_number || ''}</span>
-                    <span style={{ flex: 1, fontSize: 13 }}>{sop.file_name}</span>
-                    <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{sop.department}</span>
-                    <span style={{ fontSize: 11, color: '#aaa', flexShrink: 0 }}>{sop.category}</span>
-                  </div>
-                )
-              })}
-            </div>
-            <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: '#666' }}>已选 {selectedSops.length} 项</span>
-              <Space>
-                <Button size="small" onClick={() => {
-                  const visibleIds = new Set(allSops.slice(0, 200).map(s => s.id))
-                  const others = selectedSops.filter(s => !visibleIds.has(s.id))
-                  setSelectedSops([...others, ...allSops.slice(0, 200)])
-                }}>全选当前</Button>
-                <Button size="small" onClick={() => {
-                  const visibleIds = new Set(allSops.slice(0, 200).map(s => s.id))
-                  setSelectedSops(prev => prev.filter(s => !visibleIds.has(s.id)))
-                }}>取消全选</Button>
-              </Space>
-            </div>
-          </Card>
-
           {/* ===== Part II & IV: 培训计划 + 完成确认 (匹配模板) ===== */}
           <Card className="no-print-padding">
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -259,7 +232,11 @@ export default function OnboardingPrejobClient() {
                   <tr key={i}>
                     <td style={{...CELL, textAlign: 'center'}}>{i + 1}</td>
                     <td style={CELL} colSpan={4}>{item.sop_number ? `${item.sop_number} ` : ''}{item.file_name || ''}</td>
-                    <td style={CELL} colSpan={2}></td>
+                    <td style={CELL} colSpan={2}>
+                      <DatePicker size="small" style={{ width: '100%' }} placeholder="完成期限"
+                        value={sopPlanDates[item.id] ? dayjs(sopPlanDates[item.id]) : null}
+                        onChange={(d) => setSopPlanDates(prev => ({...prev, [item.id]: d ? d.format('YYYY-MM-DD') : ''}))} />
+                    </td>
                     <td style={CELL} colSpan={2}>
                       <Select size="small" value={sopTrainers[item.id] || undefined}
                         onChange={v => setSopTrainers(prev => ({...prev, [item.id]: v}))}
@@ -275,7 +252,7 @@ export default function OnboardingPrejobClient() {
                     <td style={CELL}></td><td style={CELL}></td><td style={CELL}></td>
                   </tr>
                 )) : (
-                  <tr><td style={CELL} colSpan={13}>请在上方 SOP 目录中勾选培训内容</td></tr>
+                  <tr><td style={CELL} colSpan={13}>选择员工后将自动加载岗位培训内容</td></tr>
                 )}
                 {/* Part III: 审核批准 */}
                 <tr>
