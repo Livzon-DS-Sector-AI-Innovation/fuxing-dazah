@@ -185,6 +185,7 @@ class GasDetectorCreate(BaseModel):
     detection_unit: str | None = Field(default=None, max_length=200, description="检测单位")
     next_calibration_date: date | None = Field(default=None, description="下次检定时间")
     manufacturer: str | None = Field(default=None, max_length=200, description="制造单位")
+    status: str | None = Field(default=None, max_length=20, description="器具状态：在用/停用/超期")
     department: str | None = Field(default=None, max_length=200, description="部门")
     remark: str | None = Field(default=None, max_length=500, description="备注")
 
@@ -205,6 +206,7 @@ class GasDetectorUpdate(BaseModel):
     detection_unit: str | None = Field(default=None, max_length=200, description="检测单位")
     next_calibration_date: date | None = Field(default=None, description="下次检定时间")
     manufacturer: str | None = Field(default=None, max_length=200, description="制造单位")
+    status: str | None = Field(default=None, max_length=20, description="器具状态：在用/停用/超期")
     department: str | None = Field(default=None, max_length=200, description="部门")
     remark: str | None = Field(default=None, max_length=500, description="备注")
 
@@ -225,6 +227,7 @@ class GasDetectorResponse(BaseModel):
     detection_unit: str | None = None
     next_calibration_date: date | None = None
     manufacturer: str | None = None
+    status: str | None = None
     department: NormalizedDepartment = None
     calibration_result: str | None = None
     sheet_name: str | None = None
@@ -252,6 +255,7 @@ class GasDetectorListResponse(BaseModel):
     calibration_factor: str | None = None
     manufacturer_supplier: str | None = None
     manufacturer: str | None = None
+    status: str | None = None
     calibration_date: date | None = None
     next_calibration_date: date | None = None
     detection_unit: str | None = None
@@ -270,6 +274,7 @@ class GasDetectorFilter(PageParams):
     instrument_name: str | None = Field(default=None, description="器具名称（模糊搜索）")
     detection_model: str | None = Field(default=None, description="检测型号（精确匹配）")
     product_number: str | None = Field(default=None, description="产品编号（精确匹配）")
+    measurement_range: str | None = Field(default=None, description="量程（精确匹配，支持逗号多选）")
     installation_type: str | None = Field(default=None, description="安装方式")
     installation_location: str | None = Field(default=None, description="安装位置（精确匹配）")
     medium: str | None = Field(default=None, description="使用介质（精确匹配）")
@@ -278,6 +283,7 @@ class GasDetectorFilter(PageParams):
     calibration_factor: str | None = Field(default=None, description="标定系数（精确匹配）")
     manufacturer_supplier: str | None = Field(default=None, description="制造商/供应商（精确匹配）")
     manufacturer: str | None = Field(default=None, description="制造单位（精确匹配）")
+    status: str | None = Field(default=None, description="器具状态：在用/停用/超期")
     next_calibration_before: date | None = Field(default=None, description="下次检定日期在此日期之前")
     next_calibration_after: date | None = Field(default=None, description="下次检定日期在此日期之后")
     calibration_date_before: date | None = Field(default=None, description="检定日期在此日期之前")
@@ -341,6 +347,11 @@ class ExtractDateResponse(BaseModel):
 # ═══════════════════════════════════════════
 # 批量导出
 # ═══════════════════════════════════════════
+
+
+class BatchDeleteRequest(BaseModel):
+    """批量删除请求。"""
+    ids: list[str] = Field(default_factory=list, min_length=1, description="仪表 ID 列表")
 
 
 class ExportReportRequest(BaseModel):
@@ -444,12 +455,14 @@ class GasDetectorFilterOptions(BaseModel):
     instrument_name: list[str] = Field(default_factory=list)
     detection_model: list[str] = Field(default_factory=list)
     product_number: list[str] = Field(default_factory=list)
+    measurement_range: list[str] = Field(default_factory=list)
     installation_type: list[str] = Field(default_factory=list)
     installation_location: list[str] = Field(default_factory=list)
     medium: list[str] = Field(default_factory=list)
     calibration_factor: list[str] = Field(default_factory=list)
     manufacturer_supplier: list[str] = Field(default_factory=list)
     manufacturer: list[str] = Field(default_factory=list)
+    status: list[str] = Field(default_factory=list)
     detection_unit: list[str] = Field(default_factory=list)
     calibration_result: list[str] = Field(default_factory=list)
 
@@ -518,6 +531,7 @@ class GasDetectorBatchCreateItem(BaseModel):
     detection_unit: str | None = Field(default=None, max_length=200)
     next_calibration_date: date | None = None
     manufacturer: str | None = Field(default=None, max_length=200)
+    status: str | None = Field(default=None, max_length=20)
     department: str = Field(..., max_length=200, description="部门")
     remark: str | None = Field(default=None, max_length=500, description="备注")
 
@@ -555,6 +569,37 @@ class LedgerImportResult(BaseModel):
     sheet_count: int = Field(default=0, description="处理的 sheet 数")
     sheet_details: list[LedgerImportSheetDetail] = Field(default_factory=list)
     warnings: list[LedgerImportError] = Field(default_factory=list, description="字段缺失提醒")
+
+
+# ═══════════════════════════════════════════
+# 日期聚合统计
+# ═══════════════════════════════════════════
+
+
+class DateStatDay(BaseModel):
+    """日期聚合：单日统计。"""
+    day: int = Field(..., ge=1, le=31, description="日")
+    count: int = Field(..., ge=0, description="该日期条目数")
+
+
+class DateStatMonth(BaseModel):
+    """日期聚合：单月统计。"""
+    month: int = Field(..., ge=1, le=12, description="月份")
+    count: int = Field(..., ge=0, description="该月总条目数")
+    days: list[DateStatDay] = Field(default_factory=list, description="日期明细")
+
+
+class DateStatYear(BaseModel):
+    """日期聚合：单年统计。"""
+    year: int = Field(..., description="年份")
+    count: int = Field(..., ge=0, description="该年总条目数")
+    months: list[DateStatMonth] = Field(default_factory=list, description="月份明细")
+
+
+class DateStatsResponse(BaseModel):
+    """日期聚合统计响应。"""
+    field: str = Field(..., description="统计的日期字段: calibration_date | next_calibration_date")
+    years: list[DateStatYear] = Field(default_factory=list, description="年份列表（降序）")
 
 
 # ═══════════════════════════════════════════

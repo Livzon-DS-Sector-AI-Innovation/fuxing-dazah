@@ -20,8 +20,10 @@ from app.modules.meter.ai_service import extract_and_update_date, get_meter_ai_c
 from app.modules.meter.schemas import (
     BatchCreateRequest,
     BatchCreateResult,
+    BatchDeleteRequest,
     BatchExtractRequest,
     BatchExtractResponse,
+    DateStatsResponse,
     DepartmentCreate,
     DepartmentResponse,
     DepartmentUpdate,
@@ -128,6 +130,16 @@ async def get_instrument_filter_options(
     if "department" in options:
         options["department"] = [d for d in (_normalize_department(x) for x in options["department"]) if d is not None]
     return success_response(InstrumentFilterOptions(**options).model_dump(mode="json"))
+
+
+@router.get("/instruments/date-stats", summary="标准计量器具日期聚合统计")
+async def get_instrument_date_stats(
+    field: str = Query(default="calibration_date", pattern="^(calibration_date|next_calibration_date)$", description="统计的日期字段"),
+    filters: InstrumentFilter = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    stats = await service.get_instrument_date_stats(db, filters, field)
+    return success_response(DateStatsResponse(**stats).model_dump(mode="json"))
 
 
 @router.get("/instruments/export", summary="导出标准计量器具为 CSV")
@@ -482,6 +494,25 @@ async def delete_instrument(
     return success_response(message="删除成功")
 
 
+@router.post("/instruments/batch-delete", summary="批量删除标准计量器具（软删除）")
+async def batch_delete_instruments(
+    body: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    ids = [UUID(i) for i in body.ids]
+    deleted_count = await service.batch_delete_instruments(db, ids)
+    return success_response({"deleted_count": deleted_count}, message=f"成功删除 {deleted_count} 条记录")
+
+
+@router.get("/instruments/ids", summary="获取筛选条件下所有标准计量器具 ID（用于跨页全选）")
+async def get_instrument_ids(
+    filters: InstrumentFilter = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    ids = await service.get_all_instrument_ids(db, filters)
+    return success_response([str(i) for i in ids])
+
+
 @router.post("/instruments/export-reports", summary="批量导出标准计量器具最新报告 ZIP（单次最多 200 份）")
 async def export_instrument_reports(
     body: ExportReportRequest,
@@ -539,6 +570,7 @@ async def list_gas_detectors(
                 calibration_factor=r.calibration_factor,
                 manufacturer_supplier=r.manufacturer_supplier,
                 manufacturer=r.manufacturer,
+                status=service.compute_status(r.status, r.next_calibration_date),
                 calibration_date=r.calibration_date,
                 next_calibration_date=r.next_calibration_date,
                 detection_unit=r.detection_unit,
@@ -566,6 +598,16 @@ async def get_gas_detector_filter_options(
     if "department" in options:
         options["department"] = [d for d in (_normalize_department(x) for x in options["department"]) if d is not None]
     return success_response(GasDetectorFilterOptions(**options).model_dump(mode="json"))
+
+
+@router.get("/gas-detectors/date-stats", summary="有毒有害可燃探测器日期聚合统计")
+async def get_gas_detector_date_stats(
+    field: str = Query(default="calibration_date", pattern="^(calibration_date|next_calibration_date)$", description="统计的日期字段"),
+    filters: GasDetectorFilter = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    stats = await service.get_gas_detector_date_stats(db, filters, field)
+    return success_response(DateStatsResponse(**stats).model_dump(mode="json"))
 
 
 @router.get("/gas-detectors/export-excel", summary="导出有毒有害可燃探测器为 Excel")
@@ -656,6 +698,7 @@ async def get_gas_detector(
             detection_unit=obj.detection_unit,
             next_calibration_date=obj.next_calibration_date,
             manufacturer=obj.manufacturer,
+            status=service.compute_status(obj.status, obj.next_calibration_date),
             department=obj.department,
             sheet_name=obj.sheet_name,
             anomaly_flags=obj.anomaly_flags,
@@ -690,6 +733,7 @@ async def create_gas_detector(
             detection_unit=record.detection_unit,
             next_calibration_date=record.next_calibration_date,
             manufacturer=record.manufacturer,
+            status=service.compute_status(record.status, record.next_calibration_date),
             department=record.department,
             sheet_name=record.sheet_name,
             anomaly_flags=record.anomaly_flags,
@@ -727,6 +771,7 @@ async def update_gas_detector(
             detection_unit=record.detection_unit,
             next_calibration_date=record.next_calibration_date,
             manufacturer=record.manufacturer,
+            status=service.compute_status(record.status, record.next_calibration_date),
             department=record.department,
             sheet_name=record.sheet_name,
             anomaly_flags=record.anomaly_flags,
@@ -745,6 +790,25 @@ async def delete_gas_detector(
 ) -> JSONResponse:
     await service.delete_gas_detector(db, detector_id)
     return success_response(message="删除成功")
+
+
+@router.post("/gas-detectors/batch-delete", summary="批量删除有毒有害可燃探测器（软删除）")
+async def batch_delete_gas_detectors(
+    body: BatchDeleteRequest,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    ids = [UUID(i) for i in body.ids]
+    deleted_count = await service.batch_delete_gas_detectors(db, ids)
+    return success_response({"deleted_count": deleted_count}, message=f"成功删除 {deleted_count} 条记录")
+
+
+@router.get("/gas-detectors/ids", summary="获取筛选条件下所有探测器 ID（用于跨页全选）")
+async def get_gas_detector_ids(
+    filters: GasDetectorFilter = Depends(),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    ids = await service.get_all_gas_detector_ids(db, filters)
+    return success_response([str(i) for i in ids])
 
 
 @router.post("/gas-detectors/export-reports", summary="批量导出探测器最新报告 ZIP（单次最多 200 份）")

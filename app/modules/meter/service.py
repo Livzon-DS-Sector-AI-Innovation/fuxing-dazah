@@ -41,9 +41,16 @@ MODULE_CODE = "meter"
 
 
 def compute_status(record_status: str | None, next_calibration_date: date | None) -> str | None:
-    """计算显示状态：在用 + 下次检定过期 → 超期；停用只能人工设置，永不变为超期。"""
-    if record_status == "在用" and next_calibration_date is not None and next_calibration_date < date.today():
+    """计算显示状态。
+
+    - 在用/超期 + 下次检定已过期 → 显示"超期"
+    - 手动设为超期 + 下次检定未过期（或无日期） → 自动恢复为"在用"
+    - 停用永不变为超期，原样返回
+    """
+    if record_status in ("在用", "超期") and next_calibration_date is not None and next_calibration_date < date.today():
         return "超期"
+    if record_status == "超期" and (next_calibration_date is None or next_calibration_date >= date.today()):
+        return "在用"
     return record_status
 
 
@@ -78,6 +85,8 @@ async def create_instrument(
         raise DuplicateException("资产编号", data.asset_number)
     values = data.model_dump()
     _auto_calc_next_calibration_date(values)
+    max_order = await repo.get_max_instrument_sort_order(db)
+    values["sort_order"] = max_order + 1
     return await repo.create_instrument(db, values)
 
 
@@ -87,6 +96,8 @@ async def batch_create_instruments(
     """批量新增标准计量器具。"""
     results: list[dict[str, Any]] = []
     created = skipped = 0
+
+    max_order = await repo.get_max_instrument_sort_order(db)
 
     for i, item in enumerate(items):
         asset_number = item.get("asset_number")
@@ -120,6 +131,8 @@ async def batch_create_instruments(
 
         try:
             _auto_calc_next_calibration_date(item)
+            max_order += 1
+            item["sort_order"] = max_order
             record = await repo.create_instrument(db, item)
             created += 1
             results.append({
@@ -144,6 +157,8 @@ async def batch_create_gas_detectors(
     results: list[dict[str, Any]] = []
     created = skipped = 0
 
+    max_order = await repo.get_max_gas_detector_sort_order(db)
+
     for i, item in enumerate(items):
         instrument_name = item.get("instrument_name", "").strip()
 
@@ -156,6 +171,8 @@ async def batch_create_gas_detectors(
             continue
 
         try:
+            max_order += 1
+            item["sort_order"] = max_order
             record = await repo.create_gas_detector(db, item)
             created += 1
             results.append({
@@ -247,6 +264,38 @@ async def delete_instrument(db: AsyncSession, instrument_id: UUID) -> None:
         raise NotFoundException("标准计量器具", str(instrument_id))
 
 
+async def batch_delete_instruments(db: AsyncSession, ids: list[UUID]) -> int:
+    """批量软删除标准计量器具，返回实际删除数。"""
+    return await repo.batch_soft_delete_instruments(db, ids)
+
+
+async def get_all_instrument_ids(
+    db: AsyncSession, filters: InstrumentFilter
+) -> list[UUID]:
+    """获取当前筛选条件下的所有记录 ID。"""
+    return await repo.get_all_instrument_ids(
+        db,
+        department=filters.department,
+        asset_number=filters.asset_number,
+        instrument_name=filters.instrument_name,
+        model_spec=filters.model_spec,
+        measurement_range=filters.measurement_range,
+        accuracy_grade=filters.accuracy_grade,
+        serial_number=filters.serial_number,
+        location=filters.location,
+        manufacturer=filters.manufacturer,
+        status=filters.status,
+        calibration_unit=filters.calibration_unit,
+        calibration_result=filters.calibration_result,
+        color_marking=filters.color_marking,
+        next_calibration_before=filters.next_calibration_before,
+        next_calibration_after=filters.next_calibration_after,
+        calibration_date_before=filters.calibration_date_before,
+        calibration_date_after=filters.calibration_date_after,
+        keyword=filters.keyword,
+    )
+
+
 async def get_instrument_departments(db: AsyncSession) -> list[str]:
     return await repo.get_instrument_departments(db)
 
@@ -263,7 +312,10 @@ async def create_gas_detector(
         db, data.product_number
     ):
         raise DuplicateException("产品编号", data.product_number)
-    return await repo.create_gas_detector(db, data.model_dump())
+    values = data.model_dump()
+    max_order = await repo.get_max_gas_detector_sort_order(db)
+    values["sort_order"] = max_order + 1
+    return await repo.create_gas_detector(db, values)
 
 
 async def get_gas_detector(
@@ -284,6 +336,7 @@ async def list_gas_detectors(
         instrument_name=filters.instrument_name,
         detection_model=filters.detection_model,
         product_number=filters.product_number,
+        measurement_range=filters.measurement_range,
         installation_type=filters.installation_type,
         installation_location=filters.installation_location,
         medium=filters.medium,
@@ -292,6 +345,7 @@ async def list_gas_detectors(
         calibration_factor=filters.calibration_factor,
         manufacturer_supplier=filters.manufacturer_supplier,
         manufacturer=filters.manufacturer,
+        status=filters.status,
         next_calibration_before=filters.next_calibration_before,
         next_calibration_after=filters.next_calibration_after,
         calibration_date_before=filters.calibration_date_before,
@@ -335,6 +389,39 @@ async def delete_gas_detector(db: AsyncSession, detector_id: UUID) -> None:
         raise NotFoundException("有毒有害可燃探测器", str(detector_id))
 
 
+async def batch_delete_gas_detectors(db: AsyncSession, ids: list[UUID]) -> int:
+    """批量软删除有毒有害可燃探测器，返回实际删除数。"""
+    return await repo.batch_soft_delete_gas_detectors(db, ids)
+
+
+async def get_all_gas_detector_ids(
+    db: AsyncSession, filters: GasDetectorFilter
+) -> list[UUID]:
+    """获取当前筛选条件下的所有记录 ID。"""
+    return await repo.get_all_gas_detector_ids(
+        db,
+        department=filters.department,
+        instrument_name=filters.instrument_name,
+        detection_model=filters.detection_model,
+        product_number=filters.product_number,
+        measurement_range=filters.measurement_range,
+        installation_type=filters.installation_type,
+        installation_location=filters.installation_location,
+        medium=filters.medium,
+        detection_unit=filters.detection_unit,
+        calibration_result=filters.calibration_result,
+        calibration_factor=filters.calibration_factor,
+        manufacturer_supplier=filters.manufacturer_supplier,
+        manufacturer=filters.manufacturer,
+        status=filters.status,
+        next_calibration_before=filters.next_calibration_before,
+        next_calibration_after=filters.next_calibration_after,
+        calibration_date_before=filters.calibration_date_before,
+        calibration_date_after=filters.calibration_date_after,
+        keyword=filters.keyword,
+    )
+
+
 async def get_gas_detector_departments(db: AsyncSession) -> list[str]:
     return await repo.get_gas_detector_departments(db)
 
@@ -350,7 +437,11 @@ async def get_instrument_filter_options(db: AsyncSession) -> dict[str, list[str]
 
 async def get_gas_detector_filter_options(db: AsyncSession) -> dict[str, list[str]]:
     """获取有毒有害可燃探测器所有筛选列的 distinct 值。"""
-    return await repo.get_gas_detector_filter_options(db)
+    options = await repo.get_gas_detector_filter_options(db)
+    # "超期" 是动态计算的状态，不在数据库中存储，需要手动加入筛选选项
+    if "超期" not in options.get("status", []):
+        options.setdefault("status", []).insert(0, "超期")
+    return options
 
 
 # ═══════════════════════════════════════════
@@ -972,6 +1063,99 @@ async def get_meter_overview(db: AsyncSession, source: str) -> dict[str, int]:
 
 
 # ═══════════════════════════════════════════
+# 日期聚合统计
+# ═══════════════════════════════════════════
+
+
+def _build_date_stats_tree(rows: list[dict[str, int]]) -> list[dict[str, Any]]:
+    """将 repo 返回的扁平行 [{year, month, day, count}] 组装为嵌套 year→month→day 结构。"""
+    years_map: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        y = row["year"]
+        m = row["month"]
+        d = row["day"]
+        c = row["count"]
+
+        if y not in years_map:
+            years_map[y] = {"year": y, "count": 0, "months": {}}
+        years_map[y]["count"] += c
+
+        months_map: dict[int, dict[str, Any]] = years_map[y]["months"]
+        if m not in months_map:
+            months_map[m] = {"month": m, "count": 0, "days": {}}
+        months_map[m]["count"] += c
+
+        days_map: dict[int, dict[str, Any]] = months_map[m]["days"]
+        days_map[d] = {"day": d, "count": c}
+
+    # 转为列表并按年份降序、月降序、日降序排列
+    result: list[dict[str, Any]] = []
+    for y in sorted(years_map.keys(), reverse=True):
+        y_data = years_map[y]
+        months_list: list[dict[str, Any]] = []
+        for m in sorted(y_data["months"].keys(), reverse=True):
+            m_data = y_data["months"][m]
+            days_list = [
+                {"day": d, "count": m_data["days"][d]["count"]}
+                for d in sorted(m_data["days"].keys(), reverse=True)
+            ]
+            months_list.append({"month": m, "count": m_data["count"], "days": days_list})
+        result.append({"year": y, "count": y_data["count"], "months": months_list})
+    return result
+
+
+async def get_instrument_date_stats(
+    db: AsyncSession, filters: InstrumentFilter, field: str
+) -> dict[str, Any]:
+    """获取标准计量器具的日期聚合统计。"""
+    rows = await repo.get_instrument_date_stats(
+        db,
+        field=field,
+        department=filters.department,
+        asset_number=filters.asset_number,
+        instrument_name=filters.instrument_name,
+        model_spec=filters.model_spec,
+        measurement_range=filters.measurement_range,
+        accuracy_grade=filters.accuracy_grade,
+        serial_number=filters.serial_number,
+        location=filters.location,
+        manufacturer=filters.manufacturer,
+        status=filters.status,
+        calibration_unit=filters.calibration_unit,
+        calibration_result=filters.calibration_result,
+        color_marking=filters.color_marking,
+        keyword=filters.keyword,
+    )
+    return {"field": field, "years": _build_date_stats_tree(rows)}
+
+
+async def get_gas_detector_date_stats(
+    db: AsyncSession, filters: GasDetectorFilter, field: str
+) -> dict[str, Any]:
+    """获取有毒有害可燃探测器的日期聚合统计。"""
+    rows = await repo.get_gas_detector_date_stats(
+        db,
+        field=field,
+        department=filters.department,
+        instrument_name=filters.instrument_name,
+        detection_model=filters.detection_model,
+        product_number=filters.product_number,
+        measurement_range=filters.measurement_range,
+        installation_type=filters.installation_type,
+        installation_location=filters.installation_location,
+        medium=filters.medium,
+        detection_unit=filters.detection_unit,
+        calibration_result=filters.calibration_result,
+        calibration_factor=filters.calibration_factor,
+        manufacturer_supplier=filters.manufacturer_supplier,
+        manufacturer=filters.manufacturer,
+        status=filters.status,
+        keyword=filters.keyword,
+    )
+    return {"field": field, "years": _build_date_stats_tree(rows)}
+
+
+# ═══════════════════════════════════════════
 # 部门管理
 # ═══════════════════════════════════════════
 
@@ -1172,8 +1356,10 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
 
         for key in merged:
             for inst in inst_groups.get(key, []):
-                # 跳过检定单位为"计量室"的器具
+                # 跳过检定单位为"计量室"或已停用的器具
                 if inst.calibration_unit == "计量室":
+                    continue
+                if inst.status == "停用":
                     continue
                 days = (inst.next_calibration_date - today).days if inst.next_calibration_date else None
                 merged[key].append({
@@ -1185,8 +1371,10 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
                     "days_until_due": days,
                 })
             for det in det_groups.get(key, []):
-                # 跳过检测单位为"计量室"的探测器
+                # 跳过检测单位为"计量室"或已停用的探测器
                 if det.detection_unit == "计量室":
+                    continue
+                if det.status == "停用":
                     continue
                 days = (det.next_calibration_date - today).days if det.next_calibration_date else None
                 merged[key].append({
@@ -1279,6 +1467,7 @@ GAS_DETECTOR_COLUMN_MAP: dict[str, str] = {
     "下次检定时间": "next_calibration_date",
     "检定结论": "calibration_result",
     "生产厂家": "manufacturer",
+    "器具状态": "status",
     "部门": "department",
 }
 
@@ -1451,8 +1640,8 @@ def _map_and_convert_rows(
         headers = sheet["headers"]
         rows = sheet["rows"]
         sheet_name = sheet["name"]
-        # 部门名直接使用 sheet 名称（如 "1QC"、"2菌种"），前置数字是部门标识的一部分
-        dept = sheet_name.strip()
+        # 优先使用 Row 2 解析出的部门名，否则回退到 sheet 名称
+        dept = (sheet.get("dept") or sheet_name).strip()
 
         # 构建列索引映射：header_index → db_field
         col_mapping: dict[int, str] = {}
@@ -1619,6 +1808,10 @@ async def import_instrument_ledger(
     if not mapped_rows:
         raise ValueError("文件中未找到有效的计量器具数据")
 
+    # 按 Excel 解析顺序赋予全局 sort_order
+    for idx, row in enumerate(mapped_rows):
+        row["sort_order"] = idx
+
     # 4. 软删除全部 + 批量插入（在事务中）
     deleted_count = await _soft_delete_all_instruments(db)
     await db.flush()
@@ -1718,6 +1911,10 @@ async def import_gas_detector_ledger(
 
     if not mapped_rows:
         raise ValueError("文件中未找到有效的探测器数据")
+
+    # 按 Excel 解析顺序赋予全局 sort_order
+    for idx, row in enumerate(mapped_rows):
+        row["sort_order"] = idx
 
     # 4. 软删除全部 + 批量插入
     deleted_count = await _soft_delete_all_gas_detectors(db)

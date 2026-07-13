@@ -41,6 +41,7 @@ class InstrumentRecord(BaseModel):
         {"schema": SCHEMA},
     )
 
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="排序序号（Excel 行顺序）")
     asset_number: Mapped[str | None] = mapped_column(String(80), nullable=True, comment="资产编号")
     instrument_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="器具名称")
     model_spec: Mapped[str | None] = mapped_column(String(200), comment="型号规格")
@@ -50,7 +51,7 @@ class InstrumentRecord(BaseModel):
     calibration_cycle_months: Mapped[int | None] = mapped_column(Integer, comment="检定周期(月)")
     location: Mapped[str | None] = mapped_column(String(500), comment="使用地点")
     manufacturer: Mapped[str | None] = mapped_column(String(200), comment="器具制造商")
-    status: Mapped[str | None] = mapped_column(String(20), comment="器具状态：在用/停用")
+    status: Mapped[str | None] = mapped_column(String(20), comment="器具状态：在用/停用/超期")
     color_marking: Mapped[str | None] = mapped_column(String(20), comment="彩色标志")
     calibration_date: Mapped[date | None] = mapped_column(Date, comment="检定日期")
     calibration_unit: Mapped[str | None] = mapped_column(String(200), comment="检定单位")
@@ -87,6 +88,7 @@ class GasDetectorRecord(BaseModel):
         {"schema": SCHEMA},
     )
 
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="排序序号（Excel 行顺序）")
     instrument_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="器具名称")
     detection_model: Mapped[str | None] = mapped_column(String(200), comment="检测型号")
     measurement_range: Mapped[str | None] = mapped_column(String(100), comment="量程")
@@ -101,6 +103,7 @@ class GasDetectorRecord(BaseModel):
     next_calibration_date: Mapped[date | None] = mapped_column(Date, comment="下次检定时间")
     calibration_result: Mapped[str | None] = mapped_column(String(50), comment="检定结论")
     manufacturer: Mapped[str | None] = mapped_column(String(200), comment="制造单位")
+    status: Mapped[str | None] = mapped_column(String(20), comment="器具状态：在用/停用/超期")
     department: Mapped[str | None] = mapped_column(String(200), comment="部门")
     sheet_name: Mapped[str | None] = mapped_column(String(200), comment="来源 sheet 名")
     remark: Mapped[str | None] = mapped_column(String(500), nullable=True, comment="备注")
