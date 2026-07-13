@@ -929,6 +929,23 @@ export async function fetchCandidates(params: Record<string, any> = {}): Promise
   return { data: [], meta: { total: 0 } }
 }
 
+// ─── Position APIs ───
+
+export interface PositionOption {
+  id: string
+  department: string
+  name: string
+}
+
+export async function fetchPositions(department?: string): Promise<PositionOption[]> {
+  const sp = new URLSearchParams()
+  if (department) sp.set('department', department)
+  const res = await fetch(`${API_BASE}/api/v1/hr/positions?${sp.toString()}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('获取职位列表失败')
+  const d = await res.json()
+  return d.data || []
+}
+
 // ─── SOP Catalog APIs ───
 
 export async function fetchSopCatalog(params?: {
