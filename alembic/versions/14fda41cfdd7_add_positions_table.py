@@ -15,20 +15,20 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table('positions',
-        sa.Column('department', sa.String(128), nullable=False, comment='部门名称'),
-        sa.Column('name', sa.String(128), nullable=False, comment='职位名称'),
-        sa.Column('sort_order', sa.Integer(), nullable=False, server_default='0', comment='排序'),
-        sa.Column('id', sa.Uuid(), nullable=False),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-        sa.Column('created_by', sa.Uuid(), nullable=True),
-        sa.Column('updated_by', sa.Uuid(), nullable=True),
-        sa.Column('is_deleted', sa.Boolean(), server_default='false', nullable=False),
-        sa.PrimaryKeyConstraint('id'),
-        schema='hr'
-    )
-    op.create_index('ix_positions_department', 'positions', ['department'], schema='hr')
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS hr.positions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            department VARCHAR(128) NOT NULL,
+            name VARCHAR(128) NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            created_by UUID,
+            updated_by UUID,
+            is_deleted BOOLEAN NOT NULL DEFAULT false
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_positions_department ON hr.positions (department)")
 
 
 def downgrade() -> None:

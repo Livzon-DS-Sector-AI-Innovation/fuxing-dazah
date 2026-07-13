@@ -15,7 +15,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('employees', sa.Column('actual_department', sa.String(64), nullable=True, comment='实际部门'), schema='hr')
+    op.execute("ALTER TABLE hr.employees ADD COLUMN IF NOT EXISTS actual_department VARCHAR(64)")
 
 
 def downgrade() -> None:
