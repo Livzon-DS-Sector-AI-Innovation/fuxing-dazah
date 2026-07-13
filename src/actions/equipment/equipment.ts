@@ -6,7 +6,6 @@ import {
   CreateCategoryInput, UpdateCategoryInput, CreateLocationInput, UpdateLocationInput, CreateEquipmentInput, UpdateEquipmentInput,
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
-  CreateCalibrationPlanInput, UpdateCalibrationPlanInput, CreateCalibrationRecordInput,
   CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockAdjustInput,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
@@ -220,43 +219,6 @@ export async function verifyWorkOrder(id: string, data: VerifyWorkOrderInput): P
 export async function closeWorkOrder(id: string): Promise<ActionResult> {
   const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/${id}/close`, {
     method: 'PUT',
-  })
-  if (result.success) revalidatePath('/equipment')
-  return result
-}
-
-// ==================== 校准计划 ====================
-export async function createCalibrationPlan(data: CreateCalibrationPlanInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-  if (result.success) revalidatePath('/equipment')
-  return result
-}
-
-export async function updateCalibrationPlan(id: string, data: UpdateCalibrationPlanInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  })
-  if (result.success) revalidatePath('/equipment')
-  return result
-}
-
-export async function deleteCalibrationPlan(id: string): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans/${id}`, {
-    method: 'DELETE',
-  })
-  if (result.success) revalidatePath('/equipment')
-  return result
-}
-
-// ==================== 校准记录 ====================
-export async function createCalibrationRecord(data: CreateCalibrationRecordInput): Promise<ActionResult> {
-  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/records`, {
-    method: 'POST',
-    body: JSON.stringify(data),
   })
   if (result.success) revalidatePath('/equipment')
   return result

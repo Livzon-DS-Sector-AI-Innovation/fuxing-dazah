@@ -18,7 +18,6 @@ interface Props {
 const SCOPE_COLORS: Record<string, { color: string; bg: string; label: string }> = {
   global: { color: '#0075de', bg: '#dcecfa', label: '全局' },
   inspection: { color: '#7b3ff2', bg: '#e6e0f5', label: '巡检' },
-  calibration: { color: '#dd5b00', bg: '#ffe8d4', label: '校准' },
   maintenance: { color: '#1aae39', bg: '#d9f3e1', label: '维修' },
 }
 
@@ -322,7 +321,6 @@ export function RoleManagePanel({ roles }: Props) {
               options={[
                 { label: '全局 (global)', value: 'global' },
                 { label: '巡检 (inspection)', value: 'inspection' },
-                { label: '校准 (calibration)', value: 'calibration' },
                 { label: '维修 (maintenance)', value: 'maintenance' },
               ]}
             />

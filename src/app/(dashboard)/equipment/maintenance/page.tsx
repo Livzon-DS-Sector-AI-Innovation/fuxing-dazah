@@ -4,11 +4,10 @@ import '@/lib/http-server'
 import { MaintenancePage } from '@/components/equipment'
 import {
   fetchEquipments, fetchWorkOrders, fetchWorkOrderStatistics, fetchFailureCodes,
-  fetchCalibrationPlans, fetchCalibrationRecords,
   fetchMaintenancePlans,
 } from '@/lib/api/equipment'
 import {
-  Equipment, FailureCode, WorkOrder, WorkOrderStatistics, CalibrationPlan, CalibrationRecord,
+  Equipment, FailureCode, WorkOrder, WorkOrderStatistics,
   MaintenancePlan,
 } from '@/types/equipment'
 
@@ -29,10 +28,6 @@ export default async function MaintenancePageWrapper() {
     causes: [],
     actions: [],
   }
-  let calibrationPlans: CalibrationPlan[] = []
-  let calibrationPlanTotal = 0
-  let calibrationRecords: CalibrationRecord[] = []
-  let calibrationRecordTotal = 0
   let maintenancePlans: MaintenancePlan[] = []
   let maintenancePlanTotal = 0
 
@@ -44,8 +39,6 @@ export default async function MaintenancePageWrapper() {
       fetchFailureCodes('symptoms'),
       fetchFailureCodes('causes'),
       fetchFailureCodes('actions'),
-      fetchCalibrationPlans({ page: 1, page_size: 20 }),
-      fetchCalibrationRecords({ page: 1, page_size: 20 }),
       fetchMaintenancePlans({ page: 1, page_size: 20 }),
     ])
 
@@ -69,17 +62,9 @@ export default async function MaintenancePageWrapper() {
       failureCodes.actions = results[5].value
     } else { console.warn('加载处理措施失败:', results[5].reason) }
     if (results[6].status === 'fulfilled') {
-      calibrationPlans = results[6].value.items
-      calibrationPlanTotal = results[6].value.total
-    } else { console.warn('加载校准计划失败:', results[6].reason) }
-    if (results[7].status === 'fulfilled') {
-      calibrationRecords = results[7].value.items
-      calibrationRecordTotal = results[7].value.total
-    } else { console.warn('加载校准记录失败:', results[7].reason) }
-    if (results[8].status === 'fulfilled') {
-      maintenancePlans = results[8].value.items
-      maintenancePlanTotal = results[8].value.total
-    } else { console.warn('加载维护计划失败:', results[8].reason) }
+      maintenancePlans = results[6].value.items
+      maintenancePlanTotal = results[6].value.total
+    } else { console.warn('加载维护计划失败:', results[6].reason) }
   } catch (error) {
     console.warn('维护模块数据加载异常:', error)
   }
@@ -91,10 +76,6 @@ export default async function MaintenancePageWrapper() {
       initialWorkOrderTotal={workOrderTotal}
       initialWorkOrderStatistics={workOrderStatistics}
       initialFailureCodes={failureCodes}
-      initialCalibrationPlans={calibrationPlans}
-      initialCalibrationPlanTotal={calibrationPlanTotal}
-      initialCalibrationRecords={calibrationRecords}
-      initialCalibrationRecordTotal={calibrationRecordTotal}
       initialMaintenancePlans={maintenancePlans}
       initialMaintenancePlanTotal={maintenancePlanTotal}
     />

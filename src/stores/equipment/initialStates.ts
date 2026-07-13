@@ -6,8 +6,6 @@ import type {
   FailureCode,
   WorkOrder,
   WorkOrderStatistics,
-  CalibrationPlan,
-  CalibrationRecord,
   SparePart,
   StockWarning,
   MaintenancePlan,
@@ -70,31 +68,6 @@ export const initialFailureCodeState = {
   failureCodeDrawerOpen: false,
   failureCodeDrawerType: 'symptoms' as 'symptoms' | 'causes' | 'actions',
   editingFailureCode: null as FailureCode | null,
-}
-
-// ============ 校准计划状态 ============
-
-export const initialCalibrationPlanState = {
-  calibrationPlans: [] as CalibrationPlan[],
-  calibrationPlanTotal: 0,
-  calibrationPlanPage: 1,
-  calibrationPlanPageSize: 20,
-  calibrationPlanLoading: false,
-  calibrationPlanStatusFilter: '' as '' | '启用' | '停用',
-  calibrationPlanDrawerOpen: false,
-  editingCalibrationPlan: null as CalibrationPlan | null,
-}
-
-// ============ 校准记录状态 ============
-
-export const initialCalibrationRecordState = {
-  calibrationRecords: [] as CalibrationRecord[],
-  calibrationRecordTotal: 0,
-  calibrationRecordPage: 1,
-  calibrationRecordPageSize: 20,
-  calibrationRecordLoading: false,
-  calibrationRecordDrawerOpen: false,
-  editingCalibrationRecord: null as CalibrationRecord | null,
 }
 
 // ============ 备件管理状态 ============

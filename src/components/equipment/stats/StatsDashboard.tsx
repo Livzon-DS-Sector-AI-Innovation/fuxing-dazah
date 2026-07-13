@@ -30,7 +30,6 @@ import type {
   WorkOrderStatistics,
   StockWarning,
   MaintenancePlan,
-  CalibrationPlan,
   WorkOrder,
 } from '@/types/equipment'
 import { antdTheme } from '@/lib/antd-theme'
@@ -43,7 +42,6 @@ interface DashboardData {
   workOrderStats: WorkOrderStatistics | null
   stockWarnings: StockWarning[]
   overduePlans: MaintenancePlan[]
-  calibrationPlans: CalibrationPlan[]
   recentWorkOrders: WorkOrder[]
 }
 
@@ -748,18 +746,10 @@ function WorkOrderPipeline({ statistics }: { statistics: WorkOrderStatistics }) 
 function WarningPanels({
   stockWarnings,
   overduePlans,
-  calibrationPlans,
 }: {
   stockWarnings: StockWarning[]
   overduePlans: MaintenancePlan[]
-  calibrationPlans: CalibrationPlan[]
 }) {
-  const today = new Date()
-  const thirtyDaysLater = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000)
-  const upcomingCals = calibrationPlans
-    .filter(c => c.next_calibration_date && new Date(c.next_calibration_date) <= thirtyDaysLater && new Date(c.next_calibration_date) >= today)
-    .slice(0, 5)
-
   const panels = [
     {
       title: '备件库存预警',
@@ -800,40 +790,10 @@ function WarningPanels({
         ),
       })),
     },
-    {
-      title: '校准即将到期',
-      count: upcomingCals.length,
-      icon: <ExperimentOutlined />,
-      accent: '#7b3ff2',
-      bg: '#f5f0ff',
-      border: '#d6b6f6',
-      emptyText: '暂无到期校准',
-      items: upcomingCals.map(c => {
-        const daysLeft = Math.ceil(
-          (new Date(c.next_calibration_date!).getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
-        )
-        return {
-          key: c.id,
-          label: c.equipment_name || c.equipment_no || '',
-          sub: c.calibration_type,
-          meta: (
-            <span
-              style={{
-                color: daysLeft <= 7 ? '#e03131' : '#dd5b00',
-                fontWeight: 600,
-                fontSize: 13,
-              }}
-            >
-              {daysLeft} 天后到期
-            </span>
-          ),
-        }
-      }),
-    },
   ]
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
       {panels.map((panel, pi) => (
         <div
           key={panel.title}
@@ -1052,7 +1012,6 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
     workOrderStats,
     stockWarnings,
     overduePlans,
-    calibrationPlans,
     recentWorkOrders,
   } = initialData
 
@@ -1276,7 +1235,31 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
           />
         </div>
 
-        {/* ========== 第二行：设备全景 + 工单概览 ========== */}
+        {/* ========== 第二行：工单流转 ========== */}
+        <div
+          style={{
+            background: '#ffffff',
+            borderRadius: 12,
+            border: '1px solid #e5e3df',
+            padding: '24px 28px',
+            marginBottom: 28,
+            animation: 'fadeInUp 0.5s ease both',
+            animationDelay: '320ms',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
+            <ThunderboltFilled style={{ fontSize: 16, color: '#dd5b00' }} />
+            <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a', margin: 0 }}>
+              工单流转概览
+            </h3>
+            <span style={{ fontSize: 12, color: '#a4a097', marginLeft: 'auto' }}>
+              共 {wo.total} 个工单
+            </span>
+          </div>
+          <WorkOrderPipeline statistics={wo} />
+        </div>
+
+        {/* ========== 第三行：设备全景 ========== */}
         <div
           style={{
             display: 'grid',
@@ -1293,7 +1276,7 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
               border: '1px solid #e5e3df',
               padding: '20px 24px',
               animation: 'fadeInUp 0.5s ease both',
-              animationDelay: '320ms',
+              animationDelay: '400ms',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
@@ -1316,7 +1299,7 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
               border: '1px solid #e5e3df',
               padding: '20px 24px',
               animation: 'fadeInUp 0.5s ease both',
-              animationDelay: '400ms',
+              animationDelay: '480ms',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
@@ -1329,36 +1312,11 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
           </div>
         </div>
 
-        {/* ========== 第三行：工单流转 ========== */}
-        <div
-          style={{
-            background: '#ffffff',
-            borderRadius: 12,
-            border: '1px solid #e5e3df',
-            padding: '24px 28px',
-            marginBottom: 28,
-            animation: 'fadeInUp 0.5s ease both',
-            animationDelay: '480ms',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 20 }}>
-            <ThunderboltFilled style={{ fontSize: 16, color: '#dd5b00' }} />
-            <h3 style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a', margin: 0 }}>
-              工单流转概览
-            </h3>
-            <span style={{ fontSize: 12, color: '#a4a097', marginLeft: 'auto' }}>
-              共 {wo.total} 个工单
-            </span>
-          </div>
-          <WorkOrderPipeline statistics={wo} />
-        </div>
-
         {/* ========== 第四行：预警面板 ========== */}
         <div style={{ marginBottom: 28 }}>
           <WarningPanels
             stockWarnings={stockWarnings}
             overduePlans={overduePlans}
-            calibrationPlans={calibrationPlans}
           />
         </div>
 

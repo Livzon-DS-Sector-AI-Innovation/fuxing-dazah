@@ -1,8 +1,6 @@
 import {
   EquipmentCategory, Location, EquipmentFilters, EquipmentListResponse, EquipmentStatistics,
   FailureCode, WorkOrderFilters, WorkOrderListResponse, WorkOrderStatistics, WorkOrder,
-  CalibrationPlanFilters, CalibrationPlanListResponse, CalibrationPlan,
-  CalibrationRecordFilters, CalibrationRecordListResponse, CalibrationRecord,
   SparePartFilters, SparePartListResponse, SparePart, StockWarning,
   MaintenancePlanFilters, MaintenancePlanListResponse, MaintenancePlan,
   InspectionTemplateFilters, InspectionTemplateListResponse, InspectionTemplate,
@@ -96,46 +94,6 @@ export async function fetchWorkOrderStatistics(exclude_status?: string): Promise
 
 export async function fetchWorkOrderById(id: string): Promise<WorkOrder> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/${id}`)
-}
-
-// ═══════════════════════════════════════════════════════════
-//  校准计划
-// ═══════════════════════════════════════════════════════════
-export async function fetchCalibrationPlans(filters: CalibrationPlanFilters = {}): Promise<CalibrationPlanListResponse> {
-  const params = new URLSearchParams()
-  if (filters.equipment_id) params.append('equipment_id', filters.equipment_id)
-  if (filters.status) params.append('status', filters.status)
-  if (filters.page) params.append('page', filters.page.toString())
-  if (filters.page_size) params.append('page_size', filters.page_size.toString())
-
-  const queryString = params.toString()
-  const url = queryString
-    ? `${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans?${queryString}`
-    : `${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans`
-
-  return apiFetchPaginated(url)
-}
-
-export async function fetchCalibrationPlanById(id: string): Promise<CalibrationPlan> {
-  return apiGet(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans/${id}`)
-}
-
-// ═══════════════════════════════════════════════════════════
-//  校准记录
-// ═══════════════════════════════════════════════════════════
-export async function fetchCalibrationRecords(filters: CalibrationRecordFilters = {}): Promise<CalibrationRecordListResponse> {
-  const params = new URLSearchParams()
-  if (filters.equipment_id) params.append('equipment_id', filters.equipment_id)
-  if (filters.plan_id) params.append('plan_id', filters.plan_id)
-  if (filters.page) params.append('page', filters.page.toString())
-  if (filters.page_size) params.append('page_size', filters.page_size.toString())
-
-  const queryString = params.toString()
-  const url = queryString
-    ? `${API_BASE_URL}/api/v1/equipment/maintenance/calibration/records?${queryString}`
-    : `${API_BASE_URL}/api/v1/equipment/maintenance/calibration/records`
-
-  return apiFetchPaginated(url)
 }
 
 // ═══════════════════════════════════════════════════════════

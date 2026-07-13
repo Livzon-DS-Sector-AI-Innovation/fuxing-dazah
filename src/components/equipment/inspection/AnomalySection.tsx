@@ -3,10 +3,10 @@
 import { useState, useEffect } from 'react'
 import { DatePicker, Typography, Spin, App } from 'antd'
 import { AlertOutlined } from '@ant-design/icons'
-import { Bar, Column } from '@ant-design/charts'
+import { DualAxes } from '@ant-design/charts'
 import dayjs from 'dayjs'
 import { fetchAnomaly } from '@/lib/api/inspection-analytics'
-import type { AnomalyRankingItem, AnomalyMonthlyItem } from '@/types/equipment/inspection-analytics'
+import type { AnomalyRankingItem } from '@/types/equipment/inspection-analytics'
 
 const { Text } = Typography
 const { RangePicker } = DatePicker
@@ -21,22 +21,43 @@ const T = {
 
 const CHART_H = 300
 
-// 横向柱状图：异常率降序,严重度分色(签名元素——高异常率红/橙)
-function RankingBar({ data, nameKey }: { data: any[]; nameKey: string }) {
-  const sorted = [...data].sort((a, b) => b.anomaly_rate - a.anomaly_rate)
-  const range = sorted.map(r => (r.anomaly_rate >= 30 ? T.error : r.anomaly_rate >= 15 ? T.orange : T.primary))
+// 组合图：柱状-异常率(左轴) + 折线-巡检总数(右轴)，降序 TOP10
+function ComboRanking({ data, nameKey }: { data: any[]; nameKey: string }) {
+  const sorted = [...data]
+    .sort((a, b) => b.anomaly_rate - a.anomaly_rate)
+    .slice(0, 10)
+    .map((r) => ({
+      _displayName: (r[nameKey] || ''),
+      异常率: Number(r.anomaly_rate),
+      巡检总数: Number(r.total_count),
+    }))
+
   return (
-    <Bar
+    <DualAxes
+      xField="_displayName"
       data={sorted}
-      xField="anomaly_rate"
-      yField={nameKey}
-      colorField={nameKey}
-      scale={{ color: { range } }}
-      axis={{ y: { labelFormatter: (v: string) => (v && v.length > 14 ? v.slice(0, 14) + '…' : v) } }}
-      legend={false}
-      height={CHART_H}
-      marginLeft={140}
-      tooltip={{ channel: 'x', name: '异常率', valueFormatter: (v: number) => `${v}%` }}
+      legend={{
+        color: {
+          itemMarker: (v: string) => (v === '巡检总数' ? 'smooth' : 'rect'),
+        },
+      }}
+      children={[
+        {
+          type: 'interval',
+          yField: '异常率',
+          style: { maxWidth: 24 },
+          axis: { y: { labelFormatter: (v: number) => `${v}%` } },
+          tooltip: { items: [{ channel: 'y', valueFormatter: (v: number) => `${v}%` }] },
+        },
+        {
+          type: 'line',
+          yField: '巡检总数',
+          style: { lineWidth: 2 },
+          axis: { y: { position: 'right' } },
+          tooltip: { items: [{ channel: 'y', valueFormatter: (v: number) => `${v} 次` }] },
+        },
+      ]}
+      height={CHART_H + 40}
     />
   )
 }
@@ -46,7 +67,6 @@ export function AnomalySection() {
   const [dateRange, setDateRange] = useState<[string, string] | null>(null)
   const [eqRanking, setEqRanking] = useState<AnomalyRankingItem[]>([])
   const [itemRanking, setItemRanking] = useState<AnomalyRankingItem[]>([])
-  const [monthly, setMonthly] = useState<AnomalyMonthlyItem[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -58,7 +78,7 @@ export function AnomalySection() {
     if (!dateRange) return
     setLoading(true)
     fetchAnomaly({ from_date: dateRange[0], to_date: dateRange[1] })
-      .then(r => { setEqRanking(r.equipment_ranking); setItemRanking(r.item_ranking); setMonthly(r.monthly_trend) })
+      .then(r => { setEqRanking(r.equipment_ranking); setItemRanking(r.item_ranking) })
       .catch(() => message.error('异常数据加载失败'))
       .finally(() => setLoading(false))
   }, [dateRange, message])
@@ -66,14 +86,7 @@ export function AnomalySection() {
   const eqNamed = eqRanking.map(r => ({ ...r, _name: r.equipment_name || r.equipment_no || r.equipment_id?.slice(0, 8) || '' }))
   const itemNamed = itemRanking.map(r => ({ ...r, _name: r.item_name || r.template_item_id?.slice(0, 8) || '' }))
 
-  // 月度堆叠柱：正常/异常/跳过
-  const monthData = monthly.flatMap(m => [
-    { month: m.month, type: '正常', value: m.normal },
-    { month: m.month, type: '异常', value: m.abnormal },
-    { month: m.month, type: '跳过', value: m.skip },
-  ])
-
-  const hasData = eqRanking.length > 0 || itemRanking.length > 0 || monthly.length > 0
+  const hasData = eqRanking.length > 0 || itemRanking.length > 0
   const subTitle = { fontSize: 13, fontWeight: 600, color: T.charcoal, display: 'block' as const, marginBottom: 12 }
 
   return (
@@ -97,37 +110,19 @@ export function AnomalySection() {
             </div>
           : (
             <>
-              {/* 上层: 设备排行 × 月度趋势 */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 32 }}>
-                <div>
-                  <Text style={subTitle}>设备异常率 TOP10</Text>
-                  {eqNamed.length > 0
-                    ? <RankingBar data={eqNamed} nameKey="_name" />
-                    : <Text type="secondary" style={{ fontSize: 12, color: T.stone }}>暂无数据</Text>}
-                </div>
-                <div>
-                  <Text style={subTitle}>月度异常趋势</Text>
-                  {monthly.length > 0
-                    ? <Column
-                        data={monthData}
-                        xField="month"
-                        yField="value"
-                        colorField="type"
-                        stack
-                        scale={{ color: { domain: ['正常', '异常', '跳过'], range: [T.green, T.error, T.muted] } }}
-                        axis={{ x: { title: '月份' }, y: { title: false } }}
-                        legend={{ color: { position: 'top' } }}
-                        height={CHART_H}
-                      />
-                    : <Text type="secondary" style={{ fontSize: 12, color: T.stone }}>暂无数据</Text>}
-                </div>
+              {/* 设备异常率排行 — 全宽 */}
+              <div style={{ marginBottom: 32 }}>
+                <Text style={subTitle}>设备异常率 TOP10</Text>
+                {eqNamed.length > 0
+                  ? <ComboRanking data={eqNamed} nameKey="_name" />
+                  : <Text type="secondary" style={{ fontSize: 12, color: T.stone }}>暂无数据</Text>}
               </div>
 
-              {/* 下层: 检查项排行 */}
+              {/* 检查项异常率排行 — 全宽 */}
               {itemNamed.length > 0 && (
                 <div>
                   <Text style={subTitle}>检查项异常率 TOP10</Text>
-                  <RankingBar data={itemNamed} nameKey="_name" />
+                  <ComboRanking data={itemNamed} nameKey="_name" />
                 </div>
               )}
             </>

@@ -7,7 +7,6 @@ import {
   fetchWorkOrderStatistics,
   fetchStockWarnings,
   fetchOverdueMaintenancePlans,
-  fetchCalibrationPlans,
   fetchWorkOrders,
 } from '@/lib/api/equipment'
 import type {
@@ -19,7 +18,6 @@ import type {
   WorkOrderStatistics,
   StockWarning,
   MaintenancePlan,
-  CalibrationPlan,
   WorkOrder,
 } from '@/types/equipment'
 
@@ -43,7 +41,6 @@ export default async function StatsPage() {
   let workOrderStats: WorkOrderStatistics = defaultWorkOrderStats
   let stockWarnings: StockWarning[] = []
   let overduePlans: MaintenancePlan[] = []
-  let calibrationPlans: CalibrationPlan[] = []
   let recentWorkOrders: WorkOrder[] = []
 
   try {
@@ -52,12 +49,11 @@ export default async function StatsPage() {
       fetchWorkOrderStatistics(),
       fetchStockWarnings(),
       fetchOverdueMaintenancePlans(),
-      fetchCalibrationPlans({ status: '启用', page_size: 100 }),
       fetchWorkOrders({ page: 1, page_size: 10 }),
     ])
 
     // 依次解构，每个接口错误不影响其他
-    const [eqResult, woResult, swResult, overdueResult, calResult, ordersResult] = results
+    const [eqResult, woResult, swResult, overdueResult, ordersResult] = results
 
     if (eqResult.status === 'fulfilled') {
       equipmentStats = eqResult.value
@@ -83,12 +79,6 @@ export default async function StatsPage() {
       console.warn('逾期维护计划加载失败:', overdueResult.reason)
     }
 
-    if (calResult.status === 'fulfilled') {
-      calibrationPlans = calResult.value.items || []
-    } else {
-      console.warn('校准计划加载失败:', calResult.reason)
-    }
-
     if (ordersResult.status === 'fulfilled') {
       recentWorkOrders = ordersResult.value.items || []
     } else {
@@ -105,7 +95,6 @@ export default async function StatsPage() {
         workOrderStats,
         stockWarnings,
         overduePlans,
-        calibrationPlans,
         recentWorkOrders,
       }}
     />

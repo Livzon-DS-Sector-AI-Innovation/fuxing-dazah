@@ -51,7 +51,7 @@ export function TrendSection() {
         from_date: dateRange[0], to_date: dateRange[1],
       })
       setSeries(r.series)
-      setSelectedItems(r.series.map(s => s.template_item_id))  // 默认全选
+      setSelectedItems(r.series.length > 0 ? [r.series[0].template_item_id] : [])  // 默认只选第一个
     } catch { setSeries([]); setSelectedItems([]) }
     finally { setLoading(false) }
   }, [selectedEq, dateRange])

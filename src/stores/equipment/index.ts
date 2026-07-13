@@ -7,8 +7,6 @@ import {
   initialEquipmentListState,
   initialWorkOrderState,
   initialFailureCodeState,
-  initialCalibrationPlanState,
-  initialCalibrationRecordState,
   initialSparePartState,
   initialMaintenancePlanState,
   initialInspectionTemplateState,
@@ -27,8 +25,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       ...initialEquipmentListState,
       ...initialWorkOrderState,
       ...initialFailureCodeState,
-      ...initialCalibrationPlanState,
-      ...initialCalibrationRecordState,
       ...initialSparePartState,
       ...initialMaintenancePlanState,
       ...initialInspectionTemplateState,
@@ -108,33 +104,6 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeFailureCodeDrawer: () => set({
         failureCodeDrawerOpen: false, editingFailureCode: null,
       }, false, 'equipment/closeFailureCodeDrawer'),
-
-      // ── 校准计划操作 ──
-      setCalibrationPlans: (plans) => set({ calibrationPlans: plans }, false, 'equipment/setCalibrationPlans'),
-      setCalibrationPlanTotal: (total) => set({ calibrationPlanTotal: total }, false, 'equipment/setCalibrationPlanTotal'),
-      setCalibrationPlanPage: (page) => set({ calibrationPlanPage: page }, false, 'equipment/setCalibrationPlanPage'),
-      setCalibrationPlanPageSize: (size) => set({ calibrationPlanPageSize: size, calibrationPlanPage: 1 }, false, 'equipment/setCalibrationPlanPageSize'),
-      setCalibrationPlanLoading: (loading) => set({ calibrationPlanLoading: loading }, false, 'equipment/setCalibrationPlanLoading'),
-      setCalibrationPlanStatusFilter: (status) => set({ calibrationPlanStatusFilter: status, calibrationPlanPage: 1 }, false, 'equipment/setCalibrationPlanStatusFilter'),
-      openCalibrationPlanDrawer: (plan) => set({
-        calibrationPlanDrawerOpen: true, editingCalibrationPlan: plan || null,
-      }, false, 'equipment/openCalibrationPlanDrawer'),
-      closeCalibrationPlanDrawer: () => set({
-        calibrationPlanDrawerOpen: false, editingCalibrationPlan: null,
-      }, false, 'equipment/closeCalibrationPlanDrawer'),
-
-      // ── 校准记录操作 ──
-      setCalibrationRecords: (records) => set({ calibrationRecords: records }, false, 'equipment/setCalibrationRecords'),
-      setCalibrationRecordTotal: (total) => set({ calibrationRecordTotal: total }, false, 'equipment/setCalibrationRecordTotal'),
-      setCalibrationRecordPage: (page) => set({ calibrationRecordPage: page }, false, 'equipment/setCalibrationRecordPage'),
-      setCalibrationRecordPageSize: (size) => set({ calibrationRecordPageSize: size, calibrationRecordPage: 1 }, false, 'equipment/setCalibrationRecordPageSize'),
-      setCalibrationRecordLoading: (loading) => set({ calibrationRecordLoading: loading }, false, 'equipment/setCalibrationRecordLoading'),
-      openCalibrationRecordDrawer: (record) => set({
-        calibrationRecordDrawerOpen: true, editingCalibrationRecord: record || null,
-      }, false, 'equipment/openCalibrationRecordDrawer'),
-      closeCalibrationRecordDrawer: () => set({
-        calibrationRecordDrawerOpen: false, editingCalibrationRecord: null,
-      }, false, 'equipment/closeCalibrationRecordDrawer'),
 
       // ── 备件管理操作 ──
       setSpareParts: (parts) => set({ spareParts: parts }, false, 'equipment/setSpareParts'),

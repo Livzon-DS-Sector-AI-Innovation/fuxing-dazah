@@ -10,9 +10,6 @@ import type {
   WorkOrderPriority,
   WorkOrderType,
   WorkOrderStatistics,
-  CalibrationPlan,
-  CalibrationPlanStatus,
-  CalibrationRecord,
   SparePart,
   StockWarning,
   MaintenancePlan,
@@ -118,40 +115,6 @@ export interface EquipmentStore {
   editingFailureCode: FailureCode | null
   openFailureCodeDrawer: (type: 'symptoms' | 'causes' | 'actions', code?: FailureCode) => void
   closeFailureCodeDrawer: () => void
-
-  // ── 校准计划 ──
-  calibrationPlans: CalibrationPlan[]
-  calibrationPlanTotal: number
-  calibrationPlanPage: number
-  calibrationPlanPageSize: number
-  calibrationPlanLoading: boolean
-  calibrationPlanStatusFilter: CalibrationPlanStatus | ''
-  setCalibrationPlans: (plans: CalibrationPlan[]) => void
-  setCalibrationPlanTotal: (total: number) => void
-  setCalibrationPlanPage: (page: number) => void
-  setCalibrationPlanPageSize: (size: number) => void
-  setCalibrationPlanLoading: (loading: boolean) => void
-  setCalibrationPlanStatusFilter: (status: CalibrationPlanStatus | '') => void
-  calibrationPlanDrawerOpen: boolean
-  editingCalibrationPlan: CalibrationPlan | null
-  openCalibrationPlanDrawer: (plan?: CalibrationPlan) => void
-  closeCalibrationPlanDrawer: () => void
-
-  // ── 校准记录 ──
-  calibrationRecords: CalibrationRecord[]
-  calibrationRecordTotal: number
-  calibrationRecordPage: number
-  calibrationRecordPageSize: number
-  calibrationRecordLoading: boolean
-  setCalibrationRecords: (records: CalibrationRecord[]) => void
-  setCalibrationRecordTotal: (total: number) => void
-  setCalibrationRecordPage: (page: number) => void
-  setCalibrationRecordPageSize: (size: number) => void
-  setCalibrationRecordLoading: (loading: boolean) => void
-  calibrationRecordDrawerOpen: boolean
-  editingCalibrationRecord: CalibrationRecord | null
-  openCalibrationRecordDrawer: (record?: CalibrationRecord) => void
-  closeCalibrationRecordDrawer: () => void
 
   // ── 备件管理 ──
   spareParts: SparePart[]

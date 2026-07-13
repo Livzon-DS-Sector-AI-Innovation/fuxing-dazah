@@ -5,8 +5,6 @@ import {
   Location,
   EquipmentListResponse, EquipmentStatistics,
   FailureCode, WorkOrderFilters, WorkOrderListResponse, WorkOrderStatistics, WorkOrder,
-  CalibrationPlanFilters, CalibrationPlanListResponse,
-  CalibrationRecordFilters, CalibrationRecordListResponse,
   SparePartFilters, SparePartListResponse, SparePart, StockWarning,
   MaintenancePlanFilters, MaintenancePlanListResponse, MaintenancePlan,
   InspectionTemplateFilters, InspectionTemplateListResponse, InspectionTemplate,
@@ -70,19 +68,6 @@ export async function fetchWorkOrderStatisticsClient(exclude_status?: string): P
 
 export async function fetchWorkOrderByIdClient(id: string): Promise<WorkOrder> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/${id}`)
-}
-
-// ═══════════════════════════════════════════════════════════
-//  校准
-// ═══════════════════════════════════════════════════════════
-export async function fetchCalibrationPlansClient(params: CalibrationPlanFilters = {}): Promise<CalibrationPlanListResponse> {
-  const s = qs(params as any)
-  return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/plans${s ? `?${s}` : ''}`)
-}
-
-export async function fetchCalibrationRecordsClient(params: CalibrationRecordFilters = {}): Promise<CalibrationRecordListResponse> {
-  const s = qs(params as any)
-  return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/maintenance/calibration/records${s ? `?${s}` : ''}`)
 }
 
 // ═══════════════════════════════════════════════════════════

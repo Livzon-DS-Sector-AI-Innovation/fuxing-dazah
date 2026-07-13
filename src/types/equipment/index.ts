@@ -1,6 +1,6 @@
 export * from './equipment'
 export * from './work-order'
-export * from './calibration'
+
 export * from './spare-part'
 export * from './maintenance'
 export * from './failure-code'
