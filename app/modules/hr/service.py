@@ -838,11 +838,26 @@ class EmployeeService:
                         await self.repo.session.flush()
                     plan_cache[cache_key] = plan
 
-                # 添加计划项
-                item = AnnualTrainingPlanItem(plan_id=plan.id, **item_data)
-                self.repo.session.add(item)
+                # 添加计划项（去重：同计划+同内容+同月份视为重复，跳过）
+                content = item_data.get("content_and_textbook") or ""
+                month_val = item_data.get("month") or ""
+                existing_item = (await self.repo.session.execute(
+                    select(AnnualTrainingPlanItem).where(
+                        AnnualTrainingPlanItem.plan_id == plan.id,
+                        AnnualTrainingPlanItem.content_and_textbook == content,
+                        AnnualTrainingPlanItem.month == month_val,
+                        AnnualTrainingPlanItem.is_deleted == False,
+                    )
+                )).scalar_one_or_none()
+                if existing_item:
+                    for k, v in item_data.items():
+                        setattr(existing_item, k, v)
+                    updated += 1
+                else:
+                    item = AnnualTrainingPlanItem(plan_id=plan.id, **item_data)
+                    self.repo.session.add(item)
+                    created += 1
                 await self.repo.session.flush()
-                created += 1
 
                 await nested.commit()
             except Exception as e:
