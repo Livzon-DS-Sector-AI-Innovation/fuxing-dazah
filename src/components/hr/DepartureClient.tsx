@@ -39,6 +39,7 @@ export default function DepartureClient({
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
   const [selectedDept, setSelectedDept] = useState<string>('')
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
   useEffect(() => {
     fetchDepartments({ page_size: 200 }).then(r => {
@@ -51,7 +52,7 @@ export default function DepartureClient({
     createForm.setFieldValue('employee', undefined)
     if (!dept) { setDeptEmployees([]); return }
     try {
-      const url = `http://localhost:8000/api/v1/hr/employees?department=${encodeURIComponent(dept)}&page=1&page_size=200`
+      const url = `${API_BASE}/api/v1/hr/employees?department=${encodeURIComponent(dept)}&page=1&page_size=200`
       const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json()
@@ -69,7 +70,6 @@ export default function DepartureClient({
       const vals = await createForm.validateFields()
       setCreateLoading(true)
       const emp = deptEmployees.find((e:any) => e.value === vals.employee)
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
       const res = await fetch(`${API_BASE}/api/v1/hr/departure-records`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
