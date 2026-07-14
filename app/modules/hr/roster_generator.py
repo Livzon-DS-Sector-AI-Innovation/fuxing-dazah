@@ -7,7 +7,7 @@ from pathlib import Path
 
 from docx import Document
 
-TEMPLATE = Path(__file__).parent.parent.parent.parent / "assets" / "hr" / "roster_template.docx"
+TEMPLATE = Path(__file__).parent / "roster_template.docx"
 
 
 def generate_roster_sync(employees: list[tuple], department: str | None = None) -> BytesIO:
