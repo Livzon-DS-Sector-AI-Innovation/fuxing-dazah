@@ -487,7 +487,7 @@ class EmployeeService:
         """上传 SOP 目录 Excel，按 SOP 编号 upsert。"""
         from io import BytesIO
         from openpyxl import load_workbook
-        from app.modules.hr.models import SopCatalog
+        from app.modules.hr.models import SopCatalog, PositionTraining
 
         wb = load_workbook(BytesIO(file_bytes), data_only=True)
         ws = wb.active
@@ -526,6 +526,17 @@ class EmployeeService:
                     self.repo.session.add(SopCatalog(**data))
                     created += 1
                 await self.repo.session.flush()
+
+                # 同步写入岗位培训关联表（用于入职培训自动匹配）
+                if data.get("position_name") and data.get("department"):
+                    pt = PositionTraining(
+                        position_name=data["position_name"],
+                        department=data["department"],
+                        training_category=data.get("category") or "",
+                        sop_number=data.get("sop_number"),
+                        file_name=data["file_name"],
+                    )
+                    self.repo.session.add(pt)
             except Exception as e:
                 errors.append(f"第{row_idx}行: {e}")
         return {"created": created, "updated": updated, "errors": errors}
