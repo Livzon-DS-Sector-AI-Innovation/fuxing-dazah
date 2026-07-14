@@ -11,6 +11,7 @@ from datetime import datetime
 
 from app.core.config import get_settings
 from app.core.database import async_session_factory
+from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -67,3 +68,13 @@ async def calibration_reminder_coro() -> None:
             )
     except Exception:
         logger.exception("检定到期提醒定时任务异常")
+
+
+CALIBRATION_REMINDER_TASK = TaskDefinition(
+    name="meter.calibration_reminder",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+    ),
+    coro=calibration_reminder_coro,
+    module="meter",
+)

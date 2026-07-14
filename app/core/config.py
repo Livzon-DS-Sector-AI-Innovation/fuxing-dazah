@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Maintenance Plan — 自动生成工单
     MAINTENANCE_PLAN_AUTO_ENABLED: bool = True
 
+    # Meter — 检定到期飞书自动提醒
+    METER_CALIBRATION_AUTO_NOTIFY_ENABLED: bool = False
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 
