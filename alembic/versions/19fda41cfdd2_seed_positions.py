@@ -307,7 +307,7 @@ POSITIONS = [
 
 def upgrade():
     for dept, name in POSITIONS:
-        op.execute(f"INSERT INTO hr.positions (id, department, name) SELECT gen_random_uuid(), {dept}, {name} WHERE NOT EXISTS (SELECT 1 FROM hr.positions WHERE department={dept} AND name={name})")
+        op.execute(f"INSERT INTO hr.positions (id, department, name) SELECT gen_random_uuid(), '{dept}', '{name}' WHERE NOT EXISTS (SELECT 1 FROM hr.positions WHERE department='{dept}' AND name='{name}')")
 
 def downgrade():
     pass
