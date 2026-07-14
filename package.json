@@ -16,6 +16,8 @@
     "antd": "^6.4.3",
     "dagre": "^0.8.5",
     "dayjs": "^1.11.21",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
     "next": "16.2.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",

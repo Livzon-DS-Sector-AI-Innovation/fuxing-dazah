@@ -7,6 +7,8 @@ import type {
   AnomalyResponse,
   AnomalyQuery,
   EquipmentListResponse,
+  LinkageResponse,
+  LinkageQuery,
 } from '@/types/equipment/inspection-analytics'
 
 const BASE = `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/equipment/inspection/analytics`
@@ -38,4 +40,11 @@ export async function fetchAnomaly(query: AnomalyQuery = {}): Promise<AnomalyRes
 
 export async function fetchEquipmentList(keyword?: string): Promise<EquipmentListResponse> {
   return apiGet<EquipmentListResponse>(`${BASE}/equipment-list${qs({ keyword })}`)
+}
+
+export async function fetchLinkage(query: LinkageQuery = {}): Promise<LinkageResponse> {
+  return apiGet<LinkageResponse>(`${BASE}/linkage${qs({
+    from_date: query.from_date,
+    to_date: query.to_date,
+  })}`)
 }

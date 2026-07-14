@@ -45,10 +45,22 @@ export interface AnomalyMonthlyItem {
   total: number
 }
 
+export interface AnomalyMatrixCell {
+  equipment_id: string
+  equipment_name: string
+  equipment_no: string
+  template_item_id: string
+  item_name: string
+  total_count: number
+  abnormal_count: number
+  anomaly_rate: number
+}
+
 export interface AnomalyResponse {
   equipment_ranking: AnomalyRankingItem[]
   item_ranking: AnomalyRankingItem[]
   monthly_trend: AnomalyMonthlyItem[]
+  matrix: AnomalyMatrixCell[]
 }
 
 export interface AnomalyQuery {
@@ -66,4 +78,19 @@ export interface EquipmentListItem {
 
 export interface EquipmentListResponse {
   equipments: EquipmentListItem[]
+}
+
+export interface LinkagePoint {
+  month: string
+  series: string
+  count: number
+}
+
+export interface LinkageResponse {
+  points: LinkagePoint[]
+}
+
+export interface LinkageQuery {
+  from_date?: string
+  to_date?: string
 }

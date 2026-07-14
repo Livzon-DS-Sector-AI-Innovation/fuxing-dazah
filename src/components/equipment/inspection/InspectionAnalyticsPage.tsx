@@ -2,6 +2,7 @@
 
 import { TrendSection } from './TrendSection'
 import { AnomalySection } from './AnomalySection'
+import { LinkageSection } from './LinkageSection'
 
 // ── DESIGN.md tokens ──
 // hero-band-dark: brand-navy(#0a1530) bg, on-dark text, primary(#5645d4) accent
@@ -24,6 +25,7 @@ export function InspectionAnalyticsPage() {
       <div style={{ margin: '0 auto', padding: '40px 0px' }}>
         <TrendSection />
         <AnomalySection />
+        <LinkageSection />
       </div>
     </div>
   )

@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Select, DatePicker, Typography, Spin, App } from 'antd'
 import { LineChartOutlined } from '@ant-design/icons'
-import { Line } from '@ant-design/charts'
+import type { EChartsOption } from 'echarts'
+import ReactECharts from 'echarts-for-react'
 import dayjs from 'dayjs'
 import { fetchEquipmentList, fetchTrend } from '@/lib/api/inspection-analytics'
 import type { EquipmentListItem, TrendSeries } from '@/types/equipment/inspection-analytics'
@@ -22,6 +23,7 @@ const T = {
   surfaceSoft: '#fafaf9',  // {colors.surface-soft}
   lavenderBg: '#e6e0f5',   // {colors.card-tint-lavender}
 }
+const PALETTE = ['#5645d4', '#0075de', '#1aae39', '#dd5b00', '#7b3ff2', '#2a9d99', '#f5d75e', '#ff64c8']
 // card-base: canvas bg, rounded-lg(12px), hairline border, padding xl(24px)
 // heading-4: 22px / 600 ; button-primary: purple, rounded-md(8px), NOT pill
 
@@ -63,18 +65,49 @@ export function TrendSection() {
     setDateRange([s.toISOString().slice(0, 10), e.toISOString().slice(0, 10)])
   }, [])
 
-  const visibleSeries = selectedItems.length > 0
-    ? series.filter(s => selectedItems.includes(s.template_item_id))
-    : series
-  const allPoints = visibleSeries.flatMap(s =>
-    s.data_points.map(dp => ({
-      date: dp.date,
-      value: dp.value == null ? null : Number(dp.value),  // 后端 Decimal 序列化为字符串,转数字
-      result: dp.result,
-      item_name: s.item_name,
-      unit: s.unit,
-    }))
-  )
+  const { trendOption, hasData } = useMemo(() => {
+    // item_ids 传空 → 后端返回全部数值型参数;此处按勾选在客户端过滤
+    const vis = selectedItems.length > 0
+      ? series.filter(s => selectedItems.includes(s.template_item_id))
+      : series
+    const pts = vis.flatMap(s =>
+      s.data_points.map(dp => ({
+        date: dp.date,
+        value: dp.value == null ? null : Number(dp.value),  // 后端 Decimal 序列化为字符串,转数字
+        name: s.unit ? `${s.item_name} (${s.unit})` : s.item_name,
+      }))
+    )
+    const names = [...new Set(pts.map(p => p.name))]
+    const dates = [...new Set(pts.map(p => p.date))].sort()
+    const option: EChartsOption = {
+      color: PALETTE,
+      grid: { left: 52, right: 24, top: 48, bottom: 32 },
+      legend: { top: 8, textStyle: { color: T.slate, fontSize: 12 } },
+      tooltip: {
+        trigger: 'axis',
+        valueFormatter: v => (v == null ? '-' : Number(v as number).toFixed(2)),
+      },
+      xAxis: {
+        type: 'category', data: dates, name: '日期',
+        boundaryGap: false,
+        axisLabel: { color: T.stone, fontSize: 11 },
+        axisLine: { lineStyle: { color: T.hairline } },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { color: T.stone, fontSize: 11 },
+        splitLine: { lineStyle: { color: T.hairline } },
+      },
+      series: names.map(name => ({
+        name, type: 'line', symbolSize: 5, connectNulls: true,
+        data: dates.map(d => {
+          const pt = pts.find(p => p.name === name && p.date === d)
+          return pt ? pt.value : null
+        }),
+      })),
+    }
+    return { trendOption: option, hasData: pts.length > 0 }
+  }, [series, selectedItems])
 
   return (
     <div style={{ background: T.canvas, borderRadius: 12, border: `1px solid ${T.hairline}`, padding: 24, marginBottom: 48 }}>
@@ -124,18 +157,8 @@ export function TrendSection() {
 
       {/* ── 折线图 ── */}
       <Spin spinning={loading}>
-        {allPoints.length > 0
-          ? <Line
-              data={allPoints}
-              xField="date"
-              yField="value"
-              colorField="item_name"
-              axis={{ x: { title: '日期' }, y: { title: false } }}
-              legend={{ color: { position: 'top' } }}
-              tooltip={{ channel: 'y', valueFormatter: (v: number) => (v != null ? Number(v).toFixed(2) : '-') }}
-              point={{ size: 3 }}
-              height={320}
-            />
+        {hasData
+          ? <ReactECharts option={trendOption} style={{ height: 320 }} notMerge />
           : <div style={{ padding: '60px 0', textAlign: 'center' }}>
               <Text type="secondary" style={{ fontSize: 13, color: T.stone }}>选择设备和时间范围后查看参数趋势</Text>
             </div>}
