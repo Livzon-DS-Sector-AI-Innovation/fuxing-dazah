@@ -106,6 +106,13 @@ export default function TrainersPage() {
           }}>
             <Button icon={<UploadOutlined />}>上传内训师</Button>
           </Upload>
+          <Popconfirm title="确认清空全部内训师？此操作不可恢复" onConfirm={async () => {
+            const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, { method: 'DELETE' })
+            if (res.ok) { message.success('已清空'); load(1) }
+            else message.error('清空失败')
+          }}>
+            <Button danger>清空全部</Button>
+          </Popconfirm>
         </Space>
       </div>
       <Card>
