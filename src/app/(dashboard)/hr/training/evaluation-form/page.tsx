@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Card, Form, Input, InputNumber, Select, Button, message, Alert } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import EvaluationPreview from '@/components/hr/EvaluationPreview'
 
 const METHODS = [{v:'面授',l:'面授'},{v:'自学',l:'自学'},{v:'自学+面授',l:'自学+面授'}]
@@ -36,7 +37,7 @@ export default function EvaluationFormPage() {
     if (!item) return
     form.setFieldsValue({
       subject: item.training_content || '',
-      training_date: item.training_date || undefined,
+      training_date: item.training_date ? dayjs(item.training_date) : undefined,
       training_method: item.training_method || undefined,
       trainer: item.trainer_name || item.trainer || undefined,
       assessment_method: item.assessment_method || undefined,
