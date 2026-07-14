@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core import time as app_time
-from app.core.exceptions import AppException, NotFoundException
+from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.core.storage import delete_object, upload_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.equipment import repository as repo
@@ -1131,14 +1131,18 @@ async def delete_schedule(
 from app.modules.equipment.repository.inspection import (  # noqa: E402
     get_analytics_equipment_list,
     get_anomaly_stats,
+    get_linkage_stats,
     get_trend_data,
 )
 from app.modules.equipment.schemas.inspection import (  # noqa: E402
+    AnomalyMatrixCell,
     AnomalyMonthlyItem,
     AnomalyRankingItem,
     AnomalyResponse,
     EquipmentListItem,
     EquipmentListResponse,
+    LinkagePoint,
+    LinkageResponse,
     TrendDataPoint,
     TrendResponse,
     TrendSeries,
@@ -1151,11 +1155,17 @@ async def get_trend(
     item_ids: list[uuid.UUID],
     from_date: date,
     to_date: date,
+    ctx: EquipmentAccessContext,
 ) -> TrendResponse:
     """参数趋势分析"""
     from app.modules.equipment.repository.equipment import get_equipment_by_id
 
     eq = await get_equipment_by_id(db, equipment_id)
+    # 单设备:按数据范围校验设备归属部门,越权直接 403(与列表过滤口径一致)
+    if not ctx.is_unrestricted and (
+        eq is None or eq.department_id not in ctx.visible_department_ids
+    ):
+        raise ForbiddenException("无权查看其他部门设备的巡检分析")
     rows = await get_trend_data(db, equipment_id, item_ids, from_date, to_date)
 
     series = []
@@ -1188,9 +1198,10 @@ async def get_anomaly(
     db: AsyncSession,
     from_date: date,
     to_date: date,
+    ctx: EquipmentAccessContext,
 ) -> AnomalyResponse:
     """异常热力分析"""
-    data = await get_anomaly_stats(db, from_date, to_date)
+    data = await get_anomaly_stats(db, from_date, to_date, ctx)
 
     return AnomalyResponse(
         equipment_ranking=[
@@ -1225,15 +1236,29 @@ async def get_anomaly(
             )
             for r in data["monthly_trend"]
         ],
+        matrix=[
+            AnomalyMatrixCell(
+                equipment_id=r["equipment_id"],
+                equipment_name=r["equipment_name"],
+                equipment_no=r["equipment_no"],
+                template_item_id=r["template_item_id"],
+                item_name=r["item_name"],
+                total_count=r["total_count"],
+                abnormal_count=r["abnormal_count"],
+                anomaly_rate=r["anomaly_rate"],
+            )
+            for r in data["matrix"]
+        ],
     )
 
 
 async def get_equipment_list(
     db: AsyncSession,
     keyword: str | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> EquipmentListResponse:
     """可选设备列表"""
-    data = await get_analytics_equipment_list(db, keyword)
+    data = await get_analytics_equipment_list(db, keyword, ctx)
 
     return EquipmentListResponse(
         equipments=[
@@ -1247,3 +1272,24 @@ async def get_equipment_list(
             for r in data
         ],
     )
+
+
+async def get_linkage(
+    db: AsyncSession,
+    from_date: date,
+    to_date: date,
+    ctx: EquipmentAccessContext,
+) -> LinkageResponse:
+    """巡检-维修联动分析：按月叠加巡检异常数与各类型工单量。"""
+    data = await get_linkage_stats(db, from_date, to_date, ctx)
+
+    points = [
+        LinkagePoint(month=r["month"], series="巡检异常", count=r["count"])
+        for r in data["anomaly"]
+    ]
+    points += [
+        LinkagePoint(month=r["month"], series=r["order_type"], count=r["count"])
+        for r in data["work_orders"]
+    ]
+
+    return LinkageResponse(points=points)

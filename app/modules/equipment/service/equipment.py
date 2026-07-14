@@ -134,7 +134,9 @@ async def delete_equipment_category(
     if plan_count > 0:
         raise AppException(message="该分类下存在关联维护计划，无法删除")
 
-    personnel_count = await repo.count_personnel_assignments_by_category(db, category_id)
+    personnel_count = await repo.count_personnel_assignments_by_category(
+        db, category_id
+    )
     if personnel_count > 0:
         raise AppException(message="该分类下存在关联人员角色，无法删除")
 
@@ -303,8 +305,15 @@ async def get_equipments(
 ) -> tuple[list[Equipment], int]:
     """获取设备列表"""
     return await repo.get_equipments(
-        db, ctx, category_id, location_id,
-        department_id, status, keyword, page, page_size,
+        db,
+        ctx,
+        category_id,
+        location_id,
+        department_id,
+        status,
+        keyword,
+        page,
+        page_size,
     )
 
 
@@ -342,7 +351,8 @@ async def delete_equipment(
 
 
 async def get_equipment_statistics(
-    db: AsyncSession, ctx: EquipmentAccessContext,
+    db: AsyncSession,
+    ctx: EquipmentAccessContext,
 ) -> dict[str, Any]:
     """获取设备统计（按数据范围过滤）"""
     return await repo.get_equipment_statistics(db, ctx)
@@ -380,24 +390,24 @@ VALID_IMPORTANCE = {"高", "中", "低"}
 
 # 模板表头
 TEMPLATE_HEADERS = [
-    ("设备编号 *", 20),     # A
-    ("设备名称 *", 24),     # B
-    ("设备分类 *", 18),     # C
-    ("设备位置 *", 18),     # D
-    ("归属部门 *", 18),     # E
-    ("负责人 *", 14),       # F
-    ("设备状态", 10),       # G
-    ("重要性", 8),           # H
-    ("型号", 20),            # I
-    ("规格", 22),            # J
-    ("制造商", 22),          # K
-    ("供应商", 22),          # L
-    ("出厂日期", 14),        # M
-    ("投用日期", 14),        # N
-    ("保修到期日", 14),      # O
+    ("设备编号 *", 20),  # A
+    ("设备名称 *", 24),  # B
+    ("设备分类 *", 18),  # C
+    ("设备位置 *", 18),  # D
+    ("归属部门 *", 18),  # E
+    ("负责人 *", 14),  # F
+    ("设备状态", 10),  # G
+    ("重要性", 8),  # H
+    ("型号", 20),  # I
+    ("规格", 22),  # J
+    ("制造商", 22),  # K
+    ("供应商", 22),  # L
+    ("出厂日期", 14),  # M
+    ("投用日期", 14),  # N
+    ("保修到期日", 14),  # O
     ("资产原值（元）", 16),  # P
-    ("折旧年限", 10),        # Q
-    ("设备描述", 30),        # R
+    ("折旧年限", 10),  # Q
+    ("设备描述", 30),  # R
 ]
 
 
@@ -439,12 +449,18 @@ def generate_template_bytes() -> io.BytesIO:
     ws.title = "设备台账"
 
     header_font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
-    header_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
-    thin_border = Border(
-        left=Side(style="thin"), right=Side(style="thin"),
-        top=Side(style="thin"), bottom=Side(style="thin"),
+    header_fill = PatternFill(
+        start_color="2E75B6", end_color="2E75B6", fill_type="solid"
     )
-    example_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+    example_fill = PatternFill(
+        start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"
+    )
 
     ws.freeze_panes = "A3"
 
@@ -453,16 +469,32 @@ def generate_template_bytes() -> io.BytesIO:
         cell = ws.cell(row=1, column=i, value=label)
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.alignment = Alignment(
+            horizontal="center", vertical="center", wrap_text=True
+        )
         cell.border = thin_border
         ws.column_dimensions[get_column_letter(i)].width = width
 
     # 示例数据（第2行）
     examples = [
-        "EQ-001", "离心泵-A-01", "离心泵", "A车间一楼", "动力部", "张三",
-        "在用", "中", "IHF65-50-160", "流量25m³/h 扬程32m",
-        "XX泵业有限公司", "XX机电设备公司", "2024-01-15", "2024-03-01",
-        "2026-01-15", "15000", "10", "用于XX工序物料输送",
+        "EQ-001",
+        "离心泵-A-01",
+        "离心泵",
+        "A车间一楼",
+        "动力部",
+        "张三",
+        "在用",
+        "中",
+        "IHF65-50-160",
+        "流量25m³/h 扬程32m",
+        "XX泵业有限公司",
+        "XX机电设备公司",
+        "2024-01-15",
+        "2024-03-01",
+        "2026-01-15",
+        "15000",
+        "10",
+        "用于XX工序物料输送",
     ]
     ws.row_dimensions[2].height = 28
     for i, example in enumerate(examples, start=1):
@@ -514,7 +546,9 @@ async def import_equipments_from_excel(
         raise ValueError("Excel 中缺少「设备台账」工作表，请使用模板文件")
 
     ws = wb["设备台账"]
-    rows = list(ws.iter_rows(min_row=3, values_only=True))  # 第1行表头，第2行示例，第3行起数据
+    rows = list(
+        ws.iter_rows(min_row=3, values_only=True)
+    )  # 第1行表头，第2行示例，第3行起数据
 
     imported = 0
     skipped = 0
@@ -592,51 +626,63 @@ async def import_equipments_from_excel(
             if not person_name:
                 missing.append("负责人")
             if missing:
-                warnings.append(ImportRowError(
-                    row=row_num,
-                    message=f"缺少必填项: {', '.join(missing)}，已跳过",
-                ))
+                warnings.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"缺少必填项: {', '.join(missing)}，已跳过",
+                    )
+                )
                 skipped += 1
                 continue
 
-            assert eq_no and name and cat_name and loc_name and dept_name and person_name
+            assert (
+                eq_no and name and cat_name and loc_name and dept_name and person_name
+            )
 
             # 设备编号重复
             if eq_no in existing_nos:
-                errors.append(ImportRowError(
-                    row=row_num,
-                    message=f"设备编号「{eq_no}」已存在",
-                ))
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"设备编号「{eq_no}」已存在",
+                    )
+                )
                 skipped += 1
                 continue
 
             # 分类不存在
             category_id = cat_map.get(cat_name)
             if not category_id:
-                errors.append(ImportRowError(
-                    row=row_num,
-                    message=f"设备分类「{cat_name}」在系统中不存在",
-                ))
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"设备分类「{cat_name}」在系统中不存在",
+                    )
+                )
                 skipped += 1
                 continue
 
             # 位置不存在
             location_id = loc_map.get(loc_name)
             if not location_id:
-                errors.append(ImportRowError(
-                    row=row_num,
-                    message=f"设备位置「{loc_name}」在系统中不存在",
-                ))
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"设备位置「{loc_name}」在系统中不存在",
+                    )
+                )
                 skipped += 1
                 continue
 
             # 部门不存在
             department_id = dept_map.get(dept_name)
             if not department_id:
-                errors.append(ImportRowError(
-                    row=row_num,
-                    message=f"归属部门「{dept_name}」在系统中不存在",
-                ))
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"归属部门「{dept_name}」在系统中不存在",
+                    )
+                )
                 skipped += 1
                 continue
 
@@ -646,47 +692,67 @@ async def import_equipments_from_excel(
                     not ctx.visible_department_ids
                     or department_id not in ctx.visible_department_ids
                 ):
-                    errors.append(ImportRowError(
-                        row=row_num,
-                        message=f"归属部门「{dept_name}」不在您的数据权限范围内",
-                    ))
+                    errors.append(
+                        ImportRowError(
+                            row=row_num,
+                            message=f"归属部门「{dept_name}」不在您的数据权限范围内",
+                        )
+                    )
                     skipped += 1
                     continue
 
             # 负责人不存在
             responsible_person_id = user_map.get(person_name)
             if not responsible_person_id:
-                errors.append(ImportRowError(
-                    row=row_num,
-                    message=f"负责人「{person_name}」在系统中不存在",
-                ))
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"负责人「{person_name}」在系统中不存在",
+                    )
+                )
                 skipped += 1
                 continue
 
             # 校验状态
             status = values[COL_STATUS] or "在用"
             if status not in VALID_STATUSES:
-                warnings.append(ImportRowError(
-                    row=row_num,
-                    message=f"设备状态「{status}」无效，已默认设为「在用」",
-                ))
+                warnings.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"设备状态「{status}」无效，已默认设为「在用」",
+                    )
+                )
                 status = "在用"
 
             # 校验重要性
             importance = values[COL_IMPORTANCE] or "低"
             if importance not in VALID_IMPORTANCE:
-                warnings.append(ImportRowError(
-                    row=row_num,
-                    message=f"重要性「{importance}」无效，已默认设为「低」",
-                ))
+                warnings.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"重要性「{importance}」无效，已默认设为「低」",
+                    )
+                )
                 importance = "低"
 
             # 创建装备（使用 SAVEPOINT 隔离每行，避免一行失败导致整个事务损坏）
-            raw_pd = row[COL_PRODUCTION_DATE] if COL_PRODUCTION_DATE < len(row) else None
-            raw_cd = row[COL_COMMISSIONING_DATE] if COL_COMMISSIONING_DATE < len(row) else None
-            raw_we = row[COL_WARRANTY_EXPIRE] if COL_WARRANTY_EXPIRE < len(row) else None
+            raw_pd = (
+                row[COL_PRODUCTION_DATE] if COL_PRODUCTION_DATE < len(row) else None
+            )
+            raw_cd = (
+                row[COL_COMMISSIONING_DATE]
+                if COL_COMMISSIONING_DATE < len(row)
+                else None
+            )
+            raw_we = (
+                row[COL_WARRANTY_EXPIRE] if COL_WARRANTY_EXPIRE < len(row) else None
+            )
             raw_av = row[COL_ASSET_VALUE] if COL_ASSET_VALUE < len(row) else None
-            raw_dy = row[COL_DEPRECIATION_YEARS] if COL_DEPRECIATION_YEARS < len(row) else None
+            raw_dy = (
+                row[COL_DEPRECIATION_YEARS]
+                if COL_DEPRECIATION_YEARS < len(row)
+                else None
+            )
 
             async with db.begin_nested():
                 equipment = Equipment(
@@ -714,20 +780,24 @@ async def import_equipments_from_excel(
                 await db.flush()
 
                 # 关联分类
-                db.add(EquipmentCategoryLink(
-                    equipment_id=equipment.id,
-                    category_id=category_id,
-                ))
+                db.add(
+                    EquipmentCategoryLink(
+                        equipment_id=equipment.id,
+                        category_id=category_id,
+                    )
+                )
                 await db.flush()
 
             existing_nos.add(eq_no)
             imported += 1
 
         except Exception as e:
-            errors.append(ImportRowError(
-                row=row_num,
-                message=f"导入异常: {e}",
-            ))
+            errors.append(
+                ImportRowError(
+                    row=row_num,
+                    message=f"导入异常: {e}",
+                )
+            )
             skipped += 1
             logger.warning("导入行 %d 失败: %s", row_num, e)
 

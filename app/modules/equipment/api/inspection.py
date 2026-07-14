@@ -36,6 +36,7 @@ from app.modules.equipment.schemas.inspection import (
     InspectionTaskCreate,
     InspectionTaskDetailResponse,
     InspectionTaskResponse,
+    LinkageResponse,
     RouteCheckSubmit,
     RouteEquipmentTemplateResponse,
     RouteLocationEquipmentResponse,
@@ -761,7 +762,7 @@ async def analytics_trend(
     from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
     to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
-    _: EquipmentAccessContext = Depends(
+    ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:inspection:read"),
     ),
 ):
@@ -770,7 +771,7 @@ async def analytics_trend(
     fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
     td = date.fromisoformat(to_date) if to_date else date.today()
 
-    return await inspection_svc.get_trend(db, equipment_id, items, fd, td)
+    return await inspection_svc.get_trend(db, equipment_id, items, fd, td, ctx)
 
 
 @router.get("/analytics/anomaly", summary="异常热力分析", response_model=AnomalyResponse)
@@ -778,7 +779,7 @@ async def analytics_anomaly(
     from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
     to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
     db: AsyncSession = Depends(get_db),
-    _: EquipmentAccessContext = Depends(
+    ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:inspection:read"),
     ),
 ):
@@ -786,7 +787,7 @@ async def analytics_anomaly(
     fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
     td = date.fromisoformat(to_date) if to_date else date.today()
 
-    return await inspection_svc.get_anomaly(db, fd, td)
+    return await inspection_svc.get_anomaly(db, fd, td, ctx)
 
 
 @router.get(
@@ -797,10 +798,26 @@ async def analytics_anomaly(
 async def analytics_equipment_list(
     keyword: str = Query(default="", description="搜索关键词"),
     db: AsyncSession = Depends(get_db),
-    _: EquipmentAccessContext = Depends(
+    ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:inspection:read"),
     ),
 ):
     """查询有数值型巡检数据的设备列表，供趋势图设备选择器使用。"""
     kw = keyword.strip() if keyword else None
-    return await inspection_svc.get_equipment_list(db, kw)
+    return await inspection_svc.get_equipment_list(db, kw, ctx)
+
+
+@router.get("/analytics/linkage", summary="巡检-维修联动分析", response_model=LinkageResponse)
+async def analytics_linkage(
+    from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
+    to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:inspection:read"),
+    ),
+):
+    """按月叠加巡检异常数与各类型工单量，展示巡检投入与维修产出的联动关系。"""
+    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=365)
+    td = date.fromisoformat(to_date) if to_date else date.today()
+
+    return await inspection_svc.get_linkage(db, fd, td, ctx)

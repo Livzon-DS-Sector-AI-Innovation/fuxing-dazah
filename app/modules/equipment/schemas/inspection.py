@@ -415,12 +415,26 @@ class AnomalyMonthlyItem(BaseModel):
     total: int = Field(0, ge=0, description="总数")
 
 
+class AnomalyMatrixCell(BaseModel):
+    """设备×检查项 异常率矩阵单元格"""
+
+    equipment_id: str = Field(..., description="设备ID")
+    equipment_name: str = Field("", description="设备名称")
+    equipment_no: str = Field("", description="设备编号")
+    template_item_id: str = Field(..., description="检查项ID")
+    item_name: str = Field("", description="检查项名称")
+    total_count: int = Field(0, ge=0, description="总检查次数")
+    abnormal_count: int = Field(0, ge=0, description="异常次数")
+    anomaly_rate: float = Field(0.0, ge=0, le=100, description="异常率(%)")
+
+
 class AnomalyResponse(BaseModel):
     """异常热力响应"""
 
     equipment_ranking: list[AnomalyRankingItem] = Field(default_factory=list, description="设备异常率 TOP10")
     item_ranking: list[AnomalyRankingItem] = Field(default_factory=list, description="检查项异常率 TOP10")
     monthly_trend: list[AnomalyMonthlyItem] = Field(default_factory=list, description="月度异常趋势")
+    matrix: list[AnomalyMatrixCell] = Field(default_factory=list, description="设备×检查项异常率矩阵")
 
 
 class AnomalyQuery(BaseModel):
@@ -444,3 +458,17 @@ class EquipmentListResponse(BaseModel):
     """可选设备列表响应"""
 
     equipments: list[EquipmentListItem] = Field(default_factory=list, description="设备列表")
+
+
+class LinkagePoint(BaseModel):
+    """巡检-维修联动分析单个数据点"""
+
+    month: str = Field(..., description="月份（YYYY-MM）")
+    series: str = Field(..., description="序列名：巡检异常 或 工单类型")
+    count: int = Field(0, ge=0, description="次数")
+
+
+class LinkageResponse(BaseModel):
+    """巡检-维修联动分析响应"""
+
+    points: list[LinkagePoint] = Field(default_factory=list, description="按月对齐的多序列数据点")

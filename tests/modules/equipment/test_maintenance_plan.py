@@ -36,7 +36,6 @@ from app.modules.equipment.service import (
     generate_due_work_orders,
     get_maintenance_plan_by_id,
     get_overdue_maintenance_plans,
-    start_work_order,
     update_maintenance_plan,
 )
 from app.modules.equipment.service.maintenance_plan import (
@@ -587,7 +586,9 @@ async def test_generate_sets_expected_work_order_fields(
     ).scalar_one()
     assert wo.order_type == "计划维护"
     assert wo.priority == "中"
-    assert wo.status == "待处理"
+    # 已自动派工执行人 → 直接进「执行中」并写开工时间
+    assert wo.status == "执行中"
+    assert wo.started_at is not None
     assert wo.reporter_id is None
     assert wo.responsible_person_id == executor.id
     assert wo.assignee_id == executor.id
@@ -785,7 +786,8 @@ async def test_device_plan_advances_on_work_order_completion(
     ).scalar_one()
 
     ctx = make_access_ctx(executor)
-    await start_work_order(db_session, wo.id, ctx)
+    # 带执行人的自动工单已直接进「执行中」,无需再手动 start
+    assert wo.status == "执行中"
     await complete_work_order(
         db_session, wo.id, WorkOrderComplete(repair_detail="保养完成"), ctx
     )

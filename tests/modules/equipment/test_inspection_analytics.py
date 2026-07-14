@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import time as app_time
-from app.core.exceptions import AppException, NotFoundException
+from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import Equipment, Location
 from app.modules.equipment.models.inspection import (
@@ -44,7 +44,9 @@ from app.modules.equipment.service.inspection import (
     create_schedule,
     create_task,
     delete_schedule,
+    get_linkage,
     get_schedules_by_route,
+    get_trend,
     start_task,
     submit_equipment_check,
     update_schedule,
@@ -109,6 +111,26 @@ async def _item(db: AsyncSession, template_id: uuid.UUID) -> InspectionTemplateI
     item = r.scalars().first()
     assert item is not None
     return item
+
+
+async def _make_equipment(
+    db: AsyncSession, department_id: uuid.UUID | None = None
+) -> Equipment:
+    """创建一台带指定归属部门的在用设备(department_id 逻辑引用,无需真实部门行)。"""
+    loc = Location(name="车间", code=f"WS-{uuid.uuid4().hex[:6]}")
+    db.add(loc)
+    await db.flush()
+    eq = Equipment(
+        equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
+        name="设备",
+        location_id=loc.id,
+        status="在用",
+        importance="中",
+        department_id=department_id,
+    )
+    db.add(eq)
+    await db.flush()
+    return eq
 
 
 async def _running_task(
@@ -410,7 +432,10 @@ async def test_get_anomaly_stats_counts_our_equipment(
     )
 
     stats = await get_anomaly_stats(
-        db_session, from_date=date(2026, 1, 1), to_date=date(2026, 12, 31)
+        db_session,
+        from_date=date(2026, 1, 1),
+        to_date=date(2026, 12, 31),
+        ctx=EquipmentAccessContext(user=inspector, data_scope="all"),
     )
 
     # 共享库需按本设备过滤,避免其他测试数据干扰
@@ -442,6 +467,22 @@ async def test_get_anomaly_stats_counts_our_equipment(
     for m in stats["monthly_trend"]:
         assert {"month", "normal", "abnormal", "skip", "total"} <= set(m.keys())
 
+    # 设备×检查项矩阵:本设备本检查项一格,异常率100
+    cell = next(
+        (
+            c
+            for c in stats["matrix"]
+            if c["equipment_id"] == str(equipment.id)
+            and c["template_item_id"] == str(item.id)
+        ),
+        None,
+    )
+    assert cell is not None
+    assert cell["total_count"] == 1
+    assert cell["abnormal_count"] == 1
+    assert cell["anomaly_rate"] == 100.0
+    assert cell["item_name"]
+
 
 async def test_get_analytics_equipment_list_filters_numeric(
     db_session: AsyncSession,
@@ -469,7 +510,179 @@ async def test_get_analytics_equipment_list_filters_numeric(
     assert row["latest_inspection_date"] != ""
 
 
+# ══════════ 数据范围过滤(按设备部门) ══════════
+async def test_analytics_equipment_list_scoped_by_department(
+    db_session: AsyncSession,
+    inspector: User,
+    numeric_template: InspectionTemplate,
+) -> None:
+    """可选设备列表按数据范围过滤:非超管只见可见部门内设备。"""
+    dept_a, dept_b = uuid.uuid4(), uuid.uuid4()
+    eq_a = await _make_equipment(db_session, dept_a)
+    eq_b = await _make_equipment(db_session, dept_b)
+    item = await _item(db_session, numeric_template.id)
+    for eq in (eq_a, eq_b):
+        await _submit_and_complete(
+            db_session, inspector, eq, numeric_template,
+            [{"template_item_id": item.id, "result": "正常", "actual_value": "25"}],
+        )
+
+    ctx = EquipmentAccessContext(
+        user=inspector, data_scope="department", visible_department_ids=[dept_a]
+    )
+    rows = await get_analytics_equipment_list(db_session, ctx=ctx)
+    ids = {r["equipment_id"] for r in rows}
+    assert str(eq_a.id) in ids
+    assert str(eq_b.id) not in ids
+
+
+async def test_analytics_equipment_list_empty_scope_returns_nothing(
+    db_session: AsyncSession,
+    inspector: User,
+    numeric_template: InspectionTemplate,
+) -> None:
+    """可见部门为空的非超管:列表返回空(where(false()))。"""
+    eq_a = await _make_equipment(db_session, uuid.uuid4())
+    item = await _item(db_session, numeric_template.id)
+    await _submit_and_complete(
+        db_session, inspector, eq_a, numeric_template,
+        [{"template_item_id": item.id, "result": "正常", "actual_value": "25"}],
+    )
+    ctx = EquipmentAccessContext(
+        user=inspector, data_scope="department", visible_department_ids=[]
+    )
+    rows = await get_analytics_equipment_list(db_session, ctx=ctx)
+    assert rows == []
+
+
+async def test_get_anomaly_stats_scoped_by_department(
+    db_session: AsyncSession,
+    inspector: User,
+    numeric_template: InspectionTemplate,
+) -> None:
+    """异常热力统计按部门过滤:排行与矩阵只含可见部门设备。"""
+    dept_a, dept_b = uuid.uuid4(), uuid.uuid4()
+    eq_a = await _make_equipment(db_session, dept_a)
+    eq_b = await _make_equipment(db_session, dept_b)
+    item = await _item(db_session, numeric_template.id)
+    for eq in (eq_a, eq_b):
+        await _submit_and_complete(
+            db_session, inspector, eq, numeric_template,
+            [{"template_item_id": item.id, "result": "异常", "actual_value": "", "remark": "x"}],
+        )
+
+    ctx = EquipmentAccessContext(
+        user=inspector, data_scope="department", visible_department_ids=[dept_a]
+    )
+    stats = await get_anomaly_stats(
+        db_session, from_date=date(2026, 1, 1), to_date=date(2026, 12, 31), ctx=ctx
+    )
+    eq_ids = {r["equipment_id"] for r in stats["equipment_ranking"]}
+    assert str(eq_a.id) in eq_ids
+    assert str(eq_b.id) not in eq_ids
+    matrix_ids = {c["equipment_id"] for c in stats["matrix"]}
+    assert str(eq_b.id) not in matrix_ids
+
+
+async def test_get_trend_forbidden_for_other_department(
+    db_session: AsyncSession,
+    inspector: User,
+) -> None:
+    """趋势查询:请求可见部门外的设备应抛 ForbiddenException(403)。"""
+    eq_b = await _make_equipment(db_session, uuid.uuid4())
+    ctx = EquipmentAccessContext(
+        user=inspector, data_scope="department", visible_department_ids=[uuid.uuid4()]
+    )
+    with pytest.raises(ForbiddenException):
+        await get_trend(
+            db_session, eq_b.id, [], date(2026, 1, 1), date(2026, 12, 31), ctx
+        )
+
+
+async def test_get_trend_allowed_for_own_department(
+    db_session: AsyncSession,
+    inspector: User,
+    numeric_template: InspectionTemplate,
+) -> None:
+    """趋势查询:请求可见部门内设备正常返回,不抛异常。"""
+    dept_a = uuid.uuid4()
+    eq_a = await _make_equipment(db_session, dept_a)
+    item = await _item(db_session, numeric_template.id)
+    await _submit_and_complete(
+        db_session, inspector, eq_a, numeric_template,
+        [{"template_item_id": item.id, "result": "正常", "actual_value": "25"}],
+    )
+    ctx = EquipmentAccessContext(
+        user=inspector, data_scope="department", visible_department_ids=[dept_a]
+    )
+    resp = await get_trend(
+        db_session, eq_a.id, [], date(2026, 1, 1), date(2026, 12, 31), ctx
+    )
+    assert resp.equipment_no == eq_a.equipment_no
+    assert len(resp.series) == 1
+
+
 # ══════════ cron 计算与校验 ══════════
+async def test_get_linkage_counts_work_orders_by_type(
+    db_session: AsyncSession,
+    inspector: User,
+    equipment: Equipment,
+) -> None:
+    """联动分析:隔离历史窗口内 2 故障维修 + 1 异常处理 → 按类型 series 计数正确。"""
+    from app.modules.equipment.models.work_order import WorkOrder
+
+    reported = datetime(2019, 5, 10, tzinfo=UTC)
+    for i, otype in enumerate(["故障维修", "故障维修", "异常处理"]):
+        db_session.add(
+            WorkOrder(
+                work_order_no=f"WO-{uuid.uuid4().hex[:10]}-{i}",
+                equipment_id=equipment.id,
+                order_type=otype,
+                reported_at=reported,
+            )
+        )
+    await db_session.flush()
+
+    resp = await get_linkage(
+        db_session,
+        from_date=date(2019, 5, 1),
+        to_date=date(2019, 5, 31),
+        ctx=EquipmentAccessContext(user=inspector, data_scope="all"),
+    )
+    fault = sum(p.count for p in resp.points if p.series == "故障维修")
+    abnormal = sum(p.count for p in resp.points if p.series == "异常处理")
+    assert fault == 2
+    assert abnormal == 1
+    # 该历史窗口内无已完成巡检任务,不应出现巡检异常序列
+    assert all(p.series != "巡检异常" for p in resp.points)
+
+
+async def test_get_linkage_includes_anomaly_series(
+    db_session: AsyncSession,
+    inspector: User,
+    equipment: Equipment,
+    numeric_template: InspectionTemplate,
+) -> None:
+    """联动分析:存在一条已完成巡检异常记录时,叠加出「巡检异常」序列且计数≥1。"""
+    item = await _item(db_session, numeric_template.id)
+    await _submit_and_complete(
+        db_session,
+        inspector,
+        equipment,
+        numeric_template,
+        [{"template_item_id": item.id, "result": "异常", "actual_value": "", "remark": "温度过高"}],
+    )
+
+    resp = await get_linkage(
+        db_session,
+        from_date=date(2026, 1, 1),
+        to_date=date(2026, 12, 31),
+        ctx=EquipmentAccessContext(user=inspector, data_scope="all"),
+    )
+    anomaly = sum(p.count for p in resp.points if p.series == "巡检异常")
+    assert anomaly >= 1
+
+
 def test_compute_next_cron_five_segment() -> None:
     """5 段 cron(min hour dom mon dow)计算下次触发,带应用时区。"""
     base = datetime(2026, 7, 11, 8, 0, tzinfo=app_time.APP_TZ)

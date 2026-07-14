@@ -285,13 +285,18 @@ async def generate_due_work_orders(
                     "equipment_id": eq_id,
                     "order_type": "计划维护",
                     "priority": "中",
-                    "status": "待处理",
+                    # 已自动派工给执行人 → 直接进「执行中」;无执行人则留「待处理」
+                    "status": "执行中" if plan.executor_id else "待处理",
                     "reporter_id": None,  # 系统自动生成，无报修人
                     "maintenance_plan_id": plan.id,
                     "responsible_person_id": plan.executor_id,
                     # 执行人自动作为维修人（指派人），与手动派工保持一致
                     "assignee_id": plan.executor_id,
                     "assigned_at": (
+                        app_time.now() if plan.executor_id else None
+                    ),
+                    # 直接进执行中的工单同步写开工时间，避免「执行中却无 started_at」
+                    "started_at": (
                         app_time.now() if plan.executor_id else None
                     ),
                     "planned_start_date": plan.next_maintenance_date,

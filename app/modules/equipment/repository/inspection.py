@@ -941,6 +941,7 @@ async def get_anomaly_stats(
     db: AsyncSession,
     from_date: date,
     to_date: date,
+    ctx: EquipmentAccessContext,
 ) -> dict:
     """异常热力统计：设备排行、检查项排行、月度趋势。"""
     from app.modules.equipment.models.equipment import Equipment
@@ -950,7 +951,7 @@ async def get_anomaly_stats(
         InspectionTemplateItem,
     )
 
-    base = (
+    base_q = (
         select(
             InspectionRecord.equipment_id,
             InspectionRecord.template_item_id,
@@ -958,14 +959,20 @@ async def get_anomaly_stats(
             func.date(InspectionTask.completed_at).label("date"),
         )
         .join(InspectionTask, InspectionRecord.task_id == InspectionTask.id)
+        # outer join：超管路径不丢弃无设备记录;数据范围过滤在下方按部门收口
+        .join(Equipment, InspectionRecord.equipment_id == Equipment.id, isouter=True)
         .where(
             InspectionRecord.is_deleted == False,  # noqa: E712
             InspectionTask.is_deleted == False,    # noqa: E712
             InspectionTask.completed_at >= from_date,
             InspectionTask.completed_at <= to_date,
         )
-        .subquery()
     )
+    # 按设备部门过滤(超管放行);无部门设备对非超管天然不可见
+    base_q = apply_equipment_scope(
+        base_q, ctx, Equipment.department_id, "department_id"
+    )
+    base = base_q.subquery()
 
     # 设备排行 TOP10
     eq_stmt = (
@@ -1049,16 +1056,59 @@ async def get_anomaly_stats(
         for r in month_rows
     ]
 
+    # 设备×检查项 矩阵（热力图/雷达/仪表盘共用数据源）
+    matrix_stmt = (
+        select(
+            base.c.equipment_id,
+            Equipment.name.label("equipment_name"),
+            Equipment.equipment_no,
+            base.c.template_item_id,
+            InspectionTemplateItem.item_name,
+            func.count().label("total"),
+            func.sum(case((base.c.result == "异常", 1), else_=0)).label("abnormal"),
+        )
+        .join(Equipment, base.c.equipment_id == Equipment.id)
+        .join(
+            InspectionTemplateItem,
+            base.c.template_item_id == InspectionTemplateItem.id,
+        )
+        .group_by(
+            base.c.equipment_id,
+            Equipment.name,
+            Equipment.equipment_no,
+            base.c.template_item_id,
+            InspectionTemplateItem.item_name,
+        )
+        .having(func.count() >= 1)
+        # ponytail: 全部设备×检查项，不截断（用户要求）。若某厂矩阵过大再加 having/limit。
+    )
+    matrix_rows = (await db.execute(matrix_stmt)).all()
+    matrix = [
+        {
+            "equipment_id": str(r.equipment_id),
+            "equipment_name": r.equipment_name or "",
+            "equipment_no": r.equipment_no or "",
+            "template_item_id": str(r.template_item_id),
+            "item_name": r.item_name or "",
+            "total_count": r.total,
+            "abnormal_count": r.abnormal or 0,
+            "anomaly_rate": round((r.abnormal or 0) / r.total * 100, 1) if r.total else 0,
+        }
+        for r in matrix_rows
+    ]
+
     return {
         "equipment_ranking": equipment_ranking,
         "item_ranking": item_ranking,
         "monthly_trend": monthly_trend,
+        "matrix": matrix,
     }
 
 
 async def get_analytics_equipment_list(
     db: AsyncSession,
     keyword: str | None = None,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[dict]:
     """可选设备列表：只返回有数值型检查项且有巡检记录的设备。"""
     from app.modules.equipment.models.equipment import Equipment
@@ -1095,6 +1145,11 @@ async def get_analytics_equipment_list(
             Equipment.name.ilike(f"%{keyword}%")
             | Equipment.equipment_no.ilike(f"%{keyword}%")
         )
+    # 按设备部门过滤数据范围(ctx 为空时不过滤,兼容内部无上下文调用)
+    if ctx is not None:
+        eq_stmt = apply_equipment_scope(
+            eq_stmt, ctx, Equipment.department_id, "department_id"
+        )
     eq_stmt = eq_stmt.group_by(Equipment.id, Equipment.name, Equipment.equipment_no)
 
     rows = (await db.execute(eq_stmt)).all()
@@ -1130,3 +1185,76 @@ async def get_analytics_equipment_list(
         eq["numeric_item_count"] = (await db.execute(count_stmt)).scalar() or 0
 
     return equipments
+
+
+async def get_linkage_stats(
+    db: AsyncSession,
+    from_date: date,
+    to_date: date,
+    ctx: EquipmentAccessContext,
+) -> dict:
+    """巡检-维修联动：按月统计巡检异常数 与 各类型工单量。"""
+    from app.modules.equipment.models.equipment import Equipment
+    from app.modules.equipment.models.inspection import InspectionTask
+    from app.modules.equipment.models.inspection_template import InspectionRecord
+    from app.modules.equipment.models.work_order import WorkOrder
+
+    # 巡检异常/月（复用 anomaly 的 base 口径：按任务 completed_at 归月）
+    anomaly_base_q = (
+        select(
+            InspectionRecord.result,
+            func.date(InspectionTask.completed_at).label("date"),
+        )
+        .join(InspectionTask, InspectionRecord.task_id == InspectionTask.id)
+        # outer join：超管路径不丢弃无设备记录
+        .join(Equipment, InspectionRecord.equipment_id == Equipment.id, isouter=True)
+        .where(
+            InspectionRecord.is_deleted == False,  # noqa: E712
+            InspectionTask.is_deleted == False,    # noqa: E712
+            InspectionTask.completed_at >= from_date,
+            InspectionTask.completed_at <= to_date,
+        )
+    )
+    anomaly_base_q = apply_equipment_scope(
+        anomaly_base_q, ctx, Equipment.department_id, "department_id"
+    )
+    anomaly_base = anomaly_base_q.subquery()
+    anomaly_stmt = (
+        select(
+            func.to_char(func.date_trunc("month", anomaly_base.c.date), "YYYY-MM").label("month"),
+            func.sum(case((anomaly_base.c.result == "异常", 1), else_=0)).label("count"),
+        )
+        .group_by(text("month"))
+        .order_by(text("month"))
+    )
+    anomaly_rows = (await db.execute(anomaly_stmt)).all()
+    anomaly = [{"month": r.month, "count": r.count or 0} for r in anomaly_rows]
+
+    # 工单量/月/类型（按报修时间 reported_at 归月）
+    wo_stmt = (
+        select(
+            func.to_char(func.date_trunc("month", WorkOrder.reported_at), "YYYY-MM").label("month"),
+            WorkOrder.order_type,
+            func.count().label("count"),
+        )
+        # 工单无 department_id,经 equipment_id 关联设备部门(WorkOrder.equipment_id 非空)
+        .join(Equipment, WorkOrder.equipment_id == Equipment.id)
+        .where(
+            WorkOrder.is_deleted == False,  # noqa: E712
+            WorkOrder.order_type.notin_(["计划维护", "日常维护"]),
+            WorkOrder.reported_at >= from_date,
+            WorkOrder.reported_at <= to_date,
+        )
+        .group_by(text("month"), WorkOrder.order_type)
+        .order_by(text("month"))
+    )
+    wo_stmt = apply_equipment_scope(
+        wo_stmt, ctx, Equipment.department_id, "department_id"
+    )
+    wo_rows = (await db.execute(wo_stmt)).all()
+    work_orders = [
+        {"month": r.month, "order_type": r.order_type, "count": r.count}
+        for r in wo_rows
+    ]
+
+    return {"anomaly": anomaly, "work_orders": work_orders}
