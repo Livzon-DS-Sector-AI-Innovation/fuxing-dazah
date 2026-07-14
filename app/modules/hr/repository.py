@@ -230,7 +230,7 @@ class EmployeeRepository:
         if filters.get("status"):
             stmt = stmt.where(Employee.status == filters["status"])
         else:
-            stmt = stmt.where(Employee.status != "待审批")
+            stmt = stmt.where(Employee.status.not_in(["待审批", "离职"]))
         if filters.get("keyword"):
             stmt = stmt.where(
                 Employee.name.ilike(f"{filters['keyword']}%")

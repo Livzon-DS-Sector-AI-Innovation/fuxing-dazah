@@ -510,7 +510,10 @@ class EmployeeService:
         header = [str(c).strip() if c else "" for c in rows[0]]
         col_map = {}
         col_name_map = {"SOP编号": "sop_number", "文件名称": "file_name", "培训类别": "category",
-                        "部门": "department", "所属部门": "department", "岗位": "position_name"}
+                        "部门": "department", "所属部门": "department", "岗位": "position_name",
+                        "体现部门": "department", "SOP名称": "file_name", "文件名": "file_name",
+                        "类别": "category", "分类": "category", "培训分类": "category",
+                        "职位": "position_name", "岗位名称": "position_name"}
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
 
@@ -939,6 +942,7 @@ class DepartmentService:
                 select(func.count()).select_from(Employee).where(
                     Employee.department == dept.name,
                     Employee.is_deleted.is_(False),
+                    Employee.status != "离职",
                 )
             )
             dept.employee_count = count or 0
