@@ -16,6 +16,7 @@ from app.modules.hr.models import (
     HrDepartment,
     OffboardingRecord,
     OnboardingRecord,
+    PositionTraining,
     Team,
     TrainingLedger,
     TrainingLedgerPage,
@@ -94,52 +95,65 @@ class EmployeeService:
 
     async def _sync_employee_training(self, employee: Employee) -> None:
         """为新员工自动创建培训台账页面和岗位关联的培训记录。"""
-        from sqlalchemy import text as sql_text
+        from app.modules.hr.models import TrainingLedgerPage
         # 创建台账页面
-        await self.repo.session.execute(sql_text("""
-            INSERT INTO hr.training_ledger_pages (id, employee_number, employee_name, created_at)
-            SELECT gen_random_uuid(), :en, :n, now()
-            WHERE NOT EXISTS (
-                SELECT 1 FROM hr.training_ledger_pages
-                WHERE employee_number = :en AND is_deleted = false
-            )
-        """), {"en": employee.employee_number, "n": employee.name})
+        q = select(TrainingLedgerPage).where(
+            TrainingLedgerPage.employee_number == employee.employee_number,
+            TrainingLedgerPage.is_deleted == False,
+        )
+        r = await self.repo.session.execute(q)
+        if not r.scalar_one_or_none():
+            self.repo.session.add(TrainingLedgerPage(
+                employee_number=employee.employee_number,
+                employee_name=employee.name,
+            ))
 
         # 根据岗位导入培训内容
-        await self.repo.session.execute(sql_text("""
-            INSERT INTO hr.training_ledgers (id, employee_number, training_subject, training_method,
-                trainer, training_date, created_at)
-            SELECT DISTINCT ON (pt.training_category)
-                gen_random_uuid(), :en, pt.training_category,
-                pt.training_method, pt.trainer, :hd, now()
-            FROM hr.position_trainings pt
-            WHERE pt.position_name = :pos AND pt.department = :dept
-            AND NOT EXISTS (
-                SELECT 1 FROM hr.training_ledgers tl
-                WHERE tl.employee_number = :en AND tl.training_subject = pt.training_category
+        if employee.position and employee.department:
+            pt_q = select(PositionTraining).where(
+                PositionTraining.position_name == employee.position,
+                PositionTraining.department == employee.department,
+                PositionTraining.is_deleted == False,
             )
-        """), {"en": employee.employee_number, "pos": employee.position,
-               "dept": employee.department, "hd": employee.hire_date})
+            pts = (await self.repo.session.execute(pt_q)).scalars().all()
+            for pt in pts:
+                exist_q = select(TrainingLedger).where(
+                    TrainingLedger.employee_number == employee.employee_number,
+                    TrainingLedger.training_subject == pt.training_category,
+                    TrainingLedger.is_deleted == False,
+                )
+                ext = await self.repo.session.execute(exist_q)
+                if not ext.scalar_one_or_none():
+                    self.repo.session.add(TrainingLedger(
+                        employee_number=employee.employee_number,
+                        training_subject=pt.training_category,
+                        training_method=pt.training_method,
+                        trainer=pt.trainer,
+                        training_date=employee.hire_date or date.today(),
+                    ))
 
     async def _create_onboarding_record(self, employee: Employee) -> None:
         """为新员工创建入职台账记录。"""
-        from sqlalchemy import text as sql_text
-        await self.repo.session.execute(sql_text("""
-            INSERT INTO hr.onboarding_records (id, employee_number, name, domain_account, department, team,
-                position, job_category, status_category, is_employed, hire_date, factory_entry_date,
-                education, school, major, phone, created_at)
-            VALUES (gen_random_uuid(), :en, :n, :da, :dept, :team,
-                :pos, :jc, :sc, '是', :hd, :fed,
-                :edu, :sch, :maj, :ph, now())
-        """), {
-            "en": employee.employee_number, "n": employee.name,
-            "da": employee.domain_account, "dept": employee.department,
-            "team": employee.team, "pos": employee.position,
-            "jc": employee.job_category, "sc": employee.status_category,
-            "hd": employee.hire_date, "fed": employee.factory_entry_date,
-            "edu": employee.education, "sch": employee.school,
-            "maj": employee.major, "ph": employee.phone,
-        })
+        from app.modules.hr.models import OnboardingRecord
+        record = OnboardingRecord(
+            employee_number=employee.employee_number,
+            name=employee.name,
+            domain_account=employee.domain_account,
+            department=employee.department,
+            team=employee.team,
+            position=employee.position,
+            job_category=employee.job_category,
+            status_category=employee.status_category,
+            is_employed="是",
+            hire_date=employee.hire_date,
+            factory_entry_date=employee.factory_entry_date,
+            education=employee.education,
+            school=employee.school,
+            major=employee.major,
+            phone=employee.phone,
+        )
+        self.repo.session.add(record)
+        await self.repo.session.flush()
 
     # ── Excel 列名 → 模型字段名 映射 ──
     _UPLOAD_COLUMN_MAP: dict[str, str] = {
