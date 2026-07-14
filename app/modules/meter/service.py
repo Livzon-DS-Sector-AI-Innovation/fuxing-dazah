@@ -1331,6 +1331,22 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
         logger.info("没有需要发送提醒的部门")
         return {"sent": 0, "skipped": 0, "errors": 0}
 
+    # 预加载 identity.users 的 name → feishu_user_id 映射（user_id 跨应用有效）
+    from sqlalchemy import select as sa_select
+
+    from app.platform.identity.models import User
+
+    name_to_user_id: dict[str, str] = {}
+    users_result = await db.execute(
+        sa_select(User.name, User.feishu_user_id).where(
+            User.is_deleted == False,  # noqa: E712
+            User.feishu_user_id.isnot(None),
+            User.feishu_user_id != "",
+        )
+    )
+    for row in users_result.all():
+        name_to_user_id[row[0]] = row[1]
+
     today = date.today()
     sent = 0
     skipped = 0
@@ -1397,14 +1413,20 @@ async def send_calibration_reminders(db: AsyncSession) -> dict[str, Any]:
 
         all_ok = True
         for head in heads_list:
-            open_id = head.get("feishu_open_id", "").strip()
             head_name = head.get("name", "未知")
-            if not open_id:
+            # 优先使用 user_id（应用无关），其次回退到 open_id
+            feishu_id = name_to_user_id.get(head_name, "")
+            receive_id_type: str = "user_id"
+            if not feishu_id:
+                feishu_id = head.get("feishu_open_id", "").strip()
+                receive_id_type = "open_id"
+            if not feishu_id:
                 continue
             ok = await send_user_card(
-                open_id=open_id,
+                open_id=feishu_id,
                 title=title,
                 content=content,
+                receive_id_type=receive_id_type,
             )
             if not ok:
                 all_ok = False
