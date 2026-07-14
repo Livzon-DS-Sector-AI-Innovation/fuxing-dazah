@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Select, Collapse, Table, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm } from 'antd'
-import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Select, Collapse, Table, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
+import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
@@ -114,7 +114,20 @@ export default function SopCatalogPage() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)]">SOP 目录</h1>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建职位SOP</Button>
+        <Space>
+          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            const fd = new FormData(); fd.append('file', file as File)
+            try {
+              const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/upload`, { method: 'POST', body: fd })
+              const d = await res.json()
+              if (res.ok) { message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll() }
+              else message.error(d.message || '上传失败')
+            } catch { message.error('上传失败') }
+          }}>
+            <Button icon={<UploadOutlined />}>上传SOP</Button>
+          </Upload>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>新建职位SOP</Button>
+        </Space>
       </div>
 
       <div className="flex gap-3 items-center flex-wrap">
