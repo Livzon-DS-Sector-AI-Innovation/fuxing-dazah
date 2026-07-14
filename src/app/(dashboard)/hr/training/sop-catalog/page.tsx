@@ -120,7 +120,12 @@ export default function SopCatalogPage() {
             try {
               const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/upload`, { method: 'POST', body: fd })
               const d = await res.json()
-              if (res.ok) { message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll() }
+              if (res.ok) {
+                if (d.data.errors?.length) {
+                  Modal.warning({ title: `上传完成但有${d.data.errors.length}条错误`, content: <ul>{d.data.errors.slice(0,10).map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>, width: 500 })
+                }
+                message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
+              }
               else message.error(d.message || '上传失败')
             } catch { message.error('上传失败') }
           }}>
