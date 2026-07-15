@@ -43,7 +43,7 @@ next-env.d.ts
 
 # AI Agent
 .claude
-prompt.md
+.mcp.json
 CLAUDE.local.md
 
 docs/superpowers
