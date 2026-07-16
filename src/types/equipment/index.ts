@@ -1,5 +1,6 @@
 export * from './equipment'
 export * from './work-order'
+export * from './availability'
 
 export * from './spare-part'
 export * from './maintenance'

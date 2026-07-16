@@ -37,5 +37,5 @@ export async function GET(request: NextRequest) {
     maxAge: 60 * 60 * 24 * 7,
   })
 
-  return NextResponse.redirect(new URL('/production', origin))
+  return NextResponse.redirect(new URL('/welcome', origin))
 }

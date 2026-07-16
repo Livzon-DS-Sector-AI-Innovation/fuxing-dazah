@@ -1,28 +1,28 @@
 'use client'
 
-import { useCallback, useState, useEffect, useRef, type CSSProperties } from 'react'
+import { useCallback, useState, useEffect, useRef } from 'react'
 import { App, Table, Space, Input, Select, Button } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, ImportOutlined, EyeOutlined } from '@ant-design/icons'
-import { Equipment, EquipmentStatus } from '@/types/equipment'
+import { Equipment } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
-import { statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared/shared-styles'
+import { EQUIP_STATUS_PILL_COLORS, RUNNING_STATUS_PILL_COLORS, statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared/shared-styles'
 import { EquipmentDetailDrawer } from './EquipmentDetailDrawer'
 import { usePermission } from '@/hooks/usePermission'
 
-const statusConfig: Record<EquipmentStatus, { color: string; bg: string }> = {
-  '在用':   { color: '#1aae39', bg: '#d9f3e1' },
-  '备用':   { color: '#7b3ff2', bg: '#e6e0f5' },
-  '维修中': { color: '#dd5b00', bg: '#ffe8d4' },
-  '停用':   { color: '#787671', bg: '#f0eeec' },
-  '报废':   { color: '#e03131', bg: '#fde0ec' },
+const statusPillMap: Record<string, React.CSSProperties> = Object.fromEntries(
+  Object.entries(EQUIP_STATUS_PILL_COLORS).map(([k, v]) => [k, statusPill(v.color, v.bg)])
+)
+
+const runningStatusPillMap: Record<string, React.CSSProperties> = Object.fromEntries(
+  Object.entries(RUNNING_STATUS_PILL_COLORS).map(([k, v]) => [k, statusPill(v.color, v.bg)])
+)
+
+const statusOptions = Object.keys(EQUIP_STATUS_PILL_COLORS).map(value => ({ label: value, value }))
+
+const IMPORTANCE_PILL_MAP: Record<string, React.CSSProperties> = {
+  '高': pillPurple, '中': pillNeutral, '低': pillNeutral,
 }
-
-const statusPillMap: Record<EquipmentStatus, React.CSSProperties> = Object.fromEntries(
-  Object.entries(statusConfig).map(([k, v]) => [k, statusPill(v.color, v.bg)])
-) as Record<EquipmentStatus, React.CSSProperties>
-
-const statusOptions = Object.keys(statusConfig).map(value => ({ label: value, value }))
 
 interface EquipmentTableProps {
   loading?: boolean
@@ -104,12 +104,11 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick, r
     { title: '负责人', dataIndex: 'responsible_person_name', key: 'responsible', width: 100,
       render: (v: string | null) => v || '-' },
     { title: '设备状态', dataIndex: 'status', key: 'status', width: 90,
-      render: (s: EquipmentStatus) => <span style={statusPillMap[s] || statusPill('#787671', '#f0eeec')}>{s}</span> },
+      render: (s: string) => <span style={statusPillMap[s] || pillNeutral}>{s}</span> },
+    { title: '运行状态', dataIndex: 'running_status', key: 'running_status', width: 90,
+      render: (s: string) => <span style={runningStatusPillMap[s] || pillNeutral}>{s}</span> },
     { title: '重要性', dataIndex: 'importance', key: 'importance', width: 80,
-      render: (v: string) => {
-        const m: Record<string, CSSProperties> = { '高': pillPurple, '中': pillNeutral, '低': pillNeutral }
-        return <span style={m[v] || pillNeutral}>{v}</span>
-      }},
+      render: (v: string) => <span style={IMPORTANCE_PILL_MAP[v] || pillNeutral}>{v}</span> },
     { title: '型号', dataIndex: 'model', key: 'model', width: 140, ellipsis: true },
     { title: '供应商', dataIndex: 'supplier', key: 'supplier', width: 150, ellipsis: true },
     { title: '投用日期', dataIndex: 'commissioning_date', key: 'commissioning_date', width: 120 },

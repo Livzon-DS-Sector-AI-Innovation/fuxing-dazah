@@ -55,7 +55,8 @@ export interface UpdateLocationInput {
 }
 
 // 设备管理
-export type EquipmentStatus = '在用' | '备用' | '维修中' | '停用' | '报废'
+export type EquipmentStatus = '完好' | '备用' | '故障待检' | '维修中' | '报废'
+export type RunningStatus = '开机' | '停机'
 export type EquipmentImportance = '高' | '中' | '低'
 
 export interface Equipment {
@@ -67,6 +68,7 @@ export interface Equipment {
   location_id: string
   location_name?: string | null
   status: EquipmentStatus
+  running_status: RunningStatus
   importance: EquipmentImportance
   model: string | null
   specification: string | null
@@ -93,6 +95,7 @@ export interface CreateEquipmentInput {
   category_ids: string[]
   location_id: string
   status?: EquipmentStatus
+  running_status?: RunningStatus
   importance?: EquipmentImportance
   model?: string
   specification?: string
@@ -110,6 +113,7 @@ export interface UpdateEquipmentInput {
   category_ids?: string[]
   location_id?: string
   status?: EquipmentStatus
+  running_status?: RunningStatus
   importance?: EquipmentImportance
   model?: string
   specification?: string

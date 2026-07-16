@@ -25,7 +25,7 @@ export const initialEquipmentListState = {
 
   selectedCategory: null as string | null,
   selectedLocation: null as string | null,
-  statusFilter: '' as '' | '在用' | '备用' | '维修中' | '停用' | '报废',
+  statusFilter: '' as '' | '完好' | '备用' | '故障待检' | '维修中' | '报废',
   departmentFilter: null as string | null,
   departments: [] as DepartmentOption[],
   keyword: '',

@@ -1,15 +1,16 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { App, Drawer, Descriptions, Table, Tabs, Tag, Space, Empty, Spin } from 'antd'
-import { ToolOutlined, SearchOutlined, CalendarOutlined } from '@ant-design/icons'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { App, Drawer, Descriptions, Table, Tabs, Tag, Space, Empty, Spin, Timeline } from 'antd'
+import { ToolOutlined, SearchOutlined, CalendarOutlined, HistoryOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { Equipment, MaintenancePlan, WorkOrder } from '@/types/equipment'
+import dayjs from 'dayjs'
+import type { Equipment, MaintenancePlan, WorkOrder, EquipmentStatusLog, StatusLogSource } from '@/types/equipment'
 import type { InspectionTask } from '@/types/inspection'
-import { fetchMaintenancePlansClient, fetchWorkOrdersClient } from '@/lib/api/equipment-client'
+import { fetchMaintenancePlansClient, fetchWorkOrdersClient, fetchStatusLogsClient } from '@/lib/api/equipment-client'
 import { fetchInspectionHistory } from '@/lib/api/inspection'
-import { monoFont, pillNeutral, pillSuccess, pillWarning, pillError, pillInfo, pillPurple, statusPill } from '@/components/equipment/shared/shared-styles'
-import type { EquipmentStatus, EquipmentImportance } from '@/types/equipment'
+import { EQUIP_STATUS_PILL_COLORS, RUNNING_STATUS_PILL_COLORS, EQUIPMENT_STATUS_COLORS, RUNNING_STATUS_COLORS, monoFont, pillNeutral, pillSuccess, pillError, pillPurple, statusPill } from '@/components/equipment/shared/shared-styles'
+import type { EquipmentImportance } from '@/types/equipment'
 
 interface EquipmentDetailDrawerProps {
   open: boolean
@@ -26,7 +27,7 @@ const MAINTENANCE_STATUS_MAP: Record<string, { color: string; bg: string }> = {
 }
 
 const WORK_ORDER_STATUS_MAP: Record<string, { color: string; bg: string }> = {
-  '待处理': { color: '#dd5b00', bg: '#ffe8d4' },
+  '待处理': { color: '#e03131', bg: '#fde0ec' },
   '执行中': { color: '#7b3ff2', bg: '#e6e0f5' },
   '待验收': { color: '#0075de', bg: '#dcecfa' },
   '已完成': { color: '#1aae39', bg: '#d9f3e1' },
@@ -40,16 +41,24 @@ const TASK_STATUS_MAP: Record<string, { color: string; bg: string }> = {
   '已关闭': { color: '#787671', bg: '#f0eeec' },
 }
 
-function localStatusPill(color: string, bg: string): React.CSSProperties {
-  return { display: 'inline-flex', alignItems: 'center', padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 600, lineHeight: '20px', color, background: bg }
+// 从共享色表派生 full pill style
+const EQUIP_STATUS_MAP: Record<string, React.CSSProperties> = Object.fromEntries(
+  Object.entries(EQUIP_STATUS_PILL_COLORS).map(([k, v]) => [k, statusPill(v.color, v.bg)])
+)
+
+const RUNNING_STATUS_MAP: Record<string, React.CSSProperties> = Object.fromEntries(
+  Object.entries(RUNNING_STATUS_PILL_COLORS).map(([k, v]) => [k, statusPill(v.color, v.bg)])
+)
+
+// 状态历史时间线同时渲染设备状态与运行状态两类日志
+const LOG_PILL_MAP: Record<string, React.CSSProperties> = {
+  ...EQUIP_STATUS_MAP,
+  ...RUNNING_STATUS_MAP,
 }
 
-const EQUIP_STATUS_MAP: Record<EquipmentStatus, React.CSSProperties> = {
-  '在用': statusPill('#1aae39', '#d9f3e1'),
-  '备用': statusPill('#0075de', '#dcecfa'),
-  '维修中': statusPill('#dd5b00', '#ffe8d4'),
-  '停用': statusPill('#787671', '#f0eeec'),
-  '报废': statusPill('#e03131', '#fde0ec'),
+const LOG_DOT_COLORS: Record<string, string> = {
+  ...EQUIPMENT_STATUS_COLORS,
+  ...RUNNING_STATUS_COLORS,
 }
 
 const IMPORTANCE_MAP: Record<EquipmentImportance, React.CSSProperties> = {
@@ -58,9 +67,22 @@ const IMPORTANCE_MAP: Record<EquipmentImportance, React.CSSProperties> = {
   '低': pillNeutral,
 }
 
+const STATUS_LOG_SOURCE_MAP: Record<StatusLogSource, string> = {
+  init: '初始基线',
+  create: '新建登记',
+  manual: '台账编辑',
+  work_order: '工单联动',
+  import: 'Excel导入',
+}
+
+const PRIORITY_STYLE_MAP: Record<string, React.CSSProperties> = {
+  '紧急': { color: '#e03131', fontWeight: 600 },
+  '高':   { color: '#dd5b00', fontWeight: 600 },
+}
+
 export function EquipmentDetailDrawer({ open, equipment, categoryName, locationName, onClose }: EquipmentDetailDrawerProps) {
   const { message } = App.useApp()
-  const [activeTab, setActiveTab] = useState<'plans' | 'history' | 'orders'>('plans')
+  const [activeTab, setActiveTab] = useState<'plans' | 'history' | 'orders' | 'status'>('plans')
 
   // 维护保养计划
   const [plans, setPlans] = useState<MaintenancePlan[]>([])
@@ -74,53 +96,72 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
   const [orders, setOrders] = useState<WorkOrder[]>([])
   const [ordersLoading, setOrdersLoading] = useState(false)
 
-  const loadPlans = useCallback(async () => {
+  // 状态历史
+  const [statusLogs, setStatusLogs] = useState<EquipmentStatusLog[]>([])
+  const [statusLogsLoading, setStatusLogsLoading] = useState(false)
+
+  // 代际计数器 — 快速切换设备时忽略旧请求
+  const genRef = useRef(0)
+
+  const loadPlans = useCallback(async (gen: number) => {
     if (!equipment) return
     setPlansLoading(true)
     try {
       const result = await fetchMaintenancePlansClient({ equipment_id: equipment.id, page: 1, page_size: 50 })
-      setPlans(result.items)
+      if (genRef.current === gen) setPlans(result.items)
     } catch {
-      message.error('加载维护保养计划失败')
+      if (genRef.current === gen) message.error('加载维护保养计划失败')
     } finally {
-      setPlansLoading(false)
+      if (genRef.current === gen) setPlansLoading(false)
     }
   }, [equipment, message])
 
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async (gen: number) => {
     if (!equipment) return
     setHistoryLoading(true)
     try {
       const result = await fetchInspectionHistory({ equipment_id: equipment.id, page: 1, page_size: 50 })
-      setHistory(result.items)
+      if (genRef.current === gen) setHistory(result.items)
     } catch {
-      message.error('加载巡检记录失败')
+      if (genRef.current === gen) message.error('加载巡检记录失败')
     } finally {
-      setHistoryLoading(false)
+      if (genRef.current === gen) setHistoryLoading(false)
     }
   }, [equipment, message])
 
-  const loadOrders = useCallback(async () => {
+  const loadOrders = useCallback(async (gen: number) => {
     if (!equipment) return
     setOrdersLoading(true)
     try {
       const result = await fetchWorkOrdersClient({ equipment_id: equipment.id, page: 1, page_size: 50 })
-      setOrders(result.items)
+      if (genRef.current === gen) setOrders(result.items)
     } catch {
-      message.error('加载维修工单失败')
+      if (genRef.current === gen) message.error('加载维修工单失败')
     } finally {
-      setOrdersLoading(false)
+      if (genRef.current === gen) setOrdersLoading(false)
+    }
+  }, [equipment, message])
+
+  const loadStatusLogs = useCallback(async (gen: number) => {
+    if (!equipment) return
+    setStatusLogsLoading(true)
+    try {
+      const data = await fetchStatusLogsClient(equipment.id)
+      if (genRef.current === gen) setStatusLogs(data)
+    } catch {
+      if (genRef.current === gen) message.error('加载状态历史失败')
+    } finally {
+      if (genRef.current === gen) setStatusLogsLoading(false)
     }
   }, [equipment, message])
 
   useEffect(() => {
     if (open && equipment) {
-      loadPlans()
-      loadHistory()
-      loadOrders()
+      const gen = ++genRef.current
+      Promise.allSettled([loadPlans(gen), loadHistory(gen), loadOrders(gen), loadStatusLogs(gen)])
       setActiveTab('plans')
     }
-  }, [open, equipment, loadPlans, loadHistory, loadOrders])
+  }, [open, equipment, loadPlans, loadHistory, loadOrders, loadStatusLogs])
 
   // ── 维护保养计划列 ──
   const planColumns: ColumnsType<MaintenancePlan> = [
@@ -139,7 +180,7 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
       title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s: string) => {
         const m = MAINTENANCE_STATUS_MAP[s] || { color: '#787671', bg: '#f0eeec' }
-        return <span style={localStatusPill(m.color, m.bg)}>{s}</span>
+        return <span style={statusPill(m.color, m.bg)}>{s}</span>
       },
     },
   ]
@@ -157,13 +198,13 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
       title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s: string) => {
         const m = TASK_STATUS_MAP[s] || { color: '#787671', bg: '#f0eeec' }
-        return <span style={localStatusPill(m.color, m.bg)}>{s}</span>
+        return <span style={statusPill(m.color, m.bg)}>{s}</span>
       },
     },
     {
       title: '结果', dataIndex: 'overall_result', key: 'overall_result', width: 75,
       render: (r: string | null) => {
-        if (!r) return '-'
+        if (r == null) return '-'
         return <span style={r === '正常' ? pillSuccess : pillError}>{r}</span>
       },
     },
@@ -181,16 +222,15 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
     },
     {
       title: '优先级', dataIndex: 'priority', key: 'priority', width: 70,
-      render: (p: string) => {
-        const cmap: Record<string, React.CSSProperties> = { '紧急': { color: '#e03131', fontWeight: 600 }, '高': { color: '#dd5b00', fontWeight: 600 } }
-        return <span style={{ fontSize: 13, ...cmap[p] }}>{p}</span>
-      },
+      render: (p: string) => (
+        <span style={{ fontSize: 13, ...PRIORITY_STYLE_MAP[p] }}>{p}</span>
+      ),
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 80,
       render: (s: string) => {
         const m = WORK_ORDER_STATUS_MAP[s] || { color: '#787671', bg: '#f0eeec' }
-        return <span style={localStatusPill(m.color, m.bg)}>{s}</span>
+        return <span style={statusPill(m.color, m.bg)}>{s}</span>
       },
     },
     { title: '报修人', dataIndex: 'reporter_name', key: 'reporter_name', width: 80, render: (n: string | undefined) => n || '-' },
@@ -238,6 +278,45 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
         </Spin>
       ),
     },
+    {
+      key: 'status' as const,
+      label: <span><HistoryOutlined /> 状态历史</span>,
+      children: (
+        <Spin spinning={statusLogsLoading}>
+          {statusLogs.length === 0 ? (
+            <Empty description="暂无状态变更记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <Timeline
+              style={{ paddingTop: 8 }}
+              items={statusLogs.map(log => ({
+                key: log.id,
+                color: LOG_DOT_COLORS[log.new_status] || '#787671',
+                content: (
+                  <div>
+                    <Space size={8}>
+                      {log.log_type === 'running' && (
+                        <Tag style={{ color: '#0075de', marginInlineEnd: 0 }}>运行</Tag>
+                      )}
+                      {log.old_status ? (
+                        <span style={LOG_PILL_MAP[log.old_status] || pillNeutral}>{log.old_status}</span>
+                      ) : (
+                        <span style={{ fontSize: 12, color: '#a4a097' }}>初始状态</span>
+                      )}
+                      <span style={{ color: '#a4a097' }}>→</span>
+                      <span style={LOG_PILL_MAP[log.new_status] || pillNeutral}>{log.new_status}</span>
+                    </Space>
+                    <div style={{ fontSize: 12, color: '#a4a097', marginTop: 4 }}>
+                      {dayjs(log.changed_at).format('YYYY-MM-DD HH:mm')}
+                      <Tag style={{ marginLeft: 8, color: '#787671' }}>{STATUS_LOG_SOURCE_MAP[log.source] || log.source}</Tag>
+                    </div>
+                  </div>
+                ),
+              }))}
+            />
+          )}
+        </Spin>
+      ),
+    },
   ]
 
   if (!equipment) return null
@@ -271,6 +350,9 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
           <Descriptions.Item label="设备状态">
             <span style={EQUIP_STATUS_MAP[equipment.status] || pillNeutral}>{equipment.status}</span>
           </Descriptions.Item>
+          <Descriptions.Item label="运行状态">
+            <span style={RUNNING_STATUS_MAP[equipment.running_status] || pillNeutral}>{equipment.running_status}</span>
+          </Descriptions.Item>
           <Descriptions.Item label="重要性">
             <span style={IMPORTANCE_MAP[equipment.importance as EquipmentImportance] || pillNeutral}>{equipment.importance}</span>
           </Descriptions.Item>
@@ -279,7 +361,7 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
           <Descriptions.Item label="制造商">{equipment.manufacturer || '-'}</Descriptions.Item>
           <Descriptions.Item label="供应商">{equipment.supplier || '-'}</Descriptions.Item>
           <Descriptions.Item label="出厂日期">{equipment.production_date || '-'}</Descriptions.Item>
-          <Descriptions.Item label="投用日期">{equipment.commissioning_date || '-'}</Descriptions.Item>
+          <Descriptions.Item label="投用日期" span={2}>{equipment.commissioning_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="描述" span={2}>{equipment.description || '-'}</Descriptions.Item>
         </Descriptions>
       </div>
@@ -289,7 +371,7 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
         <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: '0 0 16px 0' }}>关联记录</h3>
         <Tabs
           activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as 'plans' | 'history' | 'orders')}
+          onChange={(k) => setActiveTab(k as 'plans' | 'history' | 'orders' | 'status')}
           items={tabItems}
         />
       </div>

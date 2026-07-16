@@ -94,3 +94,26 @@ export const monoFont: React.CSSProperties = {
   color: '#5d5b54',
   letterSpacing: -0.2,
 }
+
+// ── 设备状态 pill 配色（唯一数据源：color / bg 对） ──
+export const EQUIP_STATUS_PILL_COLORS: Record<string, { color: string; bg: string }> = {
+  '完好':     { color: '#1aae39', bg: '#d9f3e1' },
+  '备用':     { color: '#0075de', bg: '#dcecfa' },
+  '故障待检': { color: '#e03131', bg: '#fde0ec' },
+  '维修中':   { color: '#dd5b00', bg: '#ffe8d4' },
+  '报废':     { color: '#787671', bg: '#f0eeec' },
+}
+
+export const RUNNING_STATUS_PILL_COLORS: Record<string, { color: string; bg: string }> = {
+  '开机': { color: '#1aae39', bg: '#d9f3e1' },
+  '停机': { color: '#787671', bg: '#f0eeec' },
+}
+
+// 衍生：仅前景色（Timeline dot / echarts series / StatsCards）——从上述唯一数据源派生
+export const EQUIPMENT_STATUS_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(EQUIP_STATUS_PILL_COLORS).map(([k, v]) => [k, v.color])
+)
+
+export const RUNNING_STATUS_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(RUNNING_STATUS_PILL_COLORS).map(([k, v]) => [k, v.color])
+)

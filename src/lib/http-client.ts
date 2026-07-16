@@ -33,7 +33,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   })
   if (!res.ok) {
-    throw new Error(`请求失败: ${res.status} ${res.statusText}`)
+    const body = await res.text().catch(() => '')
+    let msg = `请求失败: ${res.status}`
+    try { msg = JSON.parse(body).message || msg } catch { /* not JSON */ }
+    throw new Error(msg)
   }
   return res.json()
 }

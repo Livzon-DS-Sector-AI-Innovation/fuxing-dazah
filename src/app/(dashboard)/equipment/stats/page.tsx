@@ -24,7 +24,7 @@ import type {
 // 默认空数据
 const defaultEquipmentStats: EquipmentStatistics = {
   total: 0,
-  by_status: { '在用': 0, '备用': 0, '维修中': 0, '停用': 0, '报废': 0 } as Record<EquipmentStatus, number>,
+  by_status: { '完好': 0, '备用': 0, '故障待检': 0, '维修中': 0, '报废': 0 } as Record<EquipmentStatus, number>,
   by_category: {} as Record<string, number>,
   by_location: {} as Record<string, number>,
 }

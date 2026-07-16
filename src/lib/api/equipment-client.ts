@@ -4,6 +4,7 @@ import {
   EquipmentCategory,
   Location,
   EquipmentListResponse, EquipmentStatistics,
+  AvailabilityResponse, EquipmentStatusLog,
   FailureCode, WorkOrderFilters, WorkOrderListResponse, WorkOrderStatistics, WorkOrder,
   SparePartFilters, SparePartListResponse, SparePart, StockWarning,
   MaintenancePlanFilters, MaintenancePlanListResponse, MaintenancePlan,
@@ -33,6 +34,18 @@ export async function fetchEquipmentsClient(params: Record<string, string | numb
 
 export async function fetchEquipmentStatisticsClient(): Promise<EquipmentStatistics> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/statistics`)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  状态日志 / 时间开动率
+// ═══════════════════════════════════════════════════════════
+export async function fetchAvailabilityClient(fromDate: string, toDate: string): Promise<AvailabilityResponse> {
+  const s = qs({ from_date: fromDate, to_date: toDate })
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/analytics/availability?${s}`)
+}
+
+export async function fetchStatusLogsClient(equipmentId: string): Promise<EquipmentStatusLog[]> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/status-logs`)
 }
 
 // ═══════════════════════════════════════════════════════════

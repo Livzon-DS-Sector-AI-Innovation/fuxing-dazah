@@ -13,7 +13,9 @@ export function fileProxyUrl(path: string | null | undefined): string {
   if (path.startsWith('http')) return path
 
   const base =
-    process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'
+    process.env.NEXT_PUBLIC_API_BASE_URL
+      ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1`
+      : 'http://localhost:8000/api/v1'
 
   // Encode each path segment separately to preserve / as directory separator.
   // encodeURIComponent encodes / as %2F, but the backend's MinIO object keys

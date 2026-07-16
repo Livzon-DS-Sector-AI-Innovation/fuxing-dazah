@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { App, Drawer, Form, Input, Select, DatePicker, Button, Space } from 'antd'
 import dayjs from 'dayjs'
 import { useEquipmentStore } from '@/stores/equipment'
-import { EquipmentStatus, EquipmentImportance, EquipmentCategory, Location } from '@/types/equipment'
+import { EquipmentStatus, RunningStatus, EquipmentImportance, EquipmentCategory, Location } from '@/types/equipment'
 import { createEquipment, updateEquipment } from '@/actions/equipment'
 
 const { TextArea } = Input
@@ -16,11 +16,16 @@ const importanceOptions: { label: string; value: EquipmentImportance }[] = [
 ]
 
 const statusOptions: { label: string; value: EquipmentStatus }[] = [
-  { label: '在用', value: '在用' },
+  { label: '完好', value: '完好' },
   { label: '备用', value: '备用' },
+  { label: '故障待检', value: '故障待检' },
   { label: '维修中', value: '维修中' },
-  { label: '停用', value: '停用' },
   { label: '报废', value: '报废' },
+]
+
+const runningStatusOptions: { label: string; value: RunningStatus }[] = [
+  { label: '开机', value: '开机' },
+  { label: '停机', value: '停机' },
 ]
 
 // 扁平化树结构
@@ -128,6 +133,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           category_ids: editingEquipment.category_ids || [],
           location_id: editingEquipment.location_id,
           status: editingEquipment.status,
+          running_status: editingEquipment.running_status,
           model: editingEquipment.model ?? undefined,
           specification: editingEquipment.specification ?? undefined,
           manufacturer: editingEquipment.manufacturer ?? undefined,
@@ -301,6 +307,14 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           rules={[{ required: true, message: '请选择设备状态' }]}
         >
           <Select placeholder="请选择设备状态" options={statusOptions} />
+        </Form.Item>
+        <Form.Item
+          name="running_status"
+          label="运行状态"
+          initialValue="开机"
+          rules={[{ required: true, message: '请选择运行状态' }]}
+        >
+          <Select placeholder="请选择运行状态" options={runningStatusOptions} />
         </Form.Item>
         <Form.Item
           name="importance"

@@ -11,9 +11,9 @@ interface StatsCardsProps {
 
 const statusCards = [
   { key: '' as const, label: '总数', color: '#1a1a1a', dotColor: '#787671' },
-  { key: '在用' as EquipmentStatus, label: '在用', color: '#1aae39', dotColor: '#1aae39' },
+  { key: '完好' as EquipmentStatus, label: '完好', color: '#1aae39', dotColor: '#1aae39' },
+  { key: '故障待检' as EquipmentStatus, label: '故障待检', color: '#e03131', dotColor: '#e03131' },
   { key: '维修中' as EquipmentStatus, label: '维修中', color: '#dd5b00', dotColor: '#dd5b00' },
-  { key: '停用' as EquipmentStatus, label: '停用', color: '#787671', dotColor: '#787671' },
 ]
 
 export function StatsCards({ statistics, compact = false }: StatsCardsProps) {

@@ -71,8 +71,8 @@ export function TopNav() {
               className={`
                 flex items-center gap-1.5 px-3 h-full text-[14px] font-medium transition-colors whitespace-nowrap relative
                 ${isActive
-                  ? "text-[var(--color-ink)]"
-                  : "text-[var(--color-steel)] hover:text-[var(--color-charcoal)]"
+                  ? "text-[var(--color-primary)]"
+                  : "text-[var(--color-steel)] hover:text-[var(--color-primary)]"
                 }
               `}
             >

@@ -25,14 +25,8 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["production:*:read"],
     children: [
       { key: "dashboard", label: "生产看板", path: "/production" },
-      { key: "demands", label: "销售需求", path: "/production/demands" },
-      { key: "plan", label: "生产计划", path: "/production/plan" },
-      { key: "scheduling", label: "排产调度", path: "/production/scheduling" },
+      { key: "process", label: "产品工艺", path: "/production/process" },
       { key: "batches", label: "批次管理", path: "/production/batches" },
-      { key: "inventory", label: "库存管理", path: "/production/inventory" },
-      { key: "bom", label: "BOM管理", path: "/production/bom" },
-      { key: "procurement", label: "采购申请", path: "/production/procurement" },
-      { key: "balance", label: "物料平衡", path: "/production/balance" },
     ],
   },
   {
@@ -45,6 +39,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "stats", label: "设备仪表盘", path: "/equipment/stats", children: [
         { key: "stats-dashboard", label: "仪表盘概览", path: "/equipment/stats" },
         { key: "stats-analytics", label: "巡检分析", path: "/equipment/stats/analytics" },
+        { key: "stats-availability", label: "设备分析", path: "/equipment/stats/availability" },
       ] },
       { key: "assets", label: "设备台账", path: "/equipment/assets" },
       { key: "maintenance", label: "维护保养", path: "/equipment/maintenance" },

@@ -33,6 +33,7 @@ import type {
   WorkOrder,
 } from '@/types/equipment'
 import { antdTheme } from '@/lib/antd-theme'
+import { EQUIPMENT_STATUS_COLORS } from '@/components/equipment/shared/shared-styles'
 
 // ============================================================
 // 类型定义
@@ -236,14 +237,6 @@ function KpiCard({
 // ============================================================
 // 设备状态分布条
 // ============================================================
-const statusColorMap: Record<string, string> = {
-  '在用': '#1aae39',
-  '备用': '#0075de',
-  '维修中': '#dd5b00',
-  '停用': '#787671',
-  '报废': '#c8c4be',
-}
-
 function StatusDistribution({ statistics }: { statistics: EquipmentStatistics }) {
   const total = statistics.total || 1
   const entries = Object.entries(statistics.by_status)
@@ -276,7 +269,7 @@ function StatusDistribution({ statistics }: { statistics: EquipmentStatistics })
             key={status}
             style={{
               width: `${(count / total) * 100}%`,
-              background: statusColorMap[status] || '#c8c4be',
+              background: EQUIPMENT_STATUS_COLORS[status] || '#c8c4be',
               transition: 'width 0.8s cubic-bezier(0.22, 0.61, 0.36, 1)',
               minWidth: count > 0 ? 4 : 0,
             }}
@@ -305,7 +298,7 @@ function StatusDistribution({ statistics }: { statistics: EquipmentStatistics })
                   width: 10,
                   height: 10,
                   borderRadius: 3,
-                  background: statusColorMap[status] || '#c8c4be',
+                  background: EQUIPMENT_STATUS_COLORS[status] || '#c8c4be',
                   flexShrink: 0,
                 }}
               />
@@ -324,7 +317,7 @@ function StatusDistribution({ statistics }: { statistics: EquipmentStatistics })
                   style={{
                     height: '100%',
                     width: `${pct}%`,
-                    background: statusColorMap[status] || '#c8c4be',
+                    background: EQUIPMENT_STATUS_COLORS[status] || '#c8c4be',
                     borderRadius: 2,
                     transition: 'width 1s ease',
                   }}
@@ -1017,7 +1010,7 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
 
   const eq = equipmentStats || { total: 0, by_status: {} as Record<EquipmentStatus, number>, by_category: {} as Record<string, number>, by_location: {} as Record<string, number> }
   const wo = workOrderStats || { total: 0, by_status: {} as Record<WorkOrderStatus, number>, by_type: {} as Record<WorkOrderType, number>, by_priority: {} as Record<WorkOrderPriority, number> }
-  const onlineCount = (eq.by_status['在用'] || 0) + (eq.by_status['备用'] || 0)
+  const onlineCount = (eq.by_status['完好'] || 0) + (eq.by_status['备用'] || 0)
   const onlineRate = eq.total > 0 ? ((onlineCount / eq.total) * 100).toFixed(1) : '0'
   const pendingOrders = wo.by_status['待处理'] || 0
   const urgentOrders = wo.by_priority['紧急'] || 0
