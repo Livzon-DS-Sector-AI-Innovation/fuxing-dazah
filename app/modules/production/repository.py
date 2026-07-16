@@ -1,500 +1,410 @@
-"""Production database queries live here."""
+"""生产模块数据读写。只负责查询与持久化，不做业务判断。"""
 
 import uuid
-from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import select, update, func
+from sqlalchemy import Row, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.modules.production.models import (
     Batch,
-    BatchMaterial,
-    MaterialBalance,
-    PlanTask,
-    ProcessParameter,
-    ProcessSpec,
-    ProcessStep,
-    ProductionPlan,
-    ProductionRecord,
+    NodeExecution,
+    NodeExecutionEquipment,
+    NodeFieldDef,
+    NodeFieldValue,
+    ProcessRoute,
+    Product,
+    RouteEdge,
+    RouteNode,
+)
+
+# 注意：BatchLink 的读取只发生在下方递归 CTE 中，无需单独查询函数
+
+# ── 产品 ──
+
+
+async def get_product(db: AsyncSession, product_id: uuid.UUID) -> Product | None:
+    stmt = select(Product).where(Product.id == product_id, Product.is_deleted == False)  # noqa: E712
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_product_by_name(db: AsyncSession, name: str) -> Product | None:
+    stmt = select(Product).where(
+        Product.product_name == name, Product.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_products(
+    db: AsyncSession, keyword: str | None, page: int, page_size: int
+) -> tuple[list[Product], int]:
+    stmt = select(Product).where(Product.is_deleted == False)  # noqa: E712
+    if keyword:
+        pattern = f"%{keyword}%"
+        stmt = stmt.where(
+            Product.product_code.ilike(pattern) | Product.product_name.ilike(pattern)
+        )
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    stmt = stmt.order_by(Product.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    items = list((await db.execute(stmt)).scalars())
+    return items, total
+
+
+# ── 路线（模板图） ──
+
+
+async def get_route(db: AsyncSession, route_id: uuid.UUID) -> ProcessRoute | None:
+    stmt = select(ProcessRoute).where(
+        ProcessRoute.id == route_id, ProcessRoute.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_routes(
+    db: AsyncSession, product_id: uuid.UUID | None, page: int, page_size: int
+) -> tuple[list[ProcessRoute], int]:
+    stmt = select(ProcessRoute).where(ProcessRoute.is_deleted == False)  # noqa: E712
+    if product_id:
+        stmt = stmt.where(ProcessRoute.product_id == product_id)
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    stmt = (
+        stmt.order_by(ProcessRoute.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list((await db.execute(stmt)).scalars()), total
+
+
+async def next_route_version(db: AsyncSession, product_id: uuid.UUID) -> int:
+    stmt = select(func.coalesce(func.max(ProcessRoute.version), 0)).where(
+        ProcessRoute.product_id == product_id,
+        ProcessRoute.is_deleted == False,  # noqa: E712
+    )
+    return int((await db.execute(stmt)).scalar_one()) + 1
+
+
+async def get_route_nodes(db: AsyncSession, route_id: uuid.UUID) -> list[RouteNode]:
+    stmt = (
+        select(RouteNode)
+        .where(RouteNode.route_id == route_id, RouteNode.is_deleted == False)  # noqa: E712
+        .order_by(RouteNode.sort_order, RouteNode.node_code)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_route_edges(db: AsyncSession, route_id: uuid.UUID) -> list[RouteEdge]:
+    stmt = select(RouteEdge).where(
+        RouteEdge.route_id == route_id, RouteEdge.is_deleted == False  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_edge(db: AsyncSession, edge_id: uuid.UUID) -> RouteEdge | None:
+    stmt = select(RouteEdge).where(
+        RouteEdge.id == edge_id, RouteEdge.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_field_defs_by_nodes(
+    db: AsyncSession, node_ids: list[uuid.UUID]
+) -> list[NodeFieldDef]:
+    if not node_ids:
+        return []
+    stmt = (
+        select(NodeFieldDef)
+        .where(NodeFieldDef.node_id.in_(node_ids), NodeFieldDef.is_deleted == False)  # noqa: E712
+        .order_by(NodeFieldDef.sort_order)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def soft_delete_route_graph(db: AsyncSession, route_id: uuid.UUID) -> None:
+    """整图替换前软删除路线现有节点、边、字段定义。"""
+    nodes = await get_route_nodes(db, route_id)
+    node_ids = [n.id for n in nodes]
+    for n in nodes:
+        n.is_deleted = True
+    for e in await get_route_edges(db, route_id):
+        e.is_deleted = True
+    for f in await get_field_defs_by_nodes(db, node_ids):
+        f.is_deleted = True
+    await db.flush()
+
+
+# ── 批次 ──
+
+
+async def get_batch(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
+    stmt = select(Batch).where(Batch.id == batch_id, Batch.is_deleted == False)  # noqa: E712
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_batch_by_no(db: AsyncSession, batch_no: str) -> Batch | None:
+    stmt = select(Batch).where(
+        Batch.batch_no == batch_no, Batch.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_batches_by_ids(
+    db: AsyncSession, batch_ids: list[uuid.UUID]
+) -> list[Batch]:
+    if not batch_ids:
+        return []
+    stmt = select(Batch).where(Batch.id.in_(batch_ids), Batch.is_deleted == False)  # noqa: E712
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_batches(
+    db: AsyncSession,
+    product_id: uuid.UUID | None,
+    status: str | None,
+    keyword: str | None,
+    page: int,
+    page_size: int,
+    order_by: str = "created_at",
+    order: str = "desc",
+) -> tuple[list[Batch], int]:
+    stmt = select(Batch).where(Batch.is_deleted == False)  # noqa: E712
+    if product_id:
+        stmt = stmt.where(Batch.product_id == product_id)
+    if status:
+        stmt = stmt.where(Batch.status == status)
+    if keyword:
+        stmt = stmt.where(Batch.batch_no.ilike(f"%{keyword}%"))
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    sort_col = {"batch_no": Batch.batch_no, "created_at": Batch.created_at}.get(
+        order_by, Batch.created_at
+    )
+    stmt = (
+        stmt.order_by(sort_col.asc() if order == "asc" else sort_col.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list((await db.execute(stmt)).scalars()), total
+
+
+async def count_unfinished_batches(db: AsyncSession, product_id: uuid.UUID) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(Batch)
+        .where(
+            Batch.product_id == product_id,
+            Batch.status.in_(("pending", "in_progress")),
+            Batch.is_deleted == False,  # noqa: E712
+        )
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+# ── 执行 ──
+
+
+async def get_execution(
+    db: AsyncSession, execution_id: uuid.UUID
+) -> NodeExecution | None:
+    stmt = select(NodeExecution).where(
+        NodeExecution.id == execution_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_executions(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> list[NodeExecution]:
+    stmt = (
+        select(NodeExecution)
+        .where(
+            NodeExecution.batch_id == batch_id,
+            NodeExecution.is_deleted == False,  # noqa: E712
+        )
+        .order_by(NodeExecution.started_at)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_executions_by_batches(
+    db: AsyncSession, batch_ids: list[uuid.UUID]
+) -> list[NodeExecution]:
+    if not batch_ids:
+        return []
+    stmt = (
+        select(NodeExecution)
+        .where(
+            NodeExecution.batch_id.in_(batch_ids),
+            NodeExecution.is_deleted == False,  # noqa: E712
+        )
+        .order_by(NodeExecution.started_at)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def count_executions(db: AsyncSession, batch_id: uuid.UUID) -> int:
+    stmt = select(func.count()).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return int((await db.execute(stmt)).scalar_one())
+
+
+async def max_execution_seq(
+    db: AsyncSession, batch_id: uuid.UUID, node_id: uuid.UUID
+) -> int:
+    stmt = select(func.coalesce(func.max(NodeExecution.execution_seq), 0)).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.node_id == node_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return int((await db.execute(stmt)).scalar_one())
+
+
+async def has_in_progress_execution(
+    db: AsyncSession, batch_id: uuid.UUID, node_id: uuid.UUID
+) -> bool:
+    stmt = select(func.count()).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.node_id == node_id,
+        NodeExecution.status == "in_progress",
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return int((await db.execute(stmt)).scalar_one()) > 0
+
+
+async def completed_node_ids(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> set[uuid.UUID]:
+    stmt = select(NodeExecution.node_id).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.status == "completed",
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return set((await db.execute(stmt)).scalars())
+
+
+async def get_field_values_by_executions(
+    db: AsyncSession, execution_ids: list[uuid.UUID]
+) -> list[NodeFieldValue]:
+    if not execution_ids:
+        return []
+    stmt = select(NodeFieldValue).where(
+        NodeFieldValue.execution_id.in_(execution_ids),
+        NodeFieldValue.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_equipments_by_executions(
+    db: AsyncSession, execution_ids: list[uuid.UUID]
+) -> list[NodeExecutionEquipment]:
+    if not execution_ids:
+        return []
+    stmt = select(NodeExecutionEquipment).where(
+        NodeExecutionEquipment.execution_id.in_(execution_ids),
+        NodeExecutionEquipment.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_nodes_by_ids(
+    db: AsyncSession, node_ids: list[uuid.UUID]
+) -> list[RouteNode]:
+    if not node_ids:
+        return []
+    stmt = select(RouteNode).where(
+        RouteNode.id.in_(node_ids), RouteNode.is_deleted == False  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_executions_by_node(
+    db: AsyncSession,
+    node_id: uuid.UUID,
+    status: str | None,
+    page: int,
+    page_size: int,
+    order_by: str = "started_at",
+    order: str = "desc",
+) -> tuple[list[NodeExecution], int]:
+    stmt = select(NodeExecution).where(
+        NodeExecution.node_id == node_id,
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    if status:
+        stmt = stmt.where(NodeExecution.status == status)
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    if order_by == "batch_no":
+        # 批号在 batches 表上，仅排序时 join（无外键约束，按 batch_id 关联）
+        stmt = stmt.join(Batch, Batch.id == NodeExecution.batch_id)
+    sort_col = {
+        "batch_no": Batch.batch_no,
+        "started_at": NodeExecution.started_at,
+    }.get(order_by, NodeExecution.started_at)
+    stmt = (
+        stmt.order_by(sort_col.asc() if order == "asc" else sort_col.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list((await db.execute(stmt)).scalars()), int(total)
+
+
+# ── 谱系与溯源 ──
+
+
+_TRACE_UP_SQL = text(
+    """
+WITH RECURSIVE up AS (
+    SELECT l.parent_batch_id, l.child_batch_id, l.edge_id, l.allocated_qty,
+           l.is_deviation, ARRAY[l.child_batch_id] AS path, 1 AS depth
+    FROM production.batch_links l
+    WHERE l.child_batch_id = :bid AND l.is_deleted = false
+    UNION ALL
+    SELECT l.parent_batch_id, l.child_batch_id, l.edge_id, l.allocated_qty,
+           l.is_deviation, up.path || l.child_batch_id, up.depth + 1
+    FROM production.batch_links l
+    JOIN up ON l.child_batch_id = up.parent_batch_id
+    WHERE l.is_deleted = false
+      AND NOT (l.parent_batch_id = ANY(up.path))
+      AND up.depth < 20
+)
+SELECT parent_batch_id, child_batch_id, edge_id, allocated_qty, is_deviation FROM up
+"""
+)
+
+_TRACE_DOWN_SQL = text(
+    """
+WITH RECURSIVE down AS (
+    SELECT l.parent_batch_id, l.child_batch_id, l.edge_id, l.allocated_qty,
+           l.is_deviation, ARRAY[l.parent_batch_id] AS path, 1 AS depth
+    FROM production.batch_links l
+    WHERE l.parent_batch_id = :bid AND l.is_deleted = false
+    UNION ALL
+    SELECT l.parent_batch_id, l.child_batch_id, l.edge_id, l.allocated_qty,
+           l.is_deviation, down.path || l.parent_batch_id, down.depth + 1
+    FROM production.batch_links l
+    JOIN down ON l.parent_batch_id = down.child_batch_id
+    WHERE l.is_deleted = false
+      AND NOT (l.child_batch_id = ANY(down.path))
+      AND down.depth < 20
+)
+SELECT parent_batch_id, child_batch_id, edge_id, allocated_qty, is_deviation FROM down
+"""
 )
 
 
-class ProductionRepository:
-    """Production module repository"""
-
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    # ============ Batch Operations ============
-
-    async def get_batches(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        product_code: str | None = None,
-        batch_no: str | None = None,
-        start_date: datetime | None = None,
-        end_date: datetime | None = None,
-        exclude_cancelled: bool = False,
-    ) -> tuple[list[Batch], int]:
-        """获取批次列表
-
-        Args:
-            exclude_cancelled: 是否排除已取消的批次，用于生产记录下拉框等场景
-        """
-        query = select(Batch).where(Batch.is_deleted == False)
-
-        if exclude_cancelled:
-            query = query.where(Batch.status != 'cancelled')
-        if status:
-            query = query.where(Batch.status == status)
-        if product_code:
-            query = query.where(Batch.product_code == product_code)
-        if batch_no:
-            query = query.where(Batch.batch_no.contains(batch_no))
-        if start_date:
-            query = query.where(Batch.start_time >= start_date)
-        if end_date:
-            query = query.where(Batch.end_time <= end_date)
-
-        count_query = select(func.count(Batch.id)).where(Batch.is_deleted == False)
-        if exclude_cancelled:
-            count_query = count_query.where(Batch.status != 'cancelled')
-        if status:
-            count_query = count_query.where(Batch.status == status)
-        if product_code:
-            count_query = count_query.where(Batch.product_code == product_code)
-        if batch_no:
-            count_query = count_query.where(Batch.batch_no.contains(batch_no))
-
-        total = await self.session.scalar(count_query)
-        query = query.offset(skip).limit(limit).order_by(Batch.created_at.desc())
-        result = await self.session.execute(query)
-        batches = list(result.scalars().all())
-        return batches, total or 0
-
-    async def get_batch_by_id(self, batch_id: uuid.UUID) -> Batch | None:
-        """获取批次详情"""
-        query = select(Batch).where(Batch.id == batch_id, Batch.is_deleted == False)
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def create_batch(self, data: dict[str, Any]) -> Batch:
-        """创建批次"""
-        batch = Batch(**data)
-        self.session.add(batch)
-        await self.session.flush()
-        await self.session.refresh(batch)
-        return batch
-
-    async def update_batch(self, batch_id: uuid.UUID, data: dict[str, Any]) -> Batch | None:
-        """更新批次"""
-        query = (
-            update(Batch)
-            .where(Batch.id == batch_id, Batch.is_deleted == False)
-            .values(**data)
-            .returning(Batch)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_batch(self, batch_id: uuid.UUID) -> bool:
-        """删除批次(软删除)"""
-        query = (
-            update(Batch)
-            .where(Batch.id == batch_id, Batch.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ BatchMaterial Operations ============
-
-    async def get_batch_materials(self, batch_id: uuid.UUID) -> list[BatchMaterial]:
-        """获取批次物料列表"""
-        query = select(BatchMaterial).where(
-            BatchMaterial.batch_id == batch_id, BatchMaterial.is_deleted == False
-        )
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
-
-    async def create_batch_material(self, data: dict[str, Any]) -> BatchMaterial:
-        """创建批次物料"""
-        material = BatchMaterial(**data)
-        self.session.add(material)
-        await self.session.flush()
-        await self.session.refresh(material)
-        return material
-
-    async def update_batch_material(
-        self, material_id: uuid.UUID, data: dict[str, Any]
-    ) -> BatchMaterial | None:
-        """更新批次物料"""
-        query = (
-            update(BatchMaterial)
-            .where(BatchMaterial.id == material_id, BatchMaterial.is_deleted == False)
-            .values(**data)
-            .returning(BatchMaterial)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_batch_material(self, material_id: uuid.UUID) -> bool:
-        """删除批次物料"""
-        query = (
-            update(BatchMaterial)
-            .where(BatchMaterial.id == material_id, BatchMaterial.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ ProductionPlan Operations ============
-
-    async def get_plans(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        plan_month: str | None = None,
-    ) -> tuple[list[ProductionPlan], int]:
-        """获取生产计划列表"""
-        query = select(ProductionPlan).where(ProductionPlan.is_deleted == False)
-
-        if status:
-            query = query.where(ProductionPlan.status == status)
-        if plan_month:
-            query = query.where(ProductionPlan.plan_month == plan_month)
-
-        count_query = select(func.count(ProductionPlan.id)).where(ProductionPlan.is_deleted == False)
-        if status:
-            count_query = count_query.where(ProductionPlan.status == status)
-        if plan_month:
-            count_query = count_query.where(ProductionPlan.plan_month == plan_month)
-
-        total = await self.session.scalar(count_query)
-        query = query.offset(skip).limit(limit).order_by(ProductionPlan.created_at.desc())
-        result = await self.session.execute(query)
-        plans = list(result.scalars().all())
-        return plans, total or 0
-
-    async def get_plan_by_id(self, plan_id: uuid.UUID) -> ProductionPlan | None:
-        """获取生产计划详情"""
-        query = (
-            select(ProductionPlan)
-            .options(selectinload(ProductionPlan.tasks))
-            .where(ProductionPlan.id == plan_id, ProductionPlan.is_deleted == False)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def create_plan(self, data: dict[str, Any]) -> ProductionPlan:
-        """创建生产计划"""
-        plan = ProductionPlan(**data)
-        self.session.add(plan)
-        await self.session.flush()
-        await self.session.refresh(plan)
-        return plan
-
-    async def update_plan(self, plan_id: uuid.UUID, data: dict[str, Any]) -> ProductionPlan | None:
-        """更新生产计划"""
-        query = (
-            update(ProductionPlan)
-            .where(ProductionPlan.id == plan_id, ProductionPlan.is_deleted == False)
-            .values(**data)
-            .returning(ProductionPlan)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_plan(self, plan_id: uuid.UUID) -> bool:
-        """删除生产计划"""
-        query = (
-            update(ProductionPlan)
-            .where(ProductionPlan.id == plan_id, ProductionPlan.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ PlanTask Operations ============
-
-    async def get_tasks_by_plan(self, plan_id: uuid.UUID) -> list[PlanTask]:
-        """获取计划任务列表"""
-        query = select(PlanTask).where(
-            PlanTask.plan_id == plan_id, PlanTask.is_deleted == False
-        )
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
-
-    async def create_task(self, data: dict[str, Any]) -> PlanTask:
-        """创建计划任务"""
-        task = PlanTask(**data)
-        self.session.add(task)
-        await self.session.flush()
-        await self.session.refresh(task)
-        return task
-
-    async def update_task(self, task_id: uuid.UUID, data: dict[str, Any]) -> PlanTask | None:
-        """更新计划任务"""
-        query = (
-            update(PlanTask)
-            .where(PlanTask.id == task_id, PlanTask.is_deleted == False)
-            .values(**data)
-            .returning(PlanTask)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_task(self, task_id: uuid.UUID) -> bool:
-        """删除计划任务"""
-        query = (
-            update(PlanTask)
-            .where(PlanTask.id == task_id, PlanTask.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ ProcessSpec Operations ============
-
-    async def get_process_specs(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        product_code: str | None = None,
-    ) -> tuple[list[ProcessSpec], int]:
-        """获取工艺规程列表"""
-        query = select(ProcessSpec).where(ProcessSpec.is_deleted == False)
-
-        if status:
-            query = query.where(ProcessSpec.status == status)
-        if product_code:
-            query = query.where(ProcessSpec.product_code == product_code)
-
-        count_query = select(func.count(ProcessSpec.id)).where(ProcessSpec.is_deleted == False)
-        if status:
-            count_query = count_query.where(ProcessSpec.status == status)
-        if product_code:
-            count_query = count_query.where(ProcessSpec.product_code == product_code)
-
-        total = await self.session.scalar(count_query)
-        query = query.offset(skip).limit(limit).order_by(ProcessSpec.created_at.desc())
-        result = await self.session.execute(query)
-        specs = list(result.scalars().all())
-        return specs, total or 0
-
-    async def get_process_spec_by_id(self, spec_id: uuid.UUID) -> ProcessSpec | None:
-        """获取工艺规程详情"""
-        query = (
-            select(ProcessSpec)
-            .options(selectinload(ProcessSpec.steps).selectinload(ProcessStep.parameters))
-            .where(ProcessSpec.id == spec_id, ProcessSpec.is_deleted == False)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def create_process_spec(self, data: dict[str, Any]) -> ProcessSpec:
-        """创建工艺规程"""
-        spec = ProcessSpec(**data)
-        self.session.add(spec)
-        await self.session.flush()
-        await self.session.refresh(spec)
-        return spec
-
-    async def update_process_spec(
-        self, spec_id: uuid.UUID, data: dict[str, Any]
-    ) -> ProcessSpec | None:
-        """更新工艺规程"""
-        query = (
-            update(ProcessSpec)
-            .where(ProcessSpec.id == spec_id, ProcessSpec.is_deleted == False)
-            .values(**data)
-            .returning(ProcessSpec)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_process_spec(self, spec_id: uuid.UUID) -> bool:
-        """删除工艺规程"""
-        query = (
-            update(ProcessSpec)
-            .where(ProcessSpec.id == spec_id, ProcessSpec.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ ProcessStep Operations ============
-
-    async def get_steps_by_spec(self, spec_id: uuid.UUID) -> list[ProcessStep]:
-        """获取工艺步骤列表"""
-        query = (
-            select(ProcessStep)
-            .options(selectinload(ProcessStep.parameters))
-            .where(ProcessStep.spec_id == spec_id, ProcessStep.is_deleted == False)
-        )
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
-
-    async def create_process_step(self, data: dict[str, Any]) -> ProcessStep:
-        """创建工艺步骤"""
-        step = ProcessStep(**data)
-        self.session.add(step)
-        await self.session.flush()
-        await self.session.refresh(step)
-        return step
-
-    async def update_process_step(
-        self, step_id: uuid.UUID, data: dict[str, Any]
-    ) -> ProcessStep | None:
-        """更新工艺步骤"""
-        query = (
-            update(ProcessStep)
-            .where(ProcessStep.id == step_id, ProcessStep.is_deleted == False)
-            .values(**data)
-            .returning(ProcessStep)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_process_step(self, step_id: uuid.UUID) -> bool:
-        """删除工艺步骤"""
-        query = (
-            update(ProcessStep)
-            .where(ProcessStep.id == step_id, ProcessStep.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ ProcessParameter Operations ============
-
-    async def get_parameters_by_step(self, step_id: uuid.UUID) -> list[ProcessParameter]:
-        """获取工艺参数列表"""
-        query = select(ProcessParameter).where(
-            ProcessParameter.step_id == step_id, ProcessParameter.is_deleted == False
-        )
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
-
-    async def create_process_parameter(self, data: dict[str, Any]) -> ProcessParameter:
-        """创建工艺参数"""
-        param = ProcessParameter(**data)
-        self.session.add(param)
-        await self.session.flush()
-        await self.session.refresh(param)
-        return param
-
-    async def update_process_parameter(
-        self, param_id: uuid.UUID, data: dict[str, Any]
-    ) -> ProcessParameter | None:
-        """更新工艺参数"""
-        query = (
-            update(ProcessParameter)
-            .where(ProcessParameter.id == param_id, ProcessParameter.is_deleted == False)
-            .values(**data)
-            .returning(ProcessParameter)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_process_parameter(self, param_id: uuid.UUID) -> bool:
-        """删除工艺参数"""
-        query = (
-            update(ProcessParameter)
-            .where(ProcessParameter.id == param_id, ProcessParameter.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ ProductionRecord Operations ============
-
-    async def get_records_by_batch(
-        self, batch_id: uuid.UUID, skip: int = 0, limit: int = 100
-    ) -> list[ProductionRecord]:
-        """获取生产记录列表"""
-        query = (
-            select(ProductionRecord)
-            .where(ProductionRecord.batch_id == batch_id, ProductionRecord.is_deleted == False)
-            .offset(skip)
-            .limit(limit)
-            .order_by(ProductionRecord.operation_time.desc())
-        )
-        result = await self.session.execute(query)
-        return list(result.scalars().all())
-
-    async def get_record_by_id(self, record_id: uuid.UUID) -> ProductionRecord | None:
-        """通过ID获取单条生产记录"""
-        query = select(ProductionRecord).where(
-            ProductionRecord.id == record_id, ProductionRecord.is_deleted == False
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def create_production_record(self, data: dict[str, Any]) -> ProductionRecord:
-        """创建生产记录"""
-        record = ProductionRecord(**data)
-        self.session.add(record)
-        await self.session.flush()
-        await self.session.refresh(record)
-        return record
-
-    async def update_production_record(
-        self, record_id: uuid.UUID, data: dict[str, Any]
-    ) -> ProductionRecord | None:
-        """更新生产记录"""
-        query = (
-            update(ProductionRecord)
-            .where(ProductionRecord.id == record_id, ProductionRecord.is_deleted == False)
-            .values(**data)
-            .returning(ProductionRecord)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def delete_production_record(self, record_id: uuid.UUID) -> bool:
-        """删除生产记录"""
-        query = (
-            update(ProductionRecord)
-            .where(ProductionRecord.id == record_id, ProductionRecord.is_deleted == False)
-            .values(is_deleted=True)
-        )
-        result = await self.session.execute(query)
-        return result.rowcount > 0
-
-    # ============ MaterialBalance Operations ============
-
-    async def get_material_balance(self, batch_id: uuid.UUID) -> MaterialBalance | None:
-        """获取物料平衡"""
-        query = select(MaterialBalance).where(
-            MaterialBalance.batch_id == batch_id, MaterialBalance.is_deleted == False
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
-
-    async def create_material_balance(self, data: dict[str, Any]) -> MaterialBalance:
-        """创建物料平衡"""
-        balance = MaterialBalance(**data)
-        self.session.add(balance)
-        await self.session.flush()
-        await self.session.refresh(balance)
-        return balance
-
-    async def update_material_balance(
-        self, batch_id: uuid.UUID, data: dict[str, Any]
-    ) -> MaterialBalance | None:
-        """更新物料平衡"""
-        query = (
-            update(MaterialBalance)
-            .where(MaterialBalance.batch_id == batch_id, MaterialBalance.is_deleted == False)
-            .values(**data)
-            .returning(MaterialBalance)
-        )
-        result = await self.session.execute(query)
-        return result.scalar_one_or_none()
+async def trace_links(
+    db: AsyncSession, batch_id: uuid.UUID, direction: Literal["up", "down"]
+) -> list[Row[Any]]:
+    """沿 batch_links 递归上溯/下溯，返回谱系边行（防环、深度上限 20）。"""
+    sql = _TRACE_UP_SQL if direction == "up" else _TRACE_DOWN_SQL
+    result = await db.execute(sql, {"bid": batch_id})
+    return list(result.all())

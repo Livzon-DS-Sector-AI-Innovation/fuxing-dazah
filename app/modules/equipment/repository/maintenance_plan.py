@@ -147,7 +147,7 @@ async def get_equipment_ids_by_category(
     db: AsyncSession,
     category_id: uuid.UUID,
 ) -> list[uuid.UUID]:
-    """获取某分类下所有非停用/报废设备的ID列表"""
+    """获取某分类下所有非报废设备的ID列表"""
     from app.modules.equipment.models.equipment import (
         Equipment,
         EquipmentCategoryLink,
@@ -163,7 +163,7 @@ async def get_equipment_ids_by_category(
             EquipmentCategoryLink.category_id == category_id,
             EquipmentCategoryLink.is_deleted == False,  # noqa: E712
             Equipment.is_deleted == False,  # noqa: E712
-            Equipment.status.notin_(["停用", "报废"]),
+            Equipment.status != "报废",
         )
     )
     return [row[0] for row in result.all()]

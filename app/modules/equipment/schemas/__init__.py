@@ -17,6 +17,7 @@ from app.modules.equipment.schemas.equipment import (
     LocationResponse,
     LocationTree,
     LocationUpdate,
+    RunningStatus,
 )
 from app.modules.equipment.schemas.failure_code import (
     FailureCodeCreate,
@@ -104,6 +105,11 @@ from app.modules.equipment.schemas.spare_part import (
     StockResponse,
     StockWarningResponse,
 )
+from app.modules.equipment.schemas.status_log import (
+    AvailabilityItem,
+    AvailabilityResponse,
+    EquipmentStatusLogItem,
+)
 from app.modules.equipment.schemas.work_order import (
     MaterialConsumeItem,
     MaterialConsumeRequest,
@@ -127,6 +133,7 @@ from app.modules.equipment.schemas.work_order_image import (
 __all__ = [
     # equipment
     "EquipmentStatus",
+    "RunningStatus",
     "EquipmentCategoryCreate",
     "EquipmentCategoryUpdate",
     "EquipmentCategoryResponse",
@@ -147,6 +154,10 @@ __all__ = [
     "FailureCodeCreate",
     "FailureCodeUpdate",
     "FailureCodeResponse",
+    # status log
+    "AvailabilityItem",
+    "AvailabilityResponse",
+    "EquipmentStatusLogItem",
     # inspection AI
     "InspectionAIAnalyzeRequest",
     "InspectionAIAnalyzeResponse",

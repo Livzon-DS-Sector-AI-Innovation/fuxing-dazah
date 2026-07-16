@@ -13,6 +13,7 @@ from app.modules.equipment.repository.equipment import (
     delete_equipment,
     delete_equipment_category,
     delete_location,
+    equipment_exists,
     exists_category_by_code,
     exists_location_by_code,
     get_department_info,
@@ -137,6 +138,11 @@ from app.modules.equipment.repository.spare_part import (
     update_spare_part,
     update_stock_qty,
 )
+from app.modules.equipment.repository.status_log import (
+    get_equipments_for_availability,
+    get_status_events_until,
+    get_status_logs_by_equipment,
+)
 from app.modules.equipment.repository.work_order import (
     count_open_fault_work_orders,
     count_open_work_orders_by_equipment,
@@ -186,6 +192,7 @@ __all__ = [
     "delete_inspection_template",
     "delete_location",
     "delete_maintenance_plan",
+    "equipment_exists",
     "exists_category_by_code",
     "exists_failure_code_by_code",
     "exists_location_by_code",
@@ -306,4 +313,8 @@ __all__ = [
     "set_route_locations",
     "update_route",
     "update_schedule",
+    # status log
+    "get_equipments_for_availability",
+    "get_status_events_until",
+    "get_status_logs_by_equipment",
 ]

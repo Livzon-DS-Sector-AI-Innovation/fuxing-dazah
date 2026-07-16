@@ -20,10 +20,22 @@ from app.modules.equipment.schemas import (
     WorkOrderVerify,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+from app.modules.equipment.service.status_log import record_status_change
 
 logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 3
+
+
+def validate_transition(
+    current: str, target: str, transitions: dict[str, list[str]],
+) -> None:
+    """校验状态转换是否合法（通用：调用方传入状态机定义）。"""
+    allowed = transitions.get(current, [])
+    if target not in allowed:
+        raise AppException(
+            message=f"状态不允许从 '{current}' 转换到 '{target}'"
+        )
 
 _VALID_TRANSITIONS: dict[str, list[str]] = {
     "待处理": ["执行中", "已关闭"],
@@ -47,12 +59,8 @@ async def generate_work_order_no(db: AsyncSession) -> str:
 
 
 def _validate_transition(current: str, target: str) -> None:
-    """校验状态转换是否合法"""
-    allowed = _VALID_TRANSITIONS.get(current, [])
-    if target not in allowed:
-        raise AppException(
-            message=f"状态不允许从 '{current}' 转换到 '{target}'"
-        )
+    """校验工单状态转换是否合法。"""
+    validate_transition(current, target, _VALID_TRANSITIONS)
 
 
 async def _get_work_order(
@@ -69,25 +77,38 @@ async def _update_equipment_status(
     db: AsyncSession,
     equipment_id: uuid.UUID,
     status: str,
+    *,
+    operator_id: uuid.UUID | None = None,
 ) -> None:
     """直接更新设备状态（模块内使用）"""
     equipment = await repo.get_equipment_by_id(db, equipment_id)
-    if equipment:
+    if equipment and equipment.status != status:
+        old_status = equipment.status
         equipment.status = status
-        await db.flush()
+        await record_status_change(
+            db, equipment_id, old_status, status,
+            source="work_order", operator_id=operator_id,
+        )
 
 
 async def _try_restore_equipment_status(
     db: AsyncSession,
     equipment_id: uuid.UUID,
+    *,
+    operator_id: uuid.UUID | None = None,
 ) -> None:
-    """检查设备是否所有故障维修工单已关闭，是则恢复设备为正常"""
+    """检查设备是否所有故障维修工单已关闭，是则恢复设备为完好"""
     open_count = await repo.count_open_fault_work_orders(db, equipment_id)
     if open_count == 0:
         equipment = await repo.get_equipment_by_id(db, equipment_id)
-        if equipment and equipment.status == "维修中":
-            equipment.status = "在用"
-            await db.flush()
+        # 覆盖"建单后未开始维修就关单"的场景（设备停在故障待检）
+        if equipment and equipment.status in ("故障待检", "维修中"):
+            old_status = equipment.status
+            equipment.status = "完好"
+            await record_status_change(
+                db, equipment_id, old_status, "完好",
+                source="work_order", operator_id=operator_id,
+            )
 
 
 async def create_work_order(
@@ -101,7 +122,7 @@ async def create_work_order(
         raise NotFoundException("设备", str(data.equipment_id))
 
     # 校验设备状态
-    if equipment.status in ("停用", "报废"):
+    if equipment.status == "报废":
         raise AppException(
             message=f"设备当前状态为 '{equipment.status}'，不能创建工单"
         )
@@ -119,9 +140,12 @@ async def create_work_order(
 
         try:
             work_order = await repo.create_work_order(db, wo_data)
-            # 仅"故障维修"类型的工单才自动改设备状态为维修中
-            if data.order_type == "故障维修":
-                await _update_equipment_status(db, data.equipment_id, "维修中")
+            # 仅"故障维修"类型的工单才自动改设备状态为故障待检；
+            # 设备已在维修中（另一张单已开始执行）时不回退
+            if data.order_type == "故障维修" and equipment.status != "维修中":
+                await _update_equipment_status(
+                    db, data.equipment_id, "故障待检", operator_id=ctx.user.id,
+                )
             # eager re-fetch，避免返回对象触发懒加载 MissingGreenlet
             result = cast(WorkOrder, await repo.get_work_order_by_id(db, work_order.id))
             # 飞书通知设备责任人（异步，非关键路径）
@@ -208,6 +232,11 @@ async def start_work_order(
     wo.status = "执行中"
     wo.started_at = app_time.now()
     await db.flush()
+    # 故障维修开始执行后，设备进入维修中
+    if wo.order_type == "故障维修":
+        await _update_equipment_status(
+            db, wo.equipment_id, "维修中", operator_id=ctx.user.id,
+        )
     return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
 
 
@@ -588,7 +617,9 @@ async def close_work_order(
 
     # 仅故障维修类型触发设备状态恢复检查
     if wo.order_type == "故障维修":
-        await _try_restore_equipment_status(db, wo.equipment_id)
+        await _try_restore_equipment_status(
+            db, wo.equipment_id, operator_id=ctx.user.id if ctx else None,
+        )
 
     # eager re-fetch
     return cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))

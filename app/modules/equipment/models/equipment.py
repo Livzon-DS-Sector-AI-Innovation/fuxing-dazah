@@ -154,8 +154,12 @@ class Equipment(BaseModel):
             postgresql_where=text("is_deleted = false"),
         ),
         CheckConstraint(
-            "status IN ('在用', '备用', '维修中', '停用', '报废')",
+            "status IN ('完好', '备用', '故障待检', '维修中', '报废')",
             name="ck_equipments_status",
+        ),
+        CheckConstraint(
+            "running_status IN ('开机', '停机')",
+            name="ck_equipments_running_status",
         ),
         CheckConstraint(
             "importance IN ('高', '中', '低')",
@@ -176,8 +180,13 @@ class Equipment(BaseModel):
     )
     status: Mapped[str] = mapped_column(
         String(20),
-        default="在用",
-        comment="设备状态：在用/备用/维修中/停用/报废",
+        default="完好",
+        comment="设备状态：完好/备用/故障待检/维修中/报废",
+    )
+    running_status: Mapped[str] = mapped_column(
+        String(10),
+        default="开机",
+        comment="运行状态：开机/停机",
     )
     model: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="设备型号"

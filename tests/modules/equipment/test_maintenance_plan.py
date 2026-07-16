@@ -89,12 +89,12 @@ async def location(db_session: AsyncSession) -> Location:
 
 @pytest.fixture
 async def due_equipment(db_session: AsyncSession, location: Location) -> Equipment:
-    """在用设备。"""
+    """完好设备。"""
     equipment = Equipment(
         equipment_no=f"EQ-M-{uuid.uuid4().hex[:8]}",
         name="待维护设备",
         location_id=location.id,
-        status="在用",
+        status="完好",
     )
     db_session.add(equipment)
     await db_session.flush()
@@ -104,7 +104,7 @@ async def due_equipment(db_session: AsyncSession, location: Location) -> Equipme
 async def _make_category_with_equipment(
     db: AsyncSession,
     location: Location,
-    status: str = "在用",
+    status: str = "完好",
 ) -> tuple[EquipmentCategory, Equipment]:
     """创建一个分类并挂一台设备（通过关联表）。返回 (分类, 设备)。"""
     category = EquipmentCategory(
@@ -653,10 +653,10 @@ async def test_generate_category_creates_wo_and_advances_next(
     assert wo.equipment_id == equipment.id
     assert wo.planned_start_date == next_date
 
-    # 分类级：next 推进一个周期，last_generated 同步为新 next
+    # 分类级：next 推进一个周期，last_generated 保持为原始日期（防重：记录本次已生成的周期）
     expected_next = _add_months(next_date, 1)
     assert plan.next_maintenance_date == expected_next
-    assert plan.last_generated_date == expected_next
+    assert plan.last_generated_date == next_date
 
 
 async def test_generate_category_skips_when_no_available_equipment(
@@ -686,7 +686,7 @@ async def test_generate_category_skips_when_no_available_equipment(
 
     assert await _wo_count_for_plan(db_session, plan.id) == 0
     assert plan.next_maintenance_date == next_date
-    assert plan.last_generated_date is None
+    assert plan.last_generated_date is not None  # 防重：无可用设备时也置防重，避免无限重试
 
 
 async def test_generate_skips_scrapped_equipment(
@@ -721,7 +721,7 @@ async def test_generate_skips_scrapped_equipment(
     await generate_due_work_orders(db_session, advance_days=0)
 
     assert await _wo_count_for_plan(db_session, plan.id) == 0
-    assert plan.last_generated_date is None
+    assert plan.last_generated_date is not None  # 防重：避免下次调度无限重试
 
 
 async def test_generate_skips_deleted_equipment(
@@ -750,7 +750,7 @@ async def test_generate_skips_deleted_equipment(
     await generate_due_work_orders(db_session, advance_days=0)
 
     assert await _wo_count_for_plan(db_session, plan.id) == 0
-    assert plan.last_generated_date is None
+    assert plan.last_generated_date is not None  # 防重：避免下次调度无限重试
 
 
 # ══════════════════════ 工单完成推进计划（设备级） ══════════════════════

@@ -76,7 +76,7 @@ async def sample_user(db_session: AsyncSession) -> User:
 
 @pytest.fixture
 async def sample_equipment(db_session: AsyncSession) -> Equipment:
-    """在用设备(分类走关联表,工单测试无需分类)。"""
+    """完好设备(分类走关联表,工单测试无需分类)。"""
     location = Location(name="一车间", code=f"WS-{_uid()}")
     db_session.add(location)
     await db_session.flush()
@@ -85,7 +85,7 @@ async def sample_equipment(db_session: AsyncSession) -> Equipment:
         equipment_no=f"EQ-{_uid()}",
         name="R-101反应釜",
         location_id=location.id,
-        status="在用",
+        status="完好",
     )
     db_session.add(equipment)
     await db_session.flush()
@@ -170,16 +170,14 @@ async def test_create_work_order(
     assert wo.reporter_id == sample_user.id
 
 
-@pytest.mark.parametrize("bad_status", ["停用", "报废"])
-async def test_create_work_order_equipment_not_in_service(
+async def test_create_work_order_equipment_scrapped(
     db_session: AsyncSession,
     sample_equipment: Equipment,
     sample_user: User,
     make_access_ctx: Callable[[User], EquipmentAccessContext],
-    bad_status: str,
 ) -> None:
-    """设备停用/报废时不能创建工单。"""
-    sample_equipment.status = bad_status
+    """设备报废时不能创建工单。"""
+    sample_equipment.status = "报废"
     await db_session.flush()
 
     data = WorkOrderCreate(equipment_id=sample_equipment.id)
@@ -187,20 +185,47 @@ async def test_create_work_order_equipment_not_in_service(
         await create_work_order(db_session, data, make_access_ctx(sample_user))
 
 
-async def test_create_fault_sets_equipment_repairing(
+async def test_create_fault_sets_equipment_pending_check(
     db_session: AsyncSession,
     sample_equipment: Equipment,
     sample_user: User,
     make_access_ctx: Callable[[User], EquipmentAccessContext],
 ) -> None:
-    """故障维修工单创建后,设备状态自动改为「维修中」。"""
+    """故障维修工单创建后,设备状态自动改为「故障待检」。"""
     data = WorkOrderCreate(
         equipment_id=sample_equipment.id, order_type="故障维修"
     )
     await create_work_order(db_session, data, make_access_ctx(sample_user))
     refreshed = await db_session.get(Equipment, sample_equipment.id)
     assert refreshed is not None
+    assert refreshed.status == "故障待检"
+
+
+async def test_start_fault_sets_equipment_repairing(
+    db_session: AsyncSession,
+    sample_equipment: Equipment,
+    sample_user: User,
+    make_access_ctx: Callable[[User], EquipmentAccessContext],
+) -> None:
+    """故障维修开始执行后设备进入「维修中」,关单后恢复「完好」。"""
+    ctx = make_access_ctx(sample_user)
+    data = WorkOrderCreate(
+        equipment_id=sample_equipment.id,
+        order_type="故障维修",
+        responsible_person_id=sample_user.id,
+    )
+    wo = await create_work_order(db_session, data, ctx)
+    wo = await assign_work_order(db_session, wo.id, sample_user.id, ctx)
+    wo = await start_work_order(db_session, wo.id, ctx)
+
+    refreshed = await db_session.get(Equipment, sample_equipment.id)
+    assert refreshed is not None
     assert refreshed.status == "维修中"
+
+    await close_work_order(db_session, wo.id, ctx)
+    refreshed = await db_session.get(Equipment, sample_equipment.id)
+    assert refreshed is not None
+    assert refreshed.status == "完好"
 
 
 @pytest.mark.parametrize(
@@ -213,14 +238,14 @@ async def test_create_non_fault_keeps_equipment_status(
     make_access_ctx: Callable[[User], EquipmentAccessContext],
     order_type: WorkOrderType,
 ) -> None:
-    """非故障维修类型创建工单不改设备状态,设备仍为「在用」。"""
+    """非故障维修类型创建工单不改设备状态,设备仍为「完好」。"""
     data = WorkOrderCreate(
         equipment_id=sample_equipment.id, order_type=order_type
     )
     await create_work_order(db_session, data, make_access_ctx(sample_user))
     refreshed = await db_session.get(Equipment, sample_equipment.id)
     assert refreshed is not None
-    assert refreshed.status == "在用"
+    assert refreshed.status == "完好"
 
 
 # ==================== start ====================
@@ -510,15 +535,15 @@ async def test_close_fault_restores_equipment(
     sample_user: User,
     make_access_ctx: Callable[[User], EquipmentAccessContext],
 ) -> None:
-    """关闭故障维修工单后,该设备无未关闭故障工单且为维修中 → 恢复「在用」。"""
+    """关闭故障维修工单后,该设备无未关闭故障工单 → 恢复「完好」(建单未开始即关单,从故障待检恢复)。"""
     ctx = make_access_ctx(sample_user)
     data = WorkOrderCreate(
         equipment_id=sample_equipment.id, order_type="故障维修"
     )
     wo = await create_work_order(db_session, data, ctx)
-    # 创建后设备应为维修中
+    # 创建后设备应为故障待检
     refreshed = await db_session.get(Equipment, sample_equipment.id)
-    assert refreshed is not None and refreshed.status == "维修中"
+    assert refreshed is not None and refreshed.status == "故障待检"
 
     # 待处理 → 已关闭 是合法边
     wo = await close_work_order(db_session, wo.id, ctx)
@@ -526,7 +551,7 @@ async def test_close_fault_restores_equipment(
 
     refreshed = await db_session.get(Equipment, sample_equipment.id)
     assert refreshed is not None
-    assert refreshed.status == "在用"
+    assert refreshed.status == "完好"
 
 
 async def test_close_non_fault_does_not_restore(
@@ -577,7 +602,7 @@ async def test_close_fault_keeps_repairing_when_other_open_fault(
 
     refreshed = await db_session.get(Equipment, sample_equipment.id)
     assert refreshed is not None
-    assert refreshed.status == "维修中"
+    assert refreshed.status == "故障待检"
 
 
 # ==================== consume_materials 领料 ====================

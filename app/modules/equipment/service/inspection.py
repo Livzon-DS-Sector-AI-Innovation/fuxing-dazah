@@ -43,11 +43,15 @@ from app.modules.equipment.schemas.inspection import (
     InspectionScheduleResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+from app.modules.equipment.service.work_order import (
+    _MAX_RETRIES,
+    generate_work_order_no,
+    validate_transition,
+)
 
 logger = logging.getLogger(__name__)
 
 _UPLOAD_DIR = "uploads/inspection"
-_MAX_RETRIES = 3
 os.makedirs(_UPLOAD_DIR, exist_ok=True)
 
 _VALID_TRANSITIONS: dict[str, list[str]] = {
@@ -234,11 +238,8 @@ async def get_inspection_items(
 
 
 def _validate_transition(current: str, target: str) -> None:
-    allowed = _VALID_TRANSITIONS.get(current, [])
-    if target not in allowed:
-        raise AppException(
-            message=f"状态不允许从 '{current}' 转换到 '{target}'"
-        )
+    """校验巡检任务状态转换是否合法。"""
+    validate_transition(current, target, _VALID_TRANSITIONS)
 
 
 async def create_task(
@@ -515,13 +516,7 @@ async def _create_anomaly_work_order(
     # 生成工单号 + 创建工单（含并发重试）
     wo: WOModel | None = None
     for attempt in range(_MAX_RETRIES):
-        wo_no = await repo.get_max_work_order_no(db)
-        today = app_time.now().strftime("%Y%m%d")
-        if wo_no:
-            seq = int(wo_no.split("-")[-1]) + 1
-        else:
-            seq = 1
-        new_wo_no = f"WO-{today}-{seq:04d}"
+        new_wo_no = await generate_work_order_no(db)
 
         wo = WOModel(
             work_order_no=new_wo_no,
@@ -907,14 +902,17 @@ async def save_photo_from_base64(
     valid_magics = {
         b"\xff\xd8\xff": "jpg",       # JPEG
         b"\x89PNG": "png",             # PNG
-        b"RIFF": "webp",              # WEBP
         b"BM": "bmp",                 # BMP
     }
     ext = "jpg"
-    for magic_bytes, fmt in valid_magics.items():
-        if magic.startswith(magic_bytes):
-            ext = fmt
-            break
+    # RIFF 容器含多种格式（AVI/WAV/WebP），需二次验证 WEBP 签名
+    if magic == b"RIFF" and len(content) >= 12 and content[8:12] == b"WEBP":
+        ext = "webp"
+    else:
+        for magic_bytes, fmt in valid_magics.items():
+            if magic.startswith(magic_bytes):
+                ext = fmt
+                break
 
     fname = filename or f"{uuid.uuid4()}.{ext}"
 
@@ -971,12 +969,33 @@ async def get_history(
         conditions.append(ITask.planned_time >= date_from)
     if date_to:
         conditions.append(ITask.planned_time <= date_to)
+    from app.modules.equipment.models.inspection_route_location import (
+        RouteLocation,
+        RouteLocationEquipment,
+    )
+
     if equipment_id:
         conditions.append(
             or_(
                 ITask.equipment_id == equipment_id,
                 cast(ITask.equipment_ids, String).like(
                     f'%"{equipment_id}"%'
+                ),
+                # 线路巡检：通过路线-地点-设备链匹配
+                and_(
+                    ITask.route_id.isnot(None),
+                    ITask.route_id.in_(
+                        select(RouteLocation.route_id)
+                        .join(
+                            RouteLocationEquipment,
+                            RouteLocationEquipment.route_location_id == RouteLocation.id,
+                        )
+                        .where(
+                            RouteLocationEquipment.equipment_id == equipment_id,
+                            RouteLocationEquipment.is_deleted == False,  # noqa: E712
+                            RouteLocation.is_deleted == False,  # noqa: E712
+                        )
+                    ),
                 ),
             )
         )
@@ -989,10 +1008,6 @@ async def get_history(
     count_stmt = select(func.count(ITask.id)).where(and_(*conditions))
     count_stmt = apply_equipment_scope(count_stmt, ctx, ITask.created_by, "user_id")
     total = (await db.execute(count_stmt)).scalar_one()
-
-    from app.modules.equipment.models.inspection_route_location import (
-        RouteLocation,
-    )
 
     stmt = (
         select(ITask)

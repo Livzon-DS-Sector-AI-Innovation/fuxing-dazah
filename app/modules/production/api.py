@@ -1,643 +1,352 @@
-"""Production API routes."""
+"""生产模块 HTTP 路由。只做 HTTP 层：入参、依赖注入、调 service、统一响应。"""
 
 import uuid
-from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import CurrentUser, get_current_user
-from app.core.response import ApiResponse
+from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
     BatchCreate,
-    BatchMaterialCreate,
-    BatchMaterialResponse,
-    BatchMaterialUpdate,
-    BatchResponse,
-    BatchStatusUpdate,
-    BatchUpdate,
-    MaterialBalanceCalculate,
-    MaterialBalanceResponse,
-    MaterialBalanceUpdate,
-    OperationType,
-    PlanTaskCreate,
-    PlanTaskResponse,
-    PlanTaskUpdate,
-    ProcessParameterCreate,
-    ProcessParameterResponse,
-    ProcessSpecCreate,
-    ProcessSpecResponse,
-    ProcessSpecUpdate,
-    ProcessStepCreate,
-    ProcessStepResponse,
-    ProcessStepUpdate,
-    ProductionPlanCreate,
-    ProductionPlanResponse,
-    ProductionPlanUpdate,
-    ProductionRecordCreate,
-    ProductionRecordResponse,
-    ProductionRecordUpdate,
+    BatchOut,
+    DeriveIn,
+    ExecutionCompleteIn,
+    ExecutionOut,
+    ExecutionStartIn,
+    MergeIn,
+    ProductCreate,
+    ProductOut,
+    ProductUpdate,
+    RouteCreate,
+    RouteGraphIn,
+    RouteOut,
 )
-from app.modules.production.service import ProductionService
+from app.modules.production.service import (
+    batch_service,
+    execution_service,
+    route_service,
+    trace_service,
+)
+from app.platform.identity.models import User
+from app.platform.permission.deps import require_permission
 
 router = APIRouter()
 
+_manage = require_permission("production:process:manage")
+_submit = require_permission("production:batch:submit")
+_read = require_permission("production:batch:read")
 
-# ============ Batch Routes ============
+
+# ── 产品 ──
 
 
-@router.get("/batches", response_model=ApiResponse, summary="获取批次列表")
-async def get_batches(
+@router.get("/products", summary="产品列表")
+async def list_products(
+    keyword: str | None = None,
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    status: str | None = None,
-    product_code: str | None = None,
-    batch_no: str | None = None,
-    exclude_cancelled: str | None = Query(None, description="是否排除已取消的批次，传入 'true' 或 'false'"),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取批次列表"""
-    service = ProductionService(db)
-    skip = (page - 1) * page_size
-    # 将字符串参数转换为布尔值
-    exclude_cancelled_bool = exclude_cancelled is not None and exclude_cancelled.lower() == 'true'
-    batches, total = await service.get_batches(skip, page_size, status, product_code, batch_no, exclude_cancelled_bool)
-    return ApiResponse(
-        data=[BatchResponse.model_validate(b) for b in batches],
-        meta={"page": page, "page_size": page_size, "total": total},
+) -> JSONResponse:
+    items, total = await route_service.list_products_paged(db, keyword, page, page_size)
+    return paginated_response(
+        [ProductOut.model_validate(i).model_dump(mode="json") for i in items],
+        page,
+        page_size,
+        total,
     )
 
 
-@router.get("/batches/{batch_id}", response_model=ApiResponse, summary="获取批次详情")
-async def get_batch(
-    batch_id: uuid.UUID,
+@router.post("/products", summary="新建产品")
+async def create_product(
+    payload: ProductCreate,
+    user: User = Depends(_manage),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取批次详情"""
-    service = ProductionService(db)
-    batch = await service.get_batch(batch_id)
-    if not batch:
-        return ApiResponse(code=404, message="批次不存在")
-    return ApiResponse(data=BatchResponse.model_validate(batch))
+) -> JSONResponse:
+    product = await route_service.create_product(db, payload, user)
+    return success_response(ProductOut.model_validate(product).model_dump(mode="json"))
 
 
-@router.post("/batches", response_model=ApiResponse, summary="创建批次")
+@router.get("/products/{product_id}", summary="产品详情")
+async def get_product(
+    product_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    product = await route_service.get_product_or_404(db, product_id)
+    return success_response(ProductOut.model_validate(product).model_dump(mode="json"))
+
+
+@router.put("/products/{product_id}", summary="更新产品")
+async def update_product(
+    product_id: uuid.UUID,
+    payload: ProductUpdate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    product = await route_service.update_product(db, product_id, payload, user)
+    return success_response(ProductOut.model_validate(product).model_dump(mode="json"))
+
+
+@router.delete("/products/{product_id}", summary="删除产品")
+async def delete_product(
+    product_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    await route_service.delete_product(db, product_id, user)
+    return success_response()
+
+
+# ── 工艺路线 ──
+
+
+@router.get("/routes", summary="工艺路线列表")
+async def list_routes(
+    product_id: uuid.UUID | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items, total = await route_service.list_routes_paged(db, product_id, page, page_size)
+    return paginated_response(
+        [RouteOut.model_validate(i).model_dump(mode="json") for i in items],
+        page,
+        page_size,
+        total,
+    )
+
+
+@router.post("/routes", summary="新建工艺路线（draft）")
+async def create_route(
+    payload: RouteCreate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    route = await route_service.create_route(db, payload, user)
+    return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
+
+
+@router.get("/routes/{route_id}", summary="工艺路线完整图")
+async def get_route_graph(
+    route_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    graph = await route_service.get_graph(db, route_id)
+    return success_response(graph.model_dump(mode="json"))
+
+
+@router.put("/routes/{route_id}/graph", summary="整图保存（仅 draft）")
+async def save_route_graph(
+    route_id: uuid.UUID,
+    payload: RouteGraphIn,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    await route_service.save_graph(db, route_id, payload, user)
+    return success_response()
+
+
+@router.post("/routes/{route_id}/publish", summary="发布路线")
+async def publish_route(
+    route_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    route = await route_service.publish_route(db, route_id, user)
+    return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
+
+
+@router.post("/routes/{route_id}/archive", summary="归档路线")
+async def archive_route(
+    route_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    route = await route_service.archive_route(db, route_id, user)
+    return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
+
+
+@router.post("/routes/{route_id}/new-version", summary="复制新版本（draft）")
+async def new_route_version(
+    route_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    route = await route_service.new_version(db, route_id, user)
+    return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
+
+
+@router.delete("/routes/{route_id}", summary="删除路线（仅 draft）")
+async def delete_route(
+    route_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    await route_service.delete_route(db, route_id, user)
+    return success_response()
+
+
+# ── 批次 ──
+
+
+@router.get("/batches", summary="批次列表")
+async def list_batches(
+    product_id: uuid.UUID | None = None,
+    status: str | None = None,
+    keyword: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    order_by: str = Query("created_at", pattern="^(batch_no|created_at)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items, total = await batch_service.list_batches_paged(
+        db, product_id, status, keyword, page, page_size, order_by, order
+    )
+    return paginated_response(
+        [BatchOut.model_validate(i).model_dump(mode="json") for i in items],
+        page,
+        page_size,
+        total,
+    )
+
+
+@router.post("/batches", summary="创建起始批次")
 async def create_batch(
-    data: BatchCreate,
+    payload: BatchCreate,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建批次"""
-    service = ProductionService(db)
-    batch = await service.create_batch(data)
-    await db.commit()
-    return ApiResponse(data=BatchResponse.model_validate(batch))
+) -> JSONResponse:
+    batch = await batch_service.create_batch(db, payload, user)
+    return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
 
 
-@router.put("/batches/{batch_id}", response_model=ApiResponse, summary="更新批次")
-async def update_batch(
+@router.get("/batches/{batch_id}", summary="批次详情（含执行时间线）")
+async def get_batch_detail(
     batch_id: uuid.UUID,
-    data: BatchUpdate,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新批次"""
-    service = ProductionService(db)
-    batch = await service.update_batch(batch_id, data)
-    if not batch:
-        return ApiResponse(code=404, message="批次不存在")
-    await db.commit()
-    return ApiResponse(data=BatchResponse.model_validate(batch))
+) -> JSONResponse:
+    detail = await batch_service.get_batch_detail(db, batch_id)
+    return success_response(detail.model_dump(mode="json"))
 
 
-@router.put("/batches/{batch_id}/status", response_model=ApiResponse, summary="更新批次状态")
-async def update_batch_status(
+@router.post("/batches/{batch_id}/derive", summary="分裂 / 1→1 换号")
+async def derive_batches(
     batch_id: uuid.UUID,
-    data: BatchStatusUpdate,
+    payload: DeriveIn,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新批次状态"""
-    service = ProductionService(db)
-    try:
-        batch = await service.update_batch_status(batch_id, data)
-        if not batch:
-            return ApiResponse(code=404, message="批次不存在")
-        await db.commit()
-        return ApiResponse(data=BatchResponse.model_validate(batch))
-    except ValueError as e:
-        return ApiResponse(code=400, message=str(e))
-
-
-@router.delete("/batches/{batch_id}", response_model=ApiResponse, summary="删除批次")
-async def delete_batch(
-    batch_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除批次"""
-    service = ProductionService(db)
-    result = await service.delete_batch(batch_id)
-    if not result:
-        return ApiResponse(code=404, message="批次不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ BatchMaterial Routes ============
-
-
-@router.get("/batches/{batch_id}/materials", response_model=ApiResponse, summary="获取批次物料列表")
-async def get_batch_materials(
-    batch_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取批次物料列表"""
-    service = ProductionService(db)
-    materials = await service.get_batch_materials(batch_id)
-    return ApiResponse(data=[BatchMaterialResponse.model_validate(m) for m in materials])
-
-
-@router.post("/batches/{batch_id}/materials", response_model=ApiResponse, summary="添加批次物料")
-async def add_batch_material(
-    batch_id: uuid.UUID,
-    data: BatchMaterialCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """添加批次物料"""
-    service = ProductionService(db)
-    material = await service.add_batch_material(batch_id, data.model_dump())
-    await db.commit()
-    return ApiResponse(data=BatchMaterialResponse.model_validate(material))
-
-
-@router.put("/materials/{material_id}", response_model=ApiResponse, summary="更新批次物料")
-async def update_batch_material(
-    material_id: uuid.UUID,
-    data: BatchMaterialUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新批次物料"""
-    service = ProductionService(db)
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    material = await service.update_batch_material(material_id, update_data)
-    if not material:
-        return ApiResponse(code=404, message="物料不存在")
-    await db.commit()
-    return ApiResponse(data=BatchMaterialResponse.model_validate(material))
-
-
-@router.delete("/materials/{material_id}", response_model=ApiResponse, summary="删除批次物料")
-async def delete_batch_material(
-    material_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除批次物料"""
-    service = ProductionService(db)
-    result = await service.delete_batch_material(material_id)
-    if not result:
-        return ApiResponse(code=404, message="物料不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ ProductionPlan Routes ============
-
-
-@router.get("/plans", response_model=ApiResponse, summary="获取生产计划列表")
-async def get_plans(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    status: str | None = None,
-    plan_month: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取生产计划列表"""
-    service = ProductionService(db)
-    skip = (page - 1) * page_size
-    plans, total = await service.get_plans(skip, page_size, status, plan_month)
-    return ApiResponse(
-        data=[ProductionPlanResponse.model_validate(p) for p in plans],
-        meta={"page": page, "page_size": page_size, "total": total},
+) -> JSONResponse:
+    children = await batch_service.derive_batches(db, batch_id, payload, user)
+    return success_response(
+        [BatchOut.model_validate(c).model_dump(mode="json") for c in children]
     )
 
 
-@router.get("/plans/{plan_id}", response_model=ApiResponse, summary="获取生产计划详情")
-async def get_plan(
-    plan_id: uuid.UUID,
+@router.post("/batches/merge", summary="合并批次")
+async def merge_batches(
+    payload: MergeIn,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取生产计划详情"""
-    service = ProductionService(db)
-    plan = await service.get_plan(plan_id)
-    if not plan:
-        return ApiResponse(code=404, message="计划不存在")
-    return ApiResponse(data=ProductionPlanResponse.model_validate(plan))
+) -> JSONResponse:
+    child = await batch_service.merge_batches(db, payload, user)
+    return success_response(BatchOut.model_validate(child).model_dump(mode="json"))
 
 
-@router.post("/plans", response_model=ApiResponse, summary="创建生产计划")
-async def create_plan(
-    data: ProductionPlanCreate,
+@router.post("/batches/{batch_id}/complete", summary="批次完成")
+async def complete_batch(
+    batch_id: uuid.UUID,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建生产计划"""
-    service = ProductionService(db)
-    plan = await service.create_plan(data)
-    await db.commit()
-    return ApiResponse(data=ProductionPlanResponse.model_validate(plan))
+) -> JSONResponse:
+    batch = await batch_service.complete_batch(db, batch_id, user)
+    return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
 
 
-@router.put("/plans/{plan_id}", response_model=ApiResponse, summary="更新生产计划")
-async def update_plan(
-    plan_id: uuid.UUID,
-    data: ProductionPlanUpdate,
+@router.post("/batches/{batch_id}/cancel", summary="批次报废")
+async def cancel_batch(
+    batch_id: uuid.UUID,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新生产计划"""
-    service = ProductionService(db)
-    plan = await service.update_plan(plan_id, data)
-    if not plan:
-        return ApiResponse(code=404, message="计划不存在")
-    await db.commit()
-    return ApiResponse(data=ProductionPlanResponse.model_validate(plan))
+) -> JSONResponse:
+    batch = await batch_service.cancel_batch(db, batch_id, user)
+    return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
 
 
-@router.delete("/plans/{plan_id}", response_model=ApiResponse, summary="删除生产计划")
-async def delete_plan(
-    plan_id: uuid.UUID,
+@router.get("/batches/{batch_id}/trace", summary="全链路溯源")
+async def get_trace(
+    batch_id: uuid.UUID,
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除生产计划"""
-    service = ProductionService(db)
-    result = await service.delete_plan(plan_id)
-    if not result:
-        return ApiResponse(code=404, message="计划不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
+) -> JSONResponse:
+    trace = await trace_service.get_trace(db, batch_id)
+    return success_response(trace.model_dump(mode="json"))
 
 
-# ============ PlanTask Routes ============
+# ── 工序执行 ──
 
 
-@router.get("/plans/{plan_id}/tasks", response_model=ApiResponse, summary="获取计划任务列表")
-async def get_plan_tasks(
-    plan_id: uuid.UUID,
+@router.post("/batches/{batch_id}/executions", summary="开始工序")
+async def start_execution(
+    batch_id: uuid.UUID,
+    payload: ExecutionStartIn,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取计划任务列表"""
-    service = ProductionService(db)
-    tasks = await service.get_tasks(plan_id)
-    return ApiResponse(data=[PlanTaskResponse.model_validate(t) for t in tasks])
-
-
-@router.post("/tasks", response_model=ApiResponse, summary="创建计划任务")
-async def create_task(
-    data: PlanTaskCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建计划任务"""
-    service = ProductionService(db)
-    task = await service.create_task(data)
-    await db.commit()
-    return ApiResponse(data=PlanTaskResponse.model_validate(task))
-
-
-@router.put("/tasks/{task_id}", response_model=ApiResponse, summary="更新计划任务")
-async def update_task(
-    task_id: uuid.UUID,
-    data: PlanTaskUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新计划任务"""
-    service = ProductionService(db)
-    task = await service.update_task(task_id, data)
-    if not task:
-        return ApiResponse(code=404, message="任务不存在")
-    await db.commit()
-    return ApiResponse(data=PlanTaskResponse.model_validate(task))
-
-
-@router.delete("/tasks/{task_id}", response_model=ApiResponse, summary="删除计划任务")
-async def delete_task(
-    task_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除计划任务"""
-    service = ProductionService(db)
-    result = await service.delete_task(task_id)
-    if not result:
-        return ApiResponse(code=404, message="任务不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ ProcessSpec Routes ============
-
-
-@router.get("/process-specs", response_model=ApiResponse, summary="获取工艺规程列表")
-async def get_process_specs(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
-    status: str | None = None,
-    product_code: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取工艺规程列表"""
-    service = ProductionService(db)
-    skip = (page - 1) * page_size
-    specs, total = await service.get_process_specs(skip, page_size, status, product_code)
-    return ApiResponse(
-        data=[ProcessSpecResponse.model_validate(s) for s in specs],
-        meta={"page": page, "page_size": page_size, "total": total},
+) -> JSONResponse:
+    execution = await execution_service.start_execution(db, batch_id, payload, user)
+    return success_response(
+        ExecutionOut.model_validate(execution).model_dump(mode="json")
     )
 
 
-@router.get("/process-specs/{spec_id}", response_model=ApiResponse, summary="获取工艺规程详情")
-async def get_process_spec(
-    spec_id: uuid.UUID,
+@router.post("/executions/{execution_id}/complete", summary="结束工序")
+async def complete_execution(
+    execution_id: uuid.UUID,
+    payload: ExecutionCompleteIn,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取工艺规程详情"""
-    service = ProductionService(db)
-    spec = await service.get_process_spec(spec_id)
-    if not spec:
-        return ApiResponse(code=404, message="工艺规程不存在")
-    return ApiResponse(data=ProcessSpecResponse.model_validate(spec))
+) -> JSONResponse:
+    execution = await execution_service.complete_execution(
+        db, execution_id, payload, user
+    )
+    return success_response(
+        ExecutionOut.model_validate(execution).model_dump(mode="json")
+    )
 
 
-@router.post("/process-specs", response_model=ApiResponse, summary="创建工艺规程")
-async def create_process_spec(
-    data: ProcessSpecCreate,
+@router.post("/executions/{execution_id}/abort", summary="中止工序执行")
+async def abort_execution(
+    execution_id: uuid.UUID,
+    user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建工艺规程"""
-    service = ProductionService(db)
-    spec = await service.create_process_spec(data)
-    await db.commit()
-    return ApiResponse(data=ProcessSpecResponse.model_validate(spec))
+) -> JSONResponse:
+    execution = await execution_service.abort_execution(db, execution_id, user)
+    return success_response(
+        ExecutionOut.model_validate(execution).model_dump(mode="json")
+    )
 
 
-@router.put("/process-specs/{spec_id}", response_model=ApiResponse, summary="更新工艺规程")
-async def update_process_spec(
-    spec_id: uuid.UUID,
-    data: ProcessSpecUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新工艺规程"""
-    service = ProductionService(db)
-    spec = await service.update_process_spec(spec_id, data)
-    if not spec:
-        return ApiResponse(code=404, message="工艺规程不存在")
-    await db.commit()
-    return ApiResponse(data=ProcessSpecResponse.model_validate(spec))
-
-
-@router.delete("/process-specs/{spec_id}", response_model=ApiResponse, summary="删除工艺规程")
-async def delete_process_spec(
-    spec_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除工艺规程"""
-    service = ProductionService(db)
-    result = await service.delete_process_spec(spec_id)
-    if not result:
-        return ApiResponse(code=404, message="工艺规程不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ ProcessStep Routes ============
-
-
-@router.get("/process-specs/{spec_id}/steps", response_model=ApiResponse, summary="获取工艺步骤列表")
-async def get_process_steps(
-    spec_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取工艺步骤列表"""
-    service = ProductionService(db)
-    steps = await service.get_steps(spec_id)
-    return ApiResponse(data=[ProcessStepResponse.model_validate(s) for s in steps])
-
-
-@router.post("/steps", response_model=ApiResponse, summary="创建工艺步骤")
-async def create_process_step(
-    data: ProcessStepCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建工艺步骤"""
-    service = ProductionService(db)
-    step = await service.create_process_step(data)
-    await db.commit()
-    return ApiResponse(data=ProcessStepResponse.model_validate(step))
-
-
-@router.put("/steps/{step_id}", response_model=ApiResponse, summary="更新工艺步骤")
-async def update_process_step(
-    step_id: uuid.UUID,
-    data: ProcessStepUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新工艺步骤"""
-    service = ProductionService(db)
-    step = await service.update_process_step(step_id, data)
-    if not step:
-        return ApiResponse(code=404, message="步骤不存在")
-    await db.commit()
-    return ApiResponse(data=ProcessStepResponse.model_validate(step))
-
-
-@router.delete("/steps/{step_id}", response_model=ApiResponse, summary="删除工艺步骤")
-async def delete_process_step(
-    step_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除工艺步骤"""
-    service = ProductionService(db)
-    result = await service.delete_process_step(step_id)
-    if not result:
-        return ApiResponse(code=404, message="步骤不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ ProcessParameter Routes ============
-
-
-@router.get("/steps/{step_id}/parameters", response_model=ApiResponse, summary="获取工艺参数列表")
-async def get_process_parameters(
-    step_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取工艺参数列表"""
-    service = ProductionService(db)
-    params = await service.get_parameters(step_id)
-    return ApiResponse(data=[ProcessParameterResponse.model_validate(p) for p in params])
-
-
-@router.post("/parameters", response_model=ApiResponse, summary="创建工艺参数")
-async def create_process_parameter(
-    data: ProcessParameterCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建工艺参数"""
-    service = ProductionService(db)
-    param = await service.create_process_parameter(data)
-    await db.commit()
-    return ApiResponse(data=ProcessParameterResponse.model_validate(param))
-
-
-@router.delete("/parameters/{param_id}", response_model=ApiResponse, summary="删除工艺参数")
-async def delete_process_parameter(
-    param_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除工艺参数"""
-    service = ProductionService(db)
-    result = await service.delete_process_parameter(param_id)
-    if not result:
-        return ApiResponse(code=404, message="参数不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ ProductionRecord Routes ============
-
-
-@router.get("/batches/{batch_id}/records", response_model=ApiResponse, summary="获取生产记录列表")
-async def get_production_records(
-    batch_id: uuid.UUID,
+@router.get("/nodes/{node_id}/executions", summary="工序执行记录（跨批次）")
+async def list_node_executions(
+    node_id: uuid.UUID,
+    status: str | None = None,
     page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
+    page_size: int = Query(20, ge=1, le=100),
+    order_by: str = Query("started_at", pattern="^(batch_no|started_at)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取生产记录列表"""
-    service = ProductionService(db)
-    skip = (page - 1) * page_size
-    records = await service.get_records(batch_id, skip, page_size)
-    return ApiResponse(data=[ProductionRecordResponse.model_validate(r) for r in records])
-
-
-@router.post("/records", response_model=ApiResponse, summary="创建生产记录")
-async def create_production_record(
-    data: ProductionRecordCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """创建生产记录"""
-    service = ProductionService(db)
-    record = await service.create_production_record(data)
-    await db.commit()
-    return ApiResponse(data=ProductionRecordResponse.model_validate(record))
-
-
-@router.put("/records/{record_id}", response_model=ApiResponse, summary="更新生产记录")
-async def update_production_record(
-    record_id: uuid.UUID,
-    data: ProductionRecordUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新生产记录"""
-    service = ProductionService(db)
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    record = await service.update_production_record(record_id, update_data)
-    if not record:
-        return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
-    return ApiResponse(data=ProductionRecordResponse.model_validate(record))
-
-
-@router.delete("/records/{record_id}", response_model=ApiResponse, summary="删除生产记录")
-async def delete_production_record(
-    record_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """删除生产记录"""
-    service = ProductionService(db)
-    result = await service.delete_production_record(record_id)
-    if not result:
-        return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
-    return ApiResponse(message="删除成功")
-
-
-# ============ MaterialBalance Routes ============
-
-
-@router.get("/batches/{batch_id}/balance", response_model=ApiResponse, summary="获取物料平衡")
-async def get_material_balance(
-    batch_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """获取物料平衡"""
-    service = ProductionService(db)
-    balance = await service.get_material_balance(batch_id)
-    if not balance:
-        return ApiResponse(code=404, message="物料平衡不存在")
-    return ApiResponse(data=MaterialBalanceResponse.model_validate(balance))
-
-
-@router.post("/batches/{batch_id}/balance/calculate", response_model=ApiResponse, summary="计算物料平衡")
-async def calculate_material_balance(
-    batch_id: uuid.UUID,
-    min_balance_rate: float = Query(95.0, ge=0, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """计算物料平衡"""
-    service = ProductionService(db)
-    balance = await service.calculate_material_balance(batch_id, min_balance_rate)
-    if not balance:
-        return ApiResponse(code=404, message="批次不存在")
-    await db.commit()
-    return ApiResponse(data=MaterialBalanceResponse.model_validate(balance))
-
-
-@router.put("/batches/{batch_id}/balance", response_model=ApiResponse, summary="更新物料平衡")
-async def update_material_balance(
-    batch_id: uuid.UUID,
-    data: MaterialBalanceUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """更新物料平衡"""
-    service = ProductionService(db)
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    balance = await service.update_material_balance(batch_id, update_data)
-    if not balance:
-        return ApiResponse(code=404, message="物料平衡不存在")
-    await db.commit()
-    return ApiResponse(data=MaterialBalanceResponse.model_validate(balance))
+) -> JSONResponse:
+    items, total = await execution_service.list_node_executions(
+        db, node_id, status, page, page_size, order_by, order
+    )
+    return paginated_response(
+        [i.model_dump(mode="json") for i in items], page, page_size, total
+    )

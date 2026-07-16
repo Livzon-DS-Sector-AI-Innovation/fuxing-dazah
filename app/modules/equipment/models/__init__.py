@@ -41,6 +41,7 @@ from app.modules.equipment.models.spare_part import (
     SparePartStock,
     SparePartTransaction,
 )
+from app.modules.equipment.models.status_log import EquipmentStatusLog
 from app.modules.equipment.models.work_order import WorkOrder
 from app.modules.equipment.models.work_order_image import WorkOrderImage
 
@@ -71,6 +72,7 @@ __all__ = [
     "SparePart",
     "SparePartStock",
     "SparePartTransaction",
+    "EquipmentStatusLog",
     "MaintenanceConfig",
     "WorkOrder",
     "WorkOrderImage",

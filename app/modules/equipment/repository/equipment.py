@@ -163,8 +163,8 @@ async def update_equipment_category(
     for key, value in data.items():
         setattr(category, key, value)
     await db.flush()
-    await db.refresh(category)
-    return category
+    # SELECT re-fetch (CLAUDE.md: UPDATE 后必须 re-fetch, 禁止 db.refresh)
+    return await get_equipment_category_by_id(db, category_id)
 
 
 async def delete_equipment_category(
@@ -274,8 +274,8 @@ async def update_location(
     for key, value in data.items():
         setattr(location, key, value)
     await db.flush()
-    await db.refresh(location)
-    return location
+    # SELECT re-fetch (CLAUDE.md: UPDATE 后必须 re-fetch, 禁止 db.refresh)
+    return await get_location_by_id(db, location_id)
 
 
 async def delete_location(
@@ -366,6 +366,19 @@ async def _refetch_equipment(
         .where(Equipment.id == equipment_id, Equipment.is_deleted == False)  # noqa: E712
     )
     return result.scalar_one_or_none()
+
+
+async def equipment_exists(db: AsyncSession, equipment_id: uuid.UUID) -> bool:
+    """检查设备是否存在（轻量 EXISTS，不加载关联）。"""
+    from sqlalchemy import exists as sa_exists
+
+    result = await db.execute(
+        sa_exists().where(
+            Equipment.id == equipment_id,
+            Equipment.is_deleted == False,  # noqa: E712
+        ).select()
+    )
+    return bool(result.scalar())
 
 
 async def get_equipment_by_id(

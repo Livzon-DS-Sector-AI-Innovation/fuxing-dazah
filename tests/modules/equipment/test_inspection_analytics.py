@@ -66,7 +66,7 @@ async def inspector(db_session: AsyncSession) -> User:
 
 @pytest.fixture
 async def equipment(db_session: AsyncSession) -> Equipment:
-    """一台在用设备(带所属地点)。"""
+    """一台完好设备(带所属地点)。"""
     loc = Location(name="车间", code=f"WS-{uuid.uuid4().hex[:6]}")
     db_session.add(loc)
     await db_session.flush()
@@ -74,7 +74,7 @@ async def equipment(db_session: AsyncSession) -> Equipment:
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="反应釜",
         location_id=loc.id,
-        status="在用",
+        status="完好",
         importance="中",
     )
     db_session.add(eq)
@@ -116,7 +116,7 @@ async def _item(db: AsyncSession, template_id: uuid.UUID) -> InspectionTemplateI
 async def _make_equipment(
     db: AsyncSession, department_id: uuid.UUID | None = None
 ) -> Equipment:
-    """创建一台带指定归属部门的在用设备(department_id 逻辑引用,无需真实部门行)。"""
+    """创建一台带指定归属部门的完好设备(department_id 逻辑引用,无需真实部门行)。"""
     loc = Location(name="车间", code=f"WS-{uuid.uuid4().hex[:6]}")
     db.add(loc)
     await db.flush()
@@ -124,7 +124,7 @@ async def _make_equipment(
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="设备",
         location_id=loc.id,
-        status="在用",
+        status="完好",
         importance="中",
         department_id=department_id,
     )

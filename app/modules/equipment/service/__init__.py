@@ -133,6 +133,11 @@ from app.modules.equipment.service.spare_part import (
     outbound_stock,
     update_spare_part,
 )
+from app.modules.equipment.service.status_log import (
+    get_availability,
+    get_status_logs,
+    record_status_change,
+)
 from app.modules.equipment.service.work_order import (
     assign_work_order,
     close_work_order,
@@ -242,6 +247,10 @@ __all__ = [
     "inbound_stock",
     "outbound_stock",
     "update_spare_part",
+    # status log
+    "get_availability",
+    "get_status_logs",
+    "record_status_change",
     # work order
     "assign_work_order",
     "close_work_order",

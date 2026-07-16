@@ -29,6 +29,7 @@ from app.modules.equipment.schemas.equipment import (
     ImportRowError,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+from app.modules.equipment.service.status_log import record_status_change
 from app.platform.identity.models import Department, User
 
 logger = logging.getLogger(__name__)
@@ -276,9 +277,19 @@ async def create_equipment(
     equipment_data = data.model_dump()
 
     try:
-        return await repo.create_equipment(db, equipment_data)
+        equipment = await repo.create_equipment(db, equipment_data)
     except IntegrityError:
         raise DuplicateException("设备编号", data.equipment_no)
+
+    # 记录初始状态/运行状态基线，作为开动率统计起点
+    await record_status_change(
+        db, equipment.id, None, equipment.status, source="create"
+    )
+    await record_status_change(
+        db, equipment.id, None, equipment.running_status,
+        source="create", log_type="running",
+    )
+    return equipment
 
 
 async def get_equipment_by_id(
@@ -326,6 +337,8 @@ async def update_equipment(
     """更新设备"""
     equipment = await get_equipment_by_id(db, equipment_id)
     await verify_write_ownership(ctx, equipment, "department_id", "department_id")
+    old_status = equipment.status
+    old_running_status = equipment.running_status
 
     if data.category_ids is not None:
         for cid in data.category_ids:
@@ -334,7 +347,21 @@ async def update_equipment(
         await get_location_by_id(db, data.location_id)
 
     update_data = data.model_dump(exclude_unset=True)
-    return cast(Equipment, await repo.update_equipment(db, equipment_id, update_data))
+    updated = cast(Equipment, await repo.update_equipment(db, equipment_id, update_data))
+
+    new_status = update_data.get("status")
+    if new_status:
+        await record_status_change(
+            db, equipment_id, old_status, new_status,
+            source="manual", operator_id=ctx.user.id,
+        )
+    new_running_status = update_data.get("running_status")
+    if new_running_status:
+        await record_status_change(
+            db, equipment_id, old_running_status, new_running_status,
+            source="manual", operator_id=ctx.user.id, log_type="running",
+        )
+    return updated
 
 
 async def delete_equipment(
@@ -385,7 +412,7 @@ COL_ASSET_VALUE = 15
 COL_DEPRECIATION_YEARS = 16
 COL_DESCRIPTION = 17
 
-VALID_STATUSES = {"在用", "备用", "维修中", "停用", "报废"}
+VALID_STATUSES = {"完好", "备用", "故障待检", "维修中", "报废"}
 VALID_IMPORTANCE = {"高", "中", "低"}
 
 # 模板表头
@@ -483,7 +510,7 @@ def generate_template_bytes() -> io.BytesIO:
         "A车间一楼",
         "动力部",
         "张三",
-        "在用",
+        "完好",
         "中",
         "IHF65-50-160",
         "流量25m³/h 扬程32m",
@@ -507,11 +534,11 @@ def generate_template_bytes() -> io.BytesIO:
     # 数据验证 — 设备状态
     dv_status = DataValidation(
         type="list",
-        formula1='"在用,备用,维修中,停用,报废"',
+        formula1='"完好,备用,故障待检,维修中,报废"',
         allow_blank=True,
         showErrorMessage=True,
         errorTitle="无效状态",
-        error="请选择：在用 / 备用 / 维修中 / 停用 / 报废",
+        error="请选择：完好 / 备用 / 故障待检 / 维修中 / 报废",
     )
     dv_status.add("G3:G5002")
     ws.add_data_validation(dv_status)
@@ -635,10 +662,6 @@ async def import_equipments_from_excel(
                 skipped += 1
                 continue
 
-            assert (
-                eq_no and name and cat_name and loc_name and dept_name and person_name
-            )
-
             # 设备编号重复
             if eq_no in existing_nos:
                 errors.append(
@@ -714,15 +737,15 @@ async def import_equipments_from_excel(
                 continue
 
             # 校验状态
-            status = values[COL_STATUS] or "在用"
+            status = values[COL_STATUS] or "完好"
             if status not in VALID_STATUSES:
                 warnings.append(
                     ImportRowError(
                         row=row_num,
-                        message=f"设备状态「{status}」无效，已默认设为「在用」",
+                        message=f"设备状态「{status}」无效，已默认设为「完好」",
                     )
                 )
-                status = "在用"
+                status = "完好"
 
             # 校验重要性
             importance = values[COL_IMPORTANCE] or "低"
@@ -788,10 +811,21 @@ async def import_equipments_from_excel(
                 )
                 await db.flush()
 
+                # 记录初始状态/运行状态基线，作为开动率统计起点
+                await record_status_change(
+                    db, equipment.id, None, status,
+                    source="import", operator_id=ctx.user.id if ctx else None,
+                )
+                await record_status_change(
+                    db, equipment.id, None, equipment.running_status,
+                    source="import", operator_id=ctx.user.id if ctx else None,
+                    log_type="running",
+                )
+
             existing_nos.add(eq_no)
             imported += 1
 
-        except Exception as e:
+        except (IntegrityError, ValueError) as e:
             errors.append(
                 ImportRowError(
                     row=row_num,

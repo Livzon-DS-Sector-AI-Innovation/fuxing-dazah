@@ -100,7 +100,7 @@ async def equipment_with_dept(
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="R-101反应釜",
         location_id=location.id,
-        status="在用",
+        status="完好",
         importance="高",
         department_id=department.id,
     )
@@ -118,7 +118,7 @@ async def other_equipment(
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="R-999旁站设备",
         location_id=location.id,
-        status="在用",
+        status="完好",
         importance="低",
     )
     db_session.add(eq)
@@ -1068,12 +1068,12 @@ async def test_anomaly_work_order_metadata(
     wo = pending[0]
     assert wo.reporter_id == inspector.id
     assert wo.inspection_task_id == inspection_task.id
-    assert wo.original_equipment_status == "在用"
+    assert wo.original_equipment_status == "完好"
 
     # 设备状态不应被异常工单改动
     eq = await db_session.get(Equipment, equipment_with_dept.id)
     assert eq is not None
-    assert eq.status == "在用"
+    assert eq.status == "完好"
 
 
 async def test_close_blocked_by_pending_work_order(
@@ -1145,7 +1145,7 @@ async def test_work_order_no_responsible_person(
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="R-202反应釜",
         location_id=location.id,
-        status="在用",
+        status="完好",
         importance="中",
         department_id=None,
     )

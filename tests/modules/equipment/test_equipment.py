@@ -91,7 +91,7 @@ async def _make_equipment(
     location_id: uuid.UUID,
     equipment_no: str | None = None,
     name: str = "R-101反应釜",
-    status: EquipmentStatus = "在用",
+    status: EquipmentStatus = "完好",
     department_id: uuid.UUID | None = None,
 ) -> Equipment:
     """经 service 创建一台设备并返回。"""
@@ -458,6 +458,29 @@ async def test_update_equipment_status(
     assert updated.status == "维修中"
 
 
+async def test_update_running_status_records_running_log(
+    db_session: AsyncSession, ctx: EquipmentAccessContext
+) -> None:
+    """更新运行状态：字段生效且落一条 log_type=running 的日志（含创建基线共两条）。"""
+    category = await _make_category(db_session, ctx)
+    location = await _make_location(db_session, ctx)
+    equipment = await _make_equipment(
+        db_session, category_ids=[category.id], location_id=location.id
+    )
+    assert equipment.running_status == "开机"
+
+    updated = await service.update_equipment(
+        db_session, equipment.id, EquipmentUpdate(running_status="停机"), ctx
+    )
+    assert updated.running_status == "停机"
+
+    logs = await service.get_status_logs(db_session, equipment.id)
+    running_logs = [log for log in logs if log.log_type == "running"]
+    # 倒序：手动停机 → 创建基线开机
+    assert [log.new_status for log in running_logs] == ["停机", "开机"]
+    assert running_logs[0].source == "manual"
+
+
 async def test_update_equipment_invalid_category(
     db_session: AsyncSession, ctx: EquipmentAccessContext
 ) -> None:
@@ -603,7 +626,7 @@ async def test_equipment_statistics_counts_scoped_department(
         )
     stats = await service.get_equipment_statistics(db_session, _dept_ctx(dept_id))
     assert stats["total"] == 2
-    assert stats["by_status"].get("在用") == 2
+    assert stats["by_status"].get("完好") == 2
 
 
 # ==================== 筛选 ====================
@@ -614,16 +637,16 @@ async def test_filter_equipments_by_status(
     category = await _make_category(db_session, ctx)
     location = await _make_location(db_session, ctx)
     await _make_equipment(
-        db_session, category_ids=[category.id], location_id=location.id, status="在用"
+        db_session, category_ids=[category.id], location_id=location.id, status="完好"
     )
     await _make_equipment(
         db_session, category_ids=[category.id], location_id=location.id, status="备用"
     )
     items, total = await service.get_equipments(
-        db_session, ctx, category_id=category.id, status="在用"
+        db_session, ctx, category_id=category.id, status="完好"
     )
     assert total == 1
-    assert [e.status for e in items] == ["在用"]
+    assert [e.status for e in items] == ["完好"]
 
 
 async def test_filter_equipments_by_category(

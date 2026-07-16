@@ -355,6 +355,22 @@ async def get_tasks(
                 cast(InspectionTask.equipment_ids, String).like(
                     f'%"{equipment_id}"%'
                 ),
+                # 线路巡检：通过路线-地点-设备链匹配
+                and_(
+                    InspectionTask.route_id.isnot(None),
+                    InspectionTask.route_id.in_(
+                        select(RouteLocation.route_id)
+                        .join(
+                            RouteLocationEquipment,
+                            RouteLocationEquipment.route_location_id == RouteLocation.id,
+                        )
+                        .where(
+                            RouteLocationEquipment.equipment_id == equipment_id,
+                            RouteLocationEquipment.is_deleted == False,  # noqa: E712
+                            RouteLocation.is_deleted == False,  # noqa: E712
+                        )
+                    ),
+                ),
             )
         )
     if planned_time_from:

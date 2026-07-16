@@ -1,17 +1,20 @@
 """设备台账 API 路由."""
 
 import uuid
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.exceptions import NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import repository as repo
 from app.modules.equipment import service
 from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
 from app.modules.equipment.schemas import (
+    AvailabilityResponse,
     EquipmentCategoryCreate,
     EquipmentCategoryResponse,
     EquipmentCategoryTree,
@@ -277,6 +280,25 @@ async def get_equipment_statistics(
     return success_response(data=EquipmentStatistics(**stats))
 
 
+@router.get(
+    "/equipments/analytics/availability",
+    summary="时间开动率统计",
+    response_model=AvailabilityResponse,
+)
+async def get_equipment_availability(
+    from_date: str = Query(default="", description="开始日期 YYYY-MM-DD"),
+    to_date: str = Query(default="", description="结束日期 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:stats:read"),
+    ),
+) -> AvailabilityResponse:
+    """按运行状态变更日志计算时间范围内各设备的时间开动率（开机时长/日历时长），报废设备不参与。"""
+    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
+    td = date.fromisoformat(to_date) if to_date else date.today()
+    return await service.get_availability(db, ctx, fd, td)
+
+
 @router.get("/equipments/{equipment_id}", summary="获取设备详情")
 async def get_equipment(
     equipment_id: uuid.UUID,
@@ -288,6 +310,21 @@ async def get_equipment(
     """获取设备详情"""
     equipment = await service.get_equipment_by_id(db, equipment_id)
     return success_response(data=await _equipment_to_response(equipment, db))
+
+
+@router.get("/equipments/{equipment_id}/status-logs", summary="获取设备状态变更历史")
+async def get_equipment_status_logs(
+    equipment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:asset:read"),
+    ),
+) -> JSONResponse:
+    """获取设备的设备状态/运行状态变更时间线（倒序，含两类日志）"""
+    if not await repo.equipment_exists(db, equipment_id):
+        raise NotFoundException("设备", str(equipment_id))
+    logs = await service.get_status_logs(db, equipment_id)
+    return success_response(data=logs)
 
 
 @router.put("/equipments/{equipment_id}", summary="更新设备")

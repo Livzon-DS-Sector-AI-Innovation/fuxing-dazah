@@ -137,6 +137,26 @@ async def _resolve_visible_department_ids(
     return []
 
 
+async def build_access_context(
+    db: AsyncSession, user: User, resource: str | None = None
+) -> EquipmentAccessContext:
+    """构建设备模块访问上下文（不做权限校验，仅解析数据范围）。
+
+    供 FastAPI 依赖和 public_api 跨模块调用复用。
+    """
+    scope = await _perm_repo.get_effective_data_scope(
+        db, user.id, "equipment", resource=resource,
+    )
+    dept_user_ids = await _resolve_department_user_ids(db, user, scope)
+    visible_dept_ids = await _resolve_visible_department_ids(db, user, scope)
+    return EquipmentAccessContext(
+        user=user,
+        data_scope=scope,
+        department_user_ids=dept_user_ids,
+        visible_department_ids=visible_dept_ids,
+    )
+
+
 def require_equipment_access(*codes: str):
     """组合依赖工厂：权限检查 + 数据范围解析。
 
@@ -157,16 +177,6 @@ def require_equipment_access(*codes: str):
         user: User = Depends(perm_dep),
         db: AsyncSession = Depends(get_db),
     ) -> EquipmentAccessContext:
-        scope = await _perm_repo.get_effective_data_scope(
-            db, user.id, "equipment", resource=_resource,
-        )
-        dept_user_ids = await _resolve_department_user_ids(db, user, scope)
-        visible_dept_ids = await _resolve_visible_department_ids(db, user, scope)
-        return EquipmentAccessContext(
-            user=user,
-            data_scope=scope,
-            department_user_ids=dept_user_ids,
-            visible_department_ids=visible_dept_ids,
-        )
+        return await build_access_context(db, user, resource=_resource)
 
     return _dependency

@@ -77,7 +77,7 @@ async def work_order(db_session: AsyncSession) -> WorkOrder:
         equipment_no=f"EQ-{uuid.uuid4().hex[:8]}",
         name="图片测试设备",
         location_id=location.id,
-        status="在用",
+        status="完好",
     )
     db_session.add(equipment)
     await db_session.flush()

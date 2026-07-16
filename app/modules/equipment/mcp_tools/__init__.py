@@ -14,6 +14,7 @@ from app.modules.equipment.mcp_tools._helpers import (  # noqa: F401
 )
 from app.modules.equipment.mcp_tools.equipment import (  # noqa: F401
     search_equipments,
+    update_equipment_running_status,
 )
 from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
     get_inspection_check_items,

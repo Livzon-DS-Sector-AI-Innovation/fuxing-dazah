@@ -4,14 +4,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core import time as app_time
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import WorkOrder
-from app.modules.equipment.service.data_scope import apply_equipment_scope
+from app.modules.equipment.models.equipment import Equipment
 
 
 async def create_work_order(
@@ -110,8 +110,23 @@ async def get_work_orders(
         .where(WorkOrder.is_deleted == False)  # noqa: E712
     )
 
-    # Apply data scope filtering based on reporter_id
-    query = apply_equipment_scope(query, ctx, WorkOrder.reporter_id, "user_id")
+    # 数据范围过滤：按 reporter_id（user_id 模式）；维护计划自动生成的工单
+    # reporter_id 为 NULL，按设备所属部门兜底可见
+    if not ctx.is_unrestricted:
+        reporter_cond = WorkOrder.reporter_id.in_(ctx.department_user_ids)
+        if ctx.visible_department_ids:
+            null_cond = and_(
+                WorkOrder.reporter_id.is_(None),
+                WorkOrder.equipment_id.in_(
+                    select(Equipment.id).where(
+                        Equipment.department_id.in_(ctx.visible_department_ids),
+                        Equipment.is_deleted == False,  # noqa: E712
+                    )
+                ),
+            )
+            query = query.where(or_(reporter_cond, null_cond))
+        else:
+            query = query.where(reporter_cond)
 
     if status:
         query = query.where(WorkOrder.status == status)
@@ -146,9 +161,24 @@ async def get_work_order_statistics(
     if exclude_status:
         base_where = base_where & (WorkOrder.status != exclude_status)
 
-    # 按 reporter_id（user_id 模式）过滤数据范围
+    # 按 reporter_id（user_id 模式）过滤数据范围；维护计划自动生成的工单
+    # reporter_id 为 NULL，按设备所属部门兜底可见
     def _apply_scope(q):
-        return apply_equipment_scope(q, ctx, WorkOrder.reporter_id, "user_id")
+        if ctx.is_unrestricted:
+            return q
+        reporter_cond = WorkOrder.reporter_id.in_(ctx.department_user_ids)
+        if ctx.visible_department_ids:
+            null_cond = and_(
+                WorkOrder.reporter_id.is_(None),
+                WorkOrder.equipment_id.in_(
+                    select(Equipment.id).where(
+                        Equipment.department_id.in_(ctx.visible_department_ids),
+                        Equipment.is_deleted == False,  # noqa: E712
+                    )
+                ),
+            )
+            return q.where(or_(reporter_cond, null_cond))
+        return q.where(reporter_cond)
 
     total_query = _apply_scope(select(func.count()).where(base_where))
     total_result = await db.execute(total_query)

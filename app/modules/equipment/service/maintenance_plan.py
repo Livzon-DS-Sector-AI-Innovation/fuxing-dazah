@@ -21,12 +21,11 @@ from app.modules.equipment.schemas import (
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
 from app.modules.equipment.service.work_order import (
+    _MAX_RETRIES,
     generate_work_order_no,
 )
 
 logger = logging.getLogger(__name__)
-
-_MAX_RETRIES = 3
 
 
 def _calculate_next_maintenance_date(
@@ -230,11 +229,15 @@ async def generate_due_work_orders(
                     "维护计划 %s (%s) 的分类下无可用设备，跳过",
                     plan.id, plan.plan_name,
                 )
+                plan.last_generated_date = plan.next_maintenance_date
+                await db.flush()
                 skipped_count += 1
                 continue
         elif plan.equipment_id:
             equipment_ids = [plan.equipment_id]
         else:
+            plan.last_generated_date = plan.next_maintenance_date
+            await db.flush()
             skipped_count += 1
             continue
 
@@ -269,7 +272,7 @@ async def generate_due_work_orders(
                 )
                 continue
 
-            if equipment.status in ("停用", "报废"):
+            if equipment.status == "报废":
                 logger.info(
                     "维护计划 %s (%s) 的设备 %s 状态为 %s，跳过",
                     plan.id, plan.plan_name, equipment.name, equipment.status,
@@ -343,9 +346,13 @@ async def generate_due_work_orders(
                     plan.frequency,
                     plan.frequency_unit,
                 )
-                plan.last_generated_date = plan.next_maintenance_date
+                # ponytail: line 337 already sets last_generated_date to the
+                # pre-advance value; don't overwrite with the future date.
             await db.flush()
         else:
+            # 全部设备生成失败时也更新防重日期，避免下次调度无限重试
+            plan.last_generated_date = plan.next_maintenance_date
+            await db.flush()
             skipped_count += 1
 
     return created_count, skipped_count

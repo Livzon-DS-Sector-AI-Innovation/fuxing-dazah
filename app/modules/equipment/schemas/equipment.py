@@ -6,7 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EquipmentStatus = Literal["在用", "备用", "维修中", "停用", "报废"]
+EquipmentStatus = Literal["完好", "备用", "故障待检", "维修中", "报废"]
+RunningStatus = Literal["开机", "停机"]
 EquipmentImportance = Literal["高", "中", "低"]
 
 
@@ -113,7 +114,10 @@ class EquipmentCreate(BaseModel):
     )
     location_id: uuid.UUID = Field(..., description="设备位置ID")
     status: EquipmentStatus = Field(
-        default="在用", description="设备状态：在用/备用/维修中/停用/报废"
+        default="完好", description="设备状态：完好/备用/故障待检/维修中/报废"
+    )
+    running_status: RunningStatus = Field(
+        default="开机", description="运行状态：开机/停机"
     )
     model: str | None = Field(default=None, max_length=100, description="设备型号")
     specification: str | None = Field(
@@ -152,7 +156,10 @@ class EquipmentUpdate(BaseModel):
     )
     location_id: uuid.UUID | None = Field(default=None, description="设备位置ID")
     status: EquipmentStatus | None = Field(
-        default=None, description="设备状态：在用/备用/维修中/停用/报废"
+        default=None, description="设备状态：完好/备用/故障待检/维修中/报废"
+    )
+    running_status: RunningStatus | None = Field(
+        default=None, description="运行状态：开机/停机"
     )
     model: str | None = Field(default=None, max_length=100, description="设备型号")
     specification: str | None = Field(
@@ -186,12 +193,13 @@ class EquipmentResponse(BaseModel):
     id: uuid.UUID
     equipment_no: str
     name: str
+    model: str | None = None
     category_ids: list[uuid.UUID] = Field(default_factory=list)
     category_names: str | None = None
     location_id: uuid.UUID
     location_name: str | None = None
     status: EquipmentStatus
-    model: str | None
+    running_status: RunningStatus
     specification: str | None
     manufacturer: str | None
     supplier: str | None

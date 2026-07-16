@@ -117,11 +117,11 @@ class TestEquipmentModel:
             equipment_no="EQ-001",
             name="500L反应釜",
             location_id=uuid.uuid4(),
-            status="在用",
+            status="完好",
         )
         assert equip.equipment_no == "EQ-001"
         assert equip.name == "500L反应釜"
-        assert equip.status == "在用"
+        assert equip.status == "完好"
 
     def test_date_fields_accept_date_objects(self) -> None:
         """production_date and commissioning_date accept datetime.date values."""
@@ -166,11 +166,22 @@ class TestEquipmentModel:
             for c in Equipment.__table_args__
             if isinstance(c, CheckConstraint) and c.name == "ck_equipments_status"
         )
-        assert "在用" in constraint.sqltext.text
+        assert "完好" in constraint.sqltext.text
         assert "备用" in constraint.sqltext.text
+        assert "故障待检" in constraint.sqltext.text
         assert "维修中" in constraint.sqltext.text
-        assert "停用" in constraint.sqltext.text
         assert "报废" in constraint.sqltext.text
+
+    def test_running_status_check_constraint_exists(self) -> None:
+        """CheckConstraint 限定 running_status 取值为 开机/停机。"""
+        constraint = next(
+            c
+            for c in Equipment.__table_args__
+            if isinstance(c, CheckConstraint)
+            and c.name == "ck_equipments_running_status"
+        )
+        assert "开机" in constraint.sqltext.text
+        assert "停机" in constraint.sqltext.text
 
     def test_importance_check_constraint_exists(self) -> None:
         """CheckConstraint 限定 importance 取值为 高/中/低。"""
