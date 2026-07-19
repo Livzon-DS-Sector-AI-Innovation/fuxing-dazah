@@ -196,7 +196,6 @@ async def save_graph(
                     direction=im.direction,
                     unit_override=im.unit_override,
                     required=im.required,
-                    is_product=im.is_product,
                     sort_order=im.sort_order,
                     remark=im.remark,
                     created_by=user.id if user else None,
@@ -214,11 +213,14 @@ async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
     for d in defs:
         defs_by_node.setdefault(d.node_id, []).append(FieldDefOut.model_validate(d))
     intermediates = await repo.get_node_intermediates(db, [n.id for n in nodes])
+    # 批量查出中间体类型名称
+    type_ids = list({im.intermediate_type_id for im in intermediates})
+    type_name_map = {t.id: t.name for t in await repo.get_intermediate_types_by_ids(db, type_ids)}
     ims_by_node: dict[uuid.UUID, list[NodeIntermediateOut]] = {}
     for im in intermediates:
-        ims_by_node.setdefault(im.node_id, []).append(
-            NodeIntermediateOut.model_validate(im)
-        )
+        out = NodeIntermediateOut.model_validate(im)
+        out.intermediate_type_name = type_name_map.get(im.intermediate_type_id)
+        ims_by_node.setdefault(im.node_id, []).append(out)
     node_outs = []
     for n in nodes:
         out = NodeOut.model_validate(n)
@@ -380,7 +382,6 @@ async def new_version(
                 direction=im.direction,
                 unit_override=im.unit_override,
                 required=im.required,
-                is_product=im.is_product,
                 sort_order=im.sort_order,
                 remark=im.remark,
                 created_by=user.id if user else None,
