@@ -33,6 +33,10 @@ class IntermediateType(BaseModel):
     description: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="说明"
     )
+    is_product: Mapped[bool] = mapped_column(default=False, comment="是否为成品")
+    product_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="关联的产品ID（可选）"
+    )
 
 
 class RouteNodeIntermediate(BaseModel):
@@ -65,7 +69,6 @@ class RouteNodeIntermediate(BaseModel):
         String(20), nullable=True, comment="覆盖默认单位"
     )
     required: Mapped[bool] = mapped_column(default=False, comment="是否必填")
-    is_product: Mapped[bool] = mapped_column(default=False, comment="产出方向时标记为成品")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
 

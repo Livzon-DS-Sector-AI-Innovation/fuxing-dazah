@@ -269,11 +269,12 @@ async def list_batches_paged(
     product_id: uuid.UUID | None,
     status: str | None,
     keyword: str | None,
-    page: int,
-    page_size: int,
+    entry_node_filter: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
     order_by: str = "created_at",
     order: str = "desc",
 ) -> tuple[list[Batch], int]:
     return await repo.list_batches(
-        db, product_id, status, keyword, page, page_size, order_by, order
+        db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
     )

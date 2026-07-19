@@ -192,6 +192,11 @@ async def start_execution(
         output = await repo.get_intermediate_output(db, c.output_id)
         if not output:
             raise NotFoundException("中间体产出记录", str(c.output_id))
+        if c.intermediate_type_id != output.intermediate_type_id:
+            raise AppException(
+                status_code=400,
+                message="消耗的中间体类型与产出源类型不匹配",
+            )
         db.add(
             BatchIntermediateConsumption(
                 batch_id=batch_id,
@@ -238,28 +243,33 @@ async def complete_execution(
         db.add(row)
     # 中间体产出记录
     batch = await repo.get_batch(db, execution.batch_id)
-    if batch:
-        node_ims = await repo.get_node_intermediates(db, [execution.node_id])
-        is_product_map = {
-            im.intermediate_type_id: im.is_product
-            for im in node_ims
-            if im.direction == "output"
-        }
-        for o in payload.intermediate_outputs:
-            db.add(
-                BatchIntermediateOutput(
-                    batch_id=execution.batch_id,
-                    execution_id=execution.id,
-                    node_id=execution.node_id,
-                    intermediate_type_id=o.intermediate_type_id,
-                    intermediate_batch_no=o.intermediate_batch_no or batch.batch_no,
-                    quantity=o.quantity,
-                    unit=o.unit or "",
-                    is_product=is_product_map.get(o.intermediate_type_id, False),
-                    remark=o.remark,
-                    created_by=user.id if user else None,
-                )
+    if not batch:
+        raise AppException(status_code=400, message="批次不存在或已删除，无法完成工序")
+    # 从产出物类型配置读取 is_product（批量查询，不走全表扫描）
+    output_type_ids = [o.intermediate_type_id for o in payload.intermediate_outputs]
+    is_product_map: dict[uuid.UUID, bool] = {}
+    if output_type_ids:
+        types = await repo.get_intermediate_types_by_ids(db, output_type_ids)
+        is_product_map = {t.id: t.is_product for t in types}
+        # 校验所有中间体类型均存在且未被软删除
+        missing = set(output_type_ids) - set(is_product_map.keys())
+        if missing:
+            raise NotFoundException("中间体类型", ", ".join(str(m) for m in missing))
+    for o in payload.intermediate_outputs:
+        db.add(
+            BatchIntermediateOutput(
+                batch_id=execution.batch_id,
+                execution_id=execution.id,
+                node_id=execution.node_id,
+                intermediate_type_id=o.intermediate_type_id,
+                intermediate_batch_no=o.intermediate_batch_no or batch.batch_no,
+                quantity=o.quantity,
+                unit=o.unit or "",
+                is_product=is_product_map.get(o.intermediate_type_id, False),
+                remark=o.remark,
+                created_by=user.id if user else None,
             )
+        )
     execution.status = "completed"
     execution.finished_at = datetime.now(UTC)
     execution.finished_by = user.id if user else None
