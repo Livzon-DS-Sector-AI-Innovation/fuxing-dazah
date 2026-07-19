@@ -275,7 +275,7 @@ export function RouteFlowGraph({ nodes, edges, onNodeClick }: Props) {
       nodes={rfNodes}
       edges={rfEdges}
       nodeTypes={nodeTypes}
-      onNodeClick={onNodeClick}
+      onNodeClick={onNodeClick ? (id) => { if (!id.includes('__material-')) onNodeClick(id) } : undefined}
       height={460}
     />
   )
