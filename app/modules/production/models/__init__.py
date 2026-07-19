@@ -1,10 +1,16 @@
-"""生产模块 ORM 模型。按聚合拆分：product / route / batch / execution。"""
+"""生产模块 ORM 模型。按聚合拆分：product / route / batch / execution / intermediate。"""
 
 from app.modules.production.models.batch import Batch, BatchLink
 from app.modules.production.models.execution import (
     NodeExecution,
     NodeExecutionEquipment,
     NodeFieldValue,
+)
+from app.modules.production.models.intermediate import (
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
+    IntermediateType,
+    RouteNodeIntermediate,
 )
 from app.modules.production.models.product import Product
 from app.modules.production.models.route import (
@@ -16,7 +22,10 @@ from app.modules.production.models.route import (
 
 __all__ = [
     "Batch",
+    "BatchIntermediateConsumption",
+    "BatchIntermediateOutput",
     "BatchLink",
+    "IntermediateType",
     "NodeExecution",
     "NodeExecutionEquipment",
     "NodeFieldValue",
@@ -25,4 +34,5 @@ __all__ = [
     "Product",
     "RouteEdge",
     "RouteNode",
+    "RouteNodeIntermediate",
 ]

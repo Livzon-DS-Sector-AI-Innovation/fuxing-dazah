@@ -73,7 +73,9 @@ async def maintenance_plan_loop() -> None:
 
                 advance_config = await get_advance_days_config(db)
                 created_count, skipped_count = await generate_due_work_orders(
-                    db, advance_days=advance_config.advance_days
+                    db,
+                    advance_days=advance_config.advance_days,
+                    auto_execute=advance_config.auto_execute,
                 )
                 await db.commit()
 

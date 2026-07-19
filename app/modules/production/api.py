@@ -15,6 +15,9 @@ from app.modules.production.schemas import (
     ExecutionCompleteIn,
     ExecutionOut,
     ExecutionStartIn,
+    IntermediateTypeCreate,
+    IntermediateTypeOut,
+    IntermediateTypeUpdate,
     MergeIn,
     ProductCreate,
     ProductOut,
@@ -26,6 +29,7 @@ from app.modules.production.schemas import (
 from app.modules.production.service import (
     batch_service,
     execution_service,
+    intermediate_service,
     route_service,
     trace_service,
 )
@@ -350,3 +354,113 @@ async def list_node_executions(
     return paginated_response(
         [i.model_dump(mode="json") for i in items], page, page_size, total
     )
+
+
+# ── 中间体字典 ──
+
+
+@router.get("/intermediate-types", summary="中间体字典列表")
+async def list_intermediate_types(
+    keyword: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items, total = await intermediate_service.list_intermediate_types_paged(
+        db, keyword, page, page_size
+    )
+    return paginated_response(
+        [IntermediateTypeOut.model_validate(i).model_dump(mode="json") for i in items],
+        page,
+        page_size,
+        total,
+    )
+
+
+@router.post("/intermediate-types", summary="新增中间体字典")
+async def create_intermediate_type(
+    payload: IntermediateTypeCreate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    obj = await intermediate_service.create_intermediate_type(db, payload, user)
+    return success_response(
+        IntermediateTypeOut.model_validate(obj).model_dump(mode="json")
+    )
+
+
+@router.get("/intermediate-types/{type_id}", summary="中间体字典详情")
+async def get_intermediate_type(
+    type_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    from app.modules.production import repository as repo
+    obj = await repo.get_intermediate_type(db, type_id)
+    if not obj:
+        from app.core.exceptions import NotFoundException
+        raise NotFoundException("中间体", str(type_id))
+    return success_response(
+        IntermediateTypeOut.model_validate(obj).model_dump(mode="json")
+    )
+
+
+@router.put("/intermediate-types/{type_id}", summary="编辑中间体字典")
+async def update_intermediate_type(
+    type_id: uuid.UUID,
+    payload: IntermediateTypeUpdate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    obj = await intermediate_service.update_intermediate_type(db, type_id, payload, user)
+    return success_response(
+        IntermediateTypeOut.model_validate(obj).model_dump(mode="json")
+    )
+
+
+@router.delete("/intermediate-types/{type_id}", summary="删除中间体字典")
+async def delete_intermediate_type(
+    type_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    await intermediate_service.delete_intermediate_type(db, type_id, user)
+    return success_response()
+
+
+# ── 批次中间体台账 ──
+
+
+@router.get("/batches/{batch_id}/intermediates/outputs", summary="批次中间体产出列表")
+async def list_batch_intermediate_outputs(
+    batch_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    outputs = await intermediate_service.get_batch_outputs(db, batch_id)
+    return success_response([o.model_dump(mode="json") for o in outputs])
+
+
+@router.get("/batches/{batch_id}/intermediates/consumptions", summary="批次中间体消耗列表")
+async def list_batch_intermediate_consumptions(
+    batch_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    consumptions = await intermediate_service.get_batch_consumptions(db, batch_id)
+    return success_response([c.model_dump(mode="json") for c in consumptions])
+
+
+@router.get("/intermediates/outputs/{output_id}/trace", summary="中间体物料流向追溯")
+async def trace_intermediate(
+    output_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """给定一个中间体产出 ID，返回该产出本身及其下游消耗记录。"""
+    result = await intermediate_service.trace_intermediate_output(db, output_id)
+    return success_response({
+        "output": result["output"].model_dump(mode="json"),
+        "consumptions": [c.model_dump(mode="json") for c in result["consumptions"]],
+    })

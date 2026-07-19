@@ -35,6 +35,7 @@ _TIMEOUT_KEYS = [
 
 
 ADVANCE_DAYS_KEY = "maintenance_plan_advance_days"
+AUTO_EXECUTE_KEY = "maintenance_plan_auto_execute"
 
 
 def _rand_key() -> str:
@@ -152,11 +153,12 @@ async def test_update_claim_timeout_all_none_is_noop(
 async def test_get_advance_days_defaults_to_zero(
     db_session: AsyncSession,
 ) -> None:
-    """空库时维护计划提前创建天数默认 0。"""
-    await _clear_keys(db_session, [ADVANCE_DAYS_KEY])
+    """空库时维护计划提前创建天数默认 0，自动执行默认 True。"""
+    await _clear_keys(db_session, [ADVANCE_DAYS_KEY, AUTO_EXECUTE_KEY])
     config = await service.get_advance_days_config(db_session)
 
     assert config.advance_days == 0
+    assert config.auto_execute is True
 
 
 async def test_update_advance_days_roundtrip(
@@ -170,6 +172,21 @@ async def test_update_advance_days_roundtrip(
     reread = await service.get_advance_days_config(db_session)
 
     assert reread.advance_days == 7
+
+
+async def test_update_auto_execute_roundtrip(
+    db_session: AsyncSession,
+) -> None:
+    """关闭自动执行后读回应为 False，再开启读回 True。"""
+    await service.update_advance_days_config(
+        db_session, AdvanceDaysUpdateRequest(advance_days=0, auto_execute=False)
+    )
+    assert (await service.get_advance_days_config(db_session)).auto_execute is False
+
+    await service.update_advance_days_config(
+        db_session, AdvanceDaysUpdateRequest(advance_days=0, auto_execute=True)
+    )
+    assert (await service.get_advance_days_config(db_session)).auto_execute is True
 
 
 async def test_update_advance_days_upsert_overwrites(

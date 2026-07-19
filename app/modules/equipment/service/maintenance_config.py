@@ -51,21 +51,29 @@ async def update_claim_timeout_config(
 
 
 _ADVANCE_DAYS_KEY = "maintenance_plan_advance_days"
+_AUTO_EXECUTE_KEY = "maintenance_plan_auto_execute"
 
 
 async def get_advance_days_config(
     db: AsyncSession,
 ) -> AdvanceDaysConfig:
-    """获取维护计划提前创建天数配置。返回 advance_days，未配置时默认 0。"""
-    configs = await repo.get_configs(db, [_ADVANCE_DAYS_KEY])
+    """获取维护计划自动创建配置。advance_days 默认 0，auto_execute 默认 true。"""
+    configs = await repo.get_configs(db, [_ADVANCE_DAYS_KEY, _AUTO_EXECUTE_KEY])
     return AdvanceDaysConfig(
         advance_days=int(configs.get(_ADVANCE_DAYS_KEY, 0)),
+        auto_execute=configs.get(_AUTO_EXECUTE_KEY, "true") == "true",
     )
 
 
 async def update_advance_days_config(
     db: AsyncSession, data: AdvanceDaysUpdateRequest
 ) -> AdvanceDaysConfig:
-    """更新维护计划提前创建天数配置。"""
-    await repo.upsert_configs(db, {_ADVANCE_DAYS_KEY: str(data.advance_days)})
+    """更新维护计划自动创建配置。"""
+    await repo.upsert_configs(
+        db,
+        {
+            _ADVANCE_DAYS_KEY: str(data.advance_days),
+            _AUTO_EXECUTE_KEY: "true" if data.auto_execute else "false",
+        },
+    )
     return await get_advance_days_config(db)

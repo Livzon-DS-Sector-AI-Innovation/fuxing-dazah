@@ -12,10 +12,12 @@ from app.modules.production.models import (
     Product,
     RouteEdge,
     RouteNode,
+    RouteNodeIntermediate,
 )
 from app.modules.production.schemas import (
     EdgeOut,
     FieldDefOut,
+    NodeIntermediateOut,
     NodeOut,
     ProductCreate,
     ProductUpdate,
@@ -185,6 +187,21 @@ async def save_graph(
                 created_by=user.id if user else None,
             )
         )
+    for n in graph.nodes:
+        for im in n.intermediates:
+            db.add(
+                RouteNodeIntermediate(
+                    node_id=node_by_code[n.node_code].id,
+                    intermediate_type_id=im.intermediate_type_id,
+                    direction=im.direction,
+                    unit_override=im.unit_override,
+                    required=im.required,
+                    is_product=im.is_product,
+                    sort_order=im.sort_order,
+                    remark=im.remark,
+                    created_by=user.id if user else None,
+                )
+            )
     await db.flush()
 
 
@@ -196,10 +213,17 @@ async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
     defs_by_node: dict[uuid.UUID, list[FieldDefOut]] = {}
     for d in defs:
         defs_by_node.setdefault(d.node_id, []).append(FieldDefOut.model_validate(d))
+    intermediates = await repo.get_node_intermediates(db, [n.id for n in nodes])
+    ims_by_node: dict[uuid.UUID, list[NodeIntermediateOut]] = {}
+    for im in intermediates:
+        ims_by_node.setdefault(im.node_id, []).append(
+            NodeIntermediateOut.model_validate(im)
+        )
     node_outs = []
     for n in nodes:
         out = NodeOut.model_validate(n)
         out.fields = defs_by_node.get(n.id, [])
+        out.intermediates = ims_by_node.get(n.id, [])
         node_outs.append(out)
     return RouteGraphOut(
         route=RouteOut.model_validate(route),
@@ -340,6 +364,25 @@ async def new_version(
                 min_value=d.min_value,
                 max_value=d.max_value,
                 sort_order=d.sort_order,
+                created_by=user.id if user else None,
+            )
+        )
+    intermediates = await repo.get_node_intermediates(
+        db, [n.id for n in nodes]
+    )
+    for im in intermediates:
+        if im.node_id not in id_map:
+            continue
+        db.add(
+            RouteNodeIntermediate(
+                node_id=id_map[im.node_id],
+                intermediate_type_id=im.intermediate_type_id,
+                direction=im.direction,
+                unit_override=im.unit_override,
+                required=im.required,
+                is_product=im.is_product,
+                sort_order=im.sort_order,
+                remark=im.remark,
                 created_by=user.id if user else None,
             )
         )

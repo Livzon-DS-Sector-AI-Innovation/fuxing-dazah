@@ -5,6 +5,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.production.schemas.intermediate import (
+    IntermediateConsumptionIn,
+    IntermediateOutputIn,
+)
+
 
 class FieldValueIn(BaseModel):
     field_key: str
@@ -41,11 +46,13 @@ class ExecutionStartIn(BaseModel):
     field_values: list[FieldValueIn] = []
     deviation_reason: str | None = None
     remark: str | None = None
+    intermediate_consumptions: list[IntermediateConsumptionIn] = []
 
 
 class ExecutionCompleteIn(BaseModel):
     field_values: list[FieldValueIn] = []
     remark: str | None = None
+    intermediate_outputs: list[IntermediateOutputIn] = []
 
 
 class ExecutionOut(BaseModel):

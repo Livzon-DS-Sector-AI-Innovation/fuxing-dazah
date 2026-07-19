@@ -6,6 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.production.schemas.intermediate import (
+    NodeIntermediateIn,
+    NodeIntermediateOut,
+)
+
 
 class FieldDefIn(BaseModel):
     field_key: str = Field(max_length=50)
@@ -37,6 +42,7 @@ class NodeIn(BaseModel):
     node_type: str = "process"
     sort_order: int = 0
     fields: list[FieldDefIn] = []
+    intermediates: list[NodeIntermediateIn] = []
 
 
 class NodeOut(BaseModel):
@@ -49,6 +55,7 @@ class NodeOut(BaseModel):
     node_type: str
     sort_order: int
     fields: list[FieldDefOut] = []
+    intermediates: list[NodeIntermediateOut] = []
 
 
 class EdgeIn(BaseModel):

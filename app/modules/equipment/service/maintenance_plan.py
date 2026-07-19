@@ -190,11 +190,13 @@ async def get_overdue_maintenance_plans(
 async def generate_due_work_orders(
     db: AsyncSession,
     advance_days: int = 0,
+    auto_execute: bool = True,
 ) -> tuple[int, int]:
     """扫描到期维护计划，自动创建"计划维护"工单。
 
     Args:
         advance_days: 提前天数，默认 0（仅扫描今天到期）。
+        auto_execute: 是否自动执行，True 时有执行人的工单直接进「执行中」。
 
     Returns:
         (created_count, skipped_count) 元组
@@ -281,6 +283,8 @@ async def generate_due_work_orders(
 
             # 生成工单（带重试，使用 SAVEPOINT 避免并发冲突时
             # 回滚同一事务中已创建的其他设备工单）
+            # 自动执行开启且有执行人 → 直接进「执行中」;否则留「待处理」
+            should_start = auto_execute and plan.executor_id is not None
             for attempt in range(_MAX_RETRIES):
                 wo_no = await generate_work_order_no(db)
                 wo_data: dict[str, object] = {
@@ -288,8 +292,7 @@ async def generate_due_work_orders(
                     "equipment_id": eq_id,
                     "order_type": "计划维护",
                     "priority": "中",
-                    # 已自动派工给执行人 → 直接进「执行中」;无执行人则留「待处理」
-                    "status": "执行中" if plan.executor_id else "待处理",
+                    "status": "执行中" if should_start else "待处理",
                     "reporter_id": None,  # 系统自动生成，无报修人
                     "maintenance_plan_id": plan.id,
                     "responsible_person_id": plan.executor_id,
@@ -300,7 +303,7 @@ async def generate_due_work_orders(
                     ),
                     # 直接进执行中的工单同步写开工时间，避免「执行中却无 started_at」
                     "started_at": (
-                        app_time.now() if plan.executor_id else None
+                        app_time.now() if should_start else None
                     ),
                     "planned_start_date": plan.next_maintenance_date,
                     "original_equipment_status": equipment.status,

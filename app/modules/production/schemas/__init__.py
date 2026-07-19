@@ -1,4 +1,4 @@
-"""生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace。"""
+"""生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace / intermediate。"""
 
 from app.modules.production.schemas.batch import (
     BatchCreate,
@@ -17,6 +17,17 @@ from app.modules.production.schemas.execution import (
     FieldValueIn,
     FieldValueOut,
     NodeExecutionListItem,
+)
+from app.modules.production.schemas.intermediate import (
+    IntermediateConsumptionIn,
+    IntermediateConsumptionOut,
+    IntermediateOutputIn,
+    IntermediateOutputOut,
+    IntermediateTypeCreate,
+    IntermediateTypeOut,
+    IntermediateTypeUpdate,
+    NodeIntermediateIn,
+    NodeIntermediateOut,
 )
 from app.modules.production.schemas.product import (
     ProductCreate,
@@ -58,10 +69,19 @@ __all__ = [
     "FieldDefOut",
     "FieldValueIn",
     "FieldValueOut",
+    "IntermediateConsumptionIn",
+    "IntermediateConsumptionOut",
+    "IntermediateOutputIn",
+    "IntermediateOutputOut",
+    "IntermediateTypeCreate",
+    "IntermediateTypeOut",
+    "IntermediateTypeUpdate",
     "MergeIn",
     "MergeParentIn",
     "NodeExecutionListItem",
     "NodeIn",
+    "NodeIntermediateIn",
+    "NodeIntermediateOut",
     "NodeOut",
     "ProductCreate",
     "ProductOut",

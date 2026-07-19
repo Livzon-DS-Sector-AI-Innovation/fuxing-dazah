@@ -23,6 +23,7 @@ class TraceBatch(BaseModel):
     status: str
     quantity: float | None
     unit: str | None
+    current_stage_name: str | None = None
     executions: list[TraceExecutionBrief] = []
 
 

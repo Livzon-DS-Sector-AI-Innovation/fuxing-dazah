@@ -11,6 +11,8 @@ from app.modules.equipment.public_api import get_equipment_briefs
 from app.modules.production import repository as repo
 from app.modules.production.models import (
     Batch,
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
     NodeExecution,
     NodeExecutionEquipment,
     NodeFieldDef,
@@ -185,6 +187,24 @@ async def start_execution(
                 created_by=user.id if user else None,
             )
         )
+    # 中间体消耗记录
+    for c in payload.intermediate_consumptions:
+        output = await repo.get_intermediate_output(db, c.output_id)
+        if not output:
+            raise NotFoundException("中间体产出记录", str(c.output_id))
+        db.add(
+            BatchIntermediateConsumption(
+                batch_id=batch_id,
+                execution_id=execution.id,
+                node_id=payload.node_id,
+                intermediate_type_id=c.intermediate_type_id,
+                output_id=c.output_id,
+                quantity=c.quantity,
+                unit=c.unit or output.unit,
+                remark=c.remark,
+                created_by=user.id if user else None,
+            )
+        )
     # 首个执行推进批次状态
     if batch.status == "pending":
         batch.status = "in_progress"
@@ -216,6 +236,30 @@ async def complete_execution(
         defs, payload.field_values, "end", execution.id, user
     ):
         db.add(row)
+    # 中间体产出记录
+    batch = await repo.get_batch(db, execution.batch_id)
+    if batch:
+        node_ims = await repo.get_node_intermediates(db, [execution.node_id])
+        is_product_map = {
+            im.intermediate_type_id: im.is_product
+            for im in node_ims
+            if im.direction == "output"
+        }
+        for o in payload.intermediate_outputs:
+            db.add(
+                BatchIntermediateOutput(
+                    batch_id=execution.batch_id,
+                    execution_id=execution.id,
+                    node_id=execution.node_id,
+                    intermediate_type_id=o.intermediate_type_id,
+                    intermediate_batch_no=o.intermediate_batch_no or batch.batch_no,
+                    quantity=o.quantity,
+                    unit=o.unit or "",
+                    is_product=is_product_map.get(o.intermediate_type_id, False),
+                    remark=o.remark,
+                    created_by=user.id if user else None,
+                )
+            )
     execution.status = "completed"
     execution.finished_at = datetime.now(UTC)
     execution.finished_by = user.id if user else None

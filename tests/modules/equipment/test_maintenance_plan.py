@@ -595,6 +595,71 @@ async def test_generate_sets_expected_work_order_fields(
     assert wo.planned_start_date == next_date
 
 
+async def test_generate_auto_execute_off_assigns_but_stays_pending(
+    db_session: AsyncSession,
+    due_equipment: Equipment,
+    executor: User,
+) -> None:
+    """auto_execute=False 时有执行人的工单仍自动派工，但保持「待处理」不开工。"""
+    plan = MaintenancePlan(
+        equipment_id=due_equipment.id,
+        plan_name="保养",
+        plan_type="预防性维护",
+        frequency=1,
+        frequency_unit="月",
+        next_maintenance_date=app_time.today(),
+        executor_id=executor.id,
+        status="启用",
+    )
+    db_session.add(plan)
+    await db_session.flush()
+
+    await generate_due_work_orders(db_session, advance_days=0, auto_execute=False)
+
+    wo = (
+        await db_session.execute(
+            select(WorkOrder).where(WorkOrder.maintenance_plan_id == plan.id)
+        )
+    ).scalar_one()
+    assert wo.status == "待处理"
+    assert wo.started_at is None
+    # 派工信息不受 auto_execute 影响
+    assert wo.responsible_person_id == executor.id
+    assert wo.assignee_id == executor.id
+    assert wo.assigned_at is not None
+
+
+async def test_generate_auto_execute_on_without_executor_stays_pending(
+    db_session: AsyncSession,
+    due_equipment: Equipment,
+) -> None:
+    """auto_execute=True 但计划无执行人时，工单保持「待处理」且不派工。"""
+    plan = MaintenancePlan(
+        equipment_id=due_equipment.id,
+        plan_name="保养",
+        plan_type="预防性维护",
+        frequency=1,
+        frequency_unit="月",
+        next_maintenance_date=app_time.today(),
+        executor_id=None,
+        status="启用",
+    )
+    db_session.add(plan)
+    await db_session.flush()
+
+    await generate_due_work_orders(db_session, advance_days=0, auto_execute=True)
+
+    wo = (
+        await db_session.execute(
+            select(WorkOrder).where(WorkOrder.maintenance_plan_id == plan.id)
+        )
+    ).scalar_one()
+    assert wo.status == "待处理"
+    assert wo.started_at is None
+    assert wo.assignee_id is None
+    assert wo.assigned_at is None
+
+
 async def test_generate_device_level_does_not_advance_next(
     db_session: AsyncSession,
     due_equipment: Equipment,

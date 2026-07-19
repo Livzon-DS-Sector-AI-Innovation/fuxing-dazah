@@ -46,6 +46,13 @@ async def get_trace(db: AsyncSession, batch_id: uuid.UUID) -> TraceOut:
     values = await repo.get_field_values_by_executions(db, exec_ids)
     nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
     node_names = {n.id: n.name for n in nodes}
+    node_stages = {n.id: n.stage_name for n in nodes}
+
+    # 每批最新 execution 所在节点 → 当前工段
+    batch_latest_node: dict[uuid.UUID, uuid.UUID] = {}
+    for e in sorted(executions, key=lambda x: x.started_at):
+        batch_latest_node[e.batch_id] = e.node_id
+    batch_stages = {bid: node_stages.get(nid) for bid, nid in batch_latest_node.items()}
 
     abnormal_by_exec: dict[uuid.UUID, int] = {}
     for v in values:
@@ -74,6 +81,7 @@ async def get_trace(db: AsyncSession, batch_id: uuid.UUID) -> TraceOut:
             status=b.status,
             quantity=b.quantity,
             unit=b.unit,
+            current_stage_name=batch_stages.get(b.id),
             executions=briefs_by_batch.get(b.id, []),
         )
         for b in batches

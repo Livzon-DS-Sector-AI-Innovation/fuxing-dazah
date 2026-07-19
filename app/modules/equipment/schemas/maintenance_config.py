@@ -22,14 +22,20 @@ class ClaimTimeoutUpdateRequest(BaseModel):
 
 
 class AdvanceDaysConfig(BaseModel):
-    """维护计划提前创建工单天数配置"""
+    """维护计划自动创建工单配置"""
 
     advance_days: int = Field(default=0, ge=0, le=364, description="提前天数，0=当天触发")
+    auto_execute: bool = Field(
+        default=True, description="是否自动执行：有执行人的工单直接进「执行中」"
+    )
 
 
 class AdvanceDaysUpdateRequest(BaseModel):
-    """更新提前天数配置请求"""
+    """更新维护计划自动创建配置请求"""
 
     advance_days: int = Field(
         ..., ge=0, le=364, description="提前天数，0-364，0=当天触发"
+    )
+    auto_execute: bool = Field(
+        default=True, description="是否自动执行：有执行人的工单直接进「执行中」"
     )

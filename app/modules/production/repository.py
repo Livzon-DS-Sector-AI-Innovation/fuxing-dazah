@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import (
     Batch,
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
+    IntermediateType,
     NodeExecution,
     NodeExecutionEquipment,
     NodeFieldDef,
@@ -16,6 +19,7 @@ from app.modules.production.models import (
     Product,
     RouteEdge,
     RouteNode,
+    RouteNodeIntermediate,
 )
 
 # 注意：BatchLink 的读取只发生在下方递归 CTE 中，无需单独查询函数
@@ -124,7 +128,7 @@ async def get_field_defs_by_nodes(
 
 
 async def soft_delete_route_graph(db: AsyncSession, route_id: uuid.UUID) -> None:
-    """整图替换前软删除路线现有节点、边、字段定义。"""
+    """整图替换前软删除路线现有节点、边、字段定义、中间体绑定。"""
     nodes = await get_route_nodes(db, route_id)
     node_ids = [n.id for n in nodes]
     for n in nodes:
@@ -133,6 +137,13 @@ async def soft_delete_route_graph(db: AsyncSession, route_id: uuid.UUID) -> None
         e.is_deleted = True
     for f in await get_field_defs_by_nodes(db, node_ids):
         f.is_deleted = True
+    im_stmt = select(RouteNodeIntermediate).where(
+        RouteNodeIntermediate.node_id.in_(node_ids),
+        RouteNodeIntermediate.is_deleted == False,  # noqa: E712
+    )
+    im_list = list((await db.execute(im_stmt)).scalars())
+    for im in im_list:
+        im.is_deleted = True
     await db.flush()
 
 
@@ -408,3 +419,151 @@ async def trace_links(
     sql = _TRACE_UP_SQL if direction == "up" else _TRACE_DOWN_SQL
     result = await db.execute(sql, {"bid": batch_id})
     return list(result.all())
+
+
+# ── 中间体 ──
+
+
+async def get_intermediate_type(
+    db: AsyncSession, type_id: uuid.UUID
+) -> IntermediateType | None:
+    stmt = select(IntermediateType).where(
+        IntermediateType.id == type_id, IntermediateType.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_intermediate_type_by_code(
+    db: AsyncSession, code: str
+) -> IntermediateType | None:
+    stmt = select(IntermediateType).where(
+        IntermediateType.code == code, IntermediateType.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_intermediate_types(
+    db: AsyncSession, keyword: str | None, page: int, page_size: int
+) -> tuple[list[IntermediateType], int]:
+    stmt = select(IntermediateType).where(
+        IntermediateType.is_deleted == False  # noqa: E712
+    )
+    if keyword:
+        pattern = f"%{keyword}%"
+        stmt = stmt.where(
+            IntermediateType.code.ilike(pattern)
+            | IntermediateType.name.ilike(pattern)
+        )
+    total = (
+        await db.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    stmt = stmt.order_by(IntermediateType.created_at.desc()).offset(
+        (page - 1) * page_size
+    ).limit(page_size)
+    return list((await db.execute(stmt)).scalars()), total
+
+
+async def list_intermediate_types_all(
+    db: AsyncSession,
+) -> list[IntermediateType]:
+    stmt = select(IntermediateType).where(
+        IntermediateType.is_deleted == False  # noqa: E712
+    ).order_by(IntermediateType.code)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_node_intermediates(
+    db: AsyncSession, node_ids: list[uuid.UUID]
+) -> list[RouteNodeIntermediate]:
+    """按节点批量查询中间体绑定。"""
+    if not node_ids:
+        return []
+    stmt = select(RouteNodeIntermediate).where(
+        RouteNodeIntermediate.node_id.in_(node_ids),
+        RouteNodeIntermediate.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_node_intermediates_by_direction(
+    db: AsyncSession, node_id: uuid.UUID, direction: str
+) -> list[RouteNodeIntermediate]:
+    stmt = select(RouteNodeIntermediate).where(
+        RouteNodeIntermediate.node_id == node_id,
+        RouteNodeIntermediate.direction == direction,
+        RouteNodeIntermediate.is_deleted == False,  # noqa: E712
+    ).order_by(RouteNodeIntermediate.sort_order)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_intermediate_output(
+    db: AsyncSession, output_id: uuid.UUID
+) -> BatchIntermediateOutput | None:
+    stmt = select(BatchIntermediateOutput).where(
+        BatchIntermediateOutput.id == output_id,
+        BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_intermediate_outputs_by_batch(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> list[BatchIntermediateOutput]:
+    stmt = (
+        select(BatchIntermediateOutput)
+        .where(
+            BatchIntermediateOutput.batch_id == batch_id,
+            BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+        )
+        .order_by(BatchIntermediateOutput.created_at)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_intermediate_outputs_by_executions(
+    db: AsyncSession, execution_ids: list[uuid.UUID]
+) -> list[BatchIntermediateOutput]:
+    if not execution_ids:
+        return []
+    stmt = select(BatchIntermediateOutput).where(
+        BatchIntermediateOutput.execution_id.in_(execution_ids),
+        BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_intermediate_consumptions_by_batch(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> list[BatchIntermediateConsumption]:
+    stmt = (
+        select(BatchIntermediateConsumption)
+        .where(
+            BatchIntermediateConsumption.batch_id == batch_id,
+            BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+        )
+        .order_by(BatchIntermediateConsumption.created_at)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_intermediate_consumptions_by_executions(
+    db: AsyncSession, execution_ids: list[uuid.UUID]
+) -> list[BatchIntermediateConsumption]:
+    if not execution_ids:
+        return []
+    stmt = select(BatchIntermediateConsumption).where(
+        BatchIntermediateConsumption.execution_id.in_(execution_ids),
+        BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_consumptions_by_output(
+    db: AsyncSession, output_id: uuid.UUID
+) -> list[BatchIntermediateConsumption]:
+    """下游溯源：谁消耗了该产出。"""
+    stmt = select(BatchIntermediateConsumption).where(
+        BatchIntermediateConsumption.output_id == output_id,
+        BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
