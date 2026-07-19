@@ -54,7 +54,112 @@ function ProcessNode({ data, selected }: NodeProps) {
   )
 }
 
-const nodeTypes = { processNode: ProcessNode }
+// ── 物料节点数据 ──
+type MaterialNodeData = {
+  parentNodeId: string
+  direction: 'input' | 'output'
+  materials: { name: string }[]
+}
+
+// ── 物料消耗节点（工序左侧） ──
+function MaterialInputNode({ data }: NodeProps) {
+  const d = data as unknown as MaterialNodeData
+  return (
+    <div
+      style={{
+        width: 140,
+        background: '#fff',
+        border: '1px solid #dd5b00',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          height: 28,
+          background: '#fef0e6',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          fontSize: 12,
+          fontWeight: 500,
+          color: '#dd5b00',
+        }}
+      >
+        物料消耗
+      </div>
+      <div style={{ padding: '4px 8px' }}>
+        {d.materials.map((m, i) => (
+          <div
+            key={i}
+            style={{ fontSize: 12, color: '#37352f', lineHeight: '20px' }}
+          >
+            {m.name}
+          </div>
+        ))}
+      </div>
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="material-source"
+        style={{ background: '#dd5b00', width: 6, height: 6 }}
+      />
+    </div>
+  )
+}
+
+// ── 产出物料节点（工序右侧） ──
+function MaterialOutputNode({ data }: NodeProps) {
+  const d = data as unknown as MaterialNodeData
+  return (
+    <div
+      style={{
+        width: 140,
+        background: '#fff',
+        border: '1px solid #1aae39',
+        borderRadius: 8,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          height: 28,
+          background: '#e6f9eb',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 8px',
+          fontSize: 12,
+          fontWeight: 500,
+          color: '#1aae39',
+        }}
+      >
+        产出物
+      </div>
+      <div style={{ padding: '4px 8px' }}>
+        {d.materials.map((m, i) => (
+          <div
+            key={i}
+            style={{ fontSize: 12, color: '#37352f', lineHeight: '20px' }}
+          >
+            {m.name}
+          </div>
+        ))}
+      </div>
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="material-target"
+        style={{ background: '#1aae39', width: 6, height: 6 }}
+      />
+    </div>
+  )
+}
+
+const nodeTypes = {
+  processNode: ProcessNode,
+  materialInputNode: MaterialInputNode,
+  materialOutputNode: MaterialOutputNode,
+}
 
 export function toRouteFlowElements(
   nodes: RouteNode[],
@@ -71,27 +176,86 @@ export function toRouteFlowElements(
       fieldCount: n.fields.length,
     },
   }))
-  const rfEdges: Edge[] = edges.map(e => {
-    const isRework = e.edge_type === 'rework'
-    const isBoundary = e.is_batch_boundary
-    return {
-      id: e.id,
-      source: e.from_node_id,
-      target: e.to_node_id,
-      type: 'smoothstep',
-      animated: true,
-      sourceHandle: isRework ? 'right-source' : 'bottom',
-      targetHandle: isRework ? 'right-target' : 'top',
-      pathOptions: isRework ? { borderRadius: 18, offset: 30 } : undefined,
-      label: isBoundary ? '批次边界' : isRework ? '回流' : undefined,
-      labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : '#5645d4' },
-      style: isRework
-        ? { stroke: '#dd5b00', strokeDasharray: '6 4', strokeWidth: 2 }
-        : isBoundary
-          ? { stroke: '#5645d4', strokeWidth: 2.5 }
-          : { stroke: '#b8b6b1' },
+
+  // ── 为有 intermediates 的工序生成物料节点 ──
+  const materialEdges: Edge[] = []
+  for (const n of nodes) {
+    const intermediates = n.intermediates ?? []
+    const inputs = intermediates.filter(i => i.direction === 'input')
+    const outputs = intermediates.filter(i => i.direction === 'output')
+
+    if (inputs.length > 0) {
+      const inputNodeId = `${n.id}__material-input`
+      rfNodes.push({
+        id: inputNodeId,
+        type: 'materialInputNode',
+        position: { x: 0, y: 0 },
+        data: {
+          parentNodeId: n.id,
+          direction: 'input',
+          materials: inputs.map(i => ({ name: i.intermediate_type_name ?? '' })),
+        } satisfies MaterialNodeData,
+      })
+      materialEdges.push({
+        id: `${n.id}__material-input-edge`,
+        source: inputNodeId,
+        target: n.id,
+        sourceHandle: 'material-source',
+        targetHandle: 'left-target',
+        type: 'straight',
+        style: { stroke: '#dd5b00', strokeDasharray: '4 3', strokeWidth: 1.5 },
+      })
     }
-  })
+
+    if (outputs.length > 0) {
+      const outputNodeId = `${n.id}__material-output`
+      rfNodes.push({
+        id: outputNodeId,
+        type: 'materialOutputNode',
+        position: { x: 0, y: 0 },
+        data: {
+          parentNodeId: n.id,
+          direction: 'output',
+          materials: outputs.map(i => ({ name: i.intermediate_type_name ?? '' })),
+        } satisfies MaterialNodeData,
+      })
+      materialEdges.push({
+        id: `${n.id}__material-output-edge`,
+        source: n.id,
+        target: outputNodeId,
+        sourceHandle: 'right-source',
+        targetHandle: 'material-target',
+        type: 'straight',
+        style: { stroke: '#1aae39', strokeDasharray: '4 3', strokeWidth: 1.5 },
+      })
+    }
+  }
+
+  const rfEdges: Edge[] = [
+    ...edges.map(e => {
+      const isRework = e.edge_type === 'rework'
+      const isBoundary = e.is_batch_boundary
+      return {
+        id: e.id,
+        source: e.from_node_id,
+        target: e.to_node_id,
+        type: 'smoothstep',
+        animated: true,
+        sourceHandle: isRework ? 'right-source' : 'bottom',
+        targetHandle: isRework ? 'right-target' : 'top',
+        pathOptions: isRework ? { borderRadius: 18, offset: 30 } : undefined,
+        label: isBoundary ? '批次边界' : isRework ? '回流' : undefined,
+        labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : '#5645d4' },
+        style: isRework
+          ? { stroke: '#dd5b00', strokeDasharray: '6 4', strokeWidth: 2 }
+          : isBoundary
+            ? { stroke: '#5645d4', strokeWidth: 2.5 }
+            : { stroke: '#b8b6b1' },
+      }
+    }),
+    ...materialEdges,
+  ]
+
   return { rfNodes, rfEdges }
 }
 
