@@ -193,7 +193,7 @@ export function toRouteFlowElements(
         data: {
           parentNodeId: n.id,
           direction: 'input',
-          materials: inputs.map(i => ({ name: i.intermediate_type_name ?? '' })),
+          materials: inputs.map(i => ({ name: i.intermediate_type_name || i.intermediate_type_id })),
         } satisfies MaterialNodeData,
       })
       materialEdges.push({
@@ -216,7 +216,7 @@ export function toRouteFlowElements(
         data: {
           parentNodeId: n.id,
           direction: 'output',
-          materials: outputs.map(i => ({ name: i.intermediate_type_name ?? '' })),
+          materials: outputs.map(i => ({ name: i.intermediate_type_name || i.intermediate_type_id })),
         } satisfies MaterialNodeData,
       })
       materialEdges.push({

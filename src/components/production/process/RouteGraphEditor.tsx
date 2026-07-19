@@ -249,18 +249,33 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
             ),
           },
           {
-            title: '中间体',
-            width: 90,
+            title: '消耗',
+            width: 80,
             render: (_, n, i) => {
-              const outputs = (n.intermediates ?? []).filter(im => im.direction === 'output').length
-              const inputs = (n.intermediates ?? []).filter(im => im.direction === 'input').length
+              const count = (n.intermediates ?? []).filter(im => im.direction === 'input').length
               return (
                 <Button
                   size="small"
                   icon={<SettingOutlined />}
                   onClick={() => setIntermediatesIdx(i)}
                 >
-                  {outputs > 0 || inputs > 0 ? `产${outputs}/耗${inputs}` : '0'}
+                  {count || '0'}
+                </Button>
+              )
+            },
+          },
+          {
+            title: '产出',
+            width: 80,
+            render: (_, n, i) => {
+              const count = (n.intermediates ?? []).filter(im => im.direction === 'output').length
+              return (
+                <Button
+                  size="small"
+                  icon={<SettingOutlined />}
+                  onClick={() => setIntermediatesIdx(i)}
+                >
+                  {count || '0'}
                 </Button>
               )
             },
