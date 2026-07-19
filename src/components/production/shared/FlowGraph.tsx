@@ -20,6 +20,12 @@ const MATERIAL_INPUT = 'materialInputNode'
 const MATERIAL_OUTPUT = 'materialOutputNode'
 const MATERIAL_NODE_W = 140
 
+interface MaterialNodeData {
+  parentNodeId: string
+  direction: 'input' | 'output'
+  materials: Array<{ name: string }>
+}
+
 /** dagre TB 自动布局：工序节点由 dagre 排列，物料节点相对于父工序节点偏移定位 */
 export function layoutGraph(
   nodes: Node[],
@@ -39,10 +45,11 @@ export function layoutGraph(
   const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}))
   g.setGraph({ rankdir: 'TB', ranksep: 60, nodesep: 40 })
   processNodes.forEach(n => g.setNode(n.id, { width: nodeW, height: nodeH }))
+  const typeMap = new Map(nodes.map(n => [n.id, n.type]))
   edges
     .filter(e => {
-      const srcType = nodes.find(n => n.id === e.source)?.type
-      const tgtType = nodes.find(n => n.id === e.target)?.type
+      const srcType = typeMap.get(e.source)
+      const tgtType = typeMap.get(e.target)
       return srcType !== MATERIAL_INPUT && srcType !== MATERIAL_OUTPUT
         && tgtType !== MATERIAL_INPUT && tgtType !== MATERIAL_OUTPUT
     })
@@ -52,6 +59,7 @@ export function layoutGraph(
   // 工序节点应用 dagre 位置
   const laidOut = processNodes.map(n => {
     const pos = g.node(n.id)
+    if (!pos) return n
     return {
       ...n,
       targetPosition: Position.Top,
@@ -62,13 +70,15 @@ export function layoutGraph(
 
   // 物料节点相对于父工序节点偏移定位
   const positionedMaterials = materialNodes.map(n => {
-    const parentId = (n.data as Record<string, unknown>).parentNodeId as string
-    const direction = (n.data as Record<string, unknown>).direction as string
+    const { parentNodeId: parentId, direction, materials } = n.data as unknown as MaterialNodeData
+    if (!parentId) return n
     const parent = laidOut.find(p => p.id === parentId)
-    if (!parent) return { ...n, position: { x: 0, y: 0 } }
+    if (!parent) {
+      console.warn(`物料节点 "${n.id}" 的父工序节点 "${parentId}" 未找到`)
+      return n
+    }
     // 估计物料节点高度：标题栏 + N 行物料名
-    const materials = (n.data as Record<string, unknown>).materials as Array<{ name: string }> ?? []
-    const estH = 28 + materials.length * 20 + 8
+    const estH = 28 + (materials?.length ?? 0) * 20 + 8
     const offsetY = (nodeH - estH) / 2 // 垂直居中
     if (direction === 'input') {
       return { ...n, position: { x: parent.position.x - MATERIAL_NODE_W - 40, y: parent.position.y + offsetY } }
