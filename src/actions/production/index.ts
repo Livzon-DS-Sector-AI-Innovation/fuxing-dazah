@@ -15,4 +15,12 @@ export {
   cancelBatch,
 } from './batch'
 export { startExecution, completeExecution, abortExecution } from './execution'
+export {
+  createIntermediateType,
+  updateIntermediateType,
+  deleteIntermediateType,
+  fetchBatchOutputs,
+  fetchBatchConsumptions,
+  fetchIntermediateTrace,
+} from './intermediate'
 export { getBatches } from './legacy'

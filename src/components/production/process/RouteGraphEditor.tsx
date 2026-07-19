@@ -17,6 +17,7 @@ import type {
   RouteNode,
 } from '@/types/production'
 import { NodeFieldsDrawer } from './NodeFieldsDrawer'
+import { NodeIntermediatesEditor } from './NodeIntermediatesEditor'
 
 /** 后端 RouteGraph → 编辑器内部状态（节点带字段；特殊边=非"相邻 normal"边） */
 function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: EdgeIn[] } {
@@ -40,6 +41,15 @@ function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: E
       min_value: f.min_value,
       max_value: f.max_value,
       sort_order: f.sort_order,
+    })),
+    intermediates: (n.intermediates ?? []).map(im => ({
+      intermediate_type_id: im.intermediate_type_id,
+      direction: im.direction,
+      unit_override: im.unit_override ?? undefined,
+      required: im.required,
+      is_product: im.is_product,
+      sort_order: im.sort_order,
+      remark: im.remark ?? undefined,
     })),
   }))
   // 相邻 normal 边（自动串联部分）不进特殊边表
@@ -104,6 +114,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
   const [nodes, setNodes] = useState<NodeIn[]>(initial.nodes)
   const [extraEdges, setExtraEdges] = useState<EdgeIn[]>(initial.extraEdges)
   const [fieldsIdx, setFieldsIdx] = useState<number | null>(null)
+  const [intermediatesIdx, setIntermediatesIdx] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
 
   const move = (i: number, dir: -1 | 1) => {
@@ -236,6 +247,23 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
                 {n.fields.length}
               </Button>
             ),
+          },
+          {
+            title: '中间体',
+            width: 90,
+            render: (_, n, i) => {
+              const outputs = (n.intermediates ?? []).filter(im => im.direction === 'output').length
+              const inputs = (n.intermediates ?? []).filter(im => im.direction === 'input').length
+              return (
+                <Button
+                  size="small"
+                  icon={<SettingOutlined />}
+                  onClick={() => setIntermediatesIdx(i)}
+                >
+                  {outputs > 0 || inputs > 0 ? `产${outputs}/耗${inputs}` : '0'}
+                </Button>
+              )
+            },
           },
           {
             title: '操作',
@@ -399,6 +427,20 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
         onSave={fields => {
           if (fieldsIdx !== null) updateNode(fieldsIdx, { fields })
           setFieldsIdx(null)
+        }}
+      />
+      <NodeIntermediatesEditor
+        open={intermediatesIdx !== null}
+        intermediates={
+          intermediatesIdx !== null ? nodes[intermediatesIdx].intermediates ?? [] : []
+        }
+        nodeName={
+          intermediatesIdx !== null ? nodes[intermediatesIdx].name || nodes[intermediatesIdx].node_code : ''
+        }
+        onClose={() => setIntermediatesIdx(null)}
+        onSave={(ims: NodeIn['intermediates']) => {
+          if (intermediatesIdx !== null) updateNode(intermediatesIdx, { intermediates: ims ?? [] })
+          setIntermediatesIdx(null)
         }}
       />
     </div>

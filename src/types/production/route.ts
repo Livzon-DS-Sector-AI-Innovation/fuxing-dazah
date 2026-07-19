@@ -1,3 +1,5 @@
+import type { NodeIntermediate, NodeIntermediateIn } from './intermediate'
+
 export type RouteStatus = 'draft' | 'published' | 'archived'
 export type EdgeType = 'normal' | 'rework'
 export type FieldPhase = 'start' | 'end'
@@ -27,6 +29,7 @@ export interface RouteNode {
   node_type: string
   sort_order: number
   fields: FieldDef[]
+  intermediates?: NodeIntermediate[]
 }
 
 export interface RouteEdge {
@@ -77,6 +80,7 @@ export interface NodeIn {
   node_type?: string
   sort_order: number
   fields: FieldDefIn[]
+  intermediates?: NodeIntermediateIn[]
 }
 
 export interface EdgeIn {

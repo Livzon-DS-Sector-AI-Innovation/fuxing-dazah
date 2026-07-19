@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { App, ConfigProvider, Tabs, Button, Spin, Collapse, Input, InputNumber, Space } from 'antd'
+import { App, ConfigProvider, Tabs, Button, Spin, Collapse, Input, InputNumber, Space, Switch } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { PlusOutlined } from '@ant-design/icons'
 import {
@@ -71,11 +71,15 @@ export function MaintenancePage({
     fetchClaimTimeoutConfigClient().then(setClaimTimeoutConfig).catch(() => {})
   }, [])
 
-  // 维护计划提前天数配置
+  // 维护计划自动创建配置
   const [advanceDays, setAdvanceDays] = useState(0)
+  const [autoExecute, setAutoExecute] = useState(true)
 
   useEffect(() => {
-    fetchAdvanceDaysConfigClient().then(c => setAdvanceDays(c.advance_days)).catch(() => {})
+    fetchAdvanceDaysConfigClient().then(c => {
+      setAdvanceDays(c.advance_days)
+      setAutoExecute(c.auto_execute)
+    }).catch(() => {})
   }, [])
 
   const { message: configMsg } = App.useApp()
@@ -90,12 +94,12 @@ export function MaintenancePage({
   }
 
   const handleSaveAdvanceDays = async () => {
-    const result = await updateAdvanceDaysConfig(advanceDays)
+    const result = await updateAdvanceDaysConfig(advanceDays, autoExecute)
     if (!result.success) {
       configMsg.error(result.error)
       return
     }
-    configMsg.success('提前天数配置保存成功')
+    configMsg.success('自动创建配置保存成功')
   }
 
   // 设备列表和分类（客户端回退）
@@ -266,25 +270,47 @@ export function MaintenancePage({
               key: 'advance-days-config',
               label: '维护计划自动创建配置',
               children: (
-                <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
-                  <div>
-                    <span style={{ fontSize: 13, color: '#5645d4', fontWeight: 500, marginRight: 8 }}>
-                      提前
-                    </span>
-                    <Space.Compact>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, padding: '4px 0 16px' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
+                        提前创建
+                      </div>
+                      <div style={{ fontSize: 13, color: '#787671', lineHeight: 1.4, marginTop: 2 }}>
+                        维护到期前多少天自动创建「计划维护」工单
+                      </div>
+                    </div>
+                    <Space.Compact style={{ flexShrink: 0 }}>
                       <InputNumber
                         min={1} max={364}
                         value={advanceDays}
                         onChange={(v) => setAdvanceDays(v || 0)}
+                        style={{ width: 72 }}
                       />
                       <Button disabled>天</Button>
                     </Space.Compact>
-                    <span style={{ fontSize: 13, color: '#787671', marginLeft: 8 }}>
-                      自动创建计划维护工单
-                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, padding: '16px 0', borderTop: '1px solid #ede9e4' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
+                        自动执行
+                      </div>
+                      <div style={{ fontSize: 13, color: '#787671', lineHeight: 1.4, marginTop: 2 }}>
+                        {autoExecute
+                          ? '已配置执行人的工单将直接进入「执行中」'
+                          : '工单创建后保持「待处理」，由维修人手动开始'}
+                      </div>
+                    </div>
+                    <Switch
+                      checked={autoExecute}
+                      onChange={setAutoExecute}
+                      style={{ flexShrink: 0 }}
+                    />
                   </div>
                   {hasPermission('equipment:maintenance:update') && (
-                    <Button type="primary" onClick={handleSaveAdvanceDays}>保存配置</Button>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 16, borderTop: '1px solid #e5e3df' }}>
+                      <Button type="primary" onClick={handleSaveAdvanceDays}>保存配置</Button>
+                    </div>
                   )}
                 </div>
               ),

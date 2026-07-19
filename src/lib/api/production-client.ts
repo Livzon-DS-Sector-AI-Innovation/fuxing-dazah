@@ -2,6 +2,7 @@
 
 import type {
   BatchDetail,
+  IntermediateType,
   NodeExecutionListItem,
   ProcessRoute,
   Product,
@@ -24,6 +25,21 @@ function qs(params: Record<string, string | number | undefined | null>): string 
 export async function fetchProductsClient(keyword?: string): Promise<Product[]> {
   const s = qs({ page: 1, page_size: 100, keyword })
   return apiGet<Product[]>(`${API_BASE}/api/v1/production/products?${s}`)
+}
+
+export async function fetchIntermediateTypesClient(params: {
+  keyword?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<{ items: IntermediateType[]; total: number }> {
+  const s = qs({
+    page: params.page ?? 1,
+    page_size: params.page_size ?? 100,
+    keyword: params.keyword ?? null,
+  })
+  return apiFetchPaginated<IntermediateType>(
+    `${API_BASE}/api/v1/production/intermediate-types?${s}`,
+  )
 }
 
 export async function fetchRoutesClient(productId: string): Promise<ProcessRoute[]> {

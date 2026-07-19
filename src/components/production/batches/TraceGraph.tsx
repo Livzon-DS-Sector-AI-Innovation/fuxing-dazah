@@ -13,6 +13,7 @@ type BatchNodeData = {
   quantity: number | null
   unit: string | null
   isCurrent: boolean
+  stageName: string | null
 }
 
 function BatchNode({ data }: NodeProps) {
@@ -29,19 +30,22 @@ function BatchNode({ data }: NodeProps) {
         cursor: 'pointer',
       }}
     >
-      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
       <div style={{ fontWeight: 600, fontSize: 14, color: '#1a1a1a' }}>{d.batch_no}</div>
-      <div style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+      <div style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <Tag color={meta?.color} style={{ marginRight: 0 }}>
           {meta?.label ?? d.status}
         </Tag>
+        {d.stageName && (
+          <span style={{ color: '#5645d4' }}>{d.stageName}</span>
+        )}
         {d.quantity != null && (
           <span style={{ color: '#787671' }}>
             {d.quantity} {d.unit ?? ''}
           </span>
         )}
       </div>
-      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
 }
@@ -66,6 +70,7 @@ export function TraceGraph({ trace, currentBatchId, onBatchClick }: Props) {
         quantity: b.quantity,
         unit: b.unit,
         isCurrent: b.id === currentBatchId,
+        stageName: b.current_stage_name,
       },
     }))
     const rfEdges: Edge[] = trace.links.map(l => ({

@@ -35,7 +35,9 @@ function ProcessNode({ data, selected }: NodeProps) {
         cursor: 'pointer',
       }}
     >
-      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Top} id="top" style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Left} id="left-target" style={{ opacity: 0 }} />
+      <Handle type="target" position={Position.Right} id="right-target" style={{ opacity: 0 }} />
       <div style={{ height: 6, background: stageTint(d.stage_name) }} />
       <div style={{ padding: '8px 12px' }}>
         <div style={{ fontWeight: 600, fontSize: 14, color: '#1a1a1a' }}>{d.name}</div>
@@ -45,7 +47,9 @@ function ProcessNode({ data, selected }: NodeProps) {
           <span>{d.fieldCount} 字段</span>
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Bottom} id="bottom" style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Left} id="left-source" style={{ opacity: 0 }} />
+      <Handle type="source" position={Position.Right} id="right-source" style={{ opacity: 0 }} />
     </div>
   )
 }
@@ -76,10 +80,13 @@ export function toRouteFlowElements(
       target: e.to_node_id,
       type: 'smoothstep',
       animated: true,
+      sourceHandle: isRework ? 'right-source' : 'bottom',
+      targetHandle: isRework ? 'right-target' : 'top',
+      pathOptions: isRework ? { borderRadius: 18, offset: 30 } : undefined,
       label: isBoundary ? '批次边界' : isRework ? '回流' : undefined,
       labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : '#5645d4' },
       style: isRework
-        ? { stroke: '#dd5b00', strokeDasharray: '6 4' }
+        ? { stroke: '#dd5b00', strokeDasharray: '6 4', strokeWidth: 2 }
         : isBoundary
           ? { stroke: '#5645d4', strokeWidth: 2.5 }
           : { stroke: '#b8b6b1' },

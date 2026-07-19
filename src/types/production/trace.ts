@@ -15,6 +15,7 @@ export interface TraceBatch {
   status: string
   quantity: number | null
   unit: string | null
+  current_stage_name: string | null
   executions: TraceExecutionBrief[]
 }
 

@@ -39,7 +39,8 @@ export interface DepartmentOption {
   leader_id: string | null
 }
 
-// ==================== 维护计划提前天数配置 ====================
+// ==================== 维护计划自动创建配置 ====================
 export interface AdvanceDaysConfig {
   advance_days: number
+  auto_execute: boolean
 }

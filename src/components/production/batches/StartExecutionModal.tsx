@@ -12,6 +12,7 @@ import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { fetchEquipmentsClient } from '@/lib/api/equipment-client'
 import { PersonnelSelect } from '@/components/equipment'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
+import { fetchBatchOutputs } from '@/actions/production'
 
 interface Props {
   batchId: string
@@ -82,6 +83,21 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
   const selectedNode = graph?.nodes.find(n => n.id === nodeId)
   const startDefs = selectedNode?.fields.filter(f => f.phase === 'start') ?? []
   const needsDeviation = !!nodeId && !legalNodeIds.has(nodeId)
+  const inputIntermediates = (selectedNode?.intermediates ?? []).filter(im => im.direction === 'input')
+
+  // 加载当前批次可用产出（用于消耗选择）
+  const { data: batchOutputs } = useQuery({
+    queryKey: ['production-batch-outputs', batchId],
+    queryFn: async () => {
+      const r = await fetchBatchOutputs(batchId)
+      return r.success ? r.data ?? [] : []
+    },
+    enabled: inputIntermediates.length > 0,
+  })
+  const outputOptions = (batchOutputs ?? []).map(o => ({
+    value: o.id,
+    label: `${o.intermediate_type_name ?? '?'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / ${o.quantity}${o.unit}`,
+  }))
 
   const personnel = personnelData?.items ?? []
 
@@ -100,6 +116,14 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
       field_values: buildFieldValues(startDefs, values),
       deviation_reason: needsDeviation ? (values.deviation_reason as string) : null,
       remark: (values.remark as string) ?? null,
+      intermediate_consumptions: inputIntermediates.length > 0
+        ? inputIntermediates.map(im => ({
+            intermediate_type_id: im.intermediate_type_id,
+            output_id: (values as Record<string, string>)[`consume_output_${im.intermediate_type_id}`] ?? '',
+            quantity: Number((values as Record<string, number>)[`consume_qty_${im.intermediate_type_id}`]) || 0,
+            remark: ((values as Record<string, string>)[`consume_remark_${im.intermediate_type_id}`]) || undefined,
+          })).filter(c => c.output_id && c.quantity > 0)
+        : [],
     })
     if (result.success) {
       message.success('工序已开始')
@@ -154,6 +178,40 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
           />
         </Form.Item>
         <DynamicFieldFormItems defs={startDefs} />
+        {inputIntermediates.length > 0 && (
+          <>
+            <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, color: '#555' }}>
+              中间体消耗
+            </div>
+            {inputIntermediates.map(im => (
+              <div key={im.intermediate_type_id} style={{ marginBottom: 8, padding: 8, background: '#fafafa', borderRadius: 6 }}>
+                <span style={{ fontSize: 12, color: '#888' }}>
+                  {im.intermediate_type_name ?? im.intermediate_type_id}
+                  {im.required ? ' *' : ''}
+                </span>
+                <Form.Item
+                  name={`consume_output_${im.intermediate_type_id}`}
+                  label="选择产出批次"
+                  rules={im.required ? [{ required: true, message: '请选择' }] : undefined}
+                  style={{ marginBottom: 4 }}
+                >
+                  <Select size="small" options={outputOptions} placeholder="选择上游产出" allowClear showSearch />
+                </Form.Item>
+                <Form.Item
+                  name={`consume_qty_${im.intermediate_type_id}`}
+                  label="消耗数量"
+                  rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
+                  style={{ marginBottom: 4 }}
+                >
+                  <Input size="small" type="number" placeholder="数量" />
+                </Form.Item>
+                <Form.Item name={`consume_remark_${im.intermediate_type_id}`} label="备注" style={{ marginBottom: 0 }}>
+                  <Input size="small" placeholder="可选" />
+                </Form.Item>
+              </div>
+            ))}
+          </>
+        )}
         <Form.Item name="remark" label="备注">
           <Input.TextArea rows={2} />
         </Form.Item>

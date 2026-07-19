@@ -80,29 +80,30 @@ export function RouteVersionBar({
       </Space>
       {canManage && (
         <Space size={8}>
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() =>
+          <Popconfirm
+            title="确认新建路线？将基于当前最新版本复制"
+            onConfirm={() =>
               run(
                 () => createRoute({ product_id: productId, name: '工艺路线' }),
                 '已创建 draft 路线',
               )
             }
           >
-            新建路线
-          </Button>
+            <Button size="small" icon={<PlusOutlined />}>
+              新建路线
+            </Button>
+          </Popconfirm>
           {current?.status === 'draft' && !editing && (
             <>
               <Button size="small" type="primary" onClick={onEdit}>
                 编辑工艺
               </Button>
-              <Button
-                size="small"
-                onClick={() => run(() => publishRoute(current.id), '已发布')}
+              <Popconfirm
+                title="确认发布？发布后不可编辑"
+                onConfirm={() => run(() => publishRoute(current.id), '已发布')}
               >
-                发布
-              </Button>
+                <Button size="small">发布</Button>
+              </Popconfirm>
               <Popconfirm
                 title="删除该 draft 路线？"
                 onConfirm={() => run(() => deleteRoute(current.id), '已删除')}
@@ -115,27 +116,27 @@ export function RouteVersionBar({
           )}
           {current?.status === 'published' && (
             <>
-              <Button
-                size="small"
-                onClick={() => run(() => archiveRoute(current.id), '已归档')}
+              <Popconfirm
+                title="确认归档？归档后不可用于新建批次"
+                onConfirm={() => run(() => archiveRoute(current.id), '已归档')}
               >
-                归档
-              </Button>
-              <Button
-                size="small"
-                onClick={() => run(() => newRouteVersion(current.id), '已复制新版本')}
+                <Button size="small">归档</Button>
+              </Popconfirm>
+              <Popconfirm
+                title="确认复制新版本？将生成新的 draft 路线"
+                onConfirm={() => run(() => newRouteVersion(current.id), '已复制新版本')}
               >
-                复制新版本
-              </Button>
+                <Button size="small">复制新版本</Button>
+              </Popconfirm>
             </>
           )}
           {current?.status === 'archived' && (
-            <Button
-              size="small"
-              onClick={() => run(() => newRouteVersion(current.id), '已复制新版本')}
+            <Popconfirm
+              title="确认复制新版本？将生成新的 draft 路线"
+              onConfirm={() => run(() => newRouteVersion(current.id), '已复制新版本')}
             >
-              复制新版本
-            </Button>
+              <Button size="small">复制新版本</Button>
+            </Popconfirm>
           )}
         </Space>
       )}

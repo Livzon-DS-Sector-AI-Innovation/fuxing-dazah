@@ -51,11 +51,25 @@ export interface StartExecutionInput {
   field_values?: FieldValueInput[]
   deviation_reason?: string | null
   remark?: string | null
+  intermediate_consumptions?: Array<{
+    intermediate_type_id: string
+    output_id: string
+    quantity: number
+    unit?: string
+    remark?: string
+  }>
 }
 
 export interface CompleteExecutionInput {
   field_values?: FieldValueInput[]
   remark?: string | null
+  intermediate_outputs?: Array<{
+    intermediate_type_id: string
+    quantity: number
+    unit?: string
+    intermediate_batch_no?: string
+    remark?: string
+  }>
 }
 
 export interface NodeExecutionListItem {

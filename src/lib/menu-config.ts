@@ -27,6 +27,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "dashboard", label: "生产看板", path: "/production" },
       { key: "process", label: "产品工艺", path: "/production/process" },
       { key: "batches", label: "批次管理", path: "/production/batches" },
+      { key: "intermediate-types", label: "中间体字典", path: "/production/intermediate-types" },
     ],
   },
   {
