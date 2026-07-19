@@ -26,8 +26,8 @@ export const moduleMenus: ModuleMenu[] = [
     children: [
       { key: "dashboard", label: "生产看板", path: "/production" },
       { key: "process", label: "产品工艺", path: "/production/process" },
+      { key: "materials", label: "产出物管理", path: "/production/materials" },
       { key: "batches", label: "批次管理", path: "/production/batches" },
-      { key: "intermediate-types", label: "中间体字典", path: "/production/intermediate-types" },
     ],
   },
   {

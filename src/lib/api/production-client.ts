@@ -3,6 +3,7 @@
 import type {
   BatchDetail,
   IntermediateType,
+  MaterialMovements,
   NodeExecutionListItem,
   ProcessRoute,
   Product,
@@ -55,6 +56,7 @@ export async function fetchBatchesClient(params: {
   product_id: string
   status?: string
   keyword?: string
+  entry_node_filter?: string
   page?: number
   page_size?: number
   order_by?: string
@@ -66,6 +68,7 @@ export async function fetchBatchesClient(params: {
     page_size: params.page_size ?? 20,
     status: params.status ?? null,
     keyword: params.keyword ?? null,
+    entry_node_filter: params.entry_node_filter ?? null,
     order_by: params.order_by ?? null,
     order: params.order ?? null,
   })
@@ -98,4 +101,33 @@ export async function fetchNodeExecutionsClient(
     order: params.order ?? null,
   })
   return apiFetchPaginated<NodeExecutionListItem>(`${API_BASE}/api/v1/production/nodes/${nodeId}/executions?${s}`)
+}
+
+export async function fetchMaterialsClient(params: {
+  keyword?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<{ items: IntermediateType[]; total: number }> {
+  const s = qs({
+    page: params.page ?? 1,
+    page_size: params.page_size ?? 100,
+    keyword: params.keyword ?? null,
+  })
+  return apiFetchPaginated<IntermediateType>(
+    `${API_BASE}/api/v1/production/materials?${s}`,
+  )
+}
+
+export async function fetchMaterialDetailClient(id: string): Promise<IntermediateType> {
+  return apiGet<IntermediateType>(`${API_BASE}/api/v1/production/materials/${id}`)
+}
+
+export async function fetchMaterialMovementsClient(
+  id: string,
+  batchNo?: string,
+): Promise<MaterialMovements> {
+  const params = new URLSearchParams()
+  if (batchNo) params.set('batch_no', batchNo)
+  const queryString = params.toString()
+  return apiGet<MaterialMovements>(`${API_BASE}/api/v1/production/materials/${id}/movements${queryString ? `?${queryString}` : ''}`)
 }

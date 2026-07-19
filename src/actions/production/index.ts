@@ -19,6 +19,7 @@ export {
   createIntermediateType,
   updateIntermediateType,
   deleteIntermediateType,
+  fetchAvailableOutputs,
   fetchBatchOutputs,
   fetchBatchConsumptions,
   fetchIntermediateTrace,

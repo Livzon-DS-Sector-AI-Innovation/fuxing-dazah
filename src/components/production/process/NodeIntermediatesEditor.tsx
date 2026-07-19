@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Button,
   Input,
@@ -9,6 +9,7 @@ import {
   Switch,
   Table,
 } from 'antd'
+import type { TableColumnsType } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { fetchIntermediateTypesClient } from '@/lib/api/production-client'
@@ -22,6 +23,8 @@ interface Props {
   onSave: (intermediates: NodeIntermediateIn[]) => void
 }
 
+type IntermediateRow = NodeIntermediateIn & { _idx: number }
+
 /** 公用列定义（不含方向和成品，这两个按区不同） */
 function makeColumns(
   typeOptions: { value: string; label: string }[],
@@ -30,11 +33,11 @@ function makeColumns(
   remove: (i: number) => void,
   showProductSwitch: boolean,
 ) {
-  const cols: any[] = [
+  const cols: TableColumnsType<IntermediateRow> = [
     {
       title: '物料',
       width: 200,
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Select
           size="small"
           style={{ width: '100%' }}
@@ -49,7 +52,7 @@ function makeColumns(
     {
       title: '单位覆盖',
       width: 90,
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Input
           size="small"
           placeholder="默认"
@@ -61,7 +64,7 @@ function makeColumns(
     {
       title: '必填',
       width: 60,
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Switch
           size="small"
           checked={r.required}
@@ -71,7 +74,7 @@ function makeColumns(
     },
     {
       title: '备注',
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Input
           size="small"
           value={r.remark ?? ''}
@@ -82,7 +85,7 @@ function makeColumns(
     {
       title: '',
       width: 40,
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Button
           size="small"
           type="text"
@@ -98,7 +101,7 @@ function makeColumns(
     cols.splice(3, 0, {
       title: '成品',
       width: 60,
-      render: (_: any, r: NodeIntermediateIn & { _idx: number }) => (
+      render: (_, r: IntermediateRow) => (
         <Switch
           size="small"
           checked={r.is_product}
@@ -112,12 +115,6 @@ function makeColumns(
 }
 
 export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose, onSave }: Props) {
-  const [items, setItems] = useState<NodeIntermediateIn[]>(intermediates)
-
-  useEffect(() => {
-    if (open) setItems(intermediates)
-  }, [open, intermediates])
-
   const { data: typeData } = useQuery({
     queryKey: ['intermediate-types', ''],
     queryFn: () => fetchIntermediateTypesClient({ page_size: 100 }),
@@ -131,11 +128,44 @@ export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose
     label: `${t.name} (${t.code})`,
   }))
 
+  return (
+    <Modal
+      title={`「${nodeName}」消耗 / 产出配置`}
+      open={open}
+      width={680}
+      onCancel={onClose}
+      footer={null}
+      destroyOnHidden
+    >
+      <EditorBody
+        key={open ? 'open' : 'closed'}
+        intermediates={intermediates}
+        typeOptions={typeOptions}
+        onSave={onSave}
+        onClose={onClose}
+      />
+    </Modal>
+  )
+}
+
+function EditorBody({
+  intermediates,
+  typeOptions,
+  onSave,
+  onClose,
+}: {
+  intermediates: NodeIntermediateIn[]
+  typeOptions: { value: string; label: string }[]
+  onSave: (items: NodeIntermediateIn[]) => void
+  onClose: () => void
+}) {
+  const [items, setItems] = useState<NodeIntermediateIn[]>(intermediates)
+
   const update = (i: number, patch: Partial<NodeIntermediateIn>) =>
     setItems(items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)))
 
   const add = (direction: 'output' | 'input') =>
-    setItems([...items, { intermediate_type_id: '', direction, required: false, sort_order: items.length }])
+    setItems([...items, { intermediate_type_id: '', direction, required: false, is_product: false, sort_order: items.length }])
 
   const remove = (i: number) => setItems(items.filter((_, idx) => idx !== i))
 
@@ -149,14 +179,7 @@ export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose
   const inputItems = items.filter(it => it.direction === 'input')
 
   return (
-    <Modal
-      title={`「${nodeName}」消耗 / 产出配置`}
-      open={open}
-      width={680}
-      onOk={handleOk}
-      onCancel={onClose}
-      destroyOnHidden
-    >
+    <>
       {/* ── 产出区 ── */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontWeight: 500, marginBottom: 8, color: '#1aae39' }}>产出物</div>
@@ -165,7 +188,7 @@ export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose
             添加产出
           </Button>
         </div>
-        <Table<NodeIntermediateIn & { _idx: number }>
+        <Table<IntermediateRow>
           size="small"
           rowKey="_idx"
           dataSource={outputItems.map((it) => ({ ...it, _idx: items.indexOf(it) }))}
@@ -182,7 +205,7 @@ export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose
             添加消耗
           </Button>
         </div>
-        <Table<NodeIntermediateIn & { _idx: number }>
+        <Table<IntermediateRow>
           size="small"
           rowKey="_idx"
           dataSource={inputItems.map((it) => ({ ...it, _idx: items.indexOf(it) }))}
@@ -190,6 +213,12 @@ export function NodeIntermediatesEditor({ open, intermediates, nodeName, onClose
           columns={makeColumns(typeOptions, 'input', update, remove, false)}
         />
       </div>
-    </Modal>
+
+      {/* 底部按钮 */}
+      <div style={{ marginTop: 16, textAlign: 'right' }}>
+        <Button onClick={onClose} style={{ marginRight: 8 }}>取消</Button>
+        <Button type="primary" onClick={handleOk}>确定</Button>
+      </div>
+    </>
   )
 }

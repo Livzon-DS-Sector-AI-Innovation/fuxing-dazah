@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import {
   App,
   Button,
@@ -93,19 +93,23 @@ function MaterialFormModal({ open, editItem, onClose, onSaved }: FormModalProps)
   }, [open, editItem, form])
 
   const handleOk = async () => {
-    const values = await form.validateFields().catch(() => null)
-    if (!values) return
-    let result
-    if (editItem) {
-      result = await updateIntermediateType(editItem.id, values)
-    } else {
-      result = await createIntermediateType(values as Parameters<typeof createIntermediateType>[0])
-    }
-    if (result.success) {
-      message.success(editItem ? '产出物已更新' : '产出物已创建')
-      onSaved()
-    } else {
-      message.error(result.error)
+    try {
+      const values = await form.validateFields().catch(() => null)
+      if (!values) return
+      let result
+      if (editItem) {
+        result = await updateIntermediateType(editItem.id, values)
+      } else {
+        result = await createIntermediateType(values as Parameters<typeof createIntermediateType>[0])
+      }
+      if (result.success) {
+        message.success(editItem ? '产出物已更新' : '产出物已创建')
+        onSaved()
+      } else {
+        message.error(result.error)
+      }
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '操作失败')
     }
   }
 
@@ -289,9 +293,11 @@ function StockOverview({
 // ── 出入库流水表 ──
 
 function MovementTable({ materialId }: { materialId: string }) {
+  const [batchSearch, setBatchSearch] = useState('')
+
   const { data, isLoading } = useQuery({
-    queryKey: ['material-movements', materialId],
-    queryFn: () => fetchMaterialMovementsClient(materialId),
+    queryKey: ['material-movements', materialId, batchSearch],
+    queryFn: () => fetchMaterialMovementsClient(materialId, batchSearch || undefined),
     enabled: !!materialId,
   })
 
@@ -363,11 +369,21 @@ function MovementTable({ materialId }: { materialId: string }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <h4 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: T.ink }}>出入库流水</h4>
-        {data?.movements && data.movements.length > 0 && (
-          <span style={{ fontSize: 12, color: T.steel }}>
-            共 {data.movements.length} 条记录
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Input
+            placeholder="搜索产出批号..."
+            allowClear
+            size="small"
+            style={{ width: 180 }}
+            value={batchSearch}
+            onChange={(e) => setBatchSearch(e.target.value)}
+          />
+          {data?.movements && (
+            <span style={{ fontSize: 12, color: T.steel, whiteSpace: 'nowrap' }}>
+              共 {data.movements.length} 条记录
+            </span>
+          )}
+        </div>
       </div>
       <Table
         rowKey={(r) => `${r.type}-${r.batch_id}-${r.created_at}`}
@@ -609,9 +625,9 @@ function MaterialsContent() {
 
   const deleteMut = useMutation({
     mutationFn: deleteIntermediateType,
-    onSuccess: () => {
+    onSuccess: (_data, deletedId) => {
       message.success('产出物已删除')
-      if (selected) setSelected(null)
+      if (selected && selected.id === deletedId) setSelected(null)
       queryClient.invalidateQueries({ queryKey: ['materials'] })
     },
     onError: (e: Error) => message.error(e.message),
@@ -629,6 +645,17 @@ function MaterialsContent() {
   const allCount = data?.items?.length ?? 0
   const intermediateCount = data?.items?.filter((i) => !i.is_product).length ?? 0
   const productCount = data?.items?.filter((i) => i.is_product).length ?? 0
+
+  const hasAutoSelected = useRef(false)
+  // 首次加载或筛选导致当前选中不可见时，自动选择第一个
+  useEffect(() => {
+    if (filteredItems.length === 0) return
+    const stillVisible = selected && filteredItems.some(it => it.id === selected.id)
+    if (!hasAutoSelected.current || !stillVisible) {
+      hasAutoSelected.current = true
+      setSelected(filteredItems[0])
+    }
+  }, [filteredItems, selected])
 
   const handleSaved = useCallback(() => {
     setModalOpen(false)
@@ -677,7 +704,6 @@ function MaterialsContent() {
             <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
               <Input
                 placeholder="搜索产出物..."
-                prefix={<span style={{ color: T.stone, fontSize: 14 }}>⌕</span>}
                 allowClear
                 size="middle"
                 onChange={(e) => setKeyword(e.target.value)}

@@ -155,7 +155,7 @@ export function BatchDetailDrawer({
           />
           {((outputsData?.length ?? 0) > 0 || (consumptionsData?.length ?? 0) > 0) && (
             <>
-              <div style={{ fontWeight: 600, margin: '16px 0 8px' }}>中间体台账</div>
+              <div style={{ margin: '16px 0 8px' }}></div>
               {(outputsData?.length ?? 0) > 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#555' }}>产出记录</div>
@@ -165,7 +165,7 @@ export function BatchDetailDrawer({
                     dataSource={outputsData}
                     pagination={false}
                     columns={[
-                      { title: '中间体', dataIndex: 'intermediate_type_name', width: 140,
+                      { title: '产物', dataIndex: 'intermediate_type_name', width: 140,
                         render: (v, r) => (
                           <Space size={4}>
                             <span>{v || '-'}</span>

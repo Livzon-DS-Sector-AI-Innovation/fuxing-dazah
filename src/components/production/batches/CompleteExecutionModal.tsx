@@ -48,6 +48,8 @@ export function CompleteExecutionModal({ execution, routeId, onClose }: Props) {
         queryKey: ['production-batch-detail', execution.batch_id],
       })
       queryClient.invalidateQueries({ queryKey: ['production-batches'] })
+      queryClient.invalidateQueries({ queryKey: ['production-trace'] })
+      queryClient.invalidateQueries({ queryKey: ['production-available-outputs'] })
       onClose()
     } else {
       message.error(result.error)

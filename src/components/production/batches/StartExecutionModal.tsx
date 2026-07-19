@@ -12,7 +12,7 @@ import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { fetchEquipmentsClient } from '@/lib/api/equipment-client'
 import { PersonnelSelect } from '@/components/equipment'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
-import { fetchBatchOutputs } from '@/actions/production'
+import { fetchAvailableOutputs } from '@/actions/production'
 
 interface Props {
   batchId: string
@@ -85,19 +85,23 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
   const needsDeviation = !!nodeId && !legalNodeIds.has(nodeId)
   const inputIntermediates = (selectedNode?.intermediates ?? []).filter(im => im.direction === 'input')
 
-  // 加载当前批次可用产出（用于消耗选择）
-  const { data: batchOutputs } = useQuery({
-    queryKey: ['production-batch-outputs', batchId],
+  // 加载所有可用中间体产出（跨批次），用于消耗时选择上游产出
+  const { data: batchOutputs, isError: outputsError } = useQuery({
+    queryKey: ['production-available-outputs'],
     queryFn: async () => {
-      const r = await fetchBatchOutputs(batchId)
-      return r.success ? r.data ?? [] : []
+      const r = await fetchAvailableOutputs()
+      if (!r.success) throw new Error(r.error ?? '获取可用产出失败')
+      return r.data ?? []
     },
     enabled: inputIntermediates.length > 0,
   })
-  const outputOptions = (batchOutputs ?? []).map(o => ({
-    value: o.id,
-    label: `${o.intermediate_type_name ?? '?'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / ${o.quantity}${o.unit}`,
-  }))
+  const getOutputOptions = (intermediateTypeId: string) =>
+    (batchOutputs ?? [])
+      .filter(o => o.intermediate_type_id === intermediateTypeId)
+      .map(o => ({
+        value: o.id,
+        label: `${o.intermediate_type_name ?? '?'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / ${o.quantity}${o.unit}`,
+      }))
 
   const personnel = personnelData?.items ?? []
 
@@ -129,6 +133,8 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
       message.success('工序已开始')
       queryClient.invalidateQueries({ queryKey: ['production-batch-detail', batchId] })
       queryClient.invalidateQueries({ queryKey: ['production-batches'] })
+      queryClient.invalidateQueries({ queryKey: ['production-trace'] })
+      queryClient.invalidateQueries({ queryKey: ['production-available-outputs'] })
       onClose()
     } else {
       message.error(result.error)
@@ -183,6 +189,11 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
             <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, color: '#555' }}>
               中间体消耗
             </div>
+            {outputsError && (
+              <div style={{ marginBottom: 8, color: '#ff4d4f', fontSize: 12 }}>
+                可用产出加载失败，请稍后重试
+              </div>
+            )}
             {inputIntermediates.map(im => (
               <div key={im.intermediate_type_id} style={{ marginBottom: 8, padding: 8, background: '#fafafa', borderRadius: 6 }}>
                 <span style={{ fontSize: 12, color: '#888' }}>
@@ -195,7 +206,7 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
                   rules={im.required ? [{ required: true, message: '请选择' }] : undefined}
                   style={{ marginBottom: 4 }}
                 >
-                  <Select size="small" options={outputOptions} placeholder="选择上游产出" allowClear showSearch />
+                  <Select size="small" options={getOutputOptions(im.intermediate_type_id)} placeholder="选择上游产出" allowClear showSearch />
                 </Form.Item>
                 <Form.Item
                   name={`consume_qty_${im.intermediate_type_id}`}

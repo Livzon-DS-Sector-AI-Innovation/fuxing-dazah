@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Empty, Input, Skeleton, Tooltip, Typography } from 'antd'
 import {
   DeleteOutlined,
@@ -37,6 +37,14 @@ export function ProductSidebar({ selectedId, onSelect, onCreate, onEdit, onDelet
     queryKey: ['production-products', keyword],
     queryFn: () => fetchProductsClient(keyword || undefined),
   })
+
+  const hasAutoSelected = useRef(false)
+  useEffect(() => {
+    if (!hasAutoSelected.current && products && products.length > 0 && !selectedId) {
+      hasAutoSelected.current = true
+      onSelect(products[0])
+    }
+  }, [products, selectedId, onSelect])
 
   if (collapsed) {
     return (

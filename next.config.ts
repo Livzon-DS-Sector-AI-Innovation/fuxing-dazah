@@ -35,6 +35,17 @@ const nextConfig: NextConfig = {
       },
     ]
   },
+
+  // 旧路由重定向
+  async redirects() {
+    return [
+      {
+        source: '/production/intermediate-types',
+        destination: '/production/materials',
+        permanent: true,
+      },
+    ]
+  },
 };
 
 export default nextConfig;

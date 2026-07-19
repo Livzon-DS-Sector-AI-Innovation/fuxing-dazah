@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import { Handle, Position, type Edge, type Node, type NodeProps } from '@xyflow/react'
-import { FlowGraph } from '../shared/FlowGraph'
+import { FlowGraph, MaterialNode, MATERIAL_INPUT, MATERIAL_OUTPUT, type MaterialNodeData } from '../shared/FlowGraph'
 import type { RouteEdge, RouteNode } from '@/types/production'
 
 // 工段 pastel 色板（与 DESIGN.md pastel tint 对齐，如有出入以 DESIGN.md 为准）
@@ -54,111 +54,10 @@ function ProcessNode({ data, selected }: NodeProps) {
   )
 }
 
-// ── 物料节点数据 ──
-type MaterialNodeData = {
-  parentNodeId: string
-  direction: 'input' | 'output'
-  materials: { name: string }[]
-}
-
-// ── 物料消耗节点（工序左侧） ──
-function MaterialInputNode({ data }: NodeProps) {
-  const d = data as unknown as MaterialNodeData
-  return (
-    <div
-      style={{
-        width: 140,
-        background: '#fff',
-        border: '1px solid #dd5b00',
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          height: 28,
-          background: '#fef0e6',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 8px',
-          fontSize: 12,
-          fontWeight: 500,
-          color: '#dd5b00',
-        }}
-      >
-        物料消耗
-      </div>
-      <div style={{ padding: '4px 8px' }}>
-        {d.materials.map((m, i) => (
-          <div
-            key={i}
-            style={{ fontSize: 12, color: '#37352f', lineHeight: '20px' }}
-          >
-            {m.name}
-          </div>
-        ))}
-      </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="material-source"
-        style={{ background: '#dd5b00', width: 6, height: 6 }}
-      />
-    </div>
-  )
-}
-
-// ── 产出物料节点（工序右侧） ──
-function MaterialOutputNode({ data }: NodeProps) {
-  const d = data as unknown as MaterialNodeData
-  return (
-    <div
-      style={{
-        width: 140,
-        background: '#fff',
-        border: '1px solid #1aae39',
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          height: 28,
-          background: '#e6f9eb',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 8px',
-          fontSize: 12,
-          fontWeight: 500,
-          color: '#1aae39',
-        }}
-      >
-        产出物
-      </div>
-      <div style={{ padding: '4px 8px' }}>
-        {d.materials.map((m, i) => (
-          <div
-            key={i}
-            style={{ fontSize: 12, color: '#37352f', lineHeight: '20px' }}
-          >
-            {m.name}
-          </div>
-        ))}
-      </div>
-      <Handle
-        type="target"
-        position={Position.Left}
-        id="material-target"
-        style={{ background: '#1aae39', width: 6, height: 6 }}
-      />
-    </div>
-  )
-}
-
 const nodeTypes = {
   processNode: ProcessNode,
-  materialInputNode: MaterialInputNode,
-  materialOutputNode: MaterialOutputNode,
+  [MATERIAL_INPUT]: MaterialNode,
+  [MATERIAL_OUTPUT]: MaterialNode,
 }
 
 export function toRouteFlowElements(
@@ -188,7 +87,7 @@ export function toRouteFlowElements(
       const inputNodeId = `${n.id}__material-input`
       rfNodes.push({
         id: inputNodeId,
-        type: 'materialInputNode',
+        type: MATERIAL_INPUT,
         position: { x: 0, y: 0 },
         data: {
           parentNodeId: n.id,
@@ -211,7 +110,7 @@ export function toRouteFlowElements(
       const outputNodeId = `${n.id}__material-output`
       rfNodes.push({
         id: outputNodeId,
-        type: 'materialOutputNode',
+        type: MATERIAL_OUTPUT,
         position: { x: 0, y: 0 },
         data: {
           parentNodeId: n.id,

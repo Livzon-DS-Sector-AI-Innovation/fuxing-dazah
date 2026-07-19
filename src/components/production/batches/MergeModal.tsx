@@ -59,6 +59,8 @@ export function MergeModal({ batchId, productId, onClose }: Props) {
     if (result.success) {
       message.success('批次已合并')
       queryClient.invalidateQueries({ queryKey: ['production-batches'] })
+      queryClient.invalidateQueries({ queryKey: ['production-trace'] })
+      queryClient.invalidateQueries({ queryKey: ['production-available-outputs'] })
       onClose()
     } else {
       message.error(result.error)

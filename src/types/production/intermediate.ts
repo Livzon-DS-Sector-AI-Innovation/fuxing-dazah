@@ -7,6 +7,9 @@ export interface IntermediateType {
   category: string | null
   default_unit: string | null
   description: string | null
+  is_product: boolean
+  product_id: string | null
+  product_name: string | null
   created_at: string
   updated_at: string
 }
@@ -17,6 +20,8 @@ export interface CreateIntermediateTypeInput {
   category?: string
   default_unit?: string
   description?: string
+  is_product?: boolean
+  product_id?: string | null
 }
 
 export interface UpdateIntermediateTypeInput {
@@ -24,6 +29,8 @@ export interface UpdateIntermediateTypeInput {
   category?: string
   default_unit?: string
   description?: string
+  is_product?: boolean
+  product_id?: string | null
 }
 
 // 节点中间体绑定（模板层）
@@ -35,7 +42,7 @@ export interface NodeIntermediate {
   direction: 'output' | 'input'
   unit_override: string | null
   required: boolean
-  is_product: boolean
+  is_product?: boolean
   sort_order: number
   remark: string | null
 }
@@ -45,9 +52,9 @@ export interface NodeIntermediateIn {
   direction: 'output' | 'input'
   unit_override?: string
   required?: boolean
-  is_product?: boolean
   sort_order?: number
   remark?: string
+  is_product?: boolean
 }
 
 // 中间体产出记录
@@ -73,7 +80,6 @@ export interface IntermediateOutputIn {
   quantity: number
   unit?: string
   intermediate_batch_no?: string
-  is_product?: boolean
   remark?: string
 }
 
@@ -107,4 +113,29 @@ export interface IntermediateConsumptionIn {
 export interface IntermediateTrace {
   output: IntermediateOutput
   consumptions: IntermediateConsumption[]
+}
+
+export interface MaterialMovement {
+  type: 'output' | 'consumption'
+  batch_id: string
+  batch_no: string | null
+  node_name: string | null
+  quantity: number
+  unit: string
+  intermediate_batch_no: string | null
+  source_batch_no: string | null
+  source_output_id: string | null
+  created_at: string
+}
+
+export interface MaterialStockSummary {
+  total_output: number
+  total_consumed: number
+  current_stock: number
+}
+
+export interface MaterialMovements {
+  material: IntermediateType
+  movements: MaterialMovement[]
+  summary: MaterialStockSummary
 }

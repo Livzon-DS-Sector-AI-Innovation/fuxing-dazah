@@ -25,16 +25,18 @@ interface Props {
 export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Props) {
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
+  const [entryNodeFilter, setEntryNodeFilter] = useState<string | undefined>()
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<{ field: string; order: 'asc' | 'desc' } | undefined>()
 
   const { data, isLoading } = useQuery({
-    queryKey: ['production-batches', productId, { status, keyword, page, sort }],
+    queryKey: ['production-batches', productId, { status, keyword, entryNodeFilter, page, sort }],
     queryFn: () =>
       fetchBatchesClient({
         product_id: productId,
         status,
         keyword: keyword || undefined,
+        entry_node_filter: entryNodeFilter,
         page,
         order_by: sort?.field,
         order: sort?.order,
@@ -68,6 +70,20 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
             value: v,
             label: m.label,
           }))}
+        />
+        <Select
+          allowClear
+          placeholder="入口工序"
+          style={{ width: 130 }}
+          value={entryNodeFilter}
+          onChange={v => {
+            setEntryNodeFilter(v)
+            setPage(1)
+          }}
+          options={[
+            { value: 'root', label: '起始批次' },
+            { value: 'derived', label: '衍生批次' },
+          ]}
         />
         <Input
           allowClear
