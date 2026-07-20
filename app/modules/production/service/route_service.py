@@ -133,6 +133,8 @@ async def save_graph(
             )
         if e.edge_type == "rework" and e.is_batch_boundary:
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
+        if e.is_batch_boundary and e.allow_overlap:
+            raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
 
     await repo.soft_delete_route_graph(db, route_id)
 
@@ -183,6 +185,7 @@ async def save_graph(
                 to_node_id=node_by_code[e.to_node_code].id,
                 edge_type=e.edge_type,
                 is_batch_boundary=e.is_batch_boundary,
+                allow_overlap=e.allow_overlap,
                 remark=e.remark,
                 created_by=user.id if user else None,
             )
@@ -276,6 +279,8 @@ def _validate_graph(nodes: list[RouteNode], edges: list[RouteEdge]) -> None:
     for e in edges:
         if e.edge_type == "rework" and e.is_batch_boundary:
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
+        if e.is_batch_boundary and e.allow_overlap:
+            raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
 
 
 async def publish_route(
