@@ -105,6 +105,9 @@ class RouteEdge(BaseModel):
     remark: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="备注，如：不合格时"
     )
+    allow_overlap: Mapped[bool] = mapped_column(
+        default=False, comment="允许前道工序未完成时开始本工序（流水线模式）"
+    )
 
 
 class NodeFieldDef(BaseModel):
