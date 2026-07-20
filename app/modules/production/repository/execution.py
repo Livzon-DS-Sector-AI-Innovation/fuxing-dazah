@@ -21,6 +21,7 @@ __all__ = [
     "max_execution_seq",
     "has_in_progress_execution",
     "completed_node_ids",
+    "in_progress_node_ids",
     "get_field_values_by_executions",
     "get_equipments_by_executions",
     "get_nodes_by_ids",
@@ -105,6 +106,17 @@ async def completed_node_ids(
     stmt = select(NodeExecution.node_id).where(
         NodeExecution.batch_id == batch_id,
         NodeExecution.status == "completed",
+        NodeExecution.is_deleted == False,  # noqa: E712
+    )
+    return set((await db.execute(stmt)).scalars())
+
+
+async def in_progress_node_ids(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> set[uuid.UUID]:
+    stmt = select(NodeExecution.node_id).where(
+        NodeExecution.batch_id == batch_id,
+        NodeExecution.status == "in_progress",
         NodeExecution.is_deleted == False,  # noqa: E712
     )
     return set((await db.execute(stmt)).scalars())
