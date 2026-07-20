@@ -400,6 +400,7 @@ async def new_version(
                 to_node_id=id_map[e.to_node_id],
                 edge_type=e.edge_type,
                 is_batch_boundary=e.is_batch_boundary,
+                allow_overlap=e.allow_overlap,
                 remark=e.remark,
                 created_by=user.id if user else None,
             )
