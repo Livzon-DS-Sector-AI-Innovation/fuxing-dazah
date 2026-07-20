@@ -26,7 +26,8 @@ export { FailureCodeDrawer } from './maintenance/FailureCodeDrawer'
 export { FailureCodePanel } from './maintenance/FailureCodePanel'
 export { InspectionCompleteDrawer } from './maintenance/InspectionCompleteDrawer'
 export { MaterialRecordTable } from './maintenance/MaterialRecordTable'
-export { MaterialConsumeDrawer } from './maintenance/MaterialConsumeDrawer'
+// MaterialConsumeDrawer 暂不导出 — 工单完成弹窗已集成备件消耗，独立领料等仓库模块就绪后恢复
+// export { MaterialConsumeDrawer } from './maintenance/MaterialConsumeDrawer'
 
 // ==================== inspection（巡检） ====================
 export { InspectionPage } from './inspection/InspectionPage'
@@ -54,6 +55,7 @@ export { PersonnelCategoryDrawer } from './personnel/PersonnelCategoryDrawer'
 export { SparePartsPage } from './spare-parts/SparePartsPage'
 export { SparePartTable } from './spare-parts/SparePartTable'
 export { SparePartDrawer } from './spare-parts/SparePartDrawer'
+export { SparePartEquipmentDrawer } from './spare-parts/SparePartEquipmentDrawer'
 export { StockInboundDrawer } from './spare-parts/StockInboundDrawer'
 export { StockWarningTable } from './spare-parts/StockWarningTable'
 

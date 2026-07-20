@@ -55,7 +55,8 @@ export function MaintenancePage({
     setWorkOrders, setWorkOrderTotal, setWorkOrderStatistics, setWorkOrderLoading,
     setFailureCodes,
     setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading,
-    maintenancePlanStatusFilter, maintenancePlanPage, maintenancePlanPageSize,
+    maintenancePlanStatusFilter, maintenancePlanKeyword, maintenancePlanModeFilter,
+    maintenancePlanPage, maintenancePlanPageSize,
     openWorkOrderDrawer,
     openMaintenancePlanDrawer,
   } = useEquipmentStore()
@@ -178,6 +179,8 @@ export function MaintenancePage({
     try {
       const res = await fetchMaintenancePlansClient({
         status: maintenancePlanStatusFilter || undefined,
+        keyword: maintenancePlanKeyword || undefined,
+        plan_mode: maintenancePlanModeFilter || undefined,
         page: maintenancePlanPage, page_size: maintenancePlanPageSize,
       })
       setMaintenancePlans(res.items)
@@ -187,7 +190,7 @@ export function MaintenancePage({
     } finally {
       setMaintenancePlanLoading(false)
     }
-  }, [maintenancePlanStatusFilter, maintenancePlanPage, maintenancePlanPageSize, setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading])
+  }, [maintenancePlanStatusFilter, maintenancePlanKeyword, maintenancePlanModeFilter, maintenancePlanPage, maintenancePlanPageSize, setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading])
 
   useEffect(() => {
     if (maintenanceTab === 'work-orders') fetchWorkOrderData()

@@ -82,6 +82,7 @@ export interface AssignWorkOrderInput {
 
 export interface CompleteWorkOrderInput {
   repair_detail: string
+  consumed_parts?: { spare_part_id: string; quantity: number }[]
 }
 
 export interface VerifyWorkOrderInput {

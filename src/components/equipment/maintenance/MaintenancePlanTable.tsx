@@ -23,8 +23,10 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
   const {
     maintenancePlans, maintenancePlanTotal, maintenancePlanPage, maintenancePlanPageSize,
     maintenancePlanLoading, maintenancePlanStatusFilter, maintenancePlanKeyword,
+    maintenancePlanModeFilter,
     setMaintenancePlanPage, setMaintenancePlanPageSize, setMaintenancePlanStatusFilter,
-    setMaintenancePlanKeyword, openMaintenancePlanDrawer,
+    setMaintenancePlanKeyword, setMaintenancePlanModeFilter,
+    openMaintenancePlanDrawer,
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
 
@@ -100,8 +102,13 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
           <Select placeholder="计划状态" allowClear style={{ width: 120 }}
             value={maintenancePlanStatusFilter || undefined} onChange={v => setMaintenancePlanStatusFilter(v || '')}
             options={[{ label: '启用', value: '启用' }, { label: '停用', value: '停用' }, { label: '已完成', value: '已完成' }]} />
+          <Select placeholder="关联方式" allowClear style={{ width: 120 }}
+            value={maintenancePlanModeFilter || undefined} onChange={v => setMaintenancePlanModeFilter(v || '')}
+            options={[{ label: '按设备', value: 'equipment' }, { label: '按分类', value: 'category' }]} />
           <Input.Search placeholder="搜索计划名称" allowClear style={{ width: 200 }}
-            value={maintenancePlanKeyword || undefined} onSearch={v => setMaintenancePlanKeyword(v)} />
+            value={maintenancePlanKeyword || undefined}
+            onChange={e => { if (!e.target.value) setMaintenancePlanKeyword('') }}
+            onSearch={v => setMaintenancePlanKeyword(v)} />
         </Space>
       </div>
       <Table columns={columns} dataSource={maintenancePlans} rowKey="id" size="small" loading={maintenancePlanLoading}

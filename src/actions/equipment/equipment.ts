@@ -6,7 +6,7 @@ import {
   CreateCategoryInput, UpdateCategoryInput, CreateLocationInput, UpdateLocationInput, CreateEquipmentInput, UpdateEquipmentInput,
   CreateFailureCodeInput, UpdateFailureCodeInput,
   CreateWorkOrderInput, UpdateWorkOrderInput, AssignWorkOrderInput, CompleteWorkOrderInput, VerifyWorkOrderInput,
-  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockAdjustInput,
+  CreateSparePartInput, UpdateSparePartInput, StockInboundInput, StockAdjustInput, LinkEquipmentInput,
   CreateMaintenancePlanInput, UpdateMaintenancePlanInput,
   CreateInspectionTemplateInput, UpdateInspectionTemplateInput,
   CreateInspectionTemplateItemInput, UpdateInspectionTemplateItemInput,
@@ -264,6 +264,24 @@ export async function stockAdjust(sparePartId: string, data: StockAdjustInput): 
   const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/stock/adjust`, {
     method: 'POST',
     body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+// ==================== 备件-设备关联 ====================
+export async function linkEquipmentToSparePart(sparePartId: string, data: LinkEquipmentInput): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/equipments`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (result.success) revalidatePath('/equipment')
+  return result
+}
+
+export async function unlinkEquipmentFromSparePart(sparePartId: string, linkId: string): Promise<ActionResult> {
+  const result = await actionFetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/equipments/${linkId}`, {
+    method: 'DELETE',
   })
   if (result.success) revalidatePath('/equipment')
   return result

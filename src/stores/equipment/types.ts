@@ -137,6 +137,10 @@ export interface EquipmentStore {
   editingSparePart: SparePart | null
   openSparePartDrawer: (part?: SparePart) => void
   closeSparePartDrawer: () => void
+  sparePartEquipmentDrawerOpen: boolean
+  equipmentManagingSparePart: SparePart | null
+  openSparePartEquipmentDrawer: (part: SparePart) => void
+  closeSparePartEquipmentDrawer: () => void
   stockInboundDrawerOpen: boolean
   stockInboundSparePartId: string | null
   openStockInboundDrawer: (sparePartId: string) => void
@@ -150,6 +154,7 @@ export interface EquipmentStore {
   maintenancePlanLoading: boolean
   maintenancePlanStatusFilter: MaintenancePlanStatus | ''
   maintenancePlanKeyword: string
+  maintenancePlanModeFilter: 'equipment' | 'category' | ''
   setMaintenancePlans: (plans: MaintenancePlan[]) => void
   setMaintenancePlanTotal: (total: number) => void
   setMaintenancePlanPage: (page: number) => void
@@ -157,6 +162,7 @@ export interface EquipmentStore {
   setMaintenancePlanLoading: (loading: boolean) => void
   setMaintenancePlanStatusFilter: (status: MaintenancePlanStatus | '') => void
   setMaintenancePlanKeyword: (keyword: string) => void
+  setMaintenancePlanModeFilter: (mode: 'equipment' | 'category' | '') => void
   maintenancePlanDrawerOpen: boolean
   editingMaintenancePlan: MaintenancePlan | null
   openMaintenancePlanDrawer: (plan?: MaintenancePlan) => void

@@ -1,18 +1,18 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Input, Image, Upload } from 'antd'
-import type { UploadFile } from 'antd'
+import { App, Drawer, Descriptions, Tag, Timeline, Button, Space, Input, Image, Upload, Select, InputNumber, Modal } from 'antd'
 import {
   ClockCircleOutlined, UserOutlined, ToolOutlined, UploadOutlined,
   CheckCircleOutlined, CloseCircleOutlined, StopOutlined,
 } from '@ant-design/icons'
 import { useEquipmentStore } from '@/stores/equipment'
 import { assignWorkOrder, startWorkOrder, completeWorkOrder, verifyWorkOrder, closeWorkOrder, uploadWorkOrderImages } from '@/actions/equipment'
-import { WorkOrderStatus, WorkOrderPriority, Personnel } from '@/types/equipment'
-import { fetchWorkOrderByIdClient } from '@/lib/api/equipment-client'
+import { WorkOrderStatus, WorkOrderPriority, Personnel, SparePart } from '@/types/equipment'
+import { fetchWorkOrderByIdClient, fetchAvailableSparePartsClient } from '@/lib/api/equipment-client'
 import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { PersonnelSelect } from '@/components/equipment'
+import { MaterialRecordTable } from './MaterialRecordTable'
 import { usePermission } from '@/hooks/usePermission'
 
 const { TextArea } = Input
@@ -55,6 +55,14 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
   const { hasPermission } = usePermission()
 
   const [personnel, setPersonnel] = useState<Personnel[]>([])
+
+  // 完成弹窗状态
+  const [completeOpen, setCompleteOpen] = useState(false)
+  const [repairDetail, setRepairDetail] = useState('')
+  const [fileList, setFileList] = useState<any[]>([])
+  const [consumedParts, setConsumedParts] = useState<{ sparePartId: string; qty: number }[]>([])
+  const [availableParts, setAvailableParts] = useState<SparePart[]>([])
+  const [completeLoading, setCompleteLoading] = useState(false)
 
   const refreshDetail = async (id: string) => {
     try {
@@ -108,61 +116,51 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
     await refreshDetail(wo.id)
   }
 
-  const handleComplete = () => {
-    let repairDetail = ''
-    const fileListRef: UploadFile[] = []
-    modal.confirm({
-      title: '提交维修完成',
-      width: 520,
-      content: (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ marginBottom: 8, fontSize: 14, color: '#37352f' }}>维修过程描述 *</div>
-          <TextArea
-            placeholder="请详细描述维修过程和处理措施"
-            rows={4}
-            maxLength={1000}
-            showCount
-            onChange={(e) => { repairDetail = e.target.value }}
-          />
-          <div style={{ marginTop: 16, marginBottom: 8, fontSize: 14, color: '#37352f' }}>现场照片（可选，可多张）</div>
-          <Upload
-            multiple
-            listType="picture"
-            beforeUpload={(file) => {
-              fileListRef.push(file)
-              return false
-            }}
-            onRemove={(file) => {
-              const idx = fileListRef.findIndex(
-                f => f.name === file.name && f.size === file.size,
-              )
-              if (idx >= 0) fileListRef.splice(idx, 1)
-            }}
-          >
-            <Button icon={<UploadOutlined />}>选择图片</Button>
-          </Upload>
-        </div>
-      ),
-      okText: '提交',
-      cancelText: '取消',
-      onOk: async () => {
-        if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); return }
-        // 先上传图片
-        if (fileListRef.length > 0) {
-          const formData = new FormData()
-          fileListRef.forEach(f => {
-            const file = (f as any).originFileObj || f
-            if (file instanceof File) formData.append('files', file)
-          })
-          const uploadResult = await uploadWorkOrderImages(wo.id, formData)
-          if (!uploadResult.success) { message.error(uploadResult.error); return }
-        }
-        const result = await completeWorkOrder(wo.id, { repair_detail: repairDetail })
-        if (!result.success) { message.error(result.error); return }
-        message.success('已提交验收')
-        await refreshDetail(wo.id)
-      },
-    })
+  const openCompleteModal = async () => {
+    setRepairDetail('')
+    setFileList([])
+    setConsumedParts([{ sparePartId: '', qty: 1 }])
+    setAvailableParts([])
+    setCompleteLoading(false)
+    setCompleteOpen(true)
+    try {
+      const parts = await fetchAvailableSparePartsClient(wo.equipment_id)
+      setAvailableParts(parts)
+    } catch (e) {
+      console.error('获取可用备件失败:', e)
+      setAvailableParts([])
+    }
+  }
+
+  const handleCompleteSubmit = async () => {
+    if (!repairDetail.trim()) { message.warning('请填写维修过程描述'); return }
+    setCompleteLoading(true)
+    try {
+      // 上传图片
+      if (fileList.length > 0) {
+        const formData = new FormData()
+        fileList.forEach(f => {
+          const file = (f as any).originFileObj || f
+          if (file instanceof File) formData.append('files', file)
+        })
+        const uploadResult = await uploadWorkOrderImages(wo.id, formData)
+        if (!uploadResult.success) { message.error(uploadResult.error); return }
+      }
+      // 提交完成（消耗备件传给后端，验收通过后才写入流水）
+      const validParts = consumedParts.filter(p => p.sparePartId && p.qty > 0)
+      const result = await completeWorkOrder(wo.id, {
+        repair_detail: repairDetail,
+        consumed_parts: validParts.length > 0
+          ? validParts.map(p => ({ spare_part_id: p.sparePartId, quantity: p.qty }))
+          : undefined,
+      })
+      if (!result.success) { message.error(result.error); return }
+      message.success('已提交验收')
+      setCompleteOpen(false)
+      await refreshDetail(wo.id)
+    } finally {
+      setCompleteLoading(false)
+    }
   }
 
   const handleVerify = (result: '合格' | '不合格') => {
@@ -337,6 +335,14 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         <Timeline items={timelineItems} />
       </div>
 
+      {/* 已关闭工单显示领料记录 */}
+      {wo.status === '已关闭' && (
+        <div style={{ marginTop: 24, marginBottom: 24 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', marginBottom: 12 }}>领料记录</div>
+          <MaterialRecordTable workOrderId={wo.id} />
+        </div>
+      )}
+
       <div style={{ borderTop: '1px solid #ede9e4', paddingTop: 16 }}>
         <Space wrap>
           {wo.status === '待处理' && hasPermission('equipment:work_order:update') && (
@@ -345,7 +351,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
               <Button onClick={handleAssign}>指派维修人</Button>
             </>
           )}
-          {wo.status === '执行中' && hasPermission('equipment:work_order:update') && <Button type="primary" onClick={handleComplete}>提交完成</Button>}
+          {wo.status === '执行中' && hasPermission('equipment:work_order:update') && <Button type="primary" onClick={openCompleteModal}>提交完成</Button>}
           {wo.status === '待验收' && hasPermission('equipment:work_order:approve') && (
             <>
               <Button type="primary" onClick={() => handleVerify('合格')}>验收通过</Button>
@@ -355,6 +361,83 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
           {wo.status === '已完成' && hasPermission('equipment:work_order:update') && <Button onClick={handleClose}>关闭工单</Button>}
         </Space>
       </div>
+
+      <Modal
+        title="提交维修完成"
+        open={completeOpen}
+        width={600}
+        onCancel={() => setCompleteOpen(false)}
+        onOk={handleCompleteSubmit}
+        confirmLoading={completeLoading}
+        okText="提交"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 8, fontSize: 14, color: '#37352f' }}>维修过程描述 *</div>
+          <TextArea
+            placeholder="请详细描述维修过程和处理措施"
+            rows={3}
+            maxLength={1000}
+            showCount
+            value={repairDetail}
+            onChange={(e) => setRepairDetail(e.target.value)}
+          />
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ marginBottom: 8, fontSize: 14, color: '#37352f' }}>消耗备件（可选）</div>
+          {consumedParts.map((item, idx) => (
+            <Space key={idx} style={{ marginBottom: 8, width: '100%' }}>
+              <Select
+                showSearch
+                placeholder="选择备件"
+                style={{ width: 260 }}
+                value={item.sparePartId || undefined}
+                onChange={(v) => {
+                  setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, sparePartId: v } : p))
+                }}
+                filterOption={(input, option) =>
+                  (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={availableParts.map(sp => ({
+                  label: `${sp.code} - ${sp.name} (${sp.specification || '-'})`,
+                  value: sp.id,
+                }))}
+              />
+              <InputNumber
+                min={1}
+                value={item.qty || undefined}
+                onChange={(v) => {
+                  setConsumedParts(prev => prev.map((p, i) => i === idx ? { ...p, qty: v || 1 } : p))
+                }}
+                style={{ width: 80 }}
+                placeholder="数量"
+              />
+              <Button
+                type="link" danger size="small"
+                onClick={() => setConsumedParts(prev => prev.filter((_, i) => i !== idx))}
+              >
+                删除
+              </Button>
+            </Space>
+          ))}
+          <Button type="dashed" size="small" onClick={() => setConsumedParts(prev => [...prev, { sparePartId: '', qty: 1 }])}>
+            + 添加备件
+          </Button>
+        </div>
+
+        <div style={{ marginBottom: 8, fontSize: 14, color: '#37352f' }}>现场照片（可选）</div>
+        <Upload
+          multiple
+          listType="picture"
+          fileList={fileList}
+          onChange={({ fileList: fl }) => setFileList(fl)}
+          beforeUpload={() => false}
+        >
+          <Button icon={<UploadOutlined />}>选择图片</Button>
+        </Upload>
+      </Modal>
     </Drawer>
   )
 }

@@ -358,7 +358,7 @@ function MovementTable({ materialId }: { materialId: string }) {
       render: (_, r) => (
         <span style={{ color: T.steel, fontSize: 12 }}>
           {new Date(r.created_at).toLocaleString('zh-CN', {
-            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+            year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
           })}
         </span>
       ),
@@ -386,7 +386,7 @@ function MovementTable({ materialId }: { materialId: string }) {
         </div>
       </div>
       <Table
-        rowKey={(r) => `${r.type}-${r.batch_id}-${r.created_at}`}
+        rowKey={(r) => `${r.type}-${r.batch_id}-${r.source_output_id ?? ''}-${r.created_at}`}
         columns={columns}
         dataSource={data?.movements ?? []}
         loading={isLoading}

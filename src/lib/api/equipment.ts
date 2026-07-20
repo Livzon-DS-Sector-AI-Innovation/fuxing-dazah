@@ -136,6 +136,7 @@ export async function fetchMaintenancePlans(filters: MaintenancePlanFilters = {}
   if (filters.category_id) params.append('category_id', filters.category_id)
   if (filters.status) params.append('status', filters.status)
   if (filters.keyword) params.append('keyword', filters.keyword)
+  if (filters.plan_mode) params.append('plan_mode', filters.plan_mode)
   if (filters.page) params.append('page', filters.page.toString())
   if (filters.page_size) params.append('page_size', filters.page_size.toString())
 

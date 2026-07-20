@@ -83,6 +83,8 @@ export const initialSparePartState = {
   stockWarningsLoading: false,
   sparePartDrawerOpen: false,
   editingSparePart: null as SparePart | null,
+  sparePartEquipmentDrawerOpen: false,
+  equipmentManagingSparePart: null as SparePart | null,
   stockInboundDrawerOpen: false,
   stockInboundSparePartId: null as string | null,
 }
@@ -97,6 +99,7 @@ export const initialMaintenancePlanState = {
   maintenancePlanLoading: false,
   maintenancePlanStatusFilter: '' as '' | '启用' | '停用' | '已完成',
   maintenancePlanKeyword: '',
+  maintenancePlanModeFilter: '' as '' | 'equipment' | 'category',
   maintenancePlanDrawerOpen: false,
   editingMaintenancePlan: null as MaintenancePlan | null,
 }

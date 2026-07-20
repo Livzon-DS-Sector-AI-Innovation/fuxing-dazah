@@ -7,6 +7,8 @@ export interface ProductionBatch {
   batch_no: string
   product_id: string
   route_id: string
+  route_name: string
+  route_version: number
   status: ProductionBatchStatus
   quantity: number | null
   unit: string | null

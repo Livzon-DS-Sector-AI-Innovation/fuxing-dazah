@@ -6,7 +6,7 @@ import {
   EquipmentListResponse, EquipmentStatistics,
   AvailabilityResponse, EquipmentStatusLog,
   FailureCode, WorkOrderFilters, WorkOrderListResponse, WorkOrderStatistics, WorkOrder,
-  SparePartFilters, SparePartListResponse, SparePart, StockWarning,
+  SparePartFilters, SparePartListResponse, SparePart, StockWarning, EquipmentSparePartLink,
   MaintenancePlanFilters, MaintenancePlanListResponse, MaintenancePlan,
   InspectionTemplateFilters, InspectionTemplateListResponse, InspectionTemplate,
   MaterialRecord,
@@ -95,8 +95,29 @@ export async function fetchSparePartByIdClient(id: string): Promise<SparePart> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/${id}`)
 }
 
+export async function fetchAvailableSparePartsClient(equipmentId: string): Promise<SparePart[]> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/available-spare-parts`)
+}
+
+export async function fetchOutboundTransactionsClient(page = 1, pageSize = 20) {
+  return apiFetchPaginated<import('@/types/equipment').OutboundTransaction>(
+    `${API_BASE_URL}/api/v1/equipment/spare-parts/transactions?page=${page}&page_size=${pageSize}`,
+  )
+}
+
 export async function fetchStockWarningsClient(): Promise<StockWarning[]> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/stock/warnings`)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  备件-设备关联
+// ═══════════════════════════════════════════════════════════
+export async function fetchSparePartEquipmentsClient(sparePartId: string): Promise<EquipmentSparePartLink[]> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/spare-parts/${sparePartId}/equipments`)
+}
+
+export async function fetchEquipmentSparePartsClient(equipmentId: string): Promise<EquipmentSparePartLink[]> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/spare-parts`)
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -152,4 +173,15 @@ export async function fetchAdvanceDaysConfigClient(): Promise<AdvanceDaysConfig>
 
 export async function fetchDepartmentsClient(): Promise<import('@/types/equipment').DepartmentOption[]> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/departments`)
+}
+
+// ═══════════════════════════════════════════════════════════
+//  备件消耗历史
+// ═══════════════════════════════════════════════════════════
+export async function fetchEquipmentConsumptionClient(
+  equipmentId: string, page = 1, pageSize = 20,
+): Promise<{ items: import('@/types/equipment').EquipmentConsumptionRecord[]; total: number }> {
+  return apiFetchPaginated(
+    `${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/spare-parts/consumption-history?page=${page}&page_size=${pageSize}`,
+  )
 }

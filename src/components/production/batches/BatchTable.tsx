@@ -123,6 +123,12 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
         columns={[
           { title: '批号', dataIndex: 'batch_no', width: 180, sorter: true },
           {
+            title: '工艺路线',
+            width: 140,
+            render: (_, r) =>
+              r.route_name ? `${r.route_name} v${r.route_version}` : '—',
+          },
+          {
             title: '状态',
             dataIndex: 'status',
             width: 100,

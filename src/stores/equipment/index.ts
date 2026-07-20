@@ -120,6 +120,12 @@ export const useEquipmentStore = create<EquipmentStore>()(
       closeSparePartDrawer: () => set({
         sparePartDrawerOpen: false, editingSparePart: null,
       }, false, 'equipment/closeSparePartDrawer'),
+      openSparePartEquipmentDrawer: (part) => set({
+        sparePartEquipmentDrawerOpen: true, equipmentManagingSparePart: part,
+      }, false, 'equipment/openSparePartEquipmentDrawer'),
+      closeSparePartEquipmentDrawer: () => set({
+        sparePartEquipmentDrawerOpen: false, equipmentManagingSparePart: null,
+      }, false, 'equipment/closeSparePartEquipmentDrawer'),
       openStockInboundDrawer: (sparePartId) => set({
         stockInboundDrawerOpen: true, stockInboundSparePartId: sparePartId,
       }, false, 'equipment/openStockInboundDrawer'),
@@ -135,6 +141,7 @@ export const useEquipmentStore = create<EquipmentStore>()(
       setMaintenancePlanLoading: (loading) => set({ maintenancePlanLoading: loading }, false, 'equipment/setMaintenancePlanLoading'),
       setMaintenancePlanStatusFilter: (status) => set({ maintenancePlanStatusFilter: status, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanStatusFilter'),
       setMaintenancePlanKeyword: (keyword) => set({ maintenancePlanKeyword: keyword, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanKeyword'),
+      setMaintenancePlanModeFilter: (mode) => set({ maintenancePlanModeFilter: mode, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanModeFilter'),
       openMaintenancePlanDrawer: (plan) => set({
         maintenancePlanDrawerOpen: true, editingMaintenancePlan: plan || null,
       }, false, 'equipment/openMaintenancePlanDrawer'),

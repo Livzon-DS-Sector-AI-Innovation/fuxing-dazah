@@ -1,13 +1,13 @@
 'use client'
 
 import { useCallback } from 'react'
-import { App, Table, Button, Space, Input, Badge } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, ImportOutlined, WarningOutlined } from '@ant-design/icons'
+import { App, Table, Button, Space, Input, Tag } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { SparePart } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteSparePart } from '@/actions/equipment'
-import { pillSuccess, pillNeutral, actionLink, linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
+import { linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 import { usePermission } from '@/hooks/usePermission'
 
 interface Props { onRefresh?: () => void }
@@ -18,7 +18,7 @@ export function SparePartTable({ onRefresh }: Props) {
     spareParts, sparePartTotal, sparePartPage, sparePartPageSize,
     sparePartLoading, sparePartKeyword,
     setSparePartPage, setSparePartPageSize, setSparePartKeyword,
-    openSparePartDrawer, openStockInboundDrawer, stockWarnings,
+    openSparePartDrawer, openSparePartEquipmentDrawer,
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
 
@@ -36,7 +36,11 @@ export function SparePartTable({ onRefresh }: Props) {
   }, [modal, message, onRefresh])
 
   const columns: ColumnsType<SparePart> = [
-    { title: '编码', dataIndex: 'code', key: 'code', width: 120 },
+    { title: '编码', dataIndex: 'code', key: 'code', width: 120,
+      render: (v: string) => (
+        <span style={{ fontFamily: '"SF Mono", "Fira Code", monospace', fontSize: 12, color: '#5d5b54' }}>{v}</span>
+      ),
+    },
     { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
     { title: '规格型号', dataIndex: 'specification', key: 'specification', width: 150, render: (t: string | null) => t || '-' },
     { title: '单位', dataIndex: 'unit', key: 'unit', width: 80 },
@@ -45,23 +49,25 @@ export function SparePartTable({ onRefresh }: Props) {
     { title: '单价', dataIndex: 'unit_price', key: 'unit_price', width: 100, align: 'right', render: (p: number | null) => p != null ? `¥${p.toFixed(2)}` : '-' },
     {
       title: '库存数量', dataIndex: 'current_qty', key: 'current_qty', width: 100, align: 'right',
-      render: (qty: number, r) => (
-        <span style={{ color: qty <= r.min_qty ? '#e03131' : '#1a1a1a', fontWeight: qty <= r.min_qty ? 600 : 400 }}>{qty}</span>
-      ),
+      // ponytail: 库存列固定显示 '-'，等仓库模块就绪后恢复
+      render: () => <span style={{ color: '#a4a097' }}>-</span>,
     },
     {
-      title: '状态', dataIndex: 'is_active', key: 'is_active', width: 80,
-      render: (v: boolean) => <span style={v ? pillSuccess : pillNeutral}>{v ? '启用' : '停用'}</span>,
+      title: '适用范围', dataIndex: 'equipment_count', key: 'equipment_count', width: 110,
+      render: (count: number) =>
+        count === 0
+          ? <Tag color="blue">全部设备</Tag>
+          : <Tag color="orange">{count} 台设备</Tag>,
     },
     {
       title: '操作', key: 'action', width: 180, fixed: 'end',
       render: (_: unknown, r: SparePart) => (
         <Space size={12}>
           {hasPermission('equipment:spare_part:update') && (
-            <span role="button" onClick={() => openStockInboundDrawer(r.id)} style={linkPurple}><ImportOutlined />入库</span>
+            <span role="button" onClick={() => openSparePartEquipmentDrawer(r)} style={linkPurple}><SettingOutlined /> 关联设备</span>
           )}
           {hasPermission('equipment:spare_part:update') && (
-            <span role="button" onClick={() => openSparePartDrawer(r)} style={linkPrimary}><EditOutlined />编辑</span>
+            <span role="button" onClick={() => openSparePartDrawer(r)} style={linkPrimary}><EditOutlined /> 编辑</span>
           )}
           {hasPermission('equipment:spare_part:delete') && (
             <span role="button" onClick={() => handleDelete(r)} style={linkDanger}><DeleteOutlined />删除</span>
@@ -73,27 +79,45 @@ export function SparePartTable({ onRefresh }: Props) {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Space>
-          <Input.Search placeholder="搜索备件名称/编码" allowClear style={{ width: 240 }}
-            value={sparePartKeyword || undefined} onSearch={v => setSparePartKeyword(v)} />
-          {stockWarnings.length > 0 && (
-            <Badge count={stockWarnings.length} offset={[-4, 0]}>
-              <Button icon={<WarningOutlined />} style={{ color: '#dd5b00', borderColor: '#dd5b00' }}>库存预警</Button>
-            </Badge>
-          )}
-        </Space>
+      {/* ── 工具栏：搜索 + 新建 ── */}
+      <div style={{
+        marginBottom: 16, display: 'flex', justifyContent: 'space-between',
+        alignItems: 'center', gap: 12,
+      }}>
+        <Input.Search
+          placeholder="搜索备件名称或编码"
+          allowClear
+          style={{ width: 280 }}
+          value={sparePartKeyword || undefined}
+          onSearch={v => setSparePartKeyword(v)}
+        />
         {hasPermission('equipment:spare_part:create') && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>新建备件</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>
+            新建备件
+          </Button>
         )}
       </div>
-      <Table columns={columns} dataSource={spareParts} rowKey="id" size="small" loading={sparePartLoading}
+
+      {/* ── 表格 ── */}
+      <Table
+        columns={columns}
+        dataSource={spareParts}
+        rowKey="id"
+        size="small"
+        loading={sparePartLoading}
         scroll={{ x: 'max-content' }}
         pagination={{
-          current: sparePartPage, pageSize: sparePartPageSize, total: sparePartTotal,
-          showSizeChanger: true, showQuickJumper: true, showTotal: t => `共 ${t} 条`,
-          onChange: (p, s) => { if (s !== sparePartPageSize) { setSparePartPageSize(s) } else { setSparePartPage(p) } },
-        }} />
+          current: sparePartPage,
+          pageSize: sparePartPageSize,
+          total: sparePartTotal,
+          showSizeChanger: true,
+          showQuickJumper: true,
+          showTotal: t => `共 ${t} 条`,
+          onChange: (p, s) => {
+            if (s !== sparePartPageSize) { setSparePartPageSize(s) } else { setSparePartPage(p) }
+          },
+        }}
+      />
     </div>
   )
 }

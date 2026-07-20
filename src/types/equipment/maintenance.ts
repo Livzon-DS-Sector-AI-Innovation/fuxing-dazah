@@ -57,6 +57,7 @@ export interface MaintenancePlanFilters {
   category_id?: string
   status?: MaintenancePlanStatus
   keyword?: string
+  plan_mode?: 'equipment' | 'category'
   page?: number
   page_size?: number
 }

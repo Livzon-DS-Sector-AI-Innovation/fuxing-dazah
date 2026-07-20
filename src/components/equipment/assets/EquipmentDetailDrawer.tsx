@@ -2,12 +2,12 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { App, Drawer, Descriptions, Table, Tabs, Tag, Space, Empty, Spin, Timeline } from 'antd'
-import { ToolOutlined, SearchOutlined, CalendarOutlined, HistoryOutlined } from '@ant-design/icons'
+import { ToolOutlined, SearchOutlined, CalendarOutlined, HistoryOutlined, SettingOutlined, ExperimentOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
-import type { Equipment, MaintenancePlan, WorkOrder, EquipmentStatusLog, StatusLogSource } from '@/types/equipment'
+import type { Equipment, MaintenancePlan, WorkOrder, EquipmentStatusLog, StatusLogSource, EquipmentSparePartLink, EquipmentConsumptionRecord } from '@/types/equipment'
 import type { InspectionTask } from '@/types/inspection'
-import { fetchMaintenancePlansClient, fetchWorkOrdersClient, fetchStatusLogsClient } from '@/lib/api/equipment-client'
+import { fetchMaintenancePlansClient, fetchWorkOrdersClient, fetchStatusLogsClient, fetchEquipmentSparePartsClient, fetchEquipmentConsumptionClient } from '@/lib/api/equipment-client'
 import { fetchInspectionHistory } from '@/lib/api/inspection'
 import { EQUIP_STATUS_PILL_COLORS, RUNNING_STATUS_PILL_COLORS, EQUIPMENT_STATUS_COLORS, RUNNING_STATUS_COLORS, monoFont, pillNeutral, pillSuccess, pillError, pillPurple, statusPill } from '@/components/equipment/shared/shared-styles'
 import type { EquipmentImportance } from '@/types/equipment'
@@ -82,7 +82,7 @@ const PRIORITY_STYLE_MAP: Record<string, React.CSSProperties> = {
 
 export function EquipmentDetailDrawer({ open, equipment, categoryName, locationName, onClose }: EquipmentDetailDrawerProps) {
   const { message } = App.useApp()
-  const [activeTab, setActiveTab] = useState<'plans' | 'history' | 'orders' | 'status'>('plans')
+  const [activeTab, setActiveTab] = useState<'plans' | 'history' | 'orders' | 'status' | 'spare_parts' | 'consumption'>('plans')
 
   // 维护保养计划
   const [plans, setPlans] = useState<MaintenancePlan[]>([])
@@ -99,6 +99,14 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
   // 状态历史
   const [statusLogs, setStatusLogs] = useState<EquipmentStatusLog[]>([])
   const [statusLogsLoading, setStatusLogsLoading] = useState(false)
+
+  // 关联备件
+  const [spareParts, setSpareParts] = useState<EquipmentSparePartLink[]>([])
+  const [sparePartsLoading, setSparePartsLoading] = useState(false)
+
+  // 备件消耗
+  const [consumptionHistory, setConsumptionHistory] = useState<EquipmentConsumptionRecord[]>([])
+  const [consumptionLoading, setConsumptionLoading] = useState(false)
 
   // 代际计数器 — 快速切换设备时忽略旧请求
   const genRef = useRef(0)
@@ -155,13 +163,39 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
     }
   }, [equipment, message])
 
+  const loadSpareParts = useCallback(async (gen: number) => {
+    if (!equipment) return
+    setSparePartsLoading(true)
+    try {
+      const data = await fetchEquipmentSparePartsClient(equipment.id)
+      if (genRef.current === gen) setSpareParts(data)
+    } catch {
+      if (genRef.current === gen) {}
+    } finally {
+      if (genRef.current === gen) setSparePartsLoading(false)
+    }
+  }, [equipment])
+
+  const loadConsumption = useCallback(async (gen: number) => {
+    if (!equipment) return
+    setConsumptionLoading(true)
+    try {
+      const result = await fetchEquipmentConsumptionClient(equipment.id, 1, 50)
+      if (genRef.current === gen) setConsumptionHistory(result.items)
+    } catch {
+      if (genRef.current === gen) {}
+    } finally {
+      if (genRef.current === gen) setConsumptionLoading(false)
+    }
+  }, [equipment])
+
   useEffect(() => {
     if (open && equipment) {
       const gen = ++genRef.current
-      Promise.allSettled([loadPlans(gen), loadHistory(gen), loadOrders(gen), loadStatusLogs(gen)])
+      Promise.allSettled([loadPlans(gen), loadHistory(gen), loadOrders(gen), loadStatusLogs(gen), loadSpareParts(gen), loadConsumption(gen)])
       setActiveTab('plans')
     }
-  }, [open, equipment, loadPlans, loadHistory, loadOrders, loadStatusLogs])
+  }, [open, equipment, loadPlans, loadHistory, loadOrders, loadStatusLogs, loadSpareParts, loadConsumption])
 
   // ── 维护保养计划列 ──
   const planColumns: ColumnsType<MaintenancePlan> = [
@@ -317,6 +351,61 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
         </Spin>
       ),
     },
+    {
+      key: 'spare_parts' as const,
+      label: <span><SettingOutlined /> 关联备件</span>,
+      children: (
+        <Spin spinning={sparePartsLoading}>
+          {spareParts.length === 0 ? (
+            <Empty description="暂无关联备件" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <Table
+              columns={[
+                { title: '备件编码', dataIndex: 'spare_part_code', key: 'spare_part_code', width: 120, render: (v: string | null) => v || '-' },
+                { title: '备件名称', dataIndex: 'spare_part_name', key: 'spare_part_name', width: 150, render: (v: string | null) => v || '-' },
+                { title: '规格', dataIndex: 'spare_part_specification', key: 'spare_part_specification', width: 120, render: (v: string | null) => v || '-' },
+                { title: '单位', dataIndex: 'spare_part_unit', key: 'spare_part_unit', width: 60, render: (v: string | null) => v || '-' },
+                { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60 },
+              ]}
+              dataSource={spareParts}
+              rowKey="id"
+              size="small"
+              pagination={false}
+              scroll={{ x: 'max-content' }}
+            />
+          )}
+        </Spin>
+      ),
+    },
+    {
+      key: 'consumption' as const,
+      label: <span><ExperimentOutlined /> 备件消耗</span>,
+      children: (
+        <Spin spinning={consumptionLoading}>
+          {consumptionHistory.length === 0 ? (
+            <Empty description="暂无备件消耗记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            <Table
+              columns={[
+                { title: '备件编码', dataIndex: 'spare_part_code', key: 'spare_part_code', width: 110, render: (v: string | null) => v || '-' },
+                { title: '备件名称', dataIndex: 'spare_part_name', key: 'spare_part_name', width: 130, render: (v: string | null) => v || '-' },
+                { title: '规格', dataIndex: 'specification', key: 'specification', width: 100, render: (v: string | null) => v || '-' },
+                { title: '数量', dataIndex: 'quantity', key: 'quantity', width: 60, render: (v: number) => Math.abs(v) },
+                { title: '单位', dataIndex: 'unit', key: 'unit', width: 50, render: (v: string | null) => v || '-' },
+                { title: '关联工单', dataIndex: 'work_order_no', key: 'work_order_no', width: 150, render: (v: string | null) => v || '-' },
+                { title: '消耗时间', dataIndex: 'consumed_at', key: 'consumed_at', width: 140, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+                { title: '备注', dataIndex: 'remark', key: 'remark', width: 120, render: (v: string | null) => v || '-', ellipsis: true },
+              ]}
+              dataSource={consumptionHistory}
+              rowKey="id"
+              size="small"
+              pagination={false}
+              scroll={{ x: 'max-content' }}
+            />
+          )}
+        </Spin>
+      ),
+    },
   ]
 
   if (!equipment) return null
@@ -371,7 +460,7 @@ export function EquipmentDetailDrawer({ open, equipment, categoryName, locationN
         <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: '0 0 16px 0' }}>关联记录</h3>
         <Tabs
           activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as 'plans' | 'history' | 'orders' | 'status')}
+          onChange={(k) => setActiveTab(k as typeof activeTab)}
           items={tabItems}
         />
       </div>

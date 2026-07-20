@@ -24,6 +24,8 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const nodeId: string | undefined = Form.useWatch('node_id', form)
+  // 监听全部表单值，用于动态渲染每个产出批次的数量输入
+  const watchedValues: Record<string, unknown> | undefined = Form.useWatch([], form)
 
   const { data: detail } = useQuery({
     queryKey: ['production-batch-detail', batchId],
@@ -49,8 +51,11 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     const completed = new Set(
       detail.executions.filter(e => e.status === 'completed').map(e => e.node_id),
     )
+    const inProgress = new Set(
+      detail.executions.filter(e => e.status === 'in_progress').map(e => e.node_id),
+    )
     const legal = new Set<string>()
-    if (completed.size === 0) {
+    if (completed.size === 0 && inProgress.size === 0) {
       // 首执行：entry_node_id 或路线起点（无 normal 入边）
       if (detail.entry_node_id) {
         legal.add(detail.entry_node_id)
@@ -65,6 +70,10 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     } else {
       graph.edges.forEach(e => {
         if (completed.has(e.from_node_id)) legal.add(e.to_node_id)
+        // 流水线边：前道 in_progress 即可开始
+        if (e.allow_overlap && !e.is_batch_boundary && inProgress.has(e.from_node_id)) {
+          legal.add(e.to_node_id)
+        }
       })
     }
     return { legalNodeIds: legal }
@@ -121,12 +130,18 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
       deviation_reason: needsDeviation ? (values.deviation_reason as string) : null,
       remark: (values.remark as string) ?? null,
       intermediate_consumptions: inputIntermediates.length > 0
-        ? inputIntermediates.map(im => ({
-            intermediate_type_id: im.intermediate_type_id,
-            output_id: (values as Record<string, string>)[`consume_output_${im.intermediate_type_id}`] ?? '',
-            quantity: Number((values as Record<string, number>)[`consume_qty_${im.intermediate_type_id}`]) || 0,
-            remark: ((values as Record<string, string>)[`consume_remark_${im.intermediate_type_id}`]) || undefined,
-          })).filter(c => c.output_id && c.quantity > 0)
+        ? inputIntermediates.flatMap(im => {
+            const outputIds = (values as Record<string, string[]>)[`consume_output_${im.intermediate_type_id}`] ?? []
+            const remark = ((values as Record<string, string>)[`consume_remark_${im.intermediate_type_id}`]) || undefined
+            return outputIds
+              .map(outputId => ({
+                intermediate_type_id: im.intermediate_type_id,
+                output_id: outputId,
+                quantity: Number((values as Record<string, number>)[`consume_qty_${im.intermediate_type_id}_${outputId}`]) || 0,
+                remark,
+              }))
+              .filter(c => c.quantity > 0)
+          })
         : [],
     })
     if (result.success) {
@@ -175,6 +190,9 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
             mode="multiple"
             allowClear
             showSearch
+            filterOption={(input, option) =>
+              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+            }
             options={(equipmentData?.items ?? []).map(
               (e: { id: string; name: string; equipment_no: string }) => ({
                 value: e.id,
@@ -206,16 +224,28 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
                   rules={im.required ? [{ required: true, message: '请选择' }] : undefined}
                   style={{ marginBottom: 4 }}
                 >
-                  <Select size="small" options={getOutputOptions(im.intermediate_type_id)} placeholder="选择上游产出" allowClear showSearch />
+                  <Select size="small" mode="multiple" options={getOutputOptions(im.intermediate_type_id)} placeholder="选择上游产出" allowClear showSearch filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
                 </Form.Item>
-                <Form.Item
-                  name={`consume_qty_${im.intermediate_type_id}`}
-                  label="消耗数量"
-                  rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
-                  style={{ marginBottom: 4 }}
-                >
-                  <Input size="small" type="number" placeholder="数量" />
-                </Form.Item>
+                {(() => {
+                  const selectedIds = (watchedValues?.[`consume_output_${im.intermediate_type_id}`] as string[]) ?? []
+                  return selectedIds.map(outputId => {
+                    const output = (batchOutputs ?? []).find(o => o.id === outputId)
+                    const label = output
+                      ? (output.intermediate_batch_no ?? output.batch_no ?? outputId.slice(0, 8))
+                      : outputId.slice(0, 8)
+                    return (
+                      <Form.Item
+                        key={outputId}
+                        name={`consume_qty_${im.intermediate_type_id}_${outputId}`}
+                        label={`消耗数量 · ${label}`}
+                        rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
+                        style={{ marginBottom: 4 }}
+                      >
+                        <Input size="small" type="number" placeholder="数量" />
+                      </Form.Item>
+                    )
+                  })
+                })()}
                 <Form.Item name={`consume_remark_${im.intermediate_type_id}`} label="备注" style={{ marginBottom: 0 }}>
                   <Input size="small" placeholder="可选" />
                 </Form.Item>

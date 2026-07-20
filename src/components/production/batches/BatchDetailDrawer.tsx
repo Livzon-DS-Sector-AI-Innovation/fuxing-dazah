@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { App, Button, Drawer, Popconfirm, Skeleton, Space, Table, Tag } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cancelBatch, completeBatch, abortExecution } from '@/actions/production'
@@ -14,11 +14,59 @@ import { BATCH_STATUS_META } from './BatchTable'
 import { TraceGraph } from './TraceGraph'
 import { ExecutionTimeline } from './ExecutionTimeline'
 
+// ── 设计令牌 ──────────────────────────────────────────────
+const T = {
+  accent: '#0D7377',
+  border: '#E5E7EB',
+  textSecondary: '#6B7280',
+} as const
+
+// ── 分段标题：左侧青蓝色强调条 ──────────────────────────────
+function Section({
+  title,
+  extra,
+  children,
+}: {
+  title: string
+  extra?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            width: 3,
+            height: 18,
+            borderRadius: 2,
+            background: T.accent,
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ fontWeight: 600, fontSize: 14 }}>{title}</span>
+        {extra && (
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+            {extra}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
+  )
+}
+
 interface Props {
   batchId: string
   canSubmit: boolean
   onClose: () => void
-  // Task 8/9 接入：
   onStartExecution?: (batchId: string) => void
   onCompleteExecution?: (execution: Execution, routeId: string) => void
   onDerive?: (batchId: string) => void
@@ -81,6 +129,7 @@ export function BatchDetailDrawer({
   }
 
   const meta = detail ? BATCH_STATUS_META[detail.status] : null
+  const hasMaterials = (outputsData?.length ?? 0) > 0 || (consumptionsData?.length ?? 0) > 0
 
   return (
     <Drawer
@@ -96,37 +145,15 @@ export function BatchDetailDrawer({
       }
       extra={
         canSubmit &&
-        detail && (
-          <Space>
-            {(detail.status === 'pending' || detail.status === 'in_progress') &&
-              onStartExecution && (
-                <Button type="primary" onClick={() => onStartExecution(currentId)}>
-                  开始工序
-                </Button>
-              )}
-            {(detail.status === 'in_progress' || detail.status === 'completed') && (
-              <>
-                {onDerive && <Button onClick={() => onDerive(currentId)}>分裂</Button>}
-                {onMerge && <Button onClick={() => onMerge(currentId)}>合并</Button>}
-              </>
-            )}
-            {detail.status === 'in_progress' && (
-              <Popconfirm
-                title="确认批次完成？"
-                onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
-              >
-                <Button>完成批次</Button>
-              </Popconfirm>
-            )}
-            {detail.status !== 'completed' && detail.status !== 'cancelled' && (
-              <Popconfirm
-                title="报废该批次？不可恢复"
-                onConfirm={() => runAction(() => cancelBatch(currentId), '批次已报废')}
-              >
-                <Button danger>报废</Button>
-              </Popconfirm>
-            )}
-          </Space>
+        detail &&
+        detail.status !== 'completed' &&
+        detail.status !== 'cancelled' && (
+          <Popconfirm
+            title="报废该批次？不可恢复"
+            onConfirm={() => runAction(() => cancelBatch(currentId), '批次已报废')}
+          >
+            <Button danger>报废</Button>
+          </Popconfirm>
         )
       }
     >
@@ -134,42 +161,98 @@ export function BatchDetailDrawer({
         <Skeleton active paragraph={{ rows: 10 }} />
       ) : (
         <>
+          {/* ── 批次溯源 ──────────────────────────── */}
           {trace && trace.batches.length > 1 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8 }}>批次溯源</div>
+            <Section title="批次溯源">
               <TraceGraph
                 trace={trace}
                 currentBatchId={currentId}
                 onBatchClick={id => setCurrentId(id)}
               />
-            </div>
+            </Section>
           )}
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>工序执行时间线</div>
-          <ExecutionTimeline
-            executions={detail?.executions ?? []}
-            canSubmit={canSubmit && detail?.status !== 'cancelled'}
-            onComplete={e => detail && onCompleteExecution?.(e, detail.route_id)}
-            onAbort={e =>
-              runAction(() => abortExecution(e.id), '已中止')
+
+          {/* ── 工序执行时间线 ────────────────────── */}
+          <Section
+            title="工序执行时间线"
+            extra={
+              canSubmit && detail?.status === 'in_progress' && (
+                <Popconfirm
+                  title="确认批次完成？"
+                  onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
+                >
+                  <Button type="primary">完成批次</Button>
+                </Popconfirm>
+              )
             }
-          />
-          {((outputsData?.length ?? 0) > 0 || (consumptionsData?.length ?? 0) > 0) && (
-            <>
-              <div style={{ margin: '16px 0 8px' }}></div>
+          >
+            <ExecutionTimeline
+              executions={detail?.executions ?? []}
+              canSubmit={canSubmit && detail?.status !== 'cancelled'}
+              onComplete={e => detail && onCompleteExecution?.(e, detail.route_id)}
+              onAbort={e => runAction(() => abortExecution(e.id), '已中止')}
+            />
+
+            {/* 时间线操作栏 */}
+            {canSubmit && detail && (
+              <div
+                style={{
+                  marginTop: 16,
+                  paddingTop: 16,
+                  borderTop: `1px solid ${T.border}`,
+                }}
+              >
+                <Space>
+                  {(detail.status === 'pending' || detail.status === 'in_progress') &&
+                    onStartExecution && (
+                      <Button type="primary" onClick={() => onStartExecution(currentId)}>
+                        开始工序
+                      </Button>
+                    )}
+                  {(detail.status === 'in_progress' || detail.status === 'completed') && (
+                    <>
+                      {onDerive && <Button onClick={() => onDerive(currentId)}>分裂</Button>}
+                      {onMerge && <Button onClick={() => onMerge(currentId)}>合并</Button>}
+                    </>
+                  )}
+                </Space>
+              </div>
+            )}
+          </Section>
+
+          {/* ── 物料记录 ──────────────────────────── */}
+          {hasMaterials && (
+            <Section title="物料记录">
               {(outputsData?.length ?? 0) > 0 && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#555' }}>产出记录</div>
+                <div style={{ marginBottom: consumptionsData?.length ? 16 : 0 }}>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 500,
+                      marginBottom: 8,
+                      color: T.textSecondary,
+                    }}
+                  >
+                    产出记录
+                  </div>
                   <Table<IntermediateOutput>
                     size="small"
                     rowKey="id"
                     dataSource={outputsData}
                     pagination={false}
                     columns={[
-                      { title: '产物', dataIndex: 'intermediate_type_name', width: 140,
+                      {
+                        title: '产物',
+                        dataIndex: 'intermediate_type_name',
+                        width: 140,
                         render: (v, r) => (
                           <Space size={4}>
                             <span>{v || '-'}</span>
-                            {r.is_product && <Tag color="green" style={{ fontSize: 11 }}>成品</Tag>}
+                            {r.is_product && (
+                              <Tag color="green" style={{ fontSize: 11 }}>
+                                成品
+                              </Tag>
+                            )}
                           </Space>
                         ),
                       },
@@ -183,7 +266,16 @@ export function BatchDetailDrawer({
               )}
               {(consumptionsData?.length ?? 0) > 0 && (
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4, color: '#555' }}>消耗记录</div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 500,
+                      marginBottom: 8,
+                      color: T.textSecondary,
+                    }}
+                  >
+                    消耗记录
+                  </div>
                   <Table<IntermediateConsumption>
                     size="small"
                     rowKey="id"
@@ -199,7 +291,7 @@ export function BatchDetailDrawer({
                   />
                 </div>
               )}
-            </>
+            </Section>
           )}
         </>
       )}

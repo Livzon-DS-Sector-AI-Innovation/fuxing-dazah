@@ -310,7 +310,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       </div>
       <Table<EdgeIn>
         size="small"
-        rowKey={(e) => `${e.from_node_code}-${e.to_node_code}-${e.edge_type}-${e.is_batch_boundary}`}
+        rowKey={(e) => `${e.from_node_code}-${e.to_node_code}-${e.edge_type}-${e.is_batch_boundary}-${e.allow_overlap}`}
         dataSource={extraEdges}
         pagination={false}
         columns={[
