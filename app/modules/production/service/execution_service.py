@@ -105,20 +105,26 @@ def _build_field_values(
 async def _check_source_legality(
     db: AsyncSession, batch: Batch, node_id: uuid.UUID
 ) -> bool:
-    """来路校验：返回该流转是否在路线中有合法定义。"""
+    """来路校验：completed 节点始终合法；allow_overlap 边允许 in_progress 前道。"""
     nodes = await repo.get_route_nodes(db, batch.route_id)
     edges = await repo.get_route_edges(db, batch.route_id)
     completed = await repo.completed_node_ids(db, batch.id)
-    if not completed:
-        # 无任何已完成执行（含首次或此前全部 aborted）：
-        # derive/merge 批次以入口节点为准，根批次以路线起点为准
+    in_progress = await repo.in_progress_node_ids(db, batch.id)
+
+    if not completed and not in_progress:
+        # 无任何执行记录：仅起点/入口节点合法
         if batch.entry_node_id:
             return node_id == batch.entry_node_id
         return node_id in compute_start_nodes(nodes, edges)
-    # 任一已完成执行所在节点到目标节点有边（normal/rework 均可）即合法
-    return any(
-        e.from_node_id in completed and e.to_node_id == node_id for e in edges
-    )
+
+    for e in edges:
+        if e.to_node_id != node_id:
+            continue
+        if e.from_node_id in completed:
+            return True
+        if e.allow_overlap and not e.is_batch_boundary and e.from_node_id in in_progress:
+            return True
+    return False
 
 
 async def start_execution(
