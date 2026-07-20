@@ -15,6 +15,7 @@ from app.modules.production.models import (
 
 __all__ = [
     "get_route",
+    "get_routes_by_ids",
     "list_routes",
     "next_route_version",
     "get_route_nodes",
@@ -30,6 +31,18 @@ async def get_route(db: AsyncSession, route_id: uuid.UUID) -> ProcessRoute | Non
         ProcessRoute.id == route_id, ProcessRoute.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_routes_by_ids(
+    db: AsyncSession, route_ids: list[uuid.UUID]
+) -> list[ProcessRoute]:
+    if not route_ids:
+        return []
+    stmt = select(ProcessRoute).where(
+        ProcessRoute.id.in_(route_ids),
+        ProcessRoute.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
 
 
 async def list_routes(

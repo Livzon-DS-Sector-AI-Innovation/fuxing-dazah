@@ -275,6 +275,16 @@ async def list_batches_paged(
     order_by: str = "created_at",
     order: str = "desc",
 ) -> tuple[list[Batch], int]:
-    return await repo.list_batches(
+    batches, total = await repo.list_batches(
         db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
     )
+    # 批量填充路线名称和版本
+    route_ids = list({b.route_id for b in batches})
+    if route_ids:
+        routes = await repo.get_routes_by_ids(db, route_ids)
+        route_map = {r.id: (r.name, r.version) for r in routes}
+        for b in batches:
+            name, ver = route_map.get(b.route_id, ("", 0))
+            b.route_name = name  # type: ignore[attr-defined]
+            b.route_version = ver  # type: ignore[attr-defined]
+    return batches, total
