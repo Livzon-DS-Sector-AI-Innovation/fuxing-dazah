@@ -63,6 +63,7 @@ class EdgeIn(BaseModel):
     to_node_code: str
     edge_type: Literal["normal", "rework"] = "normal"
     is_batch_boundary: bool = False
+    allow_overlap: bool = False
     remark: str | None = Field(default=None, max_length=200)
 
 
@@ -74,6 +75,7 @@ class EdgeOut(BaseModel):
     to_node_id: uuid.UUID
     edge_type: str
     is_batch_boundary: bool
+    allow_overlap: bool
     remark: str | None
 
 
