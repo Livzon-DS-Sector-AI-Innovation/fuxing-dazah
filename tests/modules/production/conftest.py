@@ -94,7 +94,7 @@ async def published_route(db_session: AsyncSession) -> dict[str, Any]:
     """已发布的标准路线，返回 product/route/节点/边界边。"""
     product = await route_service.create_product(
         db_session,
-        ProductCreate(product_name="测试产品", product_code=rand_code("P")),
+        ProductCreate(product_name=rand_code("测试产品"), product_code=rand_code("P")),
         user=None,
     )
     route = await route_service.create_route(
