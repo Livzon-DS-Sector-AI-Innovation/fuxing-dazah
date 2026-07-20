@@ -287,7 +287,8 @@ class TestListSort:
             )
         await db_session.flush()
         items, total = await repo.list_batches(
-            db_session, product_id, None, None, 1, 20, order_by="batch_no", order="asc"
+            db_session, product_id, None, None,
+            page=1, page_size=20, order_by="batch_no", order="asc",
         )
         assert total == 3
         assert [b.batch_no for b in items] == [f"{base}-{s}" for s in ("a", "b", "c")]

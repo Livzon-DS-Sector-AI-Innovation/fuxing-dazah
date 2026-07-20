@@ -50,6 +50,7 @@ async def get_maintenance_plans(
     category_id: uuid.UUID | None = None,
     status: str | None = None,
     keyword: str | None = None,
+    plan_mode: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[MaintenancePlan], int]:
@@ -72,6 +73,10 @@ async def get_maintenance_plans(
         query = query.where(MaintenancePlan.status == status)
     if keyword:
         query = query.where(MaintenancePlan.plan_name.ilike(f"%{keyword}%"))
+    if plan_mode == "equipment":
+        query = query.where(MaintenancePlan.equipment_id.isnot(None))
+    elif plan_mode == "category":
+        query = query.where(MaintenancePlan.category_id.isnot(None))
 
     count_query = select(func.count()).select_from(
         query.with_only_columns(MaintenancePlan.id).subquery()

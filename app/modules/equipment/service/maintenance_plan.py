@@ -117,6 +117,7 @@ async def get_maintenance_plans(
     category_id: uuid.UUID | None = None,
     status: str | None = None,
     keyword: str | None = None,
+    plan_mode: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[MaintenancePlan], int]:
@@ -128,6 +129,7 @@ async def get_maintenance_plans(
         category_id=category_id,
         status=status,
         keyword=keyword,
+        plan_mode=plan_mode,
         page=page,
         page_size=page_size,
     )

@@ -60,10 +60,19 @@ class WorkOrderAssign(BaseModel):
     assignee_id: uuid.UUID = Field(..., description="维修人ID")
 
 
+class ConsumedPartItem(BaseModel):
+    """消耗备件项"""
+    spare_part_id: str
+    quantity: int = Field(..., ge=1)
+
+
 class WorkOrderComplete(BaseModel):
     """完成工单请求"""
 
     repair_detail: str = Field(..., min_length=1, description="维修过程描述")
+    consumed_parts: list[ConsumedPartItem] | None = Field(
+        default=None, description="消耗备件列表"
+    )
 
 
 class WorkOrderVerify(BaseModel):
@@ -154,6 +163,9 @@ class MaterialConsumeResponse(BaseModel):
     """领料记录响应"""
     id: uuid.UUID
     spare_part_id: uuid.UUID
+    spare_part_code: str | None = None
+    spare_part_name: str | None = None
+    spare_part_unit: str | None = None
     work_order_id: uuid.UUID
     transaction_type: str
     quantity: int

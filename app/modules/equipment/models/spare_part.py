@@ -66,6 +66,9 @@ class SparePart(BaseModel):
         server_default="true",
         comment="是否启用",
     )
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="归属部门ID，逻辑引用 identity.departments.id"
+    )
 
 
 class EquipmentSparePart(BaseModel):

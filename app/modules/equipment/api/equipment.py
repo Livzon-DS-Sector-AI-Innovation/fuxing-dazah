@@ -19,6 +19,7 @@ from app.modules.equipment.schemas import (
     EquipmentCategoryResponse,
     EquipmentCategoryTree,
     EquipmentCategoryUpdate,
+    EquipmentConsumptionRecord,
     EquipmentCreate,
     EquipmentResponse,
     EquipmentStatistics,
@@ -27,6 +28,7 @@ from app.modules.equipment.schemas import (
     LocationResponse,
     LocationTree,
     LocationUpdate,
+    SparePartResponse,
 )
 
 router = APIRouter()
@@ -352,6 +354,71 @@ async def delete_equipment(
     """删除设备"""
     await service.delete_equipment(db, equipment_id, ctx)
     return success_response(message="删除成功")
+
+
+# ==================== 设备备件关联 ====================
+@router.get("/equipments/{equipment_id}/spare-parts", summary="获取设备关联的备件列表")
+async def get_equipment_spare_parts(
+    equipment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:read"),
+    ),
+) -> JSONResponse:
+    links = await repo.get_equipment_spare_parts(db, equipment_id)
+    results = []
+    for link in links:
+        sp = link.spare_part
+        results.append({
+            "id": link.id,
+            "equipment_id": link.equipment_id,
+            "spare_part_id": link.spare_part_id,
+            "quantity": link.quantity,
+            "spare_part_code": sp.code if sp else None,
+            "spare_part_name": sp.name if sp else None,
+            "spare_part_specification": sp.specification if sp else None,
+            "spare_part_unit": sp.unit if sp else None,
+        })
+    return success_response(data=results)
+
+
+@router.get("/equipments/{equipment_id}/spare-parts/consumption-history", summary="设备备件消耗历史")
+async def get_equipment_consumption_history(
+    equipment_id: uuid.UUID,
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=200, description="每页数量"),
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:read"),
+    ),
+) -> JSONResponse:
+    rows, total = await repo.get_consumption_history_by_equipment(
+        db, equipment_id, page=page, page_size=page_size,
+    )
+    return paginated_response(
+        data=[EquipmentConsumptionRecord(**row) for row in rows],
+        page=page, page_size=page_size, total=total,
+    )
+
+
+@router.get(
+    "/equipments/{equipment_id}/available-spare-parts",
+    summary="获取设备可用备件",
+)
+async def get_available_spare_parts(
+    equipment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:read"),
+    ),
+) -> JSONResponse:
+    """获取该设备可用的备件：
+    未关联设备的备件（全局可用）+ 关联了此设备的备件
+    """
+    spare_parts = await repo.get_available_spare_parts(db, equipment_id)
+    return success_response(
+        data=[SparePartResponse.model_validate(sp) for sp in spare_parts],
+    )
 
 
 # ==================== Excel 导入 ====================

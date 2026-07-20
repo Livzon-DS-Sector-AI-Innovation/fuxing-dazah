@@ -185,6 +185,9 @@ class WorkOrder(BaseModel):
     spare_parts_cost: Mapped[float | None] = mapped_column(
         nullable=True, comment="备件费用汇总"
     )
+    consumed_parts_data: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="提交完成时选择的消耗备件 JSON"
+    )
     inspection_task_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True, comment="来源巡检任务ID，由巡检异常自动创建时填入"
     )

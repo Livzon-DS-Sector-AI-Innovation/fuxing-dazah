@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.production import repository as repo
 from app.modules.production.models.intermediate import (
     BatchIntermediateOutput,
@@ -63,13 +63,16 @@ async def update_intermediate_type(
     obj = await repo.get_intermediate_type(db, type_id)
     if not obj:
         raise NotFoundException("中间体", str(type_id))
-    non_nullable_fields = {"code", "name"}
+    non_nullable_fields = {"name"}
     for field_name, val in payload.model_dump(exclude_unset=True).items():
         if val is None and field_name in non_nullable_fields:
             continue  # 不允许将非空字段设为 None，保持旧值
         setattr(obj, field_name, val)
     if user:
         obj.updated_by = user.id
+    # 校验最终状态：is_product=True 必须关联 product_id（防止仅更新 product_id=None 时绕过）
+    if obj.is_product and not obj.product_id:
+        raise AppException(status_code=400, message="标记为成品时必须关联产品")
     if obj.product_id:
         product = await repo.get_product(db, obj.product_id)
         if not product:

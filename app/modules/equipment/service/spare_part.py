@@ -25,12 +25,18 @@ from app.modules.equipment.service.data_scope import verify_write_ownership
 async def create_spare_part(
     db: AsyncSession,
     data: SparePartCreate,
+    ctx: EquipmentAccessContext,
 ) -> SparePart:
-    """创建备件，自动创建库存记录"""
+    """创建备件，自动创建库存记录。department_id 自动从用户部门获取。"""
     if await repo.exists_spare_part_by_code(db, data.code):
         raise DuplicateException("备件编码", data.code)
 
-    spare_part = await repo.create_spare_part(db, data.model_dump())
+    create_data = data.model_dump()
+    # 自动归属用户部门
+    if not create_data.get("department_id") and ctx.visible_department_ids:
+        create_data["department_id"] = ctx.visible_department_ids[0]
+
+    spare_part = await repo.create_spare_part(db, create_data)
 
     await repo.create_stock(db, {"spare_part_id": spare_part.id})
 
@@ -54,19 +60,30 @@ async def get_spare_parts(
     category: str | None = None,
     keyword: str | None = None,
     is_active: bool | None = None,
+    department_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[SparePart], int]:
-    """获取备件列表"""
-    return await repo.get_spare_parts(
+    """获取备件列表，批量填充 department_name。"""
+    spare_parts, total = await repo.get_spare_parts(
         db,
         ctx,
         category=category,
         keyword=keyword,
         is_active=is_active,
+        department_id=department_id,
         page=page,
         page_size=page_size,
     )
+    # 批量填充 department_name（缓存去重，避免 API 层直接调用 repo）
+    dept_cache: dict[uuid.UUID, str] = {}
+    for sp in spare_parts:
+        if sp.department_id:
+            if sp.department_id not in dept_cache:
+                dept_info = await repo.get_department_info(db, sp.department_id)
+                dept_cache[sp.department_id] = dept_info["name"] if dept_info else ""
+            sp.department_name = dept_cache.get(sp.department_id, "")  # type: ignore[attr-defined]
+    return spare_parts, total
 
 
 async def update_spare_part(
@@ -77,7 +94,7 @@ async def update_spare_part(
 ) -> SparePart:
     """更新备件"""
     spare_part = await get_spare_part_by_id(db, spare_part_id)
-    await verify_write_ownership(ctx, spare_part, "created_by", "user_id")
+    await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
 
     update_data = data.model_dump(exclude_unset=True)
 
@@ -101,7 +118,7 @@ async def delete_spare_part(
 ) -> bool:
     """删除备件"""
     spare_part = await get_spare_part_by_id(db, spare_part_id)
-    await verify_write_ownership(ctx, spare_part, "created_by", "user_id")
+    await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
     return await repo.delete_spare_part(db, spare_part_id)
 
 
@@ -125,7 +142,7 @@ async def inbound_stock(
     """入库"""
     spare_part = await get_spare_part_by_id(db, spare_part_id)
     if ctx:
-        await verify_write_ownership(ctx, spare_part, "created_by", "user_id")
+        await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
 
     stock = await repo.update_stock_qty(db, spare_part_id, data.quantity)
     if not stock:
@@ -189,7 +206,7 @@ async def adjust_stock(
     """盘点调整"""
     spare_part = await get_spare_part_by_id(db, spare_part_id)
     if ctx:
-        await verify_write_ownership(ctx, spare_part, "created_by", "user_id")
+        await verify_write_ownership(ctx, spare_part, "department_id", "department_id")
 
     stock = await get_stock_by_spare_part_id(db, spare_part_id)
 

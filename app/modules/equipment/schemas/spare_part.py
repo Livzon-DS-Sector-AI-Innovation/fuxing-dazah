@@ -32,6 +32,9 @@ class SparePartCreate(BaseModel):
         default=None, ge=0, description="参考单价"
     )
     is_active: bool = Field(default=True, description="是否启用")
+    department_id: uuid.UUID | None = Field(
+        default=None, description="归属部门ID"
+    )
 
 
 class SparePartUpdate(BaseModel):
@@ -61,6 +64,9 @@ class SparePartUpdate(BaseModel):
     is_active: bool | None = Field(
         default=None, description="是否启用"
     )
+    department_id: uuid.UUID | None = Field(
+        default=None, description="归属部门ID"
+    )
 
 
 class SparePartResponse(BaseModel):
@@ -74,6 +80,9 @@ class SparePartResponse(BaseModel):
     default_supplier: str | None
     unit_price: float | None
     is_active: bool
+    equipment_count: int = 0
+    department_id: uuid.UUID | None = None
+    department_name: str | None = None
     created_at: datetime
     updated_at: datetime
     created_by: uuid.UUID | None
@@ -120,7 +129,7 @@ class StockWarningResponse(BaseModel):
 # ==================== 设备-备件关联 ====================
 class EquipmentSparePartCreate(BaseModel):
     """设备-备件关联请求"""
-    spare_part_id: uuid.UUID = Field(..., description="备件ID")
+    equipment_id: uuid.UUID = Field(..., description="设备ID")
     quantity: int = Field(default=1, ge=1, description="需要数量")
 
 
@@ -130,5 +139,47 @@ class EquipmentSparePartResponse(BaseModel):
     equipment_id: uuid.UUID
     spare_part_id: uuid.UUID
     quantity: int
+
+    model_config = {"from_attributes": True}
+
+
+class EquipmentSparePartExtended(EquipmentSparePartResponse):
+    """设备-备件关联响应（含设备摘要）"""
+    equipment_no: str | None = None
+    equipment_name: str | None = None
+
+
+class OutboundTransactionResponse(BaseModel):
+    """消耗流水响应"""
+    id: uuid.UUID
+    spare_part_id: uuid.UUID
+    spare_part_code: str | None = None
+    spare_part_name: str | None = None
+    specification: str | None = None
+    unit: str | None = None
+    quantity: int
+    work_order_id: uuid.UUID | None = None
+    work_order_no: str | None = None
+    equipment_name: str | None = None
+    consumed_at: datetime
+    remark: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# ==================== 设备备件消耗历史 ====================
+class EquipmentConsumptionRecord(BaseModel):
+    """设备备件消耗记录"""
+    id: uuid.UUID
+    spare_part_id: uuid.UUID
+    spare_part_code: str | None = None
+    spare_part_name: str | None = None
+    specification: str | None = None
+    unit: str | None = None
+    quantity: int
+    work_order_id: uuid.UUID | None = None
+    work_order_no: str | None = None
+    consumed_at: datetime
+    remark: str | None = None
 
     model_config = {"from_attributes": True}

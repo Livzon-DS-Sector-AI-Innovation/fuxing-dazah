@@ -193,9 +193,13 @@ async def start_execution(
                 created_by=user.id if user else None,
             )
         )
-    # 中间体消耗记录
+    # 中间体消耗记录（批量查询产出源，避免 N+1）
+    output_ids = [c.output_id for c in payload.intermediate_consumptions]
+    output_map: dict[uuid.UUID, BatchIntermediateOutput] = {}
+    if output_ids:
+        output_map = {o.id: o for o in await repo.get_intermediate_outputs_by_ids(db, output_ids)}
     for c in payload.intermediate_consumptions:
-        output = await repo.get_intermediate_output(db, c.output_id)
+        output = output_map.get(c.output_id)
         if not output:
             raise NotFoundException("中间体产出记录", str(c.output_id))
         if c.intermediate_type_id != output.intermediate_type_id:

@@ -1,8 +1,10 @@
 """Work order service: state machine, business logic."""
 
 import asyncio
+import json
 import logging
 import uuid
+from decimal import Decimal
 from typing import Any, cast
 
 from sqlalchemy.exc import IntegrityError
@@ -258,6 +260,13 @@ async def complete_work_order(
     wo.status = target
     wo.completed_at = now
     wo.repair_detail = data.repair_detail
+
+    # 存储消耗备件 JSON（验收通过时才写入流水）
+    if data.consumed_parts:
+        wo.consumed_parts_data = json.dumps(
+            [p.model_dump() for p in data.consumed_parts],
+            ensure_ascii=False,
+        )
 
     # 计算耗时
     if wo.started_at:
@@ -575,6 +584,24 @@ async def verify_work_order(
 
     if data.result == "合格":
         _validate_transition(wo.status, "已完成")
+
+        # 先写消耗备件流水，再改状态（consume_materials 检查工单不能为已完成）
+        if wo.consumed_parts_data:
+            try:
+                parts = json.loads(wo.consumed_parts_data)
+                if parts:
+                    await consume_materials(
+                        db,
+                        work_order_id,
+                        [
+                            {"spare_part_id": p["spare_part_id"], "quantity": p["quantity"]}
+                            for p in parts
+                        ],
+                        ctx,
+                    )
+            except (json.JSONDecodeError, KeyError):
+                pass
+
         wo.status = "已完成"
     else:
         # 打回重修：保留原始维修时间戳（用于审计和工时统计）
@@ -681,26 +708,14 @@ async def consume_materials(
     if wo.status in ("已完成", "已关闭"):
         raise AppException(message="工单已完成或已关闭，不能领料")
 
-    from app.modules.equipment.service.spare_part import (
-        get_spare_part_by_id,
-        get_stock_by_spare_part_id,
-        outbound_stock,
-    )
+    # ponytail: 备件模块不在此处做库存校验和扣减，库存由 spare_part 模块独立管理
+    from app.modules.equipment.service.spare_part import get_spare_part_by_id
 
-    total_cost = 0.0
+    total_cost = Decimal('0.00')
     transactions = []
 
     for item in items:
         spare_part = await get_spare_part_by_id(db, item["spare_part_id"])
-        stock = await get_stock_by_spare_part_id(db, item["spare_part_id"])
-
-        if not stock or stock.current_qty < item["quantity"]:
-            raise AppException(
-                message=f"备件 '{spare_part.name}' 库存不足"
-            )
-
-        # 扣减库存
-        await outbound_stock(db, item["spare_part_id"], item["quantity"])
 
         # 创建流水记录
         transaction = await repo.create_material_consumption(
@@ -720,7 +735,7 @@ async def consume_materials(
             total_cost += spare_part.unit_price * item["quantity"]
 
     # 更新工单备件费用
-    current_cost = wo.spare_parts_cost or 0.0
+    current_cost = wo.spare_parts_cost or Decimal('0.00')
     wo.spare_parts_cost = current_cost + total_cost
     await db.flush()
 

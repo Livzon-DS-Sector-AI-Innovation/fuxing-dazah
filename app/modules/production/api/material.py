@@ -52,4 +52,4 @@ async def get_material_movements(
     _: User = Depends(require_permission("production:batch:read")),
 ) -> JSONResponse:
     result = await intermediate_service.get_material_movements(db, material_id, batch_no=batch_no)
-    return success_response(data=result)
+    return success_response(data=result.model_dump(mode="json"))

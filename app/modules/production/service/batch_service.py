@@ -261,6 +261,11 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
+    # 填充路线名称和版本
+    route = await repo.get_route(db, batch.route_id)
+    if route:
+        detail.route_name = route.name
+        detail.route_version = route.version
     return detail
 
 

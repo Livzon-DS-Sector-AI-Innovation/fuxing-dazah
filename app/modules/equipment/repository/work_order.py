@@ -233,18 +233,31 @@ async def get_material_consumptions(
     db: AsyncSession,
     work_order_id: uuid.UUID,
 ) -> list["SparePartTransaction"]:  # noqa: F821
-    """获取工单领料记录"""
-    from app.modules.equipment.models.spare_part import SparePartTransaction
+    """获取工单领料记录（含备件名称等）"""
+    from app.modules.equipment.models.spare_part import SparePart, SparePartTransaction
 
     result = await db.execute(
-        select(SparePartTransaction)
+        select(
+            SparePartTransaction,
+            SparePart.code.label("spare_part_code"),
+            SparePart.name.label("spare_part_name"),
+            SparePart.unit.label("spare_part_unit"),
+        )
+        .outerjoin(SparePart, SparePart.id == SparePartTransaction.spare_part_id)
         .where(
             SparePartTransaction.work_order_id == work_order_id,
             SparePartTransaction.is_deleted == False,  # noqa: E712
         )
         .order_by(SparePartTransaction.created_at.desc())
     )
-    return list(result.scalars().all())
+    transactions = []
+    for row in result:
+        t = row[0]
+        t.spare_part_code = row.spare_part_code
+        t.spare_part_name = row.spare_part_name
+        t.spare_part_unit = row.spare_part_unit
+        transactions.append(t)
+    return transactions
 
 
 async def exists_unclosed_work_order(
