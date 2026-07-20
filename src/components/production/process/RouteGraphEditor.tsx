@@ -347,17 +347,21 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
               <Select
                 size="small"
                 style={{ width: '100%' }}
-                value={e.edge_type}
+                value={e.allow_overlap ? 'pipeline' : e.edge_type}
                 options={[
                   { value: 'normal', label: '正常' },
+                  { value: 'pipeline', label: '流水线' },
                   { value: 'rework', label: '回流' },
                 ]}
-                onChange={v =>
-                  updateEdge(i, {
-                    edge_type: v,
-                    is_batch_boundary: v === 'rework' ? false : e.is_batch_boundary,
-                  })
-                }
+                onChange={v => {
+                  if (v === 'pipeline') {
+                    updateEdge(i, { edge_type: 'normal', allow_overlap: true, is_batch_boundary: false })
+                  } else if (v === 'rework') {
+                    updateEdge(i, { edge_type: 'rework', allow_overlap: false, is_batch_boundary: false })
+                  } else {
+                    updateEdge(i, { edge_type: 'normal', allow_overlap: false })
+                  }
+                }}
               />
             ),
           },
@@ -367,19 +371,8 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
             render: (_, e, i) => (
               <Checkbox
                 checked={e.is_batch_boundary}
-                disabled={e.edge_type === 'rework'}
+                disabled={e.edge_type === 'rework' || !!e.allow_overlap}
                 onChange={ev => updateEdge(i, { is_batch_boundary: ev.target.checked })}
-              />
-            ),
-          },
-          {
-            title: '流水线',
-            width: 70,
-            render: (_, e, i) => (
-              <Checkbox
-                checked={e.allow_overlap ?? false}
-                disabled={e.is_batch_boundary}
-                onChange={ev => updateEdge(i, { allow_overlap: ev.target.checked })}
               />
             ),
           },

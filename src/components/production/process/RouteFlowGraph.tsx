@@ -144,12 +144,14 @@ export function toRouteFlowElements(
         targetHandle: isRework ? 'right-target' : 'top',
         pathOptions: isRework ? { borderRadius: 18, offset: 30 } : undefined,
         label: isBoundary ? '批次边界' : isRework ? '回流' : e.allow_overlap ? '流水线' : undefined,
-        labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : isBoundary ? '#5645d4' : '#1aae39' },
+        labelStyle: { fontSize: 11, fill: isRework ? '#dd5b00' : e.allow_overlap ? '#1aae39' : '#5645d4' },
         style: isRework
           ? { stroke: '#dd5b00', strokeDasharray: '6 4', strokeWidth: 2 }
-          : isBoundary
-            ? { stroke: '#5645d4', strokeWidth: 2.5 }
-            : { stroke: '#b8b6b1' },
+          : e.allow_overlap
+            ? { stroke: '#1aae39', strokeWidth: 2.5 }
+            : isBoundary
+              ? { stroke: '#5645d4', strokeWidth: 2.5 }
+              : { stroke: '#b8b6b1' },
       }
     }),
     ...materialEdges,
