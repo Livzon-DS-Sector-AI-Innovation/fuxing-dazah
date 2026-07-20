@@ -38,6 +38,7 @@ export interface RouteEdge {
   to_node_id: string
   edge_type: EdgeType
   is_batch_boundary: boolean
+  allow_overlap: boolean
   remark: string | null
 }
 
@@ -88,6 +89,7 @@ export interface EdgeIn {
   to_node_code: string
   edge_type: EdgeType
   is_batch_boundary: boolean
+  allow_overlap?: boolean
   remark?: string | null
 }
 

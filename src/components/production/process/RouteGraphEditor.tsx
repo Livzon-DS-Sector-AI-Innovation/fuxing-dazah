@@ -62,6 +62,7 @@ function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: E
       to_node_code: codeById.get(e.to_node_id) ?? '',
       edge_type: e.edge_type,
       is_batch_boundary: e.is_batch_boundary,
+      allow_overlap: e.allow_overlap,
       remark: e.remark,
     }))
     .filter(
@@ -85,6 +86,7 @@ function editorStateToGraphIn(nodes: NodeIn[], extraEdges: EdgeIn[]): {
     to_node_code: nodes[i + 1].node_code,
     edge_type: 'normal' as const,
     is_batch_boundary: false,
+    allow_overlap: false,
   }))
   const seen = new Set<string>()
   const merged: EdgeIn[] = []
@@ -173,6 +175,10 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       }
       if (e.edge_type === 'rework' && e.is_batch_boundary) {
         message.error('回流边不允许标记批次边界')
+        return
+      }
+      if (e.is_batch_boundary && e.allow_overlap) {
+        message.error('批次边界边不允许开启流水线模式')
         return
       }
     }
@@ -367,6 +373,17 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
             ),
           },
           {
+            title: '流水线',
+            width: 70,
+            render: (_, e, i) => (
+              <Checkbox
+                checked={e.allow_overlap ?? false}
+                disabled={e.is_batch_boundary}
+                onChange={ev => updateEdge(i, { allow_overlap: ev.target.checked })}
+              />
+            ),
+          },
+          {
             title: '备注',
             render: (_, e, i) => (
               <Input
@@ -399,7 +416,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
         onClick={() =>
           setExtraEdges([
             ...extraEdges,
-            { from_node_code: '', to_node_code: '', edge_type: 'normal', is_batch_boundary: false },
+            { from_node_code: '', to_node_code: '', edge_type: 'normal', is_batch_boundary: false, allow_overlap: false },
           ])
         }
       >
