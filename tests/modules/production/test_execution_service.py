@@ -219,6 +219,80 @@ class TestStart:
         )
         assert ex.is_deviation is False
 
+    async def test_allow_overlap_starts_when_prev_in_progress(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """流水线边：前道 in_progress 即可开始下游。"""
+        batch = await _make_batch(db_session, published_route)
+        # 先完成 A（因为 A→B 是批次边界，不允许 overlap）
+        await _complete_node_a(db_session, published_route, batch)
+        # 开始 B
+        ex_b = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        # B 未完成时即可开始 C（allow_overlap=true）
+        ex_c = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(node_id=published_route["node_c"].id),
+            user=None,
+        )
+        assert ex_c.status == "in_progress"
+        assert ex_c.is_deviation is False
+
+    async def test_batch_boundary_edge_requires_completed(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """批次边界边 A→B：A in_progress 时 B 无法开始（需偏离）。"""
+        batch = await _make_batch(db_session, published_route)
+        # 开始 A 但不完成
+        await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=None,
+        )
+        # A→B 是批次边界，A 未完成时 B 无法开始（不含偏离原因 → 拒绝）
+        with pytest.raises(AppException):
+            await execution_service.start_execution(
+                db_session,
+                batch.id,
+                ExecutionStartIn(node_id=published_route["node_b"].id),
+                user=None,
+            )
+
+    async def test_aborted_node_cannot_start_downstream(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """前道中止后不能用于启动下游。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        # 开始并中止 B
+        ex_b = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.abort_execution(db_session, ex_b.id, user=None)
+        # B 已中止，B→C 的 allow_overlap 无效（中止节点既不在 completed 也不在 in_progress）
+        with pytest.raises(AppException):
+            await execution_service.start_execution(
+                db_session,
+                batch.id,
+                ExecutionStartIn(node_id=published_route["node_c"].id),
+                user=None,
+            )
+
 
 class TestCompleteAndRework:
     async def test_complete_missing_required_end_field_rejected(

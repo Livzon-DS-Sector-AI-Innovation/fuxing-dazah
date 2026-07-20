@@ -83,7 +83,7 @@ def build_graph_in() -> RouteGraphIn:
         ],
         edges=[
             EdgeIn(from_node_code="A", to_node_code="B", is_batch_boundary=True),
-            EdgeIn(from_node_code="B", to_node_code="C"),
+            EdgeIn(from_node_code="B", to_node_code="C", allow_overlap=True),
             EdgeIn(from_node_code="C", to_node_code="B", edge_type="rework"),
         ],
     )

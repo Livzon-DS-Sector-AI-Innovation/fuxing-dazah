@@ -15,7 +15,7 @@ from app.modules.production.schemas import (
     RouteGraphIn,
 )
 from app.modules.production.service import route_service
-from tests.modules.production.conftest import build_graph_in
+from tests.modules.production.conftest import build_graph_in, rand_code
 
 
 async def _draft_route(db: AsyncSession) -> tuple[Product, ProcessRoute]:
@@ -152,3 +152,21 @@ class TestGraph:
         graph = await route_service.get_graph(db_session, v2.id)
         assert len(graph.nodes) == 3
         assert len(graph.edges) == 3
+
+    async def test_batch_boundary_with_allow_overlap_rejected(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """批次边界边不允许开启流水线模式。"""
+        product = await route_service.create_product(
+            db_session,
+            ProductCreate(product_name="测试", product_code=rand_code("P")),
+            user=None,
+        )
+        route = await route_service.create_route(
+            db_session, RouteCreate(product_id=product.id, name="V1"), user=None
+        )
+        graph = build_graph_in()
+        # 修改 A→B 边：is_batch_boundary=True + allow_overlap=True
+        graph.edges[0].allow_overlap = True
+        with pytest.raises(AppException, match="批次边界边不允许"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
