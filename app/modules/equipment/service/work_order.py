@@ -263,6 +263,19 @@ async def complete_work_order(
 
     # 存储消耗备件 JSON（验收通过时才写入流水）
     if data.consumed_parts:
+        # 提前校验库存，避免验收时才发现库存不足
+        from app.modules.equipment.service.spare_part import (
+            get_spare_part_by_id,
+            get_stock_by_spare_part_id,
+        )
+        for p in data.consumed_parts:
+            sp = await get_spare_part_by_id(db, uuid.UUID(p.spare_part_id))
+            stock = await get_stock_by_spare_part_id(db, uuid.UUID(p.spare_part_id))
+            if not stock or stock.current_qty < p.quantity:
+                raise AppException(
+                    message=f"备件 '{sp.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {p.quantity}）"
+                )
+
         wo.consumed_parts_data = json.dumps(
             [p.model_dump() for p in data.consumed_parts],
             ensure_ascii=False,
@@ -599,8 +612,12 @@ async def verify_work_order(
                         ],
                         ctx,
                     )
-            except (json.JSONDecodeError, KeyError):
-                pass
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(
+                    "工单 %s 消耗备件数据解析失败，已清除: %s",
+                    wo.work_order_no, e,
+                )
+                wo.consumed_parts_data = None
 
         wo.status = "已完成"
     else:
@@ -609,6 +626,15 @@ async def verify_work_order(
         wo.status = "执行中"
         # ponytail: 不重置 started_at/completed_at/actual_duration，
         # 保留首次维修耗时用于审计。下次提交时自然覆盖。
+
+        # 清除消耗备件数据，避免下次提交验收时混入旧数据
+        wo.consumed_parts_data = None
+
+        # 清理已上传图片，避免下次提交验收时混入旧图片
+        from app.modules.equipment.service.work_order_image import (
+            delete_images_by_work_order,
+        )
+        await delete_images_by_work_order(db, work_order_id)
 
     await db.flush()
     wo = cast(WorkOrder, await repo.get_work_order_by_id(db, wo.id))
@@ -708,14 +734,25 @@ async def consume_materials(
     if wo.status in ("已完成", "已关闭"):
         raise AppException(message="工单已完成或已关闭，不能领料")
 
-    # ponytail: 备件模块不在此处做库存校验和扣减，库存由 spare_part 模块独立管理
-    from app.modules.equipment.service.spare_part import get_spare_part_by_id
+    from app.modules.equipment.service.spare_part import (
+        get_spare_part_by_id,
+        get_stock_by_spare_part_id,
+    )
 
     total_cost = Decimal('0.00')
     transactions = []
 
     for item in items:
         spare_part = await get_spare_part_by_id(db, item["spare_part_id"])
+        stock = await get_stock_by_spare_part_id(db, item["spare_part_id"])
+
+        if not stock or stock.current_qty < item["quantity"]:
+            raise AppException(
+                message=f"备件 '{spare_part.name}' 库存不足（当前 {stock.current_qty if stock else 0}，需要 {item['quantity']}）"
+            )
+
+        # 扣减库存（直接操作库存表，流水在本函数中统一写）
+        await repo.update_stock_qty(db, item["spare_part_id"], -item["quantity"])
 
         # 创建流水记录
         transaction = await repo.create_material_consumption(
@@ -732,7 +769,7 @@ async def consume_materials(
 
         # 累加费用
         if spare_part.unit_price:
-            total_cost += spare_part.unit_price * item["quantity"]
+            total_cost += Decimal(str(spare_part.unit_price)) * item["quantity"]
 
     # 更新工单备件费用
     current_cost = wo.spare_parts_cost or Decimal('0.00')

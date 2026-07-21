@@ -24,8 +24,12 @@ from app.modules.equipment.mcp_tools.inspection import (  # noqa: F401
     submit_inspection_photos,
     update_inspection_task,
 )
+from app.modules.equipment.mcp_tools.spare_part import (  # noqa: F401
+    search_spare_parts,
+)
 from app.modules.equipment.mcp_tools.work_order import (  # noqa: F401
     create_work_order,
     list_work_orders,
     operate_work_order,
+    submit_work_order_photos,
 )

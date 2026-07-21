@@ -80,6 +80,8 @@ class SparePartResponse(BaseModel):
     default_supplier: str | None
     unit_price: float | None
     is_active: bool
+    current_qty: int = 0
+    min_qty: int = 0
     equipment_count: int = 0
     department_id: uuid.UUID | None = None
     department_name: str | None = None
@@ -157,6 +159,7 @@ class OutboundTransactionResponse(BaseModel):
     spare_part_name: str | None = None
     specification: str | None = None
     unit: str | None = None
+    transaction_type: str | None = None
     quantity: int
     work_order_id: uuid.UUID | None = None
     work_order_no: str | None = None

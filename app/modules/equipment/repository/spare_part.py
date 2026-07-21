@@ -82,9 +82,10 @@ async def get_spare_parts(
     result = await db.execute(query)
     spare_parts = list(result.scalars().all())
 
-    # 批量查关联设备数
+    # 批量查关联设备数和库存
     if spare_parts:
         ids = [sp.id for sp in spare_parts]
+        # 关联设备数
         count_q = (
             select(
                 EquipmentSparePart.spare_part_id,
@@ -98,8 +99,27 @@ async def get_spare_parts(
         )
         count_result = await db.execute(count_q)
         count_map = {row.spare_part_id: row.cnt for row in count_result}
+
+        # 库存数据
+        stock_q = (
+            select(
+                SparePartStock.spare_part_id,
+                SparePartStock.current_qty,
+                SparePartStock.safety_qty,
+            )
+            .where(
+                SparePartStock.spare_part_id.in_(ids),
+                SparePartStock.is_deleted == False,  # noqa: E712
+            )
+        )
+        stock_result = await db.execute(stock_q)
+        stock_map = {row.spare_part_id: (row.current_qty, row.safety_qty) for row in stock_result}
+
         for sp in spare_parts:
             sp.equipment_count = count_map.get(sp.id, 0)
+            stock = stock_map.get(sp.id, (0, 0))
+            sp.current_qty = stock[0]
+            sp.min_qty = stock[1]
 
     return spare_parts, total
 
@@ -118,6 +138,21 @@ async def exists_spare_part_by_code(
         query = query.where(SparePart.id != exclude_id)
     result = await db.execute(query)
     return (result.scalar() or 0) > 0
+
+
+async def get_spare_part_by_code(
+    db: AsyncSession,
+    code: str,
+) -> SparePart | None:
+    """按备件编码查找未删除且启用的备件"""
+    result = await db.execute(
+        select(SparePart).where(
+            SparePart.code == code,
+            SparePart.is_deleted == False,  # noqa: E712
+            SparePart.is_active == True,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def update_spare_part(
@@ -319,7 +354,27 @@ async def get_available_spare_parts(
     )
 
     result = await db.execute(query)
-    return list(result.scalars().all())
+    spare_parts = list(result.scalars().all())
+
+    # 批量查库存
+    if spare_parts:
+        ids = [sp.id for sp in spare_parts]
+        stock_q = (
+            select(
+                SparePartStock.spare_part_id,
+                SparePartStock.current_qty,
+            )
+            .where(
+                SparePartStock.spare_part_id.in_(ids),
+                SparePartStock.is_deleted == False,  # noqa: E712
+            )
+        )
+        stock_result = await db.execute(stock_q)
+        stock_map = {row.spare_part_id: row.current_qty for row in stock_result}
+        for sp in spare_parts:
+            sp.current_qty = stock_map.get(sp.id, 0)
+
+    return spare_parts
 
 
 async def get_outbound_transactions(
@@ -327,10 +382,12 @@ async def get_outbound_transactions(
     ctx: "EquipmentAccessContext",  # noqa: F821
     page: int = 1,
     page_size: int = 20,
+    transaction_type: str | None = None,
+    keyword: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """获取所有出库流水（分页），JOIN 备件、工单、设备"""
-    from app.modules.equipment.models.work_order import WorkOrder
+    """获取库存流水（分页），支持按类型、备件名称筛选"""
     from app.modules.equipment.models.equipment import Equipment
+    from app.modules.equipment.models.work_order import WorkOrder
 
     base = (
         select(
@@ -340,6 +397,7 @@ async def get_outbound_transactions(
             SparePart.name.label("spare_part_name"),
             SparePart.specification,
             SparePart.unit,
+            SparePartTransaction.transaction_type,
             SparePartTransaction.quantity,
             SparePartTransaction.work_order_id,
             WorkOrder.work_order_no,
@@ -351,10 +409,18 @@ async def get_outbound_transactions(
         .outerjoin(WorkOrder, WorkOrder.id == SparePartTransaction.work_order_id)
         .outerjoin(Equipment, Equipment.id == WorkOrder.equipment_id)
         .where(
-            SparePartTransaction.transaction_type == "出库",
             SparePartTransaction.is_deleted == False,  # noqa: E712
         )
     )
+
+    if transaction_type:
+        base = base.where(SparePartTransaction.transaction_type == transaction_type)
+    else:
+        base = base.where(SparePartTransaction.transaction_type.in_(["入库", "出库"]))
+
+    if keyword:
+        pattern = f"%{keyword}%"
+        base = base.where(SparePart.name.ilike(pattern))
 
     # 数据范围过滤（按备件所属人）
     base = apply_equipment_scope(base, ctx, SparePart.created_by, "user_id")

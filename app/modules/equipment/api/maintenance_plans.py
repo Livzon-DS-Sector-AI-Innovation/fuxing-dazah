@@ -71,6 +71,8 @@ async def list_maintenance_plans(
     status: str | None = Query(None, description="状态"),
     keyword: str | None = Query(None, description="关键词搜索"),
     plan_mode: str | None = Query(None, description="关联方式: equipment=按设备, category=按分类"),
+    sort_field: str | None = Query(None, description="排序字段"),
+    sort_order: str | None = Query(None, description="排序方向: ascend/descend"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
     db: AsyncSession = Depends(get_db),
@@ -82,6 +84,7 @@ async def list_maintenance_plans(
         db, ctx=ctx, equipment_id=equipment_id, category_id=category_id,
         status=status, keyword=keyword, plan_mode=plan_mode,
         page=page, page_size=page_size,
+        sort_field=sort_field, sort_order=sort_order,
     )
     # 批量查询分类名称
     cat_ids = [p.category_id for p in plans if p.category_id]

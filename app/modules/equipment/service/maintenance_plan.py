@@ -120,6 +120,8 @@ async def get_maintenance_plans(
     plan_mode: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    sort_field: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[MaintenancePlan], int]:
     """获取维护计划列表"""
     return await repo.get_maintenance_plans(
@@ -132,6 +134,8 @@ async def get_maintenance_plans(
         plan_mode=plan_mode,
         page=page,
         page_size=page_size,
+        sort_field=sort_field,
+        sort_order=sort_order,
     )
 
 

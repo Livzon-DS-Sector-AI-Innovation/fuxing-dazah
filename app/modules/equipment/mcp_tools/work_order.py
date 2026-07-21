@@ -109,6 +109,7 @@ async def operate_work_order(
     action: str,
     operator_id: str,
     repair_detail: str | None = None,
+    spare_parts: list[dict] | None = None,
 ) -> ToolResult:
     """
     对维护工单执行状态流转操作：开始维修、提交验收、或完成维修。
@@ -122,6 +123,10 @@ async def operate_work_order(
         operator_id: 实际操作人的 user_id 或姓名
         repair_detail: 维修过程描述，action=submit/complete 时必需。
                        应详细描述维修过程和结果，如「更换了轴承密封圈，设备恢复正常运转」。
+        spare_parts: 消耗备件列表，可选。每项包含：
+            - code: 备件编号（如 SP-001），必填
+            - quantity: 消耗数量（整数 >= 1），必填
+            仅 action=submit/complete 时有效。
     """
     db = get_db()
     try:
@@ -174,24 +179,85 @@ async def operate_work_order(
             is_error=True,
         )
 
-    from app.modules.equipment.schemas.work_order import WorkOrderComplete
+    from app.modules.equipment.repository.spare_part import get_spare_part_by_code
+    from app.modules.equipment.schemas.work_order import (
+        ConsumedPartItem,
+        WorkOrderComplete,
+    )
 
-    data = WorkOrderComplete(repair_detail=repair_detail.strip())
+    # 校验和转换备件列表（code → UUID）
+    consumed_parts: list[ConsumedPartItem] | None = None
+    if spare_parts:
+        if not isinstance(spare_parts, list):
+            return ToolResult(
+                content="spare_parts 参数格式错误，应为列表，每项包含 code（备件编号）和 quantity（数量）。",
+                structured_content={"error": "spare_parts 格式错误"},
+                is_error=True,
+            )
+
+        consumed_parts = []
+        for i, sp in enumerate(spare_parts):
+            idx = i + 1
+            if not isinstance(sp, dict) or "code" not in sp or "quantity" not in sp:
+                return ToolResult(
+                    content=f"spare_parts 第 {idx} 项格式错误：每项需包含 code（备件编号）和 quantity（数量）。",
+                    structured_content={"error": f"spare_parts[{i}] 格式错误"},
+                    is_error=True,
+                )
+            sp_code = str(sp["code"]).strip()
+            try:
+                sp_qty = int(sp["quantity"])
+            except (ValueError, TypeError):
+                return ToolResult(
+                    content=f"备件 {sp_code} 的数量「{sp['quantity']}」无效，应为正整数。",
+                    structured_content={"error": f"备件 {sp_code} 数量无效"},
+                    is_error=True,
+                )
+            if sp_qty < 1:
+                return ToolResult(
+                    content=f"备件 {sp_code} 的数量必须 >= 1，当前值为 {sp_qty}。",
+                    structured_content={"error": f"备件 {sp_code} 数量必须 >= 1"},
+                    is_error=True,
+                )
+
+            spare_part = await get_spare_part_by_code(db, sp_code)
+            if not spare_part:
+                return ToolResult(
+                    content=f"未找到备件编号「{sp_code}」，请确认编号正确。可先用 search_spare_parts 工具查询。",
+                    structured_content={"error": f"备件编号 {sp_code} 不存在"},
+                    is_error=True,
+                )
+            consumed_parts.append(ConsumedPartItem(
+                spare_part_id=str(spare_part.id),
+                quantity=sp_qty,
+            ))
+
+    data = WorkOrderComplete(
+        repair_detail=repair_detail.strip(),
+        consumed_parts=consumed_parts,
+    )
     result = await complete_work_order(db, wo.id, data, ctx)
     await db.commit()
 
     # 使用 re-fetched result 的 images（已 eager loaded），避免访问已过期的 wo.images
     result_images = result.images if result.images is not None else []
     img_info = f"，已上传 {len(result_images)} 张现场照片" if result_images else ""
+    parts_info = ""
+    if spare_parts:
+        parts_desc = "、".join(
+            f"{sp['code']}×{sp['quantity']}" for sp in spare_parts
+        )
+        parts_info = f"\n消耗备件：{parts_desc}"
     target_info = "待验收（已飞书通知责任人确认）" if result.status == "待验收" else result.status
     return ToolResult(
-        content=f"工单 {result.work_order_no} 已提交验收（{eq_name}）{img_info}\n状态：执行中 → {target_info}\n维修描述：{repair_detail.strip()[:200]}",
+        content=f"工单 {result.work_order_no} 已提交验收（{eq_name}）{img_info}\n状态：执行中 → {target_info}\n维修描述：{repair_detail.strip()[:200]}{parts_info}",
         structured_content={
             "success": True,
             "work_order_no": result.work_order_no,
             "old_status": "执行中",
             "new_status": result.status,
             "image_count": len(result_images),
+            "spare_parts_count": len(spare_parts) if spare_parts else 0,
         },
     )
 

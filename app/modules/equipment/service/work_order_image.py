@@ -116,6 +116,21 @@ async def delete_image(db: AsyncSession, image_id: uuid.UUID) -> None:
     await repo.delete_image(db, image)
 
 
+async def delete_images_by_work_order(
+    db: AsyncSession, work_order_id: uuid.UUID
+) -> int:
+    """删除工单的所有图片（软删除 + 物理文件清理）。返回实际成功删除数量。"""
+    images = await repo.get_images_by_work_order(db, work_order_id)
+    deleted = 0
+    for image in images:
+        try:
+            await delete_image(db, image.id)
+            deleted += 1
+        except Exception:
+            logger.exception("删除工单图片失败: image_id=%s", image.id)
+    return deleted
+
+
 async def save_photo_from_base64(
     db: AsyncSession,
     work_order_id: uuid.UUID,

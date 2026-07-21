@@ -53,6 +53,8 @@ async def get_maintenance_plans(
     plan_mode: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    sort_field: str | None = None,
+    sort_order: str | None = None,
 ) -> tuple[list[MaintenancePlan], int]:
     """获取维护计划列表"""
     query = (
@@ -84,7 +86,14 @@ async def get_maintenance_plans(
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
 
-    query = query.order_by(MaintenancePlan.next_maintenance_date)
+    # 动态排序，仅允许 next_maintenance_date 字段
+    sort_col = MaintenancePlan.next_maintenance_date
+    if sort_field == "next_maintenance_date":
+        if sort_order == "descend":
+            sort_col = MaintenancePlan.next_maintenance_date.desc()
+        elif sort_order == "ascend":
+            sort_col = MaintenancePlan.next_maintenance_date.asc()
+    query = query.order_by(sort_col)
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
     return list(result.scalars().all()), total

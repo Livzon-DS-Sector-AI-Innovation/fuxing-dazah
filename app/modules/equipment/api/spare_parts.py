@@ -91,6 +91,8 @@ async def get_stock_warnings(
 async def list_outbound_transactions(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=200, description="每页数量"),
+    transaction_type: str | None = Query(None, description="类型筛选：入库/出库"),
+    keyword: str | None = Query(None, description="备件名称搜索"),
     db: AsyncSession = Depends(get_db),
     ctx: EquipmentAccessContext = Depends(
         require_equipment_access("equipment:spare_part:read"),
@@ -98,6 +100,7 @@ async def list_outbound_transactions(
 ) -> JSONResponse:
     rows, total = await repo.get_outbound_transactions(
         db, ctx, page=page, page_size=page_size,
+        transaction_type=transaction_type, keyword=keyword,
     )
     return paginated_response(
         data=[OutboundTransactionResponse(**row) for row in rows],
