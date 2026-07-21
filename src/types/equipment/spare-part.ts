@@ -100,6 +100,7 @@ export interface OutboundTransaction {
   spare_part_name: string | null
   specification: string | null
   unit: string | null
+  transaction_type: string | null
   quantity: number
   work_order_id: string | null
   work_order_no: string | null

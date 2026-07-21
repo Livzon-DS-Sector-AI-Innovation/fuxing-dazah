@@ -155,6 +155,8 @@ export interface EquipmentStore {
   maintenancePlanStatusFilter: MaintenancePlanStatus | ''
   maintenancePlanKeyword: string
   maintenancePlanModeFilter: 'equipment' | 'category' | ''
+  maintenancePlanSortField: string | null
+  maintenancePlanSortOrder: 'ascend' | 'descend' | null
   setMaintenancePlans: (plans: MaintenancePlan[]) => void
   setMaintenancePlanTotal: (total: number) => void
   setMaintenancePlanPage: (page: number) => void
@@ -163,6 +165,8 @@ export interface EquipmentStore {
   setMaintenancePlanStatusFilter: (status: MaintenancePlanStatus | '') => void
   setMaintenancePlanKeyword: (keyword: string) => void
   setMaintenancePlanModeFilter: (mode: 'equipment' | 'category' | '') => void
+  setMaintenancePlanSortField: (field: string | null) => void
+  setMaintenancePlanSortOrder: (order: 'ascend' | 'descend' | null) => void
   maintenancePlanDrawerOpen: boolean
   editingMaintenancePlan: MaintenancePlan | null
   openMaintenancePlanDrawer: (plan?: MaintenancePlan) => void

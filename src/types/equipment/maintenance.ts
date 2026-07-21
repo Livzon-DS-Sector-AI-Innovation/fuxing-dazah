@@ -60,6 +60,8 @@ export interface MaintenancePlanFilters {
   plan_mode?: 'equipment' | 'category'
   page?: number
   page_size?: number
+  sort_field?: string
+  sort_order?: 'ascend' | 'descend'
 }
 
 export interface MaintenancePlanListResponse {

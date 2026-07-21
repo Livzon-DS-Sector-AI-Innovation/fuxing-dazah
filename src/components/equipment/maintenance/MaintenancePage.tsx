@@ -57,6 +57,7 @@ export function MaintenancePage({
     setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading,
     maintenancePlanStatusFilter, maintenancePlanKeyword, maintenancePlanModeFilter,
     maintenancePlanPage, maintenancePlanPageSize,
+    maintenancePlanSortField, maintenancePlanSortOrder,
     openWorkOrderDrawer,
     openMaintenancePlanDrawer,
   } = useEquipmentStore()
@@ -177,11 +178,14 @@ export function MaintenancePage({
   const fetchMaintenancePlanData = useCallback(async () => {
     setMaintenancePlanLoading(true)
     try {
+      const s = useEquipmentStore.getState()
       const res = await fetchMaintenancePlansClient({
-        status: maintenancePlanStatusFilter || undefined,
-        keyword: maintenancePlanKeyword || undefined,
-        plan_mode: maintenancePlanModeFilter || undefined,
-        page: maintenancePlanPage, page_size: maintenancePlanPageSize,
+        status: s.maintenancePlanStatusFilter || undefined,
+        keyword: s.maintenancePlanKeyword || undefined,
+        plan_mode: s.maintenancePlanModeFilter || undefined,
+        page: s.maintenancePlanPage, page_size: s.maintenancePlanPageSize,
+        sort_field: s.maintenancePlanSortField || undefined,
+        sort_order: s.maintenancePlanSortOrder || undefined,
       })
       setMaintenancePlans(res.items)
       setMaintenancePlanTotal(res.total)
@@ -190,7 +194,12 @@ export function MaintenancePage({
     } finally {
       setMaintenancePlanLoading(false)
     }
-  }, [maintenancePlanStatusFilter, maintenancePlanKeyword, maintenancePlanModeFilter, maintenancePlanPage, maintenancePlanPageSize, setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading])
+  }, [
+    maintenancePlanStatusFilter, maintenancePlanKeyword, maintenancePlanModeFilter,
+    maintenancePlanPage, maintenancePlanPageSize,
+    maintenancePlanSortField, maintenancePlanSortOrder,
+    setMaintenancePlans, setMaintenancePlanTotal, setMaintenancePlanLoading,
+  ])
 
   useEffect(() => {
     if (maintenanceTab === 'work-orders') fetchWorkOrderData()

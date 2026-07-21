@@ -99,9 +99,14 @@ export async function fetchAvailableSparePartsClient(equipmentId: string): Promi
   return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/${equipmentId}/available-spare-parts`)
 }
 
-export async function fetchOutboundTransactionsClient(page = 1, pageSize = 20) {
+export async function fetchOutboundTransactionsClient(
+  page = 1, pageSize = 20, type?: string, keyword?: string,
+) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (type) params.append('transaction_type', type)
+  if (keyword) params.append('keyword', keyword)
   return apiFetchPaginated<import('@/types/equipment').OutboundTransaction>(
-    `${API_BASE_URL}/api/v1/equipment/spare-parts/transactions?page=${page}&page_size=${pageSize}`,
+    `${API_BASE_URL}/api/v1/equipment/spare-parts/transactions?${params.toString()}`,
   )
 }
 

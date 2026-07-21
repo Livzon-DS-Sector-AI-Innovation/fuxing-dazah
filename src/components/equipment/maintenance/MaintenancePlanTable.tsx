@@ -23,9 +23,10 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
   const {
     maintenancePlans, maintenancePlanTotal, maintenancePlanPage, maintenancePlanPageSize,
     maintenancePlanLoading, maintenancePlanStatusFilter, maintenancePlanKeyword,
-    maintenancePlanModeFilter,
+    maintenancePlanModeFilter, maintenancePlanSortField, maintenancePlanSortOrder,
     setMaintenancePlanPage, setMaintenancePlanPageSize, setMaintenancePlanStatusFilter,
     setMaintenancePlanKeyword, setMaintenancePlanModeFilter,
+    setMaintenancePlanSortField, setMaintenancePlanSortOrder,
     openMaintenancePlanDrawer,
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
@@ -70,6 +71,8 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
     { title: '上次维护', dataIndex: 'last_maintenance_date', key: 'last_maintenance_date', width: 110, render: (d: string | null) => d || '-' },
     {
       title: '下次维护', dataIndex: 'next_maintenance_date', key: 'next_maintenance_date', width: 120,
+      sorter: true,
+      sortOrder: maintenancePlanSortField === 'next_maintenance_date' ? (maintenancePlanSortOrder as 'ascend' | 'descend' | null) : null,
       render: (d: string | null) => {
         if (!d) return '-'
         const overdue = isOverdue(d)
@@ -113,6 +116,16 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
       </div>
       <Table columns={columns} dataSource={maintenancePlans} rowKey="id" size="small" loading={maintenancePlanLoading}
         scroll={{ x: 'max-content' }}
+        onChange={(_pagination, _filters, sorter) => {
+          if (Array.isArray(sorter)) return
+          if (sorter.order) {
+            setMaintenancePlanSortField(typeof sorter.field === 'string' ? sorter.field : String(sorter.field))
+            setMaintenancePlanSortOrder(sorter.order as 'ascend' | 'descend')
+          } else {
+            setMaintenancePlanSortField(null)
+            setMaintenancePlanSortOrder(null)
+          }
+        }}
         pagination={{
           current: maintenancePlanPage, pageSize: maintenancePlanPageSize, total: maintenancePlanTotal,
           showSizeChanger: true, showQuickJumper: true, showTotal: t => `共 ${t} 条`,

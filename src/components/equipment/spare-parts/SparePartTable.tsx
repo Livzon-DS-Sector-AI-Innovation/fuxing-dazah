@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react'
 import { App, Table, Button, Space, Input, Tag } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, ImportOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { SparePart } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -18,7 +18,7 @@ export function SparePartTable({ onRefresh }: Props) {
     spareParts, sparePartTotal, sparePartPage, sparePartPageSize,
     sparePartLoading, sparePartKeyword,
     setSparePartPage, setSparePartPageSize, setSparePartKeyword,
-    openSparePartDrawer, openSparePartEquipmentDrawer,
+    openSparePartDrawer, openSparePartEquipmentDrawer, openStockInboundDrawer,
   } = useEquipmentStore()
   const { hasPermission } = usePermission()
 
@@ -43,14 +43,17 @@ export function SparePartTable({ onRefresh }: Props) {
     },
     { title: '名称', dataIndex: 'name', key: 'name', width: 150 },
     { title: '规格型号', dataIndex: 'specification', key: 'specification', width: 150, render: (t: string | null) => t || '-' },
-    { title: '单位', dataIndex: 'unit', key: 'unit', width: 80 },
-    { title: '分类', dataIndex: 'category', key: 'category', width: 100, render: (t: string | null) => t || '-' },
+    { title: '单位', dataIndex: 'unit', key: 'unit', width: 60 },
+    { title: '分类', dataIndex: 'category', key: 'category', width: 80, render: (t: string | null) => t || '-' },
     { title: '默认供应商', dataIndex: 'default_supplier', key: 'default_supplier', width: 140, render: (t: string | null) => t || '-' },
-    { title: '单价', dataIndex: 'unit_price', key: 'unit_price', width: 100, align: 'right', render: (p: number | null) => p != null ? `¥${p.toFixed(2)}` : '-' },
+    { title: '单价', dataIndex: 'unit_price', key: 'unit_price', width: 80, align: 'right', render: (p: number | null) => p != null ? `¥${p.toFixed(2)}` : '-' },
     {
-      title: '库存数量', dataIndex: 'current_qty', key: 'current_qty', width: 100, align: 'right',
-      // ponytail: 库存列固定显示 '-'，等仓库模块就绪后恢复
-      render: () => <span style={{ color: '#a4a097' }}>-</span>,
+      title: '库存数量', dataIndex: 'current_qty', key: 'current_qty', width: 80, align: 'right',
+      render: (qty: number | undefined) => (
+        <span style={{ fontWeight: 500, color: qty != null && qty > 0 ? '#1a1a1a' : '#a4a097' }}>
+          {qty != null ? qty : '-'}
+        </span>
+      ),
     },
     {
       title: '适用范围', dataIndex: 'equipment_count', key: 'equipment_count', width: 110,
@@ -60,9 +63,12 @@ export function SparePartTable({ onRefresh }: Props) {
           : <Tag color="orange">{count} 台设备</Tag>,
     },
     {
-      title: '操作', key: 'action', width: 180, fixed: 'end',
+      title: '操作', key: 'action', width: 220, fixed: 'end',
       render: (_: unknown, r: SparePart) => (
         <Space size={12}>
+          {hasPermission('equipment:spare_part:update') && (
+            <span role="button" onClick={() => openStockInboundDrawer(r.id)} style={linkPurple}><ImportOutlined /> 入库</span>
+          )}
           {hasPermission('equipment:spare_part:update') && (
             <span role="button" onClick={() => openSparePartEquipmentDrawer(r)} style={linkPurple}><SettingOutlined /> 关联设备</span>
           )}

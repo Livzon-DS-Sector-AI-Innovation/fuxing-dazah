@@ -221,6 +221,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
       open={equipmentDrawerOpen}
       onClose={closeEquipmentDrawer}
       destroyOnHidden
+      maskClosable={false}
       styles={{
         header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
         body: { padding: '24px' },

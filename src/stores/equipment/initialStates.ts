@@ -100,6 +100,8 @@ export const initialMaintenancePlanState = {
   maintenancePlanStatusFilter: '' as '' | '启用' | '停用' | '已完成',
   maintenancePlanKeyword: '',
   maintenancePlanModeFilter: '' as '' | 'equipment' | 'category',
+  maintenancePlanSortField: null as string | null,
+  maintenancePlanSortOrder: null as 'ascend' | 'descend' | null,
   maintenancePlanDrawerOpen: false,
   editingMaintenancePlan: null as MaintenancePlan | null,
 }

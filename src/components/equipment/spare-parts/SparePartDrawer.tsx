@@ -30,8 +30,10 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
 
   const isEdit = !!editingSparePart
 
-  const initialValues = editingSparePart
-    ? {
+  useEffect(() => {
+    if (!sparePartDrawerOpen) return
+    if (editingSparePart) {
+      form.setFieldsValue({
         code: editingSparePart.code,
         name: editingSparePart.name,
         specification: editingSparePart.specification,
@@ -39,11 +41,8 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
         category: editingSparePart.category,
         default_supplier: editingSparePart.default_supplier,
         unit_price: editingSparePart.unit_price,
-      }
-    : {}
-
-  useEffect(() => {
-    if (sparePartDrawerOpen && !editingSparePart) {
+      })
+    } else {
       form.resetFields()
     }
   }, [sparePartDrawerOpen, editingSparePart, form])
@@ -99,7 +98,7 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional" preserve={false} initialValues={initialValues}>
+      <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>
 
         {/* ── 基本信息 ── */}
         {sectionLabel('基本信息')}

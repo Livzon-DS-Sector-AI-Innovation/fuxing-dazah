@@ -142,6 +142,8 @@ export const useEquipmentStore = create<EquipmentStore>()(
       setMaintenancePlanStatusFilter: (status) => set({ maintenancePlanStatusFilter: status, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanStatusFilter'),
       setMaintenancePlanKeyword: (keyword) => set({ maintenancePlanKeyword: keyword, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanKeyword'),
       setMaintenancePlanModeFilter: (mode) => set({ maintenancePlanModeFilter: mode, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanModeFilter'),
+      setMaintenancePlanSortField: (field) => set({ maintenancePlanSortField: field, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanSortField'),
+      setMaintenancePlanSortOrder: (order) => set({ maintenancePlanSortOrder: order, maintenancePlanPage: 1 }, false, 'equipment/setMaintenancePlanSortOrder'),
       openMaintenancePlanDrawer: (plan) => set({
         maintenancePlanDrawerOpen: true, editingMaintenancePlan: plan || null,
       }, false, 'equipment/openMaintenancePlanDrawer'),
