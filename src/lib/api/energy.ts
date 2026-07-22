@@ -4,11 +4,12 @@ import {
   UpdateDeviceInput,
   DeviceQueryParams,
   EnergyData,
+  EnergyDataHistory,
   DataQueryParams,
-  EnergyOverviewData,
-  StatisticsParams,
+  HistoryQueryParams,
   CollectLog,
   CollectLogDetail,
+  CollectSettings,
   LogQueryParams,
   PaginatedResponse,
   AlertRule,
@@ -18,32 +19,20 @@ import {
   AlertRecord,
   ProcessRecordInput,
   RecordQueryParams,
-  CollectHistoryItem,
-  CollectHistoryParams,
-  TrendDataPoint,
+  EnergyTypeConfig,
+  CreateTypeConfigInput,
+  UpdateTypeConfigInput,
+  EnergyOverview,
+  WorkshopConfig,
+  CreateWorkshopConfigInput,
+  UpdateWorkshopConfigInput,
+  EnergyPersonnelCandidate,
 } from '@/types/energy'
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/http-client'
 
 // Server Actions 调用后端用绝对 URL，客户端调用用相对 URL（经 Next.js rewrites 代理）
 const SERVER_API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
 const CLIENT_API_BASE = ''
-
-// ── 趋势数据字段映射（后端 timestamp/energy_type/total_value → 前端 time/type/value）──
-function mapTrendData(trend: any[]): TrendDataPoint[] {
-  return (trend || []).map((item: any) => ({
-    time: item.timestamp || item.time || '',
-    type: item.energy_type || item.type || '',
-    value: item.total_value ?? item.value ?? 0,
-  }))
-}
-
-async function unwrapOverview(res: any): Promise<EnergyOverviewData> {
-  return {
-    summary: res.summary,
-    trend: mapTrendData(res.trend),
-    distribution: res.distribution || [],
-  }
-}
 
 // ── 平台信息 ──
 export interface PlatformInfo {
@@ -118,18 +107,25 @@ export async function fetchEnergyData(
   )
 }
 
-export async function fetchEnergyOverview(
-  params: StatisticsParams = {}
-): Promise<EnergyOverviewData> {
+// ── 采集历史（Server Actions）──
+
+export async function fetchEnergyDataHistory(
+  params: HistoryQueryParams = {}
+): Promise<PaginatedResponse<EnergyDataHistory>> {
   const searchParams = new URLSearchParams()
+  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  if (params.workshop) searchParams.set('workshop', params.workshop)
+  if (params.device_config_id) searchParams.set('device_config_id', params.device_config_id)
+  if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.granularity) searchParams.set('granularity', params.granularity)
   if (params.start_time) searchParams.set('start_time', params.start_time)
   if (params.end_time) searchParams.set('end_time', params.end_time)
-  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.page_size) searchParams.set('page_size', String(params.page_size))
 
-  const res = await apiGet<any>(
-    `${SERVER_API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
+  return apiFetchPaginated<EnergyDataHistory>(
+    `${SERVER_API_BASE}/api/v1/energy/data/history?${searchParams.toString()}`
   )
-  return unwrapOverview(res)
 }
 
 // ── 数据采集（Server Actions）──
@@ -162,6 +158,29 @@ export async function fetchCollectLogDetail(
 ): Promise<CollectLogDetail> {
   return apiGet<CollectLogDetail>(
     `${SERVER_API_BASE}/api/v1/energy/collect/logs/${id}/detail`
+  )
+}
+
+export async function clearCollectLogs(): Promise<{ deleted_count: number }> {
+  return apiDelete<{ deleted_count: number }>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/logs`
+  )
+}
+
+// ── 自动采集设置 ──
+
+export async function fetchCollectSettings(): Promise<CollectSettings> {
+  return apiGet<CollectSettings>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/settings`
+  )
+}
+
+export async function updateCollectSettings(
+  data: Partial<CollectSettings>
+): Promise<CollectSettings> {
+  return apiPut<CollectSettings>(
+    `${SERVER_API_BASE}/api/v1/energy/collect/settings`,
+    data
   )
 }
 
@@ -201,20 +220,6 @@ export async function fetchEnergyDataClient(
   )
 }
 
-export async function fetchEnergyOverviewClient(
-  params: StatisticsParams = {}
-): Promise<EnergyOverviewData> {
-  const searchParams = new URLSearchParams()
-  if (params.start_time) searchParams.set('start_time', params.start_time)
-  if (params.end_time) searchParams.set('end_time', params.end_time)
-  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
-
-  const res = await apiGet<any>(
-    `${CLIENT_API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
-  )
-  return unwrapOverview(res)
-}
-
 export async function fetchCollectLogDetailClient(
   id: string
 ): Promise<CollectLogDetail> {
@@ -237,30 +242,6 @@ export async function fetchCollectLogsClient(
   )
 }
 
-export async function fetchCollectHistoryClient(
-  params: CollectHistoryParams
-): Promise<PaginatedResponse<CollectHistoryItem>> {
-  const searchParams = new URLSearchParams()
-  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
-  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
-  searchParams.set('start_date', params.start_date)
-  searchParams.set('end_date', params.end_date)
-  if (params.device_config_id) searchParams.set('device_config_id', params.device_config_id)
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-
-  return apiFetchPaginated<CollectHistoryItem>(
-    `${CLIENT_API_BASE}/api/v1/energy/collect/history?${searchParams.toString()}`
-  )
-}
-
-export async function fetchVisualizationData(energyType?: string) {
-  const searchParams = new URLSearchParams()
-  if (energyType) searchParams.set('energy_type', energyType)
-  return apiGet<Record<string, { fields: any[]; records: any[] }>>(
-    `${CLIENT_API_BASE}/api/v1/energy/visualization/data?${searchParams.toString()}`
-  )
-}
 
 // ── 预警规则（Server Actions）──
 
@@ -324,21 +305,108 @@ export async function processAlertRecord(
   )
 }
 
-// ── 采集历史（Server Actions）──
+// ── 能源类型配置 ──
 
-export async function fetchCollectHistory(
-  params: CollectHistoryParams
-): Promise<PaginatedResponse<CollectHistoryItem>> {
+export async function fetchTypeConfigs(
+  isEnabled?: boolean
+): Promise<PaginatedResponse<EnergyTypeConfig>> {
   const searchParams = new URLSearchParams()
-  if (params.platform_code) searchParams.set('platform_code', params.platform_code)
-  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
-  searchParams.set('start_date', params.start_date)
-  searchParams.set('end_date', params.end_date)
-  if (params.device_config_id) searchParams.set('device_config_id', params.device_config_id)
-  if (params.page) searchParams.set('page', String(params.page))
-  if (params.page_size) searchParams.set('page_size', String(params.page_size))
-
-  return apiFetchPaginated<CollectHistoryItem>(
-    `${SERVER_API_BASE}/api/v1/energy/collect/history?${searchParams.toString()}`
+  if (isEnabled !== undefined) searchParams.set('is_enabled', String(isEnabled))
+  return apiFetchPaginated<EnergyTypeConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/type-configs?${searchParams.toString()}`
   )
 }
+
+export async function fetchEnabledTypeConfigsClient(): Promise<EnergyTypeConfig[]> {
+  const res = await apiGet<{ data: EnergyTypeConfig[] }>(
+    `${CLIENT_API_BASE}/api/v1/energy/type-configs/enabled`
+  )
+  return (res as any).data ?? (res as any)
+}
+
+export async function createTypeConfig(
+  data: CreateTypeConfigInput
+): Promise<EnergyTypeConfig> {
+  return apiPost<EnergyTypeConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/type-configs`,
+    data
+  )
+}
+
+export async function updateTypeConfig(
+  id: string,
+  data: UpdateTypeConfigInput
+): Promise<EnergyTypeConfig> {
+  return apiPut<EnergyTypeConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/type-configs/${id}`,
+    data
+  )
+}
+
+export async function deleteTypeConfig(id: string): Promise<void> {
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/type-configs/${id}`)
+}
+
+// ── 能源总览 ──
+
+export interface OverviewParams {
+  start_time: string
+  end_time: string
+  energy_type?: string
+  granularity?: 'hourly' | 'daily'
+}
+
+export async function fetchEnergyOverview(params: OverviewParams): Promise<EnergyOverview> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('start_time', params.start_time)
+  searchParams.set('end_time', params.end_time)
+  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  searchParams.set('granularity', params.granularity || 'daily')
+  return apiGet<EnergyOverview>(
+    `${CLIENT_API_BASE}/api/v1/energy/overview?${searchParams.toString()}`
+  )
+}
+
+// ── 车间预警配置（Server Actions）──
+
+export async function fetchWorkshopConfigs(
+  page = 1,
+  pageSize = 20,
+  isEnabled?: boolean,
+): Promise<PaginatedResponse<WorkshopConfig>> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('page', String(page))
+  searchParams.set('page_size', String(pageSize))
+  if (isEnabled !== undefined) searchParams.set('is_enabled', String(isEnabled))
+  return apiFetchPaginated<WorkshopConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/workshop-configs?${searchParams.toString()}`
+  )
+}
+
+export async function fetchWorkshopConfigById(id: string): Promise<WorkshopConfig> {
+  return apiGet<WorkshopConfig>(`${SERVER_API_BASE}/api/v1/energy/workshop-configs/${id}`)
+}
+
+export async function createWorkshopConfig(
+  data: CreateWorkshopConfigInput
+): Promise<WorkshopConfig> {
+  return apiPost<WorkshopConfig>(`${SERVER_API_BASE}/api/v1/energy/workshop-configs`, data)
+}
+
+export async function updateWorkshopConfig(
+  id: string,
+  data: UpdateWorkshopConfigInput
+): Promise<WorkshopConfig> {
+  return apiPut<WorkshopConfig>(`${SERVER_API_BASE}/api/v1/energy/workshop-configs/${id}`, data)
+}
+
+export async function deleteWorkshopConfig(id: string): Promise<void> {
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/workshop-configs/${id}`)
+}
+
+export async function fetchWorkshopPersonnelCandidates(): Promise<EnergyPersonnelCandidate[]> {
+  return apiGet<EnergyPersonnelCandidate[]>(
+    `${SERVER_API_BASE}/api/v1/energy/workshop-configs/personnel-candidates`
+  )
+}
+

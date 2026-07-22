@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Modal, Tabs, Table, Button, Space, Upload, Tag, Popconfirm, message as antMsg, Image, Tooltip } from 'antd'
+import { App, Modal, Tabs, Table, Button, Space, Upload, Tag, Popconfirm, Image, Tooltip } from 'antd'
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, InboxOutlined, EyeOutlined, CalendarOutlined } from '@ant-design/icons'
 import type { TableColumnsType, UploadFile } from 'antd'
 import { ReportResponse, FileMatchItem, InstrumentRecord, GasDetectorRecord } from '@/types/meter'
@@ -149,7 +149,7 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
       const result = await batchUploadReports(formData)
       message.success(`上传完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
       if (result.errors.length > 0) {
-        antMsg.warning(result.errors.slice(0, 5).join('; '))
+        message.warning(result.errors.slice(0, 5).join('; '))
       }
       setBatchFiles([])
       setMatchResults([])

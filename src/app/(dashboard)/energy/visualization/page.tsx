@@ -1,218 +1,514 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Select, Spin, Empty, App, Segmented } from 'antd'
-import { Column, Line } from '@ant-design/charts'
-import { fetchVisualizationData } from '@/lib/api/energy'
-import { energyTypeLabels } from '@/components/energy/constants'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { DatePicker, Segmented, Spin, Empty, App, Table } from 'antd'
+import { Line, Bar, Tiny } from '@ant-design/charts'
+import dayjs, { type Dayjs } from 'dayjs'
+import { fetchEnergyOverview } from '@/lib/api/energy'
+import type { EnergyOverview, DistributionRow, EnergyTypeMeta } from '@/types/energy'
 
-const META_FIELDS = new Set(['日期', '数据类型', '各分表总和', '厂内总表之和', '外购电总表之和'])
+const { RangePicker } = DatePicker
 
-const ENERGY_OPTIONS = Object.entries(energyTypeLabels).map(([value, { text }]) => ({ label: text, value }))
+const RANGE_PRESETS: Record<string, [dayjs.Dayjs, dayjs.Dayjs]> = {
+  '昨天': [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')],
+  '7天': [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')],
+  '30天': [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')],
+  '本月': [dayjs().startOf('month'), dayjs().endOf('day')],
+}
+
+// ── 迷你趋势线 ──
+function TinyTrend({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return <span style={{ color: '#c8c4be' }}>—</span>
+  const chartData = data.map((v, i) => ({ x: i, y: v }))
+  return (
+    <Tiny.Area
+      data={chartData}
+      xField="x"
+      yField="y"
+      smooth
+      width={80}
+      height={24}
+      color={color}
+      areaStyle={{ fill: color, fillOpacity: 0.15 }}
+      lineStyle={{ stroke: color, lineWidth: 1.5 }}
+      padding={[2, 0, 2, 0]}
+      animate={false}
+      tooltip={false}
+    />
+  )
+}
 
 export default function VisualizationPage() {
   const { message } = App.useApp()
-  const [energyType, setEnergyType] = useState('electricity')
-  const [compareMode, setCompareMode] = useState<'day' | 'week' | 'month'>('day')
-  const [barDayIndex, setBarDayIndex] = useState(0)
+  const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(RANGE_PRESETS['7天'])
+  const [activePreset, setActivePreset] = useState<string>('7天')
+  const [selectedType, setSelectedType] = useState<string | null>(null)
+  const [selectedWorkshop, setSelectedWorkshop] = useState<string | null>(null)
+  const [overview, setOverview] = useState<EnergyOverview | null>(null)
+  const [prevOverview, setPrevOverview] = useState<EnergyOverview | null>(null)
   const [loading, setLoading] = useState(false)
-  const [fields, setFields] = useState<any[]>([])
-  const [records, setRecords] = useState<any[]>([])
-  const isNaturalGas = energyType === 'natural_gas'
 
-  const fetchData = useCallback(async () => {
+  const days = range[1].diff(range[0], 'day') + 1
+
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchVisualizationData(energyType)
-      const table = data?.[energyType]
-      if (table) { setFields(table.fields || []); setRecords(table.records || []) }
-      else { setFields([]); setRecords([]) }
-    } catch { message.error('获取可视化数据失败') }
-    finally { setLoading(false) }
-  }, [energyType, message])
+      const d = range[1].diff(range[0], 'day') + 1
+      const [curr, prev] = await Promise.all([
+        fetchEnergyOverview({
+          start_time: range[0].toISOString(),
+          end_time: range[1].toISOString(),
+          granularity: 'daily',
+          energy_type: selectedType || undefined,
+        }),
+        fetchEnergyOverview({
+          start_time: range[0].subtract(d, 'day').toISOString(),
+          end_time: range[1].subtract(d, 'day').toISOString(),
+          granularity: 'daily',
+          energy_type: selectedType || undefined,
+        }),
+      ])
+      setOverview(curr)
+      setPrevOverview(prev)
+    } catch {
+      message.error('加载数据失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [range, selectedType])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  useEffect(() => { load() }, [load])
+  useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
 
-  const numFields = useMemo(() => fields.filter((f: any) => f.type === 2 && !META_FIELDS.has(f.field_name)), [fields])
+  const metadata = overview?.type_metadata || []
 
-  // ── 仪表盘 ──
-  const gaugeInfo = useMemo(() => {
-    if (!records.length) return { pct: 0, yesterday: 0, dayBefore: 0, max: 1 }
-    const sorted = [...records].sort((a, b) => (b.fields['日期'] || 0) - (a.fields['日期'] || 0))
-    const sum = (r: any) => numFields.reduce((s, f) => s + (parseFloat(String(r.fields[f.field_name] ?? 0)) || 0), 0)
-    const yesterday = sorted.length > 1 ? sum(sorted[1]) : 0
-    const dayBefore = sorted.length > 2 ? sum(sorted[2]) : 0
-    const max = Math.max(...sorted.map(sum).filter((v) => !isNaN(v)), 1)
-    return { pct: max > 0 ? Math.round((yesterday / max) * 100) / 100 : 0, yesterday: yesterday || 0, dayBefore: dayBefore || 0, max }
-  }, [records, numFields])
+  // ── KPI（按当前选中能源类型计算，非全部能源相加）──
+  const kpi = useMemo(() => {
+    const summary = overview?.summary || {}
+    const prevSummary = prevOverview?.summary || {}
+    const trends = overview?.trend || []
 
-  // ── 柱状图 ──
-  const barData = useMemo(() => {
-    if (!records.length) return []
-    const sorted = [...records].sort((a, b) => (b.fields['日期'] || 0) - (a.fields['日期'] || 0))
-    const target = sorted[Math.min(barDayIndex, sorted.length - 1)].fields
-    return numFields
-      .map((f: any) => ({ department: f.field_name, value: parseFloat(String(target[f.field_name] ?? 0)) }))
-      .filter((d) => d.value > 0)
-      .sort((a, b) => b.value - a.value)
-  }, [records, numFields, barDayIndex])
+    // 确定实际使用的能源类型
+    const activeType = selectedType || metadata[0]?.type_code || ''
+    const activeMeta = metadata.find((m) => m.type_code === activeType)
+    const unit = activeMeta?.unit || ''
 
-  const barConfig = { data: barData, xField: 'department', yField: 'value', scale: { y: { nice: true } }, axis: { x: { labelAutoRotate: true, labelFontSize: 11 }, y: { labelFontSize: 11 } }, style: { radiusTopLeft: 6, radiusTopRight: 6 }, colorField: 'department', color: ['#5645d4', '#0075de', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14', '#eb2f96', '#52c41a', '#13c2c2', '#f5222d', '#1890ff'], legend: false, tooltip: { items: [(d: any) => ({ name: '用量', value: d.value.toFixed(2) })] } }
+    const k = `total_${activeType}`
+    const total = (summary[k] as number) ?? (summary[activeType] as number) ?? 0
+    const prevTotal = (prevSummary[k] as number) ?? (prevSummary[activeType] as number) ?? 0
 
-  // ── 天然气折线图 ──
-  const lineData = useMemo(() => {
-    if (!isNaturalGas || !records.length) return []
-    const sorted = [...records].sort((a, b) => (a.fields['日期'] || 0) - (b.fields['日期'] || 0))
-    return sorted.slice(-10).map((r) => ({
-      date: new Date(r.fields['日期']).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }),
-      value: numFields.reduce((s, f) => s + parseFloat(String(r.fields[f.field_name] ?? 0)), 0),
+    const avg = days > 0 ? total / days : 0
+    const pctChange = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : 0
+
+    // 峰值日（仅当前能源类型）
+    const typeTrends = trends.filter((t) => t.type === activeType)
+    let peakDay = '', peakVal = 0
+    for (const t of typeTrends) {
+      if (t.value > peakVal) { peakVal = t.value; peakDay = t.time }
+    }
+
+    // 最高车间（当前能源类型）
+    const ws = overview?.workshop_distribution || []
+    const typeWs = selectedType ? ws.filter((w) => w.energy_type === selectedType) : ws
+    const wm: Record<string, number> = {}
+    for (const w of typeWs) wm[w.group_key] = (wm[w.group_key] || 0) + w.total_value
+    let topWs = '', topWsVal = 0
+    for (const [k, v] of Object.entries(wm)) { if (v > topWsVal) { topWsVal = v; topWs = k } }
+
+    return {
+      total, avg, pctChange, peakDay: peakDay ? dayjs(peakDay).format('MM-DD') : '—',
+      topWorkshop: topWs || '—', unit, activeMeta,
+    }
+  }, [overview, prevOverview, metadata, days, selectedType])
+
+  // ── 堆叠面积图 ──
+  const areaData = useMemo(() => {
+    const raw = overview?.trend || []
+    return raw.map((t) => ({
+      date: dayjs(t.time).format('MM-DD'),
+      value: t.value,
+      type: metadata.find((m) => m.type_code === t.type)?.display_name || t.type,
     }))
-  }, [records, numFields, isNaturalGas])
+  }, [overview, metadata])
 
-  const lineConfig = { data: lineData, xField: 'date', yField: 'value', scale: { y: { nice: true } }, axis: { x: { labelAutoRotate: true, labelFontSize: 11 }, y: { labelFontSize: 11 } }, point: { size: 4 }, style: { lineWidth: 2 }, color: '#faad14', tooltip: { items: [(d: any) => ({ name: '总用量', value: d.value.toFixed(2) })] } }
+  const areaColors = useMemo(() => {
+    const colors = metadata.map((m) => m.color).filter((c): c is string => !!c)
+    return colors.length > 0 ? colors : ['#1677ff', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14']
+  }, [metadata])
 
-  // ── Top5 环比 ──
-  const compareData = useMemo(() => {
-    if (!records.length) return []
-    const sorted = [...records].sort((a, b) => (a.fields['日期'] || 0) - (b.fields['日期'] || 0))
-    const byDate = new Map<number, Map<string, number>>()
-    for (const r of sorted) {
-      const ts = r.fields['日期']; if (!byDate.has(ts)) byDate.set(ts, new Map())
-      const day = byDate.get(ts)!
-      for (const f of numFields) {
-        const v = parseFloat(String(r.fields[f.field_name] ?? 0))
-        day.set(f.field_name, (day.get(f.field_name) || 0) + v)
+  const unitMap = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const t of metadata) m[t.display_name] = t.unit
+    return m
+  }, [metadata])
+
+  const lineConfig = useMemo(() => ({
+    data: areaData,
+    xField: 'date',
+    yField: 'value',
+    seriesField: 'type',
+    smooth: true,
+    height: 340,
+    point: { size: 3, shape: 'circle' },
+    legend: { position: 'top' as const },
+    xAxis: { label: { autoRotate: false }, grid: null },
+    yAxis: { grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } } },
+    tooltip: {
+      crosshairs: { type: 'xy' as const },
+      items: [
+        {
+          channel: 'y',
+          valueFormatter: (v: number, d: any) => {
+            const u = unitMap[d?.type] || ''
+            return `${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${u}`
+          },
+        },
+      ],
+    },
+    color: areaColors,
+  }), [areaData, areaColors, unitMap])
+
+  // ── 车间排名 ──
+  const workshopData = useMemo(() => {
+    const rows = overview?.workshop_distribution || []
+    const filtered = selectedType ? rows.filter((r) => r.energy_type === selectedType) : rows
+    const m: Record<string, number> = {}
+    for (const r of filtered) m[r.group_key] = (m[r.group_key] || 0) + r.total_value
+    return Object.entries(m)
+      .map(([name, val]) => ({ workshop: name || '未知', value: val }))
+      .sort((a, b) => b.value - a.value)
+  }, [overview, selectedType])
+
+  const maxWs = workshopData[0]?.value || 1
+
+  // ── 区域横向条形图 ──
+  const plBarData = useMemo(() => {
+    const rows = overview?.production_line_distribution || []
+    const merged: Record<string, { name: string; workshop: string; value: number }> = {}
+    for (const r of rows) {
+      const key = `${r.workshop || '未知'}｜${r.group_key || '未知'}`
+      if (!merged[key]) merged[key] = { name: r.group_key || '未知', workshop: r.workshop || '未知', value: 0 }
+      merged[key].value += r.total_value
+    }
+    let list = Object.values(merged).sort((a, b) => b.value - a.value)
+    if (selectedWorkshop) list = list.filter((d) => d.workshop === selectedWorkshop)
+    return list.slice(0, 15)
+  }, [overview, selectedWorkshop])
+
+  const plBarConfig = useMemo(() => ({
+    data: plBarData.map((d) => ({
+      ...d,
+      label: d.workshop && d.workshop !== '未知' ? `${d.name}（${d.workshop}）` : d.name,
+    })),
+    xField: 'value',
+    yField: 'label',
+    height: Math.max(220, Math.min(420, plBarData.length * 36)),
+    barWidthRatio: 0.65,
+    color: '#5645d4',
+    label: {
+      position: 'right' as const,
+      text: (d: any) => (d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+      style: { fontSize: 11, fill: '#5d5b54' },
+    },
+    xAxis: {
+      label: {
+        formatter: (v: string) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+      },
+      grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
+    },
+    yAxis: { label: { autoEllipsis: true, style: { fontSize: 12 } } },
+  }), [plBarData])
+
+  // ── 详情表 ──
+  const detailColumns = useMemo(() => [
+    {
+      title: '能源类型', dataIndex: 'type', key: 'type', width: 140,
+      render: (_: unknown, r: any) => (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.color, display: 'inline-block' }} />
+          <span style={{ fontWeight: 500 }}>{r.display_name}</span>
+        </span>
+      ),
+    },
+    { title: '总量', dataIndex: 'total', key: 'total', width: 120, align: 'right' as const,
+      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
+    { title: '占比', dataIndex: 'pct', key: 'pct', width: 70, align: 'right' as const,
+      render: (v: number) => <span style={{ color: '#787671' }}>{v.toFixed(1)}%</span> },
+    { title: '日均', dataIndex: 'dailyAvg', key: 'dailyAvg', width: 100, align: 'right' as const,
+      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
+    { title: '峰值', dataIndex: 'peak', key: 'peak', width: 100, align: 'right' as const,
+      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
+    { title: '趋势', dataIndex: 'sparkline', key: 'sparkline', width: 110,
+      render: (_: unknown, r: any) => <TinyTrend data={r.sparkline} color={r.color} /> },
+  ], [days])
+
+  const detailData = useMemo(() => {
+    const summary = overview?.summary || {}
+    const trends = overview?.trend || []
+    // 占比用的全类型合计（仅表格展示用，不用于 KPI）
+    let grandTotal = 0
+    for (const m of metadata) {
+      const k = `total_${m.type_code}`
+      grandTotal += (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
+    }
+    return metadata.map((m) => {
+      const k = `total_${m.type_code}`
+      const total = (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
+      const typeTrends = trends
+        .filter((t) => t.type === m.type_code)
+        .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
+      const peak = typeTrends.reduce((max, t) => Math.max(max, t.value), 0)
+      return {
+        key: m.type_code,
+        display_name: m.display_name,
+        type: m.type_code,
+        color: m.color || '#999',
+        total,
+        pct: grandTotal > 0 ? (total / grandTotal) * 100 : 0,
+        dailyAvg: days > 0 ? total / days : 0,
+        peak,
+        sparkline: typeTrends.map((t) => t.value),
       }
-    }
-    const dates = [...byDate.keys()].sort((a, b) => a - b)
-    if (dates.length < 2) return []
+    }).filter((d) => d.total > 0)
+  }, [overview, metadata, days])
 
-    let curDates: number[], prevDates: number[]
-    if (compareMode === 'day') { curDates = [dates[dates.length - 1]]; prevDates = [dates[dates.length - 2]] }
-    else if (compareMode === 'week') { curDates = dates.slice(-7); prevDates = dates.slice(-14, -7) }
-    else {
-      const byMonth = new Map<string, number[]>()
-      for (const t of dates) {
-        const d = new Date(t); const m = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-        if (!byMonth.has(m)) byMonth.set(m, []); byMonth.get(m)!.push(t)
-      }
-      const months = [...byMonth.keys()].sort()
-      if (months.length < 2) return []
-      curDates = byMonth.get(months[months.length - 1]) || []; prevDates = byMonth.get(months[months.length - 2]) || []
-    }
-    if (!curDates.length || !prevDates.length) return []
-
-    const curSum = new Map<string, number>(), prevSum = new Map<string, number>()
-    for (const f of numFields) {
-      const fn = f.field_name
-      curSum.set(fn, curDates.reduce((s, d) => s + (byDate.get(d)?.get(fn) || 0), 0))
-      prevSum.set(fn, prevDates.reduce((s, d) => s + (byDate.get(d)?.get(fn) || 0), 0))
-    }
-    return [...curSum.entries()].filter(([, v]) => v > 0).map(([name, cur]) => {
-      const prev = prevSum.get(name) || 0
-      const rate = prev > 0 ? ((cur - prev) / prev) * 100 : cur > 0 ? 100 : 0
-      return { name, cur, prev, rate }
-    }).sort((a, b) => b.cur - a.cur).slice(0, 5)
-  }, [records, numFields, compareMode])
-
-  const filled = { background: '#f6f5f4', border: 'none', borderRadius: 8, height: 36 }
+  // ── Date handlers ──
+  const handlePreset = (val: string) => {
+    setActivePreset(val)
+    if (RANGE_PRESETS[val]) setRange(RANGE_PRESETS[val])
+  }
+  const handleRangeChange = (d: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null) => {
+    if (d?.[0] && d?.[1]) { setRange([d[0], d[1]]); setActivePreset('') }
+  }
 
   return (
-    <div style={{ padding: '28px 32px', maxWidth: 1280, minHeight: '100%', background: '#fafaf9' }}>
-      <h1 style={{ fontSize: 28, fontWeight: 500, color: '#1a1a1a', margin: 0, letterSpacing: '-0.3px' }}>可视化视图</h1>
-      <p style={{ fontSize: 13, color: '#a4a097', margin: '4px 0 0' }}>从飞书多维表格拉取能耗数据，按部门与时间维度展示</p>
-      <div style={{ height: 1, marginTop: 18, marginBottom: 20, background: 'linear-gradient(to right, #5645d4 0%, transparent 100%)' }} />
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#fff', borderRadius: 12, padding: '12px 18px', boxShadow: '0 1px 3px rgba(10,10,10,0.04)', border: '1px solid #ede9e4', marginBottom: 20 }}>
-        <span style={{ fontSize: 13, color: '#5d5b54', fontWeight: 500 }}>能源类型</span>
-        <Select value={energyType} onChange={setEnergyType} variant="filled" style={{ width: 150, ...filled }} options={ENERGY_OPTIONS} />
+    <div style={{ padding: '28px 32px', minHeight: '100%', background: '#fafaf9' }}>
+      {/* ── Header ── */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 500, margin: 0, color: '#1a1a1a' }}>能源分析</h1>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Segmented
+            options={Object.keys(RANGE_PRESETS)}
+            value={activePreset}
+            onChange={(v) => handlePreset(v as string)}
+          />
+          <RangePicker value={range} onChange={handleRangeChange} allowClear={false} />
+        </div>
       </div>
 
       <Spin spinning={loading}>
-        {records.length === 0 && !loading ? (
-          <Empty description="暂无数据" />
-        ) : (
-          <div style={{ display: 'grid', gap: 16 }}>
-            {/* 仪表盘 */}
-            <div style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(10,10,10,0.04)' }}>
-              <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: '0 0 16px' }}>昨日总用量</h3>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 40 }}>
-                <div style={{ position: 'relative', width: 180, height: 100, overflow: 'hidden' }}>
-                  {/* 半圆背景 */}
-                  <div style={{
-                    width: 180, height: 90, borderRadius: '90px 90px 0 0',
-                    background: 'conic-gradient(from 180deg, #1aae39 0deg, #faad14 90deg, #e03131 180deg)',
-                  }} />
-                  {/* 指针 */}
-                  <div style={{
-                    position: 'absolute', bottom: 0, left: '50%', width: 2, height: 70,
-                    background: '#5645d4', borderRadius: 1,
-                    transform: `rotate(${-90 + gaugeInfo.pct * 180}deg)`,
-                    transformOrigin: 'bottom center',
-                    transition: 'transform 0.5s ease',
-                  }} />
-                  {/* 中心圆 */}
-                  <div style={{ position: 'absolute', bottom: -8, left: '50%', transform: 'translateX(-50%)', width: 12, height: 12, borderRadius: '50%', background: '#5645d4' }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 32, fontWeight: 500, color: '#1a1a1a', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
-                    {gaugeInfo.yesterday.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#a4a097', marginTop: 4 }}>
-                    前日 {gaugeInfo.dayBefore.toLocaleString()}
-                    {gaugeInfo.dayBefore > 0 && (
-                      <span style={{
-                        color: gaugeInfo.yesterday >= gaugeInfo.dayBefore ? '#1aae39' : '#e03131',
-                        fontWeight: 600, marginLeft: 8,
-                      }}>
-                        {gaugeInfo.yesterday >= gaugeInfo.dayBefore ? '↑' : '↓'} {Math.abs(Math.round((gaugeInfo.yesterday - gaugeInfo.dayBefore) / gaugeInfo.dayBefore * 100))}%
-                      </span>
-                    )}
+        {overview ? (
+          <>
+            {/* ── KPI 横幅 ── */}
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14, marginBottom: 20,
+            }}>
+              {([
+                {
+                  label: `总能耗${kpi.activeMeta ? ` · ${kpi.activeMeta.display_name}` : ''}`,
+                  value: kpi.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+                  suffix: kpi.unit, color: kpi.activeMeta?.color || '#5645d4', bg: '#f6f3ff',
+                },
+                {
+                  label: `日均能耗${kpi.activeMeta ? ` · ${kpi.activeMeta.display_name}` : ''}`,
+                  value: kpi.avg.toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+                  suffix: kpi.unit, color: '#1677ff', bg: '#f0f5ff',
+                },
+                {
+                  label: '环比变化',
+                  value: `${kpi.pctChange >= 0 ? '+' : ''}${kpi.pctChange.toFixed(1)}%`,
+                  suffix: '',
+                  color: kpi.pctChange >= 0 ? '#e03131' : '#1aae39',
+                  bg: kpi.pctChange >= 0 ? '#fff1f0' : '#f0fdf4',
+                  icon: kpi.pctChange >= 0 ? '↑' : '↓',
+                },
+                { label: '峰值日', value: kpi.peakDay, suffix: '', color: '#dd5b00', bg: '#fff7e6' },
+                { label: '最高车间', value: kpi.topWorkshop || '—', suffix: '', color: '#722ed1', bg: '#f9f0ff' },
+              ] as const).map((item) => (
+                <div key={item.label} style={{
+                  background: item.bg, borderRadius: 12, padding: '16px 20px',
+                  border: `1px solid ${item.color}15`,
+                }}>
+                  <div style={{ fontSize: 12, color: '#787671', marginBottom: 4 }}>{item.label}</div>
+                  <div style={{ fontSize: 24, fontWeight: 600, color: item.color, lineHeight: 1.2 }}>
+                    {'icon' in item ? <span style={{ marginRight: 4 }}>{item.icon}</span> : null}
+                    {item.value}
+                    <span style={{ fontSize: 12, fontWeight: 400, marginLeft: 3, color: '#a4a097' }}>{item.suffix}</span>
                   </div>
                 </div>
+              ))}
+            </div>
+
+            {/* ── 能源类型选择器 ── */}
+            <div style={{
+              display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20,
+              alignItems: 'center',
+            }}>
+              <button
+                onClick={() => setSelectedType(null)}
+                style={{
+                  padding: '8px 18px', borderRadius: 20, cursor: 'pointer', fontSize: 13, fontWeight: 500,
+                  border: !selectedType ? '2px solid #5645d4' : '1px solid #e8e3f0',
+                  background: !selectedType ? '#f6f3ff' : '#fff',
+                  color: !selectedType ? '#5645d4' : '#787671',
+                  transition: 'all 0.2s',
+                }}
+              >
+                全部能源
+              </button>
+              {metadata.map((m) => {
+                const k = `total_${m.type_code}`
+                const tv = (overview.summary[k] as number) ?? (overview.summary[m.type_code] as number) ?? 0
+                const active = selectedType === m.type_code
+                return (
+                  <button
+                    key={m.type_code}
+                    onClick={() => setSelectedType(active ? null : m.type_code)}
+                    style={{
+                      padding: '8px 16px', borderRadius: 20, cursor: 'pointer', fontSize: 13,
+                      border: active ? `2px solid ${m.color || '#1677ff'}` : '1px solid #e8e3f0',
+                      background: active ? `${m.color}12` || '#f0f5ff' : '#fff',
+                      color: active ? (m.color || '#1677ff') : '#37352f',
+                      transition: 'all 0.2s',
+                      display: 'flex', alignItems: 'center', gap: 8,
+                    }}
+                  >
+                    <span style={{
+                      width: 10, height: 10, borderRadius: '50%',
+                      background: m.color || '#999', display: 'inline-block',
+                    }} />
+                    <span style={{ fontWeight: active ? 600 : 400 }}>{m.display_name}</span>
+                    <span style={{ color: active ? 'inherit' : '#a4a097', opacity: active ? 1 : 0.8 }}>
+                      {tv.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} {m.unit}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* ── 堆叠面积图 ── */}
+            <div style={{
+              background: '#fff', borderRadius: 12, padding: '20px 24px', marginBottom: 20,
+              border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 4 }}>
+                {selectedType
+                  ? `${metadata.find((m) => m.type_code === selectedType)?.display_name || '能耗'} 趋势`
+                  : '能耗趋势对比'}
+                {!selectedType && metadata.length > 1 && (
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097', marginLeft: 8 }}>
+                    多系列折线 · 点击图例筛选
+                  </span>
+                )}
+              </div>
+              {areaData.length > 0 ? <Line {...lineConfig} /> : <Empty description="暂无趋势" style={{ padding: '40px 0' }} />}
+            </div>
+
+            {/* ── 车间排名 + 矩形树图 ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
+              {/* 车间排名表 */}
+              <div style={{
+                background: '#fff', borderRadius: 12, padding: '20px 24px',
+                border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
+                  车间用量排名
+                  {selectedType && (
+                    <span style={{ fontSize: 12, fontWeight: 400, color: metadata.find((m) => m.type_code === selectedType)?.color || '#1677ff', marginLeft: 8 }}>
+                      · {metadata.find((m) => m.type_code === selectedType)?.display_name}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097', marginLeft: 8 }}>
+                    点击行查看区域
+                  </span>
+                </div>
+                {workshopData.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {workshopData.map((w, i) => {
+                      const pct = maxWs > 0 ? (w.value / maxWs) * 100 : 0
+                      const active = selectedWorkshop === w.workshop
+                      return (
+                        <div
+                          key={w.workshop}
+                          onClick={() => setSelectedWorkshop(active ? null : w.workshop)}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px',
+                            borderRadius: 8, cursor: 'pointer',
+                            background: active ? '#f6f3ff' : 'transparent',
+                            border: active ? '1px solid #e8e3f0' : '1px solid transparent',
+                            transition: 'all 0.15s',
+                          }}
+                        >
+                          <span style={{
+                            width: 22, height: 22, borderRadius: 6,
+                            background: i < 3 ? '#5645d4' : '#c8c4be',
+                            color: '#fff', fontSize: 11, fontWeight: 600,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            flexShrink: 0,
+                          }}>
+                            {i + 1}
+                          </span>
+                          <span style={{ width: 80, fontSize: 13, fontWeight: 500, color: '#37352f', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {w.workshop}
+                          </span>
+                          <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%', width: `${pct}%`,
+                              background: `linear-gradient(90deg, ${i < 3 ? '#5645d4' : '#a4a097'}, ${i < 3 ? '#8b7cf0' : '#c8c4be'})`,
+                              borderRadius: 4, transition: 'width 0.4s',
+                            }} />
+                          </div>
+                          <span style={{ width: 70, textAlign: 'right', fontSize: 13, fontWeight: 500, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                            {w.value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : <Empty description="暂无数据" style={{ padding: '40px 0' }} />}
+              </div>
+
+              {/* 区域分布分组条形图 */}
+              <div style={{
+                background: '#fff', borderRadius: 12, padding: '20px 24px',
+                border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 8 }}>
+                  区域用量分布
+                  {selectedWorkshop && (
+                    <span style={{ fontSize: 13, fontWeight: 400, color: '#5645d4', marginLeft: 8 }}>
+                      › {selectedWorkshop}
+                    </span>
+                  )}
+                </div>
+                {plBarData.length > 0 ? (
+                  <Bar {...plBarConfig} />
+                ) : (
+                  <Empty description={selectedWorkshop ? '该车间暂无区域数据' : '暂无区域数据'} style={{ padding: '40px 0' }} />
+                )}
               </div>
             </div>
 
-            {isNaturalGas ? (
-              <div style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(10,10,10,0.04)' }}>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: '0 0 16px' }}>近十天趋势</h3>
-                <Line {...lineConfig} height={400} />
+            {/* ── 能源类型明细表 ── */}
+            <div style={{
+              background: '#fff', borderRadius: 12, padding: '20px 24px',
+              border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
+                能源类型明细
               </div>
-            ) : (
-              <>
-                <div style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(10,10,10,0.04)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                    <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: 0 }}>区域分布</h3>
-                    <Segmented value={barDayIndex === 0 ? 'latest' : 'yesterday'} onChange={(v) => setBarDayIndex(v === 'latest' ? 0 : 1)} options={[{ label: '最新', value: 'latest' }, { label: '昨日', value: 'yesterday' }]} style={{ background: '#f6f5f4', borderRadius: 6, padding: 1 }} size="small" />
-                  </div>
-                  <Column {...barConfig} height={400} />
-                </div>
-                {compareData.length > 0 && (
-                  <div style={{ background: '#fff', borderRadius: 12, padding: '20px 24px', border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(10,10,10,0.04)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                      <h3 style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a', margin: 0 }}>Top5 部门环比</h3>
-                      <Segmented value={compareMode} onChange={(v) => setCompareMode(v as any)} options={[{ label: '日环比', value: 'day' }, { label: '周环比', value: 'week' }, { label: '月环比', value: 'month' }]} style={{ background: '#f6f5f4', borderRadius: 8, padding: 2 }} />
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                      {compareData.map((d, i) => {
-                        const isUp = d.rate >= 0
-                        return (
-                          <div key={d.name} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                            <span style={{ width: 20, fontSize: 13, fontWeight: 600, color: i < 3 ? '#5645d4' : '#a4a097' }}>{i + 1}</span>
-                            <span style={{ width: 100, fontSize: 13, color: '#37352f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
-                            <span style={{ width: 90, fontSize: 13, color: '#5d5b54', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{d.cur.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}</span>
-                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <div style={{ height: 6, width: `${Math.min(Math.abs(d.rate), 100)}%`, maxWidth: 200, borderRadius: 3, background: isUp ? '#1aae39' : '#e03131', transition: 'width 0.3s' }} />
-                              <span style={{ fontSize: 13, fontWeight: 600, color: isUp ? '#1aae39' : '#e03131', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{isUp ? '+' : ''}{d.rate.toFixed(1)}%</span>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
+              <Table
+                columns={detailColumns}
+                dataSource={detailData}
+                pagination={false}
+                size="small"
+                style={{ marginTop: -8 }}
+              />
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 120 }}>
+            <Empty description="暂无数据" />
           </div>
         )}
       </Spin>

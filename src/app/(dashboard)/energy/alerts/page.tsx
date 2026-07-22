@@ -1,87 +1,184 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Button, Space, message } from 'antd'
+import { Button, Space, App, Tabs } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
-import { AlertRuleTable, AlertConfigDrawer } from '@/components/energy'
-import { AlertRule } from '@/types/energy'
-import { getAlertRules, deleteAlertRule } from '@/actions/energy'
+import {
+  AlertRuleTable,
+  AlertConfigDrawer,
+  WorkshopConfigTable,
+  WorkshopConfigDrawer,
+} from '@/components/energy'
+import { AlertRule, WorkshopConfig } from '@/types/energy'
+import {
+  getAlertRules,
+  deleteAlertRule,
+  getWorkshopConfigs,
+  deleteWorkshopConfig,
+} from '@/actions/energy'
 import { useEnergyStore } from '@/stores/energy'
 
 export default function AlertsPage() {
-  const { openAlertConfigDrawer } = useEnergyStore()
-  const [data, setData] = useState<AlertRule[]>([])
-  const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const { message } = App.useApp()
+  const { openAlertConfigDrawer, openWorkshopConfigDrawer } = useEnergyStore()
 
-  const fetchData = useCallback(async (p = page, ps = pageSize) => {
-    setLoading(true)
+  // ── 预警规则 ──
+  const [rules, setRules] = useState<AlertRule[]>([])
+  const [rulesLoading, setRulesLoading] = useState(false)
+  const [rulesTotal, setRulesTotal] = useState(0)
+  const [rulesPage, setRulesPage] = useState(1)
+  const [rulesPageSize, setRulesPageSize] = useState(10)
+
+  // ── 车间配置 ──
+  const [configs, setConfigs] = useState<WorkshopConfig[]>([])
+  const [configsLoading, setConfigsLoading] = useState(false)
+  const [configsTotal, setConfigsTotal] = useState(0)
+  const [configsPage, setConfigsPage] = useState(1)
+  const [configsPageSize, setConfigsPageSize] = useState(10)
+
+  const [activeTab, setActiveTab] = useState<string>('rules')
+
+  // ── 预警规则 ──
+  const fetchRules = useCallback(async (p = rulesPage, ps = rulesPageSize) => {
+    setRulesLoading(true)
     try {
       const result = await getAlertRules({ page: p, page_size: ps })
-      setData(result.items)
-      setTotal(result.total)
-    } catch (error) {
+      setRules(result.items)
+      setRulesTotal(result.total)
+    } catch {
       message.error('获取预警规则失败')
     } finally {
-      setLoading(false)
+      setRulesLoading(false)
     }
-  }, [page, pageSize])
+  }, [rulesPage, rulesPageSize])
 
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    fetchRules()
+  }, [fetchRules])
 
-  const handlePageChange = (p: number, ps: number) => {
-    setPage(p)
-    setPageSize(ps)
-  }
+  // ── 车间配置 ──
+  const fetchConfigs = useCallback(async (p = configsPage, ps = configsPageSize) => {
+    setConfigsLoading(true)
+    try {
+      const result = await getWorkshopConfigs(p, ps)
+      setConfigs(result.items)
+      setConfigsTotal(result.total)
+    } catch {
+      message.error('获取车间配置失败')
+    } finally {
+      setConfigsLoading(false)
+    }
+  }, [configsPage, configsPageSize])
 
-  const handleEdit = (record: AlertRule) => {
+  useEffect(() => {
+    if (activeTab === 'workshop') {
+      fetchConfigs()
+    }
+  }, [activeTab, fetchConfigs])
+
+  const handleEditRule = (record: AlertRule) => {
     openAlertConfigDrawer('edit', record.id)
   }
 
-  const handleDelete = async (id: string) => {
+  const handleDeleteRule = async (id: string) => {
     try {
       await deleteAlertRule(id)
       message.success('删除成功')
-      fetchData()
-    } catch (error) {
+      fetchRules()
+    } catch {
       message.error('删除失败')
     }
   }
 
+  const handleEditConfig = (record: WorkshopConfig) => {
+    openWorkshopConfigDrawer('edit', record.id)
+  }
+
+  const handleDeleteConfig = async (id: string) => {
+    try {
+      await deleteWorkshopConfig(id)
+      message.success('删除成功')
+      fetchConfigs()
+    } catch {
+      message.error('删除失败')
+    }
+  }
+
+  const tabItems = [
+    {
+      key: 'rules',
+      label: '预警规则',
+      children: (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+            <Space>
+              <Button icon={<ReloadOutlined />} onClick={() => fetchRules()}>
+                刷新
+              </Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openAlertConfigDrawer('create')}>
+                新建规则
+              </Button>
+            </Space>
+          </div>
+          <AlertRuleTable
+            data={rules}
+            loading={rulesLoading}
+            total={rulesTotal}
+            page={rulesPage}
+            pageSize={rulesPageSize}
+            onPageChange={(p, ps) => { setRulesPage(p); setRulesPageSize(ps) }}
+            onRefresh={() => fetchRules()}
+            onEdit={handleEditRule}
+            onDelete={handleDeleteRule}
+          />
+          <AlertConfigDrawer onRefresh={() => fetchRules()} />
+        </div>
+      ),
+    },
+    {
+      key: 'workshop',
+      label: '车间预警',
+      children: (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+            <Space>
+              <Button icon={<ReloadOutlined />} onClick={() => fetchConfigs()}>
+                刷新
+              </Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openWorkshopConfigDrawer('create')}>
+                新建车间配置
+              </Button>
+            </Space>
+          </div>
+          <WorkshopConfigTable
+            data={configs}
+            loading={configsLoading}
+            total={configsTotal}
+            page={configsPage}
+            pageSize={configsPageSize}
+            onPageChange={(p, ps) => { setConfigsPage(p); setConfigsPageSize(ps) }}
+            onEdit={handleEditConfig}
+            onDelete={handleDeleteConfig}
+          />
+          <WorkshopConfigDrawer onRefresh={() => fetchConfigs()} />
+        </div>
+      ),
+    },
+  ]
+
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h1
-          style={{ fontSize: 22, fontWeight: 600, color: '#1a1a1a', lineHeight: 1.3, margin: 0 }}
-        >
-          预警管理
-        </h1>
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => fetchData()}>
-            刷新
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openAlertConfigDrawer('create')}>
-            新建规则
-          </Button>
-        </Space>
-      </div>
-
-      <AlertRuleTable
-        data={data}
-        loading={loading}
-        total={total}
-        page={page}
-        pageSize={pageSize}
-        onPageChange={handlePageChange}
-        onRefresh={() => fetchData()}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
+      <h1
+        style={{ fontSize: 22, fontWeight: 600, color: '#1a1a1a', lineHeight: 1.3, margin: '0 0 20px' }}
+      >
+        预警管理
+      </h1>
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={tabItems}
+        style={{ marginTop: 0 }}
       />
-      <AlertConfigDrawer onRefresh={() => fetchData()} />
     </div>
   )
 }

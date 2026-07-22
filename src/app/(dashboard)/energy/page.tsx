@@ -1,5 +1,5 @@
-import { EnergyOverview } from '@/components/energy'
+import { redirect } from 'next/navigation'
 
 export default function EnergyPage() {
-  return <EnergyOverview />
+  redirect('/energy/type-config')
 }

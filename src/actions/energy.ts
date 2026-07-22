@@ -9,9 +9,11 @@ import {
   updateEnergyDevice as apiUpdateDevice,
   deleteEnergyDevice as apiDeleteDevice,
   fetchEnergyData,
-  fetchEnergyOverview,
+  fetchEnergyDataHistory,
   triggerCollect as apiTriggerCollect,
   fetchCollectLogs,
+  fetchCollectSettings as apiFetchCollectSettings,
+  updateCollectSettings as apiUpdateCollectSettings,
   fetchAlertRules,
   fetchAlertRuleById,
   createAlertRule as apiCreateAlertRule,
@@ -19,21 +21,34 @@ import {
   deleteAlertRule as apiDeleteAlertRule,
   fetchAlertRecords,
   processAlertRecord as apiProcessAlertRecord,
-  fetchCollectHistory,
+  fetchTypeConfigs,
+  createTypeConfig as apiCreateTypeConfig,
+  updateTypeConfig as apiUpdateTypeConfig,
+  deleteTypeConfig as apiDeleteTypeConfig,
+  clearCollectLogs as apiClearCollectLogs,
+  fetchWorkshopConfigs,
+  fetchWorkshopConfigById,
+  createWorkshopConfig as apiCreateWorkshopConfig,
+  updateWorkshopConfig as apiUpdateWorkshopConfig,
+  deleteWorkshopConfig as apiDeleteWorkshopConfig,
+  fetchWorkshopPersonnelCandidates,
 } from '@/lib/api/energy'
 import {
   CreateDeviceInput,
   UpdateDeviceInput,
   DeviceQueryParams,
   DataQueryParams,
-  StatisticsParams,
   LogQueryParams,
   CreateRuleInput,
   UpdateRuleInput,
   ProcessRecordInput,
   RuleQueryParams,
   RecordQueryParams,
-  CollectHistoryParams,
+  CreateTypeConfigInput,
+  UpdateTypeConfigInput,
+  HistoryQueryParams,
+  CreateWorkshopConfigInput,
+  UpdateWorkshopConfigInput,
 } from '@/types/energy'
 
 // 数据源配置 Server Actions
@@ -67,8 +82,9 @@ export async function getEnergyData(params: DataQueryParams = {}) {
   return fetchEnergyData(params)
 }
 
-export async function getEnergyOverview(params: StatisticsParams = {}) {
-  return fetchEnergyOverview(params)
+// 采集历史 Server Actions
+export async function getEnergyDataHistory(params: HistoryQueryParams = {}) {
+  return fetchEnergyDataHistory(params)
 }
 
 // 数据采集 Server Actions
@@ -80,6 +96,23 @@ export async function triggerCollect(platformCode?: string) {
 
 export async function getCollectLogs(params: LogQueryParams = {}) {
   return fetchCollectLogs(params)
+}
+
+// 自动采集设置 Server Actions
+export async function getCollectSettings() {
+  return apiFetchCollectSettings()
+}
+
+export async function updateCollectSettings(data: { auto_collect_enabled?: boolean; auto_collect_interval_seconds?: number }) {
+  const result = await apiUpdateCollectSettings(data)
+  revalidatePath('/energy/collect-logs')
+  return result
+}
+
+export async function clearCollectLogs() {
+  const result = await apiClearCollectLogs()
+  revalidatePath('/energy/collect-logs')
+  return result
 }
 
 // 预警规则 Server Actions
@@ -119,7 +152,55 @@ export async function processAlertRecord(id: string, data: ProcessRecordInput) {
   return result
 }
 
-// 采集历史 Server Action
-export async function getCollectHistory(params: CollectHistoryParams) {
-  return fetchCollectHistory(params)
+// 能源类型配置 Server Actions
+export async function getTypeConfigs() {
+  return fetchTypeConfigs()
 }
+
+export async function createTypeConfig(data: CreateTypeConfigInput) {
+  const result = await apiCreateTypeConfig(data)
+  revalidatePath('/energy/type-config')
+  return result
+}
+
+export async function updateTypeConfig(id: string, data: UpdateTypeConfigInput) {
+  const result = await apiUpdateTypeConfig(id, data)
+  revalidatePath('/energy/type-config')
+  return result
+}
+
+export async function deleteTypeConfig(id: string) {
+  await apiDeleteTypeConfig(id)
+  revalidatePath('/energy/type-config')
+}
+
+// 车间预警配置 Server Actions
+export async function getWorkshopConfigs(page = 1, pageSize = 20) {
+  return fetchWorkshopConfigs(page, pageSize)
+}
+
+export async function getWorkshopConfigById(id: string) {
+  return fetchWorkshopConfigById(id)
+}
+
+export async function createWorkshopConfig(data: CreateWorkshopConfigInput) {
+  const result = await apiCreateWorkshopConfig(data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function updateWorkshopConfig(id: string, data: UpdateWorkshopConfigInput) {
+  const result = await apiUpdateWorkshopConfig(id, data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function deleteWorkshopConfig(id: string) {
+  await apiDeleteWorkshopConfig(id)
+  revalidatePath('/energy/alerts')
+}
+
+export async function getWorkshopPersonnelCandidates() {
+  return fetchWorkshopPersonnelCandidates()
+}
+

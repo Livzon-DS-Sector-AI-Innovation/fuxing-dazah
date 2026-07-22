@@ -51,6 +51,13 @@ export function AlertRuleTable({
       width: 180,
     },
     {
+      title: '车间',
+      dataIndex: 'workshop',
+      key: 'workshop',
+      width: 120,
+      render: (workshop: string | null) => workshop || '—',
+    },
+    {
       title: '能源类型',
       dataIndex: 'energy_type',
       key: 'energy_type',
@@ -59,6 +66,17 @@ export function AlertRuleTable({
         const { text, color } = energyTypeLabels[type]
         return <Tag color={color}>{text}</Tag>
       },
+    },
+    {
+      title: '类型',
+      dataIndex: 'is_system',
+      key: 'is_system',
+      width: 80,
+      render: (isSystem: boolean) => (
+        <Tag color={isSystem ? 'purple' : 'geekblue'}>
+          {isSystem ? '系统' : '手动'}
+        </Tag>
+      ),
     },
     {
       title: '预警等级',
@@ -104,7 +122,7 @@ export function AlertRuleTable({
       width: 120,
       render: (_, record) => (
         <Space>
-          {hasPermission('energy:alert:manage') && (
+          {hasPermission('energy:alert:update') && (
             <Button
               type="link"
               icon={<EditOutlined />}
@@ -113,7 +131,7 @@ export function AlertRuleTable({
               编辑
             </Button>
           )}
-          {hasPermission('energy:alert:manage') && (
+          {hasPermission('energy:alert:delete') && (
             <Popconfirm
               title="确定删除此规则？"
               onConfirm={() => handleDelete(record.id)}

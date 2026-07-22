@@ -198,7 +198,7 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
     >
       <Form form={form} layout="vertical" requiredMark={false}>
         <Form.Item name="rule_name" label="规则名称" rules={[{ required: true, message: '请输入规则名称' }]}>
-          <Input placeholder="如：发酵车间电力超限预警" style={{ height: 44, borderRadius: 8 }} />
+          <Input placeholder="如：发酵部门电力超限预警" style={{ height: 44, borderRadius: 8 }} />
         </Form.Item>
 
         <Form.Item name="rule_description" label="规则描述">

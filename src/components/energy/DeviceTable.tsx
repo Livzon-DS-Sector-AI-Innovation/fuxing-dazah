@@ -215,23 +215,58 @@ export function DeviceTable({
       },
     },
     {
-      title: '车间',
+      title: '部门',
       dataIndex: 'workshop',
       key: 'workshop',
-      width: 120,
+      width: 100,
       ellipsis: true,
+    },
+    {
+      title: '所属区域',
+      dataIndex: 'production_line',
+      key: 'production_line',
+      width: 100,
+      ellipsis: true,
+      render: (v: string | null | undefined) => (
+        v ? <span style={{ color: '#37352f' }}>{v}</span> : <span style={{ color: '#c8c4be' }}>—</span>
+      ),
+    },
+    {
+      title: '关联设备',
+      dataIndex: 'equipment_name',
+      key: 'equipment_name',
+      width: 140,
+      ellipsis: true,
+      render: (name: string | null | undefined) => (
+        name ? (
+          <span style={{ color: '#37352f' }}>{name}</span>
+        ) : (
+          <span style={{ color: '#c8c4be' }}>—</span>
+        )
+      ),
     },
     {
       title: '间隔',
       dataIndex: 'collection_interval',
       key: 'collection_interval',
-      width: 80,
-      align: 'right',
-      render: (v: number) => (
-        <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
-          {v} min
-        </span>
-      ),
+      width: 110,
+      render: (_v: number, record: EnergyDeviceConfig) => {
+        const hours = _v / 60
+        if (record.daily_collect_time) {
+          const days = Math.round(hours / 24)
+          return (
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54', fontSize: 13 }}>
+              {days} 天 · 每天 {record.daily_collect_time}
+            </span>
+          )
+        }
+        const display = hours % 1 === 0 ? `${hours}` : hours.toFixed(2)
+        return (
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
+            {display} 小时
+          </span>
+        )
+      },
     },
     {
       title: '监控级别',
@@ -261,7 +296,7 @@ export function DeviceTable({
       width: 100,
       render: (_: unknown, record: EnergyDeviceConfig) => (
         <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-          <PermissionGuard permission="energy:device:manage">
+          <PermissionGuard permission="energy:device:update">
             <Button
               type="text"
               size="small"
@@ -272,6 +307,8 @@ export function DeviceTable({
             >
               {record.is_enabled ? '禁用' : '启用'}
             </Button>
+          </PermissionGuard>
+          <PermissionGuard permission="energy:device:update">
             <Button
               type="text"
               size="small"
@@ -280,6 +317,8 @@ export function DeviceTable({
               style={{ color: '#5645d4' }}
               aria-label="编辑"
             />
+          </PermissionGuard>
+          <PermissionGuard permission="energy:device:delete">
             <Button
               type="text"
               size="small"
