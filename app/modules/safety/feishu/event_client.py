@@ -310,9 +310,6 @@ async def start_ws() -> None:
                 from app.modules.safety.feishu.bitable_handler import (
                     ensure_bitable_subscribed,
                 )
-                from app.modules.safety.feishu.knowledge_bitable_handler import (
-                    ensure_knowledge_bitable_subscribed,
-                )
 
                 subscribed = await ensure_bitable_subscribed()
                 if not subscribed:
@@ -324,13 +321,6 @@ async def start_ws() -> None:
                 else:
                     _subscription_ok = True
                     logger.info("✅ Bitable 事件订阅就绪，WebSocket 将接收实时事件推送")
-
-                # 知识库表格也尝试订阅（与隐患表格在不同应用中，独立订阅）
-                knowledge_subscribed = await ensure_knowledge_bitable_subscribed()
-                if knowledge_subscribed:
-                    logger.info("✅ 知识库 Bitable 事件订阅就绪")
-                else:
-                    logger.info("知识库 Bitable 事件订阅未启用（可能未配置 env var）")
 
                 # 4. 启动 protobuf PING 心跳循环
                 ping_task = asyncio.create_task(_ping_loop(ws, service_id))

@@ -124,7 +124,7 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         path="/meter",
         db_schema="meter",
         owner_hint="仪表/计量负责人",
-        description="计量器具台账、有毒有害可燃探测器、检测报告和检定到期提醒。",
+        description="计量器具台账、有毒有害可燃探测器管理和检测报告数据入口。",
     ),
 )
 

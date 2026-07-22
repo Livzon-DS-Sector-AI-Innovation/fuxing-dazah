@@ -1,8 +1,12 @@
-"""MCP 工具调用日志 + DB 会话管理中间件。
+"""MCP 工具调用日志中间件。
 
-FastMCP Middleware，在每次工具调用时：
-1. 创建短生命周期 DB session（per-tool-call），解决 SSE 流式响应期间连接泄漏问题
-2. 记录调用方 Agent 身份（API Key 前 8 位）、工具名称、入参、返回数据、耗时
+FastMCP Middleware，在每次工具调用时记录：
+- 调用方 Agent 身份（API Key 前 8 位）
+- 工具名称
+- 入参
+- 返回数据（截断至 2000 字符）
+- 耗时（毫秒）
+- 是否异常
 
 通过 mcp.add_middleware() 注册，集成到项目统一日志体系。
 """
@@ -18,8 +22,7 @@ import mcp.types as mt
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 
-from app.core.database import async_session_factory
-from app.platform.mcp.deps import get_agent_api_key, reset_context, set_context
+from app.platform.mcp.deps import get_agent_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +72,7 @@ def _summarize(s: str, max_len: int = _MAX_RESULT_LENGTH) -> str:
 
 
 class MCPToolLoggingMiddleware(Middleware):
-    """FastMCP 中间件：per-tool-call DB 会话管理 + 请求/响应日志。
-
-    会话生命周期（解决 SSE 连接泄漏）：
-    - 每次 tool 调用创建独立 DB session，写入 contextvars
-    - tool 返回后立即 commit/rollback + close，连接秒级归还连接池
-    - 即使 SSE 流长时间不关闭，连接也不会被占用
+    """FastMCP 中间件：记录每次 /mcp tools/call 的请求与响应。
 
     日志格式（结构化 key=value）：
         event=mcp_tool_start|mcp_tool_success|mcp_tool_error
@@ -109,16 +107,9 @@ class MCPToolLoggingMiddleware(Middleware):
             args_json,
         )
 
-        # ── per-tool-call DB session ──
-        # 每次 tool 调用创建独立会话，tool 执行完立即归还连接，
-        # 避免 SSE 流式响应期间长时间占用导致连接泄漏。
-        db = async_session_factory()
-        db_token, user_token = set_context(db, None)
-
         start = time.perf_counter()
         try:
             result = await call_next(context)
-            await db.commit()
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
 
             result_str = _serialize_result(result)
@@ -140,10 +131,3 @@ class MCPToolLoggingMiddleware(Middleware):
                 exc,
             )
             raise
-        finally:
-            try:
-                await db.rollback()
-                await db.close()
-            except Exception:
-                pass
-            reset_context(db_token, user_token)
