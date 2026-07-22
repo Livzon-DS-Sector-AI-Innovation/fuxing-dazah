@@ -36,6 +36,16 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: fuxing
+          POSTGRES_PASSWORD: fuxing
+          POSTGRES_DB: fuxing_dazah
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -51,5 +61,6 @@ jobs:
             uv run alembic heads
             exit 1
           fi
-      # ponytail: alembic upgrade head 暂时移除，迁移链修好后再加回来
-      # - run: uv run alembic upgrade head
+      - run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://fuxing:fuxing@localhost:5432/fuxing_dazah
