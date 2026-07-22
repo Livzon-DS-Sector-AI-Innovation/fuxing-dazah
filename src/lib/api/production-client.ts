@@ -131,3 +131,7 @@ export async function fetchMaterialMovementsClient(
   const queryString = params.toString()
   return apiGet<MaterialMovements>(`${API_BASE}/api/v1/production/materials/${id}/movements${queryString ? `?${queryString}` : ''}`)
 }
+
+// ── 身份人员（全公司员工，供人员选择组件使用）──
+// 已迁移到 @/lib/api/identity，此处保留重导出以兼容旧引用
+export { type IdentityPersonnel, fetchIdentityPersonnel } from './identity'

@@ -25,6 +25,7 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["production:*:read"],
     children: [
       { key: "dashboard", label: "生产看板", path: "/production" },
+      { key: "workbench", label: "工作台", path: "/production/workbench" },
       { key: "process", label: "产品工艺", path: "/production/process" },
       { key: "materials", label: "产出物管理", path: "/production/materials" },
       { key: "batches", label: "批次管理", path: "/production/batches" },

@@ -155,7 +155,7 @@ export function WorkOrderDetailDrawer({ onRefresh }: WorkOrderDetailDrawerProps)
         })
         const uploadResult = await uploadWorkOrderImages(wo.id, formData)
         if (!uploadResult.success) {
-          message.warning('工单已提交，但图片上传失败: ' + uploadResult.error)
+          message.warning('工单已提交，但图片上传失败: ' + (uploadResult.error || '未知错误'))
         }
       }
 

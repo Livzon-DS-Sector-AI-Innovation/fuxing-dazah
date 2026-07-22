@@ -25,3 +25,13 @@ export {
   fetchIntermediateTrace,
 } from './intermediate'
 export { getBatches } from './legacy'
+export {
+  fetchWorkbench,
+  fetchStageAssignments,
+  createStageAssignment,
+  deleteStageAssignment,
+  fetchNodeAssignments,
+  createNodeAssignment,
+  deleteNodeAssignment,
+  receiveAndStart,
+} from './workbench'

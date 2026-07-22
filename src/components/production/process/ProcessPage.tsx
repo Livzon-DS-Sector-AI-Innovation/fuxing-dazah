@@ -17,6 +17,7 @@ import { RouteVersionBar } from './RouteVersionBar'
 import { RouteFlowGraph } from './RouteFlowGraph'
 import { RouteGraphEditor } from './RouteGraphEditor'
 import { NodeFieldsDrawer } from './NodeFieldsDrawer'
+import { StageAssignmentPanel } from './StageAssignmentPanel'
 
 function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
   void initialProducts // 产品列表由 ProductSidebar 经 React Query 拉取；SSR 数据仅用于首屏占位扩展
@@ -126,6 +127,12 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
                 }}
                 onEdit={() => setEditing(true)}
               />
+              {effectiveRouteId && canManage && (
+                <StageAssignmentPanel
+                  routeId={effectiveRouteId}
+                  stageNames={[...new Set((graph?.nodes ?? []).map(n => n.stage_name).filter(Boolean) as string[])]}
+                />
+              )}
               <div style={{ marginTop: 12 }}>
                 {graphLoading ? (
                   <Skeleton active paragraph={{ rows: 8 }} />

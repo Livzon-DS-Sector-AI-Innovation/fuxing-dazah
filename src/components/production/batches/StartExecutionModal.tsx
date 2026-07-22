@@ -1,30 +1,30 @@
 'use client'
 
-import { useMemo } from 'react'
-import { App, Form, Input, Modal, Select } from 'antd'
+import { useMemo, useEffect, useState } from 'react'
+import { App, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { startExecution } from '@/actions/production'
+import { startExecution, fetchNodeAssignments } from '@/actions/production'
 import {
   fetchBatchDetailClient,
   fetchRouteGraphClient,
 } from '@/lib/api/production-client'
-import { fetchPersonnelList } from '@/lib/api/equipment-personnel'
 import { fetchEquipmentsClient } from '@/lib/api/equipment-client'
-import { PersonnelSelect } from '@/components/equipment'
+import { UserSelect } from '@/components/shared'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
 import { fetchAvailableOutputs } from '@/actions/production'
 
 interface Props {
   batchId: string
   onClose: () => void
+  defaultNodeId?: string
 }
 
-export function StartExecutionModal({ batchId, onClose }: Props) {
+export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) {
   const [form] = Form.useForm()
   const { message } = App.useApp()
   const queryClient = useQueryClient()
+  const [submitting, setSubmitting] = useState(false)
   const nodeId: string | undefined = Form.useWatch('node_id', form)
-  // 监听全部表单值，用于动态渲染每个产出批次的数量输入
   const watchedValues: Record<string, unknown> | undefined = Form.useWatch([], form)
 
   const { data: detail } = useQuery({
@@ -36,16 +36,11 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     queryFn: () => fetchRouteGraphClient(detail!.route_id),
     enabled: !!detail?.route_id,
   })
-  const { data: personnelData } = useQuery({
-    queryKey: ['production-personnel'],
-    queryFn: () => fetchPersonnelList(),
-  })
   const { data: equipmentData } = useQuery({
     queryKey: ['production-equipments'],
     queryFn: () => fetchEquipmentsClient({ page: 1, page_size: 100 }),
   })
 
-  // 合法来路计算（与后端 _check_source_legality 同规则）
   const { legalNodeIds } = useMemo(() => {
     if (!graph || !detail) return { legalNodeIds: new Set<string>() }
     const completed = new Set(
@@ -56,7 +51,6 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     )
     const legal = new Set<string>()
     if (completed.size === 0 && inProgress.size === 0) {
-      // 首执行：entry_node_id 或路线起点（无 normal 入边）
       if (detail.entry_node_id) {
         legal.add(detail.entry_node_id)
       } else {
@@ -70,7 +64,6 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     } else {
       graph.edges.forEach(e => {
         if (completed.has(e.from_node_id)) legal.add(e.to_node_id)
-        // 流水线边：前道 in_progress 即可开始
         if (e.allow_overlap && !e.is_batch_boundary && inProgress.has(e.from_node_id)) {
           legal.add(e.to_node_id)
         }
@@ -89,12 +82,41 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     }))
   }, [graph, legalNodeIds])
 
+  const { data: nodeAssignmentsData } = useQuery({
+    queryKey: ['production-node-assignments', detail?.route_id, nodeId],
+    queryFn: async () => {
+      if (!detail?.route_id || !nodeId) return []
+      const r = await fetchNodeAssignments(detail.route_id, nodeId)
+      return r.success ? (r.data ?? []) : []
+    },
+    enabled: !!(detail?.route_id && nodeId),
+    staleTime: 30_000,
+  })
+
+  useEffect(() => {
+    if (defaultNodeId && graph) {
+      const currentNode = form.getFieldValue('node_id')
+      if (!currentNode) {
+        form.setFieldsValue({ node_id: defaultNodeId })
+      }
+    }
+  }, [defaultNodeId, graph, form])
+
+  useEffect(() => {
+    if (nodeAssignmentsData?.length) {
+      // 仅在字段为空时自动填充，避免覆盖用户手动选择
+      const currentOwner = form.getFieldValue('owner_id')
+      if (!currentOwner) {
+        form.setFieldsValue({ owner_id: nodeAssignmentsData[0].user_id })
+      }
+    }
+  }, [nodeId, nodeAssignmentsData, form])
+
   const selectedNode = graph?.nodes.find(n => n.id === nodeId)
   const startDefs = selectedNode?.fields.filter(f => f.phase === 'start') ?? []
   const needsDeviation = !!nodeId && !legalNodeIds.has(nodeId)
   const inputIntermediates = (selectedNode?.intermediates ?? []).filter(im => im.direction === 'input')
 
-  // 加载所有可用中间体产出（跨批次），用于消耗时选择上游产出
   const { data: batchOutputs, isError: outputsError } = useQuery({
     queryKey: ['production-available-outputs'],
     queryFn: async () => {
@@ -104,6 +126,7 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     },
     enabled: inputIntermediates.length > 0,
   })
+
   const getOutputOptions = (intermediateTypeId: string) =>
     (batchOutputs ?? [])
       .filter(o => o.intermediate_type_id === intermediateTypeId)
@@ -112,19 +135,16 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
         label: `${o.intermediate_type_name ?? '?'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / ${o.quantity}${o.unit}`,
       }))
 
-  const personnel = personnelData?.items ?? []
-
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
+    setSubmitting(true)
+    try {
     const ownerId: string | undefined = values.owner_id
-    const owner = personnel.find(
-      (p: { user_id?: string | null; id: string }) => (p.user_id || p.id) === ownerId,
-    )
     const result = await startExecution(batchId, {
       node_id: values.node_id,
       owner_id: ownerId ?? null,
-      owner_name: owner?.name ?? null,
+      owner_name: null,
       equipment_ids: (values.equipment_ids as string[]) ?? [],
       field_values: buildFieldValues(startDefs, values),
       deviation_reason: needsDeviation ? (values.deviation_reason as string) : null,
@@ -154,107 +174,192 @@ export function StartExecutionModal({ batchId, onClose }: Props) {
     } else {
       message.error(result.error)
     }
+    } finally {
+      setSubmitting(false)
+    }
   }
+
+  const equipmentOptions = useMemo(() => (equipmentData?.items ?? []).map(
+    (e: { id: string; name: string; equipment_no: string }) => ({
+      value: e.id,
+      label: `${e.name}（${e.equipment_no}）`,
+    }),
+  ), [equipmentData])
 
   return (
     <Modal
-      title={`开始工序 · ${detail?.batch_no ?? ''}`}
+      title={
+        <span style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a' }}>
+          开始工序 · {detail?.batch_no ?? ''}
+        </span>
+      }
       open
       onOk={handleOk}
       onCancel={onClose}
       destroyOnHidden
-      width={560}
+      width={600}
+      okText="开始工序"
+      cancelText="取消"
+      confirmLoading={submitting}
+      styles={{ body: { padding: '16px 24px', maxHeight: '70vh', overflowY: 'auto' } }}
     >
       <Form form={form} layout="vertical">
+        {/* ── 工序节点 ── */}
         <Form.Item
           name="node_id"
-          label="工序节点"
+          label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>工序节点</span>}
           rules={[{ required: true, message: '请选择工序节点' }]}
         >
-          <Select options={nodeOptions} showSearch />
+          <Select options={nodeOptions} showSearch placeholder="选择要开始的工序" style={{ borderRadius: 8 }} />
         </Form.Item>
+
+        {/* ── 偏离原因 ── */}
         {needsDeviation && (
           <Form.Item
             name="deviation_reason"
-            label="偏离原因"
+            label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>偏离原因</span>}
             rules={[{ required: true, message: '该流转未在工艺路线中定义，必须说明偏离原因' }]}
           >
-            <Input.TextArea rows={2} placeholder="该流转未在工艺路线中定义，请说明原因" />
+            <Input.TextArea rows={2} placeholder="该流转未在工艺路线中定义，请说明原因" style={{ borderRadius: 8 }} />
           </Form.Item>
         )}
-        <Form.Item name="owner_id" label="工序负责人">
-          <PersonnelSelect personnel={personnel} allowClear />
-        </Form.Item>
-        <Form.Item name="equipment_ids" label="使用设备">
-          <Select
-            mode="multiple"
-            allowClear
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-            }
-            options={(equipmentData?.items ?? []).map(
-              (e: { id: string; name: string; equipment_no: string }) => ({
-                value: e.id,
-                label: `${e.name}（${e.equipment_no}）`,
-              }),
-            )}
-          />
-        </Form.Item>
+
+        {/* ── 基础信息区 ── */}
+        <div style={{
+          padding: '16px', borderRadius: 10, marginBottom: 16,
+          background: '#fafaf8', border: '1px solid #ede9e4',
+        }}>
+          <Form.Item
+            name="owner_id"
+            label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>工序负责人</span>}
+          >
+            <UserSelect placeholder="选择工序负责人" style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="equipment_ids"
+            label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>使用设备</span>}
+            style={{ marginBottom: 0 }}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              placeholder="选择设备"
+              options={equipmentOptions}
+              style={{ borderRadius: 8 }}
+            />
+          </Form.Item>
+        </div>
+
+        {/* ── 动态字段 ── */}
         <DynamicFieldFormItems defs={startDefs} />
+
+        {/* ── 消耗物料 ── */}
         {inputIntermediates.length > 0 && (
-          <>
-            <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, color: '#555' }}>
-              中间体消耗
-            </div>
+          <div style={{ marginTop: 8, marginBottom: 16 }}>
             {outputsError && (
-              <div style={{ marginBottom: 8, color: '#ff4d4f', fontSize: 12 }}>
+              <div style={{
+                marginBottom: 10, padding: '8px 12px', borderRadius: 6,
+                background: '#fff2f0', color: '#e03131', fontSize: 12,
+                border: '1px solid #ffccc7',
+              }}>
                 可用产出加载失败，请稍后重试
               </div>
             )}
+
             {inputIntermediates.map(im => (
-              <div key={im.intermediate_type_id} style={{ marginBottom: 8, padding: 8, background: '#fafafa', borderRadius: 6 }}>
-                <span style={{ fontSize: 12, color: '#888' }}>
+              <div key={im.intermediate_type_id} style={{
+                padding: '14px 16px', marginBottom: 10,
+                borderRadius: 10, background: '#ffffff',
+                border: '1px solid #ede9e4',
+              }}>
+                {/* 物料名称 — 突出显示 */}
+                <div style={{
+                  fontSize: 15, fontWeight: 600, color: '#1a1a1a',
+                  marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6,
+                }}>
                   {im.intermediate_type_name ?? im.intermediate_type_id}
-                  {im.required ? ' *' : ''}
-                </span>
+                  {im.required && (
+                    <span style={{ fontSize: 11, color: '#e03131', fontWeight: 400 }}>必填</span>
+                  )}
+                </div>
+
+                {/* 选择产出批次 */}
                 <Form.Item
                   name={`consume_output_${im.intermediate_type_id}`}
-                  label="选择产出批次"
-                  rules={im.required ? [{ required: true, message: '请选择' }] : undefined}
-                  style={{ marginBottom: 4 }}
+                  rules={im.required ? [{ required: true, message: '请选择产出批次' }] : undefined}
+                  style={{ marginBottom: 10 }}
                 >
-                  <Select size="small" mode="multiple" options={getOutputOptions(im.intermediate_type_id)} placeholder="选择上游产出" allowClear showSearch filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
+                  <Select
+                    mode="multiple"
+                    options={getOutputOptions(im.intermediate_type_id)}
+                    placeholder="选择上游产出批次"
+                    allowClear
+                    showSearch
+                    style={{ borderRadius: 8 }}
+                  />
                 </Form.Item>
+
+                {/* 每个选中产出的消耗数量 */}
                 {(() => {
                   const selectedIds = (watchedValues?.[`consume_output_${im.intermediate_type_id}`] as string[]) ?? []
-                  return selectedIds.map(outputId => {
-                    const output = (batchOutputs ?? []).find(o => o.id === outputId)
-                    const label = output
-                      ? (output.intermediate_batch_no ?? output.batch_no ?? outputId.slice(0, 8))
-                      : outputId.slice(0, 8)
-                    return (
-                      <Form.Item
-                        key={outputId}
-                        name={`consume_qty_${im.intermediate_type_id}_${outputId}`}
-                        label={`消耗数量 · ${label}`}
-                        rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
-                        style={{ marginBottom: 4 }}
-                      >
-                        <Input size="small" type="number" placeholder="数量" />
-                      </Form.Item>
-                    )
-                  })
+                  if (!selectedIds.length) return null
+                  return (
+                    <div style={{
+                      display: 'flex', flexDirection: 'column', gap: 8,
+                      padding: '10px 12px', borderRadius: 8,
+                      background: '#fafaf8',
+                    }}>
+                      {selectedIds.map(outputId => {
+                        const output = (batchOutputs ?? []).find(o => o.id === outputId)
+                        const label = output
+                          ? (output.intermediate_batch_no ?? output.batch_no ?? outputId.slice(0, 8))
+                          : outputId.slice(0, 8)
+                        return (
+                          <div key={outputId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{
+                              fontSize: 13, fontWeight: 500, color: '#37352f', flex: 1,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            }}>
+                              {label}
+                            </span>
+                            <Form.Item
+                              name={`consume_qty_${im.intermediate_type_id}_${outputId}`}
+                              rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
+                              style={{ margin: 0, width: 140 }}
+                            >
+                              <InputNumber
+                                min={1}
+                                placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
+                                style={{ width: '100%' }}
+                              />
+                            </Form.Item>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
                 })()}
-                <Form.Item name={`consume_remark_${im.intermediate_type_id}`} label="备注" style={{ marginBottom: 0 }}>
-                  <Input size="small" placeholder="可选" />
+
+                {/* 备注 */}
+                <Form.Item
+                  name={`consume_remark_${im.intermediate_type_id}`}
+                  style={{ marginBottom: 0, marginTop: 10 }}
+                >
+                  <Input placeholder="备注（可选）" style={{ borderRadius: 6 }} />
                 </Form.Item>
               </div>
             ))}
-          </>
+          </div>
         )}
-        <Form.Item name="remark" label="备注">
-          <Input.TextArea rows={2} />
+
+        {/* ── 全局备注 ── */}
+        <Form.Item
+          name="remark"
+          label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>备注</span>}
+        >
+          <Input.TextArea rows={2} placeholder="备注信息（可选）" style={{ borderRadius: 8 }} />
         </Form.Item>
       </Form>
     </Modal>

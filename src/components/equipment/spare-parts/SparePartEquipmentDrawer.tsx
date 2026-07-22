@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { App, Drawer, Select, InputNumber, Button, Table, Popconfirm } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -21,6 +21,7 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
   const [options, setOptions] = useState<{ value: string; label: string }[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchKeyword, setSearchKeyword] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     if (sparePartEquipmentDrawerOpen && equipmentManagingSparePart) {
@@ -41,17 +42,22 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
 
   const handleSearch = useCallback(async (keyword: string) => {
     setSearchKeyword(keyword)
+    // 取消上一次未完成的搜索，避免竞态条件导致旧结果覆盖新结果
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setSearchLoading(true)
     try {
       const result = await fetchEquipmentsClient({ keyword: keyword || undefined, page: 1, page_size: 20 })
+      if (controller.signal.aborted) return
       setOptions(result.items.map(e => ({
         value: e.id,
         label: `${e.equipment_no} - ${e.name}`,
       })))
     } catch {
-      setOptions([])
+      if (!controller.signal.aborted) setOptions([])
     } finally {
-      setSearchLoading(false)
+      if (!controller.signal.aborted) setSearchLoading(false)
     }
   }, [])
 
@@ -88,10 +94,14 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
 
   const handleUnlink = async (linkId: string) => {
     if (!equipmentManagingSparePart) return
-    const result = await unlinkEquipmentFromSparePart(equipmentManagingSparePart.id, linkId)
-    if (result.success) {
-      setLinkedEquipments(prev => prev.filter(l => l.id !== linkId))
-      onRefresh?.()
+    try {
+      const result = await unlinkEquipmentFromSparePart(equipmentManagingSparePart.id, linkId)
+      if (result.success) {
+        setLinkedEquipments(prev => prev.filter(l => l.id !== linkId))
+        onRefresh?.()
+      }
+    } catch {
+      message.error('取消关联失败，请重试')
     }
   }
 
@@ -153,7 +163,7 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
             icon={<PlusOutlined />}
             loading={linkingLoading}
             onClick={handleLink}
-            disabled={selectedIds.length === 0}
+            disabled={linkingLoading || selectedIds.length === 0}
           >
             添加
           </Button>

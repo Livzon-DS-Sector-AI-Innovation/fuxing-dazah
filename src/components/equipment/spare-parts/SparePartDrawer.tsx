@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect } from 'react'
 import { App, Drawer, Form, Input, InputNumber, Button, Space } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createSparePart, updateSparePart } from '@/actions/equipment'
@@ -30,10 +29,10 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
 
   const isEdit = !!editingSparePart
 
-  useEffect(() => {
-    if (!sparePartDrawerOpen) return
-    if (editingSparePart) {
-      form.setFieldsValue({
+  // ponytail: initialValues handles form seeding declaratively; destroyOnHidden + preserve={false}
+  // already remount the form on every open, so useEffect setFieldsValue was redundant.
+  const initialValues = editingSparePart
+    ? {
         code: editingSparePart.code,
         name: editingSparePart.name,
         specification: editingSparePart.specification,
@@ -41,11 +40,8 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
         category: editingSparePart.category,
         default_supplier: editingSparePart.default_supplier,
         unit_price: editingSparePart.unit_price,
-      })
-    } else {
-      form.resetFields()
-    }
-  }, [sparePartDrawerOpen, editingSparePart, form])
+      }
+    : undefined
 
   const handleSubmit = async () => {
     let values: any
@@ -98,7 +94,7 @@ export function SparePartDrawer({ onRefresh, userDepartmentName }: SparePartDraw
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>
+      <Form form={form} layout="vertical" requiredMark="optional" preserve={false} initialValues={initialValues} key={editingSparePart?.id ?? 'new'}>
 
         {/* ── 基本信息 ── */}
         {sectionLabel('基本信息')}
