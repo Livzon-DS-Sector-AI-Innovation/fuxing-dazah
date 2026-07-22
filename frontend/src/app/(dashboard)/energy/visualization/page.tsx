@@ -212,25 +212,25 @@ export default function VisualizationPage() {
         ...d,
         label: d.workshop && d.workshop !== '未知' ? `${d.name}（${d.workshop}）` : d.name,
       })),
-      xField: 'value',
-      yField: 'label',
+      xField: 'label',   // 转置后 x → 纵轴：区域名称
+      yField: 'value',   // 转置后 y → 横轴：用量数值
       height: Math.max(220, Math.min(420, plBarData.length * 36)),
       barWidthRatio: 0.65,
       color: (d: Record<string, unknown>) => colorMap[d.workshop as string] || '#5645d4',
       label: {
         position: 'right' as const,
         text: (d: any) => `${(d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`,
-        style: { fontSize: 11, fill: '#5d5b54' },
+        style: { fontSize: 11, fill: '#5d5b54', textAlign: 'start' },
+        offset: 6,
       },
-      xAxis: {
+      yAxis: {
         label: {
           formatter: (v: string) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
         },
         grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
       },
-      yAxis: {
-        position: 'left' as const,
-        label: { autoEllipsis: true, style: { fontSize: 12 } },
+      xAxis: {
+        label: { autoEllipsis: true, style: { fontSize: 11 } },
       },
     }
   }, [plBarData])
