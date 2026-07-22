@@ -1,6 +1,6 @@
 'use client'
 
-import { ConfigProvider, App } from 'antd'
+import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { antdTheme } from '@/lib/antd-theme'
 import dayjs from 'dayjs'
@@ -15,7 +15,7 @@ interface AntdProviderProps {
 export function AntdProvider({ children }: AntdProviderProps) {
   return (
     <ConfigProvider theme={antdTheme} locale={zhCN}>
-      <App>{children}</App>
+      {children}
     </ConfigProvider>
   )
 }
