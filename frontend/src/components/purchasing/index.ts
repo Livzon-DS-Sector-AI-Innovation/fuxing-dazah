@@ -1,0 +1,1 @@
+// purchasing module components

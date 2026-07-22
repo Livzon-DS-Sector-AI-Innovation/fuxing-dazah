@@ -1,0 +1,1 @@
+// admin module TypeScript types

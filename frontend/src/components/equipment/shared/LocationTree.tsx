@@ -1,0 +1,267 @@
+'use client'
+
+import { useState } from 'react'
+import { App, Button, Space, Popconfirm, Empty } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Location } from '@/types/equipment'
+import { useEquipmentStore } from '@/stores/equipment'
+import { deleteLocation } from '@/actions/equipment'
+
+interface LocationTreeProps {
+  locations: Location[]
+  onRefresh?: () => void
+}
+
+// ==================== 自定义树节点 ====================
+
+interface TreeNodeData {
+  id: string
+  name: string
+  children?: TreeNodeData[]
+}
+
+function Chevron({ expanded }: { expanded: boolean }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        flexShrink: 0,
+        transition: 'transform 0.15s ease',
+        transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+      }}
+    >
+      <svg
+        width="10"
+        height="10"
+        viewBox="0 0 10 10"
+        fill="none"
+        style={{ display: 'block' }}
+      >
+        <path
+          d="M3.5 2L6.5 5L3.5 8"
+          stroke="#a4a097"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  )
+}
+
+function TreeNode({
+  node,
+  level,
+  selectedId,
+  onSelect,
+  onEdit,
+  onDelete,
+}: {
+  node: TreeNodeData
+  level: number
+  selectedId: string | null
+  onSelect: (id: string) => void
+  onEdit: (node: TreeNodeData) => void
+  onDelete: (node: TreeNodeData) => void
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const hasChildren = node.children && node.children.length > 0
+  const isSelected = selectedId === node.id
+
+  return (
+    <div>
+      {/* 节点行 */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onSelect(isSelected ? '' : node.id)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onKeyDown={(e) => { if (e.key === 'Enter') onSelect(node.id) }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '5px 8px 5px 4px',
+          paddingLeft: 4 + level * 20,
+          marginBottom: 1,
+          borderRadius: 6,
+          cursor: 'pointer',
+          background: isSelected ? 'rgba(86, 69, 212, 0.06)' : hovered ? '#f6f5f4' : 'transparent',
+          transition: 'background 0.12s ease, color 0.12s ease',
+          fontSize: 14,
+          lineHeight: '20px',
+          color: isSelected || hovered ? '#5645d4' : '#37352f',
+          fontWeight: isSelected ? 500 : 400,
+          userSelect: 'none' as const,
+        }}
+      >
+        {/* 展开/折叠箭头 */}
+        {hasChildren ? (
+          <span
+            role="button"
+            tabIndex={-1}
+            onClick={(e) => {
+              e.stopPropagation()
+              setExpanded(!expanded)
+            }}
+            style={{ display: 'inline-flex' }}
+          >
+            <Chevron expanded={expanded} />
+          </span>
+        ) : (
+          <span style={{ width: 20, flexShrink: 0 }} />
+        )}
+
+        {/* 节点名称 */}
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {node.name}
+        </span>
+
+        {/* 操作按钮 — hover 时显示 */}
+        <Space
+          size={2}
+          style={{
+            opacity: hovered ? 1 : 0,
+            transition: 'opacity 0.12s ease',
+            flexShrink: 0,
+          }}
+        >
+          <Button
+            type="text"
+            size="small"
+            icon={<EditOutlined style={{ fontSize: 11 }} />}
+            onClick={(e) => {
+              e.stopPropagation()
+              onEdit(node)
+            }}
+            style={{ color: '#787671', width: 24, height: 24, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          />
+          <Popconfirm
+            title="确定删除此位置？"
+            onConfirm={() => onDelete(node)}
+            okText="确认"
+            cancelText="取消"
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined style={{ fontSize: 11 }} />}
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: '#e03131', width: 24, height: 24, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+            />
+          </Popconfirm>
+        </Space>
+      </div>
+
+      {/* 子节点 */}
+      {hasChildren && expanded && (
+        <div>
+          {node.children!.map((child) => (
+            <TreeNode
+              key={child.id}
+              node={child}
+              level={level + 1}
+              selectedId={selectedId}
+              onSelect={onSelect}
+              onEdit={onEdit}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ==================== 位置树主组件 ====================
+
+export function LocationTree({ locations, onRefresh }: LocationTreeProps) {
+  const { message } = App.useApp()
+  const {
+    selectedLocation,
+    setSelectedLocation,
+    openLocationDrawer,
+  } = useEquipmentStore()
+
+  const handleDelete = async (node: TreeNodeData) => {
+    const result = await deleteLocation(node.id)
+    if (!result.success) {
+      message.error(result.error)
+      return
+    }
+    message.success('删除位置成功')
+    onRefresh?.()
+  }
+
+  const handleEdit = (node: TreeNodeData) => {
+    function find(items: Location[]): Location | undefined {
+      for (const item of items) {
+        if (item.id === node.id) return item
+        if (item.children?.length) {
+          const found = find(item.children)
+          if (found) return found
+        }
+      }
+      return undefined
+    }
+    const full = find(locations)
+    if (full) openLocationDrawer(full)
+  }
+
+  if (!locations.length) {
+    return (
+      <div>
+        <div style={{ marginBottom: 12 }}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            block
+            onClick={() => openLocationDrawer()}
+          >
+            新增位置
+          </Button>
+        </div>
+        <Empty
+          description="暂无位置"
+          styles={{ description: { color: '#787671' }}}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          block
+          onClick={() => openLocationDrawer()}
+        >
+          新增位置
+        </Button>
+      </div>
+
+      {/* 自定义树 */}
+      <div style={{ marginLeft: -4 }}>
+        {locations.map((loc) => (
+          <TreeNode
+            key={loc.id}
+            node={loc}
+            level={0}
+            selectedId={selectedLocation}
+            onSelect={(id) => setSelectedLocation(id || null)}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,450 @@
+@import "tailwindcss";
+@import "antd/dist/reset.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Brand & Primary */
+  --color-primary: #5645d4;
+  --color-primary-pressed: #4534b3;
+  --color-primary-deep: #3a2a99;
+  --color-on-primary: #ffffff;
+  --color-brand-navy: #0a1530;
+  --color-brand-navy-deep: #070f24;
+  --color-brand-navy-mid: #1a2a52;
+
+  /* Surface */
+  --color-canvas: #ffffff;
+  --color-surface: #f6f5f4;
+  --color-surface-soft: #fafaf9;
+  --color-hairline: #e5e3df;
+  --color-hairline-soft: #ede9e4;
+  --color-hairline-strong: #c8c4be;
+
+  /* Text */
+  --color-ink-deep: #000000;
+  --color-ink: #1a1a1a;
+  --color-charcoal: #37352f;
+  --color-slate: #5d5b54;
+  --color-steel: #787671;
+  --color-stone: #a4a097;
+  --color-muted: #bbb8b1;
+  --color-on-dark: #ffffff;
+  --color-on-dark-muted: #a4a097;
+
+  /* Semantic */
+  --color-success: #1aae39;
+  --color-warning: #dd5b00;
+  --color-error: #e03131;
+
+  /* Border Radius */
+  --rounded-xs: 4px;
+  --rounded-sm: 6px;
+  --rounded-md: 8px;
+  --rounded-lg: 12px;
+  --rounded-xl: 16px;
+  --rounded-xxl: 20px;
+  --rounded-xxxl: 24px;
+  --rounded-full: 9999px;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+@theme inline {
+  --color-primary: var(--color-primary);
+  --color-primary-pressed: var(--color-primary-pressed);
+  --color-primary-deep: var(--color-primary-deep);
+  --color-on-primary: var(--color-on-primary);
+  --color-brand-navy: var(--color-brand-navy);
+  --color-brand-navy-deep: var(--color-brand-navy-deep);
+  --color-brand-navy-mid: var(--color-brand-navy-mid);
+  --color-canvas: var(--color-canvas);
+  --color-surface: var(--color-surface);
+  --color-surface-soft: var(--color-surface-soft);
+  --color-hairline: var(--color-hairline);
+  --color-hairline-soft: var(--color-hairline-soft);
+  --color-hairline-strong: var(--color-hairline-strong);
+  --color-ink-deep: var(--color-ink-deep);
+  --color-ink: var(--color-ink);
+  --color-charcoal: var(--color-charcoal);
+  --color-slate: var(--color-slate);
+  --color-steel: var(--color-steel);
+  --color-stone: var(--color-stone);
+  --color-muted: var(--color-muted);
+  --color-on-dark: var(--color-on-dark);
+  --color-on-dark-muted: var(--color-on-dark-muted);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-error: var(--color-error);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans), "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif;
+}
+
+/* Sidebar Menu Styles - Following DESIGN.md */
+.sidebar-menu.ant-menu {
+  background: transparent;
+}
+
+.sidebar-menu.ant-menu .ant-menu-item {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.50;
+  color: var(--color-charcoal);
+  border-radius: 8px;
+  margin-inline: 8px;
+  margin-block: 2px;
+  padding-inline: 12px;
+  height: 36px;
+}
+
+.sidebar-menu.ant-menu .ant-menu-item:hover {
+  background-color: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.sidebar-menu.ant-menu .ant-menu-submenu-title:hover {
+  color: var(--color-primary);
+}
+
+.sidebar-menu.ant-menu .ant-menu-item-selected {
+  background-color: rgba(86, 69, 212, 0.06);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.sidebar-menu.ant-menu .ant-menu-item-selected::after {
+  display: none;
+}
+
+/* Ant Design 全局样式覆盖 - 符合 DESIGN.md */
+
+/* 表格样式 */
+.ant-table {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ant-table-thead > tr > th,
+.ant-table-thead > tr > td {
+  background: #ffffff;
+  color: #5d5b54;
+  font-weight: 500;
+  font-size: 13px;
+  border-bottom: 1px solid #ede9e4;
+  padding: 6px 12px !important;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom: 1px solid #f0eeec;
+  padding: 4px 12px !important;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: #f6f5f4;
+}
+
+/* small size 进一步压缩 */
+.ant-table-small .ant-table-thead > tr > th,
+.ant-table-small .ant-table-thead > tr > td {
+  padding: 4px 8px !important;
+  font-size: 12px;
+}
+
+.ant-table-small .ant-table-tbody > tr > td {
+  padding: 3px 8px !important;
+  font-size: 12px;
+}
+
+/* 分页样式 */
+.ant-pagination-item {
+  border-radius: 8px;
+}
+
+.ant-pagination-item-active {
+  background: #5645d4;
+  border-color: #5645d4;
+}
+
+/* 标签页样式 */
+.ant-tabs-tab {
+  font-size: 14px;
+  font-weight: 500;
+  color: #787671;
+}
+
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #1a1a1a;
+  font-weight: 500;
+}
+
+.ant-tabs-ink-bar {
+  background: #1a1a1a;
+}
+
+/* 树样式 */
+.ant-tree-title {
+  font-size: 14px;
+}
+
+.ant-tree-treenode-selected .ant-tree-title {
+  color: #5645d4;
+}
+
+/* 抽屉样式 */
+.ant-drawer-header {
+  border-bottom: 1px solid #e5e3df;
+}
+
+.ant-drawer-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+/* 表单样式 */
+.ant-form-item-label > label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a1a1a;
+}
+
+/* 按钮样式 */
+.ant-btn-primary {
+  background: #5645d4;
+  border-color: #5645d4;
+  box-shadow: none;
+}
+
+.ant-btn-primary:hover {
+  background: #6b5ddb;
+  border-color: #6b5ddb;
+}
+
+.ant-btn-primary:active {
+  background: #4534b3;
+  border-color: #4534b3;
+}
+
+/* 卡片样式 */
+.ant-card {
+  border-radius: 12px;
+  border: 1px solid #e5e3df;
+}
+
+.ant-card-hoverable:hover {
+  border-color: #b8adeb;
+  box-shadow: 0 4px 12px 0 rgba(15, 15, 15, 0.08);
+}
+
+/* 空状态样式 */
+.ant-empty-description {
+  color: #787671;
+  font-size: 14px;
+}
+
+/* 表格固定列样式 */
+.ant-table-cell-fix-left,
+.ant-table-cell-fix-right {
+  background: #ffffff !important;
+}
+
+.ant-table-cell-fix-left::after,
+.ant-table-cell-fix-right::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 20px;
+  pointer-events: none;
+  transition: box-shadow 0.3s;
+}
+
+.ant-table-cell-fix-left::after {
+  right: -20px;
+  box-shadow: inset 6px 0 8px -3px rgba(0, 0, 0, 0.05);
+}
+
+.ant-table-cell-fix-right::after {
+  left: -20px;
+  box-shadow: inset -6px 0 8px -3px rgba(0, 0, 0, 0.05);
+}
+
+.ant-table-ping-left .ant-table-cell-fix-left::after {
+  box-shadow: inset 6px 0 8px -3px rgba(0, 0, 0, 0.1);
+}
+
+.ant-table-ping-right .ant-table-cell-fix-right::after {
+  box-shadow: inset -6px 0 8px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* 表格滚动条样式 */
+.ant-table-content {
+  scrollbar-width: thin;
+  scrollbar-color: #c8c4be transparent;
+}
+
+.ant-table-content::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.ant-table-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ant-table-content::-webkit-scrollbar-thumb {
+  background-color: #c8c4be;
+  border-radius: 3px;
+}
+
+.ant-table-content::-webkit-scrollbar-thumb:hover {
+  background-color: #a4a097;
+}
+
+/* React Bits StarBorder 星光边框动画 */
+@keyframes star-movement-bottom {
+  0%   { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(-100%, 0%); opacity: 0; }
+}
+@keyframes star-movement-top {
+  0%   { transform: translate(0%, 0%); opacity: 1; }
+  100% { transform: translate(100%, 0%); opacity: 0; }
+}
+
+/* 产品列表项 hover */
+.product-sidebar-item:hover {
+  background: #f6f5f4 !important;
+  border-color: #e5e3df !important;
+}
+
+/* 批次「生产中」状态 — 呼吸脉动，表现"开动中" */
+@keyframes production-pulse {
+  0%, 100% { opacity: 1; filter: brightness(1); }
+  50%      { opacity: 0.78; filter: brightness(1.08); }
+}
+
+.tag-production-active {
+  animation: production-pulse 1.8s ease-in-out infinite;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

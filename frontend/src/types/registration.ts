@@ -1,0 +1,1 @@
+// registration module TypeScript types
