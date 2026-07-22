@@ -49,27 +49,30 @@ class ZhihengWaterAdapter(BasePlatformAdapter):
         device_codes: list[str],
         target_hour: datetime,
         api_endpoint: str,
+        is_daily: bool = False,
     ) -> list[CollectResult]:
         # 1. 收集所有独立的水表ID
         all_meter_ids: set[str] = set()
         for code in device_codes:
             all_meter_ids.update(parse_formula_ids(code))
 
-        # 2. 构造日期参数：API 需要足够跨度且 endDate 不超过当天。
+        # 2. 构造日期参数：智恒 API 的 endDate 不包含当天（半开区间），需 +1 天
         beg_date = (target_hour - timedelta(days=2)).strftime("%Y-%m-%d")
-        end_date = target_hour.strftime("%Y-%m-%d")
+        end_date = (target_hour + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # 3. 确定 API 地址：优先使用设备配置的 api_endpoint
         api_url = resolve_api_url(api_endpoint, DEFAULT_API_URL)
 
-        # 4. 逐个水表请求 API，按目标小时聚合
+        # 4. 逐个水表请求 API：日汇总模式不过滤小时，直接求全天和
         meter_values: dict[str, float] = {}
         meter_errors: set[str] = set()
         async with httpx.AsyncClient(timeout=30.0) as client:
             for meter_id in sorted(all_meter_ids):
                 try:
-                    meter_values[meter_id] = await _fetch_meter_hourly(
-                        client, meter_id, beg_date, end_date, target_hour, api_url
+                    meter_values[meter_id] = await _fetch_meter_data(
+                        client, meter_id, beg_date, end_date,
+                        target_hour=None if is_daily else target_hour,
+                        api_url=api_url,
                     )
                 except Exception:
                     logger.exception(
@@ -99,7 +102,6 @@ class ZhihengWaterAdapter(BasePlatformAdapter):
                     device_code=code,
                     timestamp=target_hour,
                     value=round(value, 4),
-                    unit="m³",
                     raw_data={"meter_values": meter_values},
                 )
             )
@@ -107,16 +109,18 @@ class ZhihengWaterAdapter(BasePlatformAdapter):
         return results
 
 
-async def _fetch_meter_hourly(
+async def _fetch_meter_data(
     client: httpx.AsyncClient,
     emtrnum: str,
     beg_date: str,
     end_date: str,
-    target_hour: datetime,
+    target_hour: datetime | None,
     api_url: str,
 ) -> float:
-    """分页获取指定水表数据，筛选目标小时记录并求和 AANALOGFLOW。
+    """分页获取指定水表数据，对 AANALOGFLOW 求和。
 
+    target_hour 为 None 时求全天总和（日汇总模式）；
+    否则仅筛选匹配 target_hour 的记录（小时模式）。
     单页请求失败时记录 warning 并继续下一页，不因个别网络抖动丢失已累计数据。
     """
     total_value = 0.0
@@ -143,22 +147,22 @@ async def _fetch_meter_hourly(
             records = payload.get("syncData") or []  # API 可能返回 null
             total_count = int(payload.get("nCount", 0))
 
-            # 筛选目标小时的数据
             for record in records:
                 try:
-                    if _record_matches_hour(record, target_hour):
+                    if target_hour is None or _record_matches_hour(record, target_hour):
                         raw_flow = record.get("AANALOGFLOW")
                         flow_value = float(raw_flow) if raw_flow is not None else 0.0
                         total_value += flow_value
                         matched_count += 1
-                        logger.debug(
-                            "水表 %s 匹配记录[%d] RecordDate=%s AANALOGFLOW=%s → %.4f",
-                            emtrnum,
-                            matched_count,
-                            record.get("RecordDate") or record.get("RecordTime"),
-                            raw_flow,
-                            flow_value,
-                        )
+                        if target_hour is not None:
+                            logger.debug(
+                                "水表 %s 匹配记录[%d] RecordDate=%s AANALOGFLOW=%s → %.4f",
+                                emtrnum,
+                                matched_count,
+                                record.get("RecordDate") or record.get("RecordTime"),
+                                raw_flow,
+                                flow_value,
+                            )
                 except (ValueError, TypeError) as e:
                     logger.warning(
                         "水表 %s AANALOGFLOW 解析异常: %s, record=%s",
@@ -199,27 +203,24 @@ async def _fetch_meter_hourly(
                 break
             continue
 
+    mode = "全天" if target_hour is None else f"小时 {target_hour.isoformat()}"
     logger.debug(
-        "水表 %s: %d 条记录, 目标小时匹配 %d 条, 合计=%.4f",
-        emtrnum, fetched, matched_count, total_value,
+        "水表 %s [%s]: %d 条记录, 匹配 %d 条, 合计=%.4f",
+        emtrnum, mode, fetched, matched_count, total_value,
     )
 
-    # 水务零值采集告警：记录完整原始数据便于溯源
+    # 水务零值采集告警
     if total_value == 0.0 and matched_count > 0:
         logger.warning(
-            "水表 %s 目标小时 %s 采集值为 0（匹配 %d 条记录但 AANALOGFLOW 全部为 0），"
+            "水表 %s [%s] 采集值为 0（匹配 %d 条记录但 AANALOGFLOW 全部为 0），"
             "请确认水表读数是否正常。",
-            emtrnum,
-            target_hour.isoformat(),
-            matched_count,
+            emtrnum, mode, matched_count,
         )
     elif total_value == 0.0:
         logger.warning(
-            "水表 %s 目标小时 %s 采集值为 0（%d 条记录中无匹配目标小时的记录），"
-            "请检查 API 数据时间是否与目标小时对齐。",
-            emtrnum,
-            target_hour.isoformat(),
-            fetched,
+            "水表 %s [%s] 采集值为 0（%d 条记录中无匹配记录），"
+            "请检查 API 数据时间是否对齐。",
+            emtrnum, mode, fetched,
         )
 
     return total_value

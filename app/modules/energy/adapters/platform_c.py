@@ -16,6 +16,7 @@ class PlatformCAdapter(BasePlatformAdapter):
         device_codes: list[str],
         target_hour: datetime,
         api_endpoint: str,
+        is_daily: bool = False,
     ) -> list[CollectResult]:
         # TODO: 等待提供 API 文档后实现
         raise NotImplementedError("平台 C 适配器尚未实现，请提供 API 文档")

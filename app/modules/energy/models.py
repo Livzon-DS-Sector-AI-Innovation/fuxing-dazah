@@ -94,10 +94,10 @@ class EnergyDeviceConfig(BaseModel):
         String(500), nullable=False, comment="API 路径"
     )
     workshop: Mapped[str] = mapped_column(
-        String(100), nullable=False, comment="所属车间"
+        String(100), nullable=False, comment="所属部门"
     )
     production_line: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="所属产线"
+        String(100), nullable=True, comment="所属区域"
     )
     monitor_level: Mapped[str] = mapped_column(
         String(20), nullable=False, default="normal", comment="监控等级"
@@ -108,8 +108,17 @@ class EnergyDeviceConfig(BaseModel):
     collection_interval: Mapped[int] = mapped_column(
         Integer, nullable=False, default=60, comment="采集间隔(分钟)"
     )
+    daily_collect_time: Mapped[str | None] = mapped_column(
+        String(5), nullable=True, comment="按天采集的触发时间 HH:MM，如 08:00；NULL 表示按小时采集"
+    )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用采集"
+    )
+    equipment_id: Mapped[UUIDType | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, comment="关联设备管理中的设备ID"
+    )
+    equipment_name: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="关联设备名称（冗余存储，便于展示）"
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
@@ -301,6 +310,12 @@ class EnergyAlertRule(BaseModel):
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用"
     )
+    workshop: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="关联车间（系统规则按车间绑定）"
+    )
+    is_system: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="是否系统自动生成"
+    )
 
 
 class EnergyAlertRecord(BaseModel):
@@ -333,6 +348,9 @@ class EnergyAlertRecord(BaseModel):
     energy_type: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="能源类型"
     )
+    workshop: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="关联车间（车间预警使用）"
+    )
     alert_level: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="预警等级"
     )
@@ -359,4 +377,81 @@ class EnergyAlertRecord(BaseModel):
     )
     process_note: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="处理备注"
+    )
+
+
+# ── 能源类型可视化配置 ──
+
+
+class EnergyTypeConfig(BaseModel):
+    """能源类型可视化配置表 — 动态管理可视化使用的能源类型与飞书表格映射"""
+
+    __tablename__ = "energy_type_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "type_code", "is_deleted",
+            name="uq_energy_type_config_code",
+        ),
+        {"schema": "energy"},
+    )
+
+    type_code: Mapped[str] = mapped_column(
+        String(50), nullable=False, comment="唯一编码，如 electricity"
+    )
+    parent_code: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="父级编码，顶层分类为 NULL"
+    )
+    display_name: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="展示名称，如 电力"
+    )
+    unit: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="计量单位: kWh / m³ / t"
+    )
+    icon: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="图标标识"
+    )
+    color: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, comment="卡片颜色，如 #0075de"
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="排序权重，越小越靠前"
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, comment="启用状态"
+    )
+    remark: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="备注"
+    )
+
+
+# ── 车间预警配置 ──
+
+
+class EnergyWorkshopConfig(BaseModel):
+    """车间能耗预警配置表 — 管理各车间的预警开关与飞书通知负责人"""
+
+    __tablename__ = "energy_workshop_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "workshop", "is_deleted",
+            name="uq_energy_workshop_config_workshop",
+        ),
+        {"schema": "energy"},
+    )
+
+    workshop: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="车间名称（与 EnergyDeviceConfig.workshop 对应）"
+    )
+    heads: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment='负责人列表 JSON: [{"name": "张三", "feishu_open_id": "ou_xxx"}]'
+    )
+    auto_notify_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, comment="是否启用自动预警通知"
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, comment="是否启用该车间配置"
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="上次预警检查时间"
     )

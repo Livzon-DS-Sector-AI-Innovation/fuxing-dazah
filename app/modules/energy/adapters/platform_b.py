@@ -42,15 +42,20 @@ class PlatformBAdapter(BasePlatformAdapter):
         device_codes: list[str],
         target_hour: datetime,
         api_endpoint: str,
+        is_daily: bool = False,
     ) -> list[CollectResult]:
         # 1. 收集所有独立的 formulaId
         all_formula_ids: set[str] = set()
         for code in device_codes:
             all_formula_ids.update(parse_formula_ids(code))
 
-        # 2. 构造时间范围：target_hour → target_hour + 1h
-        start_time = target_hour.strftime(TIME_FMT)
-        end_time = (target_hour + timedelta(hours=1)).strftime(TIME_FMT)
+        # 2. 构造时间范围
+        if is_daily:
+            start_time = target_hour.strftime(TIME_FMT)
+            end_time = (target_hour + timedelta(days=1)).strftime(TIME_FMT)
+        else:
+            start_time = target_hour.strftime(TIME_FMT)
+            end_time = (target_hour + timedelta(hours=1)).strftime(TIME_FMT)
 
         # 3. 确定 API 地址：优先使用设备配置的 api_endpoint
         api_url = resolve_api_url(api_endpoint, DEFAULT_API_URL)
@@ -92,7 +97,6 @@ class PlatformBAdapter(BasePlatformAdapter):
                     device_code=code,
                     timestamp=target_hour,
                     value=round(value, 4),
-                    unit="kWh",
                     raw_data={"formula_values": formula_values},
                 )
             )

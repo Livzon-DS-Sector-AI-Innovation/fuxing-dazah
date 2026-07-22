@@ -4,22 +4,122 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.database import async_session_factory
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
+from app.modules.energy.collect_settings import (
+    CST,
+    get_auto_collect_enabled,
+)
 from app.modules.energy.models import EnergyDeviceConfig
+from app.modules.energy.service import _collect_daily_summary, _get_unit_by_energy_type
+from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskDefinition
 
 logger = logging.getLogger(__name__)
 
-# 中国标准时间 UTC+8
-CST = timezone(timedelta(hours=8))
+# 日汇总采集检查间隔：60 秒
+DAILY_CHECK_INTERVAL = 60
 
-# 检查间隔：5 分钟
+
+async def _daily_collect_check() -> None:
+    """检查是否有设备需要在当前时间触发日汇总采集。
+
+    每天检查一次：当 HH:MM 匹配设备的 daily_collect_time 时，
+    对 collection_interval >= 1440 的设备补采缺失的日汇总记录。
+    """
+    now = datetime.now(CST)
+    current_time = now.strftime("%H:%M")
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async with async_session_factory() as db:
+        platforms = await repo.get_distinct_enabled_platforms(db)
+
+        for platform_code in platforms:
+            try:
+                devices = await repo.get_enabled_devices_by_platform(db, platform_code)
+            except Exception:
+                continue
+
+            # 筛选当前时间触发的按天设备
+            triggered: list[EnergyDeviceConfig] = []
+            for device in devices:
+                if not device.daily_collect_time:
+                    continue
+                if device.collection_interval < 1440:
+                    continue
+                if device.daily_collect_time > current_time:  # 还没到触发时间
+                    continue
+                triggered.append(device)
+
+            if not triggered:
+                continue
+
+            logger.info(
+                "触发日汇总采集: platform=%s, devices=%d, time=%s",
+                platform_code, len(triggered), current_time,
+            )
+
+            success_count = 0
+            newly_collected = 0
+            for device in triggered:
+                days = device.collection_interval // 1440
+                for d in range(days):
+                    target_day = today - timedelta(days=d + 1)
+                    try:
+                        exists = await repo.daily_record_exists(
+                            db, device.id, target_day
+                        )
+                    except Exception:
+                        continue
+                    if exists:
+                        logger.debug(
+                            "日汇总已存在: device=%s, day=%s",
+                            device.device_name, target_day.strftime("%Y-%m-%d"),
+                        )
+                        success_count += 1  # 已存在也算成功
+                        continue
+
+                    async with async_session_factory() as collect_db:
+                        try:
+                            await _collect_daily_summary(collect_db, device, target_day)
+                            await collect_db.commit()
+                            success_count += 1
+                            newly_collected += 1
+                        except Exception:
+                            logger.exception(
+                                "日汇总采集异常: device=%s, day=%s",
+                                device.device_name,
+                                target_day.strftime("%Y-%m-%d"),
+                            )
+
+            # 写入采集日志（仅当有新采集时记录）
+            if newly_collected > 0:
+                total_expected = sum(d.collection_interval // 1440 for d in triggered)
+                status = (
+                    "success" if success_count >= total_expected
+                    else "partial" if success_count > 0
+                    else "failed"
+                )
+                try:
+                    await repo.create_collect_log(
+                        db,
+                        {
+                            "platform_code": platform_code,
+                            "collect_time": now,
+                            "status": status,
+                            "device_count": total_expected,
+                            "success_count": newly_collected,
+                        },
+                    )
+                    await db.commit()
+                except Exception:
+                    logger.exception("日汇总采集日志写入失败: platform=%s", platform_code)
+
+# 检查间隔：5 分钟（调度器唤醒频率，实际采集频率由每台设备的 collection_interval 控制）
 TICK_INTERVAL = 300
 
 # 最大补采小时数：7 天
@@ -28,11 +128,11 @@ MAX_BACKFILL_HOURS = 168
 stop_energy_collection_flag = asyncio.Event()
 
 
-def _get_target_hours_since(last_collected_at: datetime | None) -> list[datetime]:
+def _get_target_hours_since(last_data_timestamp: datetime | None) -> list[datetime]:
     """计算需要补采的整点小时列表。
 
-    从 last_collected_at 所在整点之后，到上一个整点之间的所有整点。
-    如果 last_collected_at 为 None（从未采集），只返回上一个整点。
+    从 last_data_timestamp 所在整点之后，到上一个整点之间的所有整点。
+    如果 last_data_timestamp 为 None（从未采集），只返回上一个整点。
     """
     now = datetime.now(CST)
     latest_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -40,11 +140,11 @@ def _get_target_hours_since(last_collected_at: datetime | None) -> list[datetime
         # 刚过整点，采集上一个整点
         latest_hour -= timedelta(hours=1)
 
-    if last_collected_at is None:
+    if last_data_timestamp is None:
         return [latest_hour]
 
     start = (
-        last_collected_at.replace(minute=0, second=0, microsecond=0)
+        last_data_timestamp.replace(minute=0, second=0, microsecond=0)
         + timedelta(hours=1)
     )
     if start > latest_hour:
@@ -81,6 +181,16 @@ async def _do_collect(
 
     device_codes = [d.platform_device_code for d in devices]
     device_map = {d.platform_device_code: d for d in devices}
+
+    # 预加载能源类型单位映射
+    unit_map: dict[str, str] = {}
+    unique_types = {d.energy_type for d in devices}
+    for et in unique_types:
+        try:
+            unit_map[et] = await _get_unit_by_energy_type(db, et)
+        except Exception:
+            unit_map[et] = ""  # 采集时找不到单位不阻断流程
+
     # 取设备配置的 api_endpoint：优先第一个非空值，所有设备一致时直接使用
     api_endpoints = {
         d.api_endpoint.strip() for d in devices if d.api_endpoint and d.api_endpoint.strip()
@@ -120,7 +230,7 @@ async def _do_collect(
                 device_config_id=device.id,
                 timestamp=cr.timestamp,
                 value=cr.value,
-                unit=device.unit,
+                unit=unit_map.get(device.energy_type, ""),
                 platform_raw_data=cr.raw_data,
             )
             total_success += 1
@@ -182,31 +292,31 @@ async def _do_collect(
 async def energy_collection_loop() -> None:
     """能耗数据自动采集后台循环。
 
-    每 TICK_INTERVAL 秒检查一次，对到达 collection_interval 的设备触发采集。
-    支持补采：若设备上次采集时间距今超过 collection_interval，补采缺失的整点数据。
+    根据运行时设置（可通过 API 动态调整）决定是否启用及检查间隔。
     各平台独立事务，一个平台采集失败不影响其他平台。
     """
-    settings = get_settings()
-    if not settings.ENERGY_AUTO_COLLECT_ENABLED:
+    # 初始状态从配置读取（env / .env）
+    initial_enabled = get_auto_collect_enabled()
+    if not initial_enabled:
         logger.info(
             "能耗自动采集已通过配置关闭（ENERGY_AUTO_COLLECT_ENABLED=false），跳过启动"
         )
-        return
-
-    logger.info("能耗自动采集任务已启动（间隔=%d秒）", TICK_INTERVAL)
+        # 但仍然进入循环，等待运行时开启
+    else:
+        logger.info("能耗自动采集任务已启动")
 
     while not stop_energy_collection_flag.is_set():
-        # 每次 tick 重新读取配置，支持运行时动态开关
-        if not get_settings().ENERGY_AUTO_COLLECT_ENABLED:
-            logger.debug("能耗自动采集已关闭，跳过本轮 tick")
+        # 每次 tick 检查运行时设置，支持前端动态开关
+        if not get_auto_collect_enabled():
             try:
                 await asyncio.wait_for(
-                    stop_energy_collection_flag.wait(), timeout=TICK_INTERVAL
+                    stop_energy_collection_flag.wait(), timeout=30
                 )
             except TimeoutError:
                 pass
             continue
 
+        # ── 小时级采集 ──
         try:
             async with async_session_factory() as db:
                 platforms = await repo.get_distinct_enabled_platforms(db)
@@ -221,11 +331,14 @@ async def energy_collection_loop() -> None:
                         if not devices:
                             continue
 
-                        # 筛选到达采集间隔的设备
+                        # 筛选到达采集间隔的设备（跳过按天设备，由 _daily_collect_check 单独处理）
                         devices_due: list[EnergyDeviceConfig] = []
                         oldest_last: datetime | None = None
 
                         for device in devices:
+                            # 按天设备不参与小时级采集
+                            if device.daily_collect_time and device.collection_interval >= 1440:
+                                continue
                             latest = await repo.get_latest_energy_data(db, device.id)
                             if latest is None:
                                 devices_due.append(device)
@@ -236,8 +349,9 @@ async def energy_collection_loop() -> None:
                                 ).total_seconds() / 60
                                 if elapsed >= device.collection_interval:
                                     devices_due.append(device)
-                                    if oldest_last is None or ref_time < oldest_last:
-                                        oldest_last = ref_time
+                                    # 用数据时间戳计算补采小时（而非 collected_at）
+                                    if oldest_last is None or latest.timestamp < oldest_last:
+                                        oldest_last = latest.timestamp
 
                         if not devices_due:
                             continue
@@ -266,12 +380,80 @@ async def energy_collection_loop() -> None:
         except Exception:
             logger.exception("能耗自动采集循环异常")
 
-        # 等待下一次 tick
-        try:
-            await asyncio.wait_for(
-                stop_energy_collection_flag.wait(), timeout=TICK_INTERVAL
-            )
-        except TimeoutError:
-            pass
+        # 等待下一次 tick：每 60s 检查日汇总，每 300s 检查小时级采集
+        for i in range(TICK_INTERVAL // DAILY_CHECK_INTERVAL):
+            try:
+                await asyncio.wait_for(
+                    stop_energy_collection_flag.wait(), timeout=DAILY_CHECK_INTERVAL
+                )
+                return  # stop flag set
+            except TimeoutError:
+                pass
+
+            # 每个 TICK_INTERVAL 周期仅在第一次迭代检查日汇总（避免每分钟重复查询）
+            if i == 0 and get_auto_collect_enabled():
+                try:
+                    await _daily_collect_check()
+                except Exception:
+                    logger.exception("日汇总采集检查异常")
 
     logger.info("能耗自动采集任务已停止")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 车间能耗预警定时检查
+# ═══════════════════════════════════════════════════════════════
+
+
+async def energy_workshop_alert_coro() -> None:
+    """每分钟检查一次，当时间匹配 ENERGY_WORKSHOP_ALERT_TIME 时执行预警评估。
+
+    由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
+    防重复：通过 DB 中 EnergyWorkshopConfig.last_checked_at 的日期判定，
+    同一天不重复检查。
+    """
+    from datetime import datetime
+
+    from app.core.config import get_settings
+    from app.core.database import async_session_factory
+
+    settings = get_settings()
+    if not settings.ENERGY_WORKSHOP_ALERT_ENABLED:
+        return
+
+    # 解析配置的 HH:MM 时间
+    try:
+        h, m = settings.ENERGY_WORKSHOP_ALERT_TIME.split(":")
+        target_hour, target_minute = int(h), int(m)
+    except (ValueError, AttributeError):
+        logger.warning("ENERGY_WORKSHOP_ALERT_TIME 格式无效: %s", settings.ENERGY_WORKSHOP_ALERT_TIME)
+        return
+
+    now = datetime.now(CST)
+    if now.hour != target_hour or now.minute != target_minute:
+        return
+
+    try:
+        async with async_session_factory() as db:
+            from app.modules.energy.service import evaluate_workshop_alerts
+
+            result = await evaluate_workshop_alerts(db)
+            await db.commit()
+
+            logger.info(
+                "车间能耗预警检查完成: checked=%d, triggered=%d, errors=%d",
+                result["checked"], result["triggered"], result["errors"],
+            )
+    except Exception:
+        logger.exception("车间能耗预警检查异常")
+
+
+ENERGY_WORKSHOP_ALERT_TASK = TaskDefinition(
+    name="energy.workshop_alert",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+    ),
+    coro=energy_workshop_alert_coro,
+    settings_toggle_key="ENERGY_WORKSHOP_ALERT_ENABLED",
+    module="energy",
+)
