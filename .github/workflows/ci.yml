@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+        env:
+          API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.x"
+
+      - run: uv sync --frozen
+      - run: |
+          HEAD_COUNT=$(uv run alembic heads | wc -l)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "Expected 1 alembic head, got $HEAD_COUNT"
+            uv run alembic heads
+            exit 1
+          fi
+      # ponytail: alembic upgrade head 暂时移除，迁移链修好后再加回来
+      # - run: uv run alembic upgrade head
