@@ -108,25 +108,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_generator(InspectionScheduleGenerator())
     scheduler_registry.register_task(AUTO_CLOSE_TASK)
 
-    # ── Meter 检定到期提醒 ──
-    from app.modules.meter.scheduler import calibration_reminder_coro
-    from app.platform.scheduler.registry import (
-        ScheduleConfig,
-        ScheduleStrategy,
-        TaskDefinition,
-    )
+    from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
+    scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
 
-    scheduler_registry.register_task(TaskDefinition(
-        name="meter.calibration_reminder",
-        schedule=ScheduleConfig(
-            strategy=ScheduleStrategy.INTERVAL,
-            interval_seconds=60,
-            timezone="Asia/Shanghai",
-        ),
-        coro=calibration_reminder_coro,
-        settings_toggle_key="METER_CALIBRATION_AUTO_NOTIFY_ENABLED",
-        module="meter",
-    ))
+    from app.modules.energy.scheduler import ENERGY_WORKSHOP_ALERT_TASK
+    scheduler_registry.register_task(ENERGY_WORKSHOP_ALERT_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 

@@ -73,12 +73,15 @@ class Settings(BaseSettings):
 
     # Energy
     ENERGY_AUTO_COLLECT_ENABLED: bool = False
+    ENERGY_AUTO_COLLECT_INTERVAL_SECONDS: int = 3600  # 默认 60 分钟
+    ENERGY_WORKSHOP_ALERT_ENABLED: bool = False
+    ENERGY_WORKSHOP_ALERT_TIME: str = "18:00"  # HH:MM 每日检查时间
 
     # Maintenance Plan — 自动生成工单
     MAINTENANCE_PLAN_AUTO_ENABLED: bool = True
 
-    # Meter — 检定到期自动飞书提醒
-    METER_CALIBRATION_AUTO_NOTIFY_ENABLED: bool = True
+    # Meter — 检定到期飞书自动提醒
+    METER_CALIBRATION_AUTO_NOTIFY_ENABLED: bool = False
 
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours

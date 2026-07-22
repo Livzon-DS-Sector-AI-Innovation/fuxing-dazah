@@ -800,13 +800,3 @@ class SopCatalogListResponse(BaseModel):
     message: str = "ok"
     data: list[SopCatalogResponse] = Field(default_factory=list)
     meta: dict | None = None
-
-
-class SyncStatusResponse(BaseModel):
-    """飞书同步状态响应"""
-    local_total: int
-    feishu_total: int
-    synced_count: int
-    unsynced_count: int
-    conflict_count: int
-    last_sync_at: datetime | None = None

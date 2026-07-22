@@ -6,7 +6,6 @@ from app.modules.energy import router as energy_router
 from app.modules.environment import router as environment_router
 from app.modules.equipment import router as equipment_router
 from app.modules.hr import router as hr_router
-from app.modules.meter import router as meter_router
 from app.modules.procurement import router as procurement_router
 from app.modules.production import router as production_router
 from app.modules.quality import router as quality_router
@@ -60,4 +59,3 @@ api_router.include_router(
 api_router.include_router(quality_router, prefix="/quality", tags=["质量管理"])
 api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
 api_router.include_router(permission_router, prefix="/permission", tags=["权限管理"])
-api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
