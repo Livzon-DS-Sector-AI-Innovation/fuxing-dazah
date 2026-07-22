@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { DatePicker, Segmented, Spin, Empty, App, Table } from 'antd'
+import { DatePicker, Segmented, Spin, Empty, message, Table } from 'antd'
 import { Line, Bar } from '@ant-design/charts'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchEnergyOverview } from '@/lib/api/energy'
@@ -44,7 +44,6 @@ function computeTrend(values: number[]): { direction: 'up' | 'down' | 'flat'; pc
 }
 
 export default function VisualizationPage() {
-  const { message } = App.useApp()
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(RANGE_PRESETS['7天'])
   const [activePreset, setActivePreset] = useState<string>('7天')
   const [selectedType, setSelectedType] = useState<string | null>(null)

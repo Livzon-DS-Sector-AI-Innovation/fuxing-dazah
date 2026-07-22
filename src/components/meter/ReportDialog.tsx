@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Modal, Tabs, Table, Button, Space, Upload, Tag, Popconfirm, Image, Tooltip } from 'antd'
+import { message, Modal, Tabs, Table, Button, Space, Upload, Tag, Popconfirm, Image, Tooltip } from 'antd'
 import { UploadOutlined, DownloadOutlined, DeleteOutlined, InboxOutlined, EyeOutlined, CalendarOutlined } from '@ant-design/icons'
 import type { TableColumnsType, UploadFile } from 'antd'
 import { ReportResponse, FileMatchItem, InstrumentRecord, GasDetectorRecord } from '@/types/meter'
@@ -25,7 +25,6 @@ interface Props {
 }
 
 export function ReportDialog({ open, record, source, onClose }: Props) {
-  const { message } = App.useApp()
   const [reports, setReports] = useState<ReportResponse[]>([])
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('history')

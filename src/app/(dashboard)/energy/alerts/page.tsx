@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Button, Space, App, Tabs } from 'antd'
+import { Button, Space, message, Tabs } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import {
   AlertRuleTable,
@@ -19,7 +19,6 @@ import {
 import { useEnergyStore } from '@/stores/energy'
 
 export default function AlertsPage() {
-  const { message } = App.useApp()
   const { openAlertConfigDrawer, openWorkshopConfigDrawer } = useEnergyStore()
 
   // ── 预警规则 ──
