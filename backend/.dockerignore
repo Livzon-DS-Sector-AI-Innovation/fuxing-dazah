@@ -1,0 +1,36 @@
+# Python venv — 镜像中由 uv sync 创建，不要从宿主机覆盖
+.venv
+
+# Python 缓存
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Git
+.git
+.gitignore
+
+# 环境文件（通过 docker-compose env_file 注入）
+.env
+.env.*
+!.env.example
+
+# 日志
+logs/
+
+# 文档
+*.md
+!CLAUDE.md
+.claude
+
+# 测试文件
+tests

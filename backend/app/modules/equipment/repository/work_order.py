@@ -1,0 +1,387 @@
+"""Work order repository functions."""
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.core import time as app_time
+from app.modules.equipment.deps import EquipmentAccessContext
+from app.modules.equipment.models import WorkOrder
+from app.modules.equipment.models.equipment import Equipment
+
+
+async def create_work_order(
+    db: AsyncSession,
+    data: dict[str, Any],
+) -> WorkOrder:
+    """创建工单"""
+    work_order = WorkOrder(**data)
+    db.add(work_order)
+    await db.flush()
+    return work_order
+
+
+async def get_work_order_by_id(
+    db: AsyncSession,
+    work_order_id: uuid.UUID,
+) -> WorkOrder | None:
+    """根据ID获取工单"""
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.id == work_order_id,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_max_work_order_no(db: AsyncSession) -> str | None:
+    """获取当天最大工单号"""
+    today = app_time.now().strftime("%Y%m%d")
+    pattern = f"WO-{today}-%"
+    result = await db.execute(
+        select(WorkOrder.work_order_no)
+        .where(
+            WorkOrder.work_order_no.like(pattern),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.work_order_no.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def count_open_work_orders_by_equipment(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+) -> int:
+    """统计设备未关闭的工单数"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def get_work_orders(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext,
+    status: str | None = None,
+    exclude_status: str | None = None,
+    equipment_id: uuid.UUID | None = None,
+    priority: str | None = None,
+    order_type: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[WorkOrder], int]:
+    """获取工单列表"""
+    query = (
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+            selectinload(WorkOrder.images),
+        )
+        .where(WorkOrder.is_deleted == False)  # noqa: E712
+    )
+
+    # 数据范围过滤：按 reporter_id（user_id 模式）；维护计划自动生成的工单
+    # reporter_id 为 NULL，按设备所属部门兜底可见
+    if not ctx.is_unrestricted:
+        reporter_cond = WorkOrder.reporter_id.in_(ctx.department_user_ids)
+        if ctx.visible_department_ids:
+            null_cond = and_(
+                WorkOrder.reporter_id.is_(None),
+                WorkOrder.equipment_id.in_(
+                    select(Equipment.id).where(
+                        Equipment.department_id.in_(ctx.visible_department_ids),
+                        Equipment.is_deleted == False,  # noqa: E712
+                    )
+                ),
+            )
+            query = query.where(or_(reporter_cond, null_cond))
+        else:
+            query = query.where(reporter_cond)
+
+    if status:
+        query = query.where(WorkOrder.status == status)
+    if exclude_status:
+        query = query.where(WorkOrder.status != exclude_status)
+    if equipment_id:
+        query = query.where(WorkOrder.equipment_id == equipment_id)
+    if priority:
+        query = query.where(WorkOrder.priority == priority)
+    if order_type:
+        query = query.where(WorkOrder.order_type == order_type)
+
+    count_query = select(func.count()).select_from(
+        query.with_only_columns(WorkOrder.id).subquery()
+    )
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    query = query.order_by(WorkOrder.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    return list(result.scalars().all()), total
+
+
+async def get_work_order_statistics(
+    db: AsyncSession,
+    ctx: EquipmentAccessContext,
+    exclude_status: str | None = None,
+) -> dict[str, Any]:
+    """获取工单统计（按数据范围过滤）"""
+    base_where = WorkOrder.is_deleted == False  # noqa: E712
+    if exclude_status:
+        base_where = base_where & (WorkOrder.status != exclude_status)
+
+    # 按 reporter_id（user_id 模式）过滤数据范围；维护计划自动生成的工单
+    # reporter_id 为 NULL，按设备所属部门兜底可见
+    def _apply_scope(q):
+        if ctx.is_unrestricted:
+            return q
+        reporter_cond = WorkOrder.reporter_id.in_(ctx.department_user_ids)
+        if ctx.visible_department_ids:
+            null_cond = and_(
+                WorkOrder.reporter_id.is_(None),
+                WorkOrder.equipment_id.in_(
+                    select(Equipment.id).where(
+                        Equipment.department_id.in_(ctx.visible_department_ids),
+                        Equipment.is_deleted == False,  # noqa: E712
+                    )
+                ),
+            )
+            return q.where(or_(reporter_cond, null_cond))
+        return q.where(reporter_cond)
+
+    total_query = _apply_scope(select(func.count()).where(base_where))
+    total_result = await db.execute(total_query)
+    total = total_result.scalar() or 0
+
+    status_query = _apply_scope(
+        select(WorkOrder.status, func.count())
+        .where(base_where)
+        .group_by(WorkOrder.status)
+    )
+    status_result = await db.execute(status_query)
+    by_status = {row[0]: row[1] for row in status_result.all()}
+
+    type_query = _apply_scope(
+        select(WorkOrder.order_type, func.count())
+        .where(base_where)
+        .group_by(WorkOrder.order_type)
+    )
+    type_result = await db.execute(type_query)
+    by_type = {row[0]: row[1] for row in type_result.all()}
+
+    priority_query = _apply_scope(
+        select(WorkOrder.priority, func.count())
+        .where(base_where)
+        .group_by(WorkOrder.priority)
+    )
+    priority_result = await db.execute(priority_query)
+    by_priority = {row[0]: row[1] for row in priority_result.all()}
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_type": by_type,
+        "by_priority": by_priority,
+    }
+
+
+async def create_material_consumption(
+    db: AsyncSession,
+    data: dict[str, Any],
+) -> "SparePartTransaction":  # noqa: F821
+    """创建领料记录"""
+    from app.modules.equipment.models.spare_part import SparePartTransaction
+
+    transaction = SparePartTransaction(**data)
+    db.add(transaction)
+    await db.flush()
+    return transaction
+
+
+async def get_material_consumptions(
+    db: AsyncSession,
+    work_order_id: uuid.UUID,
+) -> list["SparePartTransaction"]:  # noqa: F821
+    """获取工单领料记录（含备件名称等）"""
+    from app.modules.equipment.models.spare_part import SparePart, SparePartTransaction
+
+    result = await db.execute(
+        select(
+            SparePartTransaction,
+            SparePart.code.label("spare_part_code"),
+            SparePart.name.label("spare_part_name"),
+            SparePart.unit.label("spare_part_unit"),
+        )
+        .outerjoin(SparePart, SparePart.id == SparePartTransaction.spare_part_id)
+        .where(
+            SparePartTransaction.work_order_id == work_order_id,
+            SparePartTransaction.is_deleted == False,  # noqa: E712
+        )
+        .order_by(SparePartTransaction.created_at.desc())
+    )
+    transactions = []
+    for row in result:
+        t = row[0]
+        t.spare_part_code = row.spare_part_code
+        t.spare_part_name = row.spare_part_name
+        t.spare_part_unit = row.spare_part_unit
+        transactions.append(t)
+    return transactions
+
+
+async def exists_unclosed_work_order(
+    db: AsyncSession, task_id: uuid.UUID, equipment_id: uuid.UUID
+) -> bool:
+    """检查某巡检任务+设备是否已有未关闭工单"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
+async def get_pending_work_orders_by_inspection_task(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[WorkOrder]:
+    """查询某巡检任务关联的未处理工单（状态非已完成/已关闭）"""
+    result = await db.execute(
+        select(WorkOrder)
+        .options(selectinload(WorkOrder.equipment))
+        .where(
+            WorkOrder.inspection_task_id == task_id,
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_user_work_orders(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[WorkOrder]:
+    """查询用户的未关闭工单（指派给我的 + 我是责任人的）"""
+    from sqlalchemy import or_
+
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            or_(
+                WorkOrder.assignee_id == user_id,
+                WorkOrder.responsible_person_id == user_id,
+            ),
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+async def get_work_order_by_no(
+    db: AsyncSession,
+    work_order_no: str,
+) -> WorkOrder | None:
+    """根据工单号精确查找工单"""
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.reporter),
+            selectinload(WorkOrder.assignee),
+            selectinload(WorkOrder.responsible_person),
+            selectinload(WorkOrder.equipment),
+            selectinload(WorkOrder.fault_symptom),
+            selectinload(WorkOrder.fault_cause),
+            selectinload(WorkOrder.fault_action),
+            selectinload(WorkOrder.images),
+        )
+        .where(
+            WorkOrder.work_order_no == work_order_no,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def count_open_fault_work_orders(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+) -> int:
+    """统计设备未关闭的故障维修工单数"""
+    result = await db.execute(
+        select(func.count())
+        .select_from(WorkOrder)
+        .where(
+            WorkOrder.equipment_id == equipment_id,
+            WorkOrder.order_type == "故障维修",
+            WorkOrder.status.notin_(["已完成", "已关闭"]),
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar() or 0
+
+
+async def get_stale_completed_work_orders(
+    db: AsyncSession, cutoff: datetime,
+) -> list[WorkOrder]:
+    """Return work orders eligible for auto-close.
+
+    Conditions: status='已完成', completed_at <= cutoff,
+    is_deleted=False.
+    """
+    stmt = (
+        select(WorkOrder)
+        .where(
+            WorkOrder.status == "已完成",
+            WorkOrder.completed_at <= cutoff,
+            WorkOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WorkOrder.completed_at.asc())
+    )
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
