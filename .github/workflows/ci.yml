@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+        env:
+          API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: fuxing
+          POSTGRES_PASSWORD: fuxing
+          POSTGRES_DB: fuxing_dazah
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.x"
+
+      - run: uv sync --frozen
+      - run: |
+          HEAD_COUNT=$(uv run alembic heads | wc -l)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "Expected 1 alembic head, got $HEAD_COUNT"
+            uv run alembic heads
+            exit 1
+          fi
+      - run: uv run alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://fuxing:fuxing@localhost:5432/fuxing_dazah
+          FEISHU_APP_ID: ci-placeholder
+          FEISHU_APP_SECRET: ci-placeholder
+          FEISHU_REDIRECT_URI: http://localhost
+          FRONTEND_URL: http://localhost
