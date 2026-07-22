@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DatePicker, Segmented, Spin, Empty, App, Table } from 'antd'
-import { Line, Bar, Tiny } from '@ant-design/charts'
+import { Line, Bar } from '@ant-design/charts'
 import dayjs, { type Dayjs } from 'dayjs'
 import { fetchEnergyOverview } from '@/lib/api/energy'
 import type { EnergyOverview, DistributionRow, EnergyTypeMeta } from '@/types/energy'
@@ -16,26 +16,31 @@ const RANGE_PRESETS: Record<string, [dayjs.Dayjs, dayjs.Dayjs]> = {
   '本月': [dayjs().startOf('month'), dayjs().endOf('day')],
 }
 
-// ── 迷你趋势线 ──
-function TinyTrend({ data, color }: { data: number[]; color: string }) {
-  if (data.length < 2) return <span style={{ color: '#c8c4be' }}>—</span>
-  const chartData = data.map((v, i) => ({ x: i, y: v }))
-  return (
-    <Tiny.Area
-      data={chartData}
-      xField="x"
-      yField="y"
-      smooth
-      width={80}
-      height={24}
-      color={color}
-      areaStyle={{ fill: color, fillOpacity: 0.15 }}
-      lineStyle={{ stroke: color, lineWidth: 1.5 }}
-      padding={[2, 0, 2, 0]}
-      animate={false}
-      tooltip={false}
-    />
-  )
+// ── 趋势计算（线性回归） ──
+function computeTrend(values: number[]): { direction: 'up' | 'down' | 'flat'; pct: number } | null {
+  const n = values.length
+  if (n < 2) return null
+
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+  for (let i = 0; i < n; i++) {
+    sumX += i
+    sumY += values[i]
+    sumXY += i * values[i]
+    sumX2 += i * i
+  }
+  const denom = n * sumX2 - sumX * sumX
+  if (denom === 0) return null
+
+  const slope = (n * sumXY - sumX * sumY) / denom
+  const avgY = sumY / n
+  if (avgY === 0) return { direction: 'flat', pct: 0 }
+
+  const totalChange = slope * (n - 1)
+  const pct = Math.round((totalChange / avgY) * 1000) / 10 // 保留一位小数
+
+  const absPct = Math.abs(pct)
+  if (absPct < 10) return { direction: 'flat', pct }
+  return { direction: pct > 0 ? 'up' : 'down', pct }
 }
 
 export default function VisualizationPage() {
@@ -195,29 +200,41 @@ export default function VisualizationPage() {
     return list.slice(0, 15)
   }, [overview, selectedWorkshop])
 
-  const plBarConfig = useMemo(() => ({
-    data: plBarData.map((d) => ({
-      ...d,
-      label: d.workshop && d.workshop !== '未知' ? `${d.name}（${d.workshop}）` : d.name,
-    })),
-    xField: 'value',
-    yField: 'label',
-    height: Math.max(220, Math.min(420, plBarData.length * 36)),
-    barWidthRatio: 0.65,
-    color: '#5645d4',
-    label: {
-      position: 'right' as const,
-      text: (d: any) => (d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
-      style: { fontSize: 11, fill: '#5d5b54' },
-    },
-    xAxis: {
+  const workshopColors = ['#5645d4', '#1677ff', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14']
+
+  const plBarConfig = useMemo(() => {
+    // 按车间分配颜色
+    const colorMap: Record<string, string> = {}
+    const uniqueWorkshops = [...new Set(plBarData.map((d) => d.workshop).filter((w) => w && w !== '未知'))]
+    uniqueWorkshops.forEach((w, i) => { colorMap[w] = workshopColors[i % workshopColors.length] })
+
+    return {
+      data: plBarData.map((d) => ({
+        ...d,
+        label: d.workshop && d.workshop !== '未知' ? `${d.name}（${d.workshop}）` : d.name,
+      })),
+      xField: 'value',
+      yField: 'label',
+      height: Math.max(220, Math.min(420, plBarData.length * 36)),
+      barWidthRatio: 0.65,
+      color: (d: Record<string, unknown>) => colorMap[d.workshop as string] || '#5645d4',
       label: {
-        formatter: (v: string) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+        position: 'right' as const,
+        text: (d: any) => `${(d.value ?? 0).toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`,
+        style: { fontSize: 11, fill: '#5d5b54' },
       },
-      grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
-    },
-    yAxis: { label: { autoEllipsis: true, style: { fontSize: 12 } } },
-  }), [plBarData])
+      xAxis: {
+        label: {
+          formatter: (v: string) => Number(v).toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+        },
+        grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
+      },
+      yAxis: {
+        position: 'left' as const,
+        label: { autoEllipsis: true, style: { fontSize: 12 } },
+      },
+    }
+  }, [plBarData])
 
   // ── 详情表 ──
   const detailColumns = useMemo(() => [
@@ -238,8 +255,16 @@ export default function VisualizationPage() {
       render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
     { title: '峰值', dataIndex: 'peak', key: 'peak', width: 100, align: 'right' as const,
       render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
-    { title: '趋势', dataIndex: 'sparkline', key: 'sparkline', width: 110,
-      render: (_: unknown, r: any) => <TinyTrend data={r.sparkline} color={r.color} /> },
+    { title: '趋势', dataIndex: 'sparkline', key: 'sparkline', width: 100,
+      render: (_: unknown, r: any) => {
+        const trend = computeTrend(r.sparkline)
+        if (!trend) return <span style={{ color: '#c8c4be' }}>—</span>
+        const sign = trend.pct >= 0 ? '+' : ''
+        const icon = trend.direction === 'up' ? '↑' : trend.direction === 'down' ? '↓' : '→'
+        const color = trend.direction === 'up' ? '#e03131' : trend.direction === 'down' ? '#1aae39' : '#a4a097'
+        return <span style={{ color, fontWeight: 500, fontSize: 13 }}>{icon} {sign}{trend.pct}%</span>
+      },
+    },
   ], [days])
 
   const detailData = useMemo(() => {
@@ -251,6 +276,10 @@ export default function VisualizationPage() {
       const k = `total_${m.type_code}`
       grandTotal += (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
     }
+    // 生成完整日期列表，用于补齐 sparkline 缺失日期（填 0，保留时间间距）
+    const dateList = Array.from({ length: days }, (_, i) =>
+      range[0].add(i, 'day').format('YYYY-MM-DD'),
+    )
     return metadata.map((m) => {
       const k = `total_${m.type_code}`
       const total = (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
@@ -258,6 +287,11 @@ export default function VisualizationPage() {
         .filter((t) => t.type === m.type_code)
         .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
       const peak = typeTrends.reduce((max, t) => Math.max(max, t.value), 0)
+      // 日期→值映射，缺失日期填 0
+      const valueMap: Record<string, number> = {}
+      for (const t of typeTrends) {
+        valueMap[dayjs(t.time).format('YYYY-MM-DD')] = t.value
+      }
       return {
         key: m.type_code,
         display_name: m.display_name,
@@ -267,10 +301,10 @@ export default function VisualizationPage() {
         pct: grandTotal > 0 ? (total / grandTotal) * 100 : 0,
         dailyAvg: days > 0 ? total / days : 0,
         peak,
-        sparkline: typeTrends.map((t) => t.value),
+        sparkline: dateList.map((d) => valueMap[d] ?? 0),
       }
     }).filter((d) => d.total > 0)
-  }, [overview, metadata, days])
+  }, [overview, metadata, days, range])
 
   // ── Date handlers ──
   const handlePreset = (val: string) => {

@@ -527,7 +527,7 @@ export async function toggleDepartmentAutoNotify(id: string): Promise<Department
 export async function importInstrumentLedger(file: File): Promise<LedgerImportResult> {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch(`${CLIENT_API}${BASE}/instruments/import-ledger`, {
+  const res = await fetch(`${SERVER_API}${BASE}/instruments/import-ledger`, {
     method: 'POST',
     body: formData,
     credentials: 'include',
@@ -543,7 +543,7 @@ export async function importInstrumentLedger(file: File): Promise<LedgerImportRe
 export async function importGasDetectorLedger(file: File): Promise<LedgerImportResult> {
   const formData = new FormData()
   formData.append('file', file)
-  const res = await fetch(`${CLIENT_API}${BASE}/gas-detectors/import-ledger`, {
+  const res = await fetch(`${SERVER_API}${BASE}/gas-detectors/import-ledger`, {
     method: 'POST',
     body: formData,
     credentials: 'include',
