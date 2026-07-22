@@ -379,22 +379,23 @@ async def import_instrument_ledger(
     处理所有 sheet（跳过探测器 sheet）。
     """
     max_size = 50 * 1024 * 1024
-    file_data = await file.read()
-    if len(file_data) > max_size:
-        return JSONResponse(
-            status_code=400,
-            content={"code": 400, "message": "文件大小超过 50MB 限制"},
-        )
-
     filename = file.filename or "unknown"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ("et", "xlsx", "xls"):
-        return JSONResponse(
-            status_code=400,
-            content={"code": 400, "message": "不支持的文件格式，请上传 .et 或 .xlsx 文件"},
-        )
 
     try:
+        file_data = await file.read()
+        if len(file_data) > max_size:
+            return JSONResponse(
+                status_code=400,
+                content={"code": 400, "message": "文件大小超过 50MB 限制"},
+            )
+
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in ("et", "xlsx", "xls"):
+            return JSONResponse(
+                status_code=400,
+                content={"code": 400, "message": "不支持的文件格式，请上传 .et 或 .xlsx 文件"},
+            )
+
         result = await service.import_instrument_ledger(db, file_data, filename)
     except ValueError as e:
         return JSONResponse(
@@ -425,22 +426,23 @@ async def import_gas_detector_ledger(
     支持 .et (WPS) 和 .xlsx 格式，文件限制 50MB。
     """
     max_size = 50 * 1024 * 1024
-    file_data = await file.read()
-    if len(file_data) > max_size:
-        return JSONResponse(
-            status_code=400,
-            content={"code": 400, "message": "文件大小超过 50MB 限制"},
-        )
-
     filename = file.filename or "unknown"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ("et", "xlsx", "xls"):
-        return JSONResponse(
-            status_code=400,
-            content={"code": 400, "message": "不支持的文件格式，请上传 .et 或 .xlsx 文件"},
-        )
 
     try:
+        file_data = await file.read()
+        if len(file_data) > max_size:
+            return JSONResponse(
+                status_code=400,
+                content={"code": 400, "message": "文件大小超过 50MB 限制"},
+            )
+
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in ("et", "xlsx", "xls"):
+            return JSONResponse(
+                status_code=400,
+                content={"code": 400, "message": "不支持的文件格式，请上传 .et 或 .xlsx 文件"},
+            )
+
         result = await service.import_gas_detector_ledger(db, file_data, filename)
     except ValueError as e:
         return JSONResponse(
