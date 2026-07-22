@@ -442,7 +442,6 @@ async def get_energy_statistics(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
@@ -547,7 +546,6 @@ async def get_overview_trend(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
         )
         .group_by(*group_cols)

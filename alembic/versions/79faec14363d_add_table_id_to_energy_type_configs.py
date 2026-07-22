@@ -19,6 +19,33 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("CREATE SCHEMA IF NOT EXISTS energy")
+
+    # Ensure energy_type_configs table exists before altering it.
+    # 7e70c41a9cdc (CREATE TABLE) lives on a dead branch from 241f68a331ab
+    # and was never merged into the main migration line, so on fresh
+    # databases this table may be missing.  The raw SQL below is the
+    # structural equivalent of what 7e70c41a9cdc would have produced.
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS energy.energy_type_configs (
+            type_code   VARCHAR(50)  NOT NULL,
+            parent_code VARCHAR(50),
+            display_name VARCHAR(100) NOT NULL,
+            unit        VARCHAR(20)  NOT NULL,
+            icon        VARCHAR(50),
+            sort_order  INTEGER      NOT NULL,
+            is_enabled  BOOLEAN      NOT NULL,
+            remark      TEXT,
+            id          UUID         NOT NULL,
+            created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+            updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+            created_by  UUID,
+            updated_by  UUID,
+            is_deleted  BOOLEAN      NOT NULL DEFAULT false,
+            PRIMARY KEY (id),
+            CONSTRAINT uq_energy_type_config_code UNIQUE (type_code, is_deleted)
+        )
+    """)
+
     op.add_column(
         'energy_type_configs',
         sa.Column('table_id', sa.String(length=100), nullable=True, comment='飞书多维表格 Table ID'),
