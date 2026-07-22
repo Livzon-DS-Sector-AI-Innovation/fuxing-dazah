@@ -64,3 +64,7 @@ jobs:
       - run: uv run alembic upgrade head
         env:
           DATABASE_URL: postgresql+asyncpg://fuxing:fuxing@localhost:5432/fuxing_dazah
+          FEISHU_APP_ID: ci-placeholder
+          FEISHU_APP_SECRET: ci-placeholder
+          FEISHU_REDIRECT_URI: http://localhost
+          FRONTEND_URL: http://localhost
