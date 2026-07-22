@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
 import {
   fetchOnboardingRecords,
+  API_BASE,
 } from '@/lib/api/hr'
 
 const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
@@ -23,35 +24,38 @@ export default function OnboardingPrejobClient() {
   const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
 
   useEffect(() => {
-    setLoading(true)
-    fetchOnboardingRecords({ page_size: 200 })
-      .then((res) => setEmployees(res.data || []))
-      .catch((err) => message.error('加载入职台账失败: ' + (err.message || '未知错误')))
-      .finally(() => setLoading(false))
+    loadEmployees()
   }, [])
 
-  const handleSearch = async (keyword: string) => {
-    if (!keyword || keyword.length < 1) return
+  const loadEmployees = async (keyword?: string) => {
     setLoading(true)
     try {
-      const res = await fetchOnboardingRecords({ keyword, page_size: 30 })
-      setEmployees(res.data || [])
+      const sp = new URLSearchParams()
+      if (keyword) sp.set('keyword', keyword)
+      const res = await fetch(`${API_BASE}/api/v1/hr/employees/training-candidates?${sp}`, { credentials: 'include' })
+      const d = await res.json()
+      setEmployees(d.data || [])
     } catch (err: any) {
-      message.error('搜索失败: ' + (err.message || '未知错误'))
+      message.error('加载失败: ' + (err.message || '未知错误'))
     } finally { setLoading(false) }
+  }
+
+  const handleSearch = async (keyword: string) => {
+    loadEmployees(keyword || undefined)
   }
 
   const selectedEmployee = employees.find((e: any) => e.id === selectedEmployeeId)
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-
-  // 选中员工后，根据岗位自动加载关联培训大类
+  // 选中员工后，根据岗位+部门自动加载关联培训大类
   useEffect(() => {
     if (!selectedEmployee) return
     const pos = selectedEmployee.position
+    const dept = selectedEmployee.department
     if (!pos) return
 
-    fetch(`${API_BASE}/api/v1/hr/position-trainings?position_name=${encodeURIComponent(pos)}`)
+    const params = new URLSearchParams({ position_name: pos })
+    if (dept) params.set('department', dept)
+    fetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`)
       .then(r => r.json())
       .then(res => {
         const items: any[] = res.data || []
@@ -85,7 +89,7 @@ export default function OnboardingPrejobClient() {
 
   // 加载培训师列表
   useEffect(() => {
-    fetch(`http://localhost:8000/api/v1/hr/trainers?page_size=200`).then(r => r.json())
+    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`).then(r => r.json())
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
   }, [])
 
@@ -115,12 +119,16 @@ export default function OnboardingPrejobClient() {
         content: s.file_name || '',
         method: sopMethods[s.id] || '',
         trainer: sopTrainers[s.id] || '',
+        plan_date: sopPlanDates[s.id] || '',
       }))
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/onboarding-training-record`, {
+      const employeeId = selectedEmployee.employee_id || selectedEmployee.id
+      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${employeeId}/onboarding-training-record`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ training_items: items }),
+        body: JSON.stringify({
+          training_items: items,
+          employee_type: selectedEmployee.source || '新入职',
+        }),
       })
       if (!res.ok) throw new Error('导出失败')
       const blob = await res.blob()
@@ -146,7 +154,7 @@ export default function OnboardingPrejobClient() {
             onChange={setSelectedEmployeeId}
             options={employees.map((e) => ({
               value: e.id,
-              label: `${e.employee_number} - ${e.name} (${e.department})`,
+              label: `${e.employee_number} - ${e.name} (${e.department}) [${e.source || '新入职'}]`,
             }))}
             onSearch={handleSearch}
             loading={loading}
@@ -176,7 +184,7 @@ export default function OnboardingPrejobClient() {
                 <tr>
                   <td style={LABEL}>姓名<br/>Name</td><td style={VALUE}>{selectedEmployee.name}</td>
                   <td style={LABEL}>学历<br/>Education</td><td style={VALUE}>{selectedEmployee.education || ''}</td>
-                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>新员工</td>
+                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>{selectedEmployee.source || '新入职'}</td>
                 </tr>
                 <tr>
                   <td style={LABEL}>毕业院校<br/>Graduation school</td><td style={VALUE}>{selectedEmployee.school || ''}</td>

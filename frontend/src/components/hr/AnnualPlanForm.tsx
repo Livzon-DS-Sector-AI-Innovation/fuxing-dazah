@@ -52,7 +52,7 @@ export default function AnnualPlanForm() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" description="加载中..." />
       </div>
     )
   }

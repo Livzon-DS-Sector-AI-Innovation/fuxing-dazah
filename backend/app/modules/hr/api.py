@@ -4,7 +4,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -72,11 +72,17 @@ from app.modules.hr.service import (
     TrainingLedgerService,
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
+from app.modules.hr.system_settings_routes import router as system_settings_router
+from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
 
 router = create_module_router(MODULES_BY_CODE["hr"])
+router.include_router(system_settings_router)
+router.include_router(candidate_router)
+router.include_router(job_requirement_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
@@ -1033,6 +1039,55 @@ async def delete_departure_record(
     return success_response(message="离职台账记录删除成功")
 
 
+@router.post("/departure-records/{record_id}/preview-certificate", summary="预览离职证明")
+async def preview_departure_certificate(
+    record_id: UUID,
+    service: DepartureRecordService = Depends(get_departure_service),
+):
+    from fastapi.responses import HTMLResponse
+    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_html
+    record = await service.get_record(record_id)
+    html = generate_termination_certificate_html(
+        name=record.name or "", id_number=getattr(record, "id_card", "") or "",
+        department=record.department or "", position=record.position or "",
+        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        leave_date=record.offboarding_date or "",
+        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+    )
+    return HTMLResponse(content=html)
+
+
+@router.post("/departure-records/{record_id}/send-certificate", summary="发送离职证明邮件")
+async def send_departure_certificate(
+    record_id: UUID, employee_email: str = Form(...),
+    service: DepartureRecordService = Depends(get_departure_service),
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import EmailLog
+    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_docx
+    from app.platform.mail_service import send_email
+    record = await service.get_record(record_id)
+    name = record.name or "员工"
+    docx_buf = generate_termination_certificate_docx(
+        name=name, id_number=getattr(record, "id_card", "") or "",
+        department=record.department or "", position=record.position or "",
+        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        leave_date=record.offboarding_date or "",
+        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+    )
+    filename = f"解除劳动关系证明_{name}.docx"
+    subj = "解除劳动关系证明"
+    html = f"<html><body style=\"font-family:sans-serif;padding:20px;\"><h2>解除劳动关系证明</h2><p>{name}，您好！</p><p>附件是您的解除劳动关系证明，请查收。</p></body></html>"
+    try:
+        send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, docx_buf.read())]); st, err = "sent", None
+    except Exception as e:
+        st, err = "failed", str(e)
+    session.add(EmailLog(email_type="departure_cert", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))
+    await session.commit()
+    if st == "failed": raise HTTPException(500, f"发送失败: {err}")
+    return success_response(message="离职证明已发送")
+
+
 # ─── TrainingLedger Routes ───
 
 @router.get("/training-ledgers", summary="培训台账列表")
@@ -1297,6 +1352,30 @@ async def export_training_ledger(
             "Content-Disposition": f"attachment; filename*=utf-8''{encoded_filename}"
         },
     )
+
+
+@router.get("/training-ledgers/admin", summary="管理员培训台账总览")
+async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.models import Employee, TrainingLedger
+    cols = (TrainingLedger.id, TrainingLedger.employee_number, Employee.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, Employee.department)
+    stmt = select(*cols).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
+    if department: stmt = stmt.where(Employee.department == department)
+    if training_subject: stmt = stmt.where(TrainingLedger.training_subject.ilike(f"%{training_subject}%"))
+    if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
+    if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+    rows = (await session.execute(stmt.order_by(TrainingLedger.training_date.desc()).offset((page-1)*page_size).limit(page_size))).all()
+    return paginated_response(data=[{"id":str(r[0]),"employee_number":r[1],"employee_name":r[2],"training_subject":r[3],"training_date":str(r[4]) if r[4] else None,"training_method":r[5],"trainer":r[6],"assessment_result":r[7],"department":r[8]} for r in rows], page=page, page_size=page_size, total=total)
+
+
+@router.get("/question-bank", summary="题库检索")
+async def qbank_search(file_no: str | None = Query(None), keyword: str | None = Query(None), page_params: PageParams = Depends(), session: AsyncSession = Depends(get_db)):
+    where = "WHERE is_deleted = false"
+    params = {"lim": page_params.page_size, "off": (page_params.page-1)*page_params.page_size}
+    if file_no: where += " AND file_no ILIKE :fn"; params["fn"] = f"%{file_no}%"
+    if keyword: where += " AND (question ILIKE :kw OR subject ILIKE :kw)"; params["kw"] = f"%{keyword}%"
+    r = await session.execute(text(f"SELECT id, file_no, question, answer, score, source, usage_count FROM hr.question_bank {where} ORDER BY usage_count DESC LIMIT :lim OFFSET :off"), params)
+    return success_response(data=[{"id":str(row[0]),"file_no":row[1],"question":row[2],"answer":row[3],"score":row[4],"source":row[5],"usage_count":row[6]} for row in r])
 
 
 @router.get("/training-ledgers/{record_id}", summary="培训台账记录详情")
@@ -2002,4 +2081,84 @@ async def list_pending_evaluations(
     return success_response(data=data)
 
 
-router.include_router(analysis_router)
+@router.get("/job-requirements", summary="岗位需求列表")
+async def list_job_reqs(session: AsyncSession = Depends(get_db)):
+    r = await session.execute(text("SELECT id, position_name, department, headcount, hired_count, requirements, status FROM hr.job_requirements WHERE is_deleted = false ORDER BY created_at DESC"))
+    return success_response(data=[{"id":str(row[0]),"position_name":row[1],"department":row[2],"headcount":row[3],"hired_count":row[4],"requirements":row[5],"status":row[6]} for row in r])
+
+
+@router.post("/job-requirements", summary="创建岗位需求")
+async def create_job_req(payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("INSERT INTO hr.job_requirements (id, position_name, department, headcount, requirements, status, created_at, updated_at) VALUES (gen_random_uuid(), :pn, :dept, :hc, :req, '招聘中', now(), now())"), {"pn":payload.get("position_name",""), "dept":payload.get("department",""), "hc":int(payload.get("headcount",1)), "req":payload.get("requirements","")})
+    await session.commit()
+    return success_response(message="创建成功", status_code=201)
+
+
+@router.put("/job-requirements/{req_id}", summary="更新岗位需求")
+async def update_job_req(req_id: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.job_requirements SET position_name=COALESCE(:pn,position_name), department=COALESCE(:dept,department), headcount=COALESCE(:hc,headcount), requirements=COALESCE(:req,requirements), status=COALESCE(:st,status) WHERE id=:id AND is_deleted=false"), {"pn":payload.get("position_name"),"dept":payload.get("department"),"hc":payload.get("headcount"),"req":payload.get("requirements"),"st":payload.get("status"),"id":req_id})
+    await session.commit()
+    return success_response(message="已更新")
+
+
+@router.delete("/job-requirements/{req_id}", summary="删除岗位需求")
+async def delete_job_req(req_id: UUID, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.job_requirements SET is_deleted=true WHERE id=:id"), {"id":req_id})
+    await session.commit()
+    return success_response(message="已删除")
+
+
+@router.post("/candidates/parse-resume", summary="解析简历")
+async def parse_cv(file: UploadFile = Form(..., alias="resume")):
+    if not file.filename or not file.filename.endswith(".pdf"): raise HTTPException(400, "仅支持PDF")
+    from app.modules.hr.resume_parser import parse_resume_pdf
+    import os; os.makedirs("uploads/resumes", exist_ok=True)
+    content=bytes(await file.read()); path=f"uploads/resumes/{file.filename}"
+    open(path,"wb").write(content); r=parse_resume_pdf(content); r["resume_file_path"]=path
+    return success_response(data=r)
+
+
+@router.get("/candidates/{cid}/resume-preview", summary="简历预览")
+async def resume_preview(cid: UUID, session: AsyncSession = Depends(get_db)):
+    r = await session.execute(text("SELECT resume_url FROM hr.candidates WHERE id=:id"), {"id": cid})
+    row = r.first()
+    if not row or not row[0]: raise HTTPException(404, "无简历文件")
+    import os
+    if not os.path.exists(row[0]): raise HTTPException(404, "简历文件不存在")
+    return FileResponse(row[0], media_type="application/pdf")
+
+
+@router.get("/candidates", summary="候选人列表")
+async def list_candidates(page_params: PageParams = Depends(), session: AsyncSession = Depends(get_db)):
+    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE is_deleted=false ORDER BY created_at DESC LIMIT :lim OFFSET :off"),{"lim":page_params.page_size,"off":(page_params.page-1)*page_params.page_size})
+    return success_response(data=[{"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None} for row in r])
+
+
+@router.post("/candidates", summary="创建候选人")
+async def create_candidate(payload: dict, session: AsyncSession = Depends(get_db)):
+    import os,shutil; rp=None
+    if payload.get("resume_file_path") and os.path.exists(payload["resume_file_path"]):
+        os.makedirs("uploads/resumes",exist_ok=True); rp=f"uploads/resumes/{payload.get('name','candidate')}_{os.path.basename(payload['resume_file_path'])}"
+        shutil.copy(payload["resume_file_path"],rp)
+    await session.execute(text("INSERT INTO hr.candidates (id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id,resume_url,created_at,updated_at) VALUES (gen_random_uuid(),:n,:ph,:em,:pos,:dept,:g,:sch,:edu,:maj,:st,:rl,:jid,:rp,now(),now())"),{"n":payload.get("name",""),"ph":payload.get("phone",""),"em":payload.get("email",""),"pos":payload.get("position",""),"dept":payload.get("department",""),"g":payload.get("gender",""),"sch":payload.get("school",""),"edu":payload.get("education",""),"maj":payload.get("major",""),"st":payload.get("status","待筛选"),"rl":payload.get("recommendation_level",""),"jid":payload.get("job_requirement_id"),"rp":rp})
+    await session.commit(); return success_response(message="创建成功", status_code=201)
+
+
+@router.get("/candidates/{cid}", summary="候选人详情")
+async def get_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
+    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE id=:id AND is_deleted=false"),{"id":cid})
+    row=r.first()
+    if not row: raise HTTPException(404,"不存在")
+    return success_response(data={"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None})
+
+
+@router.put("/candidates/{cid}", summary="更新候选人")
+async def update_candidate(cid: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.candidates SET name=COALESCE(:n,name),phone=COALESCE(:ph,phone),email=COALESCE(:em,email),position=COALESCE(:pos,position),department=COALESCE(:dept,department),gender=COALESCE(:g,gender),school=COALESCE(:sch,school),education=COALESCE(:edu,education),major=COALESCE(:maj,major),status=COALESCE(:st,status),recommendation_level=COALESCE(:rl,recommendation_level) WHERE id=:id AND is_deleted=false"),{"n":payload.get("name"),"ph":payload.get("phone"),"em":payload.get("email"),"pos":payload.get("position"),"dept":payload.get("department"),"g":payload.get("gender"),"sch":payload.get("school"),"edu":payload.get("education"),"maj":payload.get("major"),"st":payload.get("status"),"rl":payload.get("recommendation_level"),"id":cid})
+    await session.commit(); return success_response(message="已更新")
+
+
+@router.delete("/candidates/{cid}", summary="删除候选人")
+async def delete_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.candidates SET is_deleted=true WHERE id=:id"),{"id":cid})
+    await session.commit(); return success_response(message="已删除")

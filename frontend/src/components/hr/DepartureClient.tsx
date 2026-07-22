@@ -7,9 +7,10 @@ import {
   SearchOutlined,
   EyeOutlined,
   PlusOutlined,
-  DeleteOutlined } from '@ant-design/icons'
+  DeleteOutlined,
+  SendOutlined } from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
-import { fetchDepartureRecords, fetchDepartments } from '@/lib/api/hr'
+import { fetchDepartureRecords, fetchDepartments, API_BASE } from '@/lib/api/hr'
 import { deleteDepartureRecordAction } from '@/actions/hr'
 
 interface DepartureClientProps {
@@ -39,7 +40,10 @@ export default function DepartureClient({
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRecord, setDetailRecord] = useState<DepartureRecord | null>(null)
   const [selectedDept, setSelectedDept] = useState<string>('')
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+  const [certOpen, setCertOpen] = useState(false)
+  const [certRecord, setCertRecord] = useState<DepartureRecord | null>(null)
+  const [certEmail, setCertEmail] = useState('')
+  const [certSending, setCertSending] = useState(false)
 
   useEffect(() => {
     fetchDepartments({ page_size: 200 }).then(r => {
@@ -53,7 +57,7 @@ export default function DepartureClient({
     if (!dept) { setDeptEmployees([]); return }
     try {
       const url = `${API_BASE}/api/v1/hr/employees?department=${encodeURIComponent(dept)}&page=1&page_size=200`
-      const res = await fetch(url)
+      const res = await fetch(url, { credentials: 'include' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const d = await res.json()
       const list = (d.data||[]).map((e:any) => ({
@@ -115,6 +119,31 @@ export default function DepartureClient({
   useEffect(() => {
     loadData()
   }, [filterDepartment, filterOffboardingType, searchKeyword, page, pageSize])
+
+  const handlePreviewCert = async () => {
+    if (!certRecord) return
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/hr/departure-records/${certRecord.id}/preview-certificate`, { method: 'POST', credentials: 'include' })
+      if (!r.ok) throw new Error('预览失败')
+      const html = await r.text()
+      const w = window.open('', '_blank')
+      if (w) { w.document.write(html); w.document.close() }
+    } catch (err: any) { message.error(err.message || '预览失败') }
+  }
+
+  const handleSendCert = async () => {
+    if (!certRecord || !certEmail) return
+    setCertSending(true)
+    try {
+      const fd = new FormData()
+      fd.append('employee_email', certEmail)
+      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${certRecord.id}/send-certificate`, { method: 'POST', body: fd, credentials: 'include' })
+      if (!res.ok) { const d = await res.json(); throw new Error(d.message || '发送失败') }
+      message.success('离职证明已发送')
+      setCertOpen(false)
+    } catch (err: any) { message.error(err.message || '发送失败') }
+    finally { setCertSending(false) }
+  }
 
   const offboardingTypeColorMap: Record<string, string> = {
     '辞职': 'default',
@@ -214,7 +243,7 @@ export default function DepartureClient({
     {
       title: '操作',
       key: 'action',
-      width: 160,
+      width: 230,
       fixed: 'right',
       render: (_: any, record: DepartureRecord) => (
         <Space size="small">
@@ -226,6 +255,8 @@ export default function DepartureClient({
           >
             详情
           </Button>
+          <Button type="text" size="small" icon={<SendOutlined />}
+            onClick={() => { setCertRecord(record); setCertEmail(''); setCertOpen(true) }}>证明</Button>
           <Popconfirm
             title="确认删除？"
             onConfirm={async () => {
@@ -320,6 +351,19 @@ export default function DepartureClient({
         </Form>
       </Modal>
 
+
+      <Modal title="发送离职证明" open={certOpen} onCancel={() => setCertOpen(false)}
+        footer={[
+          <Button key="preview" onClick={handlePreviewCert}>预览</Button>,
+          <Button key="send" type="primary" loading={certSending} onClick={handleSendCert}>发送</Button>,
+        ]}
+      >
+        <div className="space-y-3 py-2">
+          <div>收件人：<b>{certRecord?.name}</b>（{certRecord?.department} / {certRecord?.position}）</div>
+          <Input placeholder="请输入收件邮箱" value={certEmail}
+            onChange={e => setCertEmail(e.target.value)} type="email" />
+        </div>
+      </Modal>
 
       <Modal title="离职详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={600}>
         {detailRecord && (

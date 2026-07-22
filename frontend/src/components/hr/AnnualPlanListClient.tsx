@@ -5,7 +5,7 @@ import { App, Button, Card, Row, Col, Popconfirm, Spin, Modal, Form, Select, Inp
 import { PlusOutlined, DeleteOutlined, EditOutlined, FileTextOutlined, UploadOutlined } from '@ant-design/icons'
 import Link from 'next/link'
 import { AnnualTrainingPlan } from '@/types/hr'
-import { fetchAnnualTrainingPlans, fetchDepartments } from '@/lib/api/hr'
+import { fetchAnnualTrainingPlans, fetchDepartments, API_BASE } from '@/lib/api/hr'
 import { createAnnualTrainingPlan, deleteAnnualTrainingPlan } from '@/actions/hr'
 
 const YEAR_OPTIONS = [2024, 2025, 2026, 2027, 2028]
@@ -111,7 +111,6 @@ export default function AnnualPlanListClient() {
         </Button>
         <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
           const fd = new FormData(); fd.append('file', file as File)
-          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
           try {
             const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, { method: 'POST', body: fd, credentials: 'include' })
             const d = await res.json()
@@ -126,7 +125,7 @@ export default function AnnualPlanListClient() {
 
       {loading ? (
         <div className="flex items-center justify-center py-20">
-          <Spin size="large" tip="加载中..." />
+          <Spin size="large" description="加载中..." />
         </div>
       ) : plans.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
@@ -140,26 +139,28 @@ export default function AnnualPlanListClient() {
         <Row gutter={[16, 16]}>
           {plans.map((plan) => (
             <Col xs={24} sm={12} lg={8} key={plan.id}>
-              <Card
-                hoverable
-                className="h-full"
-                actions={[
-                  <Link key="edit" href={`/hr/training/annual-plan?id=${plan.id}`}>
-                    <Button type="link" icon={<EditOutlined />}>
-                      编辑
-                    </Button>
-                  </Link>,
-                  <Popconfirm
-                    key="delete"
-                    title="确认删除该年度培训计划？"
-                    onConfirm={() => handleDelete(plan.id)}
-                  >
-                    <Button type="link" danger icon={<DeleteOutlined />}>
-                      删除
-                    </Button>
-                  </Popconfirm>,
-                ]}
-              >
+              <Link href={`/hr/training/annual-plan?id=${plan.id}`}>
+                <Card
+                  hoverable
+                  className="h-full"
+                  actions={[
+                    <Link key="edit" href={`/hr/training/annual-plan?id=${plan.id}`}>
+                      <Button type="link" icon={<EditOutlined />}>
+                        编辑
+                      </Button>
+                    </Link>,
+                    <Popconfirm
+                      key="delete"
+                      title="确认删除该年度培训计划？"
+                      onConfirm={(e) => { e?.stopPropagation(); handleDelete(plan.id) }}
+                      onCancel={(e) => { e?.stopPropagation() }}
+                    >
+                      <Button type="link" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()}>
+                        删除
+                      </Button>
+                    </Popconfirm>,
+                  ]}
+                >
                 <div className="flex items-start gap-4">
                   <div className="mt-1">
                     <FileTextOutlined className="text-2xl text-[var(--color-primary)]" />
@@ -177,6 +178,7 @@ export default function AnnualPlanListClient() {
                   </div>
                 </div>
               </Card>
+            </Link>
             </Col>
           ))}
         </Row>
@@ -192,7 +194,7 @@ export default function AnnualPlanListClient() {
         }}
         footer={null}
       >
-        <Spin spinning={modalLoading} tip="加载部门列表...">
+        <Spin spinning={modalLoading} description="加载部门列表...">
           <Form
             form={form}
             layout="vertical"

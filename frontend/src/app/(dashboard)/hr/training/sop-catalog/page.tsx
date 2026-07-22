@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useMemo } from 'react'
-import { Select, Collapse, Table, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
+import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
 import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -94,22 +94,6 @@ export default function SopCatalogPage() {
     return groups
   }, [allData, search])
 
-  const sopColumns = [
-    { title: 'SOP编号', dataIndex: 'sop_number', width: 140 },
-    { title: '文件名称', dataIndex: 'file_name', ellipsis: true },
-    { title: '部门', dataIndex: 'department', width: 160 },
-    { title: '操作', width: 60,
-      render: (_: any, record: SopItem) => (
-        <Popconfirm title="确认删除？" onConfirm={async () => {
-          const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/${record.id}`, { method: 'DELETE' })
-          if (res.ok) { message.success('已删除'); loadAll() }
-          else message.error('删除失败')
-        }}>
-          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-        </Popconfirm>
-      )},
-  ]
-
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -173,17 +157,15 @@ export default function SopCatalogPage() {
                 }
               >
                 {catEntries.sort((a, b) => a[0].localeCompare(b[0])).map(([catName, sops]) => (
-                  <div key={catName} className="mb-4">
-                    <div className="text-sm font-semibold text-gray-600 mb-2">
-                      {catName} <Tag>{sops.length} 条</Tag>
-                    </div>
-                    <Table
-                      columns={sopColumns}
-                      dataSource={sops}
-                      rowKey="id"
-                      size="small"
-                      pagination={false}
-                    />
+                  <div key={catName} className="inline-block mr-2 mb-2">
+                    <Tag color="blue" closable onClose={async (e) => {
+                      e.preventDefault()
+                      for (const s of sops) {
+                        await fetch(`${API_BASE}/api/v1/hr/sop-catalog/${s.id}`, { method: 'DELETE' })
+                      }
+                      message.success(`已删除「${catName}」`)
+                      loadAll()
+                    }}>{catName}</Tag>
                   </div>
                 ))}
               </Collapse.Panel>
@@ -192,12 +174,16 @@ export default function SopCatalogPage() {
         </Collapse>
       )}
 
-      <Modal title="新建职位SOP" open={modalOpen} onCancel={() => setModalOpen(false)}
+      <Modal title="新建培训分类" open={modalOpen} forceRender onCancel={() => setModalOpen(false)}
         onOk={async () => {
           const vals = await form.validateFields()
+          const payload = {
+            ...vals,
+            file_name: vals.file_name || vals.training_category,
+          }
           const res = await fetch(`${API_BASE}/api/v1/hr/position-trainings`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(vals),
+            body: JSON.stringify(payload),
           })
           if (res.ok) { message.success('创建成功'); setModalOpen(false); form.resetFields(); loadAll() }
           else { const d = await res.json(); message.error(d.message || '创建失败') }
@@ -215,13 +201,11 @@ export default function SopCatalogPage() {
             <Select placeholder="选择岗位" showSearch options={positions.map(p => ({value:p,label:p}))} />
           </Form.Item>
           <Form.Item name="training_category" label="培训类别" rules={[{ required: true }]}>
-            <Input placeholder="如：岗位职责、文件管理、质量管理" />
+            <Input placeholder="如：岗位职责、文件管理、质量管理"
+              onChange={e => { if (!form.getFieldValue('file_name')) form.setFieldValue('file_name', e.target.value) }} />
           </Form.Item>
-          <Form.Item name="sop_number" label="SOP编号">
-            <Input placeholder="如：SOP.01.1101" />
-          </Form.Item>
-          <Form.Item name="file_name" label="文件名称" rules={[{ required: true }]}>
-            <Input placeholder="培训文件名称" />
+          <Form.Item name="file_name" label="文件名称">
+            <Input placeholder="默认与培训类别相同" />
           </Form.Item>
         </Form>
       </Modal>

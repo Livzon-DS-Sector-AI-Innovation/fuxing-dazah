@@ -6,7 +6,7 @@ import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee, EmployeeCreateInput, EmployeeUpdateInput, Department } from '@/types/hr'
 import { createEmployee, updateEmployee } from '@/actions/hr'
-import { fetchDepartments, fetchPositions, PositionOption } from '@/lib/api/hr'
+import { fetchDepartments, fetchPositions, API_BASE } from '@/lib/api/hr'
 
 interface EmployeeFormProps {
   open: boolean
@@ -15,18 +15,16 @@ interface EmployeeFormProps {
   onSuccess: () => void
 }
 
-const { TabPane } = Tabs
 
 export default function EmployeeForm({ open, employee, onClose, onSuccess }: EmployeeFormProps) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const isEdit = !!employee
   const [departments, setDepartments] = useState<Department[]>([])
-  const [positions, setPositions] = useState<PositionOption[]>([])
+  const [positions, setPositions] = useState<any[]>([])
   const [newPosModalOpen, setNewPosModalOpen] = useState(false)
   const [newPosName, setNewPosName] = useState('')
   const [newPosDept, setNewPosDept] = useState('')
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
   useEffect(() => {
     if (open) {
@@ -60,23 +58,9 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
     }
   }, [open, employee, form])
 
-  // 根据选中的部门筛选可选职位，并去掉部门前缀显示
   const selectedDept = Form.useWatch('department', form)
-  const filteredPositions = selectedDept
-    ? positions.filter((p) => p.department === selectedDept)
-    : positions
-
-  const positionOptions = filteredPositions
-    .map((p) => {
-      const dept = p.department
-      let label = p.name
-      if (dept && label.startsWith(dept)) {
-        label = label.slice(dept.length)
-      }
-      return { value: p.name, label }
-    })
-    // 按 label 去重，重复的职位名只保留第一个
-    .filter((v, i, a) => a.findIndex((x) => x.label === v.label) === i)
+  const positionOptions = (selectedDept ? positions.filter((p: any) => p.department === selectedDept) : positions)
+    .map((p: any) => ({ value: p.name, label: p.name }))
 
   const handleSubmit = async () => {
     try {
@@ -142,8 +126,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
       width={860}
     >
       <Form form={form} layout="vertical" className="mt-4" autoComplete="off">
-        <Tabs defaultActiveKey="basic">
-          <TabPane tab="基本信息" key="basic">
+        <Tabs defaultActiveKey="basic" items={[
+          { key: 'basic', label: '基本信息', children: (
             <div className="grid grid-cols-3 gap-4">
               {commonInput('employee_number', '工号', true)}
               {commonInput('name', '姓名', true)}
@@ -187,12 +171,12 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {commonSelect('status', '状态', [
                 { value: '在职', label: '在职' }, { value: '试用期', label: '试用期' },
                 { value: '离职', label: '离职' }, { value: '待审批', label: '待审批' },
+                { value: '产假复岗', label: '产假复岗' },
               ], true)}
               {dateItem('hire_date', '入职日期', true)}
             </div>
-          </TabPane>
-
-          <TabPane tab="个人信息" key="personal">
+          )},
+          { key: 'personal', label: '个人信息', children: (
             <div className="grid grid-cols-3 gap-4">
               {commonInput('native_place', '籍贯')}
               {commonSelect('political_status', '政治面貌', [
@@ -223,9 +207,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {commonInput('id_card', '身份证号')}
               {commonInput('id_card_expiry', '身份证到期日')}
             </div>
-          </TabPane>
-
-          <TabPane tab="联系信息" key="contact">
+          )},
+          { key: 'contact', label: '联系信息', children: (
             <div className="grid grid-cols-2 gap-4">
               {commonInput('phone', '手机')}
               {commonInput('email', '邮箱')}
@@ -235,9 +218,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {commonInput('emergency_contact_phone', '紧急联系人电话')}
               {commonInput('emergency_contact_relation', '紧急联系人关系')}
             </div>
-          </TabPane>
-
-          <TabPane tab="学历职业" key="edu">
+          )},
+          { key: 'edu', label: '学历职业', children: (
             <div className="grid grid-cols-3 gap-4">
               {commonSelect('education', '学历', [
                 { value: '博士', label: '博士' }, { value: '硕士', label: '硕士' },
@@ -268,9 +250,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {dateItem('factory_entry_date', '进厂时间')}
               {dateItem('livo_entry_date', '入丽珠时间')}
             </div>
-          </TabPane>
-
-          <TabPane tab="合同信息" key="contract">
+          )},
+          { key: 'contract', label: '合同信息', children: (
             <div className="grid grid-cols-2 gap-4">
               {commonSelect('contract_type', '合同期限', [
                 { value: '无固定期限', label: '无固定期限' },
@@ -287,9 +268,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {dateItem('contract_start_4', '第四次合同起点')}
               {dateItem('contract_end_4', '第四次合同终止')}
             </div>
-          </TabPane>
-
-          <TabPane tab="其他" key="other">
+          )},
+          { key: 'other', label: '其他', children: (
             <div className="grid grid-cols-2 gap-4">
               {commonInput('bank_account', '银行卡号')}
               {commonInput('training_id', '培训档案编号')}
@@ -298,39 +278,33 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
                 <Select mode="tags" placeholder="输入备注" allowClear />
               </Form.Item>
             </div>
-          </TabPane>
-        </Tabs>
+          )},
+        ]} />
       </Form>
 
       <Modal title="新建职位" open={newPosModalOpen} onCancel={() => setNewPosModalOpen(false)}
         onOk={async () => {
           if (!newPosName.trim()) { message.warning('请输入职位名称'); return }
-          const fullName = newPosName.trim()
           try {
             const res = await fetch(`${API_BASE}/api/v1/hr/positions`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ department: newPosDept, name: fullName }),
+              body: JSON.stringify({ department: newPosDept, name: newPosName.trim() }),
             })
             if (res.ok) {
               message.success('职位创建成功')
               setNewPosModalOpen(false)
-              // 刷新职位列表并自动选中新职位
               const data = await fetchPositions()
               setPositions(data)
-              form.setFieldValue('position', fullName)
+              form.setFieldValue('position', newPosName.trim())
             } else {
-              const d = await res.json()
-              message.error(d.message || '创建失败')
+              const d = await res.json(); message.error(d.message || '创建失败')
             }
           } catch { message.error('创建失败') }
         }} okText="创建">
         <div className="mt-4 space-y-3">
           <div><strong>部门：</strong>{newPosDept}</div>
-          <div className="text-sm text-gray-500">部门：{newPosDept}</div>
-          <Input placeholder="输入职位名称（如：经理、主管、仪器组组员）" value={newPosName}
-            onChange={e => setNewPosName(e.target.value)} onPressEnter={() => {
-              // trigger onOk
-            }} />
+          <Input placeholder="输入职位名称" value={newPosName}
+            onChange={e => setNewPosName(e.target.value)} />
         </div>
       </Modal>
     </Modal>

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import {
   Button,
   Card,
@@ -12,6 +12,7 @@ import {
   Select,
   Space,
   TimePicker,
+  Upload,
   message,
 } from 'antd'
 import {
@@ -19,7 +20,10 @@ import {
   BellOutlined,
   FileExcelOutlined,
   BookOutlined,
-  SendOutlined,
+  UploadOutlined,
+  RobotOutlined,
+  FormOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -30,14 +34,18 @@ import {
   generateTrainingSignInSheet,
   createTrainingLedger,
   createTrainingLedgerPage,
-  sendTrainingNotification,
+  exportQaRecord,
+  saveExamPaper,
+  API_BASE,
 } from '@/lib/api/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
+import AssessmentFlow from './AssessmentFlow'
 import EvaluationPreview from './EvaluationPreview'
 
 const TRAINING_METHODS = [
   { value: '面授', label: '面授' },
   { value: '自学', label: '自学' },
+  { value: '面授+自学', label: '面授+自学' },
 ]
 
 const ASSESSMENT_METHODS = [
@@ -80,7 +88,6 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
 }
 
 export default function TrainingNotificationClient() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   const [form] = Form.useForm()
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])
@@ -88,11 +95,17 @@ export default function TrainingNotificationClient() {
   const [submittingWord, setSubmittingWord] = useState(false)
   const [submittingExcel, setSubmittingExcel] = useState(false)
   const [addingToLedger, setAddingToLedger] = useState(false)
-  const [sendingNotify, setSendingNotify] = useState(false)
   const [trainerDept, setTrainerDept] = useState<string | undefined>(undefined)
   const [trainerEmployees, setTrainerEmployees] = useState<{ value: string; label: string }[]>([])
+  const [assessmentModalOpen, setAssessmentModalOpen] = useState(false)
+  const [generatingAssessment, setGeneratingAssessment] = useState(false)
+  const [assessmentFile, setAssessmentFile] = useState<File | null>(null)
+  const [assessmentQuestions, setAssessmentQuestions] = useState<any>(null)
+  const [trainingMethod, setTrainingMethod] = useState<string | undefined>(undefined)
+  const [assessmentMethod, setAssessmentMethod] = useState<string | undefined>(undefined)
 
   const searchParams = useSearchParams()
+  const router = useRouter()
 
   useEffect(() => {
     fetchDepartments({ page_size: 100 }).then((res) => {
@@ -183,19 +196,48 @@ export default function TrainingNotificationClient() {
   const handleExportWord = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
+    const dateRange = values.training_date_range
+    const singleDate = values.training_date
+    const isDual = values.training_method === '面授+自学'
 
     setSubmittingWord(true)
     try {
+      const trainingTime = values.training_time
+      const faceDate = values.face_date
+      const faceTime = values.face_time
+      const selfStudyDate = values.self_study_date
+      const selfStudyTime = values.self_study_time
+
+      // 面授+自学：从两个日期推算整体区间
+      let dateStart, dateEnd
+      if (isDual) {
+        const dates = [faceDate, selfStudyDate].filter(Boolean)
+        if (dates.length >= 2) {
+          const sorted = [...dates].sort((a: any, b: any) => (a?.unix() || 0) - (b?.unix() || 0))
+          dateStart = sorted[0]!.format('YYYY-MM-DD')
+          dateEnd = sorted[1]!.format('YYYY-MM-DD')
+        } else if (dates.length === 1) {
+          dateStart = dateEnd = dates[0]!.format('YYYY-MM-DD')
+        }
+      } else {
+        dateStart = singleDate ? singleDate.format('YYYY-MM-DD') : undefined
+        dateEnd = undefined
+      }
+
       const payload = {
         department: values.department,
-        training_date: values.training_date.format('YYYY-MM-DD'),
+        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : undefined,
+        training_date_start: dateStart,
+        training_date_end: isDual ? dateEnd : undefined,
         subject: values.subject,
-        training_time_start: values.training_time
-          ? dayjs(values.training_time[0]).format('HH:mm')
-          : undefined,
-        training_time_end: values.training_time
-          ? dayjs(values.training_time[1]).format('HH:mm')
-          : undefined,
+        training_time_start: trainingTime ? dayjs(trainingTime[0]).format('HH:mm') : undefined,
+        training_time_end: trainingTime ? dayjs(trainingTime[1]).format('HH:mm') : undefined,
+        face_to_face_time_start: faceTime ? dayjs(faceTime[0]).format('HH:mm') : undefined,
+        face_to_face_time_end: faceTime ? dayjs(faceTime[1]).format('HH:mm') : undefined,
+        self_study_time_start: selfStudyTime ? dayjs(selfStudyTime[0]).format('HH:mm') : undefined,
+        self_study_time_end: selfStudyTime ? dayjs(selfStudyTime[1]).format('HH:mm') : undefined,
+        face_date: faceDate ? faceDate.format('YYYY-MM-DD') : undefined,
+        self_study_date: selfStudyDate ? selfStudyDate.format('YYYY-MM-DD') : undefined,
         location: values.location,
         trainer: values.trainer,
         training_method: values.training_method,
@@ -205,7 +247,7 @@ export default function TrainingNotificationClient() {
         issuer_department: values.issuer_department || values.department,
         issue_date: values.issue_date
           ? values.issue_date.format('YYYY-MM-DD')
-          : values.training_date.format('YYYY-MM-DD'),
+          : (singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : undefined)),
       }
       await generateTrainingNotification(payload)
       message.success('培训通知已生成')
@@ -219,12 +261,14 @@ export default function TrainingNotificationClient() {
   const handleExportExcel = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
+    const dateRange = values.training_date_range
+    const singleDate = values.training_date
 
     setSubmittingExcel(true)
     try {
       const topic = [values.subject, values.content].filter(Boolean).join(' ')
       const payload = {
-        training_date: values.training_date.format('YYYY-MM-DD'),
+        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : ''),
         training_time_start: values.training_time
           ? dayjs(values.training_time[0]).format('HH:mm')
           : undefined,
@@ -250,9 +294,10 @@ export default function TrainingNotificationClient() {
 
   const handleAddToLedger = async () => {
     try {
-      await form.validateFields([
+      const isDualLedger = form.getFieldValue('training_method') === '面授+自学'
+    await form.validateFields([
         'department',
-        'training_date',
+        isDualLedger ? 'training_date_range' : 'training_date',
         'subject',
         'employee_names',
       ])
@@ -300,7 +345,9 @@ export default function TrainingNotificationClient() {
       onOk: async () => {
         setAddingToLedger(true)
         try {
-          const trainingDate = values.training_date.format('YYYY-MM-DD')
+          const dateRange = values.training_date_range
+          const singleDate = values.training_date
+          const trainingDate = singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : '')
           const subject = values.subject
           const method = values.training_method || ''
           const department = values.department || ''
@@ -381,88 +428,146 @@ export default function TrainingNotificationClient() {
     })
   }
 
-  const handleSendNotify = async () => {
+  const handleGenerateAssessment = async () => {
     const values = form.getFieldsValue()
-    const selectedNames: string[] = values.employee_names || []
-    if (selectedNames.length === 0) {
-      message.warning('请先选择应出席受训人员')
+    if (!values.assessment_method) {
+      message.warning('请先选择考核方式')
       return
     }
-
-    const numbers: string[] = []
-    for (const name of selectedNames) {
-      const num = nameToNumberMap[name]
-      if (num) numbers.push(num)
-    }
-
-    if (numbers.length === 0) {
-      message.warning('所选人员缺少工号信息，无法发送通知')
-      return
-    }
-
-    try {
-      await form.validateFields(['department', 'training_date', 'subject'])
-    } catch {
-      message.warning('请填写主办部门、培训日期和培训主题')
-      return
-    }
-
-    Modal.confirm({
-      title: '确认发送培训通知',
-      content: `将向 ${numbers.length} 位受训人员发送飞书消息，是否继续？`,
-      onOk: async () => {
-        setSendingNotify(true)
-        try {
-          const payload = {
-            employee_numbers: numbers,
-            department: values.department,
-            subject: values.subject,
-            training_date: values.training_date.format('YYYY-MM-DD'),
-            training_time_start: values.training_time
-              ? dayjs(values.training_time[0]).format('HH:mm')
-              : undefined,
-            training_time_end: values.training_time
-              ? dayjs(values.training_time[1]).format('HH:mm')
-              : undefined,
-            location: values.location,
-            trainer: values.trainer,
-            content: values.content,
-            training_method: values.training_method,
-            issuer_department: values.issuer_department || values.department,
-            issue_date: values.issue_date
-              ? values.issue_date.format('YYYY-MM-DD')
-              : values.training_date.format('YYYY-MM-DD'),
-          }
-          const res = await sendTrainingNotification(payload)
-          message.success(res.message)
-        } catch (err: any) {
-          message.error(err.message || '添加失败')
-        } finally {
-          setSendingNotify(false)
-        }
-      },
-    })
+    setAssessmentModalOpen(true)
+    setAssessmentFile(null)
+    setAssessmentQuestions(null)
   }
+
+  const handleAssessmentFileUpload = async () => {
+    const values = form.getFieldsValue()
+    if (!assessmentFile) {
+      message.warning('请上传培训材料文件')
+      return
+    }
+    setGeneratingAssessment(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', assessmentFile)
+      formData.append('assessment_method', values.assessment_method || '笔试')
+      formData.append('subject', values.subject || '')
+
+      const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/generate-assessment`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || err.message || '生成失败')
+      }
+      const result = await res.json()
+      setAssessmentQuestions(result.data)
+      message.success('考核内容生成成功')
+    } catch (err: any) {
+      message.error(err.message || '生成失败')
+    } finally {
+      setGeneratingAssessment(false)
+    }
+  }
+
+  const handleExportQaRecord = async () => {
+    const values = form.getFieldsValue()
+    const dateRange = values.training_date_range
+    // 表头信息取自培训通知表单；已用 AI 出题则带上题目，否则考题区留空手写
+    const qs = (assessmentQuestions?.questions || []).map((q: any) => ({
+      file_no: q.file_no || '',
+      question: q.question || q.content || '',
+      answer: q.answer || '',
+      score: q.score || 10,
+    }))
+    try {
+      await exportQaRecord({
+        training_content: [values.subject, values.content].filter(Boolean).join(' - '),
+        training_date: dateRange ? dateRange[0].format('YYYY-MM-DD') : '',
+        training_method: values.training_method || '问答',
+        training_department: values.department || '',
+        questions: qs,
+        trainee_names: values.employee_names || [],
+      })
+      message.success('问答实操记录表已导出')
+    } catch (err: any) {
+      message.error(err.message || '导出失败')
+    }
+  }
+
+  const trainingMethodWatch = Form.useWatch('training_method', form)
+  const assessmentMethodWatch = Form.useWatch('assessment_method', form)
+  const subjectWatch = Form.useWatch('subject', form) as string | undefined
+  const deptWatch = Form.useWatch('department', form) as string | undefined
+  const trainerWatch = Form.useWatch('trainer', form) as string | undefined
+  const employeeNamesWatch = Form.useWatch('employee_names', form) as string[] | undefined
+  const isDualMethod = trainingMethodWatch === '面授+自学'
+
+  const previewNames: string[] = employeeNamesWatch || []
+  const subjectValue = subjectWatch || ''
+  const deptValue = deptWatch || ''
+  const trainingMethodValue = trainingMethodWatch || ''
+  const trainerValue = trainerWatch || ''
 
   const formValues = form.getFieldsValue()
   const traineeDepts: string[] = formValues?.trainee_departments || []
-  const deptValue = formValues?.department || ''
-  const dateValue = formValues?.training_date
-  const subjectValue = formValues?.subject || ''
+  const dateRangeValue = formValues?.training_date_range
+  const singleDateValue = formValues?.training_date
   const timeValue = formValues?.training_time
+  const faceDateValue = formValues?.face_date
+  const faceTimeValue = formValues?.face_time
+  const selfStudyDateValue = formValues?.self_study_date
+  const selfStudyTimeValue = formValues?.self_study_time
   const locationValue = formValues?.location || ''
-  const trainerValue = formValues?.trainer || ''
   const contentValue = formValues?.content || ''
   const issuerValue = formValues?.issuer_department || deptValue
-  const issueDateValue = formValues?.issue_date || dateValue
-  const trainingMethodValue = formValues?.training_method || ''
-  const previewNames: string[] = formValues?.employee_names || []
+  const issueDateValue = formValues?.issue_date || singleDateValue || faceDateValue
 
-  const dateStr = dateValue ? dateValue.format('YYYY年MM月DD日') : '____年__月__日'
+  // 日期字符串（含时间）
   const timeStr =
     timeValue
       ? `${dayjs(timeValue[0]).format('HH:mm')} ~ ${dayjs(timeValue[1]).format('HH:mm')}`
       : ''
+  const faceTimeStr =
+    faceTimeValue
+      ? `${dayjs(faceTimeValue[0]).format('HH:mm')} ~ ${dayjs(faceTimeValue[1]).format('HH:mm')}`
+      : ''
+  const selfStudyTimeStr =
+    selfStudyTimeValue
+      ? `${dayjs(selfStudyTimeValue[0]).format('HH:mm')} ~ ${dayjs(selfStudyTimeValue[1]).format('HH:mm')}`
+      : ''
+
+  const faceDateStr = faceDateValue ? faceDateValue.format('MM月DD日') : ''
+  const selfStudyDateStr = selfStudyDateValue ? selfStudyDateValue.format('MM月DD日') : ''
+
+  let dateStr: string
+  let singleDateStr: string
+  if (isDualMethod) {
+    // 面授+自学：从两个日期取区间 + 各自时间段
+    const dates = [faceDateValue, selfStudyDateValue].filter(Boolean)
+    if (dates.length >= 2) {
+      const sorted = [...dates].sort((a: any, b: any) => (a?.unix() || 0) - (b?.unix() || 0))
+      dateStr = `${sorted[0]!.format('YYYY年MM月DD日')} ~ ${sorted[1]!.format('YYYY年MM月DD日')}`
+    } else if (dates.length === 1) {
+      dateStr = dates[0]!.format('YYYY年MM月DD日')
+    } else {
+      dateStr = '____年__月__日'
+    }
+    const times = [
+      faceDateStr && faceTimeStr ? `面授 ${faceDateStr} ${faceTimeStr}` : (faceTimeStr ? `面授 ${faceTimeStr}` : ''),
+      selfStudyDateStr && selfStudyTimeStr ? `自学 ${selfStudyDateStr} ${selfStudyTimeStr}` : (selfStudyTimeStr ? `自学 ${selfStudyTimeStr}` : ''),
+    ].filter(Boolean).join('；')
+    dateStr += times ? `（${times}）` : ''
+    singleDateStr = faceDateValue ? faceDateValue.format('YYYY年MM月DD日') : '____年__月__日'
+  } else if (singleDateValue) {
+    // 单日：日期 + 时间段
+    const d = singleDateValue.format('YYYY年MM月DD日')
+    dateStr = d + (timeStr ? ` ${timeStr}` : '')
+    singleDateStr = d
+  } else {
+    dateStr = '____年__月__日'
+    singleDateStr = '____年__月__日'
+  }
   const issueDateStr = issueDateValue
     ? issueDateValue.format('YYYY年MM月DD日')
     : dateStr
@@ -476,7 +581,7 @@ export default function TrainingNotificationClient() {
       )
     : []
 
-  const hasBasicInfo = !!deptValue && !!dateValue && !!subjectValue
+  const hasBasicInfo = !!deptValue && !!(singleDateValue || faceDateValue || selfStudyDateValue) && !!subjectValue
   // Compute duration hours for preview
   const evalHours = (() => {
     if (timeValue && timeValue.length === 2) {
@@ -512,13 +617,15 @@ export default function TrainingNotificationClient() {
               />
             </Form.Item>
 
-            <Form.Item
-              name="training_date"
-              label="培训日期"
-              rules={[{ required: true, message: '请选择培训日期' }]}
-            >
-              <DatePicker className="w-full" placeholder="选择日期" />
-            </Form.Item>
+            {!isDualMethod && (
+              <Form.Item
+                name="training_date"
+                label="培训日期"
+                rules={[{ required: true, message: '请选择培训日期' }]}
+              >
+                <DatePicker className="w-full" placeholder="选择日期" />
+              </Form.Item>
+            )}
 
             <Form.Item
               name="subject"
@@ -529,13 +636,38 @@ export default function TrainingNotificationClient() {
               <Input placeholder="请输入培训主题，如：安全生产规范培训" />
             </Form.Item>
 
-            <Form.Item
-              name="training_time"
-              label="培训时间"
-              initialValue={[dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')]}
-            >
-              <TimePicker.RangePicker className="w-full" format="HH:mm" />
-            </Form.Item>
+            {isDualMethod ? (
+              <>
+                <Form.Item label="面授时间" required>
+                  <Space.Compact className="w-full">
+                    <Form.Item name="face_date" noStyle rules={[{ required: true, message: '请选择面授日期' }]}>
+                      <DatePicker placeholder="面授日期" style={{ width: '50%' }} />
+                    </Form.Item>
+                    <Form.Item name="face_time" noStyle initialValue={[dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')]}>
+                      <TimePicker.RangePicker format="HH:mm" style={{ width: '50%' }} />
+                    </Form.Item>
+                  </Space.Compact>
+                </Form.Item>
+                <Form.Item label="自学时间" required>
+                  <Space.Compact className="w-full">
+                    <Form.Item name="self_study_date" noStyle rules={[{ required: true, message: '请选择自学日期' }]}>
+                      <DatePicker placeholder="自学日期" style={{ width: '50%' }} />
+                    </Form.Item>
+                    <Form.Item name="self_study_time" noStyle initialValue={[dayjs('14:00', 'HH:mm'), dayjs('16:00', 'HH:mm')]}>
+                      <TimePicker.RangePicker format="HH:mm" style={{ width: '50%' }} />
+                    </Form.Item>
+                  </Space.Compact>
+                </Form.Item>
+              </>
+            ) : (
+              <Form.Item
+                name="training_time"
+                label="培训时间"
+                initialValue={[dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')]}
+              >
+                <TimePicker.RangePicker className="w-full" format="HH:mm" />
+              </Form.Item>
+            )}
 
             <Form.Item name="location" label="培训地点">
               <Input placeholder="请输入培训地点" />
@@ -585,6 +717,19 @@ export default function TrainingNotificationClient() {
                 className="w-full"
               />
             </Form.Item>
+
+            {assessmentMethodWatch && (
+              <Form.Item label="生成考核材料">
+                <Space>
+                  <Button
+                    icon={assessmentMethodWatch === '笔试' ? <RobotOutlined /> : <FormOutlined />}
+                    onClick={handleGenerateAssessment}
+                  >
+                    {assessmentMethodWatch === '笔试' ? '生成笔试试卷' : '生成问答实操'}
+                  </Button>
+                </Space>
+              </Form.Item>
+            )}
 
             <Form.Item name="issuer_department" label="落款部门">
               <Select
@@ -663,17 +808,22 @@ export default function TrainingNotificationClient() {
               >
                 添加到培训台账
               </Button>
-              <Button
-                type="primary"
-                icon={<SendOutlined />}
-                onClick={handleSendNotify}
-                loading={sendingNotify}
-              >
-                通知受训人员
-              </Button>
             </Space>
           </Form.Item>
         </Form>
+        {assessmentMethodWatch === '问答' && subjectValue && (
+          <div className="mt-4 pt-4 border-t" id="assessment-section">
+            <AssessmentFlow
+              subject={subjectValue}
+              department={deptValue}
+              trainingDate={dateRangeValue ? dateRangeValue[0].format('YYYY-MM-DD') : ''}
+              trainingMethod={trainingMethodValue}
+              trainer={trainerValue}
+              employeeNames={previewNames}
+              employeeNumberMap={nameToNumberMap}
+            />
+          </div>
+        )}
       </Card>
 
       {/* Print preview area */}
@@ -937,6 +1087,149 @@ export default function TrainingNotificationClient() {
           <p>填写主办部门、培训日期和培训主题后预览培训通知、签到表和效果评估表</p>
         </div>
       )}
+
+      {/* 生成考核材料 Modal */}
+      <Modal
+        title={assessmentMethodWatch === '笔试' ? '生成笔试试卷' : '生成问答实操'}
+        open={assessmentModalOpen}
+        footer={assessmentQuestions ? (
+          <Space wrap>
+            <Button onClick={() => setAssessmentModalOpen(false)}>关闭</Button>
+            {assessmentMethodWatch === '笔试' && (
+              <Button type="primary" onClick={async () => {
+                try {
+                  const v = form.getFieldsValue()
+                  const questions = (assessmentQuestions?.questions || []).map((q: any) => ({
+                    type: q.type || 'choice',
+                    question: q.question || q.content || '',
+                    options: q.options || [],
+                    answer: q.answer || '',
+                    score: q.score || 5,
+                  }))
+                  const counts: Record<string, number> = {}
+                  questions.forEach((q: any) => { counts[q.type] = (counts[q.type] || 0) + 1 })
+                  await saveExamPaper({
+                    subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷',
+                    department: v.department || undefined,
+                    training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD'),
+                    training_method: v.training_method,
+                    questions,
+                    full_score: assessmentQuestions?.total_score || 100,
+                    choice_count: counts.choice || 0,
+                    true_false_count: counts.true_false || 0,
+                    multi_choice_count: counts.multi_choice || 0,
+                    fill_blank_count: counts.fill_blank || 0,
+                  })
+                  message.success('考卷已保存，可在资料打印中下载')
+                } catch (err: any) { message.error(err.message || '保存考卷失败') }
+              }}>
+                保存考卷
+              </Button>
+            )}
+            <Button type="primary" onClick={() => {
+              const v = form.getFieldsValue()
+              const p = new URLSearchParams()
+              if (v.subject) p.set('subject', v.subject)
+              if (v.department) p.set('department', v.department)
+              if (v.training_date_range?.[0]) p.set('date', v.training_date_range[0].format('YYYY-MM-DD'))
+              if (v.training_method) p.set('method', v.training_method)
+              if (v.trainer) p.set('trainer', v.trainer)
+              if (v.employee_names?.length) p.set('trainees', v.employee_names.join(','))
+              const qs = (assessmentQuestions?.questions || []).map((q: any) => {
+                const f: string[] = []
+                if (q.file_no) f.push(`file_no:${encodeURIComponent(q.file_no)}`)
+                if (q.question || q.content) f.push(`q:${encodeURIComponent(q.question || q.content)}`)
+                if (q.answer) f.push(`a:${encodeURIComponent(q.answer)}`)
+                if (q.score) f.push(`s:${q.score}`)
+                return f.join(';')
+              })
+              if (qs.length) p.set('questions', qs.join('||'))
+              router.push(`/hr/training/qa-assessment?${p.toString()}`)
+            }}>
+              跳转到考核成绩页（录成绩 → 导出全套）
+            </Button>
+          </Space>
+        ) : null}
+        onCancel={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null) }}
+        width={700}
+      >
+        <div className="space-y-4">
+          {assessmentMethodWatch === '问答' && (
+            <>
+              <div className="border rounded p-3 bg-blue-50 flex items-center justify-between gap-3">
+                <span className="text-blue-700 text-sm">
+                  <b>下载文件：</b>生成并下载培训通知书+签到表，考核区在页面下方独立操作
+                </span>
+                <Button icon={<DownloadOutlined />} onClick={async () => {
+                  setAssessmentModalOpen(false)
+                  try { await handleExportWord() } catch {}
+                  try { await handleExportExcel() } catch {}
+                }}>
+                  下载通知书+签到表
+                </Button>
+              </div>
+            </>)}
+          <p className="text-gray-500">（可选）上传培训材料文件（支持 .docx / .txt，如 SOP 原文、课件），AI 将根据材料自动生成考题。</p>
+          <Upload
+            accept=".docx,.txt"
+            maxCount={1}
+            beforeUpload={(file) => { setAssessmentFile(file); return false }}
+            onRemove={() => setAssessmentFile(null)}
+          >
+            <Button icon={<UploadOutlined />}>选择文件</Button>
+          </Upload>
+          {assessmentFile && (
+            <p className="text-sm text-green-600">已选择：{assessmentFile.name}</p>
+          )}
+          <Button
+            type="primary"
+            loading={generatingAssessment}
+            onClick={handleAssessmentFileUpload}
+            disabled={!assessmentFile}
+          >
+            开始生成
+          </Button>
+
+          {assessmentQuestions && (
+            <div className="mt-4 border rounded p-4 max-h-96 overflow-y-auto">
+              <h3 className="font-bold mb-2">
+                {assessmentQuestions.title || '考核内容'}
+                <span className="text-gray-400 text-sm ml-2">
+                  (满分：{assessmentQuestions.total_score || 100}分)
+                </span>
+              </h3>
+              {(assessmentQuestions.questions || []).map((q: any, i: number) => (
+                <div key={i} className="mb-3 border-b pb-2">
+                  <p className="font-medium">
+                    {i + 1}. [{q.type || '题目'}] {q.question || q.content}
+                  </p>
+                  {q.options && (
+                    <div className="ml-4 text-gray-600">
+                      {q.options.map((opt: string, oi: number) => (
+                        <p key={oi}>{String.fromCharCode(65 + oi)}. {opt}</p>
+                      ))}
+                    </div>
+                  )}
+                  {q.answer && (
+                    <p className="text-green-600 text-sm ml-2">答案：{q.answer}</p>
+                  )}
+                </div>
+              ))}
+              {assessmentMethodWatch === '问答' && (
+                <div className="mt-3 pt-2 border-t">
+                  <Button
+                    type="primary"
+                    icon={<DownloadOutlined />}
+                    onClick={handleExportQaRecord}
+                  >
+                    导出问答实操记录表
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Modal>
 
       <style jsx global>{`
         @media print {

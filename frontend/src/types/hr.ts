@@ -278,48 +278,6 @@ export interface TeamListResponse {
   }
 }
 
-export interface OffboardingRecord {
-  id: string
-  employee_id: string
-  employee?: Employee
-  offboarding_date: string
-  offboarding_type: string
-  reason?: string
-  handover_status: string
-  notes?: string
-  created_at?: string
-  updated_at?: string
-}
-
-export interface OffboardingRecordCreateInput {
-  employee_id: string
-  offboarding_date: string
-  offboarding_type?: string
-  reason?: string
-  handover_status?: string
-  notes?: string
-}
-
-export interface OffboardingRecordUpdateInput {
-  employee_id?: string
-  offboarding_date?: string
-  offboarding_type?: string
-  reason?: string
-  handover_status?: string
-  notes?: string
-}
-
-export interface OffboardingRecordListResponse {
-  code: number
-  message: string
-  data: OffboardingRecord[]
-  meta?: {
-    page: number
-    page_size: number
-    total: number
-  }
-}
-
 export interface OnboardingRecord {
   id: string
   seq_number?: number
@@ -390,12 +348,6 @@ export interface OnboardingRecordListResponse {
   }
 }
 
-export interface OnboardingRecordResponse {
-  code: number
-  message: string
-  data: OnboardingRecord
-}
-
 export interface DepartureRecord {
   id: string
   name: string
@@ -445,118 +397,6 @@ export interface DepartureRecordListResponse {
     page_size: number
     total: number
   }
-}
-
-export interface DepartureRecordResponse {
-  code: number
-  message: string
-  data: DepartureRecord
-}
-
-export interface AiSuggestion {
-  suggestion: string
-  evidence: string
-}
-
-export interface TurnoverRawData {
-  period_start: string
-  period_end: string
-  onboarding_count: number
-  onboarding_by_department: Record<string, number>
-  onboarding_by_job_category: Record<string, number>
-  onboarding_by_education: Record<string, number>
-  departure_count: number
-  departure_by_reason: Record<string, number>
-  departure_by_department: Record<string, number>
-  departure_by_job_category: Record<string, number>
-  current_headcount: number
-}
-
-export interface TurnoverMetrics {
-  net_change: number
-  initial_headcount: number
-  turnover_rate: number
-}
-
-export interface TurnoverAnalysisResponse {
-  code: number
-  message: string
-  data: {
-    raw_data: TurnoverRawData
-    metrics: TurnoverMetrics
-    ai_summary: string
-    ai_suggestions: AiSuggestion[]
-  }
-}
-
-export interface TrainingNotificationData {
-  department: string
-  training_date: string
-  subject: string
-  training_time_start?: string
-  training_time_end?: string
-  location?: string
-  trainer?: string
-  content?: string
-  trainee_names: string[]
-  remarks?: string
-  issuer_department?: string
-  issue_date?: string
-}
-
-export interface TrainingEvaluationData {
-  subject: string
-  training_date?: string
-  training_time_start?: string
-  training_time_end?: string
-  duration_hours?: number
-  training_method?: string
-  is_exam?: boolean
-  trainer_type?: string
-  trainer?: string
-  department_personnel?: string
-  expected_count?: number
-  actual_count?: number
-  absent_count?: number
-  textbook?: string
-  makeup_training?: boolean
-  assessment_method?: string
-  pass_count?: number
-  fail_count?: number
-  absent_exam_count?: number
-  absent_exam_handling?: string
-  excellent_count?: number
-  qualified_count?: number
-  unqualified_count?: number
-  evaluation_conclusion?: string
-  organizer?: string
-  organizer_date?: string
-  remarks?: string
-}
-
-export interface OnboardingEvaluationData {
-  employee_name: string
-  employee_number?: string
-  gender?: string
-  department_position?: string
-  hire_date?: string
-  training_period?: string
-  regularization_date?: string
-  assessment_contents?: string[]
-  comprehensive_comment?: string
-  is_qualified?: boolean
-  assigned_position?: string
-  assessment_method?: string
-  dept_manager_signature?: string
-  signature_date?: string
-  remarks?: string
-  dept_manager_agree?: boolean
-  hr_manager_agree?: boolean
-  qa_manager_agree?: boolean
-  dept_manager?: string
-  hr_manager?: string
-  qa_manager?: string
-  approval_date?: string
 }
 
 export interface TrainingLedgerRecord {
@@ -740,40 +580,70 @@ export interface Candidate {
   updated_at?: string
 }
 
-// ─── 培训计划相关类型（待后端实现）───
+// ─── 问答/实操考核 ───
 
-export interface TrainingPlan {
-  id: string
-  [key: string]: any
+export interface QaQuestion {
+  file_no: string
+  question: string
+  answer: string
+  score: number
 }
 
-export interface TrainingPlanSop {
+export interface QaAssessment {
   id: string
-  [key: string]: any
+  subject: string
+  department?: string | null
+  training_date?: string | null
+  training_method?: string | null
+  assessment_method: string
+  trainer?: string | null
+  questions?: QaQuestion[] | null
+  question_count: number
+  full_score: number
+  excellent_line: number
+  pass_line: number
 }
 
-export interface TrainingRecord {
+export interface QaAssessmentScore {
   id: string
-  [key: string]: any
+  employee_name: string
+  employee_number?: string | null
+  wrong_questions?: number[] | null
+  total_score: number
+  grade?: string | null
+  result_text?: string | null
+  assessed_date?: string | null
 }
 
-export interface TrainingAssessment {
-  id: string
-  [key: string]: any
+export interface QaAssessmentCreateInput {
+  subject: string
+  department?: string
+  training_date?: string
+  training_method?: string
+  assessment_method?: string
+  trainer?: string
+  questions?: QaQuestion[]
+  question_count?: number
+  full_score?: number
+  excellent_line?: number
+  pass_line?: number
+  trainee_names: string[]
 }
 
-export interface TrainingApproval {
-  id: string
-  [key: string]: any
+export interface QaScoreSaveInput {
+  assessed_date?: string
+  scores: { employee_name: string; employee_number?: string; wrong_questions: number[] }[]
 }
 
-export interface TrainingPlanListResponse { code: number; message: string; data: TrainingPlan[]; meta?: { total: number; page?: number; page_size?: number } }
-export interface TrainingPlanResponse { code: number; message: string; data: TrainingPlan }
-export interface TrainingPlanSopListResponse { code: number; message: string; data: TrainingPlanSop[]; meta?: { total: number; page?: number; page_size?: number } }
-export interface TrainingPlanSopResponse { code: number; message: string; data: TrainingPlanSop }
-export interface TrainingRecordListResponse { code: number; message: string; data: TrainingRecord[]; meta?: { total: number; page?: number; page_size?: number } }
-export interface TrainingRecordResponse { code: number; message: string; data: TrainingRecord }
-export interface TrainingAssessmentListResponse { code: number; message: string; data: TrainingAssessment[]; meta?: { total: number; page?: number; page_size?: number } }
-export interface TrainingAssessmentResponse { code: number; message: string; data: TrainingAssessment }
-export interface TrainingApprovalListResponse { code: number; message: string; data: TrainingApproval[]; meta?: { total: number; page?: number; page_size?: number } }
-export interface TrainingApprovalResponse { code: number; message: string; data: TrainingApproval }
+export interface QuestionBankItem {
+  id: string
+  file_no: string
+  subject?: string | null
+  question: string
+  answer: string
+  score: number
+  source: string
+  department?: string | null
+  usage_count: number
+  last_used_date?: string | null
+}

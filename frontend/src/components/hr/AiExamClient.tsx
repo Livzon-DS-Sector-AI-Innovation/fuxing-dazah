@@ -41,8 +41,6 @@ const BORDER_STYLE_CENTER = { border: '1px solid #1f2937', padding: '8px', textA
 export default function AiExamClient() {
   // 手动输入字段
   const [title, setTitle] = useState('')
-  const [examiner, setExaminer] = useState('')
-  const [examDate, setExamDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [assessmentDate, setAssessmentDate] = useState(dayjs().format('YYYY-MM-DD'))
 
   // 上传和出题状态
@@ -110,10 +108,6 @@ export default function AiExamClient() {
       message.warning('请输入试卷标题')
       return
     }
-    if (!examiner.trim()) {
-      message.warning('请输入出卷人')
-      return
-    }
     if (choiceQuestions.length === 0 && trueFalseQuestions.length === 0 && multiQuestions.length === 0 && fillQuestions.length === 0) {
       message.warning('请先生成题目')
       return
@@ -123,8 +117,6 @@ export default function AiExamClient() {
     try {
       const data: ExamExportData = {
         title: title.trim(),
-        examiner: examiner.trim(),
-        exam_date: examDate,
         assessment_date: assessmentDate,
         choice_questions: choiceQuestions,
         true_false_questions: trueFalseQuestions,
@@ -184,47 +176,21 @@ export default function AiExamClient() {
     <div className="space-y-6">
       {/* ─── 手动输入区域 ─── */}
       <Card title="试卷基本信息" className="shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="md:col-span-2">
-            <Text className="block mb-1">试卷标题</Text>
-            <Input
-              placeholder="请输入试卷标题（对应文档页眉作为试卷题目）"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={100}
-              showCount
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">出卷人</Text>
-            <Input
-              placeholder="请输入出卷人"
-              value={examiner}
-              onChange={(e) => setExaminer(e.target.value)}
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">出卷时间</Text>
-            <Input
-              type="date"
-              value={examDate}
-              onChange={(e) => setExamDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">考核时间</Text>
-            <Input
-              type="date"
-              value={assessmentDate}
-              onChange={(e) => setAssessmentDate(e.target.value)}
-            />
-          </div>
+        <div>
+          <Text className="block mb-1">试卷标题</Text>
+          <Input
+            placeholder="请输入试卷标题"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={100}
+            showCount
+          />
         </div>
       </Card>
 
       {/* ─── 文件上传区域 ─── */}
       <Card title="上传培训文件" className="shadow-sm">
-        <Space direction="vertical" size="middle" className="w-full">
+        <Space orientation="vertical" size="middle" className="w-full">
           <Upload
             fileList={fileList}
             onChange={handleUploadChange}

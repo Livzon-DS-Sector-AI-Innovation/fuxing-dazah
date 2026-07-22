@@ -3,11 +3,12 @@
 import re
 from copy import deepcopy
 from io import BytesIO
-from pathlib import Path
 
 from docx import Document
 
-TEMPLATE = Path(__file__).parent / "roster_template.docx"
+from app.modules.hr.template_utils import find_hr_template
+
+TEMPLATE = find_hr_template("roster_template.docx")
 
 
 def generate_roster_sync(employees: list[tuple], department: str | None = None) -> BytesIO:

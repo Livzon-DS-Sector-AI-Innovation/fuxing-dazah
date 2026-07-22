@@ -28,7 +28,8 @@ export default function CreateCandidateModal({
     education: '',
     major: '',
     match_report: '',
-    recommendation_level: '' })
+    recommendation_level: '',
+    resume_file_path: '' })
 
   const handleParse = async () => {
     const values = form.getFieldsValue()
@@ -84,6 +85,7 @@ export default function CreateCandidateModal({
       formData.append('major', previewData.major)
       formData.append('match_report', previewData.match_report)
       formData.append('recommendation_level', previewData.recommendation_level)
+      if (previewData.resume_file_path) formData.append('resume_file_path', previewData.resume_file_path)
 
       await createCandidateAction(formData)
       message.success('候选人创建成功')
@@ -106,7 +108,8 @@ export default function CreateCandidateModal({
       education: '',
       major: '',
       match_report: '',
-      recommendation_level: '' })
+      recommendation_level: '',
+    resume_file_path: '' })
   }
 
   const handleCancel = () => {
