@@ -28,6 +28,7 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+.next
 
 .claude
 uploads
