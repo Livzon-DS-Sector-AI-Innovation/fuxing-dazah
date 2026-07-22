@@ -24,6 +24,7 @@ from app.modules.production.schemas import (
     FieldValueIn,
     NodeExecutionListItem,
 )
+from app.modules.production.service.assignment_service import require_stage_permission
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -150,6 +151,14 @@ async def start_execution(
         raise AppException(
             status_code=400, message="该流转未在工艺路线中定义，需提供偏离原因"
         )
+
+    # 工段/工序权限校验
+    if user:
+        route_node = next((n for n in nodes if n.id == payload.node_id), None)
+        if route_node and route_node.stage_name:
+            await require_stage_permission(
+                db, user.id, payload.node_id, batch.route_id, route_node.stage_name,
+            )
 
     # 设备校验 + 快照
     briefs = await get_equipment_briefs(db, payload.equipment_ids)

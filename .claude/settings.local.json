@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python3 *)",
       "Bash(uv run python *)",
-      "Read(/Users/chenjiangyue/Downloads/*)"
+      "Read(/Users/chenjiangyue/Downloads/*)",
+      "Git commit",
+      "Git push"
     ]
   },
   "enabledMcpjsonServers": [

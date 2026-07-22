@@ -1,5 +1,15 @@
-"""生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace / intermediate。"""
+"""生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace / intermediate / assignment。"""
 
+from app.modules.production.schemas.assignment import (
+    NodeAssigneeInfo,
+    NodeAssignmentCreate,
+    NodeAssignmentOut,
+    ReceiveAndStartIn,
+    StageAssignmentCreate,
+    StageAssignmentOut,
+    WorkbenchItem,
+    WorkbenchOut,
+)
 from app.modules.production.schemas.batch import (
     BatchCreate,
     BatchDetailOut,
@@ -100,4 +110,12 @@ __all__ = [
     "TraceExecutionBrief",
     "TraceLink",
     "TraceOut",
+    "NodeAssignmentCreate",
+    "NodeAssignmentOut",
+    "NodeAssigneeInfo",
+    "ReceiveAndStartIn",
+    "StageAssignmentCreate",
+    "StageAssignmentOut",
+    "WorkbenchItem",
+    "WorkbenchOut",
 ]

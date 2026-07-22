@@ -1,4 +1,9 @@
-"""trace_service 溯源测试：分裂 + 合并的 DAG 双向追溯。"""
+"""全链路溯源业务测试：沿 batch_links 双向递归。
+
+覆盖业务场景：
+- 向上溯源：从合并后的子批次向上穿透两层到根批次，汇总所有谱系边
+- 向下溯源：从根批次向下穿透两层到合并后的子批次，带执行摘要
+"""
 
 from typing import Any
 
@@ -37,10 +42,10 @@ async def _build_lineage(db: AsyncSession, ctx: dict[str, Any]) -> dict[str, Any
         user=None,
     )
     ex = await execution_service.start_execution(
-        db, root.id, ExecutionStartIn(node_id=ctx["node_a"].id), user=None
+        db, root.id, ExecutionStartIn(node_id=ctx["node_a"].id), user=None,
     )
     await execution_service.complete_execution(
-        db, ex.id, ExecutionCompleteIn(), user=None
+        db, ex.id, ExecutionCompleteIn(), user=None,
     )
     children = await batch_service.derive_batches(
         db,
@@ -68,7 +73,7 @@ async def _build_lineage(db: AsyncSession, ctx: dict[str, Any]) -> dict[str, Any
             db,
             ex_c.id,
             ExecutionCompleteIn(
-                field_values=[FieldValueIn(field_key="yield_qty", value=30)]
+                field_values=[FieldValueIn(field_key="yield_qty", value=30)],
             ),
             user=None,
         )
@@ -88,21 +93,23 @@ async def _build_lineage(db: AsyncSession, ctx: dict[str, Any]) -> dict[str, Any
 
 
 async def test_trace_upstream_from_merged(
-    db_session: AsyncSession, published_route: dict[str, Any]
+    db_session: AsyncSession, published_route: dict[str, Any],
 ) -> None:
+    """从合并后的子批次向上溯源：可穿透两层到 root，包含全部 4 条谱系边。"""
     lineage = await _build_lineage(db_session, published_route)
     trace = await trace_service.get_trace(db_session, lineage["merged"].id)
     batch_ids = {b.id for b in trace.batches}
-    assert lineage["root"].id in batch_ids  # 向上穿透两层
+    assert lineage["root"].id in batch_ids
     assert len(trace.links) == 4  # root->c1, root->c2, c1->m, c2->m
 
 
 async def test_trace_downstream_from_root(
-    db_session: AsyncSession, published_route: dict[str, Any]
+    db_session: AsyncSession, published_route: dict[str, Any],
 ) -> None:
+    """从根批次向下溯源：可穿透两层到 merged，root 含 1 条执行摘要。"""
     lineage = await _build_lineage(db_session, published_route)
     trace = await trace_service.get_trace(db_session, lineage["root"].id)
     batch_ids = {b.id for b in trace.batches}
-    assert lineage["merged"].id in batch_ids  # 向下穿透两层
+    assert lineage["merged"].id in batch_ids
     root_batch = next(b for b in trace.batches if b.id == lineage["root"].id)
-    assert len(root_batch.executions) == 1  # 带执行摘要
+    assert len(root_batch.executions) == 1

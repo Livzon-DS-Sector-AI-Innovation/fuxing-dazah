@@ -31,3 +31,6 @@ logs/
 *.md
 !CLAUDE.md
 .claude
+
+# 测试文件
+tests

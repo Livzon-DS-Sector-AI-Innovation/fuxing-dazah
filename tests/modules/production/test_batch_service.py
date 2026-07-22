@@ -1,7 +1,13 @@
-"""batch_service 业务规则测试。
+"""批次生命周期、分裂/合并谱系写入业务测试。
 
-注意：本文件不依赖 execution_service（Task 9 才实现）。需要"父批次已完成某工序"
-的前置状态时，直接用 ORM 插入 NodeExecution 行构造。
+覆盖业务场景：
+- 创建批次：只能在 published 路线上创建、批号唯一、进入 pending 状态
+- 批次分裂（derive）：父批次必须是 in_progress/completed；通过边界边需起点工序已完成；
+  无边界边必须提供偏离原因；偏离分裂子批次无 entry_node；
+  payload 中批号重复拒绝
+- 批次合并（merge）：父批次不能重复；多父批次合并为一个子批次
+- 批次生命周期：完成需要至少一个已完成工序；报废 pending 批次；重复报废拒绝
+- 列表排序：按 batch_no 升序排列
 """
 
 import uuid
@@ -25,6 +31,7 @@ from tests.modules.production.conftest import rand_code
 
 
 async def _make_batch(db: AsyncSession, ctx: dict[str, Any]) -> Batch:
+    """辅助：在已发布路线上下文中创建测试批次。"""
     return await batch_service.create_batch(
         db,
         BatchCreate(
@@ -39,6 +46,7 @@ async def _make_batch(db: AsyncSession, ctx: dict[str, Any]) -> Batch:
 
 
 async def _set_in_progress(db: AsyncSession, batch: Batch) -> None:
+    """辅助：直接设置批次状态为 in_progress。"""
     batch.status = "in_progress"
     await db.flush()
 
@@ -46,7 +54,7 @@ async def _set_in_progress(db: AsyncSession, batch: Batch) -> None:
 async def _insert_completed_execution(
     db: AsyncSession, batch: Batch, node_id: uuid.UUID
 ) -> None:
-    """直接构造一条 completed 执行（绕过 execution_service）。"""
+    """辅助：直接构造一条 completed 执行记录（绕过 execution_service）。"""
     now = datetime.now(UTC)
     db.add(
         NodeExecution(
@@ -65,6 +73,7 @@ class TestCreateBatch:
     async def test_create_on_published_route(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """在 published 路线上创建批次，状态为 pending 且 entry_node_id 为空。"""
         batch = await _make_batch(db_session, published_route)
         assert batch.status == "pending"
         assert batch.entry_node_id is None
@@ -72,6 +81,7 @@ class TestCreateBatch:
     async def test_duplicate_batch_no_rejected(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """重复批号创建时抛出 AppException。"""
         batch = await _make_batch(db_session, published_route)
         with pytest.raises(AppException):
             await batch_service.create_batch(
@@ -89,7 +99,8 @@ class TestDerive:
     async def test_pending_parent_rejected(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
-        parent = await _make_batch(db_session, published_route)  # pending
+        """pending 状态的父批次不能派生，抛出 AppException。"""
+        parent = await _make_batch(db_session, published_route)
         with pytest.raises(AppException):
             await batch_service.derive_batches(
                 db_session,
@@ -104,9 +115,9 @@ class TestDerive:
     async def test_derive_requires_completed_execution_at_from_node(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """通过边界边派生时父批次未完成起点工序则拒绝。"""
         parent = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, parent)
-        # 父批次在边界边 from_node（发酵A）上没有 completed 执行 → 拒绝
         with pytest.raises(AppException):
             await batch_service.derive_batches(
                 db_session,
@@ -121,6 +132,7 @@ class TestDerive:
     async def test_derive_without_edge_requires_reason(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """不指定边界边且无偏离原因时派生被拒。"""
         parent = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, parent)
         with pytest.raises(AppException):
@@ -134,6 +146,7 @@ class TestDerive:
     async def test_derive_via_boundary_edge_sets_entry_node(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """通过批次边界边派生，子批次 entry_node_id 指向边终点。"""
         parent = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, parent)
         await _insert_completed_execution(
@@ -160,6 +173,7 @@ class TestDerive:
     async def test_derive_deviation_has_no_entry_node(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """偏离派生（仅 deviation_reason 无 edge_id）的子批次 entry_node_id 为 None。"""
         parent = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, parent)
         children = await batch_service.derive_batches(
@@ -176,6 +190,7 @@ class TestDerive:
     async def test_derive_duplicate_child_no_in_payload_rejected(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """派生请求中 children 列表含重复批号时抛出 AppException。"""
         parent = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, parent)
         dup_no = rand_code("B")
@@ -198,6 +213,7 @@ class TestMerge:
     async def test_merge_duplicate_parent_rejected(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """合并时父批次列表含重复 ID 抛出 AppException。"""
         p1 = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, p1)
         with pytest.raises(AppException):
@@ -218,6 +234,7 @@ class TestMerge:
     async def test_merge_creates_single_child(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """两个父批次合并为一个子批次，子批次状态为 pending，批号正确。"""
         p1 = await _make_batch(db_session, published_route)
         p2 = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, p1)
@@ -244,6 +261,7 @@ class TestLifecycle:
     async def test_complete_requires_completed_execution(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """无已完成工序的 in_progress 批次完成时被拒；完成工序后即可完成。"""
         batch = await _make_batch(db_session, published_route)
         await _set_in_progress(db_session, batch)
         with pytest.raises(AppException):
@@ -255,6 +273,7 @@ class TestLifecycle:
         assert done.status == "completed"
 
     async def test_cancel(self, db_session: AsyncSession, published_route: dict[str, Any]) -> None:
+        """pending 批次可直接报废，状态变为 cancelled。"""
         batch = await _make_batch(db_session, published_route)
         cancelled = await batch_service.cancel_batch(db_session, batch.id, user=None)
         assert cancelled.status == "cancelled"
@@ -262,6 +281,7 @@ class TestLifecycle:
     async def test_cancel_twice_rejected(
         self, db_session: AsyncSession, published_route: dict[str, Any]
     ) -> None:
+        """已报废的批次再次报废时抛出 AppException。"""
         batch = await _make_batch(db_session, published_route)
         await batch_service.cancel_batch(db_session, batch.id, user=None)
         with pytest.raises(AppException):
@@ -272,6 +292,7 @@ class TestListSort:
     async def test_list_batches_order_by_batch_no_asc(
         self, db_session: AsyncSession
     ) -> None:
+        """按批号升序排列批次列表时结果正确排序。"""
         from app.modules.production import repository as repo
         from app.modules.production.models import Batch as BatchModel
 

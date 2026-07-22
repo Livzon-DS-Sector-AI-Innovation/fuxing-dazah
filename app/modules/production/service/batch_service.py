@@ -16,8 +16,32 @@ from app.modules.production.schemas import (
     FieldValueOut,
     MergeIn,
 )
+from app.modules.production.service.assignment_service import require_stage_permission
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
+
+
+async def _check_boundary_stage_permission(
+    db: AsyncSession,
+    user: User,
+    edge_id: uuid.UUID,
+    route_id: uuid.UUID,
+) -> None:
+    """校验用户对边界边起点工段的操作权限。
+
+    边界边的 from_node 即父批次最后完成的工序节点，
+    只有该工段或该节点的负责人才能从此边界派生/合并子批次。
+    使用 repository 层查询而非原始 select，保持架构一致性。
+    """
+    edge = await repo.get_edge(db, edge_id)
+    if not edge:
+        return
+    nodes = await repo.get_nodes_by_ids(db, [edge.from_node_id])
+    from_node = nodes[0] if nodes else None
+    if from_node and from_node.stage_name:
+        await require_stage_permission(
+            db, user.id, from_node.id, route_id, from_node.stage_name,
+        )
 
 
 async def _get_batch_or_404(db: AsyncSession, batch_id: uuid.UUID) -> Batch:
@@ -92,6 +116,11 @@ async def derive_batches(
     entry_node_id, is_deviation = await _validate_boundary(
         db, parent, payload.edge_id, payload.deviation_reason
     )
+    # 工段权限校验
+    if user and payload.edge_id and not is_deviation:
+        await _check_boundary_stage_permission(
+            db, user, payload.edge_id, parent.route_id,
+        )
     nos = [c.batch_no for c in payload.children]
     if len(nos) != len(set(nos)):
         raise AppException(status_code=400, message="子批次批号重复")
@@ -156,6 +185,12 @@ async def merge_batches(
     route_ids = {p.route_id for p in parents}
     if len(route_ids) != 1:
         raise AppException(status_code=400, message="合并的父批次必须属于同一条路线")
+    # 工段权限校验
+    if user and payload.edge_id and not is_deviation:
+        route_id = next(iter(route_ids))
+        await _check_boundary_stage_permission(
+            db, user, payload.edge_id, route_id,
+        )
     if await repo.get_batch_by_no(db, payload.batch_no):
         raise DuplicateException("批号", payload.batch_no)
     child = Batch(
