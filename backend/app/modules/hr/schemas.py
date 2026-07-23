@@ -255,6 +255,7 @@ class TrainingSignInSheetInput(BaseModel):
     training_method: str | None = Field(None, max_length=32, description="培训方式")
     assessment_method: str | None = Field(None, max_length=32, description="考核方式")
     employee_names: list[str] = Field(default_factory=list, description="应出席受训人员姓名列表")
+    employee_departments: dict[str, str] = Field(default_factory=dict, description="员工姓名→部门映射")
     remarks: str | None = Field(None, max_length=512, description="备注")
 
 
@@ -708,6 +709,9 @@ class AnnualTrainingPlanItemBase(BaseModel):
     target_audience: str | None = Field(None, max_length=256, description="培训对象")
     position_and_count: str | None = Field(None, max_length=256, description="参加岗位/参加人数")
     training_method: str | None = Field(None, max_length=64, description="培训方式")
+    location: str | None = Field(None, max_length=128, description="培训地点")
+    assessment_method: str | None = Field(None, max_length=64, description="考核方式")
+    notes: str | None = Field(None, max_length=512, description="注意事项")
     training_hours: float | None = Field(None, description="培训学时")
     confirmer: str | None = Field(None, max_length=64, description="确认者")
     confirm_date: date | None = Field(None, description="确认日期")
@@ -783,6 +787,48 @@ class TrainerListResponse(BaseModel):
     meta: dict | None = None
 
 
+# ─── Department Training Personnel Schemas ───
+
+
+class DeptTrainingPersonnelResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    display_department: str
+    variety: str | None = None
+    department: str
+    training_admin: str | None = None
+    department_head: str | None = None
+    level1_trainer: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class DeptTrainingPersonnelCreate(BaseModel):
+    display_department: str = Field(..., max_length=128)
+    variety: str | None = Field(None, max_length=64)
+    department: str = Field(..., max_length=128)
+    training_admin: str | None = Field(None, max_length=256)
+    department_head: str | None = Field(None, max_length=64)
+    level1_trainer: str | None = Field(None, max_length=64)
+
+
+class DeptTrainingPersonnelUpdate(BaseModel):
+    display_department: str | None = Field(None, max_length=128)
+    variety: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=128)
+    training_admin: str | None = Field(None, max_length=256)
+    department_head: str | None = Field(None, max_length=64)
+    level1_trainer: str | None = Field(None, max_length=64)
+
+
+class DeptTrainingPersonnelListResponse(BaseModel):
+    code: int = 0
+    message: str = "ok"
+    data: list[DeptTrainingPersonnelResponse] = Field(default_factory=list)
+    meta: dict | None = None
+
+
 # ─── SOP Catalog Schemas ───
 
 class SopCatalogResponse(BaseModel):
@@ -793,6 +839,15 @@ class SopCatalogResponse(BaseModel):
     category: str | None = None
     department: str | None = None
     position_name: str | None = None
+
+
+class BatchScoreItem(BaseModel):
+    id: UUID
+    assessment_result: str | None = None
+
+
+class BatchScoreUpdate(BaseModel):
+    records: list[BatchScoreItem]
 
 
 class SopCatalogListResponse(BaseModel):

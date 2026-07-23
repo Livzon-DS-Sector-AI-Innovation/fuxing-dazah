@@ -90,7 +90,11 @@ def generate_training_evaluation(data: TrainingEvaluationInput) -> BytesIO:
     # Row 1: date(cols 1-7), label(cols 8-10), hours(cols 11-14)
     date_str = data.training_date.strftime("%Y.%m.%d") if data.training_date else ""
     _set_cell(table.rows[1].cells[1], date_str)
-    _set_cell(table.rows[1].cells[11], _compute_hours(data.training_time_start, data.training_time_end))
+    hours_str = _compute_hours(data.training_time_start, data.training_time_end)
+    if not hours_str and data.duration_hours:
+        h = data.duration_hours
+        hours_str = f"{int(h)}h" if h == int(h) else f"{h}h"
+    _set_cell(table.rows[1].cells[11], hours_str)
 
     # Row 2: method(cols 1-7), label(cols 8-10), trainer(cols 11-14)
     _set_cell(table.rows[2].cells[1], data.training_method or "")
@@ -140,6 +144,21 @@ def generate_training_evaluation(data: TrainingEvaluationInput) -> BytesIO:
             rate_text += f"，合格率{data.pass_rate}"
         if rate_text:
             _set_cell(table.rows[15].cells[2], f"{rate_text}，达到培训效果。")
+
+    # 最终清理所有残留模板占位符（段落级替换，避免 run 拆分问题）
+    import re
+    _marker_re = re.compile(r"\{[#/]?[^}]*\}")
+    for row in table.rows:
+        for cell in row.cells:
+            for p in cell.paragraphs:
+                full_text = "".join(r.text for r in p.runs)
+                if _marker_re.search(full_text):
+                    cleaned = _marker_re.sub("", full_text)
+                    # 把清理后的文本写回第一个 run，清空其余
+                    if p.runs:
+                        p.runs[0].text = cleaned
+                        for r in p.runs[1:]:
+                            r.text = ""
 
     buf = BytesIO()
     doc.save(buf)

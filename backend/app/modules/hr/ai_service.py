@@ -13,12 +13,12 @@ from app.core.config import get_settings
 
 
 class AiChatService:
-    """Service for streaming chat completions via Moonshot API."""
+    """Service for streaming chat completions via DeepSeek API."""
 
-    def __init__(self, api_key: str, model: str = "moonshot-v1-32k") -> None:
+    def __init__(self, api_key: str, model: str = "deepseek-chat") -> None:
         self.client = openai.AsyncOpenAI(
             api_key=api_key,
-            base_url="https://api.moonshot.cn/v1",
+            base_url="https://api.deepseek.com/v1",
         )
         self.model = model
 

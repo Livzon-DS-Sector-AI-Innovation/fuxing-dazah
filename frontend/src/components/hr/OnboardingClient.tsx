@@ -15,12 +15,6 @@ interface OnboardingClientProps {
 
 export default function OnboardingClient({ initialRecords, initialTotal }: OnboardingClientProps) {
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-  const [notifyLogs, setNotifyLogs] = useState<any[]>([])
-
-  useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/notification-logs`, { credentials: 'include' })
-      .then(r => r.json()).then(d => setNotifyLogs(d.data || [])).catch(() => {})
-  }, [])
   const { message } = App.useApp()
   const [records, setRecords] = useState<OnboardingRecord[]>(initialRecords)
   const [total, setTotal] = useState(initialTotal)

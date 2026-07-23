@@ -37,21 +37,18 @@ def generate_score_report(
     """生成成绩单，按人数自动追加行。scores: [{name, department, total_score}]"""
     doc = Document(str(_find_template()))
     table = doc.tables[0]
-
     scores = scores or []
-    template_row_idx = 1  # 模板第一行数据行（跳过表头）作为样式模板
+    template_row_idx = 1  # 第一行数据行（跳过表头）作为样式模板
 
-    # 模板至少保留一行数据行用于复制样式
     if len(table.rows) <= template_row_idx:
         raise ValueError("成绩单模板至少需要一行数据行（不含表头）")
 
-    # 如果人数超过模板行数，自动追加行（复制第一行数据行的样式）
+    # 人数超过模板行数时，自动追加行
     while len(table.rows) - 1 < len(scores):
         template_row = table.rows[template_row_idx]
         new_row = deepcopy(template_row._tr)
         table._tbl.append(new_row)
 
-    # 填充数据
     for ri, s in enumerate(scores):
         row = table.rows[ri + 1]
         _set_cell_text(row.cells[0], str(ri + 1))
@@ -61,8 +58,7 @@ def generate_score_report(
 
     # 清空多余行
     for ri in range(len(scores) + 1, len(table.rows)):
-        row = table.rows[ri]
-        for cell in row.cells:
+        for cell in table.rows[ri].cells:
             _set_cell_text(cell, "")
 
     buf = BytesIO()

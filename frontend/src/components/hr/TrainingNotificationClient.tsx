@@ -8,9 +8,11 @@ import {
   DatePicker,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Space,
+  Tag,
   TimePicker,
   Upload,
   message,
@@ -24,6 +26,7 @@ import {
   RobotOutlined,
   FormOutlined,
   DatabaseOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
@@ -39,13 +42,14 @@ import {
   API_BASE,
 } from '@/lib/api/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
-import AssessmentFlow from './AssessmentFlow'
 import EvaluationPreview from './EvaluationPreview'
+import AssessmentFlow from './AssessmentFlow'
 
 const TRAINING_METHODS = [
   { value: '面授', label: '面授' },
   { value: '自学', label: '自学' },
   { value: '面授+自学', label: '面授+自学' },
+  { value: '自学+面授', label: '自学+面授' },
 ]
 
 const ASSESSMENT_METHODS = [
@@ -92,17 +96,33 @@ export default function TrainingNotificationClient() {
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])
   const [nameToNumberMap, setNameToNumberMap] = useState<Record<string, string>>({})
+  const [nameToDeptMap, setNameToDeptMap] = useState<Record<string, string>>({})
   const [submittingWord, setSubmittingWord] = useState(false)
   const [submittingExcel, setSubmittingExcel] = useState(false)
   const [addingToLedger, setAddingToLedger] = useState(false)
   const [trainerDept, setTrainerDept] = useState<string | undefined>(undefined)
   const [trainerEmployees, setTrainerEmployees] = useState<{ value: string; label: string }[]>([])
   const [assessmentModalOpen, setAssessmentModalOpen] = useState(false)
+  const [scoreModalOpen, setScoreModalOpen] = useState(false)
+  const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
+  const [exportingScore, setExportingScore] = useState(false)
+  const [dualMode, setDualMode] = useState(false)
   const [generatingAssessment, setGeneratingAssessment] = useState(false)
   const [assessmentFile, setAssessmentFile] = useState<File | null>(null)
   const [assessmentQuestions, setAssessmentQuestions] = useState<any>(null)
   const [trainingMethod, setTrainingMethod] = useState<string | undefined>(undefined)
   const [assessmentMethod, setAssessmentMethod] = useState<string | undefined>(undefined)
+  // 学员错题评分：{ traineeName: { wrongIndices: number[], score: number } }
+  const [traineeScoreMap, setTraineeScoreMap] = useState<Record<string, { wrongIndices: number[]; score: number }>>({})
+  // 题库选题
+  const [bankQuestions, setBankQuestions] = useState<any[]>([])
+  const [loadingBank, setLoadingBank] = useState(false)
+  const [selectedBankIds, setSelectedBankIds] = useState<Set<string>>(new Set())
+  const [bankSearch, setBankSearch] = useState('')
+  const [bankPage, setBankPage] = useState(1)
+  const [traineePage, setTraineePage] = useState(1)
+  const BANK_PAGE_SIZE = 50
+  const TRAINEE_PAGE_SIZE = 15
 
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -117,30 +137,60 @@ export default function TrainingNotificationClient() {
   // 从年度计划跳转过来时，自动填入
   useEffect(() => {
     const subject = searchParams.get('subject')
-    const method = searchParams.get('method')
     const dept = searchParams.get('dept')
-    if (subject) {
-      form.setFieldsValue({
-        subject: decodeURIComponent(subject),
-        training_method: method ? decodeURIComponent(method) : undefined,
-        assessment_method: searchParams.get('assessment') ? decodeURIComponent(searchParams.get('assessment')!) : undefined,
-      })
-      if (dept) {
-        const deptName = decodeURIComponent(dept)
-        setTrainerDept(deptName)
-        // 加载该部门员工
-        fetchEmployees({ department: deptName, page_size: 200 }).then(res => {
-          const emps = (res.data || []).map((e: any) => ({
-            value: e.name, label: `${e.employee_number} ${e.name}`,
-            employee_number: e.employee_number
-          }))
-          setEmployees(emps)
-          setTrainerEmployees(emps)
-          const map: Record<string, string> = {}
-          emps.forEach((e: any) => { map[e.value] = e.employee_number })
-          setNameToNumberMap(map)
-        })
+    if (!subject) return
+
+    const get = (k: string) => {
+      const v = searchParams.get(k)
+      return v ? decodeURIComponent(v) : undefined
+    }
+
+    const confirmDate = get('confirm_date')
+    const method = get('method')
+    const isDual = !!(method?.includes('面授') && method?.includes('自学'))
+    setDualMode(isDual)
+    const dateFields: Record<string, any> = {}
+    if (confirmDate) {
+      const d = dayjs(confirmDate)
+      if (isDual) {
+        dateFields.face_date = d
+        dateFields.self_study_date = d
+      } else {
+        dateFields.training_date = d
       }
+      dateFields.issue_date = d
+    }
+
+    form.setFieldsValue({
+      subject: get('subject'),
+      training_method: method,
+      assessment_method: get('assessment'),
+      location: get('location'),
+      trainer: get('trainer'),
+      department: get('dept'),
+      trainee_departments: get('dept') ? [get('dept')] : undefined,
+      ...dateFields,
+    })
+
+    if (dept) {
+      const deptName = decodeURIComponent(dept)
+      setTrainerDept(deptName)
+      fetchEmployees({ department: deptName, page_size: 200 }).then(res => {
+        const emps = (res.data || []).map((e: any) => ({
+          value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
+          employee_number: e.employee_number,
+        }))
+        setEmployees(emps)
+        setTrainerEmployees(emps)
+        const deptMap2: Record<string, string> = {}
+        emps.forEach((e: any) => { if (e.value) deptMap2[e.value] = deptName })
+        setNameToDeptMap(deptMap2)
+        const map: Record<string, string> = {}
+        emps.forEach((e: any) => { map[e.value] = e.employee_number })
+        setNameToNumberMap(map)
+        // 自动全选为出席受训人员
+        form.setFieldsValue({ employee_names: emps.map((e: any) => e.value) })
+      })
     }
   }, [searchParams])
 
@@ -163,22 +213,27 @@ export default function TrainingNotificationClient() {
     if (!depts || depts.length === 0) {
       setEmployees([])
       setNameToNumberMap({})
+      setNameToDeptMap({})
       form.setFieldsValue({ employee_names: [] })
       return
     }
     const all: { value: string; label: string }[] = []
     const numberMap: Record<string, string> = {}
+    const deptMap: Record<string, string> = {}
     for (const dept of depts) {
       try {
         const res = await fetchEmployees({ department: dept, page_size: 100 })
         const list = (res.data || []).map((e: any) => ({
           value: e.name,
-          label: `${e.name} (${e.employee_number || ''})`,
+          label: `${e.name} - ${e.department || dept} (${e.employee_number || ''})`,
         }))
         all.push(...list)
         for (const e of res.data || []) {
           if (e.name && e.employee_number) {
             numberMap[e.name] = e.employee_number
+          }
+          if (e.name && e.department) {
+            deptMap[e.name] = e.department
           }
         }
       } catch {
@@ -189,6 +244,7 @@ export default function TrainingNotificationClient() {
     const uniqueList = Array.from(map.values())
     setEmployees(uniqueList)
     setNameToNumberMap(numberMap)
+    setNameToDeptMap(deptMap)
     const names = uniqueList.map((e) => e.value)
     form.setFieldsValue({ employee_names: names })
   }
@@ -198,7 +254,7 @@ export default function TrainingNotificationClient() {
     const traineeDepts: string[] = values.trainee_departments || []
     const dateRange = values.training_date_range
     const singleDate = values.training_date
-    const isDual = values.training_method === '面授+自学'
+    const isDual = values.training_method?.includes('面授') && values.training_method?.includes('自学')
 
     setSubmittingWord(true)
     try {
@@ -282,6 +338,7 @@ export default function TrainingNotificationClient() {
         training_method: values.training_method,
         assessment_method: values.assessment_method,
         employee_names: values.employee_names || [],
+        employee_departments: values.employee_names?.length ? Object.fromEntries(values.employee_names.map((n: string) => [n, nameToDeptMap[n] || ''])) : {},
       }
       await generateTrainingSignInSheet(payload)
       message.success('培训签到表已生成')
@@ -293,8 +350,8 @@ export default function TrainingNotificationClient() {
   }
 
   const handleAddToLedger = async () => {
+    const isDualLedger = form.getFieldValue('training_method')?.includes('面授') && form.getFieldValue('training_method')?.includes('自学')
     try {
-      const isDualLedger = form.getFieldValue('training_method') === '面授+自学'
     await form.validateFields([
         'department',
         isDualLedger ? 'training_date_range' : 'training_date',
@@ -357,7 +414,13 @@ export default function TrainingNotificationClient() {
             : department
 
           let durationHours: number | undefined = undefined
-          if (values.training_time && values.training_time.length === 2) {
+          if (isDualLedger) {
+            const faceTime = values.face_time
+            if (faceTime && faceTime.length === 2) {
+              const diff = dayjs(faceTime[1]).diff(dayjs(faceTime[0]), 'minute')
+              durationHours = Math.round(diff / 30) / 2
+            }
+          } else if (values.training_time && values.training_time.length === 2) {
             const start = dayjs(values.training_time[0])
             const end = dayjs(values.training_time[1])
             const diffMinutes = end.diff(start, 'minute')
@@ -501,7 +564,7 @@ export default function TrainingNotificationClient() {
   const deptWatch = Form.useWatch('department', form) as string | undefined
   const trainerWatch = Form.useWatch('trainer', form) as string | undefined
   const employeeNamesWatch = Form.useWatch('employee_names', form) as string[] | undefined
-  const isDualMethod = trainingMethodWatch === '面授+自学'
+  const isDualMethod = trainingMethodWatch?.includes('面授') && trainingMethodWatch?.includes('自学')
 
   const previewNames: string[] = employeeNamesWatch || []
   const subjectValue = subjectWatch || ''
@@ -509,8 +572,8 @@ export default function TrainingNotificationClient() {
   const trainingMethodValue = trainingMethodWatch || ''
   const trainerValue = trainerWatch || ''
 
+  const traineeDepts: string[] = Form.useWatch('trainee_departments', form) || []
   const formValues = form.getFieldsValue()
-  const traineeDepts: string[] = formValues?.trainee_departments || []
   const dateRangeValue = formValues?.training_date_range
   const singleDateValue = formValues?.training_date
   const timeValue = formValues?.training_time
@@ -542,7 +605,7 @@ export default function TrainingNotificationClient() {
 
   let dateStr: string
   let singleDateStr: string
-  if (isDualMethod) {
+  if (isDualMethod || dualMode) {
     // 面授+自学：从两个日期取区间 + 各自时间段
     const dates = [faceDateValue, selfStudyDateValue].filter(Boolean)
     if (dates.length >= 2) {
@@ -584,6 +647,15 @@ export default function TrainingNotificationClient() {
   const hasBasicInfo = !!deptValue && !!(singleDateValue || faceDateValue || selfStudyDateValue) && !!subjectValue
   // Compute duration hours for preview
   const evalHours = (() => {
+    if (isDualMethod || dualMode) {
+      const faceTime = formValues?.face_time
+      if (faceTime?.length === 2) {
+        const diff = dayjs(faceTime[1]).diff(dayjs(faceTime[0]), 'minute')
+        const h = Math.round(diff / 30) / 2
+        return `${h}小时`
+      }
+      return ''
+    }
     if (timeValue && timeValue.length === 2) {
       const diff = dayjs(timeValue[1]).diff(dayjs(timeValue[0]), 'minute')
       const h = Math.round(diff / 30) / 2
@@ -614,10 +686,31 @@ export default function TrainingNotificationClient() {
                 placeholder="选择部门"
                 options={departments}
                 className="w-full"
+                onChange={async (dept: string) => {
+                  if (!dept) return
+                  // 自动加载该部门员工作为受训人员
+                  try {
+                    const res = await fetchEmployees({ department: dept, page_size: 200 })
+                    const emps = (res.data || []).map((e: any) => ({
+                      value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
+                      employee_number: e.employee_number,
+                    }))
+                    setEmployees(emps)
+                    setTrainerEmployees(emps)
+                    const map: Record<string, string> = {}
+                    const dmap: Record<string, string> = {}
+                    emps.forEach((e: any) => { map[e.value] = e.employee_number; dmap[e.value] = e.department || dept })
+                    setNameToNumberMap(map)
+                    setNameToDeptMap(dmap)
+                    // 自动填入受训部门
+                    form.setFieldsValue({ trainee_departments: [dept] })
+                    message.info(`已加载「${dept}」${emps.length} 名员工`)
+                  } catch { message.error('加载员工失败') }
+                }}
               />
             </Form.Item>
 
-            {!isDualMethod && (
+            {!(isDualMethod || dualMode) && (
               <Form.Item
                 name="training_date"
                 label="培训日期"
@@ -636,7 +729,7 @@ export default function TrainingNotificationClient() {
               <Input placeholder="请输入培训主题，如：安全生产规范培训" />
             </Form.Item>
 
-            {isDualMethod ? (
+            {(isDualMethod || dualMode) ? (
               <>
                 <Form.Item label="面授时间" required>
                   <Space.Compact className="w-full">
@@ -706,6 +799,7 @@ export default function TrainingNotificationClient() {
                 placeholder="选择培训方式"
                 options={TRAINING_METHODS}
                 className="w-full"
+                onChange={(v) => setDualMode(v?.includes('面授') && v?.includes('自学'))}
               />
             </Form.Item>
 
@@ -801,6 +895,16 @@ export default function TrainingNotificationClient() {
                 导出签到表
               </Button>
               <Button
+                icon={<FormOutlined />}
+                onClick={() => {
+                  if (!subjectValue) return message.warning('请先填写培训主题')
+                  if (previewNames.length === 0) return message.warning('请先选择出席受训人员')
+                  setScoreModalOpen(true)
+                }}
+              >
+                导出成绩单
+              </Button>
+              <Button
                 type="default"
                 icon={<BookOutlined />}
                 onClick={handleAddToLedger}
@@ -811,20 +915,25 @@ export default function TrainingNotificationClient() {
             </Space>
           </Form.Item>
         </Form>
-        {assessmentMethodWatch === '问答' && subjectValue && (
-          <div className="mt-4 pt-4 border-t" id="assessment-section">
-            <AssessmentFlow
-              subject={subjectValue}
-              department={deptValue}
-              trainingDate={dateRangeValue ? dateRangeValue[0].format('YYYY-MM-DD') : ''}
-              trainingMethod={trainingMethodValue}
-              trainer={trainerValue}
-              employeeNames={previewNames}
-              employeeNumberMap={nameToNumberMap}
-            />
-          </div>
-        )}
       </Card>
+
+      {/* 实操考核矩阵：考核方式选"问答"后出现 */}
+      {assessmentMethodWatch === '问答' && subjectValue && deptValue && (
+        <Card title="考核矩阵（选题 → 录成绩 → 同步台账）" className="mt-4">
+          <AssessmentFlow
+            subject={subjectValue}
+            department={deptValue}
+            trainingDate={
+              singleDateValue ? singleDateValue.format('YYYY-MM-DD')
+                : (dateRangeValue ? dateRangeValue[0].format('YYYY-MM-DD') : '')
+            }
+            trainingMethod={trainingMethodWatch || ''}
+            trainer={trainerWatch}
+            employeeNames={previewNames}
+            employeeNumberMap={nameToNumberMap}
+          />
+        </Card>
+      )}
 
       {/* Print preview area */}
       {hasBasicInfo && (
@@ -1035,7 +1144,7 @@ export default function TrainingNotificationClient() {
                             {pageNames[ri] || ''}
                           </td>
                           <td className="border border-gray-400 p-1 text-center" colSpan={2}>
-                            {pageNames[ri] ? (traineeDepts[0] || deptValue) : ''}
+                            {pageNames[ri] ? (nameToDeptMap[pageNames[ri]] || traineeDepts[0] || deptValue) : ''}
                           </td>
                           <td className="border border-gray-400 p-1"></td>
                         </tr>
@@ -1092,142 +1201,347 @@ export default function TrainingNotificationClient() {
       <Modal
         title={assessmentMethodWatch === '笔试' ? '生成笔试试卷' : '生成问答实操'}
         open={assessmentModalOpen}
-        footer={assessmentQuestions ? (
-          <Space wrap>
-            <Button onClick={() => setAssessmentModalOpen(false)}>关闭</Button>
-            {assessmentMethodWatch === '笔试' && (
-              <Button type="primary" onClick={async () => {
-                try {
-                  const v = form.getFieldsValue()
-                  const questions = (assessmentQuestions?.questions || []).map((q: any) => ({
-                    type: q.type || 'choice',
-                    question: q.question || q.content || '',
-                    options: q.options || [],
-                    answer: q.answer || '',
-                    score: q.score || 5,
-                  }))
-                  const counts: Record<string, number> = {}
-                  questions.forEach((q: any) => { counts[q.type] = (counts[q.type] || 0) + 1 })
-                  await saveExamPaper({
-                    subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷',
-                    department: v.department || undefined,
-                    training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD'),
-                    training_method: v.training_method,
-                    questions,
-                    full_score: assessmentQuestions?.total_score || 100,
-                    choice_count: counts.choice || 0,
-                    true_false_count: counts.true_false || 0,
-                    multi_choice_count: counts.multi_choice || 0,
-                    fill_blank_count: counts.fill_blank || 0,
-                  })
-                  message.success('考卷已保存，可在资料打印中下载')
-                } catch (err: any) { message.error(err.message || '保存考卷失败') }
-              }}>
-                保存考卷
-              </Button>
-            )}
-            <Button type="primary" onClick={() => {
-              const v = form.getFieldsValue()
-              const p = new URLSearchParams()
-              if (v.subject) p.set('subject', v.subject)
-              if (v.department) p.set('department', v.department)
-              if (v.training_date_range?.[0]) p.set('date', v.training_date_range[0].format('YYYY-MM-DD'))
-              if (v.training_method) p.set('method', v.training_method)
-              if (v.trainer) p.set('trainer', v.trainer)
-              if (v.employee_names?.length) p.set('trainees', v.employee_names.join(','))
-              const qs = (assessmentQuestions?.questions || []).map((q: any) => {
-                const f: string[] = []
-                if (q.file_no) f.push(`file_no:${encodeURIComponent(q.file_no)}`)
-                if (q.question || q.content) f.push(`q:${encodeURIComponent(q.question || q.content)}`)
-                if (q.answer) f.push(`a:${encodeURIComponent(q.answer)}`)
-                if (q.score) f.push(`s:${q.score}`)
-                return f.join(';')
-              })
-              if (qs.length) p.set('questions', qs.join('||'))
-              router.push(`/hr/training/qa-assessment?${p.toString()}`)
-            }}>
-              跳转到考核成绩页（录成绩 → 导出全套）
-            </Button>
-          </Space>
-        ) : null}
-        onCancel={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null) }}
-        width={700}
+        footer={null}
+        onCancel={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null); setTraineeScoreMap({}) }}
+        width={900}
       >
         <div className="space-y-4">
-          {assessmentMethodWatch === '问答' && (
+          {/* 未生成考题时：上传区 / 题库选题 */}
+          {!assessmentQuestions && (
             <>
-              <div className="border rounded p-3 bg-blue-50 flex items-center justify-between gap-3">
-                <span className="text-blue-700 text-sm">
-                  <b>下载文件：</b>生成并下载培训通知书+签到表，考核区在页面下方独立操作
-                </span>
-                <Button icon={<DownloadOutlined />} onClick={async () => {
-                  setAssessmentModalOpen(false)
-                  try { await handleExportWord() } catch {}
-                  try { await handleExportExcel() } catch {}
-                }}>
-                  下载通知书+签到表
-                </Button>
-              </div>
-            </>)}
-          <p className="text-gray-500">（可选）上传培训材料文件（支持 .docx / .txt，如 SOP 原文、课件），AI 将根据材料自动生成考题。</p>
-          <Upload
-            accept=".docx,.txt"
-            maxCount={1}
-            beforeUpload={(file) => { setAssessmentFile(file); return false }}
-            onRemove={() => setAssessmentFile(null)}
-          >
-            <Button icon={<UploadOutlined />}>选择文件</Button>
-          </Upload>
-          {assessmentFile && (
-            <p className="text-sm text-green-600">已选择：{assessmentFile.name}</p>
-          )}
-          <Button
-            type="primary"
-            loading={generatingAssessment}
-            onClick={handleAssessmentFileUpload}
-            disabled={!assessmentFile}
-          >
-            开始生成
-          </Button>
+              <p className="text-gray-500">上传培训材料文件（支持 .docx / .txt），AI 自动生成考题；或从题库直接选题。</p>
+              <Space wrap>
+                <Upload accept=".docx,.txt" maxCount={1} beforeUpload={(file) => { setAssessmentFile(file); return false }} onRemove={() => setAssessmentFile(null)}>
+                  <Button icon={<UploadOutlined />}>选择文件</Button>
+                </Upload>
+                <Button icon={<SearchOutlined />} loading={loadingBank} onClick={async () => {
+                  setLoadingBank(true)
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/hr/question-bank?page_size=500`, { credentials: 'include' })
+                    const d = await res.json()
+                    setBankQuestions(d.data || [])
+                  } catch { message.error('加载题库失败') }
+                  finally { setLoadingBank(false) }
+                }}>从题库选题</Button>
+              </Space>
+              {assessmentFile && <p className="text-sm text-green-600">已选择：{assessmentFile.name}</p>}
+              <Button type="primary" loading={generatingAssessment} onClick={handleAssessmentFileUpload} disabled={!assessmentFile}>
+                AI 开始生成
+              </Button>
 
-          {assessmentQuestions && (
-            <div className="mt-4 border rounded p-4 max-h-96 overflow-y-auto">
-              <h3 className="font-bold mb-2">
-                {assessmentQuestions.title || '考核内容'}
-                <span className="text-gray-400 text-sm ml-2">
-                  (满分：{assessmentQuestions.total_score || 100}分)
-                </span>
-              </h3>
-              {(assessmentQuestions.questions || []).map((q: any, i: number) => (
-                <div key={i} className="mb-3 border-b pb-2">
-                  <p className="font-medium">
-                    {i + 1}. [{q.type || '题目'}] {q.question || q.content}
-                  </p>
-                  {q.options && (
-                    <div className="ml-4 text-gray-600">
-                      {q.options.map((opt: string, oi: number) => (
-                        <p key={oi}>{String.fromCharCode(65 + oi)}. {opt}</p>
+              {/* 题库列表 */}
+              {bankQuestions.length > 0 && (
+                <div className="border rounded p-3 max-h-80 overflow-y-auto">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold">题库 (共{bankQuestions.length}题，已选{selectedBankIds.size}题)</span>
+                    <Space>
+                      <Button size="small" onClick={() => setSelectedBankIds(new Set(bankQuestions.map((q: any) => q.id)))}>全部</Button>
+                      <Button size="small" onClick={() => setSelectedBankIds(new Set())}>清空</Button>
+                      {(() => {
+                        const filtered = bankQuestions.filter((q: any) => {
+                          if (!bankSearch) return true
+                          const kw = bankSearch.toLowerCase()
+                          return (q.file_no || '').toLowerCase().includes(kw) || (q.question || '').toLowerCase().includes(kw)
+                        })
+                        const start = (bankPage - 1) * BANK_PAGE_SIZE
+                        const pageItems = filtered.slice(start, start + BANK_PAGE_SIZE)
+                        const pageIds = new Set(pageItems.map((q: any) => q.id))
+                        const allPageSelected = pageItems.length > 0 && pageItems.every((q: any) => selectedBankIds.has(q.id))
+                        return (<Button size="small" onClick={() => {
+                          const next = new Set(selectedBankIds)
+                          if (allPageSelected) { for (const id of pageIds) next.delete(id) }
+                          else { for (const id of pageIds) next.add(id) }
+                          setSelectedBankIds(next)
+                        }}>{allPageSelected ? '取消本页' : '本页全选'}</Button>)
+                      })()}
+                      <Button type="primary" size="small" disabled={selectedBankIds.size === 0} onClick={() => {
+                        const selected = bankQuestions.filter((q: any) => selectedBankIds.has(q.id))
+                        const questions = selected.map((q: any) => ({
+                          file_no: q.file_no || '',
+                          question: q.question || '',
+                          answer: q.answer || '',
+                          score: q.score || 10,
+                        }))
+                        const totalScore = questions.reduce((s: number, q: any) => s + (q.score || 0), 0)
+                        setAssessmentQuestions({ questions, total_score: totalScore, title: '题库选题' })
+                        setBankQuestions([])
+                        setSelectedBankIds(new Set())
+                        setBankSearch('')
+                      }}>确认选题 ({selectedBankIds.size}题)</Button>
+                    </Space>
+                  </div>
+                  <Input prefix={<SearchOutlined />} placeholder="搜索题目或文件编号" size="small" className="mb-2"
+                    value={bankSearch} onChange={e => { setBankSearch(e.target.value); setBankPage(1) }} allowClear />
+                  {(() => {
+                    const filtered = bankQuestions.filter((q: any) => {
+                      if (!bankSearch) return true
+                      const kw = bankSearch.toLowerCase()
+                      return (q.file_no || '').toLowerCase().includes(kw) || (q.question || '').toLowerCase().includes(kw)
+                    })
+                    const totalPages = Math.ceil(filtered.length / BANK_PAGE_SIZE)
+                    const start = (bankPage - 1) * BANK_PAGE_SIZE
+                    const pageItems = filtered.slice(start, start + BANK_PAGE_SIZE)
+                    return (<>
+                      {pageItems.map((q: any) => (
+                        <div key={q.id} className={`flex items-center gap-2 py-1 px-2 cursor-pointer rounded ${selectedBankIds.has(q.id) ? 'bg-blue-50' : ''}`}
+                          onClick={() => {
+                            const next = new Set(selectedBankIds)
+                            next.has(q.id) ? next.delete(q.id) : next.add(q.id)
+                            setSelectedBankIds(next)
+                          }}>
+                          <input type="checkbox" checked={selectedBankIds.has(q.id)} readOnly className="shrink-0" />
+                          <span className="text-xs text-gray-400 w-16 truncate">{q.file_no || '-'}</span>
+                          <span className="text-sm flex-1 truncate">{q.question}</span>
+                          <Tag color="green" className="text-xs">{q.score || 10}分</Tag>
+                        </div>
                       ))}
-                    </div>
-                  )}
-                  {q.answer && (
-                    <p className="text-green-600 text-sm ml-2">答案：{q.answer}</p>
-                  )}
-                </div>
-              ))}
-              {assessmentMethodWatch === '问答' && (
-                <div className="mt-3 pt-2 border-t">
-                  <Button
-                    type="primary"
-                    icon={<DownloadOutlined />}
-                    onClick={handleExportQaRecord}
-                  >
-                    导出问答实操记录表
-                  </Button>
+                      {totalPages > 1 && (
+                        <div className="flex justify-center items-center gap-2 pt-2 border-t mt-2">
+                          <Button size="small" disabled={bankPage <= 1} onClick={() => setBankPage(p => p - 1)}>上一页</Button>
+                          <span className="text-sm text-gray-500">{bankPage} / {totalPages} (共{filtered.length}题)</span>
+                          <Button size="small" disabled={bankPage >= totalPages} onClick={() => setBankPage(p => p + 1)}>下一页</Button>
+                        </div>
+                      )}
+                    </>)
+                  })()}
                 </div>
               )}
-            </div>
+            </>
           )}
+
+          {/* 生成后：题目预览 + 学员评分表 */}
+          {assessmentQuestions && (
+            <>
+              <div className="border rounded p-4 max-h-64 overflow-y-auto">
+                <h3 className="font-bold mb-2">
+                  考题 (共{assessmentQuestions.questions?.length || 0}题，满分{assessmentQuestions.total_score || 100}分)
+                </h3>
+                {(assessmentQuestions.questions || []).map((q: any, i: number) => (
+                  <div key={i} className="mb-2 border-b pb-1 text-sm">
+                    <span className="font-medium">{i + 1}. </span>
+                    <span>{q.question || q.content}</span>
+                    {q.answer && <span className="text-green-600 ml-2">(答案：{q.answer})</span>}
+                  </div>
+                ))}
+            </div>
+
+            {/* 学员评分区 */}
+            {assessmentQuestions && (() => {
+              const traineeNames: string[] = form.getFieldValue('employee_names') || []
+              const maxScore = (assessmentQuestions.questions || []).reduce((s: number, q: any) => s + (q.score || 10), 0)
+              return traineeNames.length > 0 ? (
+                <div className="border rounded p-4">
+                  <h3 className="font-bold mb-1">学员评分 (满分{maxScore}分，点击题号标记错题)</h3>
+                  <p className="text-xs text-gray-400 mb-3">默认全对满分，点击题号变红即为错题，自动扣分</p>
+                  {(() => {
+                    const questions = assessmentQuestions.questions || []
+                    const totalPages = Math.ceil(traineeNames.length / TRAINEE_PAGE_SIZE)
+                    const start = (traineePage - 1) * TRAINEE_PAGE_SIZE
+                    const pageNames = traineeNames.slice(start, start + TRAINEE_PAGE_SIZE)
+                    return (<>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm border-collapse">
+                          <thead>
+                            <tr className="bg-gray-50">
+                              <th className="border px-2 py-1 text-left">学员</th>
+                              {questions.map((q: any, qi: number) => (
+                                <th key={qi} className="border px-1 py-1 text-center w-10" title={q.question}>{qi + 1}</th>
+                              ))}
+                              <th className="border px-2 py-1 text-center w-14">得分</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pageNames.map((name: string) => {
+                              const data = traineeScoreMap[name] || { wrongIndices: [], score: maxScore }
+                              const computedScore = maxScore - data.wrongIndices.reduce((s: number, i: number) => s + (questions[i]?.score || 10), 0)
+                              return (
+                                <tr key={name}>
+                                  <td className="border px-2 py-1 font-medium whitespace-nowrap">{name}</td>
+                                  {questions.map((q: any, qi: number) => {
+                                    const isWrong = data.wrongIndices.includes(qi)
+                                    return (
+                                      <td key={qi} className="border px-1 py-1 text-center">
+                                        <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs cursor-pointer font-bold select-none ${isWrong ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}
+                                          onClick={() => {
+                                            const cur = traineeScoreMap[name] || { wrongIndices: [], score: maxScore }
+                                            const idx = cur.wrongIndices.indexOf(qi)
+                                            const newWrong = idx >= 0 ? cur.wrongIndices.filter((i: number) => i !== qi) : [...cur.wrongIndices, qi].sort((a: number, b: number) => a - b)
+                                            setTraineeScoreMap(prev => ({ ...prev, [name]: { ...cur, wrongIndices: newWrong, score: 0 } }))
+                                          }} title={isWrong ? '点击取消错题' : '点击标记错题'}>
+                                          {isWrong ? '✗' : '✓'}
+                                        </span>
+                                      </td>
+                                    )
+                                  })}
+                                  <td className="border px-2 py-1 text-center font-bold">
+                                    <span className={computedScore < maxScore * 0.6 ? 'text-red-500' : 'text-green-600'}>{computedScore}</span>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {totalPages > 1 && (
+                        <div className="flex justify-center items-center gap-2 pt-2">
+                          <Button size="small" disabled={traineePage <= 1} onClick={() => setTraineePage(p => p - 1)}>上一页</Button>
+                          <span className="text-sm text-gray-500">{traineePage} / {totalPages} (共{traineeNames.length}人)</span>
+                          <Button size="small" disabled={traineePage >= totalPages} onClick={() => setTraineePage(p => p + 1)}>下一页</Button>
+                        </div>
+                      )}
+                    </>)
+                  })()}
+                </div>
+              ) : null
+            })()}
+
+            {/* 底部操作 */}
+            {assessmentQuestions && (
+              <Space wrap className="w-full justify-end">
+                <Button onClick={() => { setAssessmentModalOpen(false); setAssessmentQuestions(null); setTraineeScoreMap({}) }}>关闭</Button>
+                {assessmentMethodWatch === '笔试' && (
+                  <Button onClick={async () => {
+                    try {
+                      const v = form.getFieldsValue()
+                      const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ type: q.type || 'choice', question: q.question || q.content || '', options: q.options || [], answer: q.answer || '', score: q.score || 5 }))
+                      const counts: Record<string, number> = {}
+                      questions.forEach((q: any) => { counts[q.type] = (counts[q.type] || 0) + 1 })
+                      await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD'), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
+                      message.success('考卷已保存，可在资料下载中查看')
+                    } catch (err: any) { message.error(err.message || '保存考卷失败') }
+                  }}>保存考卷</Button>
+                )}
+                <Button onClick={async () => {
+                  const v = form.getFieldsValue()
+                  const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ file_no: q.file_no || '', question: q.question || q.content || '', answer: q.answer || '', score: q.score || 10 }))
+                  const traineeNames = v.employee_names || []
+                  const maxScore = questions.reduce((s: number, q: any) => s + (q.score || 0), 0)
+                  const scores = traineeNames.map((name: string) => {
+                    const data = traineeScoreMap[name] || { wrongIndices: [], score: maxScore }
+                    return { name, department: nameToDeptMap[name] || v.department || '', wrong_questions: data.wrongIndices, total_score: maxScore - data.wrongIndices.reduce((s: number, i: number) => s + (questions[i]?.score || 0), 0) }
+                  })
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-score-report`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+                        training_content: [v.subject, v.content].filter(Boolean).join(' - '),
+                        training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                        training_department: v.department || '',
+                        scores_json: JSON.stringify(scores),
+                      }),
+                    })
+                    if (!res.ok) throw new Error('导出失败')
+                    const blob = await res.blob()
+                    const a = document.createElement('a'); a.href = window.URL.createObjectURL(blob)
+                    a.download = `成绩单_${v.training_date_range?.[0]?.format('YYYY-MM-DD') || 'export'}.docx`
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+                    message.success('成绩单已导出')
+                  } catch (err: any) { message.error(err.message || '导出失败') }
+                }}>导出成绩单</Button>
+                <Button type="primary" onClick={async () => {
+                  const v = form.getFieldsValue()
+                  const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ file_no: q.file_no || '', question: q.question || q.content || '', answer: q.answer || '', score: q.score || 10 }))
+                  const traineeNames = v.employee_names || []
+                  const maxScore = questions.reduce((s: number, q: any) => s + (q.score || 0), 0)
+                  const scores = traineeNames.map((name: string) => {
+                    const data = traineeScoreMap[name] || { wrongIndices: [], score: maxScore }
+                    const computed = maxScore - data.wrongIndices.reduce((s: number, i: number) => s + (questions[i]?.score || 0), 0)
+                    return { name, wrong_questions: data.wrongIndices, total_score: computed }
+                  })
+                  try {
+                    const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-qa-record-with-scores`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+                        training_content: [v.subject, v.content].filter(Boolean).join(' - '),
+                        training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                        training_method: v.training_method || '问答',
+                        training_department: v.department || '',
+                        questions_json: JSON.stringify(questions),
+                        trainee_names_json: JSON.stringify(traineeNames),
+                        scores_json: JSON.stringify(scores),
+                      }),
+                    })
+                    if (!res.ok) throw new Error('导出失败')
+                    const blob = await res.blob()
+                    const a = document.createElement('a'); a.href = window.URL.createObjectURL(blob)
+                    a.download = `问答实操记录表_${v.training_date_range?.[0]?.format('YYYY-MM-DD') || 'export'}.docx`
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+                    message.success('导出成功')
+                  } catch (err: any) { message.error(err.message || '导出失败') }
+                }}>
+                  导出实操记录表（含错题）
+                </Button>
+              </Space>
+            )}
+          </>
+          )}
+        </div>
+      </Modal>
+
+      {/* 成绩单导出弹窗 */}
+      <Modal
+        title="导出考核成绩单"
+        open={scoreModalOpen}
+        onCancel={() => setScoreModalOpen(false)}
+        width={500}
+        footer={[
+          <Button key="cancel" onClick={() => setScoreModalOpen(false)}>取消</Button>,
+          <Button key="export" type="primary" loading={exportingScore} onClick={async () => {
+            const scores = previewNames.map(name => ({
+              name,
+              department: nameToDeptMap[name] || traineeDepts[0] || deptValue || '',
+              score: scoreMap[name] || 0,
+            }))
+            setExportingScore(true)
+            try {
+              const res = await fetch(`${API_BASE}/api/v1/hr/training-assessment-scores/export`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  training_content: subjectValue,
+                  training_date: (singleDateValue || faceDateValue)?.format('YYYY-MM-DD') || '',
+                  department: traineeDepts.join('、') || deptValue || '',
+                  scores,
+                }),
+              })
+              if (!res.ok) throw new Error('导出失败')
+              const blob = await res.blob()
+              const url = window.URL.createObjectURL(blob)
+              const a = document.createElement('a'); a.href = url
+              a.download = `考核成绩单_${subjectValue || 'training'}.docx`
+              document.body.appendChild(a); a.click(); document.body.removeChild(a)
+              window.URL.revokeObjectURL(url)
+              message.success('成绩单已导出')
+            } catch { message.error('导出失败') }
+            finally { setExportingScore(false) }
+          }}>导出 Word</Button>,
+        ]}
+      >
+        <p className="text-sm text-gray-500 mb-3">
+          培训内容：{subjectValue}<br />
+          培训部门：{traineeDepts.join('、') || deptValue}
+        </p>
+        <div style={{ maxHeight: 400, overflow: 'auto' }}>
+          <table className="w-full border-collapse border border-gray-300 text-sm">
+            <thead>
+              <tr className="bg-gray-50">
+                <th className="border p-2">序号</th>
+                <th className="border p-2">姓名</th>
+                <th className="border p-2">部门</th>
+                <th className="border p-2">成绩</th>
+              </tr>
+            </thead>
+            <tbody>
+              {previewNames.map((name, idx) => (
+                <tr key={idx}>
+                  <td className="border p-2 text-center">{idx + 1}</td>
+                  <td className="border p-2">{name}</td>
+                  <td className="border p-2">{nameToDeptMap[name] || traineeDepts[0] || deptValue}</td>
+                  <td className="border p-1">
+                    <InputNumber min={0} max={100} size="small" className="w-full"
+                      value={scoreMap[name]} onChange={v => setScoreMap(prev => ({ ...prev, [name]: v || 0 }))} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </Modal>
 

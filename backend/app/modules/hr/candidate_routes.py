@@ -84,7 +84,7 @@ async def send_offer(
 ):
     from app.modules.hr.models import EmailLog
     from app.modules.hr.offer_generator import generate_offer_docx
-    from app.modules.hr.mail_service import send_email
+    from app.platform.mail_service import send_email
     n = candidate_name or "候选人"
     docx_buf = generate_offer_docx(
         name=n, department=department, position=position,
