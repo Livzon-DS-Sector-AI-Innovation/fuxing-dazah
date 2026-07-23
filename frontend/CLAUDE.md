@@ -137,24 +137,3 @@ export async function createBatch(data: CreateBatchInput) {
 5. 类型定义更新到 types/<模块>.ts
 6. 新增的对外组件记得在 components/<模块>/index.ts 里导出
 
-## 已交付功能保护清单
-
-以下HR培训模块功能已完成开发和测试，**后续新增代码必须保持兼容，不得回退或删除已有功能**：
-
-| 功能 | 关键文件 | 核心逻辑 |
-|------|---------|---------|
-| 年度计划列表/上传 | annual-plan/page.tsx, api.py | 卡片视图、Excel批量导入、新建弹窗 |
-| 年度计划明细 | annual-plan/page.tsx | 完整字段表格(含考核方式/地点/注意事项)、通知跳转(9字段传递) |
-| 培训通知表单 | TrainingNotificationClient.tsx | 双模式日期(面授+自学)、多部门受训、员工部门映射 |
-| 通知/签到表预览导出 | TrainingNotificationClient.tsx | 实时预览、分页签到表、Word导出 |
-| AI智能出题 | api.py(generate-assessment) | DeepSeek API、.doc/.docx/.txt解析、简短题目风格 |
-| 考核成绩单 | assessment_score_generator.py, TrainingNotificationClient.tsx | 成绩录入表格、Word导出 |
-| 内训师台账 | trainers/page.tsx | 双Tab布局(内训师+部门培训人员)、CRUD、Excel上传 |
-| 新员工入职培训 | OnboardingPrejobClient.tsx | 员工搜索、培训大类加载、文档导出 |
-
-### 保护规则
-1. `API_BASE = ''` 不能改为绝对路径，必须走 Next.js rewrite 代理
-2. TrainingNotificationClient.tsx 的 `nameToDeptMap`、`dualMode`、`isDualMethod` 逻辑不能删
-3. annual-plan/page.tsx 的 `goToNotification` 传参逻辑和 `API_BASE` 上传路径不能改
-4. 菜单配置中已移除"评估补录"入口，不要恢复
-5. 前端修改后必须 `pnpm build` 通过
