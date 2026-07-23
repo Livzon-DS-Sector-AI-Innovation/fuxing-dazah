@@ -1128,7 +1128,7 @@ async def send_departure_certificate(
 ):
     from app.modules.hr.models import EmailLog
     from app.modules.hr.termination_certificate_generator import generate_termination_certificate_docx
-    from app.platform.mail_service import send_email
+    from app.modules.hr.mail_service import send_email
     record = await service.get_record(record_id)
     name = record.name or "员工"
     docx_buf = generate_termination_certificate_docx(
