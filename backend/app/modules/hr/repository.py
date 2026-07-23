@@ -678,6 +678,7 @@ class TrainingLedgerRepository:
         page_size: int = 20,
         sort_by: str = "training_date",
         sort_order: str = "desc",
+        exclude_employee_numbers: Any | None = None,
     ) -> tuple[list[TrainingLedger], int]:
         stmt = select(TrainingLedger).where(TrainingLedger.is_deleted.is_(False))
 
@@ -687,6 +688,8 @@ class TrainingLedgerRepository:
             stmt = stmt.where(TrainingLedger.training_date >= date_from)
         if date_to:
             stmt = stmt.where(TrainingLedger.training_date <= date_to)
+        if exclude_employee_numbers is not None:
+            stmt = stmt.where(TrainingLedger.employee_number.not_in(exclude_employee_numbers))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())
         sort_column = getattr(TrainingLedger, sort_by, TrainingLedger.training_date)

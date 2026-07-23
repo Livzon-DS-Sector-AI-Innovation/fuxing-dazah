@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import dynamic from 'next/dynamic'
 import {
   Button,
   Descriptions,
@@ -15,11 +14,6 @@ import {
 import { ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined, EditOutlined, SaveOutlined, CloseOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
 import { updateCandidateAction, updateCandidateRecommendationLevelAction } from '@/actions/hr'
-
-const AIReportPanel = dynamic(
-  () => import('./AIReportPanel'),
-  { ssr: false }
-)
 
 interface CandidateDetailClientProps {
   candidate: Candidate
@@ -154,23 +148,6 @@ export default function CandidateDetailClient({
     '待定': 'orange',
     '不推荐': 'red',
   }
-
-  const tagPalette: Record<string, string> = {
-    blue: 'background:#e6f4ff;color:#0958d9',
-    yellow: 'background:#fffbe6;color:#d48806',
-    red: 'background:#fff2f0;color:#cf1322',
-    green: 'background:#f6ffed;color:#389e0d',
-    orange: 'background:#fff7e6;color:#d46b08',
-    purple: 'background:#f9f0ff;color:#531dab',
-  }
-
-  const processedReport = (candidate.match_report || '暂无报告').replace(
-    /<text_tag\s+color=['"]([^'"]+)['"]\s*>([\s\S]*?)<\/text_tag>/g,
-    (_, color, content) => {
-      const style = tagPalette[color] || `background:${color}20;color:${color}`
-      return `<span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:12px;${style}">${content}</span>`
-    }
-  )
 
   return (
     <div className="space-y-4">
@@ -325,11 +302,6 @@ export default function CandidateDetailClient({
               )}
             </Descriptions.Item>
           </Descriptions>
-
-          <div className="mt-6">
-            <h3 className="text-lg font-medium mb-3">AI 匹配度报告</h3>
-            <AIReportPanel content={processedReport} />
-          </div>
 
           <div className="mt-6 pt-6 border-t border-gray-100">
             <h3 className="text-lg font-medium mb-3">标记候选人情况</h3>

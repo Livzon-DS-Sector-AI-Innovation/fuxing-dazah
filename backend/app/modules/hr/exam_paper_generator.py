@@ -88,22 +88,33 @@ def generate_exam_paper_docx(
             _add_question(doc, no, q)
             no += 1
 
-    # 参考答案
-    doc.add_page_break()
-    p = doc.add_paragraph(); run = p.add_run("参考答案"); run.bold = True; run.font.size = Pt(16)
-    doc.add_paragraph("")
-    no = 1
-    for heading, qs in [("一、单选题", choice_qs), ("二、判断题", tf_qs), ("三、多选题", multi_qs), ("四、填空题", fill_qs)]:
-        if not qs: continue
-        p = doc.add_paragraph(); run = p.add_run(heading); run.bold = True; run.font.size = Pt(12)
-        for q in qs:
-            ans = q.get("answer", "")
-            if isinstance(ans, list): ans = "、".join(str(a) for a in ans)
-            elif ans is True: ans = "对"
-            elif ans is False: ans = "错"
-            doc.add_paragraph(f"{no}. {ans}")
-            no += 1
-        doc.add_paragraph("")
-
     buf = BytesIO(); doc.save(buf); buf.seek(0)
     return buf
+
+
+def generate_exam_paper(paper) -> BytesIO:
+    """从 ExamPaper ORM 对象生成 Word 文档。"""
+    questions = paper.questions or {}
+    # 按来源分类标注 type，兼容无 type 字段的旧数据
+    type_map = {
+        "choice_questions": "choice",
+        "true_false_questions": "true_false",
+        "multi_choice_questions": "multi_choice",
+        "fill_blank_questions": "fill_blank",
+    }
+    q_list: list[dict] = []
+    for key, qtype in type_map.items():
+        for q in (questions.get(key) or []):
+            q_copy = dict(q)
+            q_copy["type"] = qtype
+            q_list.append(q_copy)
+
+    return generate_exam_paper_docx(
+        subject=paper.subject,
+        department=paper.department,
+        training_date=paper.training_date,
+        training_method=paper.training_method,
+        questions=q_list,
+        full_score=paper.full_score,
+        pass_line=paper.pass_line,
+    )

@@ -262,13 +262,31 @@ export default function TrainingLedgerClient({
       message.warning('请先选择部门')
       return
     }
+    if (!filterSubject) {
+      message.warning('请先选择培训主题')
+      return
+    }
+    // 从当前已加载的记录中聚合培训信息
+    const records = adminRecords
+    const uniqueEmployees = [...new Set(records.map(r => r.employee_number))]
+    const scores = records.filter(r => r.assessment_result).map(r => ({ name: r.employee_name || r.employee_number, result: r.assessment_result }))
+    const excellentCount = scores.filter(s => Number(s.result) >= 90).length
+    const qualifiedCount = scores.filter(s => Number(s.result) >= 60 && Number(s.result) < 90).length
+    const unqualifiedCount = scores.filter(s => Number(s.result) < 60).length
+
     try {
       await exportTrainingEvaluationReport({
         department: filterDept,
-        training_subject: filterSubject || '',
-        training_date: adminDateRange ? adminDateRange[0] : undefined,
-        training_method: adminRecords[0]?.training_method || '',
-        trainer_name: adminRecords[0]?.trainer || '',
+        training_subject: filterSubject,
+        training_date: adminDateRange ? adminDateRange[0] : (records[0]?.training_date || undefined),
+        training_method: records[0]?.training_method || '',
+        trainer_name: records[0]?.trainer || '',
+        expected_count: uniqueEmployees.length,
+        actual_count: uniqueEmployees.length,
+        exam_count: scores.length,
+        excellent_count: excellentCount,
+        qualified_count: qualifiedCount,
+        unqualified_count: unqualifiedCount,
       })
       message.success('评估表已导出')
     } catch (err: any) {
@@ -501,7 +519,7 @@ export default function TrainingLedgerClient({
                 <Input
                   size="small"
                   placeholder="成绩"
-                  value={adminEditMap[record.id] !== undefined ? adminEditMap[record.id] : (v || '')}
+                  defaultValue={v || ''}
                   onChange={(e) => handleAdminScoreChange(record.id, e.target.value)}
                   style={adminDirtyIds.has(record.id) ? { borderColor: '#faad14' } : undefined}
                 />

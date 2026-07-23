@@ -333,7 +333,7 @@ export async function createQaAssessment(data: import('@/types/hr').QaAssessment
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || err.detail || '创建考核场次失败')
   }
-  revalidatePath('/hr/training/qa-assessment')
+  revalidatePath('/hr/training/notification')
   return res.json()
 }
 
@@ -359,7 +359,7 @@ export async function deleteQaAssessment(id: string) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || err.detail || '删除考核场次失败')
   }
-  revalidatePath('/hr/training/qa-assessment')
+  revalidatePath('/hr/training/notification')
   return res.json()
 }
 

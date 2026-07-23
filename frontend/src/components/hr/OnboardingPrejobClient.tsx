@@ -20,6 +20,8 @@ export default function OnboardingPrejobClient() {
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   const [downloadingWord, setDownloadingWord] = useState(false)
+  const [downloadingRecord, setDownloadingRecord] = useState(false)
+  const [downloadingPermit, setDownloadingPermit] = useState(false)
   const [selectedSops, setSelectedSops] = useState<any[]>([])
   const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
 
@@ -55,7 +57,7 @@ export default function OnboardingPrejobClient() {
 
     const params = new URLSearchParams({ position_name: pos })
     if (dept) params.set('department', dept)
-    fetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`, { credentials: 'include' })
+    fetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`)
       .then(r => r.json())
       .then(res => {
         const items: any[] = res.data || []
@@ -89,7 +91,7 @@ export default function OnboardingPrejobClient() {
 
   // 加载培训师列表
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`, { credentials: 'include' }).then(r => r.json())
+    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`).then(r => r.json())
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
   }, [])
 
@@ -109,38 +111,63 @@ export default function OnboardingPrejobClient() {
     })
   }
 
-  const handleExportWord = async () => {
-    if (!selectedEmployee) return message.warning('请先选择员工')
-    setDownloadingWord(true)
+  const buildItems = () => selectedSops.map(s => ({
+    sop_number: s.sop_number || '',
+    file_name: s.file_name || '',
+    content: s.file_name || '',
+    method: sopMethods[s.id] || '',
+    trainer: sopTrainers[s.id] || '',
+    plan_date: sopPlanDates[s.id] || '',
+  }))
+
+  const downloadDoc = async (url: string, method: string, filename: string, setLoading: (v: boolean) => void, body?: any) => {
+    setLoading(true)
     try {
-      const items = selectedSops.map(s => ({
-        sop_number: s.sop_number || '',
-        file_name: s.file_name || '',
-        content: s.file_name || '',
-        method: sopMethods[s.id] || '',
-        trainer: sopTrainers[s.id] || '',
-        plan_date: sopPlanDates[s.id] || '',
-      }))
-      const employeeId = selectedEmployee.employee_number
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${employeeId}/onboarding-training-record`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          training_items: items,
-          employee_type: selectedEmployee.source || '新入职',
-        }),
-      })
+      const opts: any = { method, headers: {} }
+      if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
+      const res = await fetch(url, opts)
       if (!res.ok) throw new Error('导出失败')
       const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
-      a.download = `入职培训记录_${selectedEmployee.name || 'employee'}.docx`
+      a.href = window.URL.createObjectURL(blob)
+      a.download = filename
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      window.URL.revokeObjectURL(url)
-      message.success('入职培训记录已导出')
+      message.success('导出成功')
     } catch (err: any) { message.error(err.message || '导出失败') }
-    finally { setDownloadingWord(false) }
+    finally { setLoading(false) }
+  }
+
+  const handleExportPlan = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.id}/prejob-training-plan`,
+      'POST',
+      `岗前培训计划_${selectedEmployee.name || 'employee'}.docx`,
+      setDownloadingWord,
+      { training_items: buildItems() },
+    )
+  }
+
+  const handleExportRecord = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/training-record`,
+      'POST',
+      `培训记录_${selectedEmployee.name}.docx`,
+      setDownloadingRecord,
+      { training_items: buildItems() },
+    )
+  }
+
+  const handleExportPermit = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/work-permit`,
+      'POST',
+      `上岗证_${selectedEmployee.name}.docx`,
+      setDownloadingPermit,
+      { training_items: buildItems() },
+    )
   }
 
   return (
@@ -161,7 +188,9 @@ export default function OnboardingPrejobClient() {
             filterOption={false}
             style={{ minWidth: 320 }}
           />
-          <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportWord} loading={downloadingWord}>导出岗位员工培训计划(Word)</Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportPlan} loading={downloadingWord}>导出岗前培训计划</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportRecord} loading={downloadingRecord}>导出培训记录</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportPermit} loading={downloadingPermit}>导出上岗证</Button>
         </Space>
       </Card>
 
@@ -243,7 +272,7 @@ export default function OnboardingPrejobClient() {
                     <td style={CELL} colSpan={2}>
                       <DatePicker size="small" style={{ width: '100%' }} placeholder="完成期限"
                         value={sopPlanDates[item.id] ? dayjs(sopPlanDates[item.id]) : null}
-                        onChange={(d) => setSopPlanDates(prev => ({...prev, [item.id]: d ? d.format('YYYY-MM-DD') : ''}))} />
+                        onChange={(d) => setSopPlanDates(prev => ({...prev, [item.id]: d ? d.format('YYYY年MM月DD日') : ''}))} />
                     </td>
                     <td style={CELL} colSpan={2}>
                       <Select size="small" value={sopTrainers[item.id] || undefined}

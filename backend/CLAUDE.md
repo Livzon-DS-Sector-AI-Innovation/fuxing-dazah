@@ -203,3 +203,4 @@ uv run python -c "from app.main import app; print(app.title)"
 
 ## 代码设计注意
 由于数据表使用软删除，所以设计数据表约束时需要避免在**重复添加→删除→添加→删除时触发**的隐形bug
+
