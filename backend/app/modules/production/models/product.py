@@ -1,4 +1,4 @@
-"""产品主数据 ORM。"""
+"""产品主数据 ORM —— 面向销售/客户的产品，非生产流程中的中间体。"""
 
 from sqlalchemy import Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -7,7 +7,7 @@ from app.shared.base_model import BaseModel
 
 
 class Product(BaseModel):
-    """产品主数据"""
+    """产品主数据 —— 面向销售/客户的最终产品（非生产流程中的中间体/产出物）。"""
 
     __tablename__ = "products"
     __table_args__ = (

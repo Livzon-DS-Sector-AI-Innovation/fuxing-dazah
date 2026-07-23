@@ -31,6 +31,8 @@ class BatchOut(BaseModel):
     unit: str | None
     entry_node_id: uuid.UUID | None
     remark: str | None
+    creation_type: str = "direct"
+    plan_version: int | None = None
     created_at: datetime
     updated_at: datetime
 

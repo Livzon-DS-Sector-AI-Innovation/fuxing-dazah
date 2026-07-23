@@ -25,10 +25,19 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["production:*:read"],
     children: [
       { key: "dashboard", label: "生产看板", path: "/production" },
-      { key: "workbench", label: "工作台", path: "/production/workbench" },
-      { key: "process", label: "产品工艺", path: "/production/process" },
-      { key: "materials", label: "产出物管理", path: "/production/materials" },
-      { key: "batches", label: "批次管理", path: "/production/batches" },
+      { key: "planning-center", label: "计划中枢", path: "/production/planning-center" },
+      { key: "master-data", label: "主数据管理", path: "/production/master-data" },
+      {
+        key: "manufacturing-unit",
+        label: "制造单元",
+        path: "",
+        children: [
+          { key: "workbench", label: "工作台", path: "/production/workbench" },
+          { key: "process", label: "工艺路径", path: "/production/process" },
+          { key: "batches", label: "批次管理", path: "/production/batches" },
+        ],
+      },
+      { key: "materials", label: "产出物流水", path: "/production/materials" },
     ],
   },
   {

@@ -1,4 +1,4 @@
-"""中间体台账 ORM：字典 / 节点绑定 / 产出记录 / 消耗记录。"""
+"""中间体台账 ORM —— 面向生产流程的产出物/中间体，非面向客户的产品。"""
 
 import uuid
 
@@ -9,7 +9,7 @@ from app.shared.base_model import BaseModel
 
 
 class IntermediateType(BaseModel):
-    """中间体字典（全局定义，节点引用）"""
+    """中间体字典 —— 生产流程中的产出物/中间体（非面向客户的产品，产品见 Product 模型）。"""
 
     __tablename__ = "intermediate_types"
     __table_args__ = (

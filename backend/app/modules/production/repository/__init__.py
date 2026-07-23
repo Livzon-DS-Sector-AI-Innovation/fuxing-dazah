@@ -14,6 +14,7 @@ from app.modules.production.repository.assignment import (  # noqa: F401
 from app.modules.production.repository.batch import *  # noqa: F403
 from app.modules.production.repository.execution import *  # noqa: F403
 from app.modules.production.repository.intermediate import *  # noqa: F403
+from app.modules.production.repository.planning import *  # noqa: F403
 from app.modules.production.repository.product import *  # noqa: F403
 from app.modules.production.repository.route import *  # noqa: F403
 from app.modules.production.repository.trace import *  # noqa: F403
