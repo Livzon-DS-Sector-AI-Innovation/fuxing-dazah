@@ -8,6 +8,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
@@ -19,6 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("CREATE SCHEMA IF NOT EXISTS hr")
+    # 检查表是否已由另一条迁移链创建，避免重复建表
+    conn = op.get_bind()
+    inspector = inspect(conn)
+    if 'dept_training_personnel' in inspector.get_table_names(schema='hr'):
+        return
     op.create_table(
         "dept_training_personnel",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
