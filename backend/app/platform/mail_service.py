@@ -8,7 +8,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None) -> bool:
+def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None, *, sender: str | None = None) -> bool:
     """调用 lark-cli mail +send 发邮件，支持附件。"""
     tmp_dir = Path(tempfile.mkdtemp(dir=Path(__file__).parent.parent.parent))
     body_file = tmp_dir / "body.html"
@@ -18,13 +18,8 @@ def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[st
         cmd = ["lark-cli", "mail", "+send", "--as", "user",
                "--to", to, "--subject", subject,
                "--body-file", "body.html", "--confirm-send", "--format", "json"]
-        try:
-            from app.modules.hr.service import get_system_setting
-            sender = get_system_setting("mail_sender")
-            if sender and isinstance(sender, str):
-                cmd.extend(["--from", sender, "--mailbox", sender])
-        except Exception:
-            pass
+        if sender:
+            cmd.extend(["--from", sender, "--mailbox", sender])
 
         # 附件：写入临时文件，使用文件名作为相对路径
         if attachments:
@@ -62,13 +57,15 @@ def send_email(
     subject: str,
     html_body: str,
     attachments: list[tuple[str, bytes]] | None = None,
+    sender: str | None = None,
 ) -> bool:
     """发送邮件。走 lark-cli（无需 SMTP 配置）。成功返回 True，失败抛异常。
 
     attachments: 附件列表，每项为 (文件名, 文件内容bytes)。
+    sender: 发件人邮箱，由调用方（业务模块）传入。
     """
     try:
         subprocess.run(["lark-cli", "--version"], capture_output=True, timeout=5, check=False)
     except FileNotFoundError:
         raise RuntimeError("lark-cli 未安装")
-    return _lark_send(to, subject, html_body, attachments)
+    return _lark_send(to, subject, html_body, attachments, sender=sender)
