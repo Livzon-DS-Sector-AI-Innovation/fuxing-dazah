@@ -1649,6 +1649,7 @@ def _map_and_convert_rows(
     sheets_data: list[dict[str, Any]],
     column_map: dict[str, str],
     datemode: int = 0,
+    use_sheet_name_as_dept: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """将原始行数据映射到 DB 字段，并转换日期。
 
@@ -1662,8 +1663,11 @@ def _map_and_convert_rows(
         headers = sheet["headers"]
         rows = sheet["rows"]
         sheet_name = sheet["name"]
-        # 优先使用 Row 2 解析出的部门名，否则回退到 sheet 名称
-        dept = (sheet.get("dept") or sheet_name).strip()
+        # 标准器具：直接用 sheet 名称作为部门；探测器：优先 Row 2 部门名，回退 sheet 名称
+        if use_sheet_name_as_dept:
+            dept = sheet_name.strip()
+        else:
+            dept = (sheet.get("dept") or sheet_name).strip()
 
         # 构建列索引映射：header_index → db_field
         col_mapping: dict[int, str] = {}
@@ -1824,7 +1828,7 @@ async def import_instrument_ledger(
 
     # 3. 映射和转换
     mapped_rows, map_warnings = _map_and_convert_rows(
-        instrument_sheets, INSTRUMENT_COLUMN_MAP, datemode
+        instrument_sheets, INSTRUMENT_COLUMN_MAP, datemode, use_sheet_name_as_dept=True
     )
 
     if not mapped_rows:
