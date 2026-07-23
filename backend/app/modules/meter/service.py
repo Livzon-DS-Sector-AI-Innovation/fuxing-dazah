@@ -1870,7 +1870,8 @@ async def import_instrument_ledger(
     # 7. 构建 sheet 详情
     sheet_details: list[dict[str, Any]] = []
     for sheet in instrument_sheets:
-        dept = sheet.get("dept")
+        # 标准器具用 sheet 名称作为部门名，与写入 DB 数据保持一致
+        dept = sheet["name"].strip()
         # 统计该 sheet 的去重后行数
         sheet_rows = sum(
             1 for r in mapped_rows
