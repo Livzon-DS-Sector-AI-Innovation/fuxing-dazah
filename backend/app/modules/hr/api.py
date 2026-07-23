@@ -4,7 +4,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from pydantic import BaseModel
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
-from app.modules.hr.document_generator import generate_onboarding_training_record
+from app.modules.hr.document_generator import (
+    generate_onboarding_certificate,
+    generate_onboarding_training_record,
+)
 from app.modules.hr.evaluation_document_generator import generate_training_evaluation
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
@@ -72,11 +75,17 @@ from app.modules.hr.service import (
     TrainingLedgerService,
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
+from app.modules.hr.system_settings_routes import router as system_settings_router
+from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
 
 router = create_module_router(MODULES_BY_CODE["hr"])
+router.include_router(system_settings_router)
+router.include_router(candidate_router)
+router.include_router(job_requirement_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
@@ -218,6 +227,54 @@ async def download_roster(
     )
 
 
+@router.get("/employees/training-candidates", summary="待培训人员列表")
+async def training_candidates(
+    keyword: str | None = Query(None, description="姓名或工号关键词"),
+    session: AsyncSession = Depends(get_db),
+):
+    """返回入职台账中在职的员工列表，用于新员工入职培训页面选择员工。"""
+    from app.modules.hr.models import OnboardingRecord
+    stmt = select(OnboardingRecord).where(
+        OnboardingRecord.is_deleted == False,
+        OnboardingRecord.is_employed == "是",
+    )
+    if keyword:
+        stmt = stmt.where(
+            OnboardingRecord.name.ilike(f"{keyword}%")
+            | OnboardingRecord.employee_number.ilike(f"{keyword}%")
+        )
+    stmt = stmt.order_by(OnboardingRecord.hire_date.desc().nulls_last())
+    r = await session.execute(stmt)
+    records = r.scalars().all()
+    return success_response(data=[
+        {
+            "id": str(rec.id),
+            "employee_number": rec.employee_number,
+            "name": rec.name,
+            "department": rec.department,
+            "position": rec.position,
+            "hire_date": str(rec.hire_date) if rec.hire_date else None,
+            "education": rec.education,
+            "school": rec.school,
+            "graduation_date": str(rec.graduation_date) if rec.graduation_date else None,
+            "source": rec.source or "新入职",
+        }
+        for rec in records
+    ])
+
+
+@router.get("/employees/probation-expiring", summary="试用期即将到期员工")
+async def probation_expiring(days: int = Query(0, ge=0, le=365), department: str | None = Query(None), session: AsyncSession = Depends(get_db)):
+    from datetime import date as dt_date, timedelta
+    from app.modules.hr.models import Employee
+    today = dt_date.today(); deadline = today + timedelta(days=days)
+    stmt = select(Employee).where(Employee.is_deleted == False, Employee.status == "试用期", Employee.probation_end_date.isnot(None))
+    if days > 0: stmt = stmt.where(Employee.probation_end_date <= deadline, Employee.probation_end_date >= today)
+    if department: stmt = stmt.where(Employee.department == department)
+    stmt = stmt.order_by(Employee.probation_end_date.asc())
+    return success_response(data=[{"id":str(e.id),"employee_number":e.employee_number,"name":e.name,"department":e.department,"position":e.position,"hire_date":str(e.hire_date) if e.hire_date else None,"probation_end_date":str(e.probation_end_date) if e.probation_end_date else None,"status":e.status} for e in (await session.execute(stmt)).scalars().all()])
+
+
 @router.get("/employees/by-number/{employee_number}", summary="根据工号查询员工")
 async def get_employee_by_number(
     employee_number: str,
@@ -287,6 +344,18 @@ async def export_onboarding_training_record(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/employees/{employee_number}/onboarding-certificate", summary="导出上岗证")
+async def export_onboarding_certificate(employee_number: str, service: EmployeeService = Depends(get_employee_service)):
+    employee = await service.get_employee_by_number(employee_number)
+    try:
+        buffer = await generate_onboarding_certificate(employee)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    def _iter(): buffer.seek(0); yield buffer.read()
+    fn = f"上岗证_{employee.name}.docx"
+    return StreamingResponse(_iter(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
 class TrainingItem(BaseModel):
@@ -1033,6 +1102,55 @@ async def delete_departure_record(
     return success_response(message="离职台账记录删除成功")
 
 
+@router.post("/departure-records/{record_id}/preview-certificate", summary="预览离职证明")
+async def preview_departure_certificate(
+    record_id: UUID,
+    service: DepartureRecordService = Depends(get_departure_service),
+):
+    from fastapi.responses import HTMLResponse
+    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_html
+    record = await service.get_record(record_id)
+    html = generate_termination_certificate_html(
+        name=record.name or "", id_number=getattr(record, "id_card", "") or "",
+        department=record.department or "", position=record.position or "",
+        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        leave_date=record.offboarding_date or "",
+        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+    )
+    return HTMLResponse(content=html)
+
+
+@router.post("/departure-records/{record_id}/send-certificate", summary="发送离职证明邮件")
+async def send_departure_certificate(
+    record_id: UUID, employee_email: str = Form(...),
+    service: DepartureRecordService = Depends(get_departure_service),
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.models import EmailLog
+    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_docx
+    from app.platform.mail_service import send_email
+    record = await service.get_record(record_id)
+    name = record.name or "员工"
+    docx_buf = generate_termination_certificate_docx(
+        name=name, id_number=getattr(record, "id_card", "") or "",
+        department=record.department or "", position=record.position or "",
+        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        leave_date=record.offboarding_date or "",
+        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+    )
+    filename = f"解除劳动关系证明_{name}.docx"
+    subj = "解除劳动关系证明"
+    html = f"<html><body style=\"font-family:sans-serif;padding:20px;\"><h2>解除劳动关系证明</h2><p>{name}，您好！</p><p>附件是您的解除劳动关系证明，请查收。</p></body></html>"
+    try:
+        send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, docx_buf.read())]); st, err = "sent", None
+    except Exception as e:
+        st, err = "failed", str(e)
+    session.add(EmailLog(email_type="departure_cert", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))
+    await session.commit()
+    if st == "failed": raise HTTPException(500, f"发送失败: {err}")
+    return success_response(message="离职证明已发送")
+
+
 # ─── TrainingLedger Routes ───
 
 @router.get("/training-ledgers", summary="培训台账列表")
@@ -1299,6 +1417,30 @@ async def export_training_ledger(
     )
 
 
+@router.get("/training-ledgers/admin", summary="管理员培训台账总览")
+async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.models import Employee, TrainingLedger
+    cols = (TrainingLedger.id, TrainingLedger.employee_number, Employee.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, Employee.department)
+    stmt = select(*cols).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
+    if department: stmt = stmt.where(Employee.department == department)
+    if training_subject: stmt = stmt.where(TrainingLedger.training_subject.ilike(f"%{training_subject}%"))
+    if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
+    if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
+    total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+    rows = (await session.execute(stmt.order_by(TrainingLedger.training_date.desc()).offset((page-1)*page_size).limit(page_size))).all()
+    return paginated_response(data=[{"id":str(r[0]),"employee_number":r[1],"employee_name":r[2],"training_subject":r[3],"training_date":str(r[4]) if r[4] else None,"training_method":r[5],"trainer":r[6],"assessment_result":r[7],"department":r[8]} for r in rows], page=page, page_size=page_size, total=total)
+
+
+@router.get("/question-bank", summary="题库检索")
+async def qbank_search(file_no: str | None = Query(None), keyword: str | None = Query(None), page_params: PageParams = Depends(), session: AsyncSession = Depends(get_db)):
+    where = "WHERE is_deleted = false"
+    params = {"lim": page_params.page_size, "off": (page_params.page-1)*page_params.page_size}
+    if file_no: where += " AND file_no ILIKE :fn"; params["fn"] = f"%{file_no}%"
+    if keyword: where += " AND (question ILIKE :kw OR subject ILIKE :kw)"; params["kw"] = f"%{keyword}%"
+    r = await session.execute(text(f"SELECT id, file_no, question, answer, score, source, usage_count FROM hr.question_bank {where} ORDER BY usage_count DESC LIMIT :lim OFFSET :off"), params)
+    return success_response(data=[{"id":str(row[0]),"file_no":row[1],"question":row[2],"answer":row[3],"score":row[4],"source":row[5],"usage_count":row[6]} for row in r])
+
+
 @router.get("/training-ledgers/{record_id}", summary="培训台账记录详情")
 async def get_training_ledger(
     record_id: UUID,
@@ -1347,7 +1489,11 @@ async def upload_annual_training_plan(
         result = await service.upload_annual_plan(content)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return success_response(data=result, message=f"新增 {result['created']} 条计划项")
+    return success_response(
+        data=result,
+        message=f"新增 {result['created']} 条，更新 {result['updated']} 条"
+        + (f"，{len(result['errors'])} 条失败" if result.get('errors') else ""),
+    )
 
 
 @router.get("/annual-training-plans", summary="年度培训计划列表")
@@ -1972,6 +2118,101 @@ async def delete_training_evaluation(
     return success_response(message="删除成功")
 
 
+@router.post("/training-evaluations/export-admin", summary="导出培训效果评估表（管理员）")
+async def export_training_evaluation_admin(
+    department: str = Form(...),
+    training_subject: str = Form(..., alias="training_subject"),
+    training_date: str = Form(""),
+    training_method: str = Form(""),
+    trainer_name: str = Form(""),
+    assessment_method: str = Form(""),
+    session: AsyncSession = Depends(get_db),
+):
+    """根据部门和培训主题导出培训效果评估表，自动汇总台账中的考核成绩。"""
+    from datetime import date as _date
+    from app.modules.hr.evaluation_document_generator import generate_training_evaluation, TrainingEvaluationInput
+
+    def _d(v: str | None):
+        if not v: return None
+        try: return _date.fromisoformat(v)
+        except: return None
+
+    train_date = _d(training_date) if training_date else None
+
+    # 查询评估补录记录
+    eval_row = (await session.execute(
+        text("SELECT id, expected_count, actual_count, excellent_count, qualified_count, unqualified_count, training_method, trainer_name, assessment_method FROM hr.training_evaluations WHERE department = :d AND training_content = :c AND is_deleted = false ORDER BY created_at DESC LIMIT 1"),
+        {"d": department, "c": training_subject},
+    )).fetchone()
+
+    # 从培训台账汇总考核成绩统计
+    total = 0
+    excellent = eval_row[3] if eval_row else 0 or 0
+    qualified = eval_row[4] if eval_row else 0 or 0
+    unqualified = eval_row[5] if eval_row else 0 or 0
+
+    if not (excellent or qualified or unqualified):
+        # 评估表里没有统计数据，从台账计算
+        ledger_rows = (await session.execute(
+            text("SELECT assessment_result FROM hr.training_ledgers WHERE training_subject = :ts AND is_deleted = false AND assessment_result IS NOT NULL"),
+            {"ts": training_subject},
+        )).fetchall()
+        for r in ledger_rows:
+            try:
+                s = int(float(r[0]))
+                if s >= 90: excellent += 1
+                elif s >= 60: qualified += 1
+                else: unqualified += 1
+                total += 1
+            except (ValueError, TypeError):
+                pass
+
+    if total == 0:
+        total = excellent + qualified + unqualified
+
+    pass_rate = f"{(excellent + qualified) / max(total, 1) * 100:.0f}%" if total > 0 else ""
+    participation_rate = f"{total}/{eval_row[1]}" if eval_row and eval_row[1] else (f"{total}/{total}" if total > 0 else "")
+
+    # 获取受训人员名单
+    trainee_names: list[str] = []
+    emp_rows = (await session.execute(
+        text("SELECT DISTINCT e.name FROM hr.training_ledgers l JOIN hr.employees e ON e.employee_number = l.employee_number WHERE l.training_subject = :ts AND l.is_deleted = false AND e.is_deleted = false"),
+        {"ts": training_subject},
+    )).fetchall()
+    trainee_names = [r[0] for r in emp_rows if r[0]]
+
+    payload = TrainingEvaluationInput(
+        subject=training_subject,
+        training_date=train_date,
+        training_method=training_method or (eval_row[6] if eval_row else "") or "",
+        trainer=trainer_name or (eval_row[7] if eval_row else "") or "",
+        assessment_method=assessment_method or (eval_row[8] if eval_row else "") or "",
+        trainee_names=trainee_names,
+        expected_count=eval_row[1] if eval_row else None,
+        actual_count=total if total > 0 else None,
+        exam_count=total if total > 0 else None,
+        excellent_count=excellent if total > 0 else None,
+        qualified_count=qualified if total > 0 else None,
+        unqualified_count=unqualified if total > 0 else None,
+        pass_rate=pass_rate or None,
+        participation_rate=participation_rate or None,
+    )
+
+    try:
+        buffer = generate_training_evaluation(payload)
+    except Exception as e:
+        raise HTTPException(400, f"生成评估表失败: {e}")
+
+    safe_date = str(training_date).replace("-", "") if training_date else "nodate"
+    from urllib.parse import quote
+    safe_fn = f"evaluation_{safe_date}.docx"
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename=\"{safe_fn}\"; filename*=utf-8''{quote('培训效果评估表_' + safe_date + '.docx')}"},
+    )
+
+
 @router.get("/training-evaluations/pending", summary="待评估的培训列表")
 async def list_pending_evaluations(
     keyword: str | None = Query(None),
@@ -2002,4 +2243,604 @@ async def list_pending_evaluations(
     return success_response(data=data)
 
 
-router.include_router(analysis_router)
+@router.get("/job-requirements", summary="岗位需求列表")
+async def list_job_reqs(session: AsyncSession = Depends(get_db)):
+    r = await session.execute(text("SELECT id, position_name, department, headcount, hired_count, requirements, status FROM hr.job_requirements WHERE is_deleted = false ORDER BY created_at DESC"))
+    return success_response(data=[{"id":str(row[0]),"position_name":row[1],"department":row[2],"headcount":row[3],"hired_count":row[4],"requirements":row[5],"status":row[6]} for row in r])
+
+
+@router.post("/job-requirements", summary="创建岗位需求")
+async def create_job_req(payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("INSERT INTO hr.job_requirements (id, position_name, department, headcount, requirements, status, created_at, updated_at) VALUES (gen_random_uuid(), :pn, :dept, :hc, :req, '招聘中', now(), now())"), {"pn":payload.get("position_name",""), "dept":payload.get("department",""), "hc":int(payload.get("headcount",1)), "req":payload.get("requirements","")})
+    await session.commit()
+    return success_response(message="创建成功", status_code=201)
+
+
+@router.put("/job-requirements/{req_id}", summary="更新岗位需求")
+async def update_job_req(req_id: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.job_requirements SET position_name=COALESCE(:pn,position_name), department=COALESCE(:dept,department), headcount=COALESCE(:hc,headcount), requirements=COALESCE(:req,requirements), status=COALESCE(:st,status) WHERE id=:id AND is_deleted=false"), {"pn":payload.get("position_name"),"dept":payload.get("department"),"hc":payload.get("headcount"),"req":payload.get("requirements"),"st":payload.get("status"),"id":req_id})
+    await session.commit()
+    return success_response(message="已更新")
+
+
+@router.delete("/job-requirements/{req_id}", summary="删除岗位需求")
+async def delete_job_req(req_id: UUID, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.job_requirements SET is_deleted=true WHERE id=:id"), {"id":req_id})
+    await session.commit()
+    return success_response(message="已删除")
+
+
+@router.post("/candidates/parse-resume", summary="解析简历")
+async def parse_cv(file: UploadFile = Form(..., alias="resume")):
+    if not file.filename or not file.filename.endswith(".pdf"): raise HTTPException(400, "仅支持PDF")
+    from app.modules.hr.resume_parser import parse_resume_pdf
+    import os; os.makedirs("uploads/resumes", exist_ok=True)
+    content=bytes(await file.read()); path=f"uploads/resumes/{file.filename}"
+    open(path,"wb").write(content); r=parse_resume_pdf(content); r["resume_file_path"]=path
+    return success_response(data=r)
+
+
+@router.get("/candidates/{cid}/resume-preview", summary="简历预览")
+async def resume_preview(cid: UUID, session: AsyncSession = Depends(get_db)):
+    r = await session.execute(text("SELECT resume_url FROM hr.candidates WHERE id=:id"), {"id": cid})
+    row = r.first()
+    if not row or not row[0]: raise HTTPException(404, "无简历文件")
+    import os
+    if not os.path.exists(row[0]): raise HTTPException(404, "简历文件不存在")
+    return FileResponse(row[0], media_type="application/pdf")
+
+
+@router.get("/candidates", summary="候选人列表")
+async def list_candidates(page_params: PageParams = Depends(), session: AsyncSession = Depends(get_db)):
+    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE is_deleted=false ORDER BY created_at DESC LIMIT :lim OFFSET :off"),{"lim":page_params.page_size,"off":(page_params.page-1)*page_params.page_size})
+    return success_response(data=[{"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None} for row in r])
+
+
+@router.post("/candidates", summary="创建候选人")
+async def create_candidate(payload: dict, session: AsyncSession = Depends(get_db)):
+    import os,shutil; rp=None
+    if payload.get("resume_file_path") and os.path.exists(payload["resume_file_path"]):
+        os.makedirs("uploads/resumes",exist_ok=True); rp=f"uploads/resumes/{payload.get('name','candidate')}_{os.path.basename(payload['resume_file_path'])}"
+        shutil.copy(payload["resume_file_path"],rp)
+    await session.execute(text("INSERT INTO hr.candidates (id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id,resume_url,created_at,updated_at) VALUES (gen_random_uuid(),:n,:ph,:em,:pos,:dept,:g,:sch,:edu,:maj,:st,:rl,:jid,:rp,now(),now())"),{"n":payload.get("name",""),"ph":payload.get("phone",""),"em":payload.get("email",""),"pos":payload.get("position",""),"dept":payload.get("department",""),"g":payload.get("gender",""),"sch":payload.get("school",""),"edu":payload.get("education",""),"maj":payload.get("major",""),"st":payload.get("status","待筛选"),"rl":payload.get("recommendation_level",""),"jid":payload.get("job_requirement_id"),"rp":rp})
+    await session.commit(); return success_response(message="创建成功", status_code=201)
+
+
+@router.get("/candidates/{cid}", summary="候选人详情")
+async def get_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
+    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE id=:id AND is_deleted=false"),{"id":cid})
+    row=r.first()
+    if not row: raise HTTPException(404,"不存在")
+    return success_response(data={"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None})
+
+
+@router.put("/candidates/{cid}", summary="更新候选人")
+async def update_candidate(cid: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.candidates SET name=COALESCE(:n,name),phone=COALESCE(:ph,phone),email=COALESCE(:em,email),position=COALESCE(:pos,position),department=COALESCE(:dept,department),gender=COALESCE(:g,gender),school=COALESCE(:sch,school),education=COALESCE(:edu,education),major=COALESCE(:maj,major),status=COALESCE(:st,status),recommendation_level=COALESCE(:rl,recommendation_level) WHERE id=:id AND is_deleted=false"),{"n":payload.get("name"),"ph":payload.get("phone"),"em":payload.get("email"),"pos":payload.get("position"),"dept":payload.get("department"),"g":payload.get("gender"),"sch":payload.get("school"),"edu":payload.get("education"),"maj":payload.get("major"),"st":payload.get("status"),"rl":payload.get("recommendation_level"),"id":cid})
+    await session.commit(); return success_response(message="已更新")
+
+
+@router.delete("/candidates/{cid}", summary="删除候选人")
+async def delete_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
+    await session.execute(text("UPDATE hr.candidates SET is_deleted=true WHERE id=:id"),{"id":cid})
+    await session.commit(); return success_response(message="已删除")
+
+
+# ─── QA / 实操考核 Routes ───
+
+class QaAssessmentCreateBody(BaseModel):
+    subject: str
+    department: str | None = None
+    training_date: str | None = None
+    training_method: str | None = None
+    assessment_method: str | None = "问答"
+    trainer: str | None = None
+    questions: list[dict] | None = None
+    question_count: int = 0
+    full_score: int = 100
+    excellent_line: int = 90
+    pass_line: int = 60
+    trainee_names: list[str] = []
+
+
+class QaScoreSaveItem(BaseModel):
+    employee_name: str
+    employee_number: str | None = None
+    wrong_questions: list[int] = []
+
+
+class QaScoreSaveBody(BaseModel):
+    assessed_date: str | None = None
+    scores: list[QaScoreSaveItem] = []
+
+
+@router.post("/qa-assessments", summary="创建考核场次")
+async def create_qa_assessment(
+    payload: QaAssessmentCreateBody,
+    session: AsyncSession = Depends(get_db),
+):
+    """创建问答/实操考核场次，含选题快照和受训人员名单。"""
+    import json as _json
+    from datetime import date as _date
+
+    total_score = sum((q.get("score", 10) or 10) for q in (payload.questions or []))
+    if total_score == 0 and payload.full_score:
+        total_score = payload.full_score
+
+    def _d(v: str | None):
+        if not v:
+            return None
+        try:
+            return _date.fromisoformat(v)
+        except (ValueError, TypeError):
+            return None
+
+    result = await session.execute(
+        text("""INSERT INTO hr.training_assessments
+            (subject, department, training_date, training_method, assessment_method, trainer,
+             questions, question_count, full_score, excellent_line, pass_line)
+            VALUES (:s, :d, :td, :tm, :am, :t, :q::jsonb, :qc, :fs, :el, :pl)
+            RETURNING id"""),
+        {
+            "s": payload.subject, "d": payload.department,
+            "td": _d(payload.training_date), "tm": payload.training_method,
+            "am": payload.assessment_method or "问答", "t": payload.trainer,
+            "q": _json.dumps(payload.questions, ensure_ascii=False) if payload.questions else None,
+            "qc": payload.question_count,
+            "fs": total_score, "el": payload.excellent_line, "pl": payload.pass_line,
+        },
+    )
+    assessment_id = result.scalar_one()
+    await session.flush()
+    return success_response(data={"id": str(assessment_id)}, message="考核场次创建成功", status_code=201)
+
+
+@router.get("/qa-assessments", summary="考核场次列表")
+async def list_qa_assessments(
+    department: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+):
+    """按部门查询考核场次列表。"""
+    where = "WHERE is_deleted = false"
+    params: dict = {"lim": page_size, "off": (page - 1) * page_size}
+    if department:
+        where += " AND department = :dept"
+        params["dept"] = department
+    total = (await session.execute(
+        text(f"SELECT count(*) FROM hr.training_assessments {where}"),
+        {k: v for k, v in params.items() if k != "lim" and k != "off"},
+    )).scalar() or 0
+    rows = (await session.execute(
+        text(f"SELECT id, subject, department, training_date, training_method, assessment_method, trainer, question_count, created_at FROM hr.training_assessments {where} ORDER BY created_at DESC LIMIT :lim OFFSET :off"),
+        params,
+    )).fetchall()
+    data = [
+        {
+            "id": str(r[0]), "subject": r[1], "department": r[2],
+            "training_date": str(r[3]) if r[3] else None,
+            "training_method": r[4], "assessment_method": r[5], "trainer": r[6],
+            "question_count": r[7], "created_at": str(r[8]) if r[8] else None,
+        }
+        for r in rows
+    ]
+    return paginated_response(data=data, page=page, page_size=page_size, total=total)
+
+
+@router.get("/qa-assessments/{assessment_id}", summary="考核场次详情")
+async def get_qa_assessment(
+    assessment_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """获取考核场次详情，含考题和成绩列表。"""
+    row = (await session.execute(
+        text("SELECT id, subject, department, training_date, training_method, assessment_method, trainer, questions, question_count, full_score, excellent_line, pass_line, created_at FROM hr.training_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(404, "考核场次不存在")
+
+    scores = (await session.execute(
+        text("SELECT id, employee_name, employee_number, wrong_questions, total_score, grade, result_text, assessed_date FROM hr.training_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
+        {"aid": assessment_id},
+    )).fetchall()
+
+    import json as _json
+    questions_val = row[8]
+    if isinstance(questions_val, str):
+        try:
+            questions_val = _json.loads(questions_val)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return success_response(data={
+        "assessment": {
+            "id": str(row[0]), "subject": row[1], "department": row[2],
+            "training_date": str(row[3]) if row[3] else None,
+            "training_method": row[4], "assessment_method": row[5], "trainer": row[6],
+            "questions": questions_val, "question_count": row[9], "full_score": row[10],
+            "excellent_line": row[11], "pass_line": row[12],
+            "created_at": str(row[13]) if row[13] else None,
+        },
+        "scores": [
+            {
+                "id": str(s[0]), "employee_name": s[1], "employee_number": s[2] or "",
+                "wrong_questions": s[3] if isinstance(s[3], list) else (_json.loads(s[3]) if isinstance(s[3], str) else []),
+                "total_score": s[4], "grade": s[5], "result_text": s[6],
+                "assessed_date": str(s[7]) if s[7] else None,
+            }
+            for s in scores
+        ],
+    })
+
+
+@router.put("/qa-assessments/{assessment_id}/scores", summary="保存考核成绩（同步培训台账）")
+async def save_qa_scores(
+    assessment_id: UUID,
+    payload: QaScoreSaveBody,
+    session: AsyncSession = Depends(get_db),
+):
+    """保存考核成绩，并同步到培训台账。"""
+    import json as _json
+    from datetime import date as _date
+
+    def _d(v: str | None):
+        if not v:
+            return None
+        try:
+            return _date.fromisoformat(v)
+        except (ValueError, TypeError):
+            return None
+
+    # 获取考核场次信息
+    assessment = (await session.execute(
+        text("SELECT subject, training_date, training_method, trainer, questions, question_count, full_score, excellent_line, pass_line FROM hr.training_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not assessment:
+        raise HTTPException(404, "考核场次不存在")
+
+    subj, train_date, method, trainer, questions_raw, question_count, full_score, excellent_line, pass_line = assessment
+    questions = questions_raw if isinstance(questions_raw, list) else (_json.loads(questions_raw) if isinstance(questions_raw, str) else [])
+
+    excellent_count = 0
+    qualified_count = 0
+    unqualified_count = 0
+    synced_count = 0
+    no_emp_names: list[str] = []
+
+    for s in payload.scores:
+        name = s.employee_name
+        if not name:
+            continue
+        wrong = s.wrong_questions or []
+        if questions and isinstance(questions, list) and len(questions) > 0:
+            deduction = sum(
+                (questions[i - 1].get("score", 10) if isinstance(questions[i - 1], dict) else 10)
+                for i in wrong if 1 <= i <= len(questions)
+            )
+            score = max(0, full_score - deduction)
+        else:
+            per_q = full_score / max(question_count, 1) if question_count > 0 else 10
+            score = max(0, full_score - len(wrong) * int(per_q))
+
+        grade = "优" if score >= excellent_line else ("合格" if score >= pass_line else "不合格")
+
+        if grade == "优":
+            excellent_count += 1
+        elif grade == "合格":
+            qualified_count += 1
+        else:
+            unqualified_count += 1
+
+        assessed_date_val = _d(payload.assessed_date)
+
+        # Upsert 成绩
+        existing = (await session.execute(
+            text("SELECT id FROM hr.training_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm AND is_deleted = false"),
+            {"aid": assessment_id, "nm": name},
+        )).fetchone()
+        if existing:
+            await session.execute(
+                text("UPDATE hr.training_assessment_scores SET wrong_questions=:wq::jsonb, total_score=:ts, grade=:g, assessed_date=:ad, updated_at=now() WHERE id=:id"),
+                {"wq": _json.dumps(wrong), "ts": score, "g": grade, "ad": assessed_date_val, "id": existing[0]},
+            )
+        else:
+            await session.execute(
+                text("INSERT INTO hr.training_assessment_scores (assessment_id, employee_name, employee_number, wrong_questions, total_score, grade, assessed_date) VALUES (:aid, :nm, :en, :wq::jsonb, :ts, :g, :ad)"),
+                {
+                    "aid": assessment_id, "nm": name,
+                    "en": s.employee_number or "",
+                    "wq": _json.dumps(wrong), "ts": score, "g": grade,
+                    "ad": assessed_date_val,
+                },
+            )
+
+        # 同步到培训台账
+        emp_no = s.employee_number or ""
+        # 没工号时从员工表反查
+        if not emp_no:
+            emp = (await session.execute(
+                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+                {"nm": name},
+            )).fetchone()
+            if emp and emp[0]:
+                emp_no = emp[0]
+        if emp_no:
+            ledger_date = assessed_date_val or train_date or _date.today()
+            exist = (await session.execute(
+                text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
+                {"en": emp_no, "td": ledger_date, "ts": subj},
+            )).fetchone()
+            if not exist:
+                await session.execute(
+                    text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
+                    {"en": emp_no, "td": ledger_date, "ts": subj, "tm": method or "", "t": trainer or "", "ar": str(score)},
+                )
+            synced_count += 1
+        else:
+            no_emp_names.append(name)
+
+    await session.commit()
+
+    total = excellent_count + qualified_count + unqualified_count
+    pass_rate = f"{(excellent_count + qualified_count) / max(total, 1) * 100:.0f}%"
+    msg = f"已保存：优{excellent_count}人/合格{qualified_count}人/不合格{unqualified_count}人，合格率{pass_rate}。已同步{synced_count}人到培训台账"
+    if no_emp_names:
+        msg += f"（{len(no_emp_names)}人缺工号未同步：{'、'.join(no_emp_names)}）"
+    return success_response(
+        data={
+            "statistics": {
+                "excellent_count": excellent_count,
+                "qualified_count": qualified_count,
+                "unqualified_count": unqualified_count,
+                "pass_rate": pass_rate,
+                "synced_count": synced_count,
+            }
+        },
+        message=msg,
+    )
+
+
+@router.post("/qa-assessments/{assessment_id}/export-scores", summary="导出成绩单（自动同步培训台账）")
+async def export_qa_scores(
+    assessment_id: UUID,
+    payload: QaScoreSaveBody,
+    session: AsyncSession = Depends(get_db),
+):
+    """保存成绩、同步培训台账、导出成绩单 docx。"""
+    import json as _json
+    from datetime import date as _date
+    from app.modules.hr.score_report_generator import generate_score_report
+
+    def _d(v: str | None):
+        if not v:
+            return None
+        try:
+            return _date.fromisoformat(v)
+        except (ValueError, TypeError):
+            return None
+
+    # 获取考核场次信息
+    assessment = (await session.execute(
+        text("SELECT subject, training_date, training_method, trainer, department, questions, question_count, full_score, excellent_line, pass_line FROM hr.training_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not assessment:
+        raise HTTPException(404, "考核场次不存在")
+
+    subj, train_date, method, trainer, dept, questions_raw, question_count, full_score, excellent_line, pass_line = assessment
+    questions = questions_raw if isinstance(questions_raw, list) else (_json.loads(questions_raw) if isinstance(questions_raw, str) else [])
+
+    # 保存成绩 + 同步台账
+    score_list = []
+    for s in payload.scores:
+        name = s.employee_name
+        if not name:
+            continue
+        wrong = s.wrong_questions or []
+        if questions and isinstance(questions, list) and len(questions) > 0:
+            deduction = sum(
+                (questions[i - 1].get("score", 10) if isinstance(questions[i - 1], dict) else 10)
+                for i in wrong if 1 <= i <= len(questions)
+            )
+            score = max(0, full_score - deduction)
+        else:
+            per_q = full_score / max(question_count, 1) if question_count > 0 else 10
+            score = max(0, full_score - len(wrong) * int(per_q))
+
+        grade = "优" if score >= excellent_line else ("合格" if score >= pass_line else "不合格")
+        assessed_date_val = _d(payload.assessed_date)
+
+        # Upsert 成绩
+        existing = (await session.execute(
+            text("SELECT id FROM hr.training_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm AND is_deleted = false"),
+            {"aid": assessment_id, "nm": name},
+        )).fetchone()
+        if existing:
+            await session.execute(
+                text("UPDATE hr.training_assessment_scores SET wrong_questions=:wq::jsonb, total_score=:ts, grade=:g, assessed_date=:ad, updated_at=now() WHERE id=:id"),
+                {"wq": _json.dumps(wrong), "ts": score, "g": grade, "ad": assessed_date_val, "id": existing[0]},
+            )
+        else:
+            await session.execute(
+                text("INSERT INTO hr.training_assessment_scores (assessment_id, employee_name, employee_number, wrong_questions, total_score, grade, assessed_date) VALUES (:aid, :nm, :en, :wq::jsonb, :ts, :g, :ad)"),
+                {
+                    "aid": assessment_id, "nm": name,
+                    "en": s.employee_number or "",
+                    "wq": _json.dumps(wrong), "ts": score, "g": grade,
+                    "ad": assessed_date_val,
+                },
+            )
+
+        # 同步到培训台账
+        emp_no = s.employee_number or ""
+        # 没工号时从员工表反查
+        if not emp_no:
+            emp = (await session.execute(
+                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+                {"nm": name},
+            )).fetchone()
+            if emp and emp[0]:
+                emp_no = emp[0]
+        if emp_no:
+            ledger_date = assessed_date_val or train_date or _date.today()
+            exist = (await session.execute(
+                text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
+                {"en": emp_no, "td": ledger_date, "ts": subj},
+            )).fetchone()
+            if not exist:
+                await session.execute(
+                    text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
+                    {"en": emp_no, "td": ledger_date, "ts": subj, "tm": method or "", "t": trainer or "", "ar": str(score)},
+                )
+
+        score_list.append({"name": name, "department": dept or "", "total_score": score})
+
+    await session.commit()  # 先提交 DB，确保成绩和台账写入不因后续异常回滚
+
+    # 汇总仍缺失工号的人员（反查后依然没有的）
+    no_emp_numbers: list[str] = []
+    for s in payload.scores:
+        if not s.employee_name:
+            continue
+        en = s.employee_number or ""
+        if not en:
+            emp = (await session.execute(
+                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+                {"nm": s.employee_name},
+            )).fetchone()
+            en = emp[0] if emp and emp[0] else ""
+        if not en:
+            no_emp_numbers.append(s.employee_name)
+
+    # 生成成绩单
+    try:
+        buffer = generate_score_report(
+            training_content=subj or "",
+            training_date=str(payload.assessed_date or train_date or ""),
+            department=dept or "",
+            scores=score_list,
+        )
+    except Exception as e:
+        raise HTTPException(400, f"生成成绩单失败: {e}")
+
+    from urllib.parse import quote as _quote
+    filename = f"成绩单_{subj}.docx"
+    headers = {
+        "Content-Disposition": f"attachment; filename*=utf-8''{_quote(filename)}",
+        "X-Sync-Result": f"已同步{len(score_list) - len(no_emp_numbers)}人到培训台账",
+    }
+    if no_emp_numbers:
+        headers["X-Sync-Warning"] = f"以下人员缺少工号，未同步台账：{';'.join(no_emp_numbers)}"
+    return StreamingResponse(
+        iter([buffer.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers,
+    )
+
+
+@router.delete("/qa-assessments/{assessment_id}", summary="删除考核场次")
+async def delete_qa_assessment(
+    assessment_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """软删除考核场次及关联成绩。"""
+    await session.execute(text("UPDATE hr.training_assessments SET is_deleted = true WHERE id = :id"), {"id": assessment_id})
+    await session.execute(text("UPDATE hr.training_assessment_scores SET is_deleted = true WHERE assessment_id = :id"), {"id": assessment_id})
+    await session.flush()
+    return success_response(message="考核场次已删除")
+
+
+@router.get("/qa-assessments/{assessment_id}/export-record", summary="导出问答实操记录表")
+async def export_qa_record(
+    assessment_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """导出问答实操记录表 docx。"""
+    from app.modules.hr.qa_record_generator import generate_qa_record
+
+    row = (await session.execute(
+        text("SELECT subject, department, training_date, training_method, trainer, questions FROM hr.training_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(404, "考核场次不存在")
+
+    scores = (await session.execute(
+        text("SELECT employee_name, employee_number, wrong_questions, total_score, assessed_date FROM hr.training_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
+        {"aid": assessment_id},
+    )).fetchall()
+
+    import json as _json
+    questions = row[5] if isinstance(row[5], list) else (_json.loads(row[5]) if row[5] else [])
+    score_entries = []
+    for s in scores:
+        wrong = s[2] if isinstance(s[2], list) else (_json.loads(s[2]) if isinstance(s[2], str) else [])
+        wrong_set = set(wrong)
+        total_q = len(questions)
+        wrong_nums = "、".join(str(i + 1) for i in range(total_q) if i in wrong_set) if total_q else ""
+        result_text = f"第{wrong_nums}题错误，其他题目正确" if wrong_nums else "全对，所有题目回答正确"
+        score_entries.append({
+            "name": s[0],
+            "employee_number": s[1] or "",
+            "total_score": str(s[3]) if s[3] is not None else "",
+            "assessed_date": str(s[4]) if s[4] else "",
+            "result_text": result_text,
+        })
+
+    try:
+        buffer = generate_qa_record(
+            training_content=row[0] or "",
+            training_department=row[1] or "",
+            training_date=row[2],
+            training_method=row[3] or "",
+            trainer_name=row[4] or "",
+            questions=questions,
+            trainee_names=[],
+            scores=score_entries,
+        )
+    except Exception as e:
+        raise HTTPException(400, f"生成记录表失败: {e}")
+
+    def _iter(): buffer.seek(0); yield buffer.read()
+    return StreamingResponse(_iter(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=qa_record.docx"})
+
+
+@router.get("/qa-assessments/{assessment_id}/export-evaluation", summary="导出培训效果评估表")
+async def export_qa_evaluation(
+    assessment_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """导出培训效果评估表 docx。"""
+    from app.modules.hr.evaluation_document_generator import generate_training_evaluation, TrainingEvaluationInput
+
+    row = (await session.execute(
+        text("SELECT subject, department, training_date, training_method, trainer FROM hr.training_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(404, "考核场次不存在")
+
+    scores = (await session.execute(
+        text("SELECT employee_name FROM hr.training_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
+        {"aid": assessment_id},
+    )).fetchall()
+
+    payload = TrainingEvaluationInput(
+        subject=row[0] or "",
+        training_date=row[2],
+        training_method=row[3] or "",
+        trainer=row[4] or "",
+        trainee_names=[s[0] for s in scores],
+    )
+    try:
+        buffer = generate_training_evaluation(payload)
+    except Exception as e:
+        raise HTTPException(400, f"生成评估表失败: {e}")
+
+    def _iter(): buffer.seek(0); yield buffer.read()
+    return StreamingResponse(_iter(), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": "attachment; filename=qa_evaluation.docx"})

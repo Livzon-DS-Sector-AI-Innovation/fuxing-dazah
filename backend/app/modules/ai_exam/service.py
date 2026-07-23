@@ -220,78 +220,18 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict | None = 
     return result
 
 
+
 def export_exam(data: dict) -> BytesIO:
-    """Export exam questions as a Word document."""
-    from docx import Document
-    from docx.shared import Pt
-
-    doc = Document()
-    doc.styles["Normal"].font.size = Pt(11)
-    doc.add_heading(data.get("title", "培训考试试卷"), level=1)
-    doc.add_paragraph("")
-
-    info = []
-    if data.get("examiner"):
-        info.append(f"出卷人：{data['examiner']}")
-    if data.get("exam_date"):
-        info.append(f"考试日期：{data['exam_date']}")
-    if data.get("assessment_date"):
-        info.append(f"评估日期：{data['assessment_date']}")
-    if info:
-        doc.add_paragraph("  |  ".join(info))
-        doc.add_paragraph("")
-
-    choice_qs = data.get("choice_questions", [])
-    if choice_qs:
-        doc.add_heading("一、单选题", level=2)
-        for q in choice_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            for opt in q.get("options", []):
-                doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
-            doc.add_paragraph("")
-
-    tf_qs = data.get("true_false_questions", [])
-    if tf_qs:
-        doc.add_heading("二、判断题", level=2)
-        for q in tf_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']} （  ）")
-            doc.add_paragraph("")
-
-    multi_qs = data.get("multi_choice_questions", [])
-    if multi_qs:
-        doc.add_heading("三、多选题", level=2)
-        for q in multi_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            for opt in q.get("options", []):
-                doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
-            doc.add_paragraph("")
-
-    fill_qs = data.get("fill_blank_questions", [])
-    if fill_qs:
-        doc.add_heading("四、填空题", level=2)
-        for q in fill_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            doc.add_paragraph("")
-
-    doc.add_heading("参考答案", level=2)
-    if choice_qs:
-        doc.add_paragraph("单选题答案：")
-        for q in choice_qs:
-            doc.add_paragraph(f"  {q['number']}. {q.get('answer', '?')}")
-    if tf_qs:
-        doc.add_paragraph("判断题答案：")
-        for q in tf_qs:
-            doc.add_paragraph(f"  {q['number']}. {q.get('answer', '?')}")
-    if multi_qs:
-        doc.add_paragraph("多选题答案：")
-        for q in multi_qs:
-            doc.add_paragraph(f"  {q['number']}. {q.get('answer', '?')}")
-    if fill_qs:
-        doc.add_paragraph("填空题答案：")
-        for q in fill_qs:
-            doc.add_paragraph(f"  {q['number']}. {q.get('answer', '?')}")
-
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
+    """Export exam questions as a Word document using HR template."""
+    from app.modules.hr.exam_paper_generator import generate_exam_paper_docx
+    questions = []
+    for q in data.get("choice_questions", []):
+        questions.append({"type": "choice", "question": q.get("question",""), "options": [{"label":o.get("label",""),"text":o.get("text","")} for o in q.get("options",[])], "answer": q.get("answer",""), "score": q.get("score",5)})
+    for q in data.get("true_false_questions", []):
+        questions.append({"type": "true_false", "question": q.get("question",""), "answer": q.get("answer") is True or q.get("answer") == "对", "score": q.get("score",5)})
+    for q in data.get("multi_choice_questions", []):
+        questions.append({"type": "multi_choice", "question": q.get("question",""), "options": [{"label":o.get("label",""),"text":o.get("text","")} for o in q.get("options",[])], "answer": q.get("answer",[]), "score": q.get("score",5)})
+    for q in data.get("fill_blank_questions", []):
+        questions.append({"type": "fill_blank", "question": q.get("question",""), "answer": q.get("answer",""), "score": q.get("score",5)})
+    full = sum(int(q.get("score",5)) for q in questions)
+    return generate_exam_paper_docx(subject=data.get("title",""), questions=questions, full_score=full or 100)

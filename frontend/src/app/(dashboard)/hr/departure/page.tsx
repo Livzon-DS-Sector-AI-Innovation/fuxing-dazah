@@ -1,13 +1,6 @@
-import { fetchDepartureRecords } from '@/lib/api/hr'
+import { Suspense } from 'react'
 import { DepartureClient } from '@/components/hr'
 
-export default async function DeparturePage() {
-  const res = await fetchDepartureRecords({ page: 1, page_size: 20 })
-
-  return (
-    <DepartureClient
-      initialRecords={res.data}
-      initialTotal={res.meta?.total || 0}
-    />
-  )
+export default function DeparturePage() {
+  return <Suspense fallback={<div className="h-64" />}><DepartureClient initialRecords={[]} initialTotal={0} /></Suspense>
 }

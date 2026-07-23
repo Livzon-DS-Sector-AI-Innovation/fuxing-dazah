@@ -638,6 +638,7 @@ class EmployeeService:
         "年份": "year",
         "部门": "department",
         "体现部门": "department",
+        "品种": "variety",
         "月份": "month",
         "培训时间": "month",
         "培训人数": "trainee_count",
@@ -649,7 +650,7 @@ class EmployeeService:
         "授课单位及授课人": "position_and_count",
         "授课单位/培训师": "position_and_count",
         "培训方式": "training_method",
-        "考核方式": "training_method",
+        "考核方式": "assessment_method",
         "培训学时": "training_hours",
         "培训跟踪": "tracking_status",
         "确认者": "confirmer",
@@ -775,7 +776,7 @@ class EmployeeService:
         # ── 逐行解析数据（用 begin_nested 做行级 SAVEPOINT 隔离）──
         plan_cache: dict[tuple, AnnualTrainingPlan] = {}
         created, updated, errors = 0, 0, []
-        skip_fields = {"year", "department", "_quarter_hours", "_confirmer_date"}
+        skip_fields = {"year", "department", "_quarter_hours", "_confirmer_date", "variety", "assessment_method"}
 
         data_start = header_row_idx + 1
         for row_idx, row in enumerate(rows[data_start:], start=data_start + 1):

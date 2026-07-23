@@ -9,25 +9,11 @@ import {
   TeamListResponse,
   TeamCreateInput,
   TeamUpdateInput,
-  OffboardingRecordListResponse,
-  OffboardingRecordCreateInput,
-  OffboardingRecordUpdateInput,
   OnboardingRecordListResponse,
   DepartureRecordListResponse,
-  SyncStatusResponse,
-  TrainingPlanListResponse,
-  TrainingPlanResponse,
-  TrainingPlanSopListResponse,
-  TrainingPlanSopResponse,
-  TrainingRecordListResponse,
-  TrainingRecordResponse,
-  TrainingAssessmentListResponse,
-  TrainingAssessmentResponse,
-  TrainingApprovalListResponse,
-  TrainingApprovalResponse,
 } from '@/types/hr'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || 'http://localhost:8000'
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || 'http://localhost:8000'
 
 export async function fetchEmployees(
   params?: {
@@ -47,22 +33,16 @@ export async function fetchEmployees(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/employees?${searchParams.toString()}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取员工列表失败')
-  return res.json()
-}
-
-export async function fetchEmployeeById(id: string): Promise<EmployeeResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取员工详情失败')
   return res.json()
 }
 
 export async function fetchEmployeeByNumber(employeeNumber: string): Promise<EmployeeResponse> {
   const res = await fetch(`${API_BASE}/api/v1/hr/employees/by-number/${employeeNumber}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取员工详情失败')
   return res.json()
@@ -82,50 +62,9 @@ export async function fetchDepartments(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/departments?${searchParams.toString()}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取部门列表失败')
-  return res.json()
-}
-
-export async function fetchTeams(
-  params?: {
-    department_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TeamListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.department_id) searchParams.set('department_id', params.department_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 100))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/teams?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取班组列表失败')
-  return res.json()
-}
-
-export async function fetchOffboardingRecords(
-  params?: {
-    employee_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<OffboardingRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.employee_id) searchParams.set('employee_id', params.employee_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/offboarding-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取离职记录失败')
   return res.json()
 }
 
@@ -151,6 +90,7 @@ export async function fetchOnboardingRecords(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/onboarding-records?${searchParams.toString()}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取入职记录失败')
   return res.json()
@@ -178,218 +118,9 @@ export async function fetchDepartureRecords(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/departure-records?${searchParams.toString()}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取离职台账记录失败')
-  return res.json()
-}
-
-// ─── Feishu Sync APIs ───
-
-export async function fetchSyncStatus(): Promise<SyncStatusResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/sync-status`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取同步状态失败')
-  return res.json()
-}
-
-export async function syncFromFeishu(): Promise<{ code: number; message: string; data: { created: number; updated: number; failed: number; total: number } }> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/sync-from-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('从飞书同步失败')
-  return res.json()
-}
-
-export async function syncToFeishu(id: string): Promise<{ code: number; message: string; data: { feishu_record_id: string } }> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/${id}/sync-to-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('同步到飞书失败')
-  return res.json()
-}
-
-export async function fetchTrainingPlans(
-  params?: {
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TrainingPlanListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-plans?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训计划列表失败')
-  return res.json()
-}
-
-export async function fetchTrainingPlanById(id: string): Promise<TrainingPlanResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-plans/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训计划详情失败')
-  return res.json()
-}
-
-export async function fetchTrainingPlanSops(
-  params?: {
-    plan_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TrainingPlanSopListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.plan_id) searchParams.set('plan_id', params.plan_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-plan-sops?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训计划SOP列表失败')
-  return res.json()
-}
-
-export async function fetchTrainingPlanSopById(id: string): Promise<TrainingPlanSopResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-plan-sops/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训计划SOP详情失败')
-  return res.json()
-}
-
-export async function fetchTrainingRecords(
-  params?: {
-    plan_id?: string
-    employee_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TrainingRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.plan_id) searchParams.set('plan_id', params.plan_id)
-  if (params?.employee_id) searchParams.set('employee_id', params.employee_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训记录列表失败')
-  return res.json()
-}
-
-export async function fetchTrainingRecordById(id: string): Promise<TrainingRecordResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-records/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训记录详情失败')
-  return res.json()
-}
-
-export async function fetchTrainingAssessments(
-  params?: {
-    record_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TrainingAssessmentListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.record_id) searchParams.set('record_id', params.record_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-assessments?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训考核列表失败')
-  return res.json()
-}
-
-export async function fetchTrainingAssessmentById(id: string): Promise<TrainingAssessmentResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-assessments/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训考核详情失败')
-  return res.json()
-}
-
-export async function fetchTrainingApprovals(
-  params?: {
-    record_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<TrainingApprovalListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.record_id) searchParams.set('record_id', params.record_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  try {
-    const res = await fetch(`${API_BASE}/api/v1/hr/training-approvals?${searchParams.toString()}`, {
-      cache: 'no-store',
-    })
-    if (!res.ok) throw new Error('获取培训审批列表失败')
-    return res.json()
-  } catch {
-    return {
-      code: 500,
-      message: '服务暂不可用',
-      data: [],
-      meta: { page: params?.page || 1, page_size: params?.page_size || 20, total: 0 },
-    }
-  }
-}
-
-export async function fetchTrainingApprovalById(id: string): Promise<TrainingApprovalResponse> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-approvals/${id}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取培训审批详情失败')
-  return res.json()
-}
-
-export { fetchTrainingPlanSops as fetchTrainingSops }
-
-export async function syncOnboardingFromFeishu(): Promise<{ code: number; message: string; data: { created: number; updated: number; failed: number; total: number } }> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/onboarding-records/sync-from-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('从飞书同步入职台账失败')
-  return res.json()
-}
-
-export async function syncDepartureFromFeishu(): Promise<{ code: number; message: string; data: { created: number; updated: number; failed: number; total: number } }> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/sync-from-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('从飞书同步离职台账失败')
-  return res.json()
-}
-
-export async function fetchTurnoverAnalysis(): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/turnover-analysis`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取人员流动分析失败')
   return res.json()
 }
 
@@ -399,7 +130,7 @@ export async function fetchOnboardingTrainingRecord(
 ): Promise<void> {
   const res = await fetch(
     `${API_BASE}/api/v1/hr/employees/${employeeId}/onboarding-training-record`,
-    { cache: 'no-store' }
+    { cache: 'no-store', credentials: 'include' }
   )
   if (!res.ok) throw new Error('生成培训记录失败')
   const blob = await res.blob()
@@ -419,7 +150,7 @@ export async function fetchPrejobTrainingPlan(
 ): Promise<void> {
   const res = await fetch(
     `${API_BASE}/api/v1/hr/employees/${employeeId}/prejob-training-plan`,
-    { cache: 'no-store' }
+    { cache: 'no-store', credentials: 'include' }
   )
   if (!res.ok) throw new Error('生成岗前培训计划失败')
   const blob = await res.blob()
@@ -455,7 +186,7 @@ export async function generateTrainingSignInSheet(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('生成培训签到表失败')
   const blob = await res.blob()
@@ -475,10 +206,16 @@ export async function generateTrainingSignInSheet(
 
 export interface TrainingNotificationData {
   department: string
-  training_date: string
+  training_date?: string
+  training_date_start?: string
+  training_date_end?: string
   subject: string
   training_time_start?: string
   training_time_end?: string
+  face_to_face_time_start?: string
+  face_to_face_time_end?: string
+  self_study_time_start?: string
+  self_study_time_end?: string
   location?: string
   trainer?: string
   training_method?: string
@@ -496,7 +233,7 @@ export async function generateTrainingNotification(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('生成培训通知失败')
   const blob = await res.blob()
@@ -504,68 +241,6 @@ export async function generateTrainingNotification(
   const a = document.createElement('a')
   a.href = url
   a.download = `培训通知_${data.training_date}.docx`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
-}
-
-export interface TrainingNotifyData {
-  employee_numbers: string[]
-  department?: string
-  subject: string
-  training_date: string
-  training_time_start?: string
-  training_time_end?: string
-  location?: string
-  trainer?: string
-  content?: string
-  training_method?: string
-  issuer_department?: string
-  issue_date?: string
-}
-
-export async function sendTrainingNotification(
-  data: TrainingNotifyData
-): Promise<{ code: number; message: string; data: { sent: number; failed: number; details: any[] } }> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-notifications/send`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('发送培训通知失败')
-  return res.json()
-}
-
-export interface TrainingEvaluationData {
-  subject: string
-  training_date?: string
-  training_time_start?: string
-  training_time_end?: string
-  duration_hours?: number
-  training_method?: string
-  trainer?: string
-  trainee_names?: string[]
-  assessment_method?: string
-}
-
-export async function generateTrainingEvaluation(
-  data: TrainingEvaluationData
-): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/v1/hr/training-evaluation`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('生成培训效果评估表失败')
-  const blob = await res.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  const safeDate = (data.training_date || 'nodate').replace(/-/g, '')
-  a.download = `培训效果评估表_${safeDate}.docx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -604,7 +279,7 @@ export async function generateOnboardingEvaluation(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('生成员工上岗评估表失败')
   const blob = await res.blob()
@@ -613,26 +288,6 @@ export async function generateOnboardingEvaluation(
   a.href = url
   const safeDate = data.approval_date || 'nodate'
   a.download = `7.12员工上岗评估表_${safeDate}.xlsx`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
-}
-
-export async function fetchOnboardingEvaluationByEmployeeId(
-  employeeId: string,
-  employeeName: string
-): Promise<void> {
-  const res = await fetch(
-    `${API_BASE}/api/v1/hr/employees/${employeeId}/onboarding-evaluation`,
-    { cache: 'no-store' }
-  )
-  if (!res.ok) throw new Error('生成员工上岗评估表失败')
-  const blob = await res.blob()
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `员工上岗评估表_${employeeName}.xlsx`
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
@@ -665,7 +320,7 @@ export async function fetchTrainingLedgers(
   searchParams.set('page_size', String(params?.page_size || 100))
 
   const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers?${searchParams.toString()}`, {
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('获取培训台账列表失败')
   return res.json()
@@ -678,7 +333,7 @@ export async function createTrainingLedger(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('创建培训台账记录失败')
   return res.json()
@@ -692,7 +347,7 @@ export async function updateTrainingLedger(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('更新培训台账记录失败')
   return res.json()
@@ -703,7 +358,7 @@ export async function deleteTrainingLedger(
 ): Promise<{ code: number; message: string }> {
   const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/${id}`, {
     method: 'DELETE',
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('删除培训台账记录失败')
   return res.json()
@@ -726,7 +381,7 @@ export async function fetchTrainingLedgerPages(): Promise<{
   data: TrainingLedgerPageRecord[]
 }> {
   const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/pages`, {
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('获取培训台账页面列表失败')
   return res.json()
@@ -739,7 +394,7 @@ export async function createTrainingLedgerPage(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('创建培训台账页面失败')
   return res.json()
@@ -748,7 +403,7 @@ export async function createTrainingLedgerPage(
 export async function exportTrainingLedger(employeeNumber: string): Promise<void> {
   const res = await fetch(
     `${API_BASE}/api/v1/hr/training-ledgers/export?employee_number=${encodeURIComponent(employeeNumber)}`,
-    { cache: 'no-store' }
+    { cache: 'no-store', credentials: 'include' }
   )
   if (!res.ok) throw new Error('导出培训台账失败')
   const blob = await res.blob()
@@ -788,6 +443,7 @@ export async function fetchAnnualTrainingPlans(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans?${searchParams.toString()}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取年度培训计划列表失败')
   return res.json()
@@ -795,120 +451,10 @@ export async function fetchAnnualTrainingPlans(
 
 // ─── New Factory APIs ───
 
-export async function fetchNewEmployees(
-  params?: {
-    department?: string
-    status?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<EmployeeListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.department) searchParams.set('department', params.department)
-  if (params?.status) searchParams.set('status', params.status)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/new/employees?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取新厂员工列表失败')
-  return res.json()
-}
-
-export async function fetchNewDepartments(
-  params?: {
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<DepartmentListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 100))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/new/departments?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取新厂部门列表失败')
-  return res.json()
-}
-
-export async function fetchNewOnboardingRecords(
-  params?: {
-    department?: string
-    position?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<OnboardingRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.department) searchParams.set('department', params.department)
-  if (params?.position) searchParams.set('position', params.position)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/new/onboarding-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取新厂入职台账列表失败')
-  return res.json()
-}
-
-export async function fetchNewDepartureRecords(
-  params?: {
-    department?: string
-    offboarding_type?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<DepartureRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.department) searchParams.set('department', params.department)
-  if (params?.offboarding_type) searchParams.set('offboarding_type', params.offboarding_type)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/new/departure-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取新厂离职台账列表失败')
-  return res.json()
-}
-
-export async function fetchNewOffboardingRecords(
-  params?: {
-    department?: string
-    offboarding_type?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<DepartureRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.department) searchParams.set('department', params.department)
-  if (params?.offboarding_type) searchParams.set('offboarding_type', params.offboarding_type)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/new/offboarding-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取新厂离职管理列表失败')
-  return res.json()
-}
-
 export async function fetchAnnualTrainingPlanById(id: string): Promise<{ code: number; message: string; data: AnnualTrainingPlan }> {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}`, {
     cache: 'no-store',
+    credentials: 'include',
   })
   if (!res.ok) throw new Error('获取年度培训计划详情失败')
   return res.json()
@@ -916,7 +462,7 @@ export async function fetchAnnualTrainingPlanById(id: string): Promise<{ code: n
 
 export async function fetchPlanItems(id: string): Promise<{ code: number; message: string; data: AnnualTrainingPlanItem[] }> {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}/items`, {
-    cache: 'no-store',
+    cache: 'no-store', credentials: 'include',
   })
   if (!res.ok) throw new Error('获取年度计划明细失败')
   return res.json()
@@ -940,7 +486,7 @@ export interface PositionOption {
 export async function fetchPositions(department?: string): Promise<PositionOption[]> {
   const sp = new URLSearchParams()
   if (department) sp.set('department', department)
-  const res = await fetch(`${API_BASE}/api/v1/hr/positions?${sp.toString()}`, { cache: 'no-store' })
+  const res = await fetch(`${API_BASE}/api/v1/hr/positions?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
   if (!res.ok) throw new Error('获取职位列表失败')
   const d = await res.json()
   return d.data || []
@@ -948,21 +494,321 @@ export async function fetchPositions(department?: string): Promise<PositionOptio
 
 // ─── SOP Catalog APIs ───
 
-export async function fetchSopCatalog(params?: {
-  department?: string; category?: string; keyword?: string; page?: number; page_size?: number
-}): Promise<{ code: number; message: string; data: any[]; meta: { page: number; page_size: number; total: number } }> {
-  const sp = new URLSearchParams()
-  if (params?.department) sp.set('department', params.department)
-  if (params?.category) sp.set('category', params.category)
-  if (params?.keyword) sp.set('keyword', params.keyword)
-  sp.set('page', String(params?.page || 1))
-  sp.set('page_size', String(params?.page_size || 50))
-  const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog?${sp.toString()}`, { cache: 'no-store' })
-  if (!res.ok) throw new Error('获取SOP目录失败')
+export async function fetchCandidateById(id: string): Promise<{ code: number; message: string; data: any }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取候选人失败')
   return res.json()
 }
 
-export async function fetchCandidateById(id: string): Promise<{ code: number; message: string; data: any }> {
-  // TODO: backend candidate API not yet implemented
-  return { code: 404, message: '招聘功能暂未实现', data: null }
+// ─── 资料打印 APIs ───
+
+async function downloadDocumentBlob(url: string, fallbackName: string): Promise<void> {
+  const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) {
+    let msg = '下载失败'
+    try {
+      const d = await res.json()
+      msg = d.message || d.detail || msg
+    } catch { /* 非 JSON 响应，用默认提示 */ }
+    if (res.status === 401) msg = '请先登录'
+    if (res.status === 403) msg = '没有下载权限，请联系管理员配置'
+    throw new Error(msg)
+  }
+  const blob = await res.blob()
+  const objectUrl = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  const disposition = res.headers.get('content-disposition')
+  const filenameMatch = disposition?.match(/filename\*=utf-8''(.+)/)
+  a.download = filenameMatch ? decodeURIComponent(filenameMatch[1]) : fallbackName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(objectUrl)
+}
+
+export async function downloadRoster(department?: string): Promise<void> {
+  const sp = new URLSearchParams()
+  if (department) sp.set('department', department)
+  await downloadDocumentBlob(
+    `${API_BASE}/api/v1/hr/roster?${sp.toString()}`,
+    `花名册_${department || '全部'}.docx`
+  )
+}
+
+export async function downloadTrainingRegistration(department?: string): Promise<void> {
+  const sp = new URLSearchParams()
+  if (department) sp.set('department', department)
+  await downloadDocumentBlob(
+    `${API_BASE}/api/v1/hr/training-registration?${sp.toString()}`,
+    `个人培训登记表_${department || '全部'}.docx`
+  )
+}
+
+// ─── Admin Training Ledger APIs ───
+
+export async function fetchTrainingLedgersAdmin(params?: {
+  department?: string
+  training_subject?: string
+  date_from?: string
+  date_to?: string
+  page?: number
+  page_size?: number
+}): Promise<{ code: number; message: string; data: any[]; meta: { page: number; page_size: number; total: number } }> {
+  const sp = new URLSearchParams()
+  if (params?.department) sp.set('department', params.department)
+  if (params?.training_subject) sp.set('training_subject', params.training_subject)
+  if (params?.date_from) sp.set('date_from', params.date_from)
+  if (params?.date_to) sp.set('date_to', params.date_to)
+  sp.set('page', String(params?.page || 1))
+  sp.set('page_size', String(params?.page_size || 20))
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/admin?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取管理员台账列表失败')
+  return res.json()
+}
+
+export async function batchUpdateScores(data: { records: { id: string; assessment_result: string }[] }): Promise<{ code: number; message: string; data: { updated: number } }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/batch-scores`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    cache: 'no-store', credentials: 'include',
+  })
+  if (!res.ok) throw new Error('批量更新成绩失败')
+  return res.json()
+}
+
+export async function fetchTrainingLedgerStats(params?: {
+  department?: string
+  training_subject?: string
+  date_from?: string
+  date_to?: string
+}): Promise<{ code: number; message: string; data: { total_count: number; assessed_count: number; qualified_count: number; unqualified_count: number; pass_rate: string; avg_score: number | null } }> {
+  const sp = new URLSearchParams()
+  if (params?.department) sp.set('department', params.department)
+  if (params?.training_subject) sp.set('training_subject', params.training_subject)
+  if (params?.date_from) sp.set('date_from', params.date_from)
+  if (params?.date_to) sp.set('date_to', params.date_to)
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/admin/stats?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取培训统计失败')
+  return res.json()
+}
+
+export async function fetchLedgerDepartments(): Promise<{ code: number; message: string; data: string[] }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/admin/departments`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取台账部门列表失败')
+  return res.json()
+}
+
+export async function fetchLedgerSubjects(department?: string): Promise<{ code: number; message: string; data: string[] }> {
+  const sp = new URLSearchParams()
+  if (department) sp.set('department', department)
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/admin/subjects?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取培训内容列表失败')
+  return res.json()
+}
+
+export async function exportQaRecord(params: {
+  training_content: string
+  training_purpose?: string
+  training_date: string
+  training_method: string
+  training_department: string
+  questions: { file_no: string; question: string; answer: string; score: number }[]
+  trainee_names: string[]
+}): Promise<void> {
+  const fd = new FormData()
+  fd.append('training_content', params.training_content)
+  fd.append('training_purpose', params.training_purpose || '')
+  fd.append('training_date', params.training_date)
+  fd.append('training_method', params.training_method)
+  fd.append('training_department', params.training_department)
+  fd.append('questions_json', JSON.stringify(params.questions))
+  fd.append('trainee_names_json', JSON.stringify(params.trainee_names))
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-qa-record`, {
+    method: 'POST',
+    body: fd,
+    cache: 'no-store', credentials: 'include',
+  })
+  if (!res.ok) throw new Error('导出问答记录表失败')
+  const blob = await res.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const disposition = res.headers.get('content-disposition')
+  const filenameMatch = disposition?.match(/filename\*=utf-8''(.+)/)
+  a.download = filenameMatch ? decodeURIComponent(filenameMatch[1]) : `问答实操记录表_${params.training_date}.docx`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+}
+
+export async function exportTrainingEvaluationReport(params: {
+  department: string
+  training_subject: string
+  training_date?: string
+  training_method?: string
+  trainer_name?: string
+  assessment_method?: string
+}): Promise<void> {
+  const fd = new FormData()
+  fd.append('department', params.department)
+  fd.append('training_subject', params.training_subject)
+  if (params.training_date) fd.append('training_date', params.training_date)
+  if (params.training_method) fd.append('training_method', params.training_method)
+  if (params.trainer_name) fd.append('trainer_name', params.trainer_name)
+  if (params.assessment_method) fd.append('assessment_method', params.assessment_method)
+  const res = await fetch(`${API_BASE}/api/v1/hr/training-evaluations/export-admin`, {
+    method: 'POST',
+    body: fd,
+    cache: 'no-store', credentials: 'include',
+  })
+  if (!res.ok) throw new Error('导出评估表失败')
+  const blob = await res.blob()
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const disposition = res.headers.get('content-disposition')
+  const filenameMatch = disposition?.match(/filename\*=utf-8''(.+)/)
+  a.download = filenameMatch ? decodeURIComponent(filenameMatch[1]) : `培训效果评估表_${params.department}.docx`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(url)
+}
+
+// ─── 问答/实操考核 APIs ───
+
+import type { QaAssessment, QaAssessmentScore } from '@/types/hr'
+
+export async function fetchQaAssessments(params?: {
+  department?: string; keyword?: string; page?: number; page_size?: number
+}): Promise<{ data: QaAssessment[]; meta?: { total: number } }> {
+  const sp = new URLSearchParams()
+  if (params?.department) sp.set('department', params.department)
+  if (params?.keyword) sp.set('keyword', params.keyword)
+  sp.set('page', String(params?.page || 1))
+  sp.set('page_size', String(params?.page_size || 20))
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments?${sp.toString()}`, {
+    cache: 'no-store',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('获取考核场次列表失败')
+  return res.json()
+}
+
+export async function fetchQaAssessmentDetail(id: string): Promise<{
+  data: { assessment: QaAssessment; scores: QaAssessmentScore[]; statistics: Record<string, unknown> }
+}> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments/${id}`, {
+    cache: 'no-store',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('获取考核详情失败')
+  return res.json()
+}
+
+export async function downloadQaAssessmentRecord(id: string): Promise<void> {
+  await downloadDocumentBlob(
+    `${API_BASE}/api/v1/hr/qa-assessments/${id}/export-record`,
+    '问答实操记录表.docx'
+  )
+}
+
+export async function downloadQaAssessmentEvaluation(id: string, expectedCount?: number): Promise<void> {
+  const sp = new URLSearchParams()
+  if (expectedCount) sp.set('expected_count', String(expectedCount))
+  await downloadDocumentBlob(
+    `${API_BASE}/api/v1/hr/qa-assessments/${id}/export-evaluation?${sp.toString()}`,
+    '培训效果评估表.docx'
+  )
+}
+
+export async function exportQaScoreReport(
+  id: string,
+  data: { assessed_date?: string; scores: { employee_name: string; employee_number?: string; wrong_questions: number[] }[] }
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments/${id}/export-scores`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    let msg = '导出失败'
+    try {
+      const d = await res.json()
+      msg = d.message || d.detail || msg
+    } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+  // 下载文件
+  const blob = await res.blob()
+  const objectUrl = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objectUrl
+  const disposition = res.headers.get('content-disposition')
+  const filenameMatch = disposition?.match(/filename\*=utf-8''(.+)/)
+  a.download = filenameMatch ? decodeURIComponent(filenameMatch[1]) : '成绩单.docx'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  window.URL.revokeObjectURL(objectUrl)
+  // 读取同步结果
+  const syncResult = res.headers.get('X-Sync-Result') || '成绩单已导出'
+  const syncWarning = res.headers.get('X-Sync-Warning') || ''
+  return { message: syncWarning ? `${syncResult}。${syncWarning}` : `${syncResult}` }
+}
+
+export async function fetchQuestionBank(params?: {
+  file_no?: string; keyword?: string; department?: string; page?: number; page_size?: number
+}): Promise<{ data: import('@/types/hr').QuestionBankItem[]; meta?: { total: number } }> {
+  const sp = new URLSearchParams()
+  if (params?.file_no) sp.set('file_no', params.file_no)
+  if (params?.keyword) sp.set('keyword', params.keyword)
+  if (params?.department) sp.set('department', params.department)
+  sp.set('page', String(params?.page || 1))
+  sp.set('page_size', String(params?.page_size || 50))
+  const res = await fetch(`${API_BASE}/api/v1/hr/question-bank?${sp.toString()}`, {
+    cache: 'no-store',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('题库检索失败')
+  return res.json()
+}
+
+// ─── 笔试试卷 APIs ───
+
+export async function fetchExamPapers(params?: {
+  department?: string; keyword?: string; page?: number; page_size?: number
+}): Promise<{ data: any[]; meta?: { total: number } }> {
+  const sp = new URLSearchParams()
+  if (params?.department) sp.set('department', params.department)
+  if (params?.keyword) sp.set('keyword', params.keyword)
+  sp.set('page', String(params?.page || 1))
+  sp.set('page_size', String(params?.page_size || 20))
+  const res = await fetch(`${API_BASE}/api/v1/hr/exam-papers?${sp.toString()}`, {
+    cache: 'no-store', credentials: 'include',
+  })
+  if (!res.ok) throw new Error('获取考卷列表失败')
+  return res.json()
+}
+
+export async function downloadExamPaper(id: string): Promise<void> {
+  await downloadDocumentBlob(`${API_BASE}/api/v1/hr/exam-papers/${id}/download`, '考卷.docx')
+}
+
+export async function saveExamPaper(payload: Record<string, unknown>): Promise<{ code: number; message: string; data: any }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/exam-papers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '保存考卷失败')
+  }
+  return res.json()
 }

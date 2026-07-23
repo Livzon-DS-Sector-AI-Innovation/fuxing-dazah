@@ -3,7 +3,7 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.shared.base_model import BaseModel
@@ -659,6 +659,11 @@ class OnboardingRecord(BaseModel):
         JSON, nullable=True, comment="备注（多选）"
     )
 
+    # ─── Source ───
+    source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="来源: feishu/approval"
+    )
+
     # ─── Feishu sync metadata ───
     feishu_record_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="飞书多维表格 record_id"
@@ -840,4 +845,87 @@ class PositionTraining(BaseModel):
     )
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )
+
+
+# ─── QA / Training Assessment Models ───
+
+class TrainingAssessment(BaseModel):
+    """培训考核场次（问答/实操）"""
+
+    __tablename__ = "training_assessments"
+    __table_args__ = (
+        Index("ix_training_assessments_department", "department"),
+        Index("ix_training_assessments_training_date", "training_date"),
+        {"schema": "hr"},
+    )
+
+    subject: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="培训内容/主题"
+    )
+    department: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="培训部门/对象"
+    )
+    training_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="培训日期"
+    )
+    training_method: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="培训方式"
+    )
+    assessment_method: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="问答", server_default="问答", comment="考核方式"
+    )
+    trainer: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="培训师"
+    )
+    questions: Mapped[dict | list | None] = mapped_column(
+        JSON, nullable=True, comment="题目快照 [{file_no,question,answer,score}]"
+    )
+    question_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10", comment="题目数量"
+    )
+    full_score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=100, server_default="100", comment="满分"
+    )
+    excellent_line: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=90, server_default="90", comment="优秀线"
+    )
+    pass_line: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=80, server_default="80", comment="合格线"
+    )
+
+
+class TrainingAssessmentScore(BaseModel):
+    """培训考核成绩"""
+
+    __tablename__ = "training_assessment_scores"
+    __table_args__ = (
+        Index("ix_training_assessment_scores_assessment_id", "assessment_id"),
+        Index("ix_training_assessment_scores_employee_number", "employee_number"),
+        {"schema": "hr"},
+    )
+
+    assessment_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="考核场次ID（逻辑关联，无外键）"
+    )
+    employee_name: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="姓名"
+    )
+    employee_number: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="工号"
+    )
+    wrong_questions: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="错题序号列表，空为全对"
+    )
+    total_score: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="总分"
+    )
+    grade: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="等级：优/合格/不合格"
+    )
+    result_text: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="得分情况文字"
+    )
+    assessed_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="考核日期"
     )

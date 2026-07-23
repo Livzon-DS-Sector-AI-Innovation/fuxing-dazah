@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useCallback, useEffect, useMemo } from 'react'
-import { App, Button, Select, Tabs, Upload } from 'antd'
+import { App, Button, Tabs, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
-import { fetchEmployees, fetchDepartments } from '@/lib/api/hr'
+import { fetchEmployees, fetchDepartments, API_BASE } from '@/lib/api/hr'
 import { Employee, Department } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeTable from './EmployeeTable'
@@ -31,7 +31,6 @@ export default function EmployeeProfileClient({
   initialTotal,
   initialDepartment }: EmployeeProfileClientProps) {
   const { message, modal } = App.useApp()
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees)
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
@@ -129,7 +128,7 @@ export default function EmployeeProfileClient({
         <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={async (file) => {
           const fd = new FormData(); fd.append('file', file as File)
           try {
-            const r = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, { method: 'POST', body: fd })
+            const r = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, { method: 'POST', body: fd, credentials: 'include' })
             const d = await r.json()
             if (!r.ok) {
               const errMsg = d.message || d.detail || `HTTP ${r.status}`
@@ -153,33 +152,26 @@ export default function EmployeeProfileClient({
         }}>
           <Button icon={<UploadOutlined />}>上传人员名单</Button>
         </Upload>
-        <Select placeholder="选择部门下载花名册" allowClear style={{ width: 220 }}
-          options={departments.map((d: any) => ({value: d.name, label: d.name}))}
-          onChange={async (dept) => {
-            if (!dept) return
-            const deptEncoded = encodeURIComponent(dept)
-            window.open(`${API_BASE}/api/v1/hr/roster?department=${deptEncoded}`)
-          }} />
       </div>
 
 
-      <Tabs activeKey={activeTab} onChange={handleTabChange} type="card">
-        {tabItems.map((dept) => (
-          <Tabs.TabPane key={dept.key} tab={dept.label}>
-            {activeTab === dept.key && (
-              <EmployeeTable
-                employees={employees}
-                total={total}
-                page={page}
-                pageSize={pageSize}
-                onPageChange={handlePageChange}
-                onRefresh={handleRefresh}
-                onEdit={handleEdit}
-              />
-            )}
-          </Tabs.TabPane>
-        ))}
-      </Tabs>
+      <Tabs activeKey={activeTab} onChange={handleTabChange} type="card"
+        items={tabItems.map((dept) => ({
+          key: dept.key,
+          label: dept.label,
+          children: activeTab === dept.key ? (
+            <EmployeeTable
+              employees={employees}
+              total={total}
+              page={page}
+              pageSize={pageSize}
+              onPageChange={handlePageChange}
+              onRefresh={handleRefresh}
+              onEdit={handleEdit}
+            />
+          ) : null,
+        }))}
+      />
 
       <EmployeeForm
         open={formOpen}
