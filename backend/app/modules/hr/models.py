@@ -3,7 +3,7 @@
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.shared.base_model import BaseModel
@@ -911,3 +911,36 @@ class ExamPaper(BaseModel):
     multi_choice_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     fill_blank_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="AI生成", server_default="AI生成")
+
+
+class SystemSetting(BaseModel):
+    """系统设置键值表"""
+
+    __tablename__ = "system_settings"
+    __table_args__ = (
+        UniqueConstraint("key"),
+        Index("ix_system_settings_key", "key", unique=True),
+        {"schema": "hr"},
+    )
+
+    key: Mapped[str] = mapped_column(String(64), nullable=False, comment="配置键")
+    value: Mapped[str] = mapped_column(Text, server_default="", nullable=False, comment="配置值")
+    description: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="说明")
+
+
+class EmailLog(BaseModel):
+    """邮件发送日志"""
+
+    __tablename__ = "email_logs"
+    __table_args__ = (
+        Index("ix_email_logs_employee_id", "employee_id"),
+        {"schema": "hr"},
+    )
+
+    email_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="类型: offer / departure_cert")
+    employee_id: Mapped[UUID | None] = mapped_column(ForeignKey("hr.employees.id"), nullable=True, comment="员工ID")
+    employee_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recipient: Mapped[str] = mapped_column(String(256), nullable=False, comment="收件邮箱")
+    subject: Mapped[str] = mapped_column(String(256), nullable=False, comment="邮件主题")
+    status: Mapped[str] = mapped_column(String(16), server_default="sent", nullable=False, comment="sent / failed")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="失败原因")
