@@ -1,7 +1,7 @@
 import { Suspense } from 'react'
 import { Spin } from 'antd'
 import TrainingLedgerClient from '@/components/hr/TrainingLedgerClient'
-import { fetchEmployeeByNumber } from '@/lib/api/hr'
+import { fetchEmployeeByNumberAction } from '@/actions/hr'
 
 interface PageProps {
   searchParams: Promise<{
@@ -15,7 +15,7 @@ export async function generateMetadata({ searchParams }: PageProps) {
 
   if (employeeNumber) {
     try {
-      const res = await fetchEmployeeByNumber(employeeNumber)
+      const res = await fetchEmployeeByNumberAction(employeeNumber)
       if (res.data?.name) {
         return {
           title: `${res.data.name}培训台账`,
@@ -38,7 +38,7 @@ export default async function TrainingLedgerPage({ searchParams }: PageProps) {
   let employeeName: string | null = null
   if (employeeNumber) {
     try {
-      const res = await fetchEmployeeByNumber(employeeNumber)
+      const res = await fetchEmployeeByNumberAction(employeeNumber)
       employeeName = res.data?.name || null
     } catch {
       employeeName = null
@@ -53,7 +53,7 @@ export default async function TrainingLedgerPage({ searchParams }: PageProps) {
             培训台账
           </h1>
           <p className="text-[14px] text-[var(--color-steel)]">
-            员工培训教育台账记录管理 · 输入工号查看个人台账
+            管理员视角 · 按部门与培训内容筛选 · 录入考核成绩 · 自动统计合格率 · 导出效果评估表
           </p>
         </div>
         <Suspense

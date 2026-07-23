@@ -1,13 +1,22 @@
-import { fetchCandidateById } from '@/lib/api/hr'
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useParams } from 'next/navigation'
 import CandidateDetailClient from '@/components/hr/CandidateDetailClient'
 
-interface CandidateDetailPageProps {
-  params: Promise<{ id: string }>
-}
+export default function CandidateDetailPage() {
+  const { id } = useParams<{ id: string }>()
+  const [candidate, setCandidate] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
 
-export default async function CandidateDetailPage({ params }: CandidateDetailPageProps) {
-  const { id } = await params
-  const res = await fetchCandidateById(id)
+  useEffect(() => {
+    setLoading(true)
+    fetch(`/api/v1/hr/candidates/${id}`, { credentials: 'include' })
+      .then(r => r.json()).then(d => setCandidate(d.data)).catch(() => setCandidate(null))
+      .finally(() => setLoading(false))
+  }, [id])
 
-  return <CandidateDetailClient candidate={res.data} />
+  if (loading) return <div className="h-64" />
+  if (!candidate) return <div className="text-center text-gray-400 py-20">候选人不存在或已被删除</div>
+  return <CandidateDetailClient candidate={candidate} />
 }

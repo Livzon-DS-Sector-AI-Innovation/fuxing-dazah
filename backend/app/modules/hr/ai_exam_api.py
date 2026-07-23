@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.core.response import success_response
-from app.modules.ai_exam.schemas import ExamExportRequest
-from app.modules.ai_exam.service import export_exam, generate_exam
+from app.modules.hr.ai_exam_schemas import ExamExportRequest
+from app.modules.hr.ai_exam_service import export_exam, generate_exam
 
 router = APIRouter(prefix="/exam", tags=["AI 出题"])
 

@@ -1,9 +1,9 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { Table, Tag, Space, Popconfirm } from 'antd'
+import { Table, Tag, Space, Popconfirm, Input, Modal, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { EyeOutlined, DeleteOutlined } from '@ant-design/icons'
+import { EyeOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
 
 interface CandidateListViewProps {
@@ -26,6 +26,7 @@ export default function CandidateListView({
   onDelete,
 }: CandidateListViewProps) {
   const router = useRouter()
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
   const handleRowClick = (record: Candidate) => {
     const ids = candidates.map((c) => c.id)
@@ -104,6 +105,31 @@ export default function CandidateListView({
         <Space size="small">
           <a onClick={() => handleRowClick(record)}>
             <EyeOutlined /> 查看
+          </a>
+          <a onClick={(e) => {
+            e.stopPropagation()
+            let email = record.email || ''
+            Modal.confirm({
+              title: `发放入职 Offer — ${record.name}`,
+              content: (
+                <div className="space-y-3 pt-2">
+                  <div>岗位：{record.position || '—'} / 部门：{record.department || '—'}</div>
+                  <Input defaultValue={email} onChange={(ev) => { email = ev.target.value }} placeholder="candidate@example.com" />
+                </div>
+              ),
+              onOk: async () => {
+                if (!email) { message.warning('请填写邮箱'); return Promise.reject() }
+                const fd = new FormData(); fd.append('candidate_email', email)
+                try {
+                  const r = await fetch(`${API_BASE}/api/v1/hr/candidates/${record.id}/send-offer`, { method: 'POST', body: fd, credentials: 'include' })
+                  const d = await r.json()
+                  if (!r.ok) throw new Error(d.message || '发送失败')
+                  message.success('Offer 已发送')
+                } catch (err: any) { message.error(err.message || '发送失败') }
+              },
+            })
+          }}>
+            <SendOutlined /> 发Offer
           </a>
           <Popconfirm
             title="确认删除"

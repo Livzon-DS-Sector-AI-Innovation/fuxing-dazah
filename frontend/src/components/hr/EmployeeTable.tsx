@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
-import { App, Table, Button, Space, Tag, Input, Select, Popconfirm, Modal } from 'antd'
-import { SearchOutlined, EditOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons'
+import { useState, useEffect } from 'react'
+import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker, Timeline, message } from 'antd'
+import { SearchOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
+import { API_BASE } from '@/lib/api/hr'
 import { useHrStore } from '@/stores/hr'
-import { deleteEmployee } from '@/actions/hr'
 
 interface EmployeeTableProps {
   employees: Employee[]
@@ -21,7 +22,8 @@ const statusColorMap: Record<string, string> = {
   在职: 'success',
   试用期: 'warning',
   离职: 'default',
-  待审批: 'processing' }
+  待审批: 'processing',
+  产假复岗: 'purple' }
 
 export default function EmployeeTable({
   employees,
@@ -37,17 +39,93 @@ export default function EmployeeTable({
   const [detailEmp, setDetailEmp] = useState<Employee | null>(null)
   const { searchKeyword, setSearchKeyword, filterStatus, setFilterStatus } = useHrStore()
 
-  const handleDelete = async (id: string) => {
-    setLoading(true)
-    try {
-      await deleteEmployee(id)
-      message.success('删除成功')
-      onRefresh()
-    } catch (err: any) {
-      message.error(err.message || '删除失败')
-    } finally {
-      setLoading(false)
+  // ─── 异动记录 Modal ───
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferEmp, setTransferEmp] = useState<Employee | null>(null)
+  const [transfers, setTransfers] = useState<any[]>([])
+  const [transferForm] = Form.useForm()
+  const [positionOptions, setPositionOptions] = useState<Record<string, string[]>>({})
+  const watchedFromDept = Form.useWatch('from_department', transferForm)
+  const watchedToDept = Form.useWatch('to_department', transferForm)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/hr/positions`, { credentials: 'include' })
+      .then(r => r.json()).then(d => {
+        const map: Record<string, string[]> = {}
+        ;(d.data || []).forEach((p: any) => {
+          if (!map[p.department]) map[p.department] = []
+          map[p.department].push(p.name)
+        })
+        setPositionOptions(map)
+      }).catch(() => {})
+  }, [])
+
+  // 获取某部门下的职位列表
+  const getPositions = (dept: string | undefined) => {
+    const deptPositions = (dept && positionOptions[dept]) ? positionOptions[dept] : []
+    const all = [...deptPositions]
+    Object.values(positionOptions).forEach(arr => arr.forEach(p => { if (!all.includes(p)) all.push(p) }))
+    return all.map(p => ({ label: p, value: p }))
+  }
+
+  const [deptOptions, setDeptOptions] = useState<string[]>([])
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/hr/departments?page_size=200`, { credentials: 'include' })
+      .then(r => r.json()).then(d => setDeptOptions((d.data || []).map((x: any) => x.name)))
+      .catch(() => {})
+  }, [])
+
+  const handleDeptChange = (deptField: string, value: string) => {
+    const posField = deptField === 'from_department' ? 'from_position' : 'to_position'
+    const currentPos = transferForm.getFieldValue(posField)
+    if (currentPos && positionOptions[value] && !positionOptions[value].includes(currentPos)) {
+      transferForm.setFieldValue(posField, undefined)
     }
+  }
+
+  const loadTransfers = async (employeeId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/hr/transfers?employee_id=${employeeId}&page_size=50`, { credentials: 'include' })
+      const d = await res.json()
+      setTransfers(d.data || [])
+    } catch { setTransfers([]) }
+  }
+
+  const handleOpenTransfers = (emp: Employee) => {
+    setTransferEmp(emp)
+    setTransferOpen(true)
+    transferForm.resetFields()
+    // 自动填入当前部门和岗位
+    transferForm.setFieldsValue({
+      from_department: emp.department || undefined,
+      from_position: emp.position || undefined,
+    })
+    loadTransfers(emp.id)
+  }
+
+  const handleCreateTransfer = async () => {
+    const values = await transferForm.validateFields()
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/hr/transfers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employee_id: transferEmp!.id,
+          transfer_type: values.transfer_type,
+          from_department: values.from_department || null,
+          to_department: values.to_department || null,
+          from_position: values.from_position || null,
+          to_position: values.to_position || null,
+          effective_date: values.effective_date.format('YYYY-MM-DD'),
+          reason: values.reason || null,
+        }),
+        credentials: 'include',
+      })
+      if (!res.ok) throw new Error('创建失败')
+      message.success('异动记录已添加')
+      transferForm.resetFields()
+      loadTransfers(transferEmp!.id)
+    } catch (err: any) { message.error(err.message || '创建失败') }
   }
 
   const allColumns: any[] = [
@@ -197,22 +275,10 @@ export default function EmployeeTable({
           >
             编辑
           </Button>
-          <Popconfirm
-            title="确认删除"
-            description={`确定要删除员工 ${record.name} 吗？`}
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
-          >
-            <Button
-              type="text"
-              size="small"
-              danger
-              icon={<DeleteOutlined />}
-            >
-              删除
-            </Button>
-          </Popconfirm>
+          <Button type="text" size="small" icon={<SwapOutlined />}
+            onClick={() => handleOpenTransfers(record)}>
+            异动
+          </Button>
         </Space>
       ) },
   ]
@@ -249,6 +315,7 @@ export default function EmployeeTable({
             { value: '试用期', label: '试用期' },
             { value: '离职', label: '离职' },
             { value: '待审批', label: '待审批' },
+            { value: '产假复岗', label: '产假复岗' },
           ]}
         />
       </div>
@@ -295,6 +362,73 @@ export default function EmployeeTable({
             </tbody>
           </table>
         )}
+      </Modal>
+
+      {/* 异动记录 Modal */}
+      <Modal
+        title={transferEmp ? `${transferEmp.name} — 异动记录` : '异动记录'}
+        open={transferOpen}
+        onCancel={() => setTransferOpen(false)}
+        footer={null}
+        width={700}
+      >
+        <div className="space-y-4">
+          {transfers.length > 0 ? (
+            <Timeline
+              items={transfers.map((t: any) => ({
+                color: t.transfer_type === '晋升' ? 'green' : t.transfer_type === '降职' ? 'red' : 'blue',
+                children: (
+                  <div>
+                    <div className="font-medium">
+                      [{t.transfer_type}] {t.from_department || '—'} → {t.to_department || '—'}
+                    </div>
+                    <div className="text-gray-500 text-sm">
+                      {t.from_position || '—'} → {t.to_position || '—'} · {t.effective_date}
+                    </div>
+                    {t.reason && <div className="text-gray-400 text-xs mt-1">原因：{t.reason}</div>}
+                  </div>
+                ),
+              }))}
+            />
+          ) : (
+            <p className="text-gray-400 text-center py-8">暂无异动记录</p>
+          )}
+
+          <div className="border-t pt-4 mt-4">
+            <h4 className="font-medium mb-3">新增异动</h4>
+            <Form form={transferForm} layout="inline" className="flex flex-wrap gap-2">
+              <Form.Item name="transfer_type" label="类型" rules={[{ required: true }]}>
+                <Select style={{ width: 110 }} options={[
+                  { label: '晋升', value: '晋升' }, { label: '转岗', value: '转岗' },
+                  { label: '产假复岗', value: '产假复岗' },
+                ]} />
+              </Form.Item>
+              <Form.Item name="effective_date" label="日期" rules={[{ required: true }]}>
+                <DatePicker style={{ width: 130 }} />
+              </Form.Item>
+              <Form.Item name="from_department" label="原部门">
+                <Select showSearch allowClear placeholder="原部门" style={{ width: 120 }}
+                  options={deptOptions.map(d => ({ label: d, value: d }))}
+                  onChange={(v) => handleDeptChange('from_department', v)} />
+              </Form.Item>
+              <Form.Item name="to_department" label="新部门">
+                <Select showSearch allowClear placeholder="新部门" style={{ width: 120 }}
+                  options={deptOptions.map(d => ({ label: d, value: d }))}
+                  onChange={(v) => handleDeptChange('to_department', v)} />
+              </Form.Item>
+              <Form.Item name="from_position" label="原岗位">
+                <Select showSearch allowClear placeholder="原岗位" style={{ width: 120 }}
+                  options={getPositions(watchedFromDept)} />
+              </Form.Item>
+              <Form.Item name="to_position" label="新岗位">
+                <Select showSearch allowClear placeholder="新岗位" style={{ width: 120 }}
+                  options={getPositions(watchedToDept)} />
+              </Form.Item>
+              <Form.Item name="reason" label="原因"><Input style={{ width: 120 }} /></Form.Item>
+              <Form.Item><Button type="primary" onClick={handleCreateTransfer}>添加</Button></Form.Item>
+            </Form>
+          </div>
+        </div>
       </Modal>
 
     </div>

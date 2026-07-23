@@ -26,7 +26,7 @@ import {
 import dayjs from 'dayjs'
 import Link from 'next/link'
 import { AnnualTrainingPlan, AnnualTrainingPlanItem } from '@/types/hr'
-import { fetchPlanItems } from '@/lib/api/hr'
+import { fetchPlanItems, API_BASE } from '@/lib/api/hr'
 import { batchUpdatePlanItems } from '@/actions/hr'
 
 interface AnnualPlanDetailClientProps {
@@ -49,7 +49,6 @@ export default function AnnualPlanDetailClient({
   const [trainerList, setTrainerList] = useState<string[]>([])
 
   useEffect(() => {
-    const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
     fetch(`${API_BASE}/api/v1/hr/departments?page_size=100`).then(r => r.json())
       .then(d => setDeptList((d.data||[]).map((x:any) => x.name)))
     fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`).then(r => r.json())
@@ -83,7 +82,7 @@ export default function AnnualPlanDetailClient({
 
   const handleExport = async () => {
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000'}/api/v1/hr/annual-training-plans/${planId}/export`)
+      const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${planId}/export`)
       if (!res.ok) throw new Error('导出失败')
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
@@ -172,8 +171,6 @@ export default function AnnualPlanDetailClient({
     }
   }
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-
   const handleDelete = async (item: AnnualTrainingPlanItem) => {
     if (item.id.startsWith('new-')) {
       setItems((prev) => prev.filter((i) => i.id !== item.id))
@@ -212,7 +209,7 @@ export default function AnnualPlanDetailClient({
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" description="加载中..." />
       </div>
     )
   }
@@ -476,7 +473,7 @@ export default function AnnualPlanDetailClient({
                     </td>
                     <td className="border border-gray-300 px-2 py-2 text-center align-top no-print">
                       {isBlank ? null : editing ? (
-                        <Space size="small" direction="vertical" className="w-full">
+                        <Space size="small" orientation="vertical" className="w-full">
                           <Button
                             size="small"
                             onClick={handleCancel}
@@ -485,7 +482,7 @@ export default function AnnualPlanDetailClient({
                           </Button>
                         </Space>
                       ) : (
-                        <Space size="small" direction="vertical" className="w-full">
+                        <Space size="small" orientation="vertical" className="w-full">
                           <Button
                             size="small"
                             type="primary"

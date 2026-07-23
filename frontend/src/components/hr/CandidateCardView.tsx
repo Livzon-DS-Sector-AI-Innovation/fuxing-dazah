@@ -1,18 +1,19 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { Card, Tag, Pagination, Spin, Empty, Popconfirm, Button } from 'antd'
+import { Card, Tag, Pagination, Spin, Empty, Popconfirm, Button, message } from 'antd'
 import { UserOutlined, DeleteOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
 
 interface CandidateCardViewProps {
   candidates: Candidate[]
-  total: number
-  page: number
-  pageSize: number
-  loading: boolean
-  onPageChange: (page: number, pageSize: number) => void
+  total?: number
+  page?: number
+  pageSize?: number
+  loading?: boolean
+  onPageChange?: (page: number, pageSize: number) => void
   onDelete: (id: string) => void
+  extraActions?: (candidate: Candidate) => React.ReactNode
 }
 
 export default function CandidateCardView({
@@ -23,8 +24,10 @@ export default function CandidateCardView({
   loading,
   onPageChange,
   onDelete,
+  extraActions,
 }: CandidateCardViewProps) {
   const router = useRouter()
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
   const handleCardClick = (id: string) => {
     const ids = candidates.map((c) => c.id)
@@ -105,6 +108,7 @@ export default function CandidateCardView({
                   </Tag>
                 )}
               </div>
+              {extraActions?.(candidate)}
               <Popconfirm
                 title="确认删除"
                 description={`确定要删除候选人「${candidate.name}」的简历吗？`}
@@ -133,7 +137,7 @@ export default function CandidateCardView({
           total={total}
           showSizeChanger
           showTotal={(t) => `共 ${t} 条`}
-          onChange={onPageChange}
+          onChange={onPageChange as any}
         />
       </div>
     </div>
