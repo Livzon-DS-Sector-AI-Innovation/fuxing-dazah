@@ -81,8 +81,13 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
         topic_parts.append(data.content)
     _set_cell(table.rows[0].cells[1], " — ".join(topic_parts))
 
-    # ── Row 1: 培训日期 | value | 课时 | value ──
-    _set_cell(table.rows[1].cells[1], str(data.training_date) if data.training_date else "")
+    # ── Row 1: 培训日期 | value (含时间) | 课时 | value ──
+    date_text = str(data.training_date) if data.training_date else ""
+    if data.training_time_start and data.training_time_end:
+        date_text += f" {data.training_time_start}—{data.training_time_end}"
+    elif data.training_time_start:
+        date_text += f" {data.training_time_start}"
+    _set_cell(table.rows[1].cells[1], date_text)
     _set_cell(table.rows[1].cells[3], _compute_hours(data.training_time_start, data.training_time_end))
 
     # ── Row 2: 培训方式 | value | 授课人 | value ──

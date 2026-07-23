@@ -1,13 +1,18 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Table, Input, Select, Space, Tag, Upload, Modal, Form, DatePicker, Popconfirm } from 'antd'
+import {
+  App, Button, Card, Table, Input, Select, Space, Tag, Upload, Modal, Form,
+  DatePicker, Popconfirm, Tabs,
+} from 'antd'
 import { SearchOutlined, UploadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
-export default function TrainersPage() {
+// ─── 内训师台账 Tab ───
+
+function TrainersTab() {
   const { message } = App.useApp()
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(false)
@@ -16,14 +21,15 @@ export default function TrainersPage() {
   const [keyword, setKeyword] = useState('')
   const [dept, setDept] = useState<string | undefined>()
   const [level1, setLevel1] = useState<string | undefined>()
-  const [depts, setDepts] = useState<{value:string,label:string}[]>([])
+  const [depts, setDepts] = useState<{ value: string; label: string }[]>([])
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<any>(null)
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`).then(r => r.json())
-      .then(res => setDepts((res.data||[]).map((d:string) => ({value:d,label:d}))))
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`)
+      .then((r) => r.json())
+      .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
   }, [])
 
   const load = async (p = 1) => {
@@ -47,7 +53,9 @@ export default function TrainersPage() {
       setEditing(record)
       form.setFieldsValue({
         ...record,
-        trainable_departments: record.trainable_departments ? record.trainable_departments.split(',').map((s:string) => s.trim()) : [],
+        trainable_departments: record.trainable_departments
+          ? record.trainable_departments.split(',').map((s: string) => s.trim())
+          : [],
         certification_date: record.certification_date ? dayjs(record.certification_date) : null,
         confirmation_date: record.confirmation_date ? dayjs(record.confirmation_date) : null,
         confirmation_reminder: record.confirmation_reminder ? dayjs(record.confirmation_reminder) : null,
@@ -62,7 +70,8 @@ export default function TrainersPage() {
   const handleSave = async () => {
     const vals = await form.validateFields()
     const payload = { ...vals }
-    if (Array.isArray(payload.trainable_departments)) payload.trainable_departments = payload.trainable_departments.join(',')
+    if (Array.isArray(payload.trainable_departments))
+      payload.trainable_departments = payload.trainable_departments.join(',')
     if (payload.certification_date) payload.certification_date = payload.certification_date.format('YYYY-MM-DD')
     if (payload.confirmation_date) payload.confirmation_date = payload.confirmation_date.format('YYYY-MM-DD')
     if (payload.confirmation_reminder) payload.confirmation_reminder = payload.confirmation_reminder.format('YYYY-MM-DD')
@@ -71,7 +80,11 @@ export default function TrainersPage() {
       ? `${API_BASE}/api/v1/hr/trainers/${editing.id}`
       : `${API_BASE}/api/v1/hr/trainers`
     const method = editing ? 'PUT' : 'POST'
-    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
     if (res.ok) {
       message.success(editing ? '已更新' : '已创建')
       setModalOpen(false)
@@ -118,15 +131,15 @@ export default function TrainersPage() {
       <Card>
         <Space wrap style={{ marginBottom: 16 }}>
           <Input prefix={<SearchOutlined />} placeholder="搜索姓名" value={keyword}
-            onChange={e => setKeyword(e.target.value)} onPressEnter={() => load(1)} style={{ width: 200 }} />
-          <Select placeholder="部门" allowClear value={dept} onChange={v => { setDept(v); setPage(1) }}
+            onChange={(e) => setKeyword(e.target.value)} onPressEnter={() => load(1)} style={{ width: 200 }} />
+          <Select placeholder="部门" allowClear value={dept} onChange={(v) => { setDept(v); setPage(1) }}
             options={depts} style={{ width: 200 }} />
           <Select placeholder="一级培训师" allowClear value={level1} style={{ width: 140 }}
-            onChange={v => { setLevel1(v); setPage(1) }}
-            options={[{value:'一级培训师',label:'是'},{value:'-',label:'否'}]} />
+            onChange={(v) => { setLevel1(v); setPage(1) }}
+            options={[{ value: '一级培训师', label: '是' }, { value: '-', label: '否' }]} />
         </Space>
         <Table dataSource={data} rowKey="id" loading={loading} scroll={{ x: 1400 }} size="small"
-          pagination={{ current: page, pageSize: 50, total, onChange: p => setPage(p) }}
+          pagination={{ current: page, pageSize: 50, total, onChange: (p) => setPage(p) }}
           columns={[
             { title: '可培训部门', dataIndex: 'trainable_departments', width: 200,
               render: (v: string) => v ? v.split(',').map((d: string) => <Tag key={d}>{d.trim()}</Tag>) : '-' },
@@ -167,11 +180,174 @@ export default function TrainersPage() {
           <Form.Item name="confirmation_date" label="确认日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="confirmation_reminder" label="确认提醒"><DatePicker style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="is_level1" label="是否一级培训师">
-            <Select options={[{value:'一级培训师',label:'一级培训师'},{value:'-',label:'否'}]} /></Form.Item>
+            <Select options={[{ value: '一级培训师', label: '一级培训师' }, { value: '-', label: '否' }]} /></Form.Item>
           <Form.Item name="admin" label="培训管理员"><Input /></Form.Item>
           <Form.Item name="remarks" label="备注"><Input.TextArea rows={2} /></Form.Item>
         </Form>
       </Modal>
     </div>
+  )
+}
+
+// ─── 部门培训人员表 Tab ───
+
+function DeptPersonnelTab() {
+  const { message } = App.useApp()
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [keyword, setKeyword] = useState('')
+  const [dept, setDept] = useState<string | undefined>()
+  const [depts, setDepts] = useState<{ value: string; label: string }[]>([])
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<any>(null)
+  const [form] = Form.useForm()
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`)
+      .then((r) => r.json())
+      .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
+  }, [])
+
+  const load = async (p = 1) => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({ page: String(p), page_size: '50' })
+      if (keyword) params.set('keyword', keyword)
+      if (dept) params.set('department', dept)
+      const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel?${params.toString()}`)
+      const d = await res.json()
+      setData(d.data || [])
+      setTotal(d.meta?.total || 0)
+    } finally { setLoading(false) }
+  }
+
+  useEffect(() => { load(page) }, [page, dept])
+
+  const openEdit = (record?: any) => {
+    if (record) {
+      setEditing(record)
+      form.setFieldsValue(record)
+    } else {
+      setEditing(null)
+      form.resetFields()
+    }
+    setModalOpen(true)
+  }
+
+  const handleSave = async () => {
+    const vals = await form.validateFields()
+    const url = editing
+      ? `${API_BASE}/api/v1/hr/dept-training-personnel/${editing.id}`
+      : `${API_BASE}/api/v1/hr/dept-training-personnel`
+    const method = editing ? 'PUT' : 'POST'
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(vals),
+    })
+    if (res.ok) {
+      message.success(editing ? '已更新' : '已创建')
+      setModalOpen(false)
+      load(page)
+    } else {
+      const d = await res.json()
+      message.error(d.message || '操作失败')
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/${id}`, { method: 'DELETE' })
+    if (res.ok) { message.success('已删除'); load(page) }
+    else message.error('删除失败')
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h1 className="text-[22px] font-semibold">部门培训人员表</h1>
+        <Space>
+          <Button icon={<PlusOutlined />} onClick={() => openEdit()}>新增</Button>
+          <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
+            const fd = new FormData(); fd.append('file', file as File)
+            try {
+              const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/upload`, {
+                method: 'POST', body: fd,
+              })
+              const d = await res.json()
+              if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
+              else message.error(d.message || '上传失败')
+              load(1)
+            } catch { message.error('上传失败') }
+          }}>
+            <Button icon={<UploadOutlined />}>上传Excel</Button>
+          </Upload>
+        </Space>
+      </div>
+      <Card>
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Input prefix={<SearchOutlined />} placeholder="搜索部门/人员" value={keyword}
+            onChange={(e) => setKeyword(e.target.value)} onPressEnter={() => load(1)} style={{ width: 240 }} />
+          <Select placeholder="部门筛选" allowClear value={dept} style={{ width: 200 }}
+            onChange={(v) => { setDept(v); setPage(1) }} options={depts} />
+        </Space>
+        <Table dataSource={data} rowKey="id" loading={loading} scroll={{ x: 900 }} size="small"
+          pagination={{ current: page, pageSize: 50, total, onChange: (p) => setPage(p) }}
+          columns={[
+            { title: '体现部门', dataIndex: 'display_department', width: 160 },
+            { title: '品种', dataIndex: 'variety', width: 100, render: (v: string | null) => v || '-' },
+            { title: '部门', dataIndex: 'department', width: 160 },
+            {
+              title: '培训管理员', dataIndex: 'training_admin', width: 160,
+              render: (v: string | null) =>
+                v ? v.split(',').map((n: string) => <Tag key={n}>{n.trim()}</Tag>) : '-',
+            },
+            { title: '部门负责人', dataIndex: 'department_head', width: 100 },
+            { title: '一级培训师', dataIndex: 'level1_trainer', width: 100 },
+            {
+              title: '操作', width: 100,
+              render: (_: any, record: any) => (
+                <Space size="small">
+                  <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+                  <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                    <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                  </Popconfirm>
+                </Space>
+              ),
+            },
+          ]} />
+      </Card>
+
+      <Modal title={editing ? '编辑部门培训人员' : '新增部门培训人员'} open={modalOpen}
+        onCancel={() => setModalOpen(false)} onOk={handleSave} okText="保存" width={520}>
+        <Form form={form} layout="vertical" className="mt-4">
+          <Form.Item name="display_department" label="体现部门" rules={[{ required: true }]}>
+            <Select options={depts} showSearch placeholder="选择体现部门" />
+          </Form.Item>
+          <Form.Item name="variety" label="品种"><Input placeholder="品种（可选）" /></Form.Item>
+          <Form.Item name="department" label="部门" rules={[{ required: true }]}>
+            <Select options={depts} showSearch placeholder="选择部门" />
+          </Form.Item>
+          <Form.Item name="training_admin" label="培训管理员"><Input placeholder="多人用逗号分隔" /></Form.Item>
+          <Form.Item name="department_head" label="部门负责人"><Input /></Form.Item>
+          <Form.Item name="level1_trainer" label="一级培训师"><Input /></Form.Item>
+        </Form>
+      </Modal>
+    </div>
+  )
+}
+
+// ─── Page ───
+
+export default function TrainersPage() {
+  return (
+    <Tabs
+      defaultActiveKey="trainers"
+      items={[
+        { key: 'trainers', label: '内训师台账', children: <TrainersTab /> },
+        { key: 'dept-personnel', label: '部门培训人员表', children: <DeptPersonnelTab /> },
+      ]}
+    />
   )
 }

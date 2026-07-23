@@ -288,7 +288,7 @@ export async function parseResumePreviewAction(formData: FormData): Promise<{ da
 export async function createCandidateAction(formData: FormData): Promise<{ data: any }> {
   // Construct JSON from FormData fields (as originally sent by CreateCandidateModal)
   const data: Record<string, unknown> = {}
-  const keys = ['name', 'phone', 'email', 'position', 'department', 'gender', 'school', 'education', 'major', 'status', 'recommendation_level', 'match_report', 'resume_file_path']
+  const keys = ['name', 'phone', 'email', 'position', 'department', 'gender', 'school', 'education', 'major', 'status', 'recommendation_level', 'resume_file_path']
   for (const k of keys) {
     const v = formData.get(k)
     if (v) data[k] = v
@@ -333,7 +333,7 @@ export async function createQaAssessment(data: import('@/types/hr').QaAssessment
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || err.detail || '创建考核场次失败')
   }
-  revalidatePath('/hr/training/qa-assessment')
+  revalidatePath('/hr/training/notification')
   return res.json()
 }
 
@@ -359,7 +359,7 @@ export async function deleteQaAssessment(id: string) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || err.detail || '删除考核场次失败')
   }
-  revalidatePath('/hr/training/qa-assessment')
+  revalidatePath('/hr/training/notification')
   return res.json()
 }
 

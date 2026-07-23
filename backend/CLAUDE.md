@@ -203,3 +203,43 @@ uv run python -c "from app.main import app; print(app.title)"
 
 ## 代码设计注意
 由于数据表使用软删除，所以设计数据表约束时需要避免在**重复添加→删除→添加→删除时触发**的隐形bug
+
+## 已交付功能清单（保护区域）
+
+以下模块已完成开发和测试，**新增代码时必须保持兼容，不得回退或删除已有功能**：
+
+### 后端（fuxing-dazah/backend/app/modules/hr/）
+
+| 文件 | 功能 | 保护级别 |
+|------|------|----------|
+| `api.py` | 全部HR API端点（员工/部门/培训/台账/通知/出题/成绩单） | ⚠️ 修改前需确认影响 |
+| `models.py` | AnnualTrainingPlan, AnnualTrainingPlanItem(含location/assessment_method/notes字段), DeptTrainingPersonnel, OnboardingRecord(含source字段) | ⚠️ 字段只能新增不能删除 |
+| `schemas.py` | 全部Pydantic请求/响应模型 | ⚠️ 字段只能新增不能删除 |
+| `service.py` | _PLAN_COLUMN_MAP(16列映射), upload_annual_plan(Excel解析逻辑) | ⚠️ 列映射修改需同步更新测试 |
+| `deps.py` | _HR_PATH_PERMISSIONS(权限路由映射) | ⚠️ 新增路由需同步添加权限 |
+| `ai_service.py` | AiChatService(DeepSeek API) | ⚠️ 修改前需确认 |
+| `assessment_score_generator.py` | 考核成绩单Word生成器 | ✅ 可扩展 |
+| `notification_document_generator.py` | 培训通知Word生成器 | ✅ 可扩展 |
+
+### 前端（fuxing-dazah/frontend/src/）
+
+| 文件 | 功能 | 保护级别 |
+|------|------|----------|
+| `app/(dashboard)/hr/training/annual-plan/page.tsx` | 年度计划页(卡片列表+明细表+新建弹窗+通知跳转) | ⚠️ 修改前需确认 |
+| `app/(dashboard)/hr/training/trainers/page.tsx` | 内训师台账+部门培训人员表(Tab双页) | ⚠️ 修改前需确认 |
+| `app/(dashboard)/hr/training/notification/page.tsx` | 培训通知页 | ⚠️ 修改前需确认 |
+| `components/hr/TrainingNotificationClient.tsx` | 培训通知核心组件(表单/预览/出题/成绩单) | ⚠️ 修改前需确认 |
+| `components/hr/OnboardingPrejobClient.tsx` | 新员工入职培训组件 | ✅ 可扩展 |
+| `lib/api/hr.ts` | API_BASE='', 全部API调用函数 | ⚠️ API_BASE不能改为绝对路径 |
+| `lib/menu-config.ts` | 菜单配置(已移除评估补录入口) | ⚠️ 修改前需确认 |
+
+### 新增功能时的安全规则
+
+1. **新增路由**：在api.py末尾添加，不要在现有路由之间插入
+2. **新增字段**：在模型末尾添加，保持现有字段顺序不变
+3. **新增前端组件**：在components/hr/下新建文件，通过index.ts导出
+4. **修改已有函数**：如非必要不要修改函数签名，通过新增参数(带默认值)扩展
+5. **数据库迁移**：每次修改模型后必须创建新迁移文件
+6. **测试**：新功能必须写测试(tests/modules/hr/下新建或追加)
+7. **前端构建**：修改后必须通过`pnpm build`验证
+8. **Excel列映射**：修改_PLAN_COLUMN_MAP后必须用年度计划表.xlsx做回归测试

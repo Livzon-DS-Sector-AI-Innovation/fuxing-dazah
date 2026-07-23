@@ -13,7 +13,7 @@ import {
   DepartureRecordListResponse,
 } from '@/types/hr'
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || 'http://localhost:8000'
+export const API_BASE = ''
 
 export async function fetchEmployees(
   params?: {
@@ -569,7 +569,7 @@ export async function fetchTrainingLedgersAdmin(params?: {
 
 export async function batchUpdateScores(data: { records: { id: string; assessment_result: string }[] }): Promise<{ code: number; message: string; data: { updated: number } }> {
   const res = await fetch(`${API_BASE}/api/v1/hr/training-ledgers/batch-scores`, {
-    method: 'PUT',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
     cache: 'no-store', credentials: 'include',
@@ -651,6 +651,12 @@ export async function exportTrainingEvaluationReport(params: {
   training_method?: string
   trainer_name?: string
   assessment_method?: string
+  expected_count?: number
+  actual_count?: number
+  exam_count?: number
+  excellent_count?: number
+  qualified_count?: number
+  unqualified_count?: number
 }): Promise<void> {
   const fd = new FormData()
   fd.append('department', params.department)
@@ -659,6 +665,12 @@ export async function exportTrainingEvaluationReport(params: {
   if (params.training_method) fd.append('training_method', params.training_method)
   if (params.trainer_name) fd.append('trainer_name', params.trainer_name)
   if (params.assessment_method) fd.append('assessment_method', params.assessment_method)
+  if (params.expected_count != null) fd.append('expected_count', String(params.expected_count))
+  if (params.actual_count != null) fd.append('actual_count', String(params.actual_count))
+  if (params.exam_count != null) fd.append('exam_count', String(params.exam_count))
+  if (params.excellent_count != null) fd.append('excellent_count', String(params.excellent_count))
+  if (params.qualified_count != null) fd.append('qualified_count', String(params.qualified_count))
+  if (params.unqualified_count != null) fd.append('unqualified_count', String(params.unqualified_count))
   const res = await fetch(`${API_BASE}/api/v1/hr/training-evaluations/export-admin`, {
     method: 'POST',
     body: fd,

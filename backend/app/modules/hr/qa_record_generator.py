@@ -146,19 +146,21 @@ def generate_qa_record(
         for _ in range(_BLANK_QUESTION_ROWS - 1):
             insert_pos = _insert_row_after(table, insert_pos)
 
-    # ── 题目区域之后的行索引都偏移了，需要重新定位 ──
-    # 重新计算：header(4行) + question_tpl(1) + 插入的题行 + empty_row(1) = 基准
-    extra_question_rows = (
-        max(0, len(questions) - 1) if questions else _BLANK_QUESTION_ROWS - 1
-    )
-    # 空行现在在 question_tpl_row + extra_question_rows + 1
-    current_empty_row = question_tpl_row + extra_question_rows + 1
+    # 删除模板自带的空行
+    empty_row_idx = question_tpl_row + 1 + (max(0, len(questions) - 1) if questions else _BLANK_QUESTION_ROWS - 1)
+    if empty_row_idx < len(table.rows):
+        table._tbl.remove(table.rows[empty_row_idx]._tr)
 
-    # 受训人员区域
-    # 原行7(header)现在在 current_empty_row + 1
-    # 原行8(模板)现在在 current_empty_row + 2
-    # 原行9(trainer)现在在 current_empty_row + 3
-    trainee_tpl_row = current_empty_row + 2
+    # ── 受训人员区域：找到「姓名」表头行 ──
+    trainee_header_row = None
+    for ri in range(question_tpl_row + 1, len(table.rows)):
+        cell_text = table.rows[ri].cells[0].text.strip() if table.rows[ri].cells else ""
+        if "姓名" in cell_text and "得分情况" in (table.rows[ri].cells[2].text if len(table.rows[ri].cells) > 2 else ""):
+            trainee_header_row = ri
+            break
+    if trainee_header_row is None:
+        trainee_header_row = question_tpl_row + 2  # fallback
+    trainee_tpl_row = trainee_header_row + 1
 
     # 清除受训人员模板行遗留标记
     for cell in table.rows[trainee_tpl_row].cells:

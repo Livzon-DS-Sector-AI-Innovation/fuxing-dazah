@@ -90,3 +90,31 @@ def generate_exam_paper_docx(
 
     buf = BytesIO(); doc.save(buf); buf.seek(0)
     return buf
+
+
+def generate_exam_paper(paper) -> BytesIO:
+    """从 ExamPaper ORM 对象生成 Word 文档。"""
+    questions = paper.questions or {}
+    # 按来源分类标注 type，兼容无 type 字段的旧数据
+    type_map = {
+        "choice_questions": "choice",
+        "true_false_questions": "true_false",
+        "multi_choice_questions": "multi_choice",
+        "fill_blank_questions": "fill_blank",
+    }
+    q_list: list[dict] = []
+    for key, qtype in type_map.items():
+        for q in (questions.get(key) or []):
+            q_copy = dict(q)
+            q_copy["type"] = qtype
+            q_list.append(q_copy)
+
+    return generate_exam_paper_docx(
+        subject=paper.subject,
+        department=paper.department,
+        training_date=paper.training_date,
+        training_method=paper.training_method,
+        questions=q_list,
+        full_score=paper.full_score,
+        pass_line=paper.pass_line,
+    )

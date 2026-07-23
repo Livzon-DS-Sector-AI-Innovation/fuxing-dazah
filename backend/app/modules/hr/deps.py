@@ -108,19 +108,19 @@ def require_hr_access(*codes: str):
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     # 员工档案
-    (r"/employees/upload", "hr:employee:export"),
-    (r"/employees/by-number", "hr:employee:read"),
-    (r"/employees/batch-regularize", "hr:employee:update"),
-    (r"/employees/.*/probation-extensions", "hr:employee:read"),
+    (r"/employees/upload", "hr:profile:export"),
+    (r"/employees/by-number", "hr:profile:read"),
+    (r"/employees/batch-regularize", "hr:profile:update"),
+    (r"/employees/.*/probation-extensions", "hr:profile:read"),
     (r"/employees/.*/onboarding-training-record", "hr:training:document"),
     (r"/employees/.*/prejob-training-plan", "hr:training:document"),
-    (r"/employees/.*/training-registration", "hr:employee:export"),
-    (r"/employees/training-candidates", "hr:employee:read"),
-    (r"/employees/probation-expiring", "hr:employee:read"),
-    (r"/employees", {"GET": "hr:employee:read", "POST": "hr:employee:create",
-                     "PUT": "hr:employee:update", "DELETE": "hr:employee:delete"}),
+    (r"/employees/.*/training-registration", "hr:profile:export"),
+    (r"/employees/training-candidates", "hr:profile:read"),
+    (r"/employees/probation-expiring", "hr:profile:read"),
+    (r"/employees", {"GET": "hr:profile:read", "POST": "hr:profile:create",
+                     "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册
-    (r"/roster", "hr:employee:export"),
+    (r"/roster", "hr:profile:export"),
     # 组织架构
     (r"/departments/", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
@@ -132,6 +132,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/position-trainings", "hr:settings:manage"),
     (r"/trainers", "hr:settings:manage"),
     (r"/sop-catalog", "hr:settings:manage"),
+    (r"/dept-training-personnel", {"GET": "hr:training:read", "POST": "hr:training:manage",
+                                    "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # 入职管理
     (r"/onboarding-applications/.*/approve", "hr:onboarding:approve"),
     (r"/onboarding-applications", {"GET": "hr:onboarding:read", "POST": "hr:onboarding:manage",
@@ -158,22 +160,34 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                             "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # 培训年度计划
     (r"/annual-training-plan", "hr:training:plan"),
+    (r"/annual-plan-items", "hr:training:plan"),
     # 问答考核
-    (r"/qa-assessments", "hr:training:assessment"),
+    (r"/qa-assessments/.*/sync-ledger", "hr:training:manage"),
+    (r"/qa-assessments/.*/export-", "hr:training:export"),
+    (r"/qa-assessments/.*/scores", "hr:training:manage"),
+    (r"/qa-assessments", {"GET": "hr:training:assessment",
+                           "POST": "hr:training:manage",
+                           "PUT": "hr:training:manage",
+                           "DELETE": "hr:training:manage"}),
     # 共享题库
-    (r"/question-bank", "hr:training:questionbank"),
+    (r"/question-bank", {"GET": "hr:training:questionbank",
+                          "POST": "hr:training:manage",
+                          "DELETE": "hr:training:manage"}),
     # 笔试试卷
     (r"/exam-papers", "hr:training:exam"),
-    # 培训文档生成
+    # 培训文档生成 & AI 出题
     (r"/training-sign-in-sheet", "hr:training:document"),
+    (r"/training-notification/generate-assessment", "hr:training:manage"),
+    (r"/training-notification/export-", "hr:training:export"),
     (r"/training-notification", "hr:training:document"),
     (r"/onboarding-evaluation", "hr:training:document"),
+    (r"/training-evaluations/export-admin", "hr:training:export"),
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),
     # 培训登记表
-    (r"/training-registration", "hr:employee:export"),
+    (r"/training-registration", "hr:profile:export"),
     # 员工异动
-    (r"/transfers", "hr:employee:transfer"),
+    (r"/transfers", "hr:profile:transfer"),
     # 人事看板
     (r"/dashboard-stats", "hr:dashboard:read"),
     # 招聘管理

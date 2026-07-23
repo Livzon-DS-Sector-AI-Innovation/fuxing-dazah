@@ -62,7 +62,7 @@ export default function SopCatalogPage() {
     finally { setLoading(false) }
   }
 
-  useEffect(() => { if (selectedDept) loadAll() }, [selectedDept])
+  useEffect(() => { loadAll() }, [selectedDept])
 
   // 按岗位分组
   const grouped = useMemo(() => {
@@ -132,7 +132,7 @@ export default function SopCatalogPage() {
       {loading ? (
         <div className="flex justify-center py-20"><Spin size="large" /></div>
       ) : Object.keys(grouped).length === 0 ? (
-        <Empty description="请选择部门加载SOP目录" />
+        <Empty description="暂无SOP目录数据，请上传或新建" />
       ) : (
         <Collapse accordion>
           {Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0])).map(([posName, group]) => {

@@ -7,16 +7,12 @@ import {
   DatePicker,
   Input,
   Modal,
-  Popconfirm,
   Space,
   Table,
   Tag,
 } from 'antd'
 import {
   DownloadOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  SaveOutlined,
   SearchOutlined,
   DatabaseOutlined,
   PlusOutlined,
@@ -24,18 +20,11 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchQuestionBank,
-  fetchQaAssessmentDetail,
-  fetchQaAssessments,
   downloadQaAssessmentRecord,
   downloadQaAssessmentEvaluation,
   API_BASE,
 } from '@/lib/api/hr'
-import {
-  createQaAssessment,
-  saveQaAssessmentScores,
-  deleteQaAssessment,
-} from '@/actions/hr'
-import { QaAssessment, QaAssessmentScore, QuestionBankItem } from '@/types/hr'
+import { QaAssessment, QuestionBankItem } from '@/types/hr'
 
 interface AssessmentFlowProps {
   subject: string
@@ -84,10 +73,6 @@ export default function AssessmentFlow({
   const [saving, setSaving] = useState(false)
 
   // 历史列表
-  const [history, setHistory] = useState<QaAssessment[]>([])
-  const [historyTotal, setHistoryTotal] = useState(0)
-  const [historyPage, setHistoryPage] = useState(1)
-  const [historyLoading, setHistoryLoading] = useState(false)
 
   const loadBank = useCallback(async (p = 1, fileNo?: string, keyword?: string) => {
     setBankLoading(true)
@@ -103,34 +88,32 @@ export default function AssessmentFlow({
     } finally { setBankLoading(false) }
   }, [bankFileNo, bankKeyword, message])
 
-  const loadHistory = useCallback(async (p = 1) => {
-    setHistoryLoading(true)
-    try {
-      const res = await fetchQaAssessments({ department, page: p, page_size: 10 })
-      setHistory(res.data || [])
-      setHistoryTotal(res.meta?.total || 0)
-      setHistoryPage(p)
-    } catch { /* ignore */ }
-    finally { setHistoryLoading(false) }
-  }, [department])
-
-  useEffect(() => { loadBank(1, '', subject); loadHistory(1) }, [])
+  useEffect(() => { loadBank(1, '', subject) }, [])
 
   const handleCreate = async () => {
     if (pickedQuestions.length === 0) { message.warning('请先从题库选题'); return }
     setCreating(true)
     try {
-      const res = await createQaAssessment({
-        subject, department,
-        training_date: trainingDate,
-        training_method: trainingMethod, trainer,
-        question_count: pickedQuestions.length,
-        questions: pickedQuestions.map((q) => ({
-          file_no: q.file_no, question: q.question, answer: q.answer, score: q.score,
-        })),
-        trainee_names: employeeNames,
+      const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subject, department,
+          training_date: trainingDate,
+          training_method: trainingMethod, trainer,
+          question_count: pickedQuestions.length,
+          questions: pickedQuestions.map((q) => ({
+            file_no: q.file_no, question: q.question, answer: q.answer, score: q.score,
+          })),
+          trainee_names: employeeNames,
+        }),
       })
-      const id = res.data?.id
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.message || err.detail || '创建考核失败')
+      }
+      const data = await res.json()
+      const id = data.data?.id
       if (!id) throw new Error('创建失败：未返回ID')
       setAssessmentId(id)
       // 初始化成绩行
@@ -141,25 +124,8 @@ export default function AssessmentFlow({
       })))
       setAssessedDate(trainingDate ? dayjs(trainingDate) : null)
       message.success('考核场次已创建，默认全对，请录入错题')
-      loadHistory(1)
     } catch (err: any) { message.error(err.message || '创建失败') }
     finally { setCreating(false) }
-  }
-
-  const openExisting = async (a: QaAssessment) => {
-    try {
-      const res = await fetchQaAssessmentDetail(a.id)
-      const { assessment: aa, scores } = res.data
-      setAssessmentId(a.id)
-      setAssessment(aa)
-      setScoreRows((scores || []).map((s: QaAssessmentScore) => ({
-        employee_name: s.employee_name,
-        employee_number: s.employee_number || undefined,
-        wrong: new Set(s.wrong_questions || []),
-      })))
-      const d = (scores || []).find((s: any) => s.assessed_date)?.assessed_date || aa.training_date
-      setAssessedDate(d ? dayjs(d) : null)
-    } catch (err: any) { message.error(err.message || '加载考核详情失败') }
   }
 
   const questionScores = useMemo(() => {
@@ -196,36 +162,74 @@ export default function AssessmentFlow({
     }))
   }
 
-  const handleSave = async () => {
-    if (!assessmentId) { message.warning('请先创建考核场次'); return }
-    setSaving(true)
-    try {
-      const res = await saveQaAssessmentScores(assessmentId, {
-        assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
-        scores: scoreRows.map((r) => ({
-          employee_name: r.employee_name,
-          employee_number: r.employee_number,
-          wrong_questions: [...r.wrong].sort((a, b) => a - b),
-        })),
-      })
-      const stats = res.data?.statistics
-      message.success(stats
-        ? `已保存：优${stats.excellent_count}人/合格${stats.qualified_count}人/不合格${stats.unqualified_count}人，合格率${stats.pass_rate}；已自动写入培训台账`
-        : '成绩已保存，已自动写入培训台账')
-      loadHistory(1)
-    } catch (err: any) { message.error(err.message || '保存失败') }
-    finally { setSaving(false) }
-  }
-
-  const handleExport = async (kind: 'record' | 'evaluation') => {
+  const handleExport = async (kind: 'record' | 'evaluation' | 'scores') => {
     if (!assessmentId) return
     setExporting(`${kind}-${assessmentId}`)
     try {
       if (kind === 'record') await downloadQaAssessmentRecord(assessmentId)
-      else await downloadQaAssessmentEvaluation(assessmentId)
+      else if (kind === 'evaluation') await downloadQaAssessmentEvaluation(assessmentId)
+      else {
+        // 先保存成绩（含台账同步）
+        const saveRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/scores`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
+            scores: scoreRows.map((r) => ({
+              employee_name: r.employee_name,
+              employee_number: r.employee_number,
+              wrong_questions: [...r.wrong].sort((a, b) => a - b),
+            })),
+          }),
+        })
+        const saveData = await saveRes.json().catch(() => ({}))
+        // 再下载成绩单
+        const r = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/export-scores`)
+        if (!r.ok) throw new Error('导出失败')
+        const blob = await r.blob()
+        const a = document.createElement('a')
+        a.href = window.URL.createObjectURL(blob)
+        a.download = '成绩单.docx'
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        message.success(saveData.message || '成绩单已导出，已同步培训台账')
+        return
+      }
       message.success('导出成功')
     } catch (err: any) { message.error(err.message || '导出失败') }
     finally { setExporting(null) }
+  }
+
+  const handleSyncLedger = async () => {
+    if (!assessmentId) { message.warning('请先创建考核场次'); return }
+    // 先保存成绩，再同步台账
+    setSaving(true)
+    try {
+      const saveRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/scores`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
+          scores: scoreRows.map((r) => ({
+            employee_name: r.employee_name,
+            employee_number: r.employee_number,
+            wrong_questions: [...r.wrong].sort((a, b) => a - b),
+          })),
+        }),
+      })
+      if (!saveRes.ok) {
+        const err = await saveRes.json().catch(() => ({}))
+        throw new Error(err.message || '保存失败')
+      }
+      // 再同步台账
+      const syncRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/sync-ledger`, { method: 'POST' })
+      if (!syncRes.ok) {
+        const err = await syncRes.json().catch(() => ({}))
+        throw new Error(err.message || err.detail || '同步失败')
+      }
+      const syncData = await syncRes.json()
+      message.success(syncData.message || '已同步到培训台账')
+    } catch (err: any) { message.error(err.message || '操作失败') }
+    finally { setSaving(false) }
   }
 
   const questionCount = assessment?.question_count || pickedQuestions.length || 0
@@ -281,7 +285,7 @@ export default function AssessmentFlow({
               <Button icon={<DatabaseOutlined />} type="primary" onClick={() => {
                 setPickedIds(pickedQuestions.map(q => q.id))
                 setPickerOpen(true)
-                loadBank(1, '', subject)
+                loadBank(1, '', '')
               }}>
                 从题库选题（已选 {pickedQuestions.length} 题）
               </Button>
@@ -315,17 +319,22 @@ export default function AssessmentFlow({
               </div>
               <Space wrap>
                 <DatePicker size="small" placeholder="考核日期" value={assessedDate} onChange={setAssessedDate} />
-                <Button size="small" icon={<SaveOutlined />} type="primary" loading={saving} onClick={handleSave}>保存成绩</Button>
                 <Button size="small" icon={<DownloadOutlined />}
                   loading={exporting === `record-${assessmentId}`}
                   onClick={() => handleExport('record')}>导出记录表</Button>
                 <Button size="small" icon={<DownloadOutlined />}
                   loading={exporting === `evaluation-${assessmentId}`}
                   onClick={() => handleExport('evaluation')}>导出评估表</Button>
+                <Button size="small" icon={<DownloadOutlined />}
+                  loading={exporting === `scores-${assessmentId}`}
+                  onClick={() => handleExport('scores')}>导出成绩单</Button>
+                <Button size="small" icon={<DatabaseOutlined />} type="primary"
+                  loading={saving}
+                  onClick={handleSyncLedger}>同步到台账</Button>
                 <Button size="small" onClick={() => { setAssessmentId(null); setAssessment(null) }}>重新选题</Button>
               </Space>
             </div>
-            <p className="text-xs text-gray-500">默认全对（绿✓），点击格子标记错题（红✗），保存后自动写入培训台账</p>
+            <p className="text-xs text-gray-500">默认全对（绿✓），点击格子标记错题（红✗），点击「同步到台账」保存并写入台账</p>
             <Table
               rowKey="employee_name" size="small" dataSource={scoreRows} columns={scoreColumns}
               pagination={false} scroll={{ x: 'max-content' }}
@@ -334,32 +343,6 @@ export default function AssessmentFlow({
         )}
       </div>
 
-      {/* 历史考核 */}
-        <Table
-          rowKey="id" size="small" loading={historyLoading}
-          dataSource={history}
-          pagination={{ current: historyPage, pageSize: 10, total: historyTotal, onChange: (p) => loadHistory(p) }}
-          columns={[
-            { title: '培训内容', dataIndex: 'subject', ellipsis: true },
-            { title: '日期', dataIndex: 'training_date', width: 100 },
-            { title: '题数', dataIndex: 'question_count', width: 56, align: 'center' as const },
-            { title: '操作', width: 150,
-              render: (_: any, a: QaAssessment) => (
-                <Space size="small">
-                  <Button size="small" icon={<EditOutlined />} onClick={() => openExisting(a)}>录成绩</Button>
-                  <Button size="small" icon={<DownloadOutlined />}
-                    onClick={() => handleExport('record')}>表</Button>
-                  <Popconfirm title="删除？" onConfirm={async () => {
-                    try { await deleteQaAssessment(a.id); message.success('已删除'); loadHistory(1) }
-                    catch (err: any) { message.error(err.message || '删除失败') }
-                  }}>
-                    <Button size="small" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                </Space>
-              ),
-            },
-          ]}
-        />
       <Modal title="从题库选题" open={pickerOpen} onCancel={() => setPickerOpen(false)} width={900}
         onOk={() => {
           const map = new Map(bankItems.map(i => [i.id, i]))

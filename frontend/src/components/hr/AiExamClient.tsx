@@ -117,6 +117,8 @@ export default function AiExamClient() {
     try {
       const data: ExamExportData = {
         title: title.trim(),
+        examiner: '',
+        exam_date: '',
         assessment_date: assessmentDate,
         choice_questions: choiceQuestions,
         true_false_questions: trueFalseQuestions,
@@ -138,6 +140,45 @@ export default function AiExamClient() {
       message.error(err.message || '导出失败')
     } finally {
       setExporting(false)
+    }
+  }
+
+  const handleSave = async () => {
+    if (!title.trim()) {
+      message.warning('请输入试卷标题')
+      return
+    }
+    const total = choiceQuestions.length + trueFalseQuestions.length + multiQuestions.length + fillQuestions.length
+    if (total === 0) {
+      message.warning('请先生成题目')
+      return
+    }
+    try {
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+      const res = await fetch(`${API}/api/v1/hr/exam-papers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          subject: title,
+          training_date: assessmentDate,
+          questions: {
+            choice_questions: choiceQuestions,
+            true_false_questions: trueFalseQuestions,
+            multi_choice_questions: multiQuestions,
+            fill_blank_questions: fillQuestions,
+          },
+          full_score: 100,
+          choice_count: choiceQuestions.length,
+          true_false_count: trueFalseQuestions.length,
+          multi_choice_count: multiQuestions.length,
+          fill_blank_count: fillQuestions.length,
+        }),
+      })
+      if (!res.ok) throw new Error('保存失败')
+      message.success('试卷已保存，可在「资料下载」中查看下载')
+    } catch (err: any) {
+      message.error(err.message || '保存失败')
     }
   }
 
@@ -246,14 +287,22 @@ export default function AiExamClient() {
           title="试卷预览（可直接编辑）"
           className="shadow-sm"
           extra={
-            <Button
-              type="primary"
-              icon={<DownloadOutlined />}
-              onClick={handleExport}
-              loading={exporting}
-            >
-              导出试卷
-            </Button>
+            <Space>
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={handleExport}
+                loading={exporting}
+              >
+                导出试卷
+              </Button>
+              <Button
+                type="primary"
+                icon={<FileTextOutlined />}
+                onClick={handleSave}
+              >
+                保存试卷
+              </Button>
+            </Space>
           }
         >
           <Spin spinning={generating}>

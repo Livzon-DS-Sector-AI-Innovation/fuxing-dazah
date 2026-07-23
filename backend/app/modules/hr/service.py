@@ -108,12 +108,15 @@ class EmployeeService:
                 employee_name=employee.name,
             ))
 
-        # 根据岗位导入培训内容
+        # 根据岗位导入培训内容（兼容带部门前缀和不带前缀的岗位名）
         if employee.position and employee.department:
             pt_q = select(PositionTraining).where(
-                PositionTraining.position_name == employee.position,
-                PositionTraining.department == employee.department,
                 PositionTraining.is_deleted == False,
+                PositionTraining.department == employee.department,
+                or_(
+                    PositionTraining.position_name == employee.position,
+                    PositionTraining.position_name.endswith(employee.position),
+                ),
             )
             pts = (await self.repo.session.execute(pt_q)).scalars().all()
             for pt in pts:
@@ -513,7 +516,7 @@ class EmployeeService:
                         "部门": "department", "所属部门": "department", "岗位": "position_name",
                         "体现部门": "department", "SOP名称": "file_name", "文件名": "file_name",
                         "类别": "category", "分类": "category", "培训分类": "category",
-                        "职位": "position_name", "岗位名称": "position_name"}
+                        "职位": "position_name", "岗位名称": "position_name", "培训内容": "file_name"}
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
 
@@ -530,30 +533,62 @@ class EmployeeService:
                 if "file_name" not in data:
                     errors.append(f"第{row_idx}行: 缺少文件名称"); continue
 
-                q = select(SopCatalog).where(
-                    SopCatalog.sop_number == data.get("sop_number"),
-                    SopCatalog.file_name == data["file_name"],
-                    SopCatalog.is_deleted == False)
-                r = await self.repo.session.execute(q)
-                existing = r.scalar_one_or_none()
-                if existing:
-                    for k, v in data.items(): setattr(existing, k, v)
-                    updated += 1
-                else:
-                    self.repo.session.add(SopCatalog(**data))
-                    created += 1
-                await self.repo.session.flush()
+                # 培训内容可能包含逗号分隔的多个条目，拆分为独立记录
+                raw_names = str(data["file_name"])
+                split_names = [n.strip() for n in raw_names.replace("，", ",").split(",") if n.strip()]
+                # 没有培训类别时，用拆分后的值作为类别
+                has_category = "category" in data
 
-                # 同步写入岗位培训关联表（用于入职培训自动匹配）
-                if data.get("position_name") and data.get("department"):
-                    pt = PositionTraining(
-                        position_name=data["position_name"],
-                        department=data["department"],
-                        training_category=data.get("category") or "",
-                        sop_number=data.get("sop_number"),
-                        file_name=data["file_name"],
-                    )
-                    self.repo.session.add(pt)
+                for name in split_names:
+                    row_data = {**data, "file_name": name}
+                    if not has_category:
+                        row_data["category"] = name
+                    # 去重：有 SOP 编号按编号+文件名匹配，否则按部门+岗位+文件名匹配
+                    if row_data.get("sop_number"):
+                        q = select(SopCatalog).where(
+                            SopCatalog.sop_number == row_data["sop_number"],
+                            SopCatalog.file_name == name,
+                            SopCatalog.is_deleted == False)
+                    else:
+                        q = select(SopCatalog).where(
+                            SopCatalog.file_name == name,
+                            SopCatalog.department == row_data.get("department"),
+                            SopCatalog.position_name == row_data.get("position_name"),
+                            SopCatalog.is_deleted == False)
+                    r = await self.repo.session.execute(q)
+                    existing = r.scalar_one_or_none()
+                    if existing:
+                        for k, v in row_data.items():
+                            if v is not None:
+                                setattr(existing, k, v)
+                        updated += 1
+                    else:
+                        self.repo.session.add(SopCatalog(**row_data))
+                        created += 1
+                    await self.repo.session.flush()
+
+                    # 同步写入岗位培训关联表（用于入职培训自动匹配），同样去重
+                    if row_data.get("position_name") and row_data.get("department"):
+                        pt_category = row_data.get("category") or name
+                        pt_q = select(PositionTraining).where(
+                            PositionTraining.position_name == row_data["position_name"],
+                            PositionTraining.department == row_data["department"],
+                            PositionTraining.training_category == pt_category,
+                            PositionTraining.is_deleted == False)
+                        pt_r = await self.repo.session.execute(pt_q)
+                        pt_existing = pt_r.scalar_one_or_none()
+                        if pt_existing:
+                            pt_existing.file_name = name
+                            pt_existing.sop_number = row_data.get("sop_number")
+                            pt_existing.updated_at = func.now()
+                        else:
+                            self.repo.session.add(PositionTraining(
+                                position_name=row_data["position_name"],
+                                department=row_data["department"],
+                                training_category=pt_category,
+                                sop_number=row_data.get("sop_number"),
+                                file_name=name,
+                            ))
             except Exception as e:
                 errors.append(f"第{row_idx}行: {e}")
         return {"created": created, "updated": updated, "errors": errors}
@@ -638,6 +673,7 @@ class EmployeeService:
         "年份": "year",
         "部门": "department",
         "体现部门": "department",
+        "品种": "variety",
         "月份": "month",
         "培训时间": "month",
         "培训人数": "trainee_count",
@@ -649,7 +685,9 @@ class EmployeeService:
         "授课单位及授课人": "position_and_count",
         "授课单位/培训师": "position_and_count",
         "培训方式": "training_method",
-        "考核方式": "training_method",
+        "考核方式": "assessment_method",
+        "培训地点": "location",
+        "注意事项": "notes",
         "培训学时": "training_hours",
         "培训跟踪": "tracking_status",
         "确认者": "confirmer",
@@ -657,6 +695,7 @@ class EmployeeService:
         "确认人/日期": "_confirmer_date",
         "确认日期": "confirm_date",
         "实施日期": "confirm_date",
+        "提醒实施": "confirm_date",
         "培训季度及课时": "_quarter_hours",
         "部门管理员": "confirmer",
         "备注": "remarks",
@@ -775,7 +814,7 @@ class EmployeeService:
         # ── 逐行解析数据（用 begin_nested 做行级 SAVEPOINT 隔离）──
         plan_cache: dict[tuple, AnnualTrainingPlan] = {}
         created, updated, errors = 0, 0, []
-        skip_fields = {"year", "department", "_quarter_hours", "_confirmer_date"}
+        skip_fields = {"year", "department", "_quarter_hours", "_confirmer_date", "variety"}
 
         data_start = header_row_idx + 1
         for row_idx, row in enumerate(rows[data_start:], start=data_start + 1):
@@ -1146,6 +1185,20 @@ class DepartureRecordService:
             employee.status = "离职"
             await self.employee_repo.update(employee)
 
+        # 同步更新入职台账为不在职，确保所有列表过滤生效
+        from app.modules.hr.models import OnboardingRecord
+        onboarding_q = select(OnboardingRecord).where(
+            OnboardingRecord.name == data.name,
+            OnboardingRecord.department == data.department,
+            OnboardingRecord.is_deleted == False,
+        )
+        onboarding_r = await self.repo.session.execute(onboarding_q)
+        for onboarding in onboarding_r.scalars().all():
+            if onboarding.is_employed != "否":
+                onboarding.is_employed = "否"
+                self.repo.session.add(onboarding)
+
+        await self.repo.session.flush()
         return record
 
     async def update_record(self, record_id: UUID, data: DepartureRecordUpdate) -> DepartureRecord:
@@ -1156,6 +1209,24 @@ class DepartureRecordService:
         return await self.repo.update(record)
 
     async def delete_record(self, record_id: UUID) -> None:
+        # 恢复入职台账的在职状态和员工状态
+        record = await self.get_record(record_id)
+        from app.modules.hr.models import OnboardingRecord
+        onboarding_q = select(OnboardingRecord).where(
+            OnboardingRecord.name == record.name,
+            OnboardingRecord.department == record.department,
+            OnboardingRecord.is_deleted == False,
+        )
+        onboarding_r = await self.repo.session.execute(onboarding_q)
+        for onboarding in onboarding_r.scalars().all():
+            onboarding.is_employed = "是"
+            self.repo.session.add(onboarding)
+
+        employee = await self.employee_repo.get_by_name_and_department(record.name, record.department)
+        if employee and employee.status == "离职":
+            employee.status = "在职"
+            await self.employee_repo.update(employee)
+
         await self.repo.session.execute(text("DELETE FROM hr.departure_records WHERE id = :id"), {"id": record_id})
 
 class TrainingLedgerService:
@@ -1208,6 +1279,12 @@ class TrainingLedgerService:
         sort_by: str = "training_date",
         sort_order: str = "asc",
     ) -> tuple[list[TrainingLedger], int]:
+        # 排除已离职员工的培训记录
+        from app.modules.hr.models import OnboardingRecord
+        departed_subq = select(OnboardingRecord.employee_number).where(
+            OnboardingRecord.is_deleted == False,
+            OnboardingRecord.is_employed == "否",
+        )
         return await self.repo.list_records(
             employee_number=employee_number,
             date_from=date_from,
@@ -1216,6 +1293,7 @@ class TrainingLedgerService:
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
+            exclude_employee_numbers=departed_subq,
         )
 
     async def create_from_notification(

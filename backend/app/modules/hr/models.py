@@ -659,6 +659,11 @@ class OnboardingRecord(BaseModel):
         JSON, nullable=True, comment="备注（多选）"
     )
 
+    # ─── Source ───
+    source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="来源: feishu/approval"
+    )
+
     # ─── Feishu sync metadata ───
     feishu_record_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="飞书多维表格 record_id"
@@ -721,6 +726,15 @@ class AnnualTrainingPlanItem(BaseModel):
     training_method: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="培训方式"
     )
+    location: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="培训地点"
+    )
+    assessment_method: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="考核方式"
+    )
+    notes: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="注意事项"
+    )
     training_hours: Mapped[float | None] = mapped_column(nullable=True, comment="培训学时")
     confirmer: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="确认者"
@@ -767,6 +781,39 @@ class HrTrainer(BaseModel):
     remarks: Mapped[str | None] = mapped_column(Text)
     is_primary_trainer: Mapped[bool] = mapped_column(default=False, server_default="false")
     admin: Mapped[str | None] = mapped_column(String(64))
+
+
+# ─── Department Training Personnel ───
+
+
+class DeptTrainingPersonnel(BaseModel):
+    """部门培训人员配置表：按部门配置培训管理员、部门负责人、一级培训师"""
+
+    __tablename__ = "dept_training_personnel"
+    __table_args__ = (
+        Index("ix_dtp_department", "department"),
+        Index("ix_dtp_display_department", "display_department"),
+        {"schema": "hr"},
+    )
+
+    display_department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="体现部门"
+    )
+    variety: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="品种"
+    )
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="部门"
+    )
+    training_admin: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="培训管理员（逗号分隔多人）"
+    )
+    department_head: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="部门负责人"
+    )
+    level1_trainer: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="一级培训师"
+    )
 
 
 # ─── SOP Catalog ───
@@ -841,3 +888,26 @@ class PositionTraining(BaseModel):
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="排序"
     )
+
+
+class ExamPaper(BaseModel):
+    """AI 生成/手工组卷的笔试试卷，可保存后复用下载。"""
+    __tablename__ = "exam_papers"
+    __table_args__ = (
+        Index("ix_exam_papers_department", "department"),
+        Index("ix_exam_papers_subject", "subject"),
+        {"schema": "hr"},
+    )
+
+    subject: Mapped[str] = mapped_column(String(256), nullable=False, comment="培训内容/主题")
+    department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训部门")
+    training_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="培训日期")
+    training_method: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="培训方式")
+    questions: Mapped[dict | None] = mapped_column(JSON, nullable=True, comment="题目快照")
+    full_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default="100")
+    pass_line: Mapped[int] = mapped_column(Integer, nullable=False, default=60, server_default="60")
+    choice_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    true_false_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    multi_choice_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    fill_blank_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="AI生成", server_default="AI生成")

@@ -98,12 +98,8 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
     _set_cell_text(table.rows[3].cells[1], str(data.training_date) if data.training_date else "")
 
 
-def _fill_employee_rows(table, employee_names: list[str], department: str) -> None:
-    """Clone Row 5 for each employee and fill name + department.
-
-    Uses python-docx's proper API (add_row + merge) rather than raw XML
-    manipulation, to avoid encoding corruption.
-    """
+def _fill_employee_rows(table, employee_names: list[str], employee_departments: dict[str, str], default_department: str) -> None:
+    """Clone Row 5 for each employee and fill name + department."""
     if len(table.rows) < 7:
         return
 
@@ -111,20 +107,13 @@ def _fill_employee_rows(table, employee_names: list[str], department: str) -> No
     footer_row = table.rows[6]
 
     for name in employee_names:
-        # Clone the template row using python-docx's _tbl API
         new_tr = copy.deepcopy(template_row._tr)
-        # Insert the new row before the footer
         footer_row._tr.addprevious(new_tr)
-
-        # Now access the new row via python-docx (it's now the row just before footer)
-        # The new row is at index len(table.rows) - 2 (since footer is last)
         new_row = table.rows[len(table.rows) - 2]
-        # Set name in cell 0, department in cell 1
         _set_cell_text(new_row.cells[0], name)
-        _set_cell_text(new_row.cells[1], department)
-        # Cell 2 is a ghost from merge, cell 3 is signature — leave empty
+        _set_cell_text(new_row.cells[1], employee_departments.get(name, default_department))
+        # Cell 2 merge ghost, cell 3 signature — empty
 
-    # Remove the original template row
     table._tbl.remove(template_row._tr)
 
 
@@ -179,7 +168,7 @@ def generate_training_sign_in_sheet(data: TrainingSignInSheetInput) -> BytesIO:
 
     first_names = data.employee_names[:EMPLOYEES_PER_PAGE]
     _fill_metadata(output_table, data)
-    _fill_employee_rows(output_table, first_names, data.department)
+    _fill_employee_rows(output_table, first_names, data.employee_departments, data.department)
 
     # Remove trainer signature row for non-last pages (it only appears on the final page)
     # The footer is always the LAST row after _fill_employee_rows
@@ -204,7 +193,7 @@ def generate_training_sign_in_sheet(data: TrainingSignInSheetInput) -> BytesIO:
         temp_doc = Document(str(template_path))
         temp_table = temp_doc.tables[0]
         _fill_metadata(temp_table, data)
-        _fill_employee_rows(temp_table, page_names, data.department)
+        _fill_employee_rows(temp_table, page_names, data.employee_departments, data.department)
         if not is_last:
             # Footer is the last row after employee rows are added
             last_row = temp_table.rows[-1]

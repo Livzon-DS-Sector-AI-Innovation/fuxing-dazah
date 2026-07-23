@@ -571,7 +571,6 @@ export interface Candidate {
   resume_url?: string
   status?: string
   recommendation_level?: string
-  match_report?: string
   feishu_record_id?: string
   feishu_sync_status?: string
   feishu_sync_error?: string

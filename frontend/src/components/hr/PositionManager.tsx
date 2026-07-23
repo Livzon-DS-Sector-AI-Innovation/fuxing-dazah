@@ -6,7 +6,7 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
-interface PositionRow { department: string; name: string }
+interface PositionRow { department: string; name: string; categories?: string[] }
 
 export default function PositionManager() {
   const [positions, setPositions] = useState<PositionRow[]>([])
@@ -22,7 +22,7 @@ export default function PositionManager() {
       const res = await fetch(`${API_BASE}/api/v1/hr/positions${deptParam}`, { credentials: 'include' })
       if (!res.ok) { setPositions([]); return }
       const data = (await res.json()).data || []
-      setPositions(data.map((p: any) => ({ department: p.department, name: p.name })))
+      setPositions(data.map((p: any) => ({ department: p.department, name: p.name, categories: p.categories || [] })))
     } catch { setPositions([]) }
     finally { setLoading(false) }
   }
@@ -77,9 +77,11 @@ export default function PositionManager() {
           loading={loading} dataSource={positions} size="small"
           pagination={{ pageSize: 20, showTotal: t => `共 ${t} 个岗位` }}
           columns={[
-            { title: '部门', dataIndex: 'department', width: 200, filters: deptOptions, onFilter: (v, r: PositionRow) => r.department === v,
+            { title: '部门', dataIndex: 'department', width: 200, filters: deptOptions.map(d => ({ text: d.label, value: d.value })), onFilter: (v, r: PositionRow) => r.department === v,
               render: (v: string) => <Tag color="blue">{v}</Tag> },
             { title: '岗位名称', dataIndex: 'name' },
+            { title: '关联培训大类', dataIndex: 'categories', width: 300,
+              render: (cats: string[]) => cats?.length ? cats.map(c => <Tag key={c} className="mb-1">{c}</Tag>) : <span className="text-gray-400">-</span> },
             {
               title: '操作', width: 80, align: 'center',
               render: (_: any, r: PositionRow) => (
