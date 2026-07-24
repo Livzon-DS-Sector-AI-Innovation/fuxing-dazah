@@ -103,7 +103,7 @@ export async function generateExamQuestions(
     formData.append('fill_blank_count', String(config.fill_blank_count ?? 0))
   }
 
-  const res = await fetch(`${BACKEND_BASE}/api/v1/ai/exam/generate`, {
+  const res = await fetch(`${BACKEND_BASE}/api/v1/hr/exam/generate`, {
     method: 'POST',
     body: formData,
   })
@@ -117,7 +117,7 @@ export async function generateExamQuestions(
 }
 
 export async function exportExam(data: ExamExportData): Promise<Blob> {
-  const res = await fetch(`${BACKEND_BASE}/api/v1/ai/exam/export`, {
+  const res = await fetch(`${BACKEND_BASE}/api/v1/hr/exam/export`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
