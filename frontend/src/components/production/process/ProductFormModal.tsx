@@ -50,9 +50,10 @@ export function ProductFormModal({ open, product, onClose }: Props) {
       <Form form={form} layout="vertical">
         <Form.Item
           name="product_code"
-          label="产品编码（可选）"
+          label="产品编码"
+          extra="唯一且不可修改，创建后无法变更"
         >
-          <Input maxLength={50} />
+          <Input maxLength={50} disabled={!!product} placeholder="可选，创建后不可修改" />
         </Form.Item>
         <Form.Item
           name="product_name"

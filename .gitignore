@@ -1,4 +1,6 @@
 .claude
 .mcp.json
+.DS_Store
 CLAUDE.local.md
 dazah-agent
+prompt.md

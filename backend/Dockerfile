@@ -3,6 +3,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV UV_PYTHON_PREFERENCE=only-system
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
