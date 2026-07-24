@@ -772,16 +772,6 @@ async def generate_assessment_questions(
                     result = subprocess.run(["catdoc", tmp_path], capture_output=True, timeout=30)
                     if result.returncode == 0:
                         text = result.stdout.decode("utf-8", errors="ignore")
-                elif shutil.which("python3") or shutil.which("python"):
-                    # 纯 Python 回退：尝试用 olefile + 简单文本提取
-                    try:
-                        import olefile
-                        ole = olefile.OleFileIO(tmp_path)
-                        stream = ole.openstream('WordDocument')
-                        raw = stream.read()
-                        text = raw.decode("utf-8", errors="ignore")[:5000]
-                    except Exception:
-                        pass
                 if not text:
                     text = "（提示：服务器未安装 .doc 转换工具，请上传 .docx 或 .txt 格式文件）"
             finally:

@@ -96,6 +96,61 @@ async def delete_candidate(cid: UUID, service: CandidateService = Depends(get_se
     return success_response(message="已删除")
 
 
+# ─── 推送审核 ───
+
+
+@router.get("/candidates/pending-review", summary="待我审核的候选人列表")
+async def list_pending_review(
+    reviewer: str | None = Query(None, description="审核人姓名"),
+    service: CandidateService = Depends(get_service),
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.schemas import CandidateReviewResponse
+    from app.modules.hr.service import CandidateReviewService
+    rv_service = CandidateReviewService(session)
+    rows = await rv_service.list_pending(reviewer=reviewer)
+    return success_response(data=[{
+        "review": CandidateReviewResponse.model_validate(row["review"]).model_dump(mode="json"),
+        "candidate": CandidateResponse.model_validate(row["candidate"]).model_dump(mode="json"),
+        "job_requirement": {"id": str(row["job_requirement"].id), "position_name": row["job_requirement"].position_name, "department": row["job_requirement"].department} if row["job_requirement"] else None,
+    } for row in rows])
+
+
+@router.post("/candidates/{cid}/push-review", summary="推送候选人给用人部门审核")
+async def push_review(
+    cid: UUID,
+    payload: dict,
+    service: CandidateService = Depends(get_service),
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.service import CandidateReviewService
+    rv_service = CandidateReviewService(session)
+    try:
+        r = await rv_service.push(cid, payload.get("pushed_by", "HR"), payload.get("push_note"))
+        return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/candidates/{cid}/decide-review", summary="审核候选人")
+async def decide_review(
+    cid: UUID,
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.schemas import CandidateReviewResponse
+    from app.modules.hr.service import CandidateReviewService
+    rv_service = CandidateReviewService(session)
+    review_id = payload.get("review_id")
+    if not review_id:
+        raise HTTPException(400, "缺少 review_id")
+    try:
+        r = await rv_service.decide(UUID(review_id), payload.get("decision", "已同意"), payload.get("review_comment"))
+        return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.put("/candidates/{cid}/status", summary="候选人状态流转")
 async def transition_status(cid: UUID, payload: CandidateStatusTransition, service: CandidateService = Depends(get_service)):
     try:

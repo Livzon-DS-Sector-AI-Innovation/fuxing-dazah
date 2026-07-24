@@ -200,6 +200,10 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     # 面试管理
     (r"/interviews", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                       "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
+    # 推送审核
+    (r"/candidates/pending-review", "hr:recruitment:read"),
+    (r"/candidates/.*/push-review", "hr:recruitment:manage"),
+    (r"/candidates/.*/decide-review", "hr:recruitment:manage"),
 ]
 
 

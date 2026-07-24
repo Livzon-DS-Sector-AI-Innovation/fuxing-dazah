@@ -1,11 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Tag, Upload } from 'antd'
+import { useRouter } from 'next/navigation'
+import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Select, Space, Tag, Upload } from 'antd'
 import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons'
 import CandidateCardView from './CandidateCardView'
 import {
-  fetchPositions, fetchCandidates, fetchJobRequirements, API_BASE,
+  fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews, API_BASE,
 } from '@/lib/hr'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
@@ -16,6 +17,7 @@ import type { JobRequirement, Candidate } from '@/types/hr'
 
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
+  const router = useRouter()
   const [jobs, setJobs] = useState<JobRequirement[]>([])
   const [selectedJob, setSelectedJob] = useState<JobRequirement | null>(null)
   const [candidates, setCandidates] = useState<Candidate[]>([])
@@ -32,6 +34,20 @@ export default function RecruitmentClient() {
   const [offerCandidate, setOfferCandidate] = useState<Candidate | null>(null)
   const [offerForm] = Form.useForm()
   const [offerSending, setOfferSending] = useState(false)
+
+  // 待我审核
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews'>('jobs')
+  const [pendingReviews, setPendingReviews] = useState<any[]>([])
+  const [reviewsLoading, setReviewsLoading] = useState(false)
+
+  const loadPendingReviews = useCallback(async () => {
+    setReviewsLoading(true)
+    try {
+      const r = await fetchPendingReviews()
+      setPendingReviews(r.data || [])
+    } catch { setPendingReviews([]) }
+    finally { setReviewsLoading(false) }
+  }, [])
 
   useEffect(() => {
     fetchPositions().then(d => setPosOptions(d.map((p: any) => ({ value: `${p.department}|||${p.name}`, label: `${p.name} (${p.department})` })))).catch(() => { })
@@ -158,13 +174,43 @@ export default function RecruitmentClient() {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">招聘管理</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">岗位需求 → 简历匹配 → 筛选 → 面试记录 → AI评估 → Offer</p>
+        <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">招聘管理</h1>
+        <div className="flex gap-2">
+          <Button type={activeTab === 'reviews' ? 'primary' : 'default'} onClick={() => { setActiveTab('reviews'); loadPendingReviews() }}>
+            待我审核 {pendingReviews.length > 0 && `(${pendingReviews.length})`}
+          </Button>
+          <Button type={activeTab === 'jobs' ? 'primary' : 'default'} onClick={() => setActiveTab('jobs')}>岗位招聘</Button>
+          {activeTab === 'jobs' && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>}
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>
       </div>
 
+      {activeTab === 'reviews' && (
+        <Card title="待我审核的候选人" loading={reviewsLoading}>
+          {pendingReviews.length === 0 ? <Empty description="暂无待审核候选人" className="py-12" /> : (
+            <div className="space-y-3">
+              {pendingReviews.map((item: any) => {
+                const c = item.candidate || {}; const jd = item.job_requirement; const rv = item.review || {}
+                return (
+                  <Card key={c.id} size="small" hoverable className="cursor-pointer"
+                    onClick={() => router.push(`/hr/recruitment/${c.id}`)}
+                    extra={<Tag color="orange">待审核</Tag>}
+                  >
+                    <div className="font-medium">{c.name} · {c.gender || '-'} · {c.education || '-'}</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {c.school} {c.major} · {c.work_years != null ? `${c.work_years}年经验` : ''}
+                      {c.current_company ? ` · ${c.current_company}` : ''}
+                    </div>
+                    <div className="text-xs text-gray-500">岗位：{jd?.position_name || c.position} · {jd?.department || c.department}</div>
+                    {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeTab === 'jobs' && (<>
       <div className="flex gap-4">
         <div className="w-72 shrink-0">
           <Card size="small" title={`岗位需求 (${jobs.length})`}>
@@ -259,6 +305,7 @@ export default function RecruitmentClient() {
           )}
         </div>
       </Modal>
+      </>)}
     </div>
   )
 }

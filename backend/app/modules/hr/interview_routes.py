@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
+from app.modules.hr.deps import HrAccessContext, require_hr_access
 from app.modules.hr.schemas import (
     AiEvaluationResponse,
     InterviewCreate,
@@ -30,31 +31,31 @@ def get_ai_service(session: AsyncSession = Depends(get_db)) -> AiEvaluationServi
 
 
 @router.get("/candidates/{cid}/interviews", summary="候选人面试列表")
-async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service)):
+async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     rows = await service.list_by_candidate(cid)
     return success_response(data=[InterviewResponse.model_validate(r).model_dump(mode="json") for r in rows])
 
 
 @router.post("/interviews", summary="安排面试")
-async def create_interview(payload: InterviewCreate, service: InterviewService = Depends(get_interview_service)):
+async def create_interview(payload: InterviewCreate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     r = await service.create(payload)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="面试已安排", status_code=201)
 
 
 @router.get("/interviews/{interview_id}", summary="面试详情")
-async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service)):
+async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     r = await service.get(interview_id)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"))
 
 
 @router.put("/interviews/{interview_id}", summary="更新面试")
-async def update_interview(interview_id: UUID, payload: InterviewUpdate, service: InterviewService = Depends(get_interview_service)):
+async def update_interview(interview_id: UUID, payload: InterviewUpdate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     r = await service.update(interview_id, payload)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="已更新")
 
 
 @router.delete("/interviews/{interview_id}", summary="取消面试")
-async def delete_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service)):
+async def delete_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     await service.delete(interview_id)
     return success_response(message="已取消")
 

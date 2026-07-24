@@ -1105,3 +1105,25 @@ class CandidateAiEvaluation(BaseModel):
     transcript_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, comment="评估时逐字稿快照")
     model_version: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="AI模型版本")
     evaluated_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="评估时间")
+
+
+# ─── 招聘：候选人推送审核 ───
+
+
+class CandidateReview(BaseModel):
+    __tablename__ = "candidate_reviews"
+    __table_args__ = (
+        Index("ix_cr_candidate_id", "candidate_id"),
+        Index("ix_cr_status", "status"),
+        Index("ix_cr_reviewer", "reviewer"),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
+    pushed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="推送人(HR)")
+    push_note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="推送备注")
+    reviewer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="审核人(用人部门负责人)")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="待审核", server_default="待审核", comment="待审核/已同意/已拒绝")
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="审核意见")
+    reviewed_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="审核时间")

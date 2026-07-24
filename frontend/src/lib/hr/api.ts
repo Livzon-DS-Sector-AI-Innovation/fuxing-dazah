@@ -504,6 +504,14 @@ export async function fetchInterviewEvaluation(interviewId: string): Promise<{ d
   return res.json()
 }
 
+export async function fetchPendingReviews(reviewer?: string): Promise<{ data: any[] }> {
+  const sp = new URLSearchParams()
+  if (reviewer) sp.set('reviewer', reviewer)
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/pending-review?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取待审核列表失败')
+  return res.json()
+}
+
 // ─── Position APIs ───
 
 export interface PositionOption {

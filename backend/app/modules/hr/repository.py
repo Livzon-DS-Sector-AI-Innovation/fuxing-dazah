@@ -13,6 +13,7 @@ from app.modules.hr.models import (
     AnnualTrainingPlanItem,
     Candidate,
     CandidateAiEvaluation,
+    CandidateReview,
     CandidateStatusLog,
     DepartureRecord,
     Employee,
@@ -1051,6 +1052,43 @@ class CandidateAiEvaluationRepository:
         result = await self.session.execute(
             select(CandidateAiEvaluation).where(CandidateAiEvaluation.id == evaluation.id)
         )
+        return result.scalar_one()
+
+
+class CandidateReviewRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_pending(self, *, reviewer: str | None = None) -> list[CandidateReview]:
+        stmt = select(CandidateReview).where(CandidateReview.is_deleted.is_(False), CandidateReview.status == "待审核")
+        if reviewer:
+            stmt = stmt.where(CandidateReview.reviewer == reviewer)
+        stmt = stmt.order_by(desc(CandidateReview.created_at))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_by_candidate(self, candidate_id: UUID) -> CandidateReview | None:
+        result = await self.session.execute(
+            select(CandidateReview).where(CandidateReview.candidate_id == candidate_id, CandidateReview.is_deleted.is_(False))
+            .order_by(desc(CandidateReview.created_at))
+        )
+        return result.scalars().first()
+
+    async def get_by_id(self, review_id: UUID) -> CandidateReview | None:
+        result = await self.session.execute(
+            select(CandidateReview).where(CandidateReview.id == review_id, CandidateReview.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, review: CandidateReview) -> CandidateReview:
+        self.session.add(review)
+        await self.session.flush()
+        await self.session.refresh(review)
+        return review
+
+    async def update(self, review: CandidateReview) -> CandidateReview:
+        await self.session.flush()
+        result = await self.session.execute(select(CandidateReview).where(CandidateReview.id == review.id))
         return result.scalar_one()
 
 

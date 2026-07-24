@@ -1064,3 +1064,29 @@ class CandidateComparisonItem(BaseModel):
     interviews: list[InterviewResponse] = Field(default_factory=list)
     recommendation_level: str | None = None
     status: str
+
+
+# ─── Recruitment: Candidate Review Schemas ───
+
+
+class PushReviewRequest(BaseModel):
+    push_note: str | None = Field(None, description="HR推送备注")
+
+
+class DecideReviewRequest(BaseModel):
+    decision: str = Field(..., max_length=16, description="已同意/已拒绝")
+    review_comment: str | None = Field(None, description="审核意见（拒绝时必填）")
+
+
+class CandidateReviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    pushed_by: str | None = None
+    push_note: str | None = None
+    reviewer: str | None = None
+    status: str
+    review_comment: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None

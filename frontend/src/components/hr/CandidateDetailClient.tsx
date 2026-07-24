@@ -9,7 +9,7 @@ import {
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
-  RobotOutlined, CheckCircleOutlined, ClockCircleOutlined,
+  RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
 } from '@ant-design/icons'
 import type { Candidate, Interview, AiEvaluation } from '@/types/hr'
 import {
@@ -17,10 +17,11 @@ import {
   transitionCandidateStatus,
 } from '@/actions/hr'
 import {
-  fetchCandidateInterviews, fetchInterviewEvaluation, API_BASE,
+  fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews, API_BASE,
 } from '@/lib/hr'
 import {
   createInterview, updateInterview, deleteInterview, evaluateInterview,
+  pushCandidateReview, decideCandidateReview,
 } from '@/actions/hr'
 import AIScoreCard from './AIScoreCard'
 
@@ -64,6 +65,12 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
   // 状态流转
   const [statusUpdating, setStatusUpdating] = useState(false)
+
+  // 推送审核
+  const [pushModalOpen, setPushModalOpen] = useState(false)
+  const [pushForm] = Form.useForm()
+  const [pushLoading, setPushLoading] = useState(false)
+  const [reviewLoading, setReviewLoading] = useState(false)
 
   useEffect(() => {
     const raw = sessionStorage.getItem('candidate_list_context')
@@ -220,6 +227,58 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     '已面试': ['录用中', '已拒绝'],
     '录用中': ['已录用', '已拒绝'],
   }
+  // 推送审核操作
+  const handlePushReview = async () => {
+    const v = await pushForm.validateFields()
+    setPushLoading(true)
+    try {
+      await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note })
+      message.success('已推送至用人部门审核')
+      setPushModalOpen(false); pushForm.resetFields()
+      router.refresh()
+    } catch (err: any) { message.error(err.message || '推送失败') }
+    finally { setPushLoading(false) }
+  }
+
+  const handleDecideReview = async (decision: string) => {
+    let comment = ''
+    if (decision === '已拒绝') {
+      // 不合适时需要填写原因
+      Modal.confirm({
+        title: '确认不合适',
+        content: (
+          <div className="mt-2">
+            <div className="text-sm mb-1">请填写不合适原因：</div>
+            <Input.TextArea id="reject-reason" rows={3} placeholder="简述不合适原因" />
+          </div>
+        ),
+        onOk: async () => {
+          const input = document.getElementById('reject-reason') as HTMLTextAreaElement
+          comment = input?.value || ''
+          if (!comment.trim()) { message.warning('请填写原因'); return Promise.reject() }
+          await doDecide(decision, comment)
+        },
+      })
+    } else {
+      await doDecide(decision)
+    }
+  }
+
+  const doDecide = async (decision: string, comment?: string) => {
+    setReviewLoading(true)
+    try {
+      // 获取最近的review_id
+      const r = await fetch(`${API_BASE}/api/v1/hr/candidates/pending-review`, { credentials: 'include' })
+      const d = await r.json()
+      const myReview = (d.data || []).find((item: any) => item.review?.candidate_id === candidate.id)
+      if (!myReview?.review?.id) { message.error('未找到审核记录'); return }
+      await decideCandidateReview(candidate.id, { review_id: myReview.review.id, decision, review_comment: comment })
+      message.success(decision === '已同意' ? '已同意面试' : '已标记为不合适')
+      router.refresh()
+    } catch (err: any) { message.error(err.message || '操作失败') }
+    finally { setReviewLoading(false) }
+  }
+
   const nextStatuses = statusTransitions[candidate.status || ''] || []
 
   // ─── 基本信息 Tab ───
@@ -296,6 +355,29 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <Select style={{ width: '100%' }} placeholder="选择推荐等级" value={recommendationLevel || undefined}
               onChange={handleUpdateRecommendation} options={recommendationOptions} loading={updating} />
           </div>
+          {/* 推送审核：已筛选状态时显示 */}
+          {candidate.status === '已筛选' && (
+            <div className="mt-2">
+              <Button type="primary" icon={<SendOutlined />} onClick={() => { pushForm.resetFields(); setPushModalOpen(true) }}>
+                推送给用人部门审核
+              </Button>
+            </div>
+          )}
+          {/* 审核决策：待部门审核时显示 */}
+          {candidate.status === '待部门审核' && (
+            <div className="mt-2 p-3 rounded bg-orange-50 border border-orange-200">
+              <div className="text-sm font-medium text-orange-700 mb-2">⏳ 待用人部门审核</div>
+              <div className="flex gap-2">
+                <Button type="primary" icon={<CheckCircleOutlined />}
+                  loading={reviewLoading} onClick={() => handleDecideReview('已同意')}>
+                  同意面试
+                </Button>
+                <Button danger loading={reviewLoading} onClick={() => handleDecideReview('已拒绝')}>
+                  不合适
+                </Button>
+              </div>
+            </div>
+          )}
           {nextStatuses.length > 0 && (
             <div>
               <h3 className="text-sm font-medium mb-2">状态流转</h3>
@@ -395,6 +477,19 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
               <Form.Item name="notes" label="备注"><Input.TextArea rows={2} /></Form.Item>
             </>
           )}
+        </Form>
+      </Modal>
+
+      {/* 推送审核 Modal */}
+      <Modal title="推送候选人给用人部门" open={pushModalOpen} onCancel={() => setPushModalOpen(false)}
+        onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
+        <Form form={pushForm} layout="vertical" className="mt-2">
+          <div className="text-sm text-gray-500 mb-3">
+            推送至：<Tag>{candidate.department}负责人</Tag>
+          </div>
+          <Form.Item name="push_note" label="推送备注（选填）">
+            <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

@@ -581,3 +581,33 @@ export async function sendOfferAction(candidateId: string, formData: FormData) {
   revalidatePath('/hr/recruitment')
   return res.json()
 }
+
+// ─── 招聘：推送审核 ───
+
+export async function pushCandidateReview(candidateId: string, data: { pushed_by: string; push_note?: string }) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/push-review`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '推送审核失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function decideCandidateReview(candidateId: string, data: { review_id: string; decision: string; review_comment?: string }) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/decide-review`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '审核操作失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}

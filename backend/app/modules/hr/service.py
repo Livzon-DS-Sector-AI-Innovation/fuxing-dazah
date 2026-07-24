@@ -13,6 +13,7 @@ from app.modules.hr.models import (
     AnnualTrainingPlanItem,
     Candidate,
     CandidateAiEvaluation,
+    CandidateReview,
     CandidateStatusLog,
     DepartureRecord,
     Employee,
@@ -31,6 +32,7 @@ from app.modules.hr.repository import (
     AnnualTrainingPlanRepository,
     CandidateAiEvaluationRepository,
     CandidateRepository,
+    CandidateReviewRepository,
     CandidateStatusLogRepository,
     DepartmentRepository,
     DepartureRecordRepository,
@@ -49,6 +51,8 @@ from app.modules.hr.schemas import (
     AnnualTrainingPlanUpdate,
     CandidateCreate,
     CandidateUpdate,
+    DecideReviewRequest,
+    PushReviewRequest,
     DepartmentCreate,
     DepartmentUpdate,
     DepartureRecordCreate,
@@ -1436,7 +1440,8 @@ class AnnualTrainingPlanItemService:
 # 候选人状态流转规则
 _CANDIDATE_TRANSITIONS: dict[str, set[str]] = {
     "待筛选": {"已筛选", "已拒绝"},
-    "已筛选": {"面试中", "已拒绝"},
+    "已筛选": {"待部门审核", "已拒绝"},
+    "待部门审核": {"面试中", "已拒绝"},
     "面试中": {"已面试", "已拒绝"},
     "已面试": {"录用中", "已拒绝"},
     "录用中": {"已录用", "已拒绝"},
@@ -1663,3 +1668,114 @@ class AiEvaluationService:
 
 评分标准：8-10优秀/强烈推荐，6-7良好/可考虑，4-5一般/需对比，1-3不推荐。
 评分必须基于面试逐字稿中的实际表现，不要假设简历内容即为真实能力。"""
+
+
+# ─── Candidate Review Service ───
+
+
+class CandidateReviewService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.repo = CandidateReviewRepository(session)
+        self.candidate_repo = CandidateRepository(session)
+        self.jd_repo = JobRequirementRepository(session)
+
+    async def list_pending(self, *, reviewer: str | None = None) -> list[dict]:
+        reviews = await self.repo.list_pending(reviewer=reviewer)
+        result = []
+        for rv in reviews:
+            c = await self.candidate_repo.get_by_id(rv.candidate_id)
+            if not c:
+                continue
+            jd = None
+            if rv.job_requirement_id:
+                jd = await self.jd_repo.get_by_id(rv.job_requirement_id)
+            result.append({
+                "review": rv,
+                "candidate": c,
+                "job_requirement": jd,
+            })
+        return result
+
+    async def push(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None) -> CandidateReview:
+        c = await self.candidate_repo.get_by_id(candidate_id)
+        if not c:
+            raise NotFoundException("候选人", str(candidate_id))
+        if not c.job_requirement_id:
+            raise ValueError("该候选人未关联岗位需求，无法推送审核")
+
+        jd = await self.jd_repo.get_by_id(c.job_requirement_id)
+        reviewer = jd.owner if jd and jd.owner else None
+        if not reviewer:
+            raise ValueError("岗位需求未设置负责人，无法推送审核")
+
+        rv = CandidateReview(
+            candidate_id=candidate_id,
+            job_requirement_id=c.job_requirement_id,
+            pushed_by=pushed_by,
+            push_note=push_note,
+            reviewer=reviewer,
+            status="待审核",
+        )
+        result = await self.repo.create(rv)
+
+        # 候选人状态流转
+        c.status = "待部门审核"
+        await self.candidate_repo.update(c)
+        self.candidate_repo.session.add(CandidateStatusLog(
+            candidate_id=candidate_id,
+            from_status="已筛选",
+            to_status="待部门审核",
+            remark=f"推送至{reviewer}审核",
+        ))
+
+        # 发送飞书消息卡片给审核人
+        await self._send_review_card(result, c, jd, push_note)
+
+        return result
+
+    async def decide(self, review_id: UUID, decision: str, review_comment: str | None = None) -> CandidateReview:
+        rv = await self.repo.get_by_id(review_id)
+        if not rv:
+            raise NotFoundException("审核记录", str(review_id))
+        if rv.status != "待审核":
+            raise ValueError("该审核已处理")
+
+        rv.status = decision
+        rv.review_comment = review_comment
+        rv.reviewed_at = datetime.now()
+        result = await self.repo.update(rv)
+
+        # 候选人状态更新
+        c = await self.candidate_repo.get_by_id(rv.candidate_id)
+        if c:
+            new_status = "面试中" if decision == "已同意" else "已拒绝"
+            c.status = new_status
+            await self.candidate_repo.update(c)
+            self.candidate_repo.session.add(CandidateStatusLog(
+                candidate_id=c.id,
+                from_status="待部门审核",
+                to_status=new_status,
+                remark=f"审核人{decision}" + (f"：{review_comment}" if review_comment else ""),
+            ))
+
+        # 通知HR审核结果
+        if rv.pushed_by:
+            await self._send_decision_notification(result, c, decision, review_comment)
+
+        return result
+
+    async def _send_review_card(self, review: CandidateReview, candidate: Candidate, jd: JobRequirement | None, push_note: str | None) -> None:
+        """发送飞书消息卡片给审核人"""
+        try:
+            from app.modules.hr.feishu_review_service import send_review_card
+            await send_review_card(review, candidate, jd, push_note)
+        except Exception as e:
+            logger.warning(f"发送飞书审核卡片失败: {e}")
+
+    async def _send_decision_notification(self, review: CandidateReview, candidate: Candidate | None, decision: str, comment: str | None) -> None:
+        """通知HR审核结果"""
+        try:
+            from app.modules.hr.feishu_review_service import send_decision_notification
+            await send_decision_notification(review, candidate, decision, comment)
+        except Exception as e:
+            logger.warning(f"发送飞书审核通知失败: {e}")
