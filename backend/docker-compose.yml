@@ -17,6 +17,7 @@ services:
       - ./alembic.ini:/app/alembic.ini:ro
       - ./logs:/app/logs
       - ./uploads:/app/uploads
+      - ./assets:/app/assets:ro
     command: >
       sh -c "uv run alembic upgrade head &&
              uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
