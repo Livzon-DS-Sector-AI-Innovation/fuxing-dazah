@@ -6,7 +6,7 @@ import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons'
 import CandidateCardView from './CandidateCardView'
 import { fetchPositions } from '@/lib/api/hr'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api/hr'
 
 interface JobReq {
   id: string; position_name: string; department: string

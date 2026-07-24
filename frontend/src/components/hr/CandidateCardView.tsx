@@ -27,7 +27,7 @@ export default function CandidateCardView({
   extraActions,
 }: CandidateCardViewProps) {
   const router = useRouter()
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
   const handleCardClick = (id: string) => {
     const ids = candidates.map((c) => c.id)

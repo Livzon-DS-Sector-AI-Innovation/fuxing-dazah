@@ -26,7 +26,7 @@ export default function CandidateListView({
   onDelete,
 }: CandidateListViewProps) {
   const router = useRouter()
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
   const handleRowClick = (record: Candidate) => {
     const ids = candidates.map((c) => c.id)
