@@ -1,10 +1,9 @@
 /**
  * HR 模块 AI 出题 API
- * 从 lib/api/ai.ts 提取，仅包含 HR 出题相关函数
  */
 import { ExamGenerateResponse, ExamExportData } from '@/types/hr'
 
-const BACKEND_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:8000'
+const BACKEND_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
 export async function generateExamQuestions(
   file: File,
@@ -22,6 +21,7 @@ export async function generateExamQuestions(
   const res = await fetch(`${BACKEND_BASE}/api/v1/hr/exam/generate`, {
     method: 'POST',
     body: formData,
+    credentials: 'include',
   })
 
   if (!res.ok) {
@@ -37,6 +37,7 @@ export async function exportExam(data: ExamExportData): Promise<Blob> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
+    credentials: 'include',
   })
 
   if (!res.ok) {
