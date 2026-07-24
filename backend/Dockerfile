@@ -5,9 +5,11 @@ WORKDIR /app
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV UV_PYTHON_PREFERENCE=only-system
 
-# 安装 Node.js（lark-cli 依赖）
+# 安装 Node.js + 中文字体 + WeasyPrint 系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl gnupg && \
+    curl gnupg fonts-noto-cjk \
+    libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+    libffi-dev libcairo2 shared-mime-info && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g @larksuite/cli && \

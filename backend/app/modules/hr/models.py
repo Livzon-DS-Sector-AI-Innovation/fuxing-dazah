@@ -1,9 +1,9 @@
 """HR business ORM models live here."""
 
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.shared.base_model import BaseModel
@@ -971,3 +971,137 @@ class TransferRecord(BaseModel):
     reason: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="原因")
     approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="审批单号")
     remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")
+
+
+# ─── 招聘：岗位需求 ───
+
+
+class JobRequirement(BaseModel):
+    __tablename__ = "job_requirements"
+    __table_args__ = (
+        Index("ix_job_req_department", "department"),
+        Index("ix_job_req_status", "status"),
+        {"schema": "hr"},
+    )
+
+    position_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="岗位名称")
+    department: Mapped[str] = mapped_column(String(64), nullable=False, comment="需求部门")
+    headcount: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1", comment="招聘人数")
+    hired_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="已入职人数")
+    requirements: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位要求描述")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="招聘中", server_default="招聘中", comment="招聘中/已关闭")
+    urgency: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="紧急程度")
+    owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="招聘负责人")
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True, comment="期望到岗日期")
+
+
+# ─── 招聘：候选人 ───
+
+
+class Candidate(BaseModel):
+    __tablename__ = "candidates"
+    __table_args__ = (
+        Index("ix_candidates_status", "status"),
+        Index("ix_candidates_email", "email"),
+        Index("ix_candidates_job_requirement_id", "job_requirement_id"),
+        {"schema": "hr"},
+    )
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="姓名")
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="手机")
+    email: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="邮箱")
+    position: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="应聘岗位")
+    department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="部门")
+    gender: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="性别")
+    school: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="学校")
+    education: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="学历")
+    major: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="专业")
+    graduation_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="毕业时间")
+    resume_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="简历文件路径")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="待筛选", server_default="待筛选", comment="状态: 待筛选/已筛选/面试中/已面试/录用中/已录用/已拒绝")
+    recommendation_level: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="推荐等级")
+    match_report: Mapped[str | None] = mapped_column(Text, nullable=True, comment="匹配报告")
+    job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
+    candidate_type: Mapped[str] = mapped_column(String(8), nullable=False, default="职能", server_default="职能", comment="候选人类型: 普工/职能")
+    offer_status: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="Offer状态: 已发送/已接受/已拒绝/已过期")
+    offer_sent_at: Mapped[date | None] = mapped_column(Date, nullable=True, comment="Offer发送时间")
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="简历来源")
+    expected_salary: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="期望薪资")
+    current_company: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="当前公司")
+    work_years: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="工作年限")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
+# ─── 招聘：候选人状态流转日志 ───
+
+
+class CandidateStatusLog(BaseModel):
+    __tablename__ = "candidate_status_logs"
+    __table_args__ = (
+        Index("ix_csl_candidate_id", "candidate_id"),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="原状态")
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False, comment="新状态")
+    operator: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="操作人")
+    remark: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="备注")
+
+
+# ─── 招聘：面试记录 ───
+
+
+class Interview(BaseModel):
+    __tablename__ = "interviews"
+    __table_args__ = (
+        Index("ix_interviews_candidate_id", "candidate_id"),
+        Index("ix_interviews_interview_date", "interview_date"),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
+    interview_type: Mapped[str] = mapped_column(String(16), nullable=False, default="初试", server_default="初试", comment="初试/复试/终试")
+    interview_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="面试日期")
+    interviewer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="面试官")
+    location: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="面试地点")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="待安排", server_default="待安排", comment="待安排/已安排/已完成/已取消")
+    transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="面试逐字稿（HR粘贴）")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
+# ─── 招聘：AI 面试评估 ───
+
+
+class CandidateAiEvaluation(BaseModel):
+    __tablename__ = "candidate_ai_evaluations"
+    __table_args__ = (
+        Index("ix_cae_candidate_id", "candidate_id"),
+        Index("ix_cae_interview_id", "interview_id"),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
+    interview_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联面试记录")
+
+    # 评分（1-10）
+    jd_match_score: Mapped[float | None] = mapped_column(nullable=True, comment="JD匹配度")
+    professional_score: Mapped[float | None] = mapped_column(nullable=True, comment="专业能力")
+    communication_score: Mapped[float | None] = mapped_column(nullable=True, comment="沟通表达")
+    learning_score: Mapped[float | None] = mapped_column(nullable=True, comment="学习能力")
+    stability_score: Mapped[float | None] = mapped_column(nullable=True, comment="稳定性评估")
+    overall_score: Mapped[float | None] = mapped_column(nullable=True, comment="综合评分")
+
+    # 文本评价
+    strengths: Mapped[str | None] = mapped_column(Text, nullable=True, comment="优势")
+    weaknesses: Mapped[str | None] = mapped_column(Text, nullable=True, comment="不足")
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True, comment="AI综合评价")
+    risk_flags: Mapped[str | None] = mapped_column(Text, nullable=True, comment="风险提示")
+
+    # 快照与元数据
+    jd_text_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, comment="评估时JD快照")
+    transcript_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True, comment="评估时逐字稿快照")
+    model_version: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="AI模型版本")
+    evaluated_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="评估时间")

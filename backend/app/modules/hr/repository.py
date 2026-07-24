@@ -4,16 +4,21 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import asc, delete, desc, func, select, text
+from sqlalchemy import asc, delete, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
+    Candidate,
+    CandidateAiEvaluation,
+    CandidateStatusLog,
     DepartureRecord,
     Employee,
     HrDepartment,
+    Interview,
+    JobRequirement,
     OffboardingRecord,
     OnboardingRecord,
     Team,
@@ -871,3 +876,197 @@ class AnnualTrainingPlanItemRepository:
             delete(AnnualTrainingPlanItem).where(AnnualTrainingPlanItem.plan_id == plan_id)
         )
         await self.session.flush()
+
+
+# ─── Recruitment Repositories ───
+
+
+class JobRequirementRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_all(self, *, status: str | None = None) -> list[JobRequirement]:
+        stmt = select(JobRequirement).where(JobRequirement.is_deleted.is_(False))
+        if status:
+            stmt = stmt.where(JobRequirement.status == status)
+        stmt = stmt.order_by(desc(JobRequirement.created_at))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_by_id(self, req_id: UUID) -> JobRequirement | None:
+        result = await self.session.execute(
+            select(JobRequirement).where(JobRequirement.id == req_id, JobRequirement.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, req: JobRequirement) -> JobRequirement:
+        self.session.add(req)
+        await self.session.flush()
+        await self.session.refresh(req)
+        return req
+
+    async def update(self, req: JobRequirement) -> JobRequirement:
+        await self.session.flush()
+        result = await self.session.execute(select(JobRequirement).where(JobRequirement.id == req.id))
+        return result.scalar_one()
+
+    async def soft_delete(self, req_id: UUID) -> None:
+        await self.session.execute(text("UPDATE hr.job_requirements SET is_deleted = true WHERE id = :id"), {"id": req_id})
+        await self.session.flush()
+
+    async def increment_hired_count(self, req_id: UUID) -> None:
+        await self.session.execute(text("UPDATE hr.job_requirements SET hired_count = hired_count + 1 WHERE id = :id"), {"id": req_id})
+        await self.session.flush()
+
+    async def count_active(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(JobRequirement).where(
+                JobRequirement.is_deleted.is_(False), JobRequirement.status == "招聘中"
+            )
+        )
+        return result.scalar() or 0
+
+
+class CandidateRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_all(
+        self, *, job_requirement_id: UUID | None = None, status: str | None = None,
+        keyword: str | None = None, candidate_type: str | None = None,
+        page: int = 1, page_size: int = 100,
+    ) -> tuple[list[Candidate], int]:
+        stmt = select(Candidate).where(Candidate.is_deleted.is_(False))
+        if job_requirement_id:
+            stmt = stmt.where(Candidate.job_requirement_id == job_requirement_id)
+        if status:
+            stmt = stmt.where(Candidate.status == status)
+        if candidate_type:
+            stmt = stmt.where(Candidate.candidate_type == candidate_type)
+        if keyword:
+            stmt = stmt.where(or_(
+                Candidate.name.ilike(f"%{keyword}%"),
+                Candidate.phone.ilike(f"%{keyword}%"),
+            ))
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+        data_stmt = stmt.order_by(desc(Candidate.created_at)).offset((page - 1) * page_size).limit(page_size)
+        return list((await self.session.execute(data_stmt)).scalars().all()), total
+
+    async def get_by_id(self, candidate_id: UUID) -> Candidate | None:
+        result = await self.session.execute(
+            select(Candidate).where(Candidate.id == candidate_id, Candidate.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, candidate: Candidate) -> Candidate:
+        self.session.add(candidate)
+        await self.session.flush()
+        await self.session.refresh(candidate)
+        return candidate
+
+    async def update(self, candidate: Candidate) -> Candidate:
+        await self.session.flush()
+        result = await self.session.execute(select(Candidate).where(Candidate.id == candidate.id))
+        return result.scalar_one()
+
+    async def soft_delete(self, candidate_id: UUID) -> None:
+        await self.session.execute(text("UPDATE hr.candidates SET is_deleted = true WHERE id = :id"), {"id": candidate_id})
+        await self.session.flush()
+
+    async def count_by_status(self, status: str) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Candidate).where(Candidate.status == status, Candidate.is_deleted.is_(False))
+        )
+        return result.scalar() or 0
+
+    async def count_total(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Candidate).where(Candidate.is_deleted.is_(False))
+        )
+        return result.scalar() or 0
+
+
+class InterviewRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[Interview]:
+        result = await self.session.execute(
+            select(Interview).where(Interview.candidate_id == candidate_id, Interview.is_deleted.is_(False))
+            .order_by(desc(Interview.interview_date))
+        )
+        return list(result.scalars().all())
+
+    async def get_by_id(self, interview_id: UUID) -> Interview | None:
+        result = await self.session.execute(
+            select(Interview).where(Interview.id == interview_id, Interview.is_deleted.is_(False))
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, interview: Interview) -> Interview:
+        self.session.add(interview)
+        await self.session.flush()
+        await self.session.refresh(interview)
+        return interview
+
+    async def update(self, interview: Interview) -> Interview:
+        await self.session.flush()
+        result = await self.session.execute(select(Interview).where(Interview.id == interview.id))
+        return result.scalar_one()
+
+    async def soft_delete(self, interview_id: UUID) -> None:
+        await self.session.execute(text("UPDATE hr.interviews SET is_deleted = true WHERE id = :id"), {"id": interview_id})
+        await self.session.flush()
+
+
+class CandidateAiEvaluationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_interview(self, interview_id: UUID) -> CandidateAiEvaluation | None:
+        result = await self.session.execute(
+            select(CandidateAiEvaluation).where(
+                CandidateAiEvaluation.interview_id == interview_id, CandidateAiEvaluation.is_deleted.is_(False)
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_candidate(self, candidate_id: UUID) -> CandidateAiEvaluation | None:
+        result = await self.session.execute(
+            select(CandidateAiEvaluation).where(
+                CandidateAiEvaluation.candidate_id == candidate_id, CandidateAiEvaluation.is_deleted.is_(False)
+            ).order_by(desc(CandidateAiEvaluation.created_at))
+        )
+        return result.scalars().first()
+
+    async def create(self, evaluation: CandidateAiEvaluation) -> CandidateAiEvaluation:
+        self.session.add(evaluation)
+        await self.session.flush()
+        await self.session.refresh(evaluation)
+        return evaluation
+
+    async def update(self, evaluation: CandidateAiEvaluation) -> CandidateAiEvaluation:
+        await self.session.flush()
+        result = await self.session.execute(
+            select(CandidateAiEvaluation).where(CandidateAiEvaluation.id == evaluation.id)
+        )
+        return result.scalar_one()
+
+
+class CandidateStatusLogRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, log: CandidateStatusLog) -> CandidateStatusLog:
+        self.session.add(log)
+        await self.session.flush()
+        await self.session.refresh(log)
+        return log
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateStatusLog]:
+        result = await self.session.execute(
+            select(CandidateStatusLog).where(CandidateStatusLog.candidate_id == candidate_id)
+            .order_by(desc(CandidateStatusLog.created_at))
+        )
+        return list(result.scalars().all())

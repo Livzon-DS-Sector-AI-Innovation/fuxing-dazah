@@ -564,7 +564,42 @@ export interface AnnualTrainingPlanItemBatchUpdateInput {
   items: Omit<AnnualTrainingPlanItem, 'id' | 'plan_id' | 'created_at' | 'updated_at'>[]
 }
 
-// ─── 招聘候选人（待后端实现）───
+// ─── 招聘相关类型 ───
+
+export interface JobRequirement {
+  id: string
+  position_name: string
+  department: string
+  headcount: number
+  hired_count: number
+  requirements?: string
+  status: string
+  urgency?: string
+  owner?: string
+  deadline?: string
+  created_at?: string
+}
+
+export interface JobRequirementCreateInput {
+  position_name: string
+  department: string
+  headcount?: number
+  requirements?: string
+  urgency?: string
+  owner?: string
+  deadline?: string
+}
+
+export interface JobRequirementUpdateInput {
+  position_name?: string
+  department?: string
+  headcount?: number
+  requirements?: string
+  status?: string
+  urgency?: string
+  owner?: string
+  deadline?: string
+}
 
 export interface Candidate {
   id: string
@@ -577,15 +612,126 @@ export interface Candidate {
   school?: string
   education?: string
   major?: string
+  graduation_date?: string
   resume_url?: string
   status?: string
   recommendation_level?: string
-  feishu_record_id?: string
-  feishu_sync_status?: string
-  feishu_sync_error?: string
-  feishu_synced_at?: string
+  match_report?: string
+  job_requirement_id?: string
+  candidate_type?: string
+  offer_status?: string
+  offer_sent_at?: string
+  source?: string
+  expected_salary?: string
+  current_company?: string
+  work_years?: number
+  notes?: string
   created_at?: string
   updated_at?: string
+}
+
+export interface CandidateCreateInput {
+  name: string
+  phone?: string
+  email?: string
+  position?: string
+  department?: string
+  gender?: string
+  school?: string
+  education?: string
+  major?: string
+  graduation_date?: string
+  resume_url?: string
+  status?: string
+  recommendation_level?: string
+  job_requirement_id?: string
+  candidate_type?: string
+  source?: string
+  expected_salary?: string
+  current_company?: string
+  work_years?: number
+  notes?: string
+}
+
+export interface CandidateUpdateInput {
+  name?: string
+  phone?: string
+  email?: string
+  position?: string
+  department?: string
+  gender?: string
+  school?: string
+  education?: string
+  major?: string
+  status?: string
+  recommendation_level?: string
+  job_requirement_id?: string
+  candidate_type?: string
+  offer_status?: string
+  source?: string
+  expected_salary?: string
+  current_company?: string
+  work_years?: number
+  notes?: string
+}
+
+export interface CandidateStatusTransition {
+  status: string
+  remark?: string
+}
+
+export interface Interview {
+  id: string
+  candidate_id: string
+  job_requirement_id?: string
+  interview_type: string
+  interview_date?: string
+  interviewer?: string
+  location?: string
+  status: string
+  transcript_text?: string
+  notes?: string
+  created_at?: string
+}
+
+export interface InterviewCreateInput {
+  candidate_id: string
+  job_requirement_id?: string
+  interview_type?: string
+  interview_date?: string
+  interviewer?: string
+  location?: string
+  notes?: string
+}
+
+export interface InterviewUpdateInput {
+  interview_type?: string
+  interview_date?: string
+  interviewer?: string
+  location?: string
+  status?: string
+  transcript_text?: string
+  notes?: string
+}
+
+export interface AiEvaluation {
+  id: string
+  candidate_id: string
+  job_requirement_id?: string
+  interview_id?: string
+  jd_match_score?: number
+  professional_score?: number
+  communication_score?: number
+  learning_score?: number
+  stability_score?: number
+  overall_score?: number
+  strengths?: string
+  weaknesses?: string
+  ai_summary?: string
+  risk_flags?: string
+  model_version?: string
+  evaluated_at?: string
+  created_at?: string
 }
 
 // ─── 问答/实操考核 ───

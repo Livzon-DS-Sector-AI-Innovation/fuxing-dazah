@@ -869,3 +869,198 @@ class TransferCreate(BaseModel):
     to_position: str | None = Field(None, max_length=64)
     effective_date: date
     reason: str | None = Field(None, max_length=256)
+
+
+# ─── Recruitment: Job Requirement Schemas ───
+
+
+class JobRequirementCreate(BaseModel):
+    position_name: str = Field(..., max_length=64)
+    department: str = Field(..., max_length=64)
+    headcount: int = Field(default=1, ge=1)
+    requirements: str | None = None
+    urgency: str | None = Field(None, max_length=8, description="紧急/普通")
+    owner: str | None = Field(None, max_length=64)
+    deadline: date | None = None
+
+
+class JobRequirementUpdate(BaseModel):
+    position_name: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    headcount: int | None = Field(None, ge=1)
+    requirements: str | None = None
+    status: str | None = Field(None, max_length=16)
+    urgency: str | None = Field(None, max_length=8)
+    owner: str | None = Field(None, max_length=64)
+    deadline: date | None = None
+
+
+class JobRequirementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    position_name: str
+    department: str
+    headcount: int
+    hired_count: int
+    requirements: str | None = None
+    status: str
+    urgency: str | None = None
+    owner: str | None = None
+    deadline: date | None = None
+    created_at: datetime | None = None
+
+
+# ─── Recruitment: Candidate Schemas ───
+
+
+class CandidateCreate(BaseModel):
+    name: str = Field(..., max_length=64)
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=128)
+    position: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    gender: str | None = Field(None, max_length=8)
+    school: str | None = Field(None, max_length=128)
+    education: str | None = Field(None, max_length=16)
+    major: str | None = Field(None, max_length=64)
+    graduation_date: date | None = None
+    resume_url: str | None = Field(None, max_length=512)
+    status: str = Field(default="待筛选", max_length=16)
+    recommendation_level: str | None = Field(None, max_length=8)
+    job_requirement_id: UUID | None = None
+    candidate_type: str = Field(default="职能", max_length=8, description="普工/职能")
+    source: str | None = Field(None, max_length=32)
+    expected_salary: str | None = Field(None, max_length=32)
+    current_company: str | None = Field(None, max_length=128)
+    work_years: int | None = None
+    notes: str | None = None
+
+
+class CandidateUpdate(BaseModel):
+    name: str | None = Field(None, max_length=64)
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=128)
+    position: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    gender: str | None = Field(None, max_length=8)
+    school: str | None = Field(None, max_length=128)
+    education: str | None = Field(None, max_length=16)
+    major: str | None = Field(None, max_length=64)
+    graduation_date: date | None = None
+    status: str | None = Field(None, max_length=16)
+    recommendation_level: str | None = Field(None, max_length=8)
+    job_requirement_id: UUID | None = None
+    candidate_type: str | None = Field(None, max_length=8)
+    offer_status: str | None = Field(None, max_length=16)
+    source: str | None = Field(None, max_length=32)
+    expected_salary: str | None = Field(None, max_length=32)
+    current_company: str | None = Field(None, max_length=128)
+    work_years: int | None = None
+    notes: str | None = None
+
+
+class CandidateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    position: str | None = None
+    department: str | None = None
+    gender: str | None = None
+    school: str | None = None
+    education: str | None = None
+    major: str | None = None
+    graduation_date: date | None = None
+    resume_url: str | None = None
+    status: str
+    recommendation_level: str | None = None
+    job_requirement_id: UUID | None = None
+    candidate_type: str
+    offer_status: str | None = None
+    offer_sent_at: date | None = None
+    source: str | None = None
+    expected_salary: str | None = None
+    current_company: str | None = None
+    work_years: int | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class CandidateStatusTransition(BaseModel):
+    """候选人状态流转请求"""
+    status: str = Field(..., max_length=16)
+    remark: str | None = Field(None, max_length=256)
+
+
+# ─── Recruitment: Interview Schemas ───
+
+
+class InterviewCreate(BaseModel):
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_type: str = Field(default="初试", max_length=16, description="初试/复试/终试")
+    interview_date: date | None = None
+    interviewer: str | None = Field(None, max_length=64)
+    location: str | None = Field(None, max_length=256)
+    notes: str | None = None
+
+
+class InterviewUpdate(BaseModel):
+    interview_type: str | None = Field(None, max_length=16)
+    interview_date: date | None = None
+    interviewer: str | None = Field(None, max_length=64)
+    location: str | None = Field(None, max_length=256)
+    status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
+    transcript_text: str | None = None
+    notes: str | None = None
+
+
+class InterviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_type: str
+    interview_date: date | None = None
+    interviewer: str | None = None
+    location: str | None = None
+    status: str
+    transcript_text: str | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+
+
+# ─── Recruitment: AI Evaluation Schemas ───
+
+
+class AiEvaluationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_id: UUID | None = None
+    jd_match_score: float | None = None
+    professional_score: float | None = None
+    communication_score: float | None = None
+    learning_score: float | None = None
+    stability_score: float | None = None
+    overall_score: float | None = None
+    strengths: str | None = None
+    weaknesses: str | None = None
+    ai_summary: str | None = None
+    risk_flags: str | None = None
+    model_version: str | None = None
+    evaluated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class CandidateComparisonItem(BaseModel):
+    """候选人对比视图单项"""
+    candidate_id: UUID
+    candidate_name: str
+    evaluation: AiEvaluationResponse | None = None
+    interviews: list[InterviewResponse] = Field(default_factory=list)
+    recommendation_level: str | None = None
+    status: str

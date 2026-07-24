@@ -13,6 +13,13 @@ import {
   TeamUpdateInput,
   TeamListResponse,
   AnnualTrainingPlanCreateInput,
+  CandidateCreateInput,
+  CandidateUpdateInput,
+  CandidateStatusTransition,
+  JobRequirementCreateInput,
+  JobRequirementUpdateInput,
+  InterviewCreateInput,
+  InterviewUpdateInput,
   AnnualTrainingPlanUpdateInput,
   AnnualTrainingPlanListResponse,
   AnnualTrainingPlanItemBatchUpdateInput,
@@ -387,5 +394,190 @@ export async function deleteQuestionBankItem(id: string) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || err.detail || '删除题目失败')
   }
+  return res.json()
+}
+
+// ─── 招聘：岗位需求 ───
+
+export async function createJobRequirement(data: JobRequirementCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '创建岗位需求失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateJobRequirement(id: string, data: JobRequirementUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '更新岗位需求失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteJobRequirement(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除岗位需求失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：候选人 ───
+
+export async function createCandidate(data: CandidateCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '创建候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateCandidate(id: string, data: CandidateUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '更新候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteCandidate(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function transitionCandidateStatus(id: string, data: CandidateStatusTransition) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}/status`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '状态流转失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function parseResumeAction(formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/parse-resume`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '简历解析失败')
+  }
+  return res.json()
+}
+
+// ─── 招聘：面试管理 ───
+
+export async function createInterview(data: InterviewCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '安排面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateInterview(id: string, data: InterviewUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '更新面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteInterview(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '取消面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：AI评估 ───
+
+export async function evaluateInterview(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}/evaluate`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || 'AI评估失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：Offer ───
+
+export async function sendOfferAction(candidateId: string, formData: FormData) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/send-offer`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '发送Offer失败')
+  }
+  revalidatePath('/hr/recruitment')
   return res.json()
 }

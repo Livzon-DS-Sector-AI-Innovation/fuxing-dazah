@@ -79,6 +79,46 @@ def generate_offer_docx(**kwargs) -> BytesIO:
     return buf
 
 
+
+def _find_cjk_font() -> str:
+    import os
+    for p in ["/System/Library/Fonts/Supplemental/Songti.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"]:
+        if os.path.exists(p): return p
+    return ""
+
+
+def generate_offer_pdf(**kwargs) -> BytesIO:
+    """fpdf2 纯 Python 生成 PDF，跨平台无系统依赖。"""
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    font_path = _find_cjk_font()
+    if font_path:
+        pdf.add_font("CJK", "", font_path, uni=True)
+        pdf.add_font("CJK", "B", font_path, uni=True)
+        fn = "CJK"
+    else:
+        fn = "Helvetica"
+    today = date.today()
+    send_date = kwargs.get("send_date") or f"{today.year}年{today.month:02d}月{today.day:02d}日"
+    vals: dict[str, str] = {}
+    for placeholder, key in PLACEHOLDER_MAP.items():
+        if key == "send_date": vals[key] = send_date
+        else: vals[key] = str(kwargs.get(key, "") or "")
+    pdf.set_font(fn, "B", 18); pdf.cell(0, 14, "丽珠集团福州福兴医药有限公司", ln=True, align="C")
+    pdf.set_font(fn, "", 12); pdf.cell(0, 10, "录用通知书", ln=True, align="C")
+    pdf.ln(6)
+    pdf.set_font(fn, "", 11)
+    lines = [f"{vals["name"]} 先生/女士：", "", f"我们很高兴通知您，经公司研究决定，拟录用您担任我司 {vals["position"]} 岗位。", "", "现将入职相关事宜通知如下：", "", f"一、薪资待遇", f"  底薪：{vals["base_salary"] or "面议"}", f"  综合月薪范围：{vals["salary_range"] or "面议"}", "", f"二、报到安排", f"  体检日期：{vals["medical_date"] or "另行通知"}", f"  报到日期：{vals["report_date"]}", f"  岗位保留至：{vals["offer_expire_date"]}", "", "三、其他说明", "  1. 报到时请携带本人身份证、学历证书、资格证书原件及复印件。", "  2. 逾期未报到且未说明原因者，本录用通知自动失效。", "  3. 本通知仅限本人使用，不得转让。", "", "如您接受以上条件，请在3个工作日内回复确认。", "", "", f"丽珠集团福州福兴医药有限公司", f"发送日期：{send_date}"]
+    for line in lines:
+        pdf.set_font(fn, "B" if line.startswith("一、") or line.startswith("二、") or line.startswith("三、") or line.startswith("丽珠") else "", 11)
+        pdf.cell(0, 8, line, ln=True, align="R" if line.startswith("丽珠") or line.startswith("发送") else "L")
+    buf = BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+    return buf
+
+
 def generate_offer_html(**kwargs) -> str:
     """生成 Offer HTML（用于前端预览和 Weasyprint 转 PDF）。"""
     today = date.today()
