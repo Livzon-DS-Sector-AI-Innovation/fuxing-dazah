@@ -57,3 +57,59 @@ async def complete_mail_auth(device_code: str = Form(...), ctx: HrAccessContext 
         raise HTTPException(400, "lark-cli 未安装，请联系管理员在服务器上安装 lark-cli")
     if r.returncode != 0: raise HTTPException(400, r.stderr.strip() or "授权失败")
     return success_response(message="授权完成")
+
+
+# ─── 数据管理 ───
+
+_HR_TABLES = [
+    ("employees", "员工档案"),
+    ("departments", "部门管理"),
+    ("teams", "班组管理"),
+    ("onboarding_records", "入职台账"),
+    ("departure_records", "离职台账"),
+    ("offboarding_records", "离职管理"),
+    ("training_ledgers", "培训台账"),
+    ("training_ledger_pages", "培训台账页面"),
+    ("annual_training_plans", "年度培训计划"),
+    ("annual_training_plan_items", "年度计划明细"),
+    ("trainers", "内训师台账"),
+    ("dept_training_personnel", "部门培训人员"),
+    ("sop_catalog", "SOP目录"),
+    ("candidates", "候选人"),
+    ("job_requirements", "岗位需求"),
+    ("exam_papers", "笔试试卷"),
+    ("question_bank", "共享题库"),
+    ("qa_assessments", "考核场次"),
+    ("qa_assessment_scores", "考核成绩"),
+    ("training_evaluations", "培训效果评估"),
+    ("email_logs", "邮件日志"),
+    ("transfer_records", "异动记录"),
+    ("system_settings", "系统设置"),
+]
+
+
+@router.get("/data-management/tables", summary="可管理的数据表及行数")
+async def list_data_tables(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
+    """返回所有可删除的 HR 数据表及当前行数。"""
+    from sqlalchemy import text
+    result = []
+    for table, label in _HR_TABLES:
+        r = await session.execute(text(f"SELECT COUNT(*) FROM hr.{table}"))
+        count = r.scalar() or 0
+        result.append({"table": table, "label": label, "count": count})
+    return success_response(data=result)
+
+
+@router.post("/data-management/clear", summary="清除指定表数据")
+async def clear_data_tables(tables: list[str], session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
+    """清空指定 HR 数据表（仅允许 _HR_TABLES 中的表）。"""
+    from sqlalchemy import text
+    allowed = {t[0] for t in _HR_TABLES}
+    cleared = []
+    for table in tables:
+        if table not in allowed:
+            raise HTTPException(400, f"不允许操作表: {table}")
+        await session.execute(text(f"DELETE FROM hr.{table}"))
+        cleared.append(table)
+    await session.commit()
+    return success_response(data={"cleared": cleared}, message=f"已清空 {len(cleared)} 张表")

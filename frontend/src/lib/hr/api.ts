@@ -469,11 +469,39 @@ export async function fetchPlanItems(id: string): Promise<{ code: number; messag
   return res.json()
 }
 
-// ─── 招聘候选人（待后端实现）───
+// ─── 招聘候选人 ───
 
 export async function fetchCandidates(params: Record<string, any> = {}): Promise<{ data: any[]; meta?: { total: number } }> {
-  // TODO: backend candidate API not yet implemented
-  return { data: [], meta: { total: 0 } }
+  const sp = new URLSearchParams()
+  if (params.job_requirement_id) sp.set('job_requirement_id', params.job_requirement_id)
+  if (params.status) sp.set('status', params.status)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.candidate_type) sp.set('candidate_type', params.candidate_type)
+  sp.set('page', String(params.page || 1))
+  sp.set('page_size', String(params.page_size || 100))
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取候选人列表失败')
+  return res.json()
+}
+
+export async function fetchJobRequirements(params?: { status?: string }): Promise<{ data: any[] }> {
+  const sp = new URLSearchParams()
+  if (params?.status) sp.set('status', params.status)
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements?${sp.toString()}`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取岗位需求失败')
+  return res.json()
+}
+
+export async function fetchCandidateInterviews(candidateId: string): Promise<{ data: any[] }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/interviews`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取面试列表失败')
+  return res.json()
+}
+
+export async function fetchInterviewEvaluation(interviewId: string): Promise<{ data: any }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${interviewId}/evaluation`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取AI评估结果失败')
+  return res.json()
 }
 
 // ─── Position APIs ───
