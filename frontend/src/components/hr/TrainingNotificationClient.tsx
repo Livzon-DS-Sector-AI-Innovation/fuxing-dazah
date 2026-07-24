@@ -40,7 +40,7 @@ import {
   exportQaRecord,
   saveExamPaper,
   API_BASE,
-} from '@/lib/api/hr'
+} from '@/lib/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
 import EvaluationPreview from './EvaluationPreview'
 import AssessmentFlow from './AssessmentFlow'

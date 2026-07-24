@@ -18,7 +18,7 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { generateOnboardingEvaluation } from '@/lib/api/hr'
+import { generateOnboardingEvaluation } from '@/lib/hr'
 
 export default function OnboardingEvaluationClient() {
   const [form] = Form.useForm()

@@ -21,7 +21,7 @@ import {
   SearchOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
-import { fetchQuestionBank, API_BASE } from '@/lib/api/hr'
+import { fetchQuestionBank, API_BASE } from '@/lib/hr'
 import { addQuestionBankItems, deleteQuestionBankItem } from '@/actions/hr'
 import { QuestionBankItem } from '@/types/hr'
 

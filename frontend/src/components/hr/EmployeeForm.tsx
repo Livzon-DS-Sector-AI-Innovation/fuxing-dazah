@@ -6,7 +6,7 @@ import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee, EmployeeCreateInput, EmployeeUpdateInput, Department } from '@/types/hr'
 import { createEmployee, updateEmployee } from '@/actions/hr'
-import { fetchDepartments, fetchPositions, API_BASE } from '@/lib/api/hr'
+import { fetchDepartments, fetchPositions, API_BASE } from '@/lib/hr'
 
 interface EmployeeFormProps {
   open: boolean

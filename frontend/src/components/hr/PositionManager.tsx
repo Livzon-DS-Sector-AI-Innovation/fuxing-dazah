@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/hr'
 
 interface PositionRow { department: string; name: string; categories?: string[] }
 

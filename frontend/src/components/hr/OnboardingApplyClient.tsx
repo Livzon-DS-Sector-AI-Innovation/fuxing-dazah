@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Space, Table, Tabs, Tag, message, Modal } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined, SendOutlined } from '@ant-design/icons'
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 export default function OnboardingApplyClient() {
   const [onboardingApps, setOnboardingApps] = useState<any[]>([])

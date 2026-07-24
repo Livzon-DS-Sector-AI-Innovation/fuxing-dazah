@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag } from 'antd'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/hr'
 
 export default function NotificationsPage() {
   const [logs, setLogs] = useState<any[]>([])

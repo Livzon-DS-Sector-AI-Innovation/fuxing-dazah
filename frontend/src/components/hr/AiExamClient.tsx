@@ -30,7 +30,7 @@ import {
   ExamExportData,
   TrueFalseQuestion,
 } from '@/types/hr'
-import { generateExamQuestions, exportExam } from '@/lib/api/ai'
+import { generateExamQuestions, exportExam } from '@/lib/hr'
 
 const { Title, Text } = Typography
 
@@ -154,7 +154,7 @@ export default function AiExamClient() {
       return
     }
     try {
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
       const res = await fetch(`${API}/api/v1/hr/exam-papers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

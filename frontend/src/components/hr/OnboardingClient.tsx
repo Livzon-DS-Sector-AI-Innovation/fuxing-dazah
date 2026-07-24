@@ -5,7 +5,7 @@ import { App, Button, Card, Table, Space, Input, Tag, Select, Popconfirm } from 
 import type { ColumnsType } from 'antd/es/table'
 import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
-import { fetchOnboardingRecords, fetchDepartments, API_BASE } from '@/lib/api/hr'
+import { fetchOnboardingRecords, fetchDepartments, API_BASE } from '@/lib/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -14,7 +14,6 @@ interface OnboardingClientProps {
 }
 
 export default function OnboardingClient({ initialRecords, initialTotal }: OnboardingClientProps) {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   const { message } = App.useApp()
   const [records, setRecords] = useState<OnboardingRecord[]>(initialRecords)
   const [total, setTotal] = useState(initialTotal)

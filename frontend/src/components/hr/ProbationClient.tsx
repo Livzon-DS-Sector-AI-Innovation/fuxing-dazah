@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Card, DatePicker, Modal, Select, Space, Table, Tag, message } from 'antd'
 import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, EditOutlined, HistoryOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { fetchDepartments, API_BASE } from '@/lib/api/hr'
+import { fetchDepartments, API_BASE } from '@/lib/hr'
 
 interface ProbationEmployee {
   id: string

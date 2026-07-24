@@ -225,6 +225,47 @@ async def download_roster(
     )
 
 
+@router.get("/training-registration", summary="下载个人培训登记表")
+async def download_training_registration(
+    department: str | None = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    """按部门下载个人培训登记表，整个部门合并为一个 docx 文件。"""
+    from app.modules.hr.training_registration_generator import generate_training_registration_sync
+    from app.modules.hr.models import Employee
+
+    stmt = select(Employee).where(
+        Employee.is_deleted == False,
+        Employee.status != "离职",
+    ).order_by(Employee.department, Employee.employee_number)
+    if department:
+        stmt = stmt.where(Employee.department == department)
+
+    r = await session.execute(stmt)
+    records = []
+    for e in r.scalars().all():
+        records.append({
+            "姓名": e.name or "",
+            "性别": e.gender or "",
+            "体现部门": e.department or "",
+            "体现岗位": e.position or "",
+            "学历": e.education or "",
+            "毕业院校": e.school or "",
+            "专业": e.major or "",
+            "证书": "",
+            "毕业时间": str(e.graduation_date) if e.graduation_date else "",
+            "入职日期": str(e.hire_date) if e.hire_date else "",
+        })
+
+    buffer = generate_training_registration_sync(records)
+    filename = f"个人培训登记表_{department or '全部'}.docx"
+    return StreamingResponse(
+        iter([buffer.read()]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"}
+    )
+
+
 @router.get("/employees/training-candidates", summary="待培训人员列表")
 async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),

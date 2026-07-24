@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { App, Button, Tabs, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
-import { fetchEmployees, fetchDepartments, API_BASE } from '@/lib/api/hr'
+import { fetchEmployees, fetchDepartments, API_BASE } from '@/lib/hr'
 import { Employee, Department } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeTable from './EmployeeTable'

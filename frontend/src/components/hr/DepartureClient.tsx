@@ -10,7 +10,7 @@ import {
   DeleteOutlined,
   SendOutlined } from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
-import { fetchDepartureRecords, fetchDepartments, API_BASE } from '@/lib/api/hr'
+import { fetchDepartureRecords, fetchDepartments, API_BASE } from '@/lib/hr'
 import { deleteDepartureRecordAction } from '@/actions/hr'
 
 interface DepartureClientProps {

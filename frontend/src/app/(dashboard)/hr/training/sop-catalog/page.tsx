@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
 import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/hr'
 
 interface SopItem {
   id: string
