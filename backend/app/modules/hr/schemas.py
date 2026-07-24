@@ -77,7 +77,9 @@ class EmployeeBase(BaseModel):
     job_category: str | None = Field(None, max_length=32, description="职类")
     level: str | None = Field(None, max_length=32, description="级别")
     concurrent_departments: str | None = Field(None, max_length=256, description="兼任部门")
+    concurrent_variety: str | None = Field(None, max_length=256, description="兼任品种")
     variety: str | None = Field(None, max_length=128, description="品种")
+    certificates: str | None = Field(None, max_length=512, description="证书")
 
     # Qualifications
     qualifications: list[str] | None = Field(None, description="职称／职业资格")
