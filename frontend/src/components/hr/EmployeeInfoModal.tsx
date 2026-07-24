@@ -10,7 +10,7 @@ interface Props {
 }
 
 function items(arr: [string, unknown][]): [string, unknown][] {
-  return arr.filter(([, v]) => v != null && v !== '')
+  return arr
 }
 
 export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
