@@ -753,16 +753,17 @@ async def generate_assessment_questions(
                 tmp_path = tmp.name
             try:
                 text = ""
-                # macOS: 使用 textutil
                 if shutil.which("textutil"):
+                    out_path = tmp_path + ".txt"
                     result = subprocess.run(
-                        ["textutil", "-convert", "txt", tmp_path, "-output", "/tmp/hr-doc-convert.txt"],
+                        ["textutil", "-convert", "txt", tmp_path, "-output", out_path],
                         capture_output=True, timeout=30,
                     )
-                    if result.returncode == 0:
-                        with open("/tmp/hr-doc-convert.txt", "r") as f:
+                    if result.returncode == 0 and os.path.exists(out_path):
+                        with open(out_path, "r") as f:
                             text = f.read()
-                # Linux: 尝试 antiword / catdoc
+                    if os.path.exists(out_path):
+                        os.unlink(out_path)
                 elif shutil.which("antiword"):
                     result = subprocess.run(["antiword", tmp_path], capture_output=True, timeout=30)
                     if result.returncode == 0:
@@ -771,7 +772,16 @@ async def generate_assessment_questions(
                     result = subprocess.run(["catdoc", tmp_path], capture_output=True, timeout=30)
                     if result.returncode == 0:
                         text = result.stdout.decode("utf-8", errors="ignore")
-                # 都不可用：提示安装
+                elif shutil.which("python3") or shutil.which("python"):
+                    # 纯 Python 回退：尝试用 olefile + 简单文本提取
+                    try:
+                        import olefile
+                        ole = olefile.OleFileIO(tmp_path)
+                        stream = ole.openstream('WordDocument')
+                        raw = stream.read()
+                        text = raw.decode("utf-8", errors="ignore")[:5000]
+                    except Exception:
+                        pass
                 if not text:
                     text = "（提示：服务器未安装 .doc 转换工具，请上传 .docx 或 .txt 格式文件）"
             finally:

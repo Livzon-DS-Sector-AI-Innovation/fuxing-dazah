@@ -85,16 +85,19 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       const r = await fetchCandidateInterviews(candidate.id)
       setInterviews(r.data || [])
-      // 加载已有评估
       for (const iv of (r.data || [])) {
         try {
           const er = await fetchInterviewEvaluation(iv.id)
           if (er.data) setEvaluations(prev => ({ ...prev, [iv.id]: er.data }))
-        } catch { /* ignore */ }
+        } catch { /* AI评估加载失败不影响面试列表 */ }
       }
-    } catch { setInterviews([]) }
+    } catch (err: any) {
+      console.error('加载面试列表失败:', err)
+      message.error('加载面试列表失败: ' + (err.message || '未知错误'))
+      setInterviews([])
+    }
     finally { setInterviewsLoading(false) }
-  }, [candidate.id])
+  }, [candidate.id, message])
 
   useEffect(() => { loadInterviews() }, [loadInterviews])
 
