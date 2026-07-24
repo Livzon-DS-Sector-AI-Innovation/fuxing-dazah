@@ -14,7 +14,7 @@ interface LogEntry {
 
 function format(entry: LogEntry): string {
   const { level, message, detail, timestamp } = entry
-  const prefix = `[${timestamp}] [HR:${level.toUpperCase()}]`
+  const prefix = `[${timestamp}] [${level.toUpperCase()}]`
   const detailStr = detail ? ' ' + JSON.stringify(detail, null, 0) : ''
   return `${prefix} ${message}${detailStr}`
 }

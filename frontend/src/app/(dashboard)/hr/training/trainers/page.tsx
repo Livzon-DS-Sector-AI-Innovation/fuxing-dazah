@@ -8,7 +8,7 @@ import {
 import { SearchOutlined, UploadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 // ─── 内训师台账 Tab ───
 

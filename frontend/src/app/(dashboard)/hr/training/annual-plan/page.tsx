@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { App, Card, Row, Col, Select, Input, Upload, Button, Space, Spin, Table, Popconfirm, Modal, Form, DatePicker, InputNumber } from 'antd'
 import { UploadOutlined, SearchOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined, BellOutlined, PlusOutlined } from '@ant-design/icons'
-import { logApiError, logError } from '@/lib/logger'
+import { logApiError, logError } from '@/lib/hr'
 
 const API_BASE = ''
 

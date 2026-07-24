@@ -30,7 +30,7 @@ import {
   ExamExportData,
   TrueFalseQuestion,
 } from '@/types/hr'
-import { generateExamQuestions, exportExam } from '@/lib/api/ai'
+import { generateExamQuestions, exportExam } from '@/lib/hr'
 
 const { Title, Text } = Typography
 

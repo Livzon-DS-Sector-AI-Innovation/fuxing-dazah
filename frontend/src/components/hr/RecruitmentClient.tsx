@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, DatePicker, Form, Input, InputNumber, message, Modal, Select, Space, Tag, Upload } from 'antd'
 import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons'
 import CandidateCardView from './CandidateCardView'
-import { fetchPositions } from '@/lib/api/hr'
+import { fetchPositions } from '@/lib/hr'
 
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 interface JobReq {
   id: string; position_name: string; department: string

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag } from 'antd'
 
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 export default function NotificationsPage() {
   const [logs, setLogs] = useState<any[]>([])

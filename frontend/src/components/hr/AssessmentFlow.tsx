@@ -23,7 +23,7 @@ import {
   downloadQaAssessmentRecord,
   downloadQaAssessmentEvaluation,
   API_BASE,
-} from '@/lib/api/hr'
+} from '@/lib/hr'
 import { QaAssessment, QuestionBankItem } from '@/types/hr'
 
 interface AssessmentFlowProps {

@@ -5,7 +5,7 @@ import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker,
 import { SearchOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 import { useHrStore } from '@/stores/hr'
 
 interface EmployeeTableProps {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartments, fetchEmployees, createTrainingLedgerPage } from '@/lib/api/hr'
+import { fetchDepartments, fetchEmployees, createTrainingLedgerPage } from '@/lib/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()

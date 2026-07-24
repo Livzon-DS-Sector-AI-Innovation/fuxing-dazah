@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
 import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 interface SopItem {
   id: string

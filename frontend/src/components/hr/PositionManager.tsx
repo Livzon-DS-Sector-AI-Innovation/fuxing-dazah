@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
-import { API_BASE } from '@/lib/api/hr'
+import { API_BASE } from '@/lib/hr'
 
 interface PositionRow { department: string; name: string; categories?: string[] }
 

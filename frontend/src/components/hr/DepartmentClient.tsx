@@ -6,7 +6,7 @@ import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions 
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { Department, Employee } from '@/types/hr'
 import { fetchDepartmentsAction, deleteDepartment } from '@/actions/hr'
-import { fetchEmployees } from '@/lib/api/hr'
+import { fetchEmployees } from '@/lib/hr'
 import DepartmentForm from './DepartmentForm'
 import TeamClient from './TeamClient'
 

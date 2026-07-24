@@ -26,7 +26,7 @@ import {
   SearchOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
-import { exportTrainingLedger } from '@/lib/api/hr'
+import { exportTrainingLedger } from '@/lib/hr'
 import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
@@ -43,7 +43,7 @@ import {
   createTrainingLedger,
   updateTrainingLedger,
   deleteTrainingLedger,
-} from '@/lib/api/hr'
+} from '@/lib/hr'
 
 interface TrainingLedgerClientProps {
   employeeNumber: string

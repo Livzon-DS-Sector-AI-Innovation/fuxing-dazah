@@ -5,11 +5,11 @@ import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
-import { logApiError } from '@/lib/logger'
+import { logApiError } from '@/lib/hr'
 import {
   fetchOnboardingRecords,
   API_BASE,
-} from '@/lib/api/hr'
+} from '@/lib/hr'
 
 const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
 const LABEL = { ...CELL, background: '#f5f5f5', fontWeight: 600, textAlign: 'center' as const, width: '15%' }

@@ -119,8 +119,8 @@ async def test_api_delete_onboarding_record(client):
     })
     assert create_resp.status_code == 201
 
-    # 查询自动生成的入职记录
-    list_resp = await client.get("/api/v1/hr/onboarding-records?keyword=API入职待删员工&days=0")
+    # 查询自动生成的入职记录（API 不支持 days 参数，service 默认 days=7）
+    list_resp = await client.get("/api/v1/hr/onboarding-records?keyword=API入职待删员工")
     assert list_resp.status_code == 200
     records = list_resp.json()["data"]
     assert len(records) >= 1

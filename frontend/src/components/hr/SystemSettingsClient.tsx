@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Alert, Modal, Spin } from 'antd'
 import { SaveOutlined, CheckCircleOutlined } from '@ant-design/icons'
-import { API_BASE } from '@/lib/api/hr'
-import { logApiError, logError } from '@/lib/logger'
+import { API_BASE } from '@/lib/hr'
+import { logApiError, logError } from '@/lib/hr'
 
 export default function SystemSettingsClient() {
   const { message } = App.useApp()

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, Popconfirm, Space, Table, Tag } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
-import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord } from '@/lib/api/hr'
+import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord } from '@/lib/hr'
 import { deleteQaAssessment } from '@/actions/hr'
 import { QaAssessment, QaAssessmentScore } from '@/types/hr'
 

@@ -5,7 +5,7 @@ import { App, Button, Card, Form, InputNumber, Select, Spin } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { createAnnualTrainingPlan } from '@/actions/hr'
-import { fetchDepartments } from '@/lib/api/hr'
+import { fetchDepartments } from '@/lib/hr'
 
 export default function AnnualPlanForm() {
   const { message } = App.useApp()

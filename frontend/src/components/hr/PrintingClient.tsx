@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Col, Row, Select } from 'antd'
 import { DownloadOutlined, PrinterOutlined, SolutionOutlined, IdcardOutlined } from '@ant-design/icons'
-import { downloadRoster, downloadTrainingRegistration } from '@/lib/api/hr'
+import { downloadRoster, downloadTrainingRegistration } from '@/lib/hr'
 import { Department } from '@/types/hr'
 
 interface PrintingClientProps {
@@ -40,7 +40,7 @@ const documents: PrintableDocument[] = [
     icon: <PrinterOutlined className="text-2xl text-[var(--color-primary)]" />,
     download: async (paperId?: string) => {
       if (!paperId) return
-      const { downloadExamPaper } = await import('@/lib/api/hr')
+      const { downloadExamPaper } = await import('@/lib/hr')
       await downloadExamPaper(paperId)
     },
   },
@@ -56,7 +56,7 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
   const [departments, setDepartments] = useState(initialDepartments)
   useEffect(() => {
     if (initialDepartments.length === 0) {
-      import('@/lib/api/hr').then(({ fetchDepartments }) => {
+      import('@/lib/hr').then(({ fetchDepartments }) => {
         fetchDepartments({ page_size: 200 }).then(res => setDepartments(res.data || [])).catch(() => {})
       })
     }
@@ -68,7 +68,7 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
     if (examPapers.length > 0) return
     setPapersLoading(true)
     try {
-      const { fetchExamPapers } = await import('@/lib/api/hr')
+      const { fetchExamPapers } = await import('@/lib/hr')
       const res = await fetchExamPapers({ page_size: 200 })
       setExamPapers((res.data || []).map((p: any) => ({
         value: p.id,
