@@ -295,6 +295,12 @@ class Employee(BaseModel):
     departure_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="离职时间"
     )
+    certificates: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="证书"
+    )
+    concurrent_variety: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="兼任品种"
+    )
 
     # ─── Feishu sync metadata ───
     feishu_open_id: Mapped[str | None] = mapped_column(
