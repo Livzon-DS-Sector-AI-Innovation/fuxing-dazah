@@ -261,11 +261,7 @@ class EmployeeService:
         "emergency_contact_name", "emergency_contact_phone",
         "emergency_contact_relation",
         "bank_account", "training_id", "transfer_history", "remarks",
-        "certificates", "concurrent_variety", "duty",
-        "dept_manager", "additional_manager", "report_grade", "dept_head_trainer",
-        "safety_training_date", "safety_training_score",
-        "culture_training_date", "gmp_training_date", "departure_date",
-        "status",
+        "status", "certificates", "concurrent_variety",
         # Excel 扩展字段
         "duty", "dept_manager", "additional_manager", "report_grade",
         "dept_head_trainer", "safety_training_date", "safety_training_score",

@@ -91,9 +91,6 @@ export default function AiExamClient() {
       if (res.data?.choice_questions) setChoiceQuestions(res.data.choice_questions)
       if (res.data?.true_false_questions) setTrueFalseQuestions(res.data.true_false_questions)
       if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
-      console.log('API返回:', res.data)
-      console.log('多选:', res.data?.multi_choice_questions?.length, '填空:', res.data?.fill_blank_questions?.length)
-      if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
       if (res.data?.fill_blank_questions) setFillQuestions(res.data.fill_blank_questions)
       message.success('试卷题目生成成功')
     } catch (err: any) {

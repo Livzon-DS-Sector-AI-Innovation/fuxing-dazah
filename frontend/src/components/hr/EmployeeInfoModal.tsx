@@ -9,75 +9,74 @@ interface Props {
   onClose: () => void
 }
 
-function items(arr: [string, unknown][]): [string, unknown][] {
-  return arr
+function val(v: unknown): string {
+  if (v == null || v === '') return '-'
+  if (Array.isArray(v)) return v.join('、') || '-'
+  return String(v)
 }
 
 export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
   if (!employee) return null
-  const e = employee as unknown as Record<string, unknown>
 
   const sections: [string, [string, unknown][]][] = [
-    ['基本信息', items([
-      ['域账号', e.domain_account], ['性别', e.gender], ['籍贯', e.native_place],
-      ['政治面貌', e.political_status], ['婚姻状况', e.marital_status],
-      ['户籍类型', e.household_type], ['身份证号', e.id_card],
-      ['身份证到期', e.id_card_expiry], ['身份证地址', e.id_card_address],
-      ['现住址', e.current_address], ['手机', e.phone], ['邮箱', e.email],
-    ])],
-    ['学历信息', items([
-      ['学历', e.education], ['全日制/非全日制', e.classification],
-      ['毕业院校', e.school], ['专业', e.major], ['毕业时间', e.graduation_date],
-    ])],
-    ['工作履历与职级', items([
-      ['参加工作时间', e.work_start_date], ['进厂时间', e.factory_entry_date],
-      ['入丽珠时间', e.livo_entry_date], ['离职时间', e.departure_date],
-      ['职类', e.job_category], ['级别', e.level], ['职务', e.duty],
-      ['报表用职级', e.report_grade], ['职称/职业资格', Array.isArray(e.qualifications) ? (e.qualifications as string[]).join('、') : e.qualifications],
-      ['职称类型', e.qualification_type],
-    ])],
-    ['管理信息', items([
-      ['部门管理者', e.dept_manager], ['额外管理者', e.additional_manager],
-      ['部门负责人/培训师', e.dept_head_trainer], ['兼任品种', e.concurrent_variety],
-    ])],
-    ['合同信息', items([
-      ['合同期限', e.contract_type], ['合同1起', e.contract_start_date], ['合同1止', e.contract_end_date],
-      ['合同2起', e.contract_start_2], ['合同2止', e.contract_end_2],
-      ['合同3起', e.contract_start_3], ['合同3止', e.contract_end_3],
-      ['合同4起', e.contract_start_4], ['合同4止', e.contract_end_4],
-    ])],
-    ['紧急联系人', items([
-      ['紧急联系人', e.emergency_contact_name], ['紧急联系电话', e.emergency_contact_phone],
-      ['与本人关系', e.emergency_contact_relation],
-    ])],
-    ['培训记录', items([
-      ['入职安全培训日期', e.safety_training_date], ['安全培训成绩', e.safety_training_score],
-      ['企业文化培训日期', e.culture_training_date], ['GMP培训日期', e.gmp_training_date],
-    ])],
-    ['其他信息', items([
-      ['银行账号', e.bank_account], ['员工性质', e.status_category], ['证书', e.certificates],
-      ['工龄(年)', e.work_years], ['厂龄', e.factory_tenure], ['司龄', e.company_tenure],
-      ['出生年', e.birth_year], ['出生月', e.birth_month], ['出生日', e.birth_day],
-    ])],
+    ['基本信息', [
+      ['域账号', employee.domain_account], ['性别', employee.gender], ['籍贯', employee.native_place],
+      ['政治面貌', employee.political_status], ['婚姻状况', employee.marital_status],
+      ['户籍类型', employee.household_type], ['身份证号', employee.id_card],
+      ['身份证到期', employee.id_card_expiry], ['身份证地址', employee.id_card_address],
+      ['现住址', employee.current_address], ['手机', employee.phone], ['邮箱', employee.email],
+    ]],
+    ['学历信息', [
+      ['学历', employee.education], ['全日制/非全日制', employee.classification as unknown],
+      ['毕业院校', employee.school], ['专业', employee.major], ['毕业时间', employee.graduation_date],
+    ]],
+    ['工作履历与职级', [
+      ['参加工作时间', employee.work_start_date], ['进厂时间', employee.factory_entry_date],
+      ['入丽珠时间', employee.livo_entry_date], ['离职时间', employee.departure_date as unknown],
+      ['职类', employee.job_category], ['级别', employee.level], ['职务', employee.duty as unknown],
+      ['报表用职级', employee.report_grade as unknown],
+      ['职称/职业资格', employee.qualifications],
+      ['职称类型', employee.qualification_type],
+    ]],
+    ['管理信息', [
+      ['部门管理者', employee.dept_manager as unknown], ['额外管理者', employee.additional_manager as unknown],
+      ['部门负责人/培训师', employee.dept_head_trainer as unknown], ['兼任品种', employee.concurrent_variety as unknown],
+    ]],
+    ['合同信息', [
+      ['合同期限', employee.contract_type], ['合同1起', employee.contract_start_date], ['合同1止', employee.contract_end_date],
+      ['合同2起', employee.contract_start_2 as unknown], ['合同2止', employee.contract_end_2 as unknown],
+      ['合同3起', employee.contract_start_3 as unknown], ['合同3止', employee.contract_end_3 as unknown],
+      ['合同4起', employee.contract_start_4 as unknown], ['合同4止', employee.contract_end_4 as unknown],
+    ]],
+    ['紧急联系人', [
+      ['紧急联系人', employee.emergency_contact_name], ['紧急联系电话', employee.emergency_contact_phone],
+      ['与本人关系', employee.emergency_contact_relation],
+    ]],
+    ['培训记录', [
+      ['入职安全培训日期', employee.safety_training_date as unknown], ['安全培训成绩', employee.safety_training_score as unknown],
+      ['企业文化培训日期', employee.culture_training_date as unknown], ['GMP培训日期', employee.gmp_training_date as unknown],
+    ]],
+    ['其他信息', [
+      ['银行账号', employee.bank_account], ['员工性质', employee.status_category],
+      ['证书', employee.certificates as unknown],
+      ['工龄(年)', employee.work_years], ['厂龄', employee.factory_tenure], ['司龄', employee.company_tenure],
+      ['出生年', employee.birth_year], ['出生月', employee.birth_month], ['出生日', employee.birth_day],
+    ]],
   ]
 
   return (
-    <Modal title={`${e.name} · 详细信息`} open={open} onCancel={onClose} footer={null} width={800}>
+    <Modal title={`${employee.name} · 详细信息`} open={open} onCancel={onClose} footer={null} width={800}>
       <div className="max-h-[70vh] overflow-y-auto pr-2">
-        {sections.map(([title, rows]) =>
-          rows.length > 0 ? (
-            <div key={title} className="mb-4">
-              <h4 className="text-sm font-semibold text-gray-500 mb-2">{title}</h4>
-              <Descriptions size="small" column={2} bordered>
-                {rows.map(([label, value]) => (
-                  <Descriptions.Item key={label as string} label={label as string}>
-                    {String(value ?? '-')}
-                  </Descriptions.Item>
-                ))}
-              </Descriptions>
-            </div>
-          ) : null
-        )}
+        {sections.map(([title, rows]) => (
+          <div key={title} className="mb-4">
+            <h4 className="text-sm font-semibold text-gray-500 mb-2">{title}</h4>
+            <Descriptions size="small" column={2} bordered>
+              {rows.map(([label, value]) => (
+                <Descriptions.Item key={label} label={label}>{val(value)}</Descriptions.Item>
+              ))}
+            </Descriptions>
+          </div>
+        ))}
       </div>
     </Modal>
   )

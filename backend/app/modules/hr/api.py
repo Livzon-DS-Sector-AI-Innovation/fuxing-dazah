@@ -59,6 +59,7 @@ from app.modules.hr.schemas import (
     TrainerListResponse,
     SopCatalogResponse,
     SopCatalogListResponse,
+    TransferCreate,
 )
 from app.modules.hr.service import (
     AnnualTrainingPlanItemService,
@@ -271,8 +272,8 @@ async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     session: AsyncSession = Depends(get_db),
 ):
-    """返回入职台账中在职的员工列表，用于新员工入职培训页面选择员工。"""
-    from app.modules.hr.models import OnboardingRecord
+    """返回入职台账中在职的员工列表，同时关联员工表获取异动等完整信息。"""
+    from app.modules.hr.models import OnboardingRecord, Employee, TransferRecord
     stmt = select(OnboardingRecord).where(
         OnboardingRecord.is_deleted == False,
         OnboardingRecord.is_employed == "是",
@@ -285,6 +286,33 @@ async def training_candidates(
     stmt = stmt.order_by(OnboardingRecord.hire_date.desc().nulls_last())
     r = await session.execute(stmt)
     records = r.scalars().all()
+    # 批量查询关联的 Employee 记录和异动记录
+    emp_numbers = [rec.employee_number for rec in records if rec.employee_number]
+    emp_map = {}
+    transfer_map: dict[str, list] = {}
+    if emp_numbers:
+        emp_rows = (await session.execute(
+            select(Employee).where(Employee.employee_number.in_(emp_numbers), Employee.is_deleted == False)
+        )).scalars().all()
+        emp_map = {e.employee_number: e for e in emp_rows}
+        emp_ids = [e.id for e in emp_rows]
+        if emp_ids:
+            t_rows = (await session.execute(
+                select(TransferRecord).where(
+                    TransferRecord.employee_id.in_(emp_ids),
+                    TransferRecord.is_deleted == False,
+                ).order_by(TransferRecord.effective_date.desc())
+            )).scalars().all()
+            for t in t_rows:
+                for e in emp_rows:
+                    if e.id == t.employee_id:
+                        transfer_map.setdefault(e.employee_number, []).append({
+                            "id": str(t.id), "transfer_type": t.transfer_type,
+                            "from_department": t.from_department, "to_department": t.to_department,
+                            "from_position": t.from_position, "to_position": t.to_position,
+                            "effective_date": str(t.effective_date) if t.effective_date else None,
+                            "reason": t.reason,
+                        })
     return success_response(data=[
         {
             "id": str(rec.id),
@@ -297,6 +325,8 @@ async def training_candidates(
             "school": rec.school,
             "graduation_date": str(rec.graduation_date) if rec.graduation_date else None,
             "source": rec.source or "新入职",
+            "transfers": transfer_map.get(rec.employee_number, []),
+            "employee_id": str(emp_map[rec.employee_number].id) if rec.employee_number in emp_map else None,
         }
         for rec in records
     ])
@@ -3828,49 +3858,49 @@ async def download_exam_paper(
 @router.get("/transfers", summary="员工异动记录列表")
 async def list_transfers(
     employee_id: UUID = Query(...),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
 ):
-    """查询某员工的异动记录。"""
+    """查询某员工的异动记录（分页）。"""
     from app.modules.hr.models import TransferRecord
+    from sqlalchemy import func
+    base = select(TransferRecord).where(
+        TransferRecord.employee_id == employee_id, TransferRecord.is_deleted == False
+    )
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
     r = await session.execute(
-        select(TransferRecord)
-        .where(TransferRecord.employee_id == employee_id, TransferRecord.is_deleted == False)
-        .order_by(TransferRecord.effective_date.desc())
+        base.order_by(TransferRecord.effective_date.desc()).offset((page - 1) * page_size).limit(page_size)
     )
     records = r.scalars().all()
-    return success_response(data=[
-        {
-            "id": str(t.id),
-            "transfer_type": t.transfer_type,
-            "from_department": t.from_department,
-            "to_department": t.to_department,
-            "from_position": t.from_position,
-            "to_position": t.to_position,
+    return paginated_response(
+        data=[{
+            "id": str(t.id), "transfer_type": t.transfer_type,
+            "from_department": t.from_department, "to_department": t.to_department,
+            "from_position": t.from_position, "to_position": t.to_position,
             "effective_date": str(t.effective_date) if t.effective_date else None,
-            "reason": t.reason,
-            "created_at": str(t.created_at),
-        }
-        for t in records
-    ])
+            "reason": t.reason, "created_at": str(t.created_at),
+        } for t in records],
+        page=page, page_size=page_size, total=total,
+    )
 
 
 @router.post("/transfers", summary="创建员工异动记录")
 async def create_transfer(
-    payload: dict,
+    payload: TransferCreate,
     session: AsyncSession = Depends(get_db),
 ):
     """新增员工异动记录。"""
     from app.modules.hr.models import TransferRecord
-    from datetime import date as dt_date
     t = TransferRecord(
-        employee_id=payload["employee_id"],
-        transfer_type=payload.get("transfer_type", "调动"),
-        from_department=payload.get("from_department"),
-        to_department=payload.get("to_department"),
-        from_position=payload.get("from_position"),
-        to_position=payload.get("to_position"),
-        effective_date=dt_date.fromisoformat(payload["effective_date"]) if payload.get("effective_date") else None,
-        reason=payload.get("reason"),
+        employee_id=payload.employee_id,
+        transfer_type=payload.transfer_type,
+        from_department=payload.from_department,
+        to_department=payload.to_department,
+        from_position=payload.from_position,
+        to_position=payload.to_position,
+        effective_date=payload.effective_date,
+        reason=payload.reason,
     )
     session.add(t)
     await session.flush()

@@ -146,7 +146,7 @@ export default function OnboardingPrejobClient() {
   const handleExportPlan = async () => {
     if (!selectedEmployee) return message.warning('请先选择员工')
     await downloadDoc(
-      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.id}/prejob-training-plan`,
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_id || selectedEmployee.id}/prejob-training-plan`,
       'POST',
       `岗前培训计划_${selectedEmployee.name || 'employee'}.docx`,
       setDownloadingWord,

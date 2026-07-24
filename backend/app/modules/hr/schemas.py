@@ -857,3 +857,15 @@ class SopCatalogListResponse(BaseModel):
     message: str = "ok"
     data: list[SopCatalogResponse] = Field(default_factory=list)
     meta: dict | None = None
+
+
+class TransferCreate(BaseModel):
+    """创建异动记录的请求体"""
+    employee_id: UUID
+    transfer_type: str = Field(default="调动", max_length=16)
+    from_department: str | None = Field(None, max_length=64)
+    to_department: str | None = Field(None, max_length=64)
+    from_position: str | None = Field(None, max_length=64)
+    to_position: str | None = Field(None, max_length=64)
+    effective_date: date
+    reason: str | None = Field(None, max_length=256)

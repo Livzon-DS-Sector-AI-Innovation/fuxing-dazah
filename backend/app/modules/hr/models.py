@@ -84,16 +84,9 @@ class Employee(BaseModel):
     concurrent_departments: Mapped[str | None] = mapped_column(
         String(256), nullable=True, comment="兼任部门"
     )
-    concurrent_variety: Mapped[str | None] = mapped_column(
-        String(256), nullable=True, comment="兼任品种"
-    )
-
     # ─── Qualifications ───
     qualifications: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True, comment="职称／职业资格（多选）"
-    )
-    certificates: Mapped[str | None] = mapped_column(
-        String(512), nullable=True, comment="证书"
     )
     qualification_type: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="职称类型"
