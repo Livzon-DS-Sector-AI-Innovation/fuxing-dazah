@@ -272,7 +272,7 @@ export default function OnboardingPrejobClient() {
                     <td style={CELL} colSpan={2}>
                       <DatePicker size="small" style={{ width: '100%' }} placeholder="完成期限"
                         value={sopPlanDates[item.id] ? dayjs(sopPlanDates[item.id]) : null}
-                        onChange={(d) => setSopPlanDates(prev => ({...prev, [item.id]: d ? d.format('YYYY年MM月DD日') : ''}))} />
+                        onChange={(d) => setSopPlanDates(prev => ({...prev, [item.id]: d ? d.format('YYYY-MM-DD') : ''}))} />
                     </td>
                     <td style={CELL} colSpan={2}>
                       <Select size="small" value={sopTrainers[item.id] || undefined}
