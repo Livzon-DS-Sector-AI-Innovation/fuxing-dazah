@@ -61,50 +61,35 @@ async def complete_mail_auth(device_code: str = Form(...), ctx: HrAccessContext 
 
 # ─── 数据管理 ───
 
-_HR_TABLES = [
-    ("employees", "员工档案"),
-    ("departments", "部门管理"),
-    ("teams", "班组管理"),
-    ("onboarding_records", "入职台账"),
-    ("departure_records", "离职台账"),
-    ("offboarding_records", "离职管理"),
-    ("training_ledgers", "培训台账"),
-    ("training_ledger_pages", "培训台账页面"),
-    ("annual_training_plans", "年度培训计划"),
-    ("annual_training_plan_items", "年度计划明细"),
-    ("trainers", "内训师台账"),
-    ("dept_training_personnel", "部门培训人员"),
-    ("sop_catalog", "SOP目录"),
-    ("candidates", "候选人"),
-    ("job_requirements", "岗位需求"),
-    ("exam_papers", "笔试试卷"),
-    ("question_bank", "共享题库"),
-    ("qa_assessments", "考核场次"),
-    ("qa_assessment_scores", "考核成绩"),
-    ("training_evaluations", "培训效果评估"),
-    ("email_logs", "邮件日志"),
-    ("transfer_records", "异动记录"),
-    ("system_settings", "系统设置"),
-]
+# 排除这些表：岗位相关 + alembic 版本表
+_SKIP_TABLES = {"positions", "position_trainings", "alembic_version"}
 
 
 @router.get("/data-management/tables", summary="可管理的数据表及行数")
 async def list_data_tables(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
-    """返回所有可删除的 HR 数据表及当前行数。"""
+    """自动扫描 hr schema 下所有表及行数（排除岗位相关表）。"""
     from sqlalchemy import text
+    r = await session.execute(text(
+        "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'hr' AND tablename != ALL(:skip)",
+        {"skip": list(_SKIP_TABLES)}
+    ))
+    tables = [row[0] for row in r.all()]
     result = []
-    for table, label in _HR_TABLES:
-        r = await session.execute(text(f"SELECT COUNT(*) FROM hr.{table}"))
-        count = r.scalar() or 0
-        result.append({"table": table, "label": label, "count": count})
+    for t in tables:
+        cnt = (await session.execute(text(f"SELECT COUNT(*) FROM hr.{t}"))).scalar() or 0
+        result.append({"table": t, "label": t, "count": cnt})
+    result.sort(key=lambda x: x["label"])
     return success_response(data=result)
 
 
 @router.post("/data-management/clear", summary="清除指定表数据")
 async def clear_data_tables(tables: list[str], session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
-    """清空指定 HR 数据表（仅允许 _HR_TABLES 中的表）。"""
+    """清空指定 HR 数据表（自动排除岗位相关表）。"""
     from sqlalchemy import text
-    allowed = {t[0] for t in _HR_TABLES}
+    r = await session.execute(text(
+        "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'hr'"
+    ))
+    allowed = {row[0] for row in r.all()} - _SKIP_TABLES
     cleared = []
     for table in tables:
         if table not in allowed:
