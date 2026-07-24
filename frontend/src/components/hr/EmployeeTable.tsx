@@ -7,6 +7,7 @@ import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
 import { API_BASE } from '@/lib/hr'
 import { useHrStore } from '@/stores/hr'
+import EmployeeInfoModal from './EmployeeInfoModal'
 
 interface EmployeeTableProps {
   employees: Employee[]
@@ -336,33 +337,7 @@ export default function EmployeeTable({
         size="small"
       />
 
-      <Modal title="员工详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null} width={600}>
-        {detailEmp && (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <tbody>
-              {[
-                ['工号', detailEmp.employee_number], ['姓名', detailEmp.name],
-                ['性别', detailEmp.gender], ['体现部门', detailEmp.department],
-                ['实际部门', detailEmp.actual_department],
-                ['体现岗位', detailEmp.position], ['兼任部门', detailEmp.concurrent_departments],
-                ['兼任品种', detailEmp.variety], ['学历', detailEmp.education],
-                ['毕业院校', detailEmp.school], ['专业', detailEmp.major],
-                ['毕业时间', detailEmp.graduation_date], ['入职日期', detailEmp.hire_date],
-                ['职类', detailEmp.job_category], ['级别', detailEmp.level],
-                ['域账号', detailEmp.domain_account], ['状态', detailEmp.status],
-                ['手机', detailEmp.phone], ['邮箱', detailEmp.email],
-                ['身份证号', detailEmp.id_card], ['籍贯', detailEmp.native_place],
-                ['政治面貌', detailEmp.political_status], ['婚姻状况', detailEmp.marital_status],
-              ].map(([label, val], i) => (
-                <tr key={i}>
-                  <td style={{ padding: '6px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600, width: '30%' }}>{label}</td>
-                  <td style={{ padding: '6px 12px', border: '1px solid #eee' }}>{val || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Modal>
+      <EmployeeInfoModal employee={detailEmp} open={detailOpen} onClose={() => setDetailOpen(false)} />
 
       {/* 异动记录 Modal */}
       <Modal

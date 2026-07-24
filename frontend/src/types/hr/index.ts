@@ -9,8 +9,12 @@ export interface Employee {
   position: string
   duty?: string
   dept_manager?: string
+  additional_manager?: string
   report_grade?: string
+  dept_head_trainer?: string
   job_category?: string
+  concurrent_variety?: string
+  certificates?: string
   level?: string
   concurrent_departments?: string
   qualifications?: string[]
@@ -31,6 +35,11 @@ export interface Employee {
   hire_date: string
   graduation_date?: string
   work_years?: number
+  departure_date?: string
+  safety_training_date?: string
+  safety_training_score?: string
+  culture_training_date?: string
+  gmp_training_date?: string
   factory_tenure?: string
   company_tenure?: string
   education?: string
