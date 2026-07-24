@@ -12,7 +12,7 @@ import {
   OnboardingRecordListResponse,
   DepartureRecordListResponse,
 } from '@/types/hr'
-import { logApiError, logApiSuccess, logError } from '@/lib/hr'
+import { logApiError, logApiSuccess, logError } from './logger'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || ''
 
