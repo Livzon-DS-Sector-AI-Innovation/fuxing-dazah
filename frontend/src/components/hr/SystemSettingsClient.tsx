@@ -3,8 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Alert, Modal, Spin } from 'antd'
 import { SaveOutlined, CheckCircleOutlined } from '@ant-design/icons'
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api/hr'
 
 export default function SystemSettingsClient() {
   const { message } = App.useApp()

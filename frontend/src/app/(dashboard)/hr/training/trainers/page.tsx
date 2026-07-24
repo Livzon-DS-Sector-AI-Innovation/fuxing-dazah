@@ -8,7 +8,7 @@ import {
 import { SearchOutlined, UploadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api/hr'
 
 // ─── 内训师台账 Tab ───
 

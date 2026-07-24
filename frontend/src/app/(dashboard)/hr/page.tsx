@@ -9,7 +9,7 @@ import {
   AuditOutlined, ClockCircleOutlined, SwapOutlined, FileProtectOutlined,
 } from '@ant-design/icons'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api/hr'
 
 const modules = [
   { key: 'profile', title: '员工档案', desc: '管理员工基本信息、入职离职、岗位变动等', icon: <TeamOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/profile' },
