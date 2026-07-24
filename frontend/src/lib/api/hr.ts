@@ -12,6 +12,7 @@ import {
   OnboardingRecordListResponse,
   DepartureRecordListResponse,
 } from '@/types/hr'
+import { logApiError, logApiSuccess, logError } from '@/lib/logger'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || ''
 
@@ -509,9 +510,13 @@ async function downloadDocumentBlob(url: string, fallbackName: string): Promise<
     try {
       const d = await res.json()
       msg = d.message || d.detail || msg
-    } catch { /* 非 JSON 响应，用默认提示 */ }
+    } catch {
+      // 非 JSON 响应，尝试读取文本用于日志
+      try { const text = await res.clone().text(); logApiError('GET', url, res.status, text) } catch { /* ignore */ }
+    }
     if (res.status === 401) msg = '请先登录'
     if (res.status === 403) msg = '没有下载权限，请联系管理员配置'
+    logApiError('GET', url, res.status, msg)
     throw new Error(msg)
   }
   const blob = await res.blob()

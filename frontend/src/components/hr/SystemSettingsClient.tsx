@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Alert, Modal, Spin } from 'antd'
 import { SaveOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { API_BASE } from '@/lib/api/hr'
+import { logApiError, logError } from '@/lib/logger'
 
 export default function SystemSettingsClient() {
   const { message } = App.useApp()
@@ -19,7 +20,7 @@ export default function SystemSettingsClient() {
   useEffect(() => {
     fetch(`${API_BASE}/api/v1/hr/system-settings`, { credentials: 'include' })
       .then(r => r.json()).then(d => form.setFieldsValue(d.data || {}))
-      .catch(() => {})
+      .catch((err: any) => { logError('加载系统设置失败', { error: err?.message }) })
   }, [form])
 
   const handleSave = async () => {

@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, useMemo } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { App, Card, Row, Col, Select, Input, Upload, Button, Space, Spin, Table, Popconfirm, Modal, Form, DatePicker, InputNumber } from 'antd'
 import { UploadOutlined, SearchOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined, BellOutlined, PlusOutlined } from '@ant-design/icons'
+import { logApiError, logError } from '@/lib/logger'
 
 const API_BASE = ''
 
@@ -27,6 +28,7 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
       const d = await res.json()
       setData(d.data || [])
     } catch (err: any) {
+      logError('加载年度计划列表失败', { error: err.message })
       message.error('加载失败: ' + (err.message || '未知错误'))
     } finally { setLoading(false) }
   }
@@ -131,6 +133,7 @@ function PlanDetailView({ planId }: { planId: string }) {
       const plan = (plans.data || []).find((p: any) => p.id === planId)
       if (plan) setPlanInfo({ dept: plan.department, year: plan.year })
     } catch (err: any) {
+      logError('加载计划明细失败', { planId, error: err.message })
       message.error('加载失败: ' + (err.message || '未知错误'))
     } finally { setLoading(false) }
   }

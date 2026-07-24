@@ -5,6 +5,7 @@ import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
+import { logApiError } from '@/lib/logger'
 import {
   fetchOnboardingRecords,
   API_BASE,
@@ -126,7 +127,12 @@ export default function OnboardingPrejobClient() {
       const opts: any = { method, headers: {}, credentials: 'include' }
       if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
       const res = await fetch(url, opts)
-      if (!res.ok) throw new Error('导出失败')
+      if (!res.ok) {
+        let detail = '导出失败'
+        try { const d = await res.json(); detail = d.message || d.detail || detail } catch { /* ignore */ }
+        logApiError(method, url, res.status, detail)
+        throw new Error(detail)
+      }
       const blob = await res.blob()
       const a = document.createElement('a')
       a.href = window.URL.createObjectURL(blob)
