@@ -123,7 +123,7 @@ export default function OnboardingPrejobClient() {
   const downloadDoc = async (url: string, method: string, filename: string, setLoading: (v: boolean) => void, body?: any) => {
     setLoading(true)
     try {
-      const opts: any = { method, headers: {} }
+      const opts: any = { method, headers: {}, credentials: 'include' }
       if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
       const res = await fetch(url, opts)
       if (!res.ok) throw new Error('导出失败')
