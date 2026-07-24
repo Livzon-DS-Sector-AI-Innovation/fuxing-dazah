@@ -165,6 +165,59 @@ async def test_delete_departure_record(db_session: AsyncSession):
         await svc.get_record(record.id)
 
 
+@pytest.mark.asyncio
+async def test_delete_departure_record_restores_employee_status(db_session: AsyncSession):
+    """删除离职台账后，匹配员工的状态应从'离职'恢复为'在职'。"""
+    dept = _rand("RESTORE")
+    emp = await _make_employee(db_session, name="恢复状态员工", department=dept, position="操作工")
+    assert emp.status == "在职"
+
+    record = await _make_departure_record(db_session, name="恢复状态员工", department=dept, position="操作工")
+
+    # 创建离职台账后员工应变为离职
+    svc = EmployeeService(db_session)
+    updated = await svc.get_employee(emp.id)
+    assert updated.status == "离职"
+
+    # 删除离职台账后员工应恢复为在职
+    departure_svc = DepartureRecordService(db_session)
+    await departure_svc.delete_record(record.id)
+
+    restored = await svc.get_employee(emp.id)
+    assert restored.status == "在职"
+
+
+@pytest.mark.asyncio
+async def test_delete_departure_record_restores_onboarding_is_employed(db_session: AsyncSession):
+    """删除离职台账后，入职台账的 is_employed 应从'否'恢复为'是'。"""
+    from sqlalchemy import select as sel
+    from app.modules.hr.models import OnboardingRecord
+
+    dept = _rand("ONBREST")
+    emp = await _make_employee(db_session, name="恢复入职员工", department=dept, position="操作工")
+
+    # 获取自动生成的入职记录
+    r = await db_session.execute(
+        sel(OnboardingRecord).where(
+            OnboardingRecord.employee_number == emp.employee_number,
+            OnboardingRecord.is_deleted.is_(False),
+        )
+    )
+    onboarding = r.scalar_one()
+    assert onboarding.is_employed == "是"
+
+    # 创建离职台账 → is_employed 变为"否"
+    record = await _make_departure_record(db_session, name="恢复入职员工", department=dept, position="操作工")
+    await db_session.refresh(onboarding)
+    assert onboarding.is_employed == "否"
+
+    # 删除离职台账 → is_employed 恢复为"是"
+    departure_svc = DepartureRecordService(db_session)
+    await departure_svc.delete_record(record.id)
+    await db_session.refresh(onboarding)
+    assert onboarding.is_employed == "是"
+
+
 # ═══════════════════════════════════════════════════════════════
 # API 层
 # ═══════════════════════════════════════════════════════════════

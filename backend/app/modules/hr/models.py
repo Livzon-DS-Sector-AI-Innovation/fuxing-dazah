@@ -84,10 +84,16 @@ class Employee(BaseModel):
     concurrent_departments: Mapped[str | None] = mapped_column(
         String(256), nullable=True, comment="兼任部门"
     )
+    concurrent_variety: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, comment="兼任品种"
+    )
 
     # ─── Qualifications ───
     qualifications: Mapped[list[str] | None] = mapped_column(
         JSON, nullable=True, comment="职称／职业资格（多选）"
+    )
+    certificates: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="证书"
     )
     qualification_type: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="职称类型"
@@ -944,3 +950,25 @@ class EmailLog(BaseModel):
     subject: Mapped[str] = mapped_column(String(256), nullable=False, comment="邮件主题")
     status: Mapped[str] = mapped_column(String(16), server_default="sent", nullable=False, comment="sent / failed")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="失败原因")
+
+
+class TransferRecord(BaseModel):
+    """员工异动记录"""
+
+    __tablename__ = "transfer_records"
+    __table_args__ = (
+        Index("ix_transfer_records_employee_id", "employee_id"),
+        Index("ix_transfer_records_effective_date", "effective_date"),
+        {"schema": "hr"},
+    )
+
+    employee_id: Mapped[UUID] = mapped_column(nullable=False, comment="员工ID")
+    transfer_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="调动", comment="调动/晋升/降职/转岗")
+    from_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原部门")
+    to_department: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="新部门")
+    from_position: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="原岗位")
+    to_position: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="新岗位")
+    effective_date: Mapped[date] = mapped_column(Date, nullable=False, comment="生效日期")
+    reason: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="原因")
+    approval_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="审批单号")
+    remark: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="备注")

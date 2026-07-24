@@ -200,6 +200,64 @@ async def test_create_from_notification_deduplication(db_session: AsyncSession):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 过滤已离职员工
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_list_training_ledgers_excludes_departed_employees(db_session: AsyncSession):
+    """离职员工的培训记录不应出现在列表中。"""
+    from sqlalchemy import select as sel
+    from app.modules.hr.models import Employee, OnboardingRecord
+    from app.modules.hr.schemas import EmployeeCreate
+    from app.modules.hr.service import EmployeeService
+
+    dept = _rand("EXCLUDE")
+
+    # 创建在职员工及其培训台账
+    emp1_svc = EmployeeService(db_session)
+    active_emp = await emp1_svc.create_employee(EmployeeCreate(
+        employee_number=_rand("ACTIVE"),
+        name="在职员工",
+        department=dept,
+        position="操作工",
+        hire_date=date.today(),
+    ))
+    active_record = await _make_training_ledger(
+        db_session, employee_number=active_emp.employee_number, training_subject="在职培训"
+    )
+
+    # 创建离职员工的培训台账（先创建员工，再将入职台账标记为不在职）
+    departed_emp = await emp1_svc.create_employee(EmployeeCreate(
+        employee_number=_rand("DEPARTED"),
+        name="离职员工",
+        department=dept,
+        position="操作工",
+        hire_date=date.today(),
+    ))
+    departed_record = await _make_training_ledger(
+        db_session, employee_number=departed_emp.employee_number, training_subject="离职员工培训"
+    )
+
+    # 将该员工的入职记录标记为不在职
+    r = await db_session.execute(
+        sel(OnboardingRecord).where(
+            OnboardingRecord.employee_number == departed_emp.employee_number,
+            OnboardingRecord.is_deleted.is_(False),
+        )
+    )
+    onboarding = r.scalar_one()
+    onboarding.is_employed = "否"
+    await db_session.flush()
+
+    # 列表查询 → 不应包含离职员工的培训记录
+    svc = TrainingLedgerService(db_session)
+    records, _ = await svc.list_records()
+    emp_nos = {rec.employee_number for rec in records}
+    assert departed_emp.employee_number not in emp_nos, "离职员工的培训记录不应出现在列表中"
+    assert active_emp.employee_number in emp_nos, "在职员工的培训记录应在列表中"
+
+
+# ═══════════════════════════════════════════════════════════════
 # API 层
 # ═══════════════════════════════════════════════════════════════
 

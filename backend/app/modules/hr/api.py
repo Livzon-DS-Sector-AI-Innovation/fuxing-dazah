@@ -3821,4 +3821,57 @@ async def download_exam_paper(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
     )
-    await session.commit(); return success_response(message="已删除")
+
+
+# ─── TransferRecord Routes ───
+
+@router.get("/transfers", summary="员工异动记录列表")
+async def list_transfers(
+    employee_id: UUID = Query(...),
+    session: AsyncSession = Depends(get_db),
+):
+    """查询某员工的异动记录。"""
+    from app.modules.hr.models import TransferRecord
+    r = await session.execute(
+        select(TransferRecord)
+        .where(TransferRecord.employee_id == employee_id, TransferRecord.is_deleted == False)
+        .order_by(TransferRecord.effective_date.desc())
+    )
+    records = r.scalars().all()
+    return success_response(data=[
+        {
+            "id": str(t.id),
+            "transfer_type": t.transfer_type,
+            "from_department": t.from_department,
+            "to_department": t.to_department,
+            "from_position": t.from_position,
+            "to_position": t.to_position,
+            "effective_date": str(t.effective_date) if t.effective_date else None,
+            "reason": t.reason,
+            "created_at": str(t.created_at),
+        }
+        for t in records
+    ])
+
+
+@router.post("/transfers", summary="创建员工异动记录")
+async def create_transfer(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+):
+    """新增员工异动记录。"""
+    from app.modules.hr.models import TransferRecord
+    from datetime import date as dt_date
+    t = TransferRecord(
+        employee_id=payload["employee_id"],
+        transfer_type=payload.get("transfer_type", "调动"),
+        from_department=payload.get("from_department"),
+        to_department=payload.get("to_department"),
+        from_position=payload.get("from_position"),
+        to_position=payload.get("to_position"),
+        effective_date=dt_date.fromisoformat(payload["effective_date"]) if payload.get("effective_date") else None,
+        reason=payload.get("reason"),
+    )
+    session.add(t)
+    await session.flush()
+    return success_response(data={"id": str(t.id)}, message="异动记录创建成功", status_code=201)

@@ -7,6 +7,7 @@
 from datetime import date
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
@@ -132,6 +133,104 @@ async def test_update_nonexistent_employee_raises(db_session: AsyncSession):
 
 
 # ═══════════════════════════════════════════════════════════════
+# 创建员工 — 副作用
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_create_employee_auto_creates_onboarding_record(db_session: AsyncSession):
+    """创建员工时自动生成入职台账记录，且 is_employed='是'。"""
+    from app.modules.hr.models import OnboardingRecord
+    emp = await _make_employee(db_session, name="副作用测试员")
+
+    result = await db_session.execute(
+        select(OnboardingRecord).where(
+            OnboardingRecord.employee_number == emp.employee_number,
+            OnboardingRecord.is_deleted.is_(False),
+        )
+    )
+    onboarding = result.scalar_one_or_none()
+    assert onboarding is not None
+    assert onboarding.name == "副作用测试员"
+    assert onboarding.is_employed == "是"
+    assert onboarding.department == emp.department
+    assert onboarding.position == emp.position
+
+
+@pytest.mark.asyncio
+async def test_create_employee_auto_creates_training_ledger_page(db_session: AsyncSession):
+    """创建员工时自动创建培训台账专属页面（TrainingLedgerPage）。"""
+    from app.modules.hr.models import TrainingLedgerPage
+    emp = await _make_employee(db_session, name="台账页面测试员")
+
+    result = await db_session.execute(
+        select(TrainingLedgerPage).where(
+            TrainingLedgerPage.employee_number == emp.employee_number,
+            TrainingLedgerPage.is_deleted.is_(False),
+        )
+    )
+    page = result.scalar_one_or_none()
+    assert page is not None
+    assert page.employee_name == "台账页面测试员"
+
+
+@pytest.mark.asyncio
+async def test_create_employee_syncs_position_training(db_session: AsyncSession):
+    """创建员工时，根据岗位培训内容自动创建培训台账记录。"""
+    from app.modules.hr.models import PositionTraining, TrainingLedger
+
+    dept = _rand("SYNC")
+    pos = _rand("操作工")
+    category = "GMP基础知识"
+
+    db_session.add(PositionTraining(
+        department=dept,
+        position_name=pos,
+        training_category=category,
+        file_name="GMP规范.pdf",
+    ))
+    await db_session.flush()
+
+    # 员工岗位匹配 → 应自动同步培训记录
+    svc = EmployeeService(db_session)
+    emp = await svc.create_employee(EmployeeCreate(
+        employee_number=_rand("SYNCEMP"),
+        name="同步培训员工",
+        department=dept,
+        position=pos,
+        hire_date=date.today(),
+    ))
+
+    result = await db_session.execute(
+        select(TrainingLedger).where(
+            TrainingLedger.employee_number == emp.employee_number,
+            TrainingLedger.training_subject == category,
+            TrainingLedger.is_deleted.is_(False),
+        )
+    )
+    ledger = result.scalar_one_or_none()
+    assert ledger is not None, f"期望自动创建培训记录 '{category}'，但未找到"
+
+
+@pytest.mark.asyncio
+async def test_create_employee_no_duplicate_training_sync(db_session: AsyncSession):
+    """已存在培训台账页面时，不重复创建。"""
+    from app.modules.hr.models import TrainingLedgerPage
+
+    emp_no = _rand("NODUP")
+    emp = await _make_employee(db_session, employee_number=emp_no, name="不重复测试")
+
+    # 查询确认只创建了一条页面记录
+    result = await db_session.execute(
+        select(TrainingLedgerPage).where(
+            TrainingLedgerPage.employee_number == emp_no,
+            TrainingLedgerPage.is_deleted.is_(False),
+        )
+    )
+    pages = result.scalars().all()
+    assert len(pages) == 1
+
+
+# ═══════════════════════════════════════════════════════════════
 # API 层
 # ═══════════════════════════════════════════════════════════════
 
@@ -196,3 +295,106 @@ async def test_api_delete_employee(client):
     await client.delete(f"/api/v1/hr/employees/{emp_id}")
     resp2 = await client.get(f"/api/v1/hr/employees/{emp_id}")
     assert resp2.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_api_get_employee_by_number(client):
+    """GET /api/v1/hr/employees/by-number/{employee_number} 返回员工信息。"""
+    number = _rand("BYNUM")
+    resp = await client.post("/api/v1/hr/employees", json={
+        "employee_number": number,
+        "name": "工号查询测试",
+        "department": "查询部",
+        "position": "测试",
+        "hire_date": str(date.today()),
+    })
+    assert resp.status_code == 201
+
+    resp2 = await client.get(f"/api/v1/hr/employees/by-number/{number}")
+    assert resp2.status_code == 200
+    assert resp2.json()["data"]["name"] == "工号查询测试"
+
+
+@pytest.mark.asyncio
+async def test_api_get_training_candidates(client):
+    """GET /api/v1/hr/employees/training-candidates 返回在职入职员工列表。"""
+    number = _rand("CAND")
+    # 先创建在职员工（会自动生成入职台账且 is_employed='是'）
+    await client.post("/api/v1/hr/employees", json={
+        "employee_number": number,
+        "name": "培训候选员工",
+        "department": "候选部",
+        "position": "测试",
+        "hire_date": str(date.today()),
+    })
+
+    resp = await client.get("/api/v1/hr/employees/training-candidates?keyword=培训候选员工")
+    assert resp.status_code == 200
+    candidates = resp.json()["data"]
+    assert len(candidates) >= 1
+    # 应包含刚创建的员工
+    names = [c["name"] for c in candidates]
+    assert "培训候选员工" in names
+
+
+# ═══════════════════════════════════════════════════════════════
+# 职位 & 岗位培训 API
+# ═══════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_api_get_positions(client):
+    """GET /api/v1/hr/positions 返回 200 和职位列表。"""
+    resp = await client.get("/api/v1/hr/positions")
+    assert resp.status_code == 200
+    assert "data" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_api_create_position(client):
+    """POST /api/v1/hr/positions 创建职位并返回 201。"""
+    dept = _rand("POSDEPT")
+    resp = await client.post("/api/v1/hr/positions", json={
+        "department": dept,
+        "name": "测试岗位",
+    })
+    assert resp.status_code == 201
+    assert resp.json()["data"]["name"] == "测试岗位"
+
+
+@pytest.mark.asyncio
+async def test_api_get_positions_by_department(client):
+    """GET /api/v1/hr/positions?department=xxx 按部门过滤。"""
+    dept = _rand("FILTERPOS")
+    await client.post("/api/v1/hr/positions", json={
+        "department": dept,
+        "name": "过滤岗位",
+    })
+
+    resp = await client.get(f"/api/v1/hr/positions?department={dept}")
+    assert resp.status_code == 200
+    positions = resp.json()["data"]
+    assert len(positions) >= 1
+    assert positions[0]["department"] == dept
+
+
+@pytest.mark.asyncio
+async def test_api_get_position_departments(client):
+    """GET /api/v1/hr/positions/departments 返回部门列表。"""
+    dept = _rand("POSDEPTLIST")
+    await client.post("/api/v1/hr/positions", json={
+        "department": dept,
+        "name": "部门列表岗位",
+    })
+
+    resp = await client.get("/api/v1/hr/positions/departments")
+    assert resp.status_code == 200
+    departments = resp.json()["data"]
+    assert dept in departments
+
+
+@pytest.mark.asyncio
+async def test_api_get_position_trainings(client):
+    """GET /api/v1/hr/position-trainings 返回 200。"""
+    resp = await client.get("/api/v1/hr/position-trainings")
+    assert resp.status_code == 200
+    assert "data" in resp.json()
