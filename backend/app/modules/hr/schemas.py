@@ -952,6 +952,7 @@ class CandidateUpdate(BaseModel):
     job_requirement_id: UUID | None = None
     candidate_type: str | None = Field(None, max_length=8)
     offer_status: str | None = Field(None, max_length=16)
+    offer_sent_at: date | None = None
     source: str | None = Field(None, max_length=32)
     expected_salary: str | None = Field(None, max_length=32)
     current_company: str | None = Field(None, max_length=128)
@@ -1070,10 +1071,12 @@ class CandidateComparisonItem(BaseModel):
 
 
 class PushReviewRequest(BaseModel):
+    pushed_by: str | None = Field(None, description="推送人")
     push_note: str | None = Field(None, description="HR推送备注")
 
 
 class DecideReviewRequest(BaseModel):
+    review_id: str = Field(..., description="审核记录ID")
     decision: str = Field(..., max_length=16, description="已同意/已拒绝")
     review_comment: str | None = Field(None, description="审核意见（拒绝时必填）")
 

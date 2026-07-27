@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Alert, Modal, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
 import { SaveOutlined, CheckCircleOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
-import { API_BASE } from '@/lib/hr'
 import { logError } from '@/lib/hr'
 
 export default function SystemSettingsClient() {
@@ -11,52 +10,47 @@ export default function SystemSettingsClient() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
 
-  // 授权引导弹窗
   const [authModal, setAuthModal] = useState(false)
   const [authUrl, setAuthUrl] = useState('')
   const [deviceCode, setDeviceCode] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [tables, setTables] = useState<any[]>([])
+  const [tablesLoading, setTablesLoading] = useState(true)
   const [selected, setSelected] = useState<string[]>([])
 
-  useEffect(() => { loadTables() }, [])
-
-  const loadTables = async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/data-management/tables`, { credentials: 'include' })
-      const d = await r.json()
-      setTables(d.data || [])
-    } catch { /* ignore */ }
+  const loadTables = () => {
+    setTablesLoading(true)
+    fetch('/api/v1/hr/data-management/tables', { credentials: 'include' })
+      .then(r => r.json()).then(d => setTables(d?.data || []))
+      .catch(() => {})
+      .finally(() => setTablesLoading(false))
   }
+
+  useEffect(() => { loadTables() }, [])
   const toggleSelect = (table: string) => setSelected(prev => prev.includes(table) ? prev.filter(t => t !== table) : [...prev, table])
-  const handleClearSelected = async () => {
+  const handleClearSelected = () => {
     if (!selected.length) return message.warning('请选择要清空的表')
-    try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/data-management/clear`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify(selected),
-      })
-      const d = await r.json()
+    fetch('/api/v1/hr/data-management/clear', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+      body: JSON.stringify(selected),
+    }).then(r => r.json()).then(d => {
       message.success(d.message)
       setSelected([])
       loadTables()
-    } catch (err: any) { message.error(err.message || '操作失败') }
+    }).catch((err: any) => { message.error(err.message || '操作失败') })
   }
-  const handleClearAll = async () => {
-    const all = tables.map(t => t.table)
-    try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/data-management/clear`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-        body: JSON.stringify(all),
-      })
-      const d = await r.json()
+  const handleClearAll = () => {
+    fetch('/api/v1/hr/data-management/clear', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+      body: JSON.stringify(tables.map(t => t.table)),
+    }).then(r => r.json()).then(d => {
       message.success(d.message)
       loadTables()
-    } catch (err: any) { message.error(err.message || '操作失败') }
+    }).catch((err: any) => { message.error(err.message || '操作失败') })
   }
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/system-settings`, { credentials: 'include' })
+    fetch(`/api/v1/hr/system-settings`, { credentials: 'include' })
       .then(r => r.json()).then(d => form.setFieldsValue(d.data || {}))
       .catch((err: any) => { logError('加载系统设置失败', { error: err?.message }) })
   }, [form])
@@ -65,7 +59,7 @@ export default function SystemSettingsClient() {
     const values = await form.validateFields()
     setLoading(true)
     try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/system-settings`, {
+      const r = await fetch(`/api/v1/hr/system-settings`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values), credentials: 'include',
       })
@@ -87,7 +81,7 @@ export default function SystemSettingsClient() {
     setAuthLoading(true)
     try {
       const fd = new FormData(); fd.append('device_code', deviceCode)
-      const r = await fetch(`${API_BASE}/api/v1/hr/system-settings/complete-auth`, {
+      const r = await fetch(`/api/v1/hr/system-settings/complete-auth`, {
         method: 'POST', body: fd, credentials: 'include',
       })
       const d = await r.json()
@@ -170,25 +164,27 @@ export default function SystemSettingsClient() {
           </Space>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          {tables.map(t => (
-            <div key={t.table}
-              onClick={() => toggleSelect(t.table)}
-              className={`cursor-pointer rounded-lg border p-3 transition-all hover:shadow-sm ${
-                selected.includes(t.table)
-                  ? 'border-red-400 bg-red-50 shadow-sm'
-                  : 'border-gray-200 bg-white hover:border-blue-300'
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">{t.label}</span>
-                <Checkbox checked={selected.includes(t.table)} />
+        <Spin spinning={tablesLoading}>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 min-h-[80px]">
+            {tables.map(t => (
+              <div key={t.table}
+                onClick={() => toggleSelect(t.table)}
+                className={`cursor-pointer rounded-lg border p-3 transition-all hover:shadow-sm ${
+                  selected.includes(t.table)
+                    ? 'border-red-400 bg-red-50 shadow-sm'
+                    : 'border-gray-200 bg-white hover:border-blue-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">{t.label}</span>
+                  <Checkbox checked={selected.includes(t.table)} />
+                </div>
+                <div className="mt-1 text-2xl font-bold text-gray-900">{t.count}</div>
+                <div className="text-xs text-gray-400">条记录</div>
               </div>
-              <div className="mt-1 text-2xl font-bold text-gray-900">{t.count}</div>
-              <div className="text-xs text-gray-400">条记录</div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </Spin>
 
         <div className="flex gap-2 pt-2 border-t border-gray-100">
           <Popconfirm title={`确认删除选中的 ${selected.length} 张表？不可恢复！`} onConfirm={handleClearSelected}>

@@ -6,14 +6,13 @@ combined into a single .docx with page breaks in between.
 """
 
 import copy
-import re
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
 
 from docx import Document
-from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from lxml import etree
 
 from app.modules.hr.schemas import TrainingSignInSheetInput

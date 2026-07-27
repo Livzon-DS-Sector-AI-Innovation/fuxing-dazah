@@ -10,9 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import DuplicateException, NotFoundException
 from app.modules.hr.schemas import DepartmentCreate, DepartmentUpdate
 from app.modules.hr.service import DepartmentService
-
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 

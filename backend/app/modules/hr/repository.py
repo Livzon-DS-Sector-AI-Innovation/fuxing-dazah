@@ -1,6 +1,6 @@
 """HR database queries live here."""
 
-from datetime import date
+from datetime import UTC, date
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +26,7 @@ from app.modules.hr.models import (
     TrainingLedger,
     TrainingLedgerPage,
 )
+
 
 class EmployeeRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -152,13 +153,12 @@ class EmployeeRepository:
     async def create(self, employee: Employee) -> Employee:
         self.session.add(employee)
         await self.session.flush()
-        await self.session.refresh(employee)
         return employee
 
     async def update(self, employee: Employee) -> Employee:
         await self.session.flush()
-        await self.session.refresh(employee)
-        return employee
+        result = await self.session.execute(select(Employee).where(Employee.id == employee.id))
+        return result.scalar_one()
 
     async def get_by_name_and_department(self, name: str, department: str) -> Employee | None:
         """按姓名+部门精确匹配一位员工。"""
@@ -378,13 +378,12 @@ class DepartmentRepository:
     async def create(self, department: HrDepartment) -> HrDepartment:
         self.session.add(department)
         await self.session.flush()
-        await self.session.refresh(department)
         return department
 
     async def update(self, department: HrDepartment) -> HrDepartment:
         await self.session.flush()
-        await self.session.refresh(department)
-        return department
+        result = await self.session.execute(select(HrDepartment).where(HrDepartment.id == department.id))
+        return result.scalar_one()
 
     async def soft_delete(self, department: HrDepartment) -> None:
         department.is_deleted = True
@@ -435,13 +434,12 @@ class TeamRepository:
     async def create(self, team: Team) -> Team:
         self.session.add(team)
         await self.session.flush()
-        await self.session.refresh(team)
         return team
 
     async def update(self, team: Team) -> Team:
         await self.session.flush()
-        await self.session.refresh(team)
-        return team
+        result = await self.session.execute(select(Team).where(Team.id == team.id))
+        return result.scalar_one()
 
     async def soft_delete(self, team: Team) -> None:
         team.is_deleted = True
@@ -494,13 +492,12 @@ class OffboardingRecordRepository:
     async def create(self, record: OffboardingRecord) -> OffboardingRecord:
         self.session.add(record)
         await self.session.flush()
-        await self.session.refresh(record)
         return record
 
     async def update(self, record: OffboardingRecord) -> OffboardingRecord:
         await self.session.flush()
-        await self.session.refresh(record)
-        return record
+        result = await self.session.execute(select(OffboardingRecord).where(OffboardingRecord.id == record.id))
+        return result.scalar_one()
 
     async def soft_delete(self, record: OffboardingRecord) -> None:
         record.is_deleted = True
@@ -532,12 +529,12 @@ class OnboardingRecordRepository:
         sort_order: str = "desc",
         days: int = 7,
     ) -> tuple[list[OnboardingRecord], int]:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
         stmt = select(OnboardingRecord).where(OnboardingRecord.is_deleted.is_(False))
 
         # 七天自动清空：只显示最近 N 天内创建的记录
         if days > 0:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            cutoff = datetime.now(UTC) - timedelta(days=days)
             stmt = stmt.where(OnboardingRecord.created_at >= cutoff)
 
         if department:
@@ -570,13 +567,12 @@ class OnboardingRecordRepository:
     async def create(self, record: OnboardingRecord) -> OnboardingRecord:
         self.session.add(record)
         await self.session.flush()
-        await self.session.refresh(record)
         return record
 
     async def update(self, record: OnboardingRecord) -> OnboardingRecord:
         await self.session.flush()
-        await self.session.refresh(record)
-        return record
+        result = await self.session.execute(select(OnboardingRecord).where(OnboardingRecord.id == record.id))
+        return result.scalar_one()
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -643,13 +639,12 @@ class DepartureRecordRepository:
     async def create(self, record: DepartureRecord) -> DepartureRecord:
         self.session.add(record)
         await self.session.flush()
-        await self.session.refresh(record)
         return record
 
     async def update(self, record: DepartureRecord) -> DepartureRecord:
         await self.session.flush()
-        await self.session.refresh(record)
-        return record
+        result = await self.session.execute(select(DepartureRecord).where(DepartureRecord.id == record.id))
+        return result.scalar_one()
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -715,13 +710,12 @@ class TrainingLedgerRepository:
     async def create(self, record: TrainingLedger) -> TrainingLedger:
         self.session.add(record)
         await self.session.flush()
-        await self.session.refresh(record)
         return record
 
     async def update(self, record: TrainingLedger) -> TrainingLedger:
         await self.session.flush()
-        await self.session.refresh(record)
-        return record
+        result = await self.session.execute(select(TrainingLedger).where(TrainingLedger.id == record.id))
+        return result.scalar_one()
 
     async def soft_delete(self, record: TrainingLedger) -> None:
         record.is_deleted = True
@@ -768,7 +762,6 @@ class TrainingLedgerPageRepository:
     async def create(self, page: TrainingLedgerPage) -> TrainingLedgerPage:
         self.session.add(page)
         await self.session.flush()
-        await self.session.refresh(page)
         return page
 
 class AnnualTrainingPlanRepository:
@@ -821,13 +814,12 @@ class AnnualTrainingPlanRepository:
     async def create(self, plan: AnnualTrainingPlan) -> AnnualTrainingPlan:
         self.session.add(plan)
         await self.session.flush()
-        await self.session.refresh(plan)
         return plan
 
     async def update(self, plan: AnnualTrainingPlan) -> AnnualTrainingPlan:
         await self.session.flush()
-        await self.session.refresh(plan)
-        return plan
+        result = await self.session.execute(select(AnnualTrainingPlan).where(AnnualTrainingPlan.id == plan.id))
+        return result.scalar_one()
 
     async def soft_delete(self, plan: AnnualTrainingPlan) -> None:
         plan.is_deleted = True
@@ -860,13 +852,12 @@ class AnnualTrainingPlanItemRepository:
     async def create(self, item: AnnualTrainingPlanItem) -> AnnualTrainingPlanItem:
         self.session.add(item)
         await self.session.flush()
-        await self.session.refresh(item)
         return item
 
     async def update(self, item: AnnualTrainingPlanItem) -> AnnualTrainingPlanItem:
         await self.session.flush()
-        await self.session.refresh(item)
-        return item
+        result = await self.session.execute(select(AnnualTrainingPlanItem).where(AnnualTrainingPlanItem.id == item.id))
+        return result.scalar_one()
 
     async def delete(self, item: AnnualTrainingPlanItem) -> None:
         await self.session.delete(item)
@@ -900,10 +891,18 @@ class JobRequirementRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_ids(self, req_ids: list[UUID]) -> list[JobRequirement]:
+        """批量按ID查询岗位需求。"""
+        if not req_ids:
+            return []
+        result = await self.session.execute(
+            select(JobRequirement).where(JobRequirement.id.in_(req_ids), JobRequirement.is_deleted.is_(False))
+        )
+        return list(result.scalars().all())
+
     async def create(self, req: JobRequirement) -> JobRequirement:
         self.session.add(req)
         await self.session.flush()
-        await self.session.refresh(req)
         return req
 
     async def update(self, req: JobRequirement) -> JobRequirement:
@@ -960,10 +959,18 @@ class CandidateRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_ids(self, candidate_ids: list[UUID]) -> list[Candidate]:
+        """批量按ID查询候选人。"""
+        if not candidate_ids:
+            return []
+        result = await self.session.execute(
+            select(Candidate).where(Candidate.id.in_(candidate_ids), Candidate.is_deleted.is_(False))
+        )
+        return list(result.scalars().all())
+
     async def create(self, candidate: Candidate) -> Candidate:
         self.session.add(candidate)
         await self.session.flush()
-        await self.session.refresh(candidate)
         return candidate
 
     async def update(self, candidate: Candidate) -> Candidate:
@@ -980,6 +987,23 @@ class CandidateRepository:
             select(func.count()).select_from(Candidate).where(Candidate.status == status, Candidate.is_deleted.is_(False))
         )
         return result.scalar() or 0
+
+    async def count_group_by_status(self) -> dict[str, int]:
+        """一次查询返回各状态的候选人数量。"""
+        result = await self.session.execute(
+            select(Candidate.status, func.count())
+            .where(Candidate.is_deleted.is_(False))
+            .group_by(Candidate.status)
+        )
+        return {row[0]: row[1] for row in result.all()}
+
+    async def get_by_id_for_update(self, candidate_id: UUID) -> Candidate | None:
+        """SELECT ... FOR UPDATE，用于并发安全的入职操作。"""
+        result = await self.session.execute(
+            select(Candidate).where(Candidate.id == candidate_id, Candidate.is_deleted.is_(False))
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -999,6 +1023,19 @@ class InterviewRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_candidate_ids(self, candidate_ids: list[UUID]) -> dict[UUID, list[Interview]]:
+        """批量查询多个候选人的面试记录。"""
+        if not candidate_ids:
+            return {}
+        result = await self.session.execute(
+            select(Interview).where(Interview.candidate_id.in_(candidate_ids), Interview.is_deleted.is_(False))
+            .order_by(desc(Interview.interview_date))
+        )
+        by_candidate: dict[UUID, list[Interview]] = {}
+        for iv in result.scalars().all():
+            by_candidate.setdefault(iv.candidate_id, []).append(iv)
+        return by_candidate
+
     async def get_by_id(self, interview_id: UUID) -> Interview | None:
         result = await self.session.execute(
             select(Interview).where(Interview.id == interview_id, Interview.is_deleted.is_(False))
@@ -1008,7 +1045,6 @@ class InterviewRepository:
     async def create(self, interview: Interview) -> Interview:
         self.session.add(interview)
         await self.session.flush()
-        await self.session.refresh(interview)
         return interview
 
     async def update(self, interview: Interview) -> Interview:
@@ -1041,10 +1077,36 @@ class CandidateAiEvaluationRepository:
         )
         return result.scalars().first()
 
+    async def get_by_candidate_ids(self, candidate_ids: list[UUID]) -> dict[UUID, CandidateAiEvaluation]:
+        """批量查询多个候选人的AI评价（每人取最新一条）。"""
+        if not candidate_ids:
+            return {}
+        from sqlalchemy import distinct
+        # 使用子查询获取每个候选人最新的 evaluation
+        subq = (
+            select(CandidateAiEvaluation.candidate_id, func.max(CandidateAiEvaluation.created_at).label("max_created"))
+            .where(CandidateAiEvaluation.candidate_id.in_(candidate_ids), CandidateAiEvaluation.is_deleted.is_(False))
+            .group_by(CandidateAiEvaluation.candidate_id)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(CandidateAiEvaluation).join(
+                subq,
+                (CandidateAiEvaluation.candidate_id == subq.c.candidate_id)
+                & (CandidateAiEvaluation.created_at == subq.c.max_created),
+            )
+        )
+        by_candidate: dict[UUID, CandidateAiEvaluation] = {}
+        for ev in result.scalars().all():
+            # 同一候选人可能有多条相同时间的，取第一条
+            if ev.candidate_id not in by_candidate:
+                by_candidate[ev.candidate_id] = ev
+        return by_candidate
+        return result.scalars().first()
+
     async def create(self, evaluation: CandidateAiEvaluation) -> CandidateAiEvaluation:
         self.session.add(evaluation)
         await self.session.flush()
-        await self.session.refresh(evaluation)
         return evaluation
 
     async def update(self, evaluation: CandidateAiEvaluation) -> CandidateAiEvaluation:
@@ -1083,7 +1145,6 @@ class CandidateReviewRepository:
     async def create(self, review: CandidateReview) -> CandidateReview:
         self.session.add(review)
         await self.session.flush()
-        await self.session.refresh(review)
         return review
 
     async def update(self, review: CandidateReview) -> CandidateReview:
@@ -1099,7 +1160,6 @@ class CandidateStatusLogRepository:
     async def create(self, log: CandidateStatusLog) -> CandidateStatusLog:
         self.session.add(log)
         await self.session.flush()
-        await self.session.refresh(log)
         return log
 
     async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateStatusLog]:

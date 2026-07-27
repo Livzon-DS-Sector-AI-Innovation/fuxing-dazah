@@ -289,6 +289,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
             const res = await fetch(`${API_BASE}/api/v1/hr/positions`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ department: newPosDept, name: newPosName.trim() }),
+              credentials: 'include' as const,
             })
             if (res.ok) {
               message.success('职位创建成功')

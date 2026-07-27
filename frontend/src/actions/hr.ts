@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
 import { getAuthHeaders } from '@/lib/auth'
 import {
   EmployeeCreateInput,
@@ -126,7 +127,7 @@ export async function fetchDepartmentsAction(
 export async function createDepartment(data: DepartmentCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -140,7 +141,7 @@ export async function createDepartment(data: DepartmentCreateInput) {
 export async function updateDepartment(id: string, data: DepartmentUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -154,6 +155,7 @@ export async function updateDepartment(id: string, data: DepartmentUpdateInput) 
 export async function deleteDepartment(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -166,6 +168,7 @@ export async function deleteDepartment(id: string) {
 export async function deleteDepartureRecordAction(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -202,7 +205,7 @@ export async function fetchTeamsAction(
 export async function createTeam(data: TeamCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -216,7 +219,7 @@ export async function createTeam(data: TeamCreateInput) {
 export async function updateTeam(id: string, data: TeamUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -230,6 +233,7 @@ export async function updateTeam(id: string, data: TeamUpdateInput) {
 export async function deleteTeam(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -244,7 +248,7 @@ export async function deleteTeam(id: string) {
 export async function createAnnualTrainingPlan(data: AnnualTrainingPlanCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -258,6 +262,7 @@ export async function createAnnualTrainingPlan(data: AnnualTrainingPlanCreateInp
 export async function deleteAnnualTrainingPlan(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -270,7 +275,7 @@ export async function deleteAnnualTrainingPlan(id: string) {
 export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanItemBatchUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}/items/batch`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -286,7 +291,9 @@ export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanI
 export async function parseResumePreviewAction(formData: FormData): Promise<{ data: any }> {
   const headers = await getAuthHeaders(); delete headers['Content-Type']
   const res = await fetch(`${API_BASE}/api/v1/hr/candidates/parse-resume`, {
-    method: 'POST', body: formData, headers,
+    method: 'POST',
+    headers,
+    body: formData,
   })
   if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '简历解析失败') }
   return res.json()
@@ -385,6 +392,38 @@ export async function addQuestionBankItems(items: {
   return res.json()
 }
 
+export async function fetchDataTables(): Promise<{ data: any[] }> {
+  const cookieStore = await cookies()
+  const allCookies = cookieStore.getAll().map(c => `${c.name}=${c.value}`).join('; ')
+  const res = await fetch(`${API_BASE}/api/v1/hr/data-management/tables`, {
+    headers: { Cookie: allCookies },
+    cache: 'no-store',
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`)
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`Invalid JSON response: ${text.slice(0, 200)}`)
+  }
+}
+
+export async function clearDataTables(tables: string[]): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/data-management/clear`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(tables),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || `HTTP ${res.status}`)
+  }
+  revalidatePath('/hr/settings')
+  return res.json()
+}
+
 export async function deleteQuestionBankItem(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/question-bank/${id}`, {
     method: 'DELETE',
@@ -407,7 +446,8 @@ export async function createJobRequirement(data: JobRequirementCreateInput) {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '创建岗位需求失败')
+    const msg = err.detail ? `${err.message}: ${err.detail}` : (err.message || '创建岗位需求失败')
+    throw new Error(msg)
   }
   revalidatePath('/hr/recruitment')
   return res.json()
@@ -421,7 +461,8 @@ export async function updateJobRequirement(id: string, data: JobRequirementUpdat
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '更新岗位需求失败')
+    const msg = err.detail ? `${err.message}: ${err.detail}` : (err.message || '更新岗位需求失败')
+    throw new Error(msg)
   }
   revalidatePath('/hr/recruitment')
   return res.json()
@@ -498,8 +539,10 @@ export async function transitionCandidateStatus(id: string, data: CandidateStatu
 }
 
 export async function parseResumeAction(formData: FormData) {
+  const headers = await getAuthHeaders(); delete headers['Content-Type']
   const res = await fetch(`${API_BASE}/api/v1/hr/candidates/parse-resume`, {
     method: 'POST',
+    headers,
     body: formData,
   })
   if (!res.ok) {
@@ -570,8 +613,10 @@ export async function evaluateInterview(id: string) {
 // ─── 招聘：Offer ───
 
 export async function sendOfferAction(candidateId: string, formData: FormData) {
+  const headers = await getAuthHeaders(); delete headers['Content-Type']
   const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/send-offer`, {
     method: 'POST',
+    headers,
     body: formData,
   })
   if (!res.ok) {

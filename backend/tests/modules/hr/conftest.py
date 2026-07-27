@@ -18,8 +18,9 @@ from app.core.database import get_db
 from app.main import app
 from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
-from tests.conftest import _test_session_factory  # noqa: F401 — 复用根 conftest 的 session factory
-
+from tests.conftest import (
+    _test_session_factory,  # noqa: F401 — 复用根 conftest 的 session factory
+)
 
 # ── 全部 HR 权限码（测试用超管视角） ──
 _ALL_HR_PERMS: set[str] = {

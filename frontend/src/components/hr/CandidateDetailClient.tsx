@@ -72,6 +72,29 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const [pushLoading, setPushLoading] = useState(false)
   const [reviewLoading, setReviewLoading] = useState(false)
 
+  // 一键入职
+  const [onboardLoading, setOnboardLoading] = useState(false)
+
+  const handleOnboard = async () => {
+    Modal.confirm({
+      title: '确认入职',
+      content: `确定将「${candidate.name}」转为入职员工？系统将自动创建入职记录。`,
+      onOk: async () => {
+        setOnboardLoading(true)
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidate.id}/onboard`, {
+            method: 'POST', credentials: 'include',
+          })
+          const d = await res.json()
+          if (!res.ok) throw new Error(d.message || '入职失败')
+          message.success(`入职成功！工号：${d.data?.employee_number || ''}`)
+          router.refresh()
+        } catch (err: any) { message.error(err.message || '入职失败') }
+        finally { setOnboardLoading(false) }
+      },
+    })
+  }
+
   useEffect(() => {
     const raw = sessionStorage.getItem('candidate_list_context')
     if (raw) {
@@ -344,6 +367,13 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             {isEditing ? <Input value={formData.expected_salary} onChange={e => setFormData({ ...formData, expected_salary: e.target.value })} /> : (candidate.expected_salary || '-')}
           </Descriptions.Item>
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
+          {(candidate.status === '已录用' || candidate.offer_status === '已接受') && (
+            <Descriptions.Item label="入职操作">
+              <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
+                🎉 转为入职员工
+              </Button>
+            </Descriptions.Item>
+          )}
           <Descriptions.Item label="备注">
             {isEditing ? <Input.TextArea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} rows={2} /> : (candidate.notes || '-')}
           </Descriptions.Item>

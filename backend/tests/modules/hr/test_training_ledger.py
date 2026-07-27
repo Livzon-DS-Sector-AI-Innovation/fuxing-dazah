@@ -13,9 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundException
 from app.modules.hr.schemas import TrainingLedgerCreate, TrainingLedgerUpdate
 from app.modules.hr.service import TrainingLedgerService
-
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 
@@ -207,7 +205,8 @@ async def test_create_from_notification_deduplication(db_session: AsyncSession):
 async def test_list_training_ledgers_excludes_departed_employees(db_session: AsyncSession):
     """离职员工的培训记录不应出现在列表中。"""
     from sqlalchemy import select as sel
-    from app.modules.hr.models import Employee, OnboardingRecord
+
+    from app.modules.hr.models import OnboardingRecord
     from app.modules.hr.schemas import EmployeeCreate
     from app.modules.hr.service import EmployeeService
 

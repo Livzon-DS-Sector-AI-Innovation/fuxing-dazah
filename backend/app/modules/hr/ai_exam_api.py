@@ -6,8 +6,9 @@ from fastapi.responses import StreamingResponse
 from app.core.response import success_response
 from app.modules.hr.ai_exam_schemas import ExamExportRequest
 from app.modules.hr.ai_exam_service import export_exam, generate_exam
+from app.modules.hr.deps import require_hr_basic
 
-router = APIRouter(prefix="/exam", tags=["AI 出题"])
+router = APIRouter(prefix="/exam", tags=["AI 出题"], dependencies=[Depends(require_hr_basic)])
 
 
 @router.post("/generate", summary="生成考试题目")

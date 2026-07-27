@@ -137,7 +137,6 @@ def _fill_training_table(doc: Document, items: list[dict[str, str]]) -> None:
         return
 
     from docx.oxml import OxmlElement
-    from lxml import etree
 
     # 扫描模板行，按原始文本内容定位每个字段的 XML cell 索引
     xml_cells = template_row._tr.findall(qn('w:tc'))

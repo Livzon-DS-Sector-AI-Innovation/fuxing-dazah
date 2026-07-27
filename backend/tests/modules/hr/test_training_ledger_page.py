@@ -10,9 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import DuplicateException
 from app.modules.hr.schemas import TrainingLedgerPageCreate
 from app.modules.hr.service import TrainingLedgerPageService
-
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 

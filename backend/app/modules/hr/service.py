@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import select, text, func, or_
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
@@ -51,8 +51,6 @@ from app.modules.hr.schemas import (
     AnnualTrainingPlanUpdate,
     CandidateCreate,
     CandidateUpdate,
-    DecideReviewRequest,
-    PushReviewRequest,
     DepartmentCreate,
     DepartmentUpdate,
     DepartureRecordCreate,
@@ -319,7 +317,8 @@ class EmployeeService:
     @staticmethod
     def _parse_date_value(val: object) -> date | None:
         """将各种格式的日期值统一转换为 date 对象。返回 None 表示无法解析。"""
-        from datetime import date as date_cls, datetime as datetime_cls
+        from datetime import date as date_cls
+        from datetime import datetime as datetime_cls
 
         if isinstance(val, datetime_cls):
             return val.date()
@@ -351,6 +350,7 @@ class EmployeeService:
         确保失败行不影响其他行。
         """
         from io import BytesIO
+
         from openpyxl import load_workbook
 
         wb = load_workbook(BytesIO(file_bytes), data_only=True)
@@ -471,7 +471,9 @@ class EmployeeService:
     async def upload_trainers(self, file_bytes: bytes) -> dict:
         """上传内训师 Excel，按姓名+部门 upsert。"""
         from io import BytesIO
+
         from openpyxl import load_workbook
+
         from app.modules.hr.models import HrTrainer
 
         wb = load_workbook(BytesIO(file_bytes), data_only=True)
@@ -524,8 +526,10 @@ class EmployeeService:
     async def upload_sop_catalog(self, file_bytes: bytes) -> dict:
         """上传 SOP 目录 Excel，按 SOP 编号 upsert。"""
         from io import BytesIO
+
         from openpyxl import load_workbook
-        from app.modules.hr.models import SopCatalog, PositionTraining
+
+        from app.modules.hr.models import PositionTraining, SopCatalog
 
         wb = load_workbook(BytesIO(file_bytes), data_only=True)
         ws = wb.active
@@ -777,7 +781,9 @@ class EmployeeService:
         每行使用独立 SAVEPOINT，单行失败不影响其他行。
         """
         from io import BytesIO
+
         from openpyxl import load_workbook
+
         from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
 
         wb = load_workbook(BytesIO(file_bytes), data_only=True)
@@ -995,7 +1001,8 @@ class DepartmentService:
             page_size=page_size,
         )
         # Attach employee count to each department
-        from sqlalchemy import select, text, func, or_, func
+        from sqlalchemy import func, select
+
         from app.modules.hr.models import Employee
         for dept in departments:
             count = await self.repo.session.scalar(
@@ -1523,7 +1530,7 @@ class CandidateService:
     async def transition_status(self, candidate_id: UUID, new_status: str, remark: str | None = None) -> Candidate:
         c = await self.get(candidate_id)
         allowed = _CANDIDATE_TRANSITIONS.get(c.status, set())
-        if new_status not in allowed and c.status not in ("已录用", "已拒绝"):
+        if new_status not in allowed:
             raise ValueError(f"不允许从「{c.status}」变更为「{new_status}」")
         old_status = c.status
         c.status = new_status
@@ -1681,18 +1688,26 @@ class CandidateReviewService:
 
     async def list_pending(self, *, reviewer: str | None = None) -> list[dict]:
         reviews = await self.repo.list_pending(reviewer=reviewer)
+        # 批量预取候选人 + 岗位需求，避免 N+1
+        candidate_ids = [rv.candidate_id for rv in reviews]
+        jd_ids = [rv.job_requirement_id for rv in reviews if rv.job_requirement_id]
+        candidate_map = {}
+        jd_map = {}
+        if candidate_ids:
+            candidates = await self.candidate_repo.get_by_ids(candidate_ids)
+            candidate_map = {c.id: c for c in candidates}
+        if jd_ids:
+            jds = await self.jd_repo.get_by_ids(jd_ids)
+            jd_map = {j.id: j for j in jds}
         result = []
         for rv in reviews:
-            c = await self.candidate_repo.get_by_id(rv.candidate_id)
+            c = candidate_map.get(rv.candidate_id)
             if not c:
                 continue
-            jd = None
-            if rv.job_requirement_id:
-                jd = await self.jd_repo.get_by_id(rv.job_requirement_id)
             result.append({
                 "review": rv,
                 "candidate": c,
-                "job_requirement": jd,
+                "job_requirement": jd_map.get(rv.job_requirement_id) if rv.job_requirement_id else None,
             })
         return result
 
@@ -1719,11 +1734,12 @@ class CandidateReviewService:
         result = await self.repo.create(rv)
 
         # 候选人状态流转
+        old_status = c.status
         c.status = "待部门审核"
         await self.candidate_repo.update(c)
         self.candidate_repo.session.add(CandidateStatusLog(
             candidate_id=candidate_id,
-            from_status="已筛选",
+            from_status=old_status,
             to_status="待部门审核",
             remark=f"推送至{reviewer}审核",
         ))
@@ -1749,11 +1765,12 @@ class CandidateReviewService:
         c = await self.candidate_repo.get_by_id(rv.candidate_id)
         if c:
             new_status = "面试中" if decision == "已同意" else "已拒绝"
+            old_status = c.status
             c.status = new_status
             await self.candidate_repo.update(c)
             self.candidate_repo.session.add(CandidateStatusLog(
                 candidate_id=c.id,
-                from_status="待部门审核",
+                from_status=old_status,
                 to_status=new_status,
                 remark=f"审核人{decision}" + (f"：{review_comment}" if review_comment else ""),
             ))

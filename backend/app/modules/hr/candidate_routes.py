@@ -1,7 +1,6 @@
 """候选人管理接口"""
 
 import os
-import shutil
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
@@ -15,6 +14,8 @@ from app.modules.hr.schemas import (
     CandidateResponse,
     CandidateStatusTransition,
     CandidateUpdate,
+    DecideReviewRequest,
+    PushReviewRequest,
 )
 from app.modules.hr.service import CandidateService
 from app.shared.schemas import PageParams
@@ -78,25 +79,7 @@ async def create_candidate(
     return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"), message="创建成功", status_code=201)
 
 
-@router.get("/candidates/{cid}", summary="候选人详情")
-async def get_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
-    r = await service.get(cid)
-    return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"))
-
-
-@router.put("/candidates/{cid}", summary="更新候选人")
-async def update_candidate(cid: UUID, payload: CandidateUpdate, service: CandidateService = Depends(get_service)):
-    r = await service.update(cid, payload)
-    return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"), message="已更新")
-
-
-@router.delete("/candidates/{cid}", summary="删除候选人")
-async def delete_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
-    await service.delete(cid)
-    return success_response(message="已删除")
-
-
-# ─── 推送审核 ───
+# ─── 推送审核（必须在 /candidates/{cid} 之前，避免路径冲突）───
 
 
 @router.get("/candidates/pending-review", summary="待我审核的候选人列表")
@@ -116,36 +99,131 @@ async def list_pending_review(
     } for row in rows])
 
 
+# ─── 候选人详情（动态路径放后面）───
+
+
+@router.get("/candidates/{cid}", summary="候选人详情")
+async def get_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
+    r = await service.get(cid)
+    return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"))
+
+
+@router.put("/candidates/{cid}", summary="更新候选人")
+async def update_candidate(cid: UUID, payload: CandidateUpdate, service: CandidateService = Depends(get_service)):
+    r = await service.update(cid, payload)
+    return success_response(data=CandidateResponse.model_validate(r).model_dump(mode="json"), message="已更新")
+
+
+@router.delete("/candidates/{cid}", summary="删除候选人")
+async def delete_candidate(cid: UUID, service: CandidateService = Depends(get_service)):
+    await service.delete(cid)
+    return success_response(message="已删除")
+
+
 @router.post("/candidates/{cid}/push-review", summary="推送候选人给用人部门审核")
 async def push_review(
     cid: UUID,
-    payload: dict,
+    payload: PushReviewRequest,
     service: CandidateService = Depends(get_service),
     session: AsyncSession = Depends(get_db),
 ):
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.push(cid, payload.get("pushed_by", "HR"), payload.get("push_note"))
+        r = await rv_service.push(cid, payload.pushed_by or "HR", payload.push_note)
         return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
+@router.get("/recruitment/stats", summary="招聘统计概览")
+async def recruitment_stats(session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.repository import CandidateRepository, JobRequirementRepository
+
+    candidate_repo = CandidateRepository(session)
+    jd_repo = JobRequirementRepository(session)
+
+    total_candidates = await candidate_repo.count_total()
+    active_jobs = await jd_repo.count_active()
+
+    # 一次 GROUP BY 查询代替 8 次顺序 count_by_status
+    status_counts = await candidate_repo.count_group_by_status()
+    statuses = ["待筛选", "已筛选", "待部门审核", "面试中", "已面试", "录用中", "已录用", "已拒绝"]
+    funnel = [{"status": s, "count": status_counts.get(s, 0)} for s in statuses]
+
+    return success_response(data={
+        "total_candidates": total_candidates,
+        "active_jobs": active_jobs,
+        "funnel": funnel,
+    })
+
+
+@router.post("/candidates/{cid}/onboard", summary="一键入职")
+async def onboard_candidate(
+    cid: UUID,
+    service: CandidateService = Depends(get_service),
+    session: AsyncSession = Depends(get_db),
+):
+    from datetime import date as date_type
+
+    from app.modules.hr.models import OnboardingRecord
+    from app.modules.hr.repository import (
+        CandidateRepository,
+        JobRequirementRepository,
+    )
+    from app.modules.hr.schemas import CandidateUpdate
+
+    # SELECT FOR UPDATE 防止并发入职
+    candidate_repo = CandidateRepository(session)
+    c = await candidate_repo.get_by_id_for_update(cid)
+    if not c:
+        raise HTTPException(404, "候选人不存在")
+    if c.status != "已录用":
+        raise HTTPException(400, "候选人状态必须为「已录用」才能入职")
+
+    # 生成工号
+    import uuid as _uuid
+    emp_no = f"ZP{date_type.today().strftime('%y%m%d')}{str(_uuid.uuid4())[:4].upper()}"
+
+    onboarding = OnboardingRecord(
+        employee_number=emp_no,
+        name=c.name or "",
+        department=c.department or "未分配",
+        position=c.position or "未分配",
+        hire_date=date_type.today(),
+        phone=c.phone,
+        email=c.email,
+        education=c.education,
+        school=c.school,
+        major=c.major,
+        source="recruitment",
+    )
+    session.add(onboarding)
+    await session.flush()
+
+    # 更新候选人状态
+    await service.update(cid, CandidateUpdate(status="已入职", offer_status="已接受"))
+
+    # 更新岗位需求 hired_count
+    if c.job_requirement_id:
+        jd_repo = JobRequirementRepository(session)
+        await jd_repo.increment_hired_count(c.job_requirement_id)
+
+    await session.commit()
+    return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
+
+
 @router.post("/candidates/{cid}/decide-review", summary="审核候选人")
 async def decide_review(
     cid: UUID,
-    payload: dict,
+    payload: DecideReviewRequest,
     session: AsyncSession = Depends(get_db),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
-    review_id = payload.get("review_id")
-    if not review_id:
-        raise HTTPException(400, "缺少 review_id")
     try:
-        r = await rv_service.decide(UUID(review_id), payload.get("decision", "已同意"), payload.get("review_comment"))
+        r = await rv_service.decide(UUID(payload.review_id), payload.decision, payload.review_comment)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -225,16 +303,13 @@ async def send_offer(
     )
     subj = f"入职 Offer — {position}" if position else "入职 Offer"
     try:
-        send_email(to=candidate_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())])
+        await send_email(to=candidate_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())])
         st, err = "sent", None
     except Exception as e:
         st, err = "failed", str(e)
     session.add(EmailLog(email_type="offer", employee_name=n, recipient=candidate_email, subject=subj, status=st, error_message=err))
     if st == "sent":
-        c = await service.get(cid)
-        c.offer_status = "已发送"
-        c.offer_sent_at = date_type.today()
-        await service.update(cid, CandidateUpdate(offer_status="已发送"))
+        await service.update(cid, CandidateUpdate(offer_status="已发送", offer_sent_at=date_type.today()))
     await session.commit()
     if st == "failed":
         raise HTTPException(500, f"发送失败: {err}")

@@ -58,7 +58,7 @@ export default function OnboardingPrejobClient() {
 
     const params = new URLSearchParams({ position_name: pos })
     if (dept) params.set('department', dept)
-    fetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`)
+    fetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`, { credentials: 'include' as const })
       .then(r => r.json())
       .then(res => {
         const items: any[] = res.data || []
@@ -92,7 +92,7 @@ export default function OnboardingPrejobClient() {
 
   // 加载培训师列表
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`).then(r => r.json())
+    fetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`, { credentials: 'include' as const }).then(r => r.json())
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
   }, [])
 

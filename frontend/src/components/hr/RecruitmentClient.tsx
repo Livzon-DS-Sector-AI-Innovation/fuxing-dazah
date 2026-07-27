@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Select, Space, Tag, Upload } from 'antd'
+import dayjs from 'dayjs'
+import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Tag, Upload } from 'antd'
 import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons'
 import CandidateCardView from './CandidateCardView'
 import {
-  fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews, API_BASE,
+  fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
+  fetchCandidateComparison, fetchRecruitmentStats, API_BASE,
 } from '@/lib/hr'
 import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
@@ -36,9 +38,32 @@ export default function RecruitmentClient() {
   const [offerSending, setOfferSending] = useState(false)
 
   // 待我审核
-  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews'>('jobs')
+  const [activeTab, setActiveTab] = useState<'jobs' | 'reviews' | 'stats'>('jobs')
   const [pendingReviews, setPendingReviews] = useState<any[]>([])
   const [reviewsLoading, setReviewsLoading] = useState(false)
+
+  // 数据分析
+  const [stats, setStats] = useState<{ total_candidates: number; active_jobs: number; funnel: any[] } | null>(null)
+  const [statsLoading, setStatsLoading] = useState(false)
+
+  const loadStats = async () => {
+    setStatsLoading(true)
+    try { const r = await fetchRecruitmentStats(); setStats(r.data) }
+    catch { setStats(null) }
+    finally { setStatsLoading(false) }
+  }
+
+  // 候选人对比
+  const [compareData, setCompareData] = useState<any[]>([])
+  const [compareLoading, setCompareLoading] = useState(false)
+  const [showCompare, setShowCompare] = useState(false)
+
+  const loadCompare = async (jobId: string) => {
+    setCompareLoading(true)
+    try { const r = await fetchCandidateComparison(jobId); setCompareData(r.data || []); setShowCompare(true) }
+    catch { setCompareData([]) }
+    finally { setCompareLoading(false) }
+  }
 
   const loadPendingReviews = useCallback(async () => {
     setReviewsLoading(true)
@@ -76,7 +101,18 @@ export default function RecruitmentClient() {
   const handleSaveReq = async () => {
     const v = await reqForm.validateFields()
     const parts = (v.position_name || '').split('|||')
-    const payload = { ...v, position_name: parts[1] || parts[0], department: v.department || parts[0] }
+    const payload: any = {
+      position_name: parts[1] || parts[0],
+      department: v.department || parts[0],
+      headcount: v.headcount ?? 1,
+      requirements: v.requirements || undefined,
+      urgency: v.urgency || undefined,
+      owner: v.owner || undefined,
+      deadline: v.deadline ? dayjs(v.deadline).format('YYYY-MM-DD') : undefined,
+    }
+    if (editingReq) {
+      payload.status = v.status || undefined
+    }
     try {
       if (editingReq) {
         await updateJobRequirement(editingReq.id, payload)
@@ -180,6 +216,7 @@ export default function RecruitmentClient() {
             待我审核 {pendingReviews.length > 0 && `(${pendingReviews.length})`}
           </Button>
           <Button type={activeTab === 'jobs' ? 'primary' : 'default'} onClick={() => setActiveTab('jobs')}>岗位招聘</Button>
+          <Button type={activeTab === 'stats' ? 'primary' : 'default'} onClick={() => { setActiveTab('stats'); loadStats() }}>数据分析</Button>
           {activeTab === 'jobs' && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingReq(null); reqForm.resetFields(); setReqOpen(true) }}>新建岗位需求</Button>}
         </div>
       </div>
@@ -210,6 +247,53 @@ export default function RecruitmentClient() {
         </Card>
       )}
 
+      {activeTab === 'stats' && (
+        <Card title="招聘数据分析" loading={statsLoading}>
+          {stats ? (
+            <div className="space-y-6">
+              <div className="flex gap-4">
+                <Card size="small" className="flex-1 text-center">
+                  <div className="text-3xl font-bold text-blue-600">{stats.total_candidates}</div>
+                  <div className="text-xs text-gray-500 mt-1">候选人总数</div>
+                </Card>
+                <Card size="small" className="flex-1 text-center">
+                  <div className="text-3xl font-bold text-green-600">{stats.active_jobs}</div>
+                  <div className="text-xs text-gray-500 mt-1">在招岗位数</div>
+                </Card>
+              </div>
+              <div>
+                <h3 className="text-sm font-medium mb-3">招聘漏斗</h3>
+                <div className="space-y-2">
+                  {stats.funnel?.map((item: any) => {
+                    const max = Math.max(...stats.funnel.map((f: any) => f.count), 1)
+                    const pct = Math.round((item.count / max) * 100)
+                    const colors: Record<string, string> = {
+                      '待筛选': '#1677ff', '已筛选': '#722ed1', '待部门审核': '#fa8c16',
+                      '面试中': '#13c2c2', '已面试': '#52c41a', '录用中': '#2f54eb',
+                      '已录用': '#389e0d', '已拒绝': '#ff4d4f',
+                    }
+                    return (
+                      <div key={item.status} className="flex items-center gap-2">
+                        <span className="text-xs w-20 text-right text-gray-500">{item.status}</span>
+                        <div className="flex-1 bg-gray-100 rounded h-5 overflow-hidden">
+                          <div className="h-full rounded transition-all" style={{
+                            width: `${pct}%`,
+                            backgroundColor: colors[item.status] || '#d9d9d9',
+                          }} />
+                        </div>
+                        <span className="text-xs font-medium w-8">{item.count}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <Empty description="暂无数据" className="py-12" />
+          )}
+        </Card>
+      )}
+
       {activeTab === 'jobs' && (<>
       <div className="flex gap-4">
         <div className="w-72 shrink-0">
@@ -235,13 +319,45 @@ export default function RecruitmentClient() {
         <div className="flex-1">
           {selectedJob ? (
             <Card size="small" title={`${selectedJob.position_name} — 候选人`}
-              extra={<Button size="small" icon={<UploadOutlined />} onClick={() => { setResumeFile(null); setResumeResult(null); setResumeOpen(true) }}>上传简历匹配</Button>}
+              extra={<div className="flex gap-1">
+                <Button size="small" onClick={() => loadCompare(selectedJob.id)}>{showCompare ? '刷新' : '横向对比'}</Button>
+                {showCompare && <Button size="small" onClick={() => setShowCompare(false)}>返回卡片</Button>}
+                {!showCompare && <Button size="small" icon={<UploadOutlined />} onClick={() => { setResumeFile(null); setResumeResult(null); setResumeOpen(true) }}>上传简历</Button>}
+              </div>}
             >
-              {candidates.length === 0 && !loading ? (
-                <div className="text-center text-gray-400 py-12">暂无候选人，点击右上角上传简历</div>
+              {showCompare ? (
+                compareLoading ? <div className="text-center py-12"><Spin /></div> :
+                compareData.length === 0 ? <Empty description="暂无候选人数据" className="py-12" /> :
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead><tr className="bg-gray-50">
+                      <th className="p-2 text-left border sticky left-0 bg-gray-50">姓名</th><th className="p-2 text-left border">学历</th><th className="p-2 text-left border">状态</th>
+                      <th className="p-2 border">JD匹配</th><th className="p-2 border">专业</th><th className="p-2 border">沟通</th><th className="p-2 border">学习</th><th className="p-2 border">稳定</th>
+                      <th className="p-2 border font-bold">综合</th><th className="p-2 border">AI摘要</th>
+                    </tr></thead>
+                    <tbody>{compareData.map((item: any, idx: number) => {
+                      const c = item.candidate || {}; const ev = item.evaluation
+                      const sc = (v: any) => v == null ? '#ccc' : v >= 8 ? '#52c41a' : v >= 6 ? '#1677ff' : v >= 4 ? '#fa8c16' : '#ff4d4f'
+                      return (<tr key={c.id} className="hover:bg-blue-50 cursor-pointer border-t" onClick={() => router.push(`/hr/recruitment/${c.id}`)}>
+                        <td className="p-2 font-medium sticky left-0 bg-white border"><span className="text-gray-400">{idx + 1}.</span> {c.name}</td>
+                        <td className="p-2 border">{c.education || '-'}</td>
+                        <td className="p-2 border"><Tag style={{fontSize:10}}>{c.status || '-'}</Tag></td>
+                        <td className="p-2 border text-center font-medium" style={{color:sc(ev?.jd_match_score)}}>{ev?.jd_match_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border text-center" style={{color:sc(ev?.professional_score)}}>{ev?.professional_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border text-center" style={{color:sc(ev?.communication_score)}}>{ev?.communication_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border text-center" style={{color:sc(ev?.learning_score)}}>{ev?.learning_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border text-center" style={{color:sc(ev?.stability_score)}}>{ev?.stability_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border text-center font-bold" style={{color:sc(ev?.overall_score)}}>{ev?.overall_score?.toFixed(1) || '-'}</td>
+                        <td className="p-2 border max-w-[200px] truncate" title={ev?.ai_summary}>{ev?.ai_summary?.slice(0, 50) || '-'}</td>
+                      </tr>)
+                    })}</tbody></table></div>
               ) : (
-                <CandidateCardView candidates={candidates} onDelete={handleDeleteCandidate} loading={loading}
-                  extraActions={(c: Candidate) => (<Button size="small" type="primary" icon={<SendOutlined />} onClick={e => { e.stopPropagation(); handleSendOffer(c) }}>发Offer</Button>) as any} />
+                candidates.length === 0 && !loading ? (
+                  <div className="text-center text-gray-400 py-12">暂无候选人</div>
+                ) : (
+                  <CandidateCardView candidates={candidates} onDelete={handleDeleteCandidate} loading={loading}
+                    extraActions={(c: Candidate) => (<Button size="small" type="primary" icon={<SendOutlined />} onClick={e => { e.stopPropagation(); handleSendOffer(c) }}>发Offer</Button>) as any} />
+                )
               )}
             </Card>
           ) : (

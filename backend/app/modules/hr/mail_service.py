@@ -1,14 +1,14 @@
 """邮件发送服务 — 通过飞书 lark-cli 发送。无需 SMTP 配置。"""
 
+import asyncio
 import logging
-import subprocess
 import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None, *, sender: str | None = None) -> bool:
+async def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None, *, sender: str | None = None) -> bool:
     """调用 lark-cli mail +send 发邮件，支持附件。"""
     tmp_dir = Path(tempfile.mkdtemp(dir=Path(__file__).parent.parent.parent))
     body_file = tmp_dir / "body.html"
@@ -30,11 +30,17 @@ def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[st
                 attach_names.append(filename)
             cmd.extend(["--attach", ",".join(attach_names)])
 
-        result = subprocess.run(cmd,
-            capture_output=True, text=True, timeout=30, cwd=str(tmp_dir),
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(tmp_dir),
         )
-        if result.returncode != 0:
-            msg = result.stderr.strip() or result.stdout.strip() or "lark-cli 邮件发送失败"
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode != 0:
+            err_output = (stderr or b"").decode("utf-8", errors="ignore").strip()
+            out_output = (stdout or b"").decode("utf-8", errors="ignore").strip()
+            msg = err_output or out_output or "lark-cli 邮件发送失败"
             raise Exception(msg)
         logger.info("邮件发送成功: to=%s attachments=%d", to, len(attachments or []))
         return True
@@ -51,7 +57,7 @@ def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[st
             pass
 
 
-def send_email(
+async def send_email(
     *,
     to: str,
     subject: str,
@@ -65,7 +71,14 @@ def send_email(
     sender: 发件人邮箱，由调用方（业务模块）传入。
     """
     try:
-        subprocess.run(["lark-cli", "--version"], capture_output=True, timeout=5, check=False)
+        proc = await asyncio.create_subprocess_exec(
+            "lark-cli", "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=5)
+        if proc.returncode != 0:
+            raise RuntimeError(f"lark-cli 不可用（退出码 {proc.returncode}），请检查安装")
     except FileNotFoundError:
         raise RuntimeError("lark-cli 未安装")
-    return _lark_send(to, subject, html_body, attachments, sender=sender)
+    return await _lark_send(to, subject, html_body, attachments, sender=sender)

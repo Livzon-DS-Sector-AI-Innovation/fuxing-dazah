@@ -12,9 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundException
 from app.modules.hr.schemas import DepartmentCreate, TeamCreate, TeamUpdate
 from app.modules.hr.service import DepartmentService, TeamService
-
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 

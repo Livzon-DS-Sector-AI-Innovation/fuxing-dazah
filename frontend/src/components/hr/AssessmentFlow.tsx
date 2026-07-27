@@ -97,6 +97,7 @@ export default function AssessmentFlow({
       const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include' as const,
         body: JSON.stringify({
           subject, department,
           training_date: trainingDate,
@@ -184,7 +185,7 @@ export default function AssessmentFlow({
         })
         const saveData = await saveRes.json().catch(() => ({}))
         // 再下载成绩单
-        const r = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/export-scores`)
+        const r = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/export-scores`, { credentials: 'include' as const })
         if (!r.ok) throw new Error('导出失败')
         const blob = await r.blob()
         const a = document.createElement('a')
@@ -221,7 +222,7 @@ export default function AssessmentFlow({
         throw new Error(err.message || '保存失败')
       }
       // 再同步台账
-      const syncRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/sync-ledger`, { method: 'POST' })
+      const syncRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/sync-ledger`, { method: 'POST', credentials: 'include' as const })
       if (!syncRes.ok) {
         const err = await syncRes.json().catch(() => ({}))
         throw new Error(err.message || err.detail || '同步失败')

@@ -23,8 +23,10 @@ async def _get_client():
 
 
 async def _get_token(client: Any) -> str:
-    import lark_oapi as lark
-    from lark_oapi.api.auth.v3 import InternalTenantAccessTokenRequest, InternalTenantAccessTokenRequestBody
+    from lark_oapi.api.auth.v3 import (
+        InternalTenantAccessTokenRequest,
+        InternalTenantAccessTokenRequestBody,
+    )
     settings = get_settings()
     req = InternalTenantAccessTokenRequest.builder().request_body(
         InternalTenantAccessTokenRequestBody.builder()
@@ -44,20 +46,9 @@ async def _lookup_open_id(name: str) -> str | None:
     """通过姓名查找飞书open_id"""
     try:
         import lark_oapi as lark
-        from lark_oapi.api.contact.v3 import BatchGetIdUserRequest, BatchGetIdUserRequestBody, UserContactInfo
+        from lark_oapi.api.contact.v3 import SearchUserRequest
         client = await _get_client()
         token = await _get_token(client)
-        req = BatchGetIdUserRequest.builder().request_body(
-            BatchGetIdUserRequestBody.builder()
-            .include_resigned(False)
-            .user_id_type("open_id")
-            .mobiles([])
-            .emails([])
-            .build()
-        ).build()
-        # 飞书批量查询ID API需要先有邮箱/手机，这里简化处理：
-        # 直接用搜索API按姓名搜用户
-        from lark_oapi.api.contact.v3 import SearchUserRequest
         search_req = SearchUserRequest.builder().query(name).page_size(1).build()
         resp = await client.contact.v3.user.asearch(search_req, lark.AccessTokenType.TENANT, token)
         if resp.success() and resp.data and resp.data.items:

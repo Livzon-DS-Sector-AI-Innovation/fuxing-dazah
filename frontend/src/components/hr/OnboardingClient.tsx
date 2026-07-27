@@ -63,7 +63,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     { title: '操作', key: 'action', width: 80,
       render: (_: any, record: OnboardingRecord) => (
         <Popconfirm title="确认删除？" onConfirm={async () => {
-          const res = await fetch(`${API_BASE}/api/v1/hr/onboarding-records/${record.id}`, { method: 'DELETE' })
+          const res = await fetch(`${API_BASE}/api/v1/hr/onboarding-records/${record.id}`, { method: 'DELETE', credentials: 'include' as const })
           if (res.ok) { message.success('已删除'); loadData() }
           else message.error('删除失败')
         }}>

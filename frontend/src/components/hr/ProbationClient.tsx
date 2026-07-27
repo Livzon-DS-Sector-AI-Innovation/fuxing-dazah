@@ -95,7 +95,8 @@ export default function ProbationClient() {
             credentials: 'include',
           })
           if (!res.ok) throw new Error('操作失败')
-          message.success(`${record.name} 已标记离职，离职台账+培训台账已自动生成`)
+          const msg = `${record.name} 已标记离职，离职台账+培训台账已自动生成`
+          message.success(msg)
           loadData()
         } catch (err: any) { message.error(err.message || '操作失败') }
       },

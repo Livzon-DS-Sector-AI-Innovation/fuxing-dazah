@@ -512,6 +512,18 @@ export async function fetchPendingReviews(reviewer?: string): Promise<{ data: an
   return res.json()
 }
 
+export async function fetchCandidateComparison(jobRequirementId: string): Promise<{ data: any[] }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements/${jobRequirementId}/candidates/comparison`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取对比数据失败')
+  return res.json()
+}
+
+export async function fetchRecruitmentStats(): Promise<{ data: { total_candidates: number; active_jobs: number; funnel: { status: string; count: number }[] } }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/recruitment/stats`, { cache: 'no-store', credentials: 'include' })
+  if (!res.ok) throw new Error('获取统计数据失败')
+  return res.json()
+}
+
 // ─── Position APIs ───
 
 export interface PositionOption {

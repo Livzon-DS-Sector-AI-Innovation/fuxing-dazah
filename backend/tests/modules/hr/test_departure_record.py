@@ -11,11 +11,13 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundException
-from app.modules.hr.schemas import DepartureRecordCreate, DepartureRecordUpdate, EmployeeCreate
+from app.modules.hr.schemas import (
+    DepartureRecordCreate,
+    DepartureRecordUpdate,
+    EmployeeCreate,
+)
 from app.modules.hr.service import DepartureRecordService, EmployeeService
-
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 
@@ -191,6 +193,7 @@ async def test_delete_departure_record_restores_employee_status(db_session: Asyn
 async def test_delete_departure_record_restores_onboarding_is_employed(db_session: AsyncSession):
     """删除离职台账后，入职台账的 is_employed 应从'否'恢复为'是'。"""
     from sqlalchemy import select as sel
+
     from app.modules.hr.models import OnboardingRecord
 
     dept = _rand("ONBREST")

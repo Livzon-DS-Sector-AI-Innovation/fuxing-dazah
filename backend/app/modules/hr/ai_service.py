@@ -61,23 +61,29 @@ class AiChatService:
     @staticmethod
     async def call_json(prompt: str, system_prompt: str | None = None) -> dict:
         """Non-streaming call that returns parsed JSON. Used for structured evaluation."""
+        import json
+        import re
+
         settings = get_settings()
         api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        model = settings.HR_AI_MODEL or "deepseek-chat"
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         resp = await client.chat.completions.create(
-            model="deepseek-chat",
+            model=model,
             messages=messages,  # type: ignore[arg-type]
             temperature=0.3,
             max_tokens=4096,
         )
         content = resp.choices[0].message.content or ""
-        # 提取 JSON
-        import json, re
+        # 去掉 markdown 代码围栏
+        content = re.sub(r"```(?:json)?\s*", "", content)
+        content = re.sub(r"```", "", content)
         content = content.strip()
+        # 提取 JSON
         m = re.search(r"\{[\s\S]*\}", content)
         if m:
             return json.loads(m.group())
