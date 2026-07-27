@@ -32,7 +32,8 @@ async def save_settings(settings: dict[str, str], session: AsyncSession = Depend
         else:
             session.add(SystemSetting(key=key, value=value))
     await session.commit()
-    import asyncio, json as _json
+    import asyncio
+    import json as _json
     auth_url = None; device_code = None
     new_mail = settings.get("mail_sender", "")
     if new_mail:

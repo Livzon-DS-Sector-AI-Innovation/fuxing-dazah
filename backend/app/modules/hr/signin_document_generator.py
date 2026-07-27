@@ -45,7 +45,7 @@ def _set_cell_text(cell, text: str) -> None:
     if first_run is not None:
         first_run.text = str(text or "")
     elif cell.paragraphs:
-        run = cell.paragraphs[0].add_run(str(text or ""))
+        _ = cell.paragraphs[0].add_run(str(text or ""))
 
 
 def _set_xml_cell_text(tc, text: str) -> None:

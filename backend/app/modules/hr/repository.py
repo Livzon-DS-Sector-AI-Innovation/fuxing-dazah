@@ -1081,7 +1081,6 @@ class CandidateAiEvaluationRepository:
         """批量查询多个候选人的AI评价（每人取最新一条）。"""
         if not candidate_ids:
             return {}
-        from sqlalchemy import distinct
         # 使用子查询获取每个候选人最新的 evaluation
         subq = (
             select(CandidateAiEvaluation.candidate_id, func.max(CandidateAiEvaluation.created_at).label("max_created"))

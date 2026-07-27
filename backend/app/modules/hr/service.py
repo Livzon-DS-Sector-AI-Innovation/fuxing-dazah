@@ -1293,7 +1293,7 @@ class TrainingLedgerService:
         return await self.repo.update(record)
 
     async def delete_record(self, record_id: UUID) -> None:
-        record = await self.get_record(record_id)
+        await self.get_record(record_id)
         await self.repo.session.execute(text("DELETE FROM hr.training_ledgers WHERE id = :id"), {"id": record_id})
 
     async def list_records(
