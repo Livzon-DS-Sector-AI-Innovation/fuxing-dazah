@@ -32,43 +32,7 @@ async def save_settings(settings: dict[str, str], session: AsyncSession = Depend
         else:
             session.add(SystemSetting(key=key, value=value))
     await session.commit()
-    import asyncio
-    import json as _json
-    auth_url = None; device_code = None
-    new_mail = settings.get("mail_sender", "")
-    if new_mail:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "lark-cli", "auth", "login", "--domain", "mail", "--no-wait", "--json",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-            if proc.returncode == 0 and stdout:
-                try:
-                    d = _json.loads(stdout.decode())
-                    auth_url = d.get("verification_url"); device_code = d.get("device_code")
-                except Exception: pass
-        except (FileNotFoundError, TimeoutError):
-            pass  # lark-cli 未安装或超时
-    return success_response(data={"auth_url": auth_url, "device_code": device_code}, message="已保存" + (" — 请扫码授权新邮箱" if auth_url else ""))
-
-
-@router.post("/system-settings/complete-auth", summary="完成邮箱授权")
-async def complete_mail_auth(device_code: str = Form(...), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
-    import asyncio
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "lark-cli", "auth", "login", "--device-code", device_code,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-    except FileNotFoundError:
-        raise HTTPException(400, "lark-cli 未安装，请联系管理员在服务器上安装 lark-cli")
-    except TimeoutError:
-        raise HTTPException(400, "授权超时，请重试")
-    if proc.returncode != 0:
-        raise HTTPException(400, stderr.decode().strip() if stderr else "授权失败")
-    return success_response(message="授权完成")
+    return success_response(message="已保存")
 
 
 # ─── 数据管理 ───

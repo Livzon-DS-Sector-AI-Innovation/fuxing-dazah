@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Form, Input, Alert, Modal, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
-import { SaveOutlined, CheckCircleOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
+import { App, Button, Card, Form, Input, Alert, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
+import { SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
 
 export default function SystemSettingsClient() {
@@ -10,10 +10,6 @@ export default function SystemSettingsClient() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
 
-  const [authModal, setAuthModal] = useState(false)
-  const [authUrl, setAuthUrl] = useState('')
-  const [deviceCode, setDeviceCode] = useState('')
-  const [authLoading, setAuthLoading] = useState(false)
   const [tables, setTables] = useState<any[]>([])
   const [tablesLoading, setTablesLoading] = useState(true)
   const [selected, setSelected] = useState<string[]>([])
@@ -66,30 +62,8 @@ export default function SystemSettingsClient() {
       const d = await r.json()
       if (!r.ok) throw new Error(d.message || '保存失败')
       message.success(d.message || '已保存')
-      // 邮箱变更 → 弹授权引导
-      if (d.data?.auth_url) {
-        setAuthUrl(d.data.auth_url)
-        setDeviceCode(d.data.device_code || '')
-        setAuthModal(true)
-      }
     } catch (err: any) { message.error(err.message || '保存失败') }
     finally { setLoading(false) }
-  }
-
-  const handleCompleteAuth = async () => {
-    if (!deviceCode) return
-    setAuthLoading(true)
-    try {
-      const fd = new FormData(); fd.append('device_code', deviceCode)
-      const r = await fetch(`/api/v1/hr/system-settings/complete-auth`, {
-        method: 'POST', body: fd, credentials: 'include',
-      })
-      const d = await r.json()
-      if (!r.ok) throw new Error(d.message || '授权失败')
-      message.success('授权完成，邮件发送已就绪')
-      setAuthModal(false)
-    } catch (err: any) { message.error(err.message || '授权失败') }
-    finally { setAuthLoading(false) }
   }
 
   return (
@@ -99,18 +73,30 @@ export default function SystemSettingsClient() {
         <p className="text-[14px] text-[var(--color-steel)]">系统基础配置</p>
       </div>
 
-      <Alert type="success" showIcon className="max-w-xl"
+      <Alert type="info" showIcon className="max-w-xl"
         message="邮件发送方式"
-        description="通过飞书邮箱发送 Offer，换人时在此页面修改邮箱并扫码授权即可，无需进后台。"
+        description="通过 SMTP 直发邮件。填写邮箱服务器信息后保存即可，无需额外工具。"
       />
 
       <Card className="max-w-xl">
         <Form form={form} layout="vertical">
-          <Form.Item name="mail_sender" label="发件邮箱"
-            tooltip="Offer 邮件的发件人地址"
-            extra="填写飞书邮箱地址。修改后保存会自动弹出授权引导。"
-          >
-            <Input placeholder="chenshengting@livzon.cn" />
+          <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
+            <Input placeholder="smtp.livzon.cn" />
+          </Form.Item>
+          <Form.Item name="smtp_port" label="端口" initialValue={587}>
+            <Input placeholder="587" />
+          </Form.Item>
+          <Form.Item name="smtp_user" label="用户名">
+            <Input placeholder="发件邮箱账号" />
+          </Form.Item>
+          <Form.Item name="smtp_password" label="密码">
+            <Input.Password placeholder="邮箱密码或授权码" />
+          </Form.Item>
+          <Form.Item name="smtp_from" label="发件邮箱地址" rules={[{ required: true, message: '请填写发件邮箱' }]}>
+            <Input placeholder="hr@livzon.cn" />
+          </Form.Item>
+          <Form.Item name="smtp_from_name" label="发件人名称" initialValue="丽珠集团福州福兴医药有限公司">
+            <Input placeholder="丽珠集团福州福兴医药有限公司" />
           </Form.Item>
 
           <Button type="primary" size="large" icon={<SaveOutlined />} loading={loading} onClick={handleSave} block>
@@ -118,37 +104,6 @@ export default function SystemSettingsClient() {
           </Button>
         </Form>
       </Card>
-
-      {/* 授权引导弹窗 */}
-      <Modal
-        title="邮箱授权"
-        open={authModal}
-        onCancel={() => setAuthModal(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setAuthModal(false)}>稍后处理</Button>,
-          <Button key="done" type="primary" icon={<CheckCircleOutlined />} loading={authLoading} onClick={handleCompleteAuth}>
-            我已扫码授权
-          </Button>,
-        ]}
-      >
-        <div className="space-y-4">
-          <p>发件邮箱已变更。请用飞书扫描下方二维码，或在浏览器打开链接完成授权：</p>
-          <div className="text-center">
-            {authUrl ? (
-              <Spin spinning={!authUrl}>
-                <Button type="link" href={authUrl} target="_blank" size="large">
-                  点击打开授权页面
-                </Button>
-              </Spin>
-            ) : (
-              <Spin />
-            )}
-          </div>
-          <p className="text-gray-400 text-sm">
-            打开链接后点击「确认授权」，然后回到本页面点击「我已扫码授权」完成。
-          </p>
-        </div>
-      </Modal>
 
       {/* ─── 数据管理 ─── */}
       <Card>

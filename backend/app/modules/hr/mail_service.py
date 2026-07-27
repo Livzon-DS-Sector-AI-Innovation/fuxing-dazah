@@ -1,60 +1,44 @@
-"""邮件发送服务 — 通过飞书 lark-cli 发送。无需 SMTP 配置。"""
+"""邮件发送服务 — 通过 SMTP 直发，无需外部 CLI 工具。"""
 
-import asyncio
 import logging
-import tempfile
-from pathlib import Path
+import smtplib
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr
+
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-async def _lark_send(to: str, subject: str, html_body: str, attachments: list[tuple[str, bytes]] | None = None, *, sender: str | None = None) -> bool:
-    """调用 lark-cli mail +send 发邮件，支持附件。"""
-    tmp_dir = Path(tempfile.mkdtemp(dir=Path(__file__).parent.parent.parent))
-    body_file = tmp_dir / "body.html"
-    body_file.write_text(html_body, encoding="utf-8")
+async def _get_smtp_config() -> dict[str, str | int]:
+    """读取 SMTP 配置：优先从数据库（系统设置），回退到环境变量。"""
+    settings = get_settings()
+    db_config: dict[str, str] = {}
     try:
-        # lark-cli 要求 --body-file 和 --attach 必须是相对路径，所以用 cwd 切到临时目录
-        cmd = ["lark-cli", "mail", "+send", "--as", "user",
-               "--to", to, "--subject", subject,
-               "--body-file", "body.html", "--confirm-send", "--format", "json"]
-        if sender:
-            cmd.extend(["--from", sender, "--mailbox", sender])
+        from sqlalchemy import select
+        from app.core.database import async_session_factory
+        from app.modules.hr.models import SystemSetting
+        async with async_session_factory() as session:
+            r = await session.execute(
+                select(SystemSetting).where(SystemSetting.key.like("smtp_%"))
+            )
+            db_config = {s.key: s.value for s in r.scalars().all()}
+    except Exception:
+        pass
 
-        # 附件：写入临时文件，使用文件名作为相对路径
-        if attachments:
-            attach_names = []
-            for filename, content in attachments:
-                fp = tmp_dir / filename
-                fp.write_bytes(content)
-                attach_names.append(filename)
-            cmd.extend(["--attach", ",".join(attach_names)])
+    def get_val(key: str, env_val: str | int) -> str:
+        return db_config.get(f"smtp_{key}") or str(env_val)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(tmp_dir),
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        if proc.returncode != 0:
-            err_output = (stderr or b"").decode("utf-8", errors="ignore").strip()
-            out_output = (stdout or b"").decode("utf-8", errors="ignore").strip()
-            msg = err_output or out_output or "lark-cli 邮件发送失败"
-            raise Exception(msg)
-        logger.info("邮件发送成功: to=%s attachments=%d", to, len(attachments or []))
-        return True
-    finally:
-        # 清理临时文件
-        for f in tmp_dir.glob("*"):
-            try:
-                f.unlink()
-            except OSError:
-                pass
-        try:
-            tmp_dir.rmdir()
-        except OSError:
-            pass
+    return {
+        "host": db_config.get("smtp_host") or settings.SMTP_HOST,
+        "port": int(db_config.get("smtp_port") or settings.SMTP_PORT),
+        "user": db_config.get("smtp_user") or settings.SMTP_USER,
+        "password": db_config.get("smtp_password") or settings.SMTP_PASSWORD,
+        "from_addr": db_config.get("smtp_from") or settings.SMTP_FROM,
+        "from_name": db_config.get("smtp_from_name") or settings.SMTP_FROM_NAME,
+    }
 
 
 async def send_email(
@@ -65,20 +49,41 @@ async def send_email(
     attachments: list[tuple[str, bytes]] | None = None,
     sender: str | None = None,
 ) -> bool:
-    """发送邮件。走 lark-cli（无需 SMTP 配置）。成功返回 True，失败抛异常。
+    """通过 SMTP 发送邮件。成功返回 True，失败抛异常。"""
+    cfg = await _get_smtp_config()
+    host = str(cfg["host"])
+    port = int(cfg["port"])
+    user = str(cfg["user"])
+    password = str(cfg["password"])
+    from_addr = sender or str(cfg["from_addr"])
+    from_name = str(cfg["from_name"])
 
-    attachments: 附件列表，每项为 (文件名, 文件内容bytes)。
-    sender: 发件人邮箱，由调用方（业务模块）传入。
-    """
+    if not host or not from_addr:
+        raise RuntimeError("SMTP 未配置，请先在系统设置中填写邮件服务器信息")
+
+    msg = MIMEMultipart()
+    msg["From"] = formataddr((from_name, from_addr))
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    if attachments:
+        for filename, content in attachments:
+            part = MIMEApplication(content, name=filename)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "lark-cli", "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await asyncio.wait_for(proc.communicate(), timeout=5)
-        if proc.returncode != 0:
-            raise RuntimeError(f"lark-cli 不可用（退出码 {proc.returncode}），请检查安装")
-    except FileNotFoundError:
-        raise RuntimeError("lark-cli 未安装")
-    return await _lark_send(to, subject, html_body, attachments, sender=sender)
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=30)
+        else:
+            server = smtplib.SMTP(host, port, timeout=30)
+            server.starttls()
+        if user and password:
+            server.login(user, password)
+        server.sendmail(from_addr, [to], msg.as_string())
+        server.quit()
+        logger.info("邮件发送成功: to=%s attachments=%d", to, len(attachments or []))
+        return True
+    except smtplib.SMTPException as e:
+        raise RuntimeError(f"邮件发送失败: {e}") from e
