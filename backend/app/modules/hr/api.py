@@ -1680,7 +1680,7 @@ async def send_departure_certificate(
     subj = "解除劳动关系证明"
     html = f"<html><body style=\"font-family:sans-serif;padding:20px;\"><h2>解除劳动关系证明</h2><p>{name}，您好！</p><p>附件是您的解除劳动关系证明，请查收。</p></body></html>"
     try:
-        await send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())]); st, err = "sent", None
+        await send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())], session=session); st, err = "sent", None
     except Exception as e:
         st, err = "failed", str(e)
     session.add(EmailLog(email_type="departure_cert", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))

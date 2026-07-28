@@ -303,7 +303,7 @@ async def send_offer(
     )
     subj = f"入职 Offer — {position}" if position else "入职 Offer"
     try:
-        await send_email(to=candidate_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())])
+        await send_email(to=candidate_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())], session=session)
         st, err = "sent", None
     except Exception as e:
         st, err = "failed", str(e)
