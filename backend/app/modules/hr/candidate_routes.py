@@ -162,55 +162,16 @@ async def recruitment_stats(session: AsyncSession = Depends(get_db)):
 async def onboard_candidate(
     cid: UUID,
     service: CandidateService = Depends(get_service),
-    session: AsyncSession = Depends(get_db),
 ):
-    from datetime import date as date_type
-
-    from app.modules.hr.models import OnboardingRecord
-    from app.modules.hr.repository import (
-        CandidateRepository,
-        JobRequirementRepository,
-    )
-    from app.modules.hr.schemas import CandidateUpdate
-
-    # SELECT FOR UPDATE 防止并发入职
-    candidate_repo = CandidateRepository(session)
-    c = await candidate_repo.get_by_id_for_update(cid)
-    if not c:
-        raise HTTPException(404, "候选人不存在")
-    if c.status != "已录用":
-        raise HTTPException(400, "候选人状态必须为「已录用」才能入职")
-
-    # 生成工号
-    import uuid as _uuid
-    emp_no = f"ZP{date_type.today().strftime('%y%m%d')}{str(_uuid.uuid4())[:4].upper()}"
-
-    onboarding = OnboardingRecord(
-        employee_number=emp_no,
-        name=c.name or "",
-        department=c.department or "未分配",
-        position=c.position or "未分配",
-        hire_date=date_type.today(),
-        phone=c.phone,
-        email=c.email,
-        education=c.education,
-        school=c.school,
-        major=c.major,
-        source="recruitment",
-    )
-    session.add(onboarding)
-    await session.flush()
-
-    # 更新候选人状态
-    await service.update(cid, CandidateUpdate(status="已入职", offer_status="已接受"))
-
-    # 更新岗位需求 hired_count
-    if c.job_requirement_id:
-        jd_repo = JobRequirementRepository(session)
-        await jd_repo.increment_hired_count(c.job_requirement_id)
-
-    await session.commit()
-    return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
+    from app.modules.hr.service import NotFoundException
+    try:
+        _, onboarding, emp_no = await service.onboard(cid)
+        await service.repo.session.commit()
+        return success_response(data={"id": str(onboarding.id), "employee_number": emp_no}, message="入职成功")
+    except NotFoundException as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.post("/candidates/{cid}/decide-review", summary="审核候选人")

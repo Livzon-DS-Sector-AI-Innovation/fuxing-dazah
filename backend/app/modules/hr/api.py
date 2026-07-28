@@ -77,6 +77,7 @@ from app.modules.hr.service import (
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 from app.modules.hr.system_settings_routes import router as system_settings_router
+from app.modules.hr.analysis_api import router as analysis_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
@@ -91,6 +92,7 @@ router.include_router(system_settings_router)
 router.include_router(candidate_router)
 router.include_router(interview_router)
 router.include_router(job_requirement_router)
+router.include_router(analysis_router)
 
 
 def get_employee_service(session: AsyncSession = Depends(get_db)) -> EmployeeService:
