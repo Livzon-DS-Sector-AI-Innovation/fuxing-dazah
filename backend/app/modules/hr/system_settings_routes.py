@@ -22,15 +22,15 @@ async def get_settings(session: AsyncSession = Depends(get_db), ctx: HrAccessCon
 
 
 @router.put("/system-settings", summary="保存系统设置")
-async def save_settings(settings: dict[str, str], session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
+async def save_settings(settings: dict, session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
     from app.modules.hr.models import SystemSetting
     for key, value in settings.items():
         r = await session.execute(select(SystemSetting).where(SystemSetting.key == key))
         row = r.scalar_one_or_none()
         if row:
-            row.value = value
+            row.value = str(value)
         else:
-            session.add(SystemSetting(key=key, value=value))
+            session.add(SystemSetting(key=key, value=str(value)))
     await session.commit()
     return success_response(message="已保存")
 
