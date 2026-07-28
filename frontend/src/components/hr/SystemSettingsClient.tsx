@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Form, Input, Alert, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
+import { App, Button, Card, Form, Input, Select, Alert, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
 import { SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
 
@@ -80,10 +80,28 @@ export default function SystemSettingsClient() {
 
       <Card className="max-w-xl">
         <Form form={form} layout="vertical">
-          <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
-            <Input placeholder="smtp.livzon.cn" />
+          <Form.Item label="快捷选择">
+            <Select placeholder="选择常见邮箱自动填入服务器和端口" allowClear
+              onChange={(val) => {
+                if (!val) return
+                const [host, port] = val.split('|')
+                form.setFieldsValue({ smtp_host: host, smtp_port: Number(port) })
+              }}
+              options={[
+                { label: '腾讯企业邮箱', value: 'smtp.exmail.qq.com|587' },
+                { label: 'QQ 邮箱', value: 'smtp.qq.com|587' },
+                { label: '网易 163 邮箱', value: 'smtp.163.com|465' },
+                { label: '网易 126 邮箱', value: 'smtp.126.com|465' },
+                { label: '阿里企业邮箱', value: 'smtp.qiye.aliyun.com|465' },
+                { label: 'Gmail', value: 'smtp.gmail.com|587' },
+                { label: 'Outlook / Hotmail', value: 'smtp-mail.outlook.com|587' },
+              ]}
+            />
           </Form.Item>
-          <Form.Item name="smtp_port" label="端口" initialValue={587}>
+          <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
+            <Input placeholder="smtp.exmail.qq.com" />
+          </Form.Item>
+          <Form.Item name="smtp_port" label="端口">
             <Input placeholder="587" />
           </Form.Item>
           <Form.Item name="smtp_user" label="用户名">
