@@ -82,7 +82,6 @@ class AiChatService:
         content = resp.choices[0].message.content or ""
         # 去掉 markdown 代码围栏
         content = re.sub(r"```(?:json)?\s*", "", content)
-        content = re.sub(r"```", "", content)
         content = content.strip()
         # 提取 JSON
         m = re.search(r"\{[\s\S]*\}", content)

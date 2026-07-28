@@ -31,7 +31,7 @@ def _build_vals(**kwargs) -> dict[str, str]:
 
 
 def generate_offer_pdf(**kwargs) -> BytesIO:
-    """生成 Offer PDF：优先 WeasyPrint（Docker），无系统库时降级 fpdf2。"""
+    """生成 Offer PDF：优先 WeasyPrint（需系统库），无则降级 fpdf2。"""
     html = generate_offer_html(**kwargs)
     try:
         from weasyprint import HTML
@@ -40,7 +40,6 @@ def generate_offer_pdf(**kwargs) -> BytesIO:
         buf.seek(0)
         return buf
     except (OSError, ImportError):
-        # 缺系统库或包未安装，用 fpdf2 兜底
         return _generate_offer_pdf_fallback(**kwargs)
 
 

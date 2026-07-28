@@ -63,15 +63,19 @@ async def send_email(
     loop = asyncio.get_running_loop()
 
     def _send():
-        if port == 465:
-            server = smtplib.SMTP_SSL(host, port, timeout=30)
-        else:
-            server = smtplib.SMTP(host, port, timeout=30)
-            server.starttls()
-        if user and password:
-            server.login(user, password)
-        server.sendmail(from_addr, [to], msg.as_string())
-        server.quit()
+        server = None
+        try:
+            if port == 465:
+                server = smtplib.SMTP_SSL(host, port, timeout=30)
+            else:
+                server = smtplib.SMTP(host, port, timeout=30)
+                server.starttls()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(from_addr, [to], msg.as_string())
+        finally:
+            if server:
+                server.quit()
 
     try:
         await loop.run_in_executor(None, _send)
