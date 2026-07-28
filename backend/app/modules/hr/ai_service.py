@@ -65,9 +65,10 @@ class AiChatService:
         import re
 
         settings = get_settings()
+        from app.modules.hr.config import HR_AI_MODEL as _model
         api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
-        model = settings.HR_AI_MODEL or "deepseek-chat"
+        model = _model or "deepseek-chat"
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -92,8 +93,8 @@ class AiChatService:
     @staticmethod
     def build_system_prompt(page: str | None = None) -> str:
         """Build the system prompt for the HR assistant."""
-        settings = get_settings()
-        prompt = settings.HR_AI_SYSTEM_PROMPT
+        from app.modules.hr.config import HR_AI_SYSTEM_PROMPT
+        prompt = HR_AI_SYSTEM_PROMPT
 
         if page:
             prompt += f"\n当前页面：{page}"

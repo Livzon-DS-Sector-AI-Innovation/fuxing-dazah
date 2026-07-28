@@ -807,11 +807,10 @@ async def generate_assessment_questions(
         text = text[:8000]
 
         # 使用 AI 生成题目
-        from app.core.config import get_settings
         from app.modules.hr.ai_service import AiChatService
-        settings = get_settings()
-        api_key = settings.HR_AI_API_KEY
-        model = settings.HR_AI_MODEL or "deepseek-chat"
+        from app.modules.hr.config import HR_AI_API_KEY, HR_AI_MODEL
+        api_key = HR_AI_API_KEY
+        model = HR_AI_MODEL or "deepseek-chat"
 
         if api_key:
             service = AiChatService(api_key=api_key, model=model)

@@ -98,15 +98,7 @@ class Settings(BaseSettings):
     HR_BITABLE_DEPARTURE_TABLE_ID: str = ""
     HR_BITABLE_APPROVAL_TABLE_ID: str = ""
 
-    # HR 模块 — AI 离职分析
-    HR_AI_API_KEY: str = ""
-    HR_AI_MODEL: str = "deepseek-chat"
-    HR_AI_SYSTEM_PROMPT: str = (
-        "你是「小H」，原料药工厂人事管理助手。"
-        "只基于查询结果回答人事问题，禁止编造。"
-        "回答极其简洁，只陈述事实，不分析、不解释、不推理。"
-        "禁止出现'根据规则'、'依据以上信息'等元话语。"
-    )
+    # HR 模块配置已收敛到 app/modules/hr/config.py
 
     # MCP — AI Agent 认证
     MCP_AGENT_API_KEYS: str = ""
