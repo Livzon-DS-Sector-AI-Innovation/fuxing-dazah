@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { App, Button, Card, Form, Input, Select, Alert, Spin, Table, Checkbox, Popconfirm, Space } from 'antd'
+import { App, Button, Card, Form, Input, Select, Alert, Spin, Table, Checkbox, Popconfirm, Space, Divider } from 'antd'
 import { SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
 
@@ -73,55 +73,84 @@ export default function SystemSettingsClient() {
         <p className="text-[14px] text-[var(--color-steel)]">系统基础配置</p>
       </div>
 
-      <Alert type="info" showIcon className="max-w-xl"
-        message="邮件发送方式"
-        description="通过 SMTP 直发邮件。填写邮箱服务器信息后保存即可，无需额外工具。"
-      />
+      <div className="flex gap-6 flex-col lg:flex-row">
+        <Card className="flex-1 max-w-xl" title="SMTP 邮件配置">
+          <Form form={form} layout="vertical">
+            <Form.Item label="快捷选择">
+              <Select placeholder="选择常见邮箱自动填入服务器和端口" allowClear
+                onChange={(val) => {
+                  if (!val) return
+                  const [host, port] = val.split('|')
+                  form.setFieldsValue({ smtp_host: host, smtp_port: Number(port) })
+                }}
+                options={[
+                  { label: '腾讯企业邮箱', value: 'smtp.exmail.qq.com|587' },
+                  { label: 'QQ 邮箱', value: 'smtp.qq.com|587' },
+                  { label: '网易 163 邮箱', value: 'smtp.163.com|465' },
+                  { label: '网易 126 邮箱', value: 'smtp.126.com|465' },
+                  { label: '阿里企业邮箱', value: 'smtp.qiye.aliyun.com|465' },
+                  { label: 'Gmail', value: 'smtp.gmail.com|587' },
+                  { label: 'Outlook / Hotmail', value: 'smtp-mail.outlook.com|587' },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
+              <Input placeholder="smtp.exmail.qq.com" />
+            </Form.Item>
+            <Form.Item name="smtp_port" label="端口">
+              <Input placeholder="587" />
+            </Form.Item>
+            <Form.Item name="smtp_from" label="发件邮箱地址" rules={[{ required: true, message: '请填写发件邮箱' }]}>
+              <Input placeholder="hr@livzon.cn" />
+            </Form.Item>
+            <Form.Item name="smtp_from_name" label="发件人名称" initialValue="丽珠集团福州福兴医药有限公司">
+              <Input placeholder="丽珠集团福州福兴医药有限公司" />
+            </Form.Item>
+            <Form.Item name="smtp_user" label="用户名">
+              <Input placeholder="通常和发件邮箱地址相同" />
+            </Form.Item>
+            <Form.Item name="smtp_password" label="密码 / 授权码"
+              tooltip="不是邮箱登录密码，需要在邮箱设置中单独生成"
+            >
+              <Input.Password placeholder="邮箱授权码，非登录密码" />
+            </Form.Item>
 
-      <Card className="max-w-xl">
-        <Form form={form} layout="vertical">
-          <Form.Item label="快捷选择">
-            <Select placeholder="选择常见邮箱自动填入服务器和端口" allowClear
-              onChange={(val) => {
-                if (!val) return
-                const [host, port] = val.split('|')
-                form.setFieldsValue({ smtp_host: host, smtp_port: Number(port) })
-              }}
-              options={[
-                { label: '腾讯企业邮箱', value: 'smtp.exmail.qq.com|587' },
-                { label: 'QQ 邮箱', value: 'smtp.qq.com|587' },
-                { label: '网易 163 邮箱', value: 'smtp.163.com|465' },
-                { label: '网易 126 邮箱', value: 'smtp.126.com|465' },
-                { label: '阿里企业邮箱', value: 'smtp.qiye.aliyun.com|465' },
-                { label: 'Gmail', value: 'smtp.gmail.com|587' },
-                { label: 'Outlook / Hotmail', value: 'smtp-mail.outlook.com|587' },
-              ]}
+            <Button type="primary" size="large" icon={<SaveOutlined />} loading={loading} onClick={handleSave} block>
+              保存设置
+            </Button>
+          </Form>
+        </Card>
+
+        <Card className="flex-1 max-w-md" title="授权码获取指南">
+          <div className="text-sm space-y-4 text-gray-600">
+            <div>
+              <p className="font-semibold text-gray-700">腾讯企业邮箱 / QQ 邮箱</p>
+              <p>登录网页版 → 设置 → 账户 → 开启 SMTP 服务 → 生成授权码</p>
+            </div>
+            <Divider style={{ margin: '8px 0' }} />
+            <div>
+              <p className="font-semibold text-gray-700">网易 163 / 126 邮箱</p>
+              <p>登录网页版 → 设置 → POP3/SMTP/IMAP → 开启 SMTP → 新增授权码</p>
+            </div>
+            <Divider style={{ margin: '8px 0' }} />
+            <div>
+              <p className="font-semibold text-gray-700">阿里企业邮箱</p>
+              <p>管理员在后台开启客户端密码 → 生成授权码</p>
+            </div>
+            <Divider style={{ margin: '8px 0' }} />
+            <div>
+              <p className="font-semibold text-gray-700">Gmail</p>
+              <p>Google 账户 → 安全性 → 应用专用密码 → 生成</p>
+            </div>
+            <Divider style={{ margin: '8px 0' }} />
+            <Alert type="warning" showIcon
+              message="重要提示"
+              description="「密码」字段填授权码，不是邮箱登录密码。授权码通常是一串16位字母，每个邮箱单独生成。"
+              style={{ marginTop: 12 }}
             />
-          </Form.Item>
-          <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
-            <Input placeholder="smtp.exmail.qq.com" />
-          </Form.Item>
-          <Form.Item name="smtp_port" label="端口">
-            <Input placeholder="587" />
-          </Form.Item>
-          <Form.Item name="smtp_user" label="用户名">
-            <Input placeholder="发件邮箱账号" />
-          </Form.Item>
-          <Form.Item name="smtp_password" label="密码">
-            <Input.Password placeholder="邮箱密码或授权码" />
-          </Form.Item>
-          <Form.Item name="smtp_from" label="发件邮箱地址" rules={[{ required: true, message: '请填写发件邮箱' }]}>
-            <Input placeholder="hr@livzon.cn" />
-          </Form.Item>
-          <Form.Item name="smtp_from_name" label="发件人名称" initialValue="丽珠集团福州福兴医药有限公司">
-            <Input placeholder="丽珠集团福州福兴医药有限公司" />
-          </Form.Item>
-
-          <Button type="primary" size="large" icon={<SaveOutlined />} loading={loading} onClick={handleSave} block>
-            保存设置
-          </Button>
-        </Form>
-      </Card>
+          </div>
+        </Card>
+      </div>
 
       {/* ─── 数据管理 ─── */}
       <Card>
