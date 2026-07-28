@@ -98,14 +98,6 @@ class Settings(BaseSettings):
     HR_BITABLE_DEPARTURE_TABLE_ID: str = ""
     HR_BITABLE_APPROVAL_TABLE_ID: str = ""
 
-    # HR 模块 — SMTP 邮件
-    SMTP_HOST: str = ""
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""
-    SMTP_PASSWORD: str = ""
-    SMTP_FROM: str = ""
-    SMTP_FROM_NAME: str = "丽珠集团福州福兴医药有限公司"
-
     # HR 模块 — AI 离职分析
     HR_AI_API_KEY: str = ""
     HR_AI_MODEL: str = "deepseek-chat"

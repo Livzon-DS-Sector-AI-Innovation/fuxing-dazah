@@ -1,4 +1,4 @@
-"""邮件发送服务 — 通过 SMTP 直发，无需外部 CLI 工具。"""
+"""邮件发送服务 — 通过 SMTP 直发，配置完全收敛在 HR 模块内。"""
 
 import logging
 import smtplib
@@ -7,9 +7,22 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
-from app.core.config import get_settings
-
 logger = logging.getLogger(__name__)
+
+
+async def _read_smtp_config(session) -> dict[str, str]:
+    """从数据库 system_settings 表读取 SMTP 配置。"""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.modules.hr.models import SystemSetting
+
+    db_config: dict[str, str] = {}
+    if isinstance(session, AsyncSession):
+        r = await session.execute(
+            select(SystemSetting).where(SystemSetting.key.like("smtp_%"))
+        )
+        db_config = {s.key: s.value for s in r.scalars().all()}
+    return db_config
 
 
 async def send_email(
@@ -21,27 +34,15 @@ async def send_email(
     sender: str | None = None,
     session = None,
 ) -> bool:
-    """通过 SMTP 发送邮件。成功返回 True，失败抛异常。"""
-    from sqlalchemy import select
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from app.modules.hr.models import SystemSetting
+    """通过 SMTP 发送邮件。配置从 HR 系统设置页面保存，完全收敛在 HR 模块内。"""
+    cfg = await _read_smtp_config(session)
 
-    settings = get_settings()
-    db_config: dict[str, str] = {}
-
-    # 从传入的 session 或新建 session 读取 SMTP 配置
-    if isinstance(session, AsyncSession):
-        r = await session.execute(
-            select(SystemSetting).where(SystemSetting.key.like("smtp_%"))
-        )
-        db_config = {s.key: s.value for s in r.scalars().all()}
-
-    host = db_config.get("smtp_host") or settings.SMTP_HOST
-    port = int(db_config.get("smtp_port") or settings.SMTP_PORT)
-    user = db_config.get("smtp_user") or settings.SMTP_USER
-    password = db_config.get("smtp_password") or settings.SMTP_PASSWORD
-    from_addr = sender or db_config.get("smtp_from") or settings.SMTP_FROM
-    from_name = db_config.get("smtp_from_name") or settings.SMTP_FROM_NAME
+    host = cfg.get("smtp_host", "")
+    port = int(cfg.get("smtp_port", "587"))
+    user = cfg.get("smtp_user", "")
+    password = cfg.get("smtp_password", "")
+    from_addr = sender or cfg.get("smtp_from", "")
+    from_name = cfg.get("smtp_from_name", "丽珠集团福州福兴医药有限公司")
 
     if not host or not from_addr:
         raise RuntimeError("SMTP 未配置，请先在系统设置中填写邮件服务器信息")
