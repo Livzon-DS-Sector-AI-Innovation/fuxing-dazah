@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -113,6 +114,9 @@ class PlanOrder(BaseModel):
         String(10), default="medium", comment="urgent/high/medium/low"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    product_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="绑定的产品")
+    route_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="绑定的工艺路线")
+    stage_config: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="工段配置")
 
 
 class PlanItem(BaseModel):
@@ -146,14 +150,17 @@ class PlanItem(BaseModel):
 
     plan_order_id: Mapped[uuid.UUID] = mapped_column(comment="所属计划单")
     item_no: Mapped[int] = mapped_column(Integer, comment="计划单内序号")
-    intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="产出物（中间体类型）")
-    intermediate_type_name: Mapped[str] = mapped_column(String(200), comment="产出物名称快照")
+    product_id: Mapped[uuid.UUID] = mapped_column(comment="产品")
+    product_name: Mapped[str] = mapped_column(String(200), comment="产品名快照")
     route_id: Mapped[uuid.UUID | None] = mapped_column(nullable=True, comment="工艺路线")
+    batch_no: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="预分配批次号，下达时使用"
+    )
     equipment_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="目标设备/产线"
     )
-    planned_quantity: Mapped[float] = mapped_column(Float, comment="计划产量")
-    unit: Mapped[str] = mapped_column(String(20), comment="单位")
+    planned_quantity: Mapped[float | None] = mapped_column(Float, nullable=True, default=None, comment="计划产量")
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None, comment="单位")
     planned_start: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="计划开始时间"
     )
@@ -168,6 +175,7 @@ class PlanItem(BaseModel):
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, comment="排程序号")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    stage_durations: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="工段时长覆盖")
 
 
 class PlanAllocation(BaseModel):

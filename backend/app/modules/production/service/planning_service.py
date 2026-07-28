@@ -71,6 +71,41 @@ async def _ensure_unique_batch_no(db: AsyncSession, base_no: str) -> str:
     return candidate
 
 
+async def _check_batch_no_unique(
+    db: AsyncSession, batch_no: str, exclude_item_id: uuid.UUID | None = None,
+) -> None:
+    """校验批次号在 plan_items 和 batches 表中均不重复。"""
+    if not batch_no:
+        return
+    if await repo.get_plan_item_by_batch_no(db, batch_no, exclude_item_id):
+        raise DuplicateException("批次号", batch_no)
+    # 已下达的真实批次也不能重复（排除自身对应的批次：若 exclude_item_id 对应已分配的 batch 则放行）
+    # ponytail: 直接查 batches 表，不做 item→alloc→batch 的复杂关联排除
+    if await repo.get_batch_by_no(db, batch_no):
+        raise DuplicateException("批次号", batch_no)
+
+
+def _stage_config_to_dict(items: list | None) -> list[dict[str, object]] | None:
+    """将 StageConfigItem 列表转为 dict 列表，用于 ORM JSONB 持久化。"""
+    if not items:
+        return None
+    return [s.model_dump() for s in items]
+
+
+def _validate_item_releasable(item: PlanItem) -> None:
+    """校验计划项满足下达/分配条件（有工艺路线和计划数量）。"""
+    if not item.route_id:
+        raise AppException(
+            status_code=400,
+            message=f"计划项 {item.item_no} 未指定工艺路线，无法生成批次",
+        )
+    if item.planned_quantity is None:
+        raise AppException(
+            status_code=400,
+            message=f"计划项 {item.item_no} 未指定计划数量，无法生成批次",
+        )
+
+
 # ═══════════════════════════════════════════
 # Demand
 # ═══════════════════════════════════════════
@@ -190,7 +225,7 @@ async def get_demand_detail(db: AsyncSession, demand_id: uuid.UUID) -> DemandDet
         item = items_map.get(da.plan_item_id)
         if item:
             dao.item_no = item.item_no
-            dao.intermediate_type_name = item.intermediate_type_name
+            dao.intermediate_type_name = item.product_name
             order = orders_map.get(item.plan_order_id)
             if order:
                 dao.plan_order_no = order.order_no
@@ -230,6 +265,9 @@ async def create_plan_order(
     order = PlanOrder(
         order_no=payload.order_no,
         title=payload.title,
+        product_id=payload.product_id,
+        route_id=payload.route_id,
+        stage_config=_stage_config_to_dict(payload.stage_config),
         scheduled_start=payload.scheduled_start,
         scheduled_end=payload.scheduled_end,
         priority=payload.priority,
@@ -293,15 +331,12 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
         )
     # 事务内：为每个 PlanItem 创建 Batch + Allocation
     for item in items:
-        if not item.route_id:
-            raise AppException(
-                status_code=400,
-                message=f"计划项 {item.item_no} 未指定工艺路线，无法生成批次",
-            )
-        batch_no = await _ensure_unique_batch_no(db, f"{order.order_no}-{item.item_no}")
+        _validate_item_releasable(item)
+        base_no = item.batch_no if item.batch_no else f"{order.order_no}-{item.item_no}"
+        batch_no = await _ensure_unique_batch_no(db, base_no)
         batch = Batch(
-            batch_no=batch_no,  # ponytail: 自动生成唯一批号
-            product_id=item.intermediate_type_id,
+            batch_no=batch_no,
+            product_id=item.product_id,
             route_id=item.route_id,
             status="scheduled",
             quantity=item.planned_quantity,
@@ -396,7 +431,7 @@ async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOr
                 dao.demand_no = demand.demand_no
             dao.plan_order_no = order.order_no
             dao.item_no = item.item_no
-            dao.intermediate_type_name = item.intermediate_type_name
+            dao.intermediate_type_name = item.product_name
             pio.demand_allocations.append(dao)
         item_outs.append(pio)
     detail = PlanOrderDetailOut.model_validate(order)
@@ -429,21 +464,31 @@ async def create_plan_item(
     order = await repo.get_plan_order(db, order_id)
     if not order:
         raise NotFoundException("计划单", str(order_id))
-    if order.status != "draft":
-        raise AppException(status_code=400, message="仅 draft 状态的计划单可添加计划项")
+    if order.status not in ("draft", "confirmed"):
+        raise AppException(status_code=400, message="仅未下达的计划单可添加计划项")
+    await _check_batch_no_unique(db, payload.batch_no)
     max_no = await repo.get_max_item_no(db, order_id)
     item_no = max_no + 1
+    # 继承：若未传则使用计划单的 product_id / route_id
+    product_id = payload.product_id if payload.product_id else order.product_id
+    route_id = payload.route_id if payload.route_id else order.route_id
+    # 继承：若未传 stage_durations 则使用计划单的 stage_config
+    stage_durations = _stage_config_to_dict(payload.stage_durations)
+    if stage_durations is None:
+        stage_durations = order.stage_config
     item = PlanItem(
         plan_order_id=order_id,
         item_no=item_no,
-        intermediate_type_id=payload.intermediate_type_id,
-        intermediate_type_name=payload.intermediate_type_name,
-        route_id=payload.route_id,
+        product_id=product_id,
+        product_name=payload.product_name,
+        route_id=route_id,
         equipment_id=payload.equipment_id,
         planned_quantity=payload.planned_quantity,
         unit=payload.unit,
+        batch_no=payload.batch_no,
         priority=payload.priority,
         remark=payload.remark,
+        stage_durations=stage_durations,
         created_by=user.id if user else None,
     )
     db.add(item)
@@ -459,6 +504,8 @@ async def update_plan_item(
         raise NotFoundException("计划项", str(item_id))
     if item.status not in ("draft", "scheduled"):
         raise AppException(status_code=400, message="仅 draft/scheduled 状态的计划项可编辑")
+    if payload.batch_no is not None:
+        await _check_batch_no_unique(db, payload.batch_no, item.id)
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(item, field, value)
@@ -481,7 +528,7 @@ async def delete_plan_item(db: AsyncSession, item_id: uuid.UUID, user: User | No
 
 async def schedule_plan_item(
     db: AsyncSession, item_id: uuid.UUID, payload: PlanItemScheduleIn, user: User | None,
-) -> tuple[PlanItem, list[dict]]:
+) -> tuple[PlanItem, list[dict[str, object]]]:
     """排程操作：设置计划项的时间和设备。返回 (PlanItem, 冲突列表)。"""
     item = await repo.get_plan_item(db, item_id)
     if not item:
@@ -496,7 +543,7 @@ async def schedule_plan_item(
         item.equipment_id = payload.equipment_id
     if payload.sort_order is not None:
         item.sort_order = payload.sort_order
-    warnings: list[dict] = []
+    warnings: list[dict[str, object]] = []
     if item.planned_start and item.planned_end:
         if not _check_time_range_valid(item.planned_start, item.planned_end):
             raise AppException(status_code=400, message="计划开始时间必须早于结束时间")
@@ -509,7 +556,7 @@ async def schedule_plan_item(
                 warnings.append({
                     "item_id": str(c.id),
                     "item_no": c.item_no,
-                    "intermediate_type_name": c.intermediate_type_name,
+                    "product_name": c.product_name,
                     "planned_start": c.planned_start.isoformat() if c.planned_start else None,
                     "planned_end": c.planned_end.isoformat() if c.planned_end else None,
                 })
@@ -530,18 +577,15 @@ async def allocate_plan_item(
         raise NotFoundException("计划项", str(item_id))
     if item.status != "scheduled":
         raise AppException(status_code=400, message="仅 scheduled 状态的计划项可分配")
-    if not item.route_id:
-        raise AppException(
-            status_code=400,
-            message=f"计划项 {item.item_no} 未指定工艺路线，无法生成批次",
-        )
+    _validate_item_releasable(item)
     order = await repo.get_plan_order(db, item.plan_order_id)
     if not order:
         raise NotFoundException("计划单", str(item.plan_order_id))
-    batch_no = await _ensure_unique_batch_no(db, f"{order.order_no}-{item.item_no}")
+    base_no = item.batch_no if item.batch_no else f"{order.order_no}-{item.item_no}"
+    batch_no = await _ensure_unique_batch_no(db, base_no)
     batch = Batch(
         batch_no=batch_no,
-        product_id=item.intermediate_type_id,
+        product_id=item.product_id,
         route_id=item.route_id,
         status="scheduled",
         quantity=item.planned_quantity,
@@ -596,10 +640,13 @@ async def get_schedule_view(
             order_scheduled_end=order.scheduled_end,
             item_id=item.id,
             item_no=item.item_no,
-            intermediate_type_name=item.intermediate_type_name,
+            product_name=item.product_name,
             equipment_id=item.equipment_id,
             planned_quantity=item.planned_quantity,
             unit=item.unit,
+            batch_no=item.batch_no,
+            route_id=item.route_id,
+            stage_durations=item.stage_durations,
             planned_start=item.planned_start,
             planned_end=item.planned_end,
             item_status=item.status,
@@ -689,7 +736,7 @@ async def get_demand_trace(db: AsyncSession, demand_id: uuid.UUID) -> TraceNode:
         item_node = TraceNode(
             type="plan_item",
             id=item.id,
-            label=f"计划项 {order.order_no + '-' + str(item.item_no) if order else '?'} - {item.intermediate_type_name}",
+            label=f"计划项 {order.order_no + '-' + str(item.item_no) if order else '?'} - {item.product_name}",
             quantity=item.planned_quantity,
             unit=item.unit,
             status=item.status,

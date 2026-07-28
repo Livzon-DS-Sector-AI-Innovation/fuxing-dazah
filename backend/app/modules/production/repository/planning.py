@@ -37,6 +37,7 @@ __all__ = [
     "get_demand_allocations_by_items",
     "get_batches_for_allocations",
     "get_batch_by_no",
+    "get_plan_item_by_batch_no",
 ]
 
 
@@ -165,7 +166,7 @@ async def list_plan_items(db: AsyncSession, plan_order_id: uuid.UUID) -> list[Pl
             PlanItem.plan_order_id == plan_order_id,
             PlanItem.is_deleted == False,  # noqa: E712
         )
-        .order_by(PlanItem.sort_order, PlanItem.item_no)
+        .order_by(PlanItem.planned_start.asc().nulls_last(), PlanItem.sort_order, PlanItem.item_no)
     )
     return list((await db.execute(stmt)).scalars())
 
@@ -204,7 +205,7 @@ async def list_plan_items_schedule_view(
         .where(
             PlanItem.is_deleted == False,  # noqa: E712
             PlanOrder.is_deleted == False,  # noqa: E712
-            PlanOrder.status.in_(("confirmed", "released")),
+            PlanOrder.status.in_(("draft", "confirmed", "released", "completed")),
             PlanItem.planned_start.isnot(None),
             PlanItem.planned_end.isnot(None),
         )
@@ -322,3 +323,20 @@ async def get_batch_by_no(db: AsyncSession, batch_no: str) -> Batch | None:
         Batch.batch_no == batch_no, Batch.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_plan_item_by_batch_no(
+    db: AsyncSession, batch_no: str, exclude_item_id: uuid.UUID | None = None,
+) -> PlanItem | None:
+    """按批号查计划项，用于创建/编辑时的唯一性校验。"""
+    stmt = (
+        select(PlanItem)
+        .where(
+            PlanItem.batch_no == batch_no,
+            PlanItem.is_deleted == False,  # noqa: E712
+        )
+        .limit(1)
+    )
+    if exclude_item_id:
+        stmt = stmt.where(PlanItem.id != exclude_item_id)
+    return (await db.execute(stmt)).scalars().first()
