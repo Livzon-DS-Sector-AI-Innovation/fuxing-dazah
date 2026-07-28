@@ -89,16 +89,7 @@ class Settings(BaseSettings):
     # Permission System
     ADMIN_EMPLOYEE_NOS: list[str] = []
 
-    # HR 模块 — 飞书多维表格同步
-    HR_BITABLE_APP_TOKEN: str = ""
-    HR_BITABLE_EMPLOYEE_TABLE_ID: str = ""
-    HR_BITABLE_DEPARTMENT_TABLE_ID: str = ""
-    HR_BITABLE_OFFBOARDING_TABLE_ID: str = ""
-    HR_BITABLE_ONBOARDING_TABLE_ID: str = ""
-    HR_BITABLE_DEPARTURE_TABLE_ID: str = ""
-    HR_BITABLE_APPROVAL_TABLE_ID: str = ""
-
-    # HR 模块配置已收敛到 app/modules/hr/config.py
+    # HR 模块配置已收敛到 app/modules/hr/config.py（SMTP、AI 等）
 
     # MCP — AI Agent 认证
     MCP_AGENT_API_KEYS: str = ""
