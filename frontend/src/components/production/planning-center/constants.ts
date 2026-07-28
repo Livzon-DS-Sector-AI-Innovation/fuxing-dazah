@@ -23,3 +23,17 @@ export const ITEM_STATUS_CONFIG: Record<string, { label: string; color: string }
   completed: { label: '已完成', color: 'green' },
   cancelled: { label: '已取消', color: 'red' },
 }
+
+// ponytail: 工段色板，CreatePlanOrderModal / PlanOrderDetailDrawer 共用
+export const STAGE_PRESET_COLORS = [
+  '#e8d5f5',
+  '#d5e8f5',
+  '#d5f5e0',
+  '#f5f0d5',
+  '#f5d5d5',
+  '#f5e0d5',
+  '#d5f5f5',
+  '#e0d5f5',
+  '#f5d5f0',
+  '#d5d5f5',
+]

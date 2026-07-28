@@ -33,12 +33,12 @@ export function ReleaseConfirmModal({ orderId, open, items, isLoading = false, o
 
   const columns: ColumnsType<PlanItem> = [
     { title: '项号', dataIndex: 'item_no', key: 'item_no', width: 60 },
-    { title: '产出物', dataIndex: 'intermediate_type_name', key: 'intermediate_type_name', width: 140 },
+    { title: '产品', dataIndex: 'product_name', key: 'product_name', width: 140 },
     {
       title: '计划数量',
       key: 'qty',
       width: 100,
-      render: (_, r) => `${r.planned_quantity}${r.unit ? ` ${r.unit}` : ''}`,
+      render: (_, r) => r.planned_quantity != null ? `${r.planned_quantity}${r.unit ? ` ${r.unit}` : ''}` : '—',
     },
     { title: '设备', dataIndex: 'equipment_id', key: 'equipment_id', width: 100, render: v => v || '—' },
     {

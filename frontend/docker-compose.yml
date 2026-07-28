@@ -1,0 +1,15 @@
+services:
+  frontend:
+    build:
+      context: .
+      args:
+        - NEXT_PUBLIC_API_BASE_URL=http://192.168.3.100:8000
+    image: dazah-frontend:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - API_BASE_URL=http://192.168.3.100:8000
+    volumes:
+      - ./.next:/app/.next
+      - ./public:/app/public
+    restart: unless-stopped

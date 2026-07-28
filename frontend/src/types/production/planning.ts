@@ -1,3 +1,11 @@
+// ── Stage Config ──
+
+export interface StageConfigItem {
+  stage_name: string
+  duration_hours: number
+  color: string
+}
+
 // ── Demand ──
 
 export interface Demand {
@@ -52,6 +60,9 @@ export interface PlanOrder {
   title: string
   plan_version: number
   status: 'draft' | 'confirmed' | 'released' | 'completed' | 'closed'
+  product_id: string | null
+  route_id: string | null
+  stage_config: StageConfigItem[] | null
   scheduled_start: string | null
   scheduled_end: string | null
   priority: 'urgent' | 'high' | 'medium' | 'low'
@@ -68,6 +79,9 @@ export interface PlanOrderDetail extends PlanOrder {
 export interface CreatePlanOrderInput {
   order_no?: string
   title: string
+  product_id: string
+  route_id: string
+  stage_config?: StageConfigItem[]
   scheduled_start?: string
   scheduled_end?: string
   priority?: string
@@ -76,6 +90,9 @@ export interface CreatePlanOrderInput {
 
 export interface UpdatePlanOrderInput {
   title?: string
+  product_id?: string
+  route_id?: string
+  stage_config?: StageConfigItem[]
   scheduled_start?: string
   scheduled_end?: string
   priority?: string
@@ -88,18 +105,20 @@ export interface PlanItem {
   id: string
   plan_order_id: string
   item_no: number
-  intermediate_type_id: string
-  intermediate_type_name: string
+  product_id: string
+  product_name: string
   route_id: string | null
   equipment_id: string | null
-  planned_quantity: number
-  unit: string
+  planned_quantity: number | null
+  unit: string | null
+  batch_no: string | null
   planned_start: string | null
   planned_end: string | null
   status: 'draft' | 'scheduled' | 'allocated' | 'in_progress' | 'completed' | 'cancelled'
   priority: 'urgent' | 'high' | 'medium' | 'low'
   sort_order: number
   remark: string | null
+  stage_durations: StageConfigItem[] | null
   created_at: string
   updated_at: string
   allocations: PlanAllocation[]
@@ -107,22 +126,26 @@ export interface PlanItem {
 }
 
 export interface CreatePlanItemInput {
-  intermediate_type_id: string
-  intermediate_type_name: string
+  product_id: string
+  product_name: string
   route_id?: string
   equipment_id?: string
-  planned_quantity: number
-  unit: string
+  planned_quantity?: number
+  unit?: string
+  batch_no: string
+  stage_durations?: StageConfigItem[]
   priority?: string
   remark?: string
 }
 
 export interface UpdatePlanItemInput {
-  intermediate_type_name?: string
+  product_name?: string
   route_id?: string
   equipment_id?: string
   planned_quantity?: number
   unit?: string
+  batch_no?: string
+  stage_durations?: StageConfigItem[]
   priority?: string
   remark?: string
 }
@@ -173,10 +196,13 @@ export interface ScheduleViewItem {
   order_scheduled_end: string | null
   item_id: string
   item_no: number
-  intermediate_type_name: string
+  product_name: string
   equipment_id: string | null
-  planned_quantity: number
-  unit: string
+  planned_quantity: number | null
+  unit: string | null
+  batch_no: string | null
+  route_id: string | null
+  stage_durations: StageConfigItem[] | null
   planned_start: string | null
   planned_end: string | null
   item_status: string

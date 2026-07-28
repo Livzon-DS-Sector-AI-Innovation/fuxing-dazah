@@ -64,9 +64,19 @@ class DemandDetailOut(DemandOut):
 
 # ── PlanOrder ──
 
+class StageConfigItem(BaseModel):
+    """工段配置/时长项 — ponytail: plan_order.stage_config 和 plan_item.stage_durations 共用"""
+    stage_name: str = Field(max_length=100)
+    duration_hours: float = Field(gt=0, description="预计完成时长（小时）")
+    color: str = Field(pattern="^#[0-9a-fA-F]{6}$", description="显示颜色 hex")
+
+
 class PlanOrderCreate(BaseModel):
     order_no: str | None = Field(default=None, max_length=30, description="留空自动生成")
     title: str = Field(max_length=200)
+    product_id: uuid.UUID
+    route_id: uuid.UUID
+    stage_config: list[StageConfigItem] | None = None
     scheduled_start: date | None = None
     scheduled_end: date | None = None
     priority: str = Field(default="medium", pattern="^(urgent|high|medium|low)$")
@@ -75,6 +85,9 @@ class PlanOrderCreate(BaseModel):
 
 class PlanOrderUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+    product_id: uuid.UUID | None = None
+    route_id: uuid.UUID | None = None
+    stage_config: list[StageConfigItem] | None = None
     scheduled_start: date | None = None
     scheduled_end: date | None = None
     priority: str | None = Field(default=None, pattern="^(urgent|high|medium|low)$")
@@ -89,6 +102,9 @@ class PlanOrderOut(BaseModel):
     title: str
     plan_version: int
     status: str
+    product_id: uuid.UUID | None = None
+    route_id: uuid.UUID | None = None
+    stage_config: list[StageConfigItem] | None = None
     scheduled_start: date | None
     scheduled_end: date | None
     priority: str
@@ -105,22 +121,26 @@ class PlanOrderDetailOut(PlanOrderOut):
 # ── PlanItem ──
 
 class PlanItemCreate(BaseModel):
-    intermediate_type_id: uuid.UUID
-    intermediate_type_name: str = Field(max_length=200)
+    product_id: uuid.UUID
+    product_name: str = Field(max_length=200)
     route_id: uuid.UUID | None = None
     equipment_id: str | None = Field(default=None, max_length=100)
-    planned_quantity: float = Field(gt=0)
-    unit: str = Field(max_length=20)
+    planned_quantity: float | None = Field(default=None, gt=0)
+    unit: str | None = Field(default=None, max_length=20)
+    batch_no: str = Field(max_length=50)
+    stage_durations: list[StageConfigItem] | None = None
     priority: str = Field(default="medium", pattern="^(urgent|high|medium|low)$")
     remark: str | None = None
 
 
 class PlanItemUpdate(BaseModel):
-    intermediate_type_name: str | None = Field(default=None, max_length=200)
+    product_name: str | None = Field(default=None, max_length=200)
     route_id: uuid.UUID | None = None
     equipment_id: str | None = Field(default=None, max_length=100)
     planned_quantity: float | None = Field(default=None, gt=0)
     unit: str | None = Field(default=None, max_length=20)
+    batch_no: str | None = Field(default=None, max_length=50)
+    stage_durations: list[StageConfigItem] | None = None
     priority: str | None = Field(default=None, pattern="^(urgent|high|medium|low)$")
     remark: str | None = None
 
@@ -138,12 +158,14 @@ class PlanItemOut(BaseModel):
     id: uuid.UUID
     plan_order_id: uuid.UUID
     item_no: int
-    intermediate_type_id: uuid.UUID
-    intermediate_type_name: str
+    product_id: uuid.UUID
+    product_name: str
     route_id: uuid.UUID | None
     equipment_id: str | None
-    planned_quantity: float
-    unit: str
+    planned_quantity: float | None
+    unit: str | None
+    batch_no: str | None
+    stage_durations: list[StageConfigItem] | None = None
     planned_start: datetime | None
     planned_end: datetime | None
     status: str
@@ -206,10 +228,13 @@ class ScheduleViewItem(BaseModel):
     order_scheduled_end: date | None
     item_id: uuid.UUID
     item_no: int
-    intermediate_type_name: str
+    product_name: str
     equipment_id: str | None
-    planned_quantity: float
-    unit: str
+    planned_quantity: float | None
+    unit: str | None
+    batch_no: str | None
+    route_id: uuid.UUID | None
+    stage_durations: list[StageConfigItem] | None = None
     planned_start: datetime | None
     planned_end: datetime | None
     item_status: str

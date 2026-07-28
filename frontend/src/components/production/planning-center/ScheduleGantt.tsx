@@ -241,8 +241,8 @@ export function ScheduleGantt({ items, viewMode, timelineStart, timelineEnd, pla
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
-                  }} title={`${item.item_no}. ${item.intermediate_type_name} (${item.planned_quantity}${item.unit})`}>
-                    {item.item_no}. {item.intermediate_type_name}
+                  }} title={`${item.item_no}. ${item.product_name} (${item.planned_quantity ?? '—'}${item.unit ?? ''})`}>
+                    {item.item_no}. {item.product_name}
                   </span>
                 </div>
               ))}
@@ -346,7 +346,7 @@ export function ScheduleGantt({ items, viewMode, timelineStart, timelineEnd, pla
                             overflow: 'hidden',
                             boxShadow: isSelected ? '0 1px 4px rgba(0,0,0,0.2)' : undefined,
                           }}
-                          title={`${item.intermediate_type_name} | ${item.planned_quantity}${item.unit} | ${formatDate(item.planned_start)} ~ ${formatDate(item.planned_end)}`}
+                          title={`${item.product_name} | ${item.planned_quantity ?? '—'}${item.unit ?? ''} | ${formatDate(item.planned_start)} ~ ${formatDate(item.planned_end)}`}
                         >
                           <span style={{
                             fontSize: 11,
@@ -356,7 +356,7 @@ export function ScheduleGantt({ items, viewMode, timelineStart, timelineEnd, pla
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                           }}>
-                            {item.intermediate_type_name}
+                            {item.product_name}
                           </span>
                         </div>
                       )}
@@ -385,8 +385,8 @@ export function ScheduleGantt({ items, viewMode, timelineStart, timelineEnd, pla
             color: '#37352f',
             flexWrap: 'wrap' as const,
           }}>
-            <span><strong>产品:</strong> {item.intermediate_type_name}</span>
-            <span><strong>数量:</strong> {item.planned_quantity}{item.unit}</span>
+            <span><strong>产品:</strong> {item.product_name}</span>
+            <span><strong>数量:</strong> {item.planned_quantity ?? '—'}{item.unit ?? ''}</span>
             <span><strong>设备:</strong> {item.equipment_id || '-'}</span>
             <span><strong>开始:</strong> {formatDate(item.planned_start)}</span>
             <span><strong>结束:</strong> {formatDate(item.planned_end)}</span>
