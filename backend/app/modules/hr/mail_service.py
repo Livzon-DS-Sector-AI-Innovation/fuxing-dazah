@@ -42,12 +42,6 @@ async def send_email(
     password = db_config.get("smtp_password") or settings.SMTP_PASSWORD
     from_addr = sender or db_config.get("smtp_from") or settings.SMTP_FROM
     from_name = db_config.get("smtp_from_name") or settings.SMTP_FROM_NAME
-    host = str(cfg["host"])
-    port = int(cfg["port"])
-    user = str(cfg["user"])
-    password = str(cfg["password"])
-    from_addr = sender or str(cfg["from_addr"])
-    from_name = str(cfg["from_name"])
 
     if not host or not from_addr:
         raise RuntimeError("SMTP 未配置，请先在系统设置中填写邮件服务器信息")
