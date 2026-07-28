@@ -27,7 +27,7 @@ function TrainersTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`)
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
       .then((r) => r.json())
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
   }, [])
@@ -39,7 +39,7 @@ function TrainersTab() {
       if (keyword) params.set('keyword', keyword)
       if (dept) params.set('department', dept)
       if (level1) params.set('is_level1', level1)
-      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${params.toString()}`)
+      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${params.toString()}`, { credentials: 'include' })
       const d = await res.json()
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
@@ -84,6 +84,7 @@ function TrainersTab() {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      credentials: 'include',
     })
     if (res.ok) {
       message.success(editing ? '已更新' : '已创建')
@@ -96,7 +97,7 @@ function TrainersTab() {
   }
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/hr/trainers/${id}`, { method: 'DELETE' })
+    const res = await fetch(`${API_BASE}/api/v1/hr/trainers/${id}`, { method: 'DELETE', credentials: 'include' })
     if (res.ok) { message.success('已删除'); load(page) }
     else message.error('删除失败')
   }
@@ -110,7 +111,7 @@ function TrainersTab() {
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
             const fd = new FormData(); fd.append('file', file as File)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, { method: 'POST', body: fd })
+              const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, { method: 'POST', body: fd, credentials: 'include' })
               const d = await res.json()
               if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
               else message.error(d.message || '上传失败')
@@ -120,7 +121,7 @@ function TrainersTab() {
             <Button icon={<UploadOutlined />}>上传内训师</Button>
           </Upload>
           <Popconfirm title="确认清空全部内训师？此操作不可恢复" onConfirm={async () => {
-            const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, { method: 'DELETE' })
+            const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, { method: 'DELETE', credentials: 'include' })
             if (res.ok) { message.success('已清空'); load(1) }
             else message.error('清空失败')
           }}>
@@ -205,7 +206,7 @@ function DeptPersonnelTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`)
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
       .then((r) => r.json())
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
   }, [])
@@ -216,7 +217,7 @@ function DeptPersonnelTab() {
       const params = new URLSearchParams({ page: String(p), page_size: '50' })
       if (keyword) params.set('keyword', keyword)
       if (dept) params.set('department', dept)
-      const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel?${params.toString()}`)
+      const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel?${params.toString()}`, { credentials: 'include' })
       const d = await res.json()
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
@@ -246,6 +247,7 @@ function DeptPersonnelTab() {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(vals),
+      credentials: 'include',
     })
     if (res.ok) {
       message.success(editing ? '已更新' : '已创建')
@@ -258,7 +260,7 @@ function DeptPersonnelTab() {
   }
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/${id}`, { method: 'DELETE' })
+    const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/${id}`, { method: 'DELETE', credentials: 'include' })
     if (res.ok) { message.success('已删除'); load(page) }
     else message.error('删除失败')
   }
@@ -273,7 +275,7 @@ function DeptPersonnelTab() {
             const fd = new FormData(); fd.append('file', file as File)
             try {
               const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/upload`, {
-                method: 'POST', body: fd,
+                method: 'POST', body: fd, credentials: 'include',
               })
               const d = await res.json()
               if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)

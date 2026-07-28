@@ -33,7 +33,7 @@ export default function SopCatalogPage() {
 
   // 加载部门列表
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`)
+    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
       .then(r => r.json())
       .then(res => setDepartments(res.data || []))
       .catch(() => {})
@@ -50,7 +50,7 @@ export default function SopCatalogPage() {
         params.set('page', String(page))
         params.set('page_size', '200')
         if (selectedDept) params.set('department', selectedDept)
-        const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog?${params}`)
+        const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog?${params}`, { credentials: 'include' })
         const d = await res.json()
         const items = d.data || []
         all = all.concat(items)
@@ -102,7 +102,7 @@ export default function SopCatalogPage() {
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
             const fd = new FormData(); fd.append('file', file as File)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/upload`, { method: 'POST', body: fd })
+              const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/upload`, { method: 'POST', body: fd, credentials: 'include' })
               const d = await res.json()
               if (res.ok) {
                 if (d.data.errors?.length) {
@@ -147,7 +147,7 @@ export default function SopCatalogPage() {
                     <Tag className="ml-2">{catEntries.length} 个培训类别</Tag>
                     <Tag color="blue">{totalSops} 条SOP</Tag>
                     <Popconfirm title={`删除岗位「${posName}」及其全部培训内容？`} onConfirm={async () => {
-                      const res = await fetch(`${API_BASE}/api/v1/hr/positions/by-name/${encodeURIComponent(posName)}?department=${encodeURIComponent(selectedDept || '')}`, { method: 'DELETE' })
+                      const res = await fetch(`${API_BASE}/api/v1/hr/positions/by-name/${encodeURIComponent(posName)}?department=${encodeURIComponent(selectedDept || '')}`, { method: 'DELETE', credentials: 'include' })
                       if (res.ok) { message.success('已删除'); loadAll() }
                       else message.error('删除失败')
                     }}>
@@ -161,7 +161,7 @@ export default function SopCatalogPage() {
                     <Tag color="blue" closable onClose={async (e) => {
                       e.preventDefault()
                       for (const s of sops) {
-                        await fetch(`${API_BASE}/api/v1/hr/sop-catalog/${s.id}`, { method: 'DELETE' })
+                        await fetch(`${API_BASE}/api/v1/hr/sop-catalog/${s.id}`, { method: 'DELETE', credentials: 'include' })
                       }
                       message.success(`已删除「${catName}」`)
                       loadAll()
@@ -183,7 +183,7 @@ export default function SopCatalogPage() {
           }
           const res = await fetch(`${API_BASE}/api/v1/hr/position-trainings`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(payload), credentials: 'include' as const,
           })
           if (res.ok) { message.success('创建成功'); setModalOpen(false); form.resetFields(); loadAll() }
           else { const d = await res.json(); message.error(d.message || '创建失败') }
@@ -192,7 +192,7 @@ export default function SopCatalogPage() {
           <Form.Item name="department" label="部门" rules={[{ required: true }]}>
             <Select placeholder="选择部门" showSearch options={departments.map(d => ({value:d,label:d}))}
               onChange={async (dept) => {
-                const res = await fetch(`${API_BASE}/api/v1/hr/positions?department=${encodeURIComponent(dept)}`)
+                const res = await fetch(`${API_BASE}/api/v1/hr/positions?department=${encodeURIComponent(dept)}`, { credentials: 'include' as const })
                 const d = await res.json()
                 setPositions((d.data || []).map((p: any) => p.name))
               }} />

@@ -6,14 +6,13 @@ combined into a single .docx with page breaks in between.
 """
 
 import copy
-import re
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
 
 from docx import Document
-from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from lxml import etree
 
 from app.modules.hr.schemas import TrainingSignInSheetInput
@@ -46,7 +45,7 @@ def _set_cell_text(cell, text: str) -> None:
     if first_run is not None:
         first_run.text = str(text or "")
     elif cell.paragraphs:
-        run = cell.paragraphs[0].add_run(str(text or ""))
+        _ = cell.paragraphs[0].add_run(str(text or ""))
 
 
 def _set_xml_cell_text(tc, text: str) -> None:

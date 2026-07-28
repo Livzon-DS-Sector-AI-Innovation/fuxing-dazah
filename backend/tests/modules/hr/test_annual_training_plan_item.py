@@ -15,10 +15,11 @@ from app.modules.hr.schemas import (
     AnnualTrainingPlanItemBatchUpdate,
     AnnualTrainingPlanItemCreate,
 )
-from app.modules.hr.service import AnnualTrainingPlanItemService, AnnualTrainingPlanService
-
+from app.modules.hr.service import (
+    AnnualTrainingPlanItemService,
+    AnnualTrainingPlanService,
+)
 from tests.modules.hr.conftest import _rand
-
 
 # ── 辅助函数 ──
 

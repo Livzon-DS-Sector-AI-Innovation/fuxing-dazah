@@ -74,7 +74,7 @@ export default function DepartureClient({
       const vals = await createForm.validateFields()
       setCreateLoading(true)
       const emp = deptEmployees.find((e:any) => e.value === vals.employee)
-      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records`, {
+      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records`, { credentials: 'include' as const,
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: emp?.name || '', department: selectedDept,

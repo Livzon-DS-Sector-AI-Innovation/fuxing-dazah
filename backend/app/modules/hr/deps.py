@@ -190,13 +190,22 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/transfers", "hr:profile:transfer"),
     # 人事看板
     (r"/dashboard-stats", "hr:dashboard:read"),
-    # 招聘管理
+    # 招聘管理 — 注意：具体路径必须在通用路径之前（re.search 首匹配即 break）
+    (r"/candidates/pending-review", "hr:recruitment:read"),
+    (r"/candidates/.*/push-review", "hr:recruitment:manage"),
+    (r"/candidates/.*/decide-review", "hr:recruitment:manage"),
+    (r"/candidates/.*/onboard", "hr:recruitment:manage"),
+    (r"/recruitment/stats", "hr:recruitment:read"),
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/candidates", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                       "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
+    (r"/job-requirements/.*/candidates/comparison", "hr:recruitment:read"),
     (r"/job-requirements", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                             "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
+    # 系统设置
+    (r"/system-settings", {"GET": "hr:settings:manage", "PUT": "hr:settings:manage", "POST": "hr:settings:manage"}),
+    (r"/data-management", {"GET": "hr:settings:manage", "POST": "hr:settings:manage"}),
 ]
 
 

@@ -4,7 +4,6 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-import copy
 
 from dateutil.relativedelta import relativedelta
 from docx import Document
@@ -70,6 +69,7 @@ def generate_onboarding_training_record(
 async def _get_position_training(employee) -> tuple[list[str], list[str]]:
     """获取员工岗位关联的培训科目及培训师。返回 (培训内容列表, 培训师列表)。"""
     from sqlalchemy import select
+
     from app.core.database import async_session_factory
     from app.modules.hr.models import PositionTraining
 

@@ -48,6 +48,7 @@ def _calc_age(birth_year: int | None) -> str:
 def _calc_probation_end(date_val: Any) -> str:
     """入职日期 + 3 个月 - 1 天"""
     from datetime import timedelta
+
     from dateutil.relativedelta import relativedelta
 
     if not date_val:

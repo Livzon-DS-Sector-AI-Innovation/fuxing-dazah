@@ -450,6 +450,7 @@ export default function TrainingNotificationClient() {
             await fetch(`${API_BASE}/api/v1/hr/training-evaluations/upsert`, {
               method: 'POST',
               body: fd,
+              credentials: 'include' as const,
             })
           } catch { message.warning('评估补录同步失败，请手动录入') }
           message.success(
@@ -518,6 +519,7 @@ export default function TrainingNotificationClient() {
       const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/generate-assessment`, {
         method: 'POST',
         body: formData,
+        credentials: 'include' as const,
       })
       if (!res.ok) {
         const err = await res.json()
@@ -1422,7 +1424,9 @@ export default function TrainingNotificationClient() {
                   })
                   try {
                     const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-score-report`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include' as const,
+                      body: JSON.stringify({
                         training_content: [v.subject, v.content].filter(Boolean).join(' - '),
                         training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
                         training_department: v.department || '',
@@ -1449,7 +1453,9 @@ export default function TrainingNotificationClient() {
                   })
                   try {
                     const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-qa-record-with-scores`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      credentials: 'include' as const,
+                      body: JSON.stringify({
                         training_content: [v.subject, v.content].filter(Boolean).join(' - '),
                         training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
                         training_method: v.training_method || '问答',
@@ -1494,6 +1500,7 @@ export default function TrainingNotificationClient() {
             try {
               const res = await fetch(`${API_BASE}/api/v1/hr/training-assessment-scores/export`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
+                credentials: 'include' as const,
                 body: JSON.stringify({
                   training_content: subjectValue,
                   training_date: (singleDateValue || faceDateValue)?.format('YYYY-MM-DD') || '',

@@ -4,18 +4,20 @@ from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from pydantic import BaseModel
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from pydantic import BaseModel
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
-from app.modules.hr.analysis_api import router as analysis_router
+from app.modules.hr.candidate_routes import router as candidate_router
 from app.modules.hr.document_generator import generate_onboarding_training_record
 from app.modules.hr.evaluation_document_generator import generate_training_evaluation
+from app.modules.hr.interview_routes import router as interview_router
+from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.modules.hr.notification_document_generator import (
     generate_training_notification,
 )
@@ -44,9 +46,13 @@ from app.modules.hr.schemas import (
     OffboardingRecordUpdate,
     OnboardingEvaluationInput,
     OnboardingRecordResponse,
+    SopCatalogListResponse,
+    SopCatalogResponse,
     TeamCreate,
     TeamResponse,
     TeamUpdate,
+    TrainerListResponse,
+    TrainerResponse,
     TrainingEvaluationInput,
     TrainingLedgerCreate,
     TrainingLedgerPageCreate,
@@ -55,10 +61,7 @@ from app.modules.hr.schemas import (
     TrainingLedgerUpdate,
     TrainingNotificationInput,
     TrainingSignInSheetInput,
-    TrainerResponse,
-    TrainerListResponse,
-    SopCatalogResponse,
-    SopCatalogListResponse,
+    TransferCreate,
 )
 from app.modules.hr.service import (
     AnnualTrainingPlanItemService,
@@ -74,15 +77,19 @@ from app.modules.hr.service import (
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 from app.modules.hr.system_settings_routes import router as system_settings_router
-from app.modules.hr.candidate_routes import router as candidate_router
-from app.modules.hr.job_requirement_routes import router as job_requirement_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
 
-router = create_module_router(MODULES_BY_CODE["hr"])
+from app.modules.hr.deps import require_hr_basic
+
+router = create_module_router(
+    MODULES_BY_CODE["hr"],
+    dependencies=[Depends(require_hr_basic)],
+)
 router.include_router(system_settings_router)
 router.include_router(candidate_router)
+router.include_router(interview_router)
 router.include_router(job_requirement_router)
 
 
@@ -208,8 +215,8 @@ async def download_roster(
     session: AsyncSession = Depends(get_db),
 ):
     """按部门下载员工花名册 Excel。"""
-    from app.modules.hr.roster_generator import generate_roster_sync
     from app.modules.hr.models import Employee
+    from app.modules.hr.roster_generator import generate_roster_sync
     r = await session.execute(
         select(Employee).where(Employee.is_deleted == False, Employee.status != "离职").order_by(Employee.department, Employee.employee_number)
     )
@@ -231,8 +238,10 @@ async def download_training_registration(
     session: AsyncSession = Depends(get_db),
 ):
     """按部门下载个人培训登记表，整个部门合并为一个 docx 文件。"""
-    from app.modules.hr.training_registration_generator import generate_training_registration_sync
     from app.modules.hr.models import Employee
+    from app.modules.hr.training_registration_generator import (
+        generate_training_registration_sync,
+    )
 
     stmt = select(Employee).where(
         Employee.is_deleted == False,
@@ -271,8 +280,8 @@ async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     session: AsyncSession = Depends(get_db),
 ):
-    """返回入职台账中在职的员工列表，用于新员工入职培训页面选择员工。"""
-    from app.modules.hr.models import OnboardingRecord
+    """返回入职台账中在职的员工列表，同时关联员工表获取异动等完整信息。"""
+    from app.modules.hr.models import Employee, OnboardingRecord, TransferRecord
     stmt = select(OnboardingRecord).where(
         OnboardingRecord.is_deleted == False,
         OnboardingRecord.is_employed == "是",
@@ -285,6 +294,34 @@ async def training_candidates(
     stmt = stmt.order_by(OnboardingRecord.hire_date.desc().nulls_last())
     r = await session.execute(stmt)
     records = r.scalars().all()
+    # 批量查询关联的 Employee 记录和异动记录
+    emp_numbers = [rec.employee_number for rec in records if rec.employee_number]
+    emp_map = {}
+    transfer_map: dict[str, list] = {}
+    if emp_numbers:
+        emp_rows = (await session.execute(
+            select(Employee).where(Employee.employee_number.in_(emp_numbers), Employee.is_deleted == False)
+        )).scalars().all()
+        emp_map = {e.employee_number: e for e in emp_rows}
+        emp_ids = [e.id for e in emp_rows]
+        if emp_ids:
+            emp_id_map = {e.id: e.employee_number for e in emp_rows}
+            t_rows = (await session.execute(
+                select(TransferRecord).where(
+                    TransferRecord.employee_id.in_(emp_ids),
+                    TransferRecord.is_deleted == False,
+                ).order_by(TransferRecord.effective_date.desc())
+            )).scalars().all()
+            for t in t_rows:
+                en = emp_id_map.get(t.employee_id)
+                if en:
+                    transfer_map.setdefault(en, []).append({
+                            "id": str(t.id), "transfer_type": t.transfer_type,
+                            "from_department": t.from_department, "to_department": t.to_department,
+                            "from_position": t.from_position, "to_position": t.to_position,
+                            "effective_date": str(t.effective_date) if t.effective_date else None,
+                            "reason": t.reason,
+                        })
     return success_response(data=[
         {
             "id": str(rec.id),
@@ -297,6 +334,8 @@ async def training_candidates(
             "school": rec.school,
             "graduation_date": str(rec.graduation_date) if rec.graduation_date else None,
             "source": rec.source or "新入职",
+            "transfers": transfer_map.get(rec.employee_number, []),
+            "employee_id": str(emp_map[rec.employee_number].id) if rec.employee_number in emp_map else None,
         }
         for rec in records
     ])
@@ -629,7 +668,6 @@ async def export_training_sign_in_sheet(
         yield buffer.read()
 
     safe_filename = f"training_sign_in_sheet_{safe_date}.docx"
-    from urllib.parse import quote
 
     return StreamingResponse(
         _iterfile(),
@@ -650,7 +688,9 @@ class AssessmentScoreInput(BaseModel):
 @router.post("/training-assessment-scores/export", summary="导出实操考核成绩单")
 async def export_assessment_scores(payload: AssessmentScoreInput):
     """根据填写的培训信息和员工成绩，生成实操考核成绩单 Word 文档。"""
-    from app.modules.hr.assessment_score_generator import generate_assessment_score_sheet
+    from app.modules.hr.assessment_score_generator import (
+        generate_assessment_score_sheet,
+    )
 
     buf = generate_assessment_score_sheet(
         training_content=payload.training_content,
@@ -710,36 +750,49 @@ async def generate_assessment_questions(
             text = content.decode("utf-8")
         elif file.filename.endswith(".docx"):
             from io import BytesIO
+
             from docx import Document
             doc = Document(BytesIO(content))
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         elif file.filename.endswith(".doc"):
             # 转换旧版 .doc 文件（兼容 macOS / Linux）
-            import subprocess, tempfile, os, shutil
+            import asyncio
+            import os
+            import shutil
+            import tempfile
             with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
             try:
                 text = ""
-                # macOS: 使用 textutil
                 if shutil.which("textutil"):
-                    result = subprocess.run(
-                        ["textutil", "-convert", "txt", tmp_path, "-output", "/tmp/hr-doc-convert.txt"],
-                        capture_output=True, timeout=30,
+                    out_path = tmp_path + ".txt"
+                    proc = await asyncio.create_subprocess_exec(
+                        "textutil", "-convert", "txt", tmp_path, "-output", out_path,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                     )
-                    if result.returncode == 0:
-                        with open("/tmp/hr-doc-convert.txt", "r") as f:
+                    await asyncio.wait_for(proc.communicate(), timeout=30)
+                    if proc.returncode == 0 and os.path.exists(out_path):
+                        with open(out_path) as f:
                             text = f.read()
-                # Linux: 尝试 antiword / catdoc
+                    if os.path.exists(out_path):
+                        os.unlink(out_path)
                 elif shutil.which("antiword"):
-                    result = subprocess.run(["antiword", tmp_path], capture_output=True, timeout=30)
-                    if result.returncode == 0:
-                        text = result.stdout.decode("utf-8", errors="ignore")
+                    proc = await asyncio.create_subprocess_exec(
+                        "antiword", tmp_path,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    if proc.returncode == 0:
+                        text = stdout.decode("utf-8", errors="ignore")
                 elif shutil.which("catdoc"):
-                    result = subprocess.run(["catdoc", tmp_path], capture_output=True, timeout=30)
-                    if result.returncode == 0:
-                        text = result.stdout.decode("utf-8", errors="ignore")
-                # 都不可用：提示安装
+                    proc = await asyncio.create_subprocess_exec(
+                        "catdoc", tmp_path,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                    )
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    if proc.returncode == 0:
+                        text = stdout.decode("utf-8", errors="ignore")
                 if not text:
                     text = "（提示：服务器未安装 .doc 转换工具，请上传 .docx 或 .txt 格式文件）"
             finally:
@@ -755,10 +808,9 @@ async def generate_assessment_questions(
 
         # 使用 AI 生成题目
         from app.modules.hr.ai_service import AiChatService
-        from app.core.config import get_settings
-        settings = get_settings()
-        api_key = settings.HR_AI_API_KEY
-        model = settings.HR_AI_MODEL or "deepseek-chat"
+        from app.modules.hr.config import HR_AI_API_KEY, HR_AI_MODEL
+        api_key = HR_AI_API_KEY
+        model = HR_AI_MODEL or "deepseek-chat"
 
         if api_key:
             service = AiChatService(api_key=api_key, model=model)
@@ -856,7 +908,10 @@ async def export_training_evaluation_admin(
     session: AsyncSession = Depends(get_db),
 ):
     """导出培训效果评估表，自动关联年度计划和台账成绩。"""
-    from app.modules.hr.evaluation_document_generator import generate_training_evaluation, TrainingEvaluationInput
+    from app.modules.hr.evaluation_document_generator import (
+        TrainingEvaluationInput,
+        generate_training_evaluation,
+    )
 
     training_date_val = date.fromisoformat(training_date) if training_date else None
     plan_expected = expected_count
@@ -982,7 +1037,6 @@ async def export_training_evaluation(
         yield buffer.read()
 
     safe_date = str(payload.training_date).replace("-", "") if payload.training_date else "nodate"
-    from urllib.parse import quote
     safe_filename = f"training_evaluation_{safe_date}.docx"
     return StreamingResponse(
         _iterfile(),
@@ -1158,7 +1212,7 @@ async def delete_position_by_name(
     session: AsyncSession = Depends(get_db),
 ):
     """删除指定部门和名称的职位，同时清除关联的 SOP 目录条目。"""
-    from app.modules.hr.models import HrPosition, SopCatalog
+    from app.modules.hr.models import HrPosition
 
     pos = (await session.execute(
         select(HrPosition).where(
@@ -1586,7 +1640,10 @@ async def preview_departure_certificate(
     service: DepartureRecordService = Depends(get_departure_service),
 ):
     from fastapi.responses import HTMLResponse
-    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_html
+
+    from app.modules.hr.termination_certificate_generator import (
+        generate_termination_certificate_html,
+    )
     record = await service.get_record(record_id)
     html = generate_termination_certificate_html(
         name=record.name or "", id_number=getattr(record, "id_card", "") or "",
@@ -1604,23 +1661,25 @@ async def send_departure_certificate(
     service: DepartureRecordService = Depends(get_departure_service),
     session: AsyncSession = Depends(get_db),
 ):
+    from app.modules.hr.mail_service import send_email
     from app.modules.hr.models import EmailLog
-    from app.modules.hr.termination_certificate_generator import generate_termination_certificate_docx
-    from app.platform.mail_service import send_email
+    from app.modules.hr.termination_certificate_generator import (
+        generate_termination_certificate_pdf,
+    )
     record = await service.get_record(record_id)
     name = record.name or "员工"
-    docx_buf = generate_termination_certificate_docx(
+    pdf_buf = generate_termination_certificate_pdf(
         name=name, id_number=getattr(record, "id_card", "") or "",
         department=record.department or "", position=record.position or "",
         entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
         leave_date=record.offboarding_date or "",
         leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
     )
-    filename = f"解除劳动关系证明_{name}.docx"
+    filename = f"解除劳动关系证明_{name}.pdf"
     subj = "解除劳动关系证明"
     html = f"<html><body style=\"font-family:sans-serif;padding:20px;\"><h2>解除劳动关系证明</h2><p>{name}，您好！</p><p>附件是您的解除劳动关系证明，请查收。</p></body></html>"
     try:
-        send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, docx_buf.read())]); st, err = "sent", None
+        await send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())], session=session); st, err = "sent", None
     except Exception as e:
         st, err = "failed", str(e)
     session.add(EmailLog(email_type="departure_cert", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))
@@ -2179,7 +2238,6 @@ async def save_qa_scores(
 ):
     """保存或更新考核成绩。"""
     import json as _json
-
     from datetime import date as _date
 
     def _d(v: str | None):
@@ -2401,6 +2459,7 @@ async def export_training_qa_record_with_scores(
 ):
     """导出含学员错题记录和评分的完整问答实操记录表。"""
     import json as _json
+
     from app.modules.hr.qa_record_generator import generate_qa_record
 
     questions = _json.loads(body.questions_json) if body.questions_json else []
@@ -2465,6 +2524,7 @@ async def export_training_qa_record_with_scores(
 async def export_score_report(body: QaRecordExportRequest, session: AsyncSession = Depends(get_db)):
     """导出考核成绩单，同时自动录入培训台账。"""
     import json as _json
+
     from app.modules.hr.score_report_generator import generate_score_report
 
     scores_raw = _json.loads(body.scores_json) if body.scores_json else []
@@ -2522,6 +2582,7 @@ async def export_training_qa_record(
 ):
     """从培训通知页直接导出问答实操记录表（无评分数据，供打印后手写）。"""
     import json as _json
+
     from app.modules.hr.qa_record_generator import generate_qa_record
 
     questions = _json.loads(questions_json) if questions_json else []
@@ -2551,8 +2612,9 @@ async def export_qa_record(
     session: AsyncSession = Depends(get_db),
 ):
     """导出问答实操记录表 docx。"""
-    from app.modules.hr.qa_record_generator import generate_qa_record
     import json as _json
+
+    from app.modules.hr.qa_record_generator import generate_qa_record
 
     row = (await session.execute(
         text("SELECT subject, department, training_date, training_method, trainer, questions, trainee_names FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
@@ -2609,7 +2671,10 @@ async def export_qa_evaluation(
     session: AsyncSession = Depends(get_db),
 ):
     """导出培训效果评估表 docx。自动从成绩数据汇总统计。"""
-    from app.modules.hr.evaluation_document_generator import generate_training_evaluation, TrainingEvaluationInput
+    from app.modules.hr.evaluation_document_generator import (
+        TrainingEvaluationInput,
+        generate_training_evaluation,
+    )
 
     row = (await session.execute(
         text("SELECT subject, department, training_date, training_method, trainer, assessment_method FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
@@ -2671,8 +2736,9 @@ async def export_qa_scores(
     session: AsyncSession = Depends(get_db),
 ):
     """导出成绩单 docx（使用成绩单模板），并自动同步成绩到培训台账。"""
-    from app.modules.hr.score_report_generator import generate_score_report
     from datetime import date as _date
+
+    from app.modules.hr.score_report_generator import generate_score_report
 
     row = (await session.execute(
         text("SELECT subject, department, training_date, training_method, trainer FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
@@ -2960,8 +3026,9 @@ async def create_annual_training_plan_item(
     payload: CreatePlanItemBody,
     session: AsyncSession = Depends(get_db),
 ):
-    from app.modules.hr.models import AnnualTrainingPlanItem
     from datetime import date as dt_date
+
+    from app.modules.hr.models import AnnualTrainingPlanItem
 
     item = AnnualTrainingPlanItem(plan_id=plan_id, **payload.model_dump(exclude_none=True))
     if payload.confirm_date:
@@ -3216,8 +3283,8 @@ async def list_trainers(
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
 ):
-    from app.modules.hr.models import HrTrainer
     from app.core.response import paginated_response
+    from app.modules.hr.models import HrTrainer
 
     query = select(HrTrainer).where(HrTrainer.is_deleted == False)
     count_q = select(func.count()).select_from(HrTrainer).where(HrTrainer.is_deleted == False)
@@ -3446,8 +3513,9 @@ async def upload_dept_training_personnel(
 
     try:
         content = await file.read()
-        import openpyxl
         from io import BytesIO
+
+        import openpyxl
 
         wb = openpyxl.load_workbook(BytesIO(content))
         ws = wb.active
@@ -3551,8 +3619,8 @@ async def list_sop_catalog(
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
 ):
-    from app.modules.hr.models import SopCatalog
     from app.core.response import paginated_response
+    from app.modules.hr.models import SopCatalog
 
     query = select(SopCatalog).where(SopCatalog.is_deleted == False)
     count_q = select(func.count()).select_from(SopCatalog).where(SopCatalog.is_deleted == False)
@@ -3624,7 +3692,6 @@ async def upsert_training_evaluation(
     session: AsyncSession = Depends(get_db),
 ):
     """从培训通知面板同步：按培训内容+部门 upsert。"""
-    from app.modules.hr.models import TrainingLedger
     existing = (await session.execute(
         text("SELECT id FROM hr.training_evaluations WHERE training_content = :c AND department = :d AND is_deleted = false"),
         {"c": training_content, "d": department}
@@ -3644,88 +3711,6 @@ async def upsert_training_evaluation(
     await session.commit()
     return success_response(data={"status": msg}, message="同步成功")
 
-
-
-@router.get("/job-requirements", summary="岗位需求列表")
-async def list_job_reqs(session: AsyncSession = Depends(get_db)):
-    r = await session.execute(text("SELECT id, position_name, department, headcount, hired_count, requirements, status FROM hr.job_requirements WHERE is_deleted = false ORDER BY created_at DESC"))
-    return success_response(data=[{"id":str(row[0]),"position_name":row[1],"department":row[2],"headcount":row[3],"hired_count":row[4],"requirements":row[5],"status":row[6]} for row in r])
-
-
-@router.post("/job-requirements", summary="创建岗位需求")
-async def create_job_req(payload: dict, session: AsyncSession = Depends(get_db)):
-    await session.execute(text("INSERT INTO hr.job_requirements (id, position_name, department, headcount, requirements, status, created_at, updated_at) VALUES (gen_random_uuid(), :pn, :dept, :hc, :req, '招聘中', now(), now())"), {"pn":payload.get("position_name",""), "dept":payload.get("department",""), "hc":int(payload.get("headcount",1)), "req":payload.get("requirements","")})
-    await session.commit()
-    return success_response(message="创建成功", status_code=201)
-
-
-@router.put("/job-requirements/{req_id}", summary="更新岗位需求")
-async def update_job_req(req_id: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
-    await session.execute(text("UPDATE hr.job_requirements SET position_name=COALESCE(:pn,position_name), department=COALESCE(:dept,department), headcount=COALESCE(:hc,headcount), requirements=COALESCE(:req,requirements), status=COALESCE(:st,status) WHERE id=:id AND is_deleted=false"), {"pn":payload.get("position_name"),"dept":payload.get("department"),"hc":payload.get("headcount"),"req":payload.get("requirements"),"st":payload.get("status"),"id":req_id})
-    await session.commit()
-    return success_response(message="已更新")
-
-
-@router.delete("/job-requirements/{req_id}", summary="删除岗位需求")
-async def delete_job_req(req_id: UUID, session: AsyncSession = Depends(get_db)):
-    await session.execute(text("UPDATE hr.job_requirements SET is_deleted=true WHERE id=:id"), {"id":req_id})
-    await session.commit()
-    return success_response(message="已删除")
-
-
-@router.post("/candidates/parse-resume", summary="解析简历")
-async def parse_cv(file: UploadFile = Form(..., alias="resume")):
-    if not file.filename or not file.filename.endswith(".pdf"): raise HTTPException(400, "仅支持PDF")
-    from app.modules.hr.resume_parser import parse_resume_pdf
-    import os; os.makedirs("uploads/resumes", exist_ok=True)
-    content=bytes(await file.read()); path=f"uploads/resumes/{file.filename}"
-    open(path,"wb").write(content); r=parse_resume_pdf(content); r["resume_file_path"]=path
-    return success_response(data=r)
-
-
-@router.get("/candidates/{cid}/resume-preview", summary="简历预览")
-async def resume_preview(cid: UUID, session: AsyncSession = Depends(get_db)):
-    r = await session.execute(text("SELECT resume_url FROM hr.candidates WHERE id=:id"), {"id": cid})
-    row = r.first()
-    if not row or not row[0]: raise HTTPException(404, "无简历文件")
-    import os
-    if not os.path.exists(row[0]): raise HTTPException(404, "简历文件不存在")
-    return FileResponse(row[0], media_type="application/pdf")
-
-
-@router.get("/candidates", summary="候选人列表")
-async def list_candidates(page_params: PageParams = Depends(), session: AsyncSession = Depends(get_db)):
-    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE is_deleted=false ORDER BY created_at DESC LIMIT :lim OFFSET :off"),{"lim":page_params.page_size,"off":(page_params.page-1)*page_params.page_size})
-    return success_response(data=[{"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None} for row in r])
-
-
-@router.post("/candidates", summary="创建候选人")
-async def create_candidate(payload: dict, session: AsyncSession = Depends(get_db)):
-    import os,shutil; rp=None
-    if payload.get("resume_file_path") and os.path.exists(payload["resume_file_path"]):
-        os.makedirs("uploads/resumes",exist_ok=True); rp=f"uploads/resumes/{payload.get('name','candidate')}_{os.path.basename(payload['resume_file_path'])}"
-        shutil.copy(payload["resume_file_path"],rp)
-    await session.execute(text("INSERT INTO hr.candidates (id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id,resume_url,created_at,updated_at) VALUES (gen_random_uuid(),:n,:ph,:em,:pos,:dept,:g,:sch,:edu,:maj,:st,:rl,:jid,:rp,now(),now())"),{"n":payload.get("name",""),"ph":payload.get("phone",""),"em":payload.get("email",""),"pos":payload.get("position",""),"dept":payload.get("department",""),"g":payload.get("gender",""),"sch":payload.get("school",""),"edu":payload.get("education",""),"maj":payload.get("major",""),"st":payload.get("status","待筛选"),"rl":payload.get("recommendation_level",""),"jid":payload.get("job_requirement_id"),"rp":rp})
-    await session.commit(); return success_response(message="创建成功", status_code=201)
-
-
-@router.get("/candidates/{cid}", summary="候选人详情")
-async def get_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
-    r=await session.execute(text("SELECT id,name,phone,email,position,department,gender,school,education,major,status,recommendation_level,job_requirement_id FROM hr.candidates WHERE id=:id AND is_deleted=false"),{"id":cid})
-    row=r.first()
-    if not row: raise HTTPException(404,"不存在")
-    return success_response(data={"id":str(row[0]),"name":row[1],"phone":row[2],"email":row[3],"position":row[4],"department":row[5],"gender":row[6],"school":row[7],"education":row[8],"major":row[9],"status":row[10],"recommendation_level":row[11],"job_requirement_id":str(row[12]) if row[12] else None})
-
-
-@router.put("/candidates/{cid}", summary="更新候选人")
-async def update_candidate(cid: UUID, payload: dict, session: AsyncSession = Depends(get_db)):
-    await session.execute(text("UPDATE hr.candidates SET name=COALESCE(:n,name),phone=COALESCE(:ph,phone),email=COALESCE(:em,email),position=COALESCE(:pos,position),department=COALESCE(:dept,department),gender=COALESCE(:g,gender),school=COALESCE(:sch,school),education=COALESCE(:edu,education),major=COALESCE(:maj,major),status=COALESCE(:st,status),recommendation_level=COALESCE(:rl,recommendation_level) WHERE id=:id AND is_deleted=false"),{"n":payload.get("name"),"ph":payload.get("phone"),"em":payload.get("email"),"pos":payload.get("position"),"dept":payload.get("department"),"g":payload.get("gender"),"sch":payload.get("school"),"edu":payload.get("education"),"maj":payload.get("major"),"st":payload.get("status"),"rl":payload.get("recommendation_level"),"id":cid})
-    await session.commit(); return success_response(message="已更新")
-
-
-@router.delete("/candidates/{cid}", summary="删除候选人")
-async def delete_candidate(cid: UUID, session: AsyncSession = Depends(get_db)):
-    await session.execute(text("UPDATE hr.candidates SET is_deleted=true WHERE id=:id"),{"id":cid})
 
 
 # ─── Exam Papers Routes ───
@@ -3805,8 +3790,8 @@ async def download_exam_paper(
     session: AsyncSession = Depends(get_db),
 ):
     """根据已保存试卷的题目快照重新生成 Word 文档下载。"""
-    from app.modules.hr.models import ExamPaper
     from app.modules.hr.exam_paper_generator import generate_exam_paper
+    from app.modules.hr.models import ExamPaper
 
     q = select(ExamPaper).where(ExamPaper.id == paper_id, ExamPaper.is_deleted == False)
     r = await session.execute(q)
@@ -3821,4 +3806,58 @@ async def download_exam_paper(
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
     )
-    await session.commit(); return success_response(message="已删除")
+
+
+# ─── TransferRecord Routes ───
+
+@router.get("/transfers", summary="员工异动记录列表")
+async def list_transfers(
+    employee_id: UUID = Query(...),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_db),
+):
+    """查询某员工的异动记录（分页）。"""
+    from sqlalchemy import func
+
+    from app.modules.hr.models import TransferRecord
+    base = select(TransferRecord).where(
+        TransferRecord.employee_id == employee_id, TransferRecord.is_deleted == False
+    )
+    total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+    r = await session.execute(
+        base.order_by(TransferRecord.effective_date.desc()).offset((page - 1) * page_size).limit(page_size)
+    )
+    records = r.scalars().all()
+    return paginated_response(
+        data=[{
+            "id": str(t.id), "transfer_type": t.transfer_type,
+            "from_department": t.from_department, "to_department": t.to_department,
+            "from_position": t.from_position, "to_position": t.to_position,
+            "effective_date": str(t.effective_date) if t.effective_date else None,
+            "reason": t.reason, "created_at": str(t.created_at),
+        } for t in records],
+        page=page, page_size=page_size, total=total,
+    )
+
+
+@router.post("/transfers", summary="创建员工异动记录")
+async def create_transfer(
+    payload: TransferCreate,
+    session: AsyncSession = Depends(get_db),
+):
+    """新增员工异动记录。"""
+    from app.modules.hr.models import TransferRecord
+    t = TransferRecord(
+        employee_id=payload.employee_id,
+        transfer_type=payload.transfer_type,
+        from_department=payload.from_department,
+        to_department=payload.to_department,
+        from_position=payload.from_position,
+        to_position=payload.to_position,
+        effective_date=payload.effective_date,
+        reason=payload.reason,
+    )
+    session.add(t)
+    await session.flush()
+    return success_response(data={"id": str(t.id)}, message="异动记录创建成功", status_code=201)

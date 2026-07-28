@@ -3,8 +3,8 @@ from fastapi import APIRouter
 from app.shared.module_registry import ModuleDefinition
 
 
-def create_module_router(module: ModuleDefinition) -> APIRouter:
-    router = APIRouter()
+def create_module_router(module: ModuleDefinition, dependencies: list | None = None) -> APIRouter:
+    router = APIRouter(dependencies=dependencies or [])
 
     @router.get("/", summary=f"{module.name}模块信息")
     async def read_module() -> dict[str, str]:

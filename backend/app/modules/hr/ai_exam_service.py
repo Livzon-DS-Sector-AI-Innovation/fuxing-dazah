@@ -1,14 +1,9 @@
 """AI exam generation service. Supports both API and local mode."""
 
-import json
 import logging
-import re
 from io import BytesIO
 
-import httpx
 from docx import Document as DocxDocument
-
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -220,16 +215,46 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict | None = 
     return result
 
 
+def _find_exam_template() -> str:
+    """查找试卷模板文件。"""
+    from pathlib import Path
+    base = Path(__file__).parent.parent.parent.parent
+    for p in [base / "assets/hr/试卷模板.docx", Path("assets/hr/试卷模板.docx")]:
+        if p.exists():
+            return str(p)
+    # 无模板时返回空字符串，走空白文档兜底
+    return ""
+
+
 def export_exam(data: dict) -> BytesIO:
-    """Export exam questions as a Word document."""
+    """导出考试试卷为 Word 文档，优先使用试卷模板。"""
     from docx import Document
     from docx.shared import Pt
 
-    doc = Document()
+    template_path = _find_exam_template()
+    if template_path:
+        doc = Document(template_path)
+    else:
+        doc = Document()
     doc.styles["Normal"].font.size = Pt(11)
-    doc.add_heading(data.get("title", "培训考试试卷"), level=1)
-    doc.add_paragraph("")
 
+    title = data.get("title", "培训考试试卷")
+    header_para = None
+    for p in doc.paragraphs:
+        if "{{培训内容}}" in (p.text or ""):
+            header_para = p
+            break
+
+    if header_para:
+        if header_para.runs:
+            header_para.runs[0].text = f"{title}试题"
+            for r in header_para.runs[1:]:
+                r.text = ""
+    else:
+        doc.add_heading(title, level=1)
+        doc.add_paragraph("")
+
+    # 考试信息行
     info = []
     if data.get("examiner"):
         info.append(f"出卷人：{data['examiner']}")
@@ -242,38 +267,46 @@ def export_exam(data: dict) -> BytesIO:
         doc.add_paragraph("")
 
     choice_qs = data.get("choice_questions", [])
-    if choice_qs:
-        doc.add_heading("一、单选题", level=2)
-        for q in choice_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            for opt in q.get("options", []):
-                doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
-            doc.add_paragraph("")
-
     tf_qs = data.get("true_false_questions", [])
-    if tf_qs:
-        doc.add_heading("二、判断题", level=2)
-        for q in tf_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']} （  ）")
-            doc.add_paragraph("")
-
     multi_qs = data.get("multi_choice_questions", [])
-    if multi_qs:
-        doc.add_heading("三、多选题", level=2)
-        for q in multi_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            for opt in q.get("options", []):
-                doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
-            doc.add_paragraph("")
-
     fill_qs = data.get("fill_blank_questions", [])
-    if fill_qs:
-        doc.add_heading("四、填空题", level=2)
-        for q in fill_qs:
-            doc.add_paragraph(f"{q['number']}. {q['question']}")
-            doc.add_paragraph("")
 
-    doc.add_heading("参考答案", level=2)
+    for heading, qs in [("一、单选题", choice_qs), ("二、判断题", tf_qs),
+                          ("三、多选题", multi_qs), ("四、填空题", fill_qs)]:
+        if not qs:
+            continue
+        p = doc.add_paragraph()
+        run = p.add_run(f"{heading}（共{len(qs)}题）")
+        run.bold = True
+        run.font.size = Pt(14)
+        doc.add_paragraph("")
+
+        if heading == "一、单选题":
+            for q in qs:
+                doc.add_paragraph(f"{q['number']}. {q['question']}")
+                for opt in q.get("options", []):
+                    doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
+                doc.add_paragraph("")
+        elif heading == "二、判断题":
+            for q in qs:
+                doc.add_paragraph(f"{q['number']}. {q['question']}  对 □    错 □")
+                doc.add_paragraph("")
+        elif heading == "三、多选题":
+            for q in qs:
+                doc.add_paragraph(f"{q['number']}. {q['question']}")
+                for opt in q.get("options", []):
+                    doc.add_paragraph(f"    {opt['label']}. {opt['text']}")
+                doc.add_paragraph("")
+        elif heading == "四、填空题":
+            for q in qs:
+                doc.add_paragraph(f"{q['number']}. {q['question']}")
+                doc.add_paragraph("    ____________________")
+                doc.add_paragraph("")
+
+    p = doc.add_paragraph()
+    run = p.add_run("参考答案")
+    run.bold = True
+    run.font.size = Pt(14)
     if choice_qs:
         doc.add_paragraph("单选题答案：")
         for q in choice_qs:
