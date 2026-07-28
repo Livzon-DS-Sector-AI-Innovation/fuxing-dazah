@@ -39,8 +39,8 @@ def generate_offer_pdf(**kwargs) -> BytesIO:
         HTML(string=html).write_pdf(buf)
         buf.seek(0)
         return buf
-    except OSError:
-        # macOS 没装系统库，用 fpdf2 兜底
+    except (OSError, ImportError):
+        # 缺系统库或包未安装，用 fpdf2 兜底
         return _generate_offer_pdf_fallback(**kwargs)
 
 

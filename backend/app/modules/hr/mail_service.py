@@ -58,7 +58,10 @@ async def send_email(
             part.add_header("Content-Disposition", "attachment", filename=filename)
             msg.attach(part)
 
-    try:
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def _send():
         if port == 465:
             server = smtplib.SMTP_SSL(host, port, timeout=30)
         else:
@@ -68,7 +71,10 @@ async def send_email(
             server.login(user, password)
         server.sendmail(from_addr, [to], msg.as_string())
         server.quit()
+
+    try:
+        await loop.run_in_executor(None, _send)
         logger.info("邮件发送成功: to=%s attachments=%d", to, len(attachments or []))
         return True
-    except smtplib.SMTPException as e:
+    except Exception as e:
         raise RuntimeError(f"邮件发送失败: {e}") from e

@@ -34,7 +34,7 @@ def generate_termination_certificate_pdf(
         HTML(string=html).write_pdf(buf)
         buf.seek(0)
         return buf
-    except OSError:
+    except (OSError, ImportError):
         return _generate_termination_certificate_pdf_fallback(
             name=name, id_number=id_number, department=department,
             position=position, entry_date=entry_date, leave_date=leave_date,

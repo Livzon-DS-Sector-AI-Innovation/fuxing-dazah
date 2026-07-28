@@ -1101,7 +1101,6 @@ class CandidateAiEvaluationRepository:
             if ev.candidate_id not in by_candidate:
                 by_candidate[ev.candidate_id] = ev
         return by_candidate
-        return result.scalars().first()
 
     async def create(self, evaluation: CandidateAiEvaluation) -> CandidateAiEvaluation:
         self.session.add(evaluation)
