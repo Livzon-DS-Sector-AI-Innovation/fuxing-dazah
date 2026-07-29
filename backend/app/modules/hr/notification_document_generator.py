@@ -83,12 +83,20 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
 
     # ── Row 1: 培训日期 | value (含时间) | 课时 | value ──
     date_text = str(data.training_date) if data.training_date else ""
-    if data.training_time_start and data.training_time_end:
-        date_text += f" {data.training_time_start}—{data.training_time_end}"
-    elif data.training_time_start:
-        date_text += f" {data.training_time_start}"
+    # 双模式：面授时间 + 自学时间
+    face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
+    face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
+    self_start = getattr(data, "self_study_time_start", None)
+    self_end = getattr(data, "self_study_time_end", None)
+    if face_start and face_end:
+        date_text += f" 面授 {face_start}—{face_end}"
+        if self_start and self_end:
+            date_text += f"；自学 {self_start}—{self_end}"
+    elif face_start:
+        date_text += f" {face_start}"
     _set_cell(table.rows[1].cells[1], date_text)
-    _set_cell(table.rows[1].cells[3], _compute_hours(data.training_time_start, data.training_time_end))
+    # 课时仅按面授时间计算
+    _set_cell(table.rows[1].cells[3], _compute_hours(face_start, face_end))
 
     # ── Row 2: 培训方式 | value | 授课人 | value ──
     _set_cell(table.rows[2].cells[1], data.training_method or "")

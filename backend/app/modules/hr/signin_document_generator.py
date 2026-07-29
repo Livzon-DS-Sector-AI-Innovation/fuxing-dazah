@@ -88,13 +88,22 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
     _set_cell_text(table.rows[1].cells[1], data.department)
     # Row 1, Col 3: 培训方式
     _set_cell_text(table.rows[1].cells[3], data.training_method or "")
-    # Row 2, Col 1: 课时
-    hours = _compute_duration_hours(data.training_time_start, data.training_time_end)
+    # Row 2, Col 1: 课时（仅按面授时间计算）
+    face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
+    face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
+    hours = _compute_duration_hours(face_start, face_end)
     _set_cell_text(table.rows[2].cells[1], hours)
     # Row 2, Col 3: 考核方式
     _set_cell_text(table.rows[2].cells[3], data.assessment_method or "")
-    # Row 3, Col 1: 培训日期 (merged cols 1-3)
-    _set_cell_text(table.rows[3].cells[1], str(data.training_date) if data.training_date else "")
+    # Row 3, Col 1: 培训日期含时间 (merged cols 1-3)
+    date_text = str(data.training_date) if data.training_date else ""
+    self_start = getattr(data, "self_study_time_start", None)
+    self_end = getattr(data, "self_study_time_end", None)
+    if face_start and face_end:
+        date_text += f" 面授 {face_start}—{face_end}"
+        if self_start and self_end:
+            date_text += f"；自学 {self_start}—{self_end}"
+    _set_cell_text(table.rows[3].cells[1], date_text)
 
 
 def _fill_employee_rows(table, employee_names: list[str], employee_departments: dict[str, str], default_department: str) -> None:
