@@ -27,6 +27,16 @@ import {
   CreateWorkshopConfigInput,
   UpdateWorkshopConfigInput,
   EnergyPersonnelCandidate,
+  AlertRuleCandidate,
+  WorkshopOption,
+  DailyPushConfig,
+  CreateDailyPushConfigInput,
+  UpdateDailyPushConfigInput,
+  DailyReportSendRequest,
+  NitrogenPushConfig,
+  CreateNitrogenPushConfigInput,
+  UpdateNitrogenPushConfigInput,
+  NitrogenReportSendRequest,
 } from '@/types/energy'
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/http-client'
 
@@ -126,6 +136,13 @@ export async function fetchEnergyDataHistory(
   return apiFetchPaginated<EnergyDataHistory>(
     `${SERVER_API_BASE}/api/v1/energy/data/history?${searchParams.toString()}`
   )
+}
+
+export async function updateEnergyDataValue(
+  dataId: string,
+  value: number,
+): Promise<void> {
+  await apiPut(`${SERVER_API_BASE}/api/v1/energy/data/${dataId}`, { value })
 }
 
 // ── 数据采集（Server Actions）──
@@ -410,3 +427,132 @@ export async function fetchWorkshopPersonnelCandidates(): Promise<EnergyPersonne
   )
 }
 
+export async function fetchAvailableRules(): Promise<AlertRuleCandidate[]> {
+  return apiGet<AlertRuleCandidate[]>(
+    `${SERVER_API_BASE}/api/v1/energy/workshop-configs/available-rules`
+  )
+}
+
+export async function fetchWorkshopOptions(energyType?: string): Promise<WorkshopOption[]> {
+  const searchParams = new URLSearchParams()
+  if (energyType) searchParams.set('energy_type', energyType)
+  const qs = searchParams.toString()
+  return apiGet<WorkshopOption[]>(
+    `${SERVER_API_BASE}/api/v1/energy/workshop-configs/workshop-options${qs ? `?${qs}` : ''}`
+  )
+}
+
+export async function fetchWorkshopOptionsClient(energyType?: string): Promise<WorkshopOption[]> {
+  const searchParams = new URLSearchParams()
+  if (energyType) searchParams.set('energy_type', energyType)
+  const qs = searchParams.toString()
+  return apiGet<WorkshopOption[]>(
+    `${CLIENT_API_BASE}/api/v1/energy/workshop-configs/workshop-options${qs ? `?${qs}` : ''}`
+  )
+}
+
+
+// ── 能源总耗推送配置（Server Actions）──
+
+export async function fetchDailyPushConfigs(
+  page = 1,
+  pageSize = 20,
+  isEnabled?: boolean,
+): Promise<PaginatedResponse<DailyPushConfig>> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('page', String(page))
+  searchParams.set('page_size', String(pageSize))
+  if (isEnabled !== undefined) searchParams.set('is_enabled', String(isEnabled))
+  return apiFetchPaginated<DailyPushConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/daily-report/configs?${searchParams.toString()}`
+  )
+}
+
+export async function fetchDailyPushConfigById(id: string): Promise<DailyPushConfig> {
+  return apiGet<DailyPushConfig>(`${SERVER_API_BASE}/api/v1/energy/daily-report/configs/${id}`)
+}
+
+export async function createDailyPushConfig(
+  data: CreateDailyPushConfigInput
+): Promise<DailyPushConfig> {
+  return apiPost<DailyPushConfig>(`${SERVER_API_BASE}/api/v1/energy/daily-report/configs`, data)
+}
+
+export async function updateDailyPushConfig(
+  id: string,
+  data: UpdateDailyPushConfigInput
+): Promise<DailyPushConfig> {
+  return apiPut<DailyPushConfig>(`${SERVER_API_BASE}/api/v1/energy/daily-report/configs/${id}`, data)
+}
+
+export async function deleteDailyPushConfig(id: string): Promise<void> {
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/daily-report/configs/${id}`)
+}
+
+export async function sendDailyReport(
+  data: DailyReportSendRequest
+): Promise<{ success: boolean; sent_to: number; total_users: number; message: string }> {
+  return apiPost<{ success: boolean; sent_to: number; total_users: number; message: string }>(
+    `${SERVER_API_BASE}/api/v1/energy/daily-report/send`,
+    data
+  )
+}
+
+export async function fetchDailyPushPersonnelCandidates(): Promise<EnergyPersonnelCandidate[]> {
+  return apiGet<EnergyPersonnelCandidate[]>(
+    `${SERVER_API_BASE}/api/v1/energy/daily-report/personnel-candidates`
+  )
+}
+
+
+// ── 氮气月度推送配置 ──
+
+export async function fetchNitrogenPushConfigs(
+  page = 1,
+  pageSize = 20,
+  isEnabled?: boolean,
+): Promise<PaginatedResponse<NitrogenPushConfig>> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('page', String(page))
+  searchParams.set('page_size', String(pageSize))
+  if (isEnabled !== undefined) searchParams.set('is_enabled', String(isEnabled))
+  return apiFetchPaginated<NitrogenPushConfig>(
+    `${SERVER_API_BASE}/api/v1/energy/nitrogen-report/configs?${searchParams.toString()}`
+  )
+}
+
+export async function fetchNitrogenPushConfigById(id: string): Promise<NitrogenPushConfig> {
+  return apiGet<NitrogenPushConfig>(`${SERVER_API_BASE}/api/v1/energy/nitrogen-report/configs/${id}`)
+}
+
+export async function createNitrogenPushConfig(
+  data: CreateNitrogenPushConfigInput
+): Promise<NitrogenPushConfig> {
+  return apiPost<NitrogenPushConfig>(`${SERVER_API_BASE}/api/v1/energy/nitrogen-report/configs`, data)
+}
+
+export async function updateNitrogenPushConfig(
+  id: string,
+  data: UpdateNitrogenPushConfigInput
+): Promise<NitrogenPushConfig> {
+  return apiPut<NitrogenPushConfig>(`${SERVER_API_BASE}/api/v1/energy/nitrogen-report/configs/${id}`, data)
+}
+
+export async function deleteNitrogenPushConfig(id: string): Promise<void> {
+  await apiDelete(`${SERVER_API_BASE}/api/v1/energy/nitrogen-report/configs/${id}`)
+}
+
+export async function sendNitrogenReport(
+  data: NitrogenReportSendRequest
+): Promise<{ success: boolean; sent_to: number; total_users: number; message: string }> {
+  return apiPost<{ success: boolean; sent_to: number; total_users: number; message: string }>(
+    `${SERVER_API_BASE}/api/v1/energy/nitrogen-report/send`,
+    data
+  )
+}
+
+export async function fetchNitrogenPushPersonnelCandidates(): Promise<EnergyPersonnelCandidate[]> {
+  return apiGet<EnergyPersonnelCandidate[]>(
+    `${SERVER_API_BASE}/api/v1/energy/nitrogen-report/personnel-candidates`
+  )
+}

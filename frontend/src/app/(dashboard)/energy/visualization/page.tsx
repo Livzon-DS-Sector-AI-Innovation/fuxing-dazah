@@ -1,11 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { DatePicker, Segmented, Spin, Empty, message, Table } from 'antd'
+import { DatePicker, Segmented, Spin, Empty, App, Button } from 'antd'
 import { Line, Bar } from '@ant-design/charts'
+import { DownloadOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
+import * as XLSX from 'xlsx'
 import { fetchEnergyOverview } from '@/lib/api/energy'
-import type { EnergyOverview, DistributionRow, EnergyTypeMeta } from '@/types/energy'
+import type { EnergyOverview, EnergyTypeMeta } from '@/types/energy'
 
 const { RangePicker } = DatePicker
 
@@ -16,37 +18,11 @@ const RANGE_PRESETS: Record<string, [dayjs.Dayjs, dayjs.Dayjs]> = {
   '本月': [dayjs().startOf('month'), dayjs().endOf('day')],
 }
 
-// ── 趋势计算（线性回归） ──
-function computeTrend(values: number[]): { direction: 'up' | 'down' | 'flat'; pct: number } | null {
-  const n = values.length
-  if (n < 2) return null
-
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
-  for (let i = 0; i < n; i++) {
-    sumX += i
-    sumY += values[i]
-    sumXY += i * values[i]
-    sumX2 += i * i
-  }
-  const denom = n * sumX2 - sumX * sumX
-  if (denom === 0) return null
-
-  const slope = (n * sumXY - sumX * sumY) / denom
-  const avgY = sumY / n
-  if (avgY === 0) return { direction: 'flat', pct: 0 }
-
-  const totalChange = slope * (n - 1)
-  const pct = Math.round((totalChange / avgY) * 1000) / 10 // 保留一位小数
-
-  const absPct = Math.abs(pct)
-  if (absPct < 10) return { direction: 'flat', pct }
-  return { direction: pct > 0 ? 'up' : 'down', pct }
-}
-
 export default function VisualizationPage() {
+  const { message } = App.useApp()
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(RANGE_PRESETS['7天'])
   const [activePreset, setActivePreset] = useState<string>('7天')
-  const [selectedType, setSelectedType] = useState<string | null>(null)
+  const [selectedType, setSelectedType] = useState<string>('')
   const [selectedWorkshop, setSelectedWorkshop] = useState<string | null>(null)
   const [overview, setOverview] = useState<EnergyOverview | null>(null)
   const [prevOverview, setPrevOverview] = useState<EnergyOverview | null>(null)
@@ -85,6 +61,13 @@ export default function VisualizationPage() {
   useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
 
   const metadata = overview?.type_metadata || []
+
+  // 首次加载时自动选中第一个能源类型
+  useEffect(() => {
+    if (!selectedType && metadata.length > 0) {
+      setSelectedType(metadata[0].type_code)
+    }
+  }, [metadata, selectedType])
 
   // ── KPI（按当前选中能源类型计算，非全部能源相加）──
   const kpi = useMemo(() => {
@@ -235,75 +218,52 @@ export default function VisualizationPage() {
     }
   }, [plBarData])
 
-  // ── 详情表 ──
-  const detailColumns = useMemo(() => [
-    {
-      title: '能源类型', dataIndex: 'type', key: 'type', width: 140,
-      render: (_: unknown, r: any) => (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: r.color, display: 'inline-block' }} />
-          <span style={{ fontWeight: 500 }}>{r.display_name}</span>
-        </span>
-      ),
-    },
-    { title: '总量', dataIndex: 'total', key: 'total', width: 120, align: 'right' as const,
-      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
-    { title: '占比', dataIndex: 'pct', key: 'pct', width: 70, align: 'right' as const,
-      render: (v: number) => <span style={{ color: '#787671' }}>{v.toFixed(1)}%</span> },
-    { title: '日均', dataIndex: 'dailyAvg', key: 'dailyAvg', width: 100, align: 'right' as const,
-      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
-    { title: '峰值', dataIndex: 'peak', key: 'peak', width: 100, align: 'right' as const,
-      render: (v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) },
-    { title: '趋势', dataIndex: 'sparkline', key: 'sparkline', width: 100,
-      render: (_: unknown, r: any) => {
-        const trend = computeTrend(r.sparkline)
-        if (!trend) return <span style={{ color: '#c8c4be' }}>—</span>
-        const sign = trend.pct >= 0 ? '+' : ''
-        const icon = trend.direction === 'up' ? '↑' : trend.direction === 'down' ? '↓' : '→'
-        const color = trend.direction === 'up' ? '#e03131' : trend.direction === 'down' ? '#1aae39' : '#a4a097'
-        return <span style={{ color, fontWeight: 500, fontSize: 13 }}>{icon} {sign}{trend.pct}%</span>
-      },
-    },
-  ], [days])
+  // ── 导出 Excel ──
+  const handleExport = useCallback(() => {
+    if (!overview) return
+    const wb = XLSX.utils.book_new()
 
-  const detailData = useMemo(() => {
-    const summary = overview?.summary || {}
-    const trends = overview?.trend || []
-    // 占比用的全类型合计（仅表格展示用，不用于 KPI）
-    let grandTotal = 0
-    for (const m of metadata) {
-      const k = `total_${m.type_code}`
-      grandTotal += (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
-    }
-    // 生成完整日期列表，用于补齐 sparkline 缺失日期（填 0，保留时间间距）
-    const dateList = Array.from({ length: days }, (_, i) =>
-      range[0].add(i, 'day').format('YYYY-MM-DD'),
-    )
-    return metadata.map((m) => {
-      const k = `total_${m.type_code}`
-      const total = (summary[k] as number) ?? (summary[m.type_code] as number) ?? 0
-      const typeTrends = trends
-        .filter((t) => t.type === m.type_code)
-        .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
-      const peak = typeTrends.reduce((max, t) => Math.max(max, t.value), 0)
-      // 日期→值映射，缺失日期填 0
-      const valueMap: Record<string, number> = {}
-      for (const t of typeTrends) {
-        valueMap[dayjs(t.time).format('YYYY-MM-DD')] = t.value
-      }
+    // Sheet 1: 趋势数据
+    const trendRows = (overview.trend || []).map((t) => {
+      const meta = metadata.find((m) => m.type_code === t.type)
       return {
-        key: m.type_code,
-        display_name: m.display_name,
-        type: m.type_code,
-        color: m.color || '#999',
-        total,
-        pct: grandTotal > 0 ? (total / grandTotal) * 100 : 0,
-        dailyAvg: days > 0 ? total / days : 0,
-        peak,
-        sparkline: dateList.map((d) => valueMap[d] ?? 0),
+        '日期': dayjs(t.time).format('YYYY-MM-DD'),
+        '能源类型': meta?.display_name || t.type,
+        '用量': t.value,
+        '单位': meta?.unit || '',
       }
-    }).filter((d) => d.total > 0)
-  }, [overview, metadata, days, range])
+    })
+    if (trendRows.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(trendRows), '趋势数据')
+    }
+
+    // Sheet 2: 车间分布
+    const wsRows = (overview.workshop_distribution || []).map((w) => ({
+      '车间': w.group_key || '未知',
+      '能源类型': metadata.find((m) => m.type_code === w.energy_type)?.display_name || w.energy_type,
+      '用量': w.total_value,
+      '单位': metadata.find((m) => m.type_code === w.energy_type)?.unit || '',
+    }))
+    if (wsRows.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(wsRows), '车间分布')
+    }
+
+    // Sheet 3: 区域分布
+    const plRows = (overview.production_line_distribution || []).map((p) => ({
+      '区域': p.group_key || '未知',
+      '车间': p.workshop || '未知',
+      '能源类型': metadata.find((m) => m.type_code === p.energy_type)?.display_name || p.energy_type,
+      '用量': p.total_value,
+      '单位': metadata.find((m) => m.type_code === p.energy_type)?.unit || '',
+    }))
+    if (plRows.length > 0) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(plRows), '区域分布')
+    }
+
+    const filename = `能源分析_${range[0].format('YYYYMMDD')}-${range[1].format('YYYYMMDD')}.xlsx`
+    XLSX.writeFile(wb, filename)
+    message.success('导出成功')
+  }, [overview, metadata, range])
 
   // ── Date handlers ──
   const handlePreset = (val: string) => {
@@ -320,6 +280,9 @@ export default function VisualizationPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 500, margin: 0, color: '#1a1a1a' }}>能源分析</h1>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Button icon={<DownloadOutlined />} onClick={handleExport} disabled={!overview}>
+            导出 Excel
+          </Button>
           <Segmented
             options={Object.keys(RANGE_PRESETS)}
             value={activePreset}
@@ -377,18 +340,6 @@ export default function VisualizationPage() {
               display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20,
               alignItems: 'center',
             }}>
-              <button
-                onClick={() => setSelectedType(null)}
-                style={{
-                  padding: '8px 18px', borderRadius: 20, cursor: 'pointer', fontSize: 13, fontWeight: 500,
-                  border: !selectedType ? '2px solid #5645d4' : '1px solid #e8e3f0',
-                  background: !selectedType ? '#f6f3ff' : '#fff',
-                  color: !selectedType ? '#5645d4' : '#787671',
-                  transition: 'all 0.2s',
-                }}
-              >
-                全部能源
-              </button>
               {metadata.map((m) => {
                 const k = `total_${m.type_code}`
                 const tv = (overview.summary[k] as number) ?? (overview.summary[m.type_code] as number) ?? 0
@@ -396,7 +347,7 @@ export default function VisualizationPage() {
                 return (
                   <button
                     key={m.type_code}
-                    onClick={() => setSelectedType(active ? null : m.type_code)}
+                    onClick={() => setSelectedType(m.type_code)}
                     style={{
                       padding: '8px 16px', borderRadius: 20, cursor: 'pointer', fontSize: 13,
                       border: active ? `2px solid ${m.color || '#1677ff'}` : '1px solid #e8e3f0',
@@ -425,14 +376,7 @@ export default function VisualizationPage() {
               border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
             }}>
               <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 4 }}>
-                {selectedType
-                  ? `${metadata.find((m) => m.type_code === selectedType)?.display_name || '能耗'} 趋势`
-                  : '能耗趋势对比'}
-                {!selectedType && metadata.length > 1 && (
-                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097', marginLeft: 8 }}>
-                    多系列折线 · 点击图例筛选
-                  </span>
-                )}
+                {metadata.find((m) => m.type_code === selectedType)?.display_name || '能耗'} 趋势
               </div>
               {areaData.length > 0 ? <Line {...lineConfig} /> : <Empty description="暂无趋势" style={{ padding: '40px 0' }} />}
             </div>
@@ -520,23 +464,6 @@ export default function VisualizationPage() {
                   <Empty description={selectedWorkshop ? '该车间暂无区域数据' : '暂无区域数据'} style={{ padding: '40px 0' }} />
                 )}
               </div>
-            </div>
-
-            {/* ── 能源类型明细表 ── */}
-            <div style={{
-              background: '#fff', borderRadius: 12, padding: '20px 24px',
-              border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            }}>
-              <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
-                能源类型明细
-              </div>
-              <Table
-                columns={detailColumns}
-                dataSource={detailData}
-                pagination={false}
-                size="small"
-                style={{ marginTop: -8 }}
-              />
             </div>
           </>
         ) : (

@@ -640,6 +640,7 @@ async def get_schedule_view(
             order_scheduled_end=order.scheduled_end,
             item_id=item.id,
             item_no=item.item_no,
+            product_id=item.product_id,
             product_name=item.product_name,
             equipment_id=item.equipment_id,
             planned_quantity=item.planned_quantity,

@@ -228,6 +228,7 @@ class ScheduleViewItem(BaseModel):
     order_scheduled_end: date | None
     item_id: uuid.UUID
     item_no: int
+    product_id: uuid.UUID
     product_name: str
     equipment_id: str | None
     planned_quantity: float | None

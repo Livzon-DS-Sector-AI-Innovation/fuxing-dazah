@@ -49,6 +49,18 @@ interface EnergyState {
   workshopConfigDrawerId: string | null
   openWorkshopConfigDrawer: (mode: 'create' | 'edit', id?: string) => void
   closeWorkshopConfigDrawer: () => void
+
+  dailyPushConfigDrawerOpen: boolean
+  dailyPushConfigDrawerMode: 'create' | 'edit'
+  dailyPushConfigDrawerId: string | null
+  openDailyPushConfigDrawer: (mode: 'create' | 'edit', id?: string) => void
+  closeDailyPushConfigDrawer: () => void
+
+  nitrogenPushConfigDrawerOpen: boolean
+  nitrogenPushConfigDrawerMode: 'create' | 'edit'
+  nitrogenPushConfigDrawerId: string | null
+  openNitrogenPushConfigDrawer: (mode: 'create' | 'edit', id?: string) => void
+  closeNitrogenPushConfigDrawer: () => void
 }
 
 const defaultDeviceFilters: DeviceQueryParams = {
@@ -173,5 +185,35 @@ export const useEnergyStore = create<EnergyState>((set) => ({
     set({
       workshopConfigDrawerOpen: false,
       workshopConfigDrawerId: null,
+    }),
+
+  dailyPushConfigDrawerOpen: false,
+  dailyPushConfigDrawerMode: 'create',
+  dailyPushConfigDrawerId: null,
+  openDailyPushConfigDrawer: (mode, id) =>
+    set({
+      dailyPushConfigDrawerOpen: true,
+      dailyPushConfigDrawerMode: mode,
+      dailyPushConfigDrawerId: id || null,
+    }),
+  closeDailyPushConfigDrawer: () =>
+    set({
+      dailyPushConfigDrawerOpen: false,
+      dailyPushConfigDrawerId: null,
+    }),
+
+  nitrogenPushConfigDrawerOpen: false,
+  nitrogenPushConfigDrawerMode: 'create',
+  nitrogenPushConfigDrawerId: null,
+  openNitrogenPushConfigDrawer: (mode, id) =>
+    set({
+      nitrogenPushConfigDrawerOpen: true,
+      nitrogenPushConfigDrawerMode: mode,
+      nitrogenPushConfigDrawerId: id || null,
+    }),
+  closeNitrogenPushConfigDrawer: () =>
+    set({
+      nitrogenPushConfigDrawerOpen: false,
+      nitrogenPushConfigDrawerId: null,
     }),
 }))

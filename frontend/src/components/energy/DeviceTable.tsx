@@ -4,7 +4,7 @@ import { useCallback } from 'react'
 import { App, Table, Button } from 'antd'
 import { EditOutlined, StopOutlined, CheckCircleOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
-import { EnergyDeviceConfig, EnergyType } from '@/types/energy'
+import { EnergyDeviceConfig, EnergyTypeMeta } from '@/types/energy'
 import { useEnergyStore } from '@/stores/energy'
 import { deleteEnergyDevice, updateEnergyDevice } from '@/actions/energy'
 import { PermissionGuard } from '@/components/permission/PermissionGuard'
@@ -23,16 +23,6 @@ const luxuryPill = (color: string, bg: string) =>
     color,
     background: bg,
   } as const)
-
-const energyTypeConfig: Record<EnergyType, ReturnType<typeof luxuryPill>> = {
-  electricity:    luxuryPill('#0075de', '#dcecfa'),
-  water:          luxuryPill('#1aae39', '#d9f3e1'),
-  steam:          luxuryPill('#dd5b00', '#ffe8d4'),
-  cooling:        luxuryPill('#722ed1', '#f4ebfa'),
-  compressed_air: luxuryPill('#2f54eb', '#e8ecfc'),
-  nitrogen:       luxuryPill('#fa541c', '#ffede8'),
-  natural_gas:    luxuryPill('#faad14', '#fffbe6'),
-}
 
 const monitorConfig: Record<string, ReturnType<typeof luxuryPill>> = {
   normal: luxuryPill('#787671', '#f0eeec'),
@@ -142,6 +132,7 @@ interface DeviceTableProps {
   loading?: boolean
   total?: number
   onRefresh: () => void
+  typeMetadata: EnergyTypeMeta[]
 }
 
 export function DeviceTable({
@@ -149,6 +140,7 @@ export function DeviceTable({
   loading = false,
   total = 0,
   onRefresh,
+  typeMetadata,
 }: DeviceTableProps) {
   const { message } = App.useApp()
   const { deviceFilters, setDeviceFilters, openDeviceDrawer } = useEnergyStore()
@@ -204,14 +196,11 @@ export function DeviceTable({
       dataIndex: 'energy_type',
       key: 'energy_type',
       width: 90,
-      render: (type: EnergyType) => {
-        const s = energyTypeConfig[type] ?? {}
-        const label = {
-          electricity: '电耗', water: '水耗', steam: '蒸汽',
-          cooling: '冷量', compressed_air: '压缩空气', nitrogen: '氮气',
-          natural_gas: '天然气',
-        }[type] ?? type
-        return <span style={s}>{label}</span>
+      render: (type: string) => {
+        const meta = typeMetadata.find(m => m.type_code === type)
+        const color = meta?.color || '#787671'
+        const label = meta?.display_name || type
+        return <span style={luxuryPill(color, color + '1a')}>{label}</span>
       },
     },
     {
@@ -222,13 +211,26 @@ export function DeviceTable({
       ellipsis: true,
     },
     {
+      title: '数据级别',
+      dataIndex: 'is_region_level',
+      key: 'is_region_level',
+      width: 90,
+      render: (v: boolean) => (
+        v
+          ? <span style={luxuryPill('#dd5b00', '#ffe8d4')}>区域级</span>
+          : <span style={luxuryPill('#5645d4', '#f6f3ff')}>部门级</span>
+      ),
+    },
+    {
       title: '所属区域',
       dataIndex: 'production_line',
       key: 'production_line',
       width: 100,
       ellipsis: true,
-      render: (v: string | null | undefined) => (
-        v ? <span style={{ color: '#37352f' }}>{v}</span> : <span style={{ color: '#c8c4be' }}>—</span>
+      render: (v: string | null | undefined, record: EnergyDeviceConfig) => (
+        record.is_region_level
+          ? (v ? <span style={{ color: '#37352f' }}>{v}</span> : <span style={{ color: '#c8c4be' }}>—</span>)
+          : <span style={{ color: '#c8c4be' }}>—</span>
       ),
     },
     {

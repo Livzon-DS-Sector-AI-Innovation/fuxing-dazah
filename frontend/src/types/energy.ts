@@ -1,12 +1,5 @@
 // 能源类型枚举
-export type EnergyType =
-  | 'electricity'
-  | 'water'
-  | 'steam'
-  | 'cooling'
-  | 'compressed_air'
-  | 'nitrogen'
-  | 'natural_gas'
+export type EnergyType = string
 
 // 监控级别
 export type MonitorLevel = 'normal' | 'important' | 'urgent'
@@ -28,6 +21,7 @@ export interface EnergyDeviceConfig {
   equipment_id?: string | null
   equipment_name?: string | null
   daily_collect_time?: string | null
+  is_region_level: boolean
   remark?: string
   created_at: string
   updated_at: string
@@ -49,10 +43,9 @@ export interface CreateDeviceInput {
   equipment_id?: string | null
   equipment_name?: string | null
   daily_collect_time?: string | null
+  is_region_level?: boolean
   remark?: string
 }
-
-// 更新数据源配置输入
 export interface UpdateDeviceInput {
   platform_code?: string
   platform_device_code?: string
@@ -68,6 +61,7 @@ export interface UpdateDeviceInput {
   equipment_id?: string | null
   equipment_name?: string | null
   daily_collect_time?: string | null
+  is_region_level?: boolean
   remark?: string
 }
 
@@ -164,6 +158,7 @@ export interface EnergyOverview {
   distribution: DistributionRow[]
   workshop_distribution: DistributionRow[]
   production_line_distribution: DistributionRow[]
+  device_distribution: DistributionRow[]
   type_metadata: EnergyTypeMeta[]
 }
 
@@ -277,7 +272,7 @@ export interface CreateRuleInput {
   monitor_metric: MonitorMetric
   threshold_type: ThresholdType
   threshold_value: number
-  unit: string
+  unit?: string
   alert_level: AlertLevel
   notify_method: string[]
   notify_users: string[]
@@ -401,6 +396,9 @@ export interface WorkshopConfig {
   auto_notify_enabled: boolean
   is_enabled: boolean
   last_checked_at: string | null
+  alert_rule_id: string | null
+  alert_rule_name: string | null
+  notify_time: string | null
   created_at: string
   updated_at: string
 }
@@ -410,6 +408,8 @@ export interface CreateWorkshopConfigInput {
   heads?: { name: string; feishu_open_id: string }[]
   auto_notify_enabled?: boolean
   is_enabled?: boolean
+  alert_rule_id?: string
+  notify_time?: string
 }
 
 export interface UpdateWorkshopConfigInput {
@@ -417,6 +417,21 @@ export interface UpdateWorkshopConfigInput {
   heads?: { name: string; feishu_open_id: string }[]
   auto_notify_enabled?: boolean
   is_enabled?: boolean
+  alert_rule_id?: string
+  notify_time?: string
+}
+
+export interface AlertRuleCandidate {
+  id: string
+  rule_name: string
+  energy_type: string
+  alert_level: string
+  unit: string
+}
+
+export interface WorkshopOption {
+  device_name: string
+  workshop: string
 }
 
 export interface EnergyPersonnelCandidate {
@@ -425,3 +440,104 @@ export interface EnergyPersonnelCandidate {
   department?: string | null
 }
 
+
+// ── 能源总耗推送配置 ──
+
+export interface DailyPushConfig {
+  id: string
+  name: string
+  is_enabled: boolean
+  notify_time: string | null
+  notify_users: { name: string; feishu_open_id: string }[]
+  solar_device_id: string | null
+  solar_device_name: string | null
+  pressure_device_id: string | null
+  pressure_device_name: string | null
+  rto1_gas_device_id: string | null
+  rto1_gas_device_name: string | null
+  rto2_gas_device_id: string | null
+  rto2_gas_device_name: string | null
+  rto1_elec_device_id: string | null
+  rto1_elec_device_name: string | null
+  rto2_elec_device_id: string | null
+  rto2_elec_device_name: string | null
+  last_sent_at: string | null
+  remark: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateDailyPushConfigInput {
+  name: string
+  is_enabled?: boolean
+  notify_time?: string | null
+  notify_users?: { name: string; feishu_open_id: string }[]
+  solar_device_id?: string | null
+  pressure_device_id?: string | null
+  rto1_gas_device_id?: string | null
+  rto2_gas_device_id?: string | null
+  rto1_elec_device_id?: string | null
+  rto2_elec_device_id?: string | null
+  remark?: string | null
+}
+
+export interface UpdateDailyPushConfigInput {
+  name?: string
+  is_enabled?: boolean
+  notify_time?: string | null
+  notify_users?: { name: string; feishu_open_id: string }[]
+  solar_device_id?: string | null
+  pressure_device_id?: string | null
+  rto1_gas_device_id?: string | null
+  rto2_gas_device_id?: string | null
+  rto1_elec_device_id?: string | null
+  rto2_elec_device_id?: string | null
+  remark?: string | null
+}
+
+export interface DailyReportSendRequest {
+  config_id: string
+  target_date: string
+}
+
+// ── 氮气月度推送配置 ──
+
+export interface NitrogenPushConfig {
+  id: string
+  name: string
+  is_enabled: boolean
+  notify_time: string | null
+  notify_users: { name: string; feishu_open_id: string }[]
+  nitrogen_device_ids: string[]
+  nitrogen_device_names: string[]
+  monthly_guaranteed_consumption: number
+  last_sent_at: string | null
+  remark: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateNitrogenPushConfigInput {
+  name: string
+  is_enabled?: boolean
+  notify_time?: string | null
+  notify_users?: { name: string; feishu_open_id: string }[]
+  nitrogen_device_ids?: string[]
+  monthly_guaranteed_consumption: number
+  remark?: string | null
+}
+
+export interface UpdateNitrogenPushConfigInput {
+  name?: string
+  is_enabled?: boolean
+  notify_time?: string | null
+  notify_users?: { name: string; feishu_open_id: string }[]
+  nitrogen_device_ids?: string[]
+  monthly_guaranteed_consumption?: number
+  remark?: string | null
+}
+
+export interface NitrogenReportSendRequest {
+  config_id: string
+  target_date: string
+}

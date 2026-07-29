@@ -26,7 +26,7 @@ import {
   deletePlanOrder,
 } from '@/actions/production'
 import { StageConfigItem, type PlanOrderDetail } from '@/types/production'
-import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
+import { fetchProductsClient, fetchRoutesClient, fetchRouteGraphClient } from '@/lib/api/production-client'
 import { PlanItemTable } from './PlanItemTable'
 import { ReleaseConfirmModal } from './ReleaseConfirmModal'
 import { STATUS_CONFIG, PRIORITY_CONFIG, STAGE_PRESET_COLORS } from './constants'
@@ -46,16 +46,38 @@ const STATUS_ACCENT: Record<string, string> = {
 
 // ── Sub-components ──
 
-function InlineEditForm({ form, onSave, onCancel }: {
+function InlineEditForm({ form, onSave, onCancel, products, routes, onProductChange }: {
   form: FormInstance
   onSave: () => Promise<void>
   onCancel: () => void
+  products: { id: string; product_name: string }[]
+  routes: { id: string; name: string; version: number }[]
+  onProductChange: (productId: string) => void
 }) {
+  const productId = Form.useWatch('product_id', form)
   return (
     <Form form={form} layout="vertical" style={{ animation: 'fadeIn 0.2s ease' }}>
       <Form.Item name="title" label="标题" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <Form.Item name="product_id" label="产品" style={{ flex: 1 }} rules={[{ required: true }]}>
+          <Select
+            showSearch
+            placeholder="选择产品"
+            filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
+            onChange={(id: string) => { onProductChange(id); form.setFieldValue('route_id', undefined) }}
+            options={products.map((p) => ({ value: p.id, label: p.product_name }))}
+          />
+        </Form.Item>
+        <Form.Item name="route_id" label="工艺路线" style={{ flex: 1 }} rules={[{ required: true }]}>
+          <Select
+            placeholder="先选产品"
+            disabled={!productId}
+            options={routes.map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
+          />
+        </Form.Item>
+      </div>
       <div style={{ display: 'flex', gap: 12 }}>
         <Form.Item name="scheduled_start" label="开始日期" style={{ flex: 1 }}>
           <Input type="date" />
@@ -140,46 +162,6 @@ const detailValue: React.CSSProperties = {
   fontSize: 14, color: 'var(--color-charcoal)',
 }
 
-function PlanItemSection({ order, productFilter, setProductFilter, productNames, onOpenStageConfig, onRefresh, isLoading }: {
-  order: PlanOrderDetail
-  productFilter: string | undefined
-  setProductFilter: (v: string | undefined) => void
-  productNames: string[]
-  onOpenStageConfig: () => void
-  onRefresh: () => void
-  isLoading: boolean
-}) {
-  return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <Select
-          placeholder="全部分类"
-          allowClear
-          size="small"
-          style={{ width: 180 }}
-          value={productFilter}
-          onChange={setProductFilter}
-          options={productNames.map((n) => ({ value: n, label: n }))}
-        />
-        {order.status === 'draft' && (
-          <Button size="small" onClick={onOpenStageConfig}>工段配置</Button>
-        )}
-      </div>
-      <PlanItemTable
-        planOrderId={order.id}
-        planOrderStatus={order.status}
-        planOrderProductId={order.product_id}
-        planOrderProductName={order.items?.[0]?.product_name ?? order.title}
-        planOrderRouteId={order.route_id}
-        planOrderStageConfig={order.stage_config}
-        items={productFilter ? order.items.filter((i) => i.product_name === productFilter) : order.items}
-        isLoading={isLoading}
-        onRefresh={onRefresh}
-      />
-    </div>
-  )
-}
-
 // ── Compact demand chips ──
 
 function DemandSection({ allocations }: { allocations: PlanOrderDetail['demand_allocations'] }) {
@@ -246,9 +228,9 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
   const [editing, setEditing] = useState(false)
   const [editForm] = Form.useForm()
   const [releaseModalOpen, setReleaseModalOpen] = useState(false)
-  const [productFilter, setProductFilter] = useState<string | undefined>()
   const [stageEditOpen, setStageEditOpen] = useState(false)
   const [stageEditForm, setStageEditForm] = useState<StageConfigItem[]>([])
+  const [editProductId, setEditProductId] = useState<string | undefined>()
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['plan-order-detail', orderId],
@@ -275,6 +257,30 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
     staleTime: 60_000,
   })
 
+  // 编辑模式下按选中产品查路线
+  const { data: editRoutes } = useQuery({
+    queryKey: ['routes', editProductId],
+    queryFn: () => fetchRoutesClient(editProductId!),
+    enabled: !!editProductId,
+    staleTime: 60_000,
+  })
+
+  // 工段配置：从工艺路线图获取可用工段名
+  const { data: routeGraph } = useQuery({
+    queryKey: ['routeGraph', order?.route_id],
+    queryFn: () => fetchRouteGraphClient(order!.route_id!),
+    enabled: !!order?.route_id,
+  })
+
+  const availableStages = useMemo(() => {
+    if (!routeGraph?.nodes) return []
+    const names = new Set<string>()
+    for (const node of routeGraph.nodes) {
+      if (node.stage_name) names.add(node.stage_name)
+    }
+    return [...names]
+  }, [routeGraph])
+
   const productName = useMemo(() => {
     if (!order?.product_id || !products) return null
     return products.find((p: any) => p.id === order.product_id)?.product_name ?? null
@@ -286,11 +292,6 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
     return r ? `${r.name} v${r.version}` : null
   }, [order?.route_id, routes])
 
-  const productNames = useMemo(() => {
-    if (!order?.items) return []
-    return [...new Set(order.items.map((i) => i.product_name))]
-  }, [order])
-
   const status = order ? (STATUS_CONFIG[order.status] ?? { label: order.status, color: 'default' }) : null
   const accentColor = STATUS_ACCENT[status?.color ?? ''] ?? STATUS_ACCENT.default
 
@@ -299,11 +300,14 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
   const handleEdit = () => {
     editForm.setFieldsValue({
       title: order?.title,
+      product_id: order?.product_id,
+      route_id: order?.route_id,
       scheduled_start: order?.scheduled_start ? order.scheduled_start.slice(0, 10) : undefined,
       scheduled_end: order?.scheduled_end ? order.scheduled_end.slice(0, 10) : undefined,
       priority: order?.priority,
       remark: order?.remark,
     })
+    setEditProductId(order?.product_id ?? undefined)
     setEditing(true)
   }
 
@@ -354,7 +358,18 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
 
   const handleOpenStageConfig = () => {
     if (!order) return
-    setStageEditForm(order.stage_config ? order.stage_config.map((s: StageConfigItem) => ({ ...s })) : [])
+    if (order.stage_config && order.stage_config.length > 0) {
+      setStageEditForm(order.stage_config.map((s: StageConfigItem) => ({ ...s })))
+    } else if (availableStages.length > 0) {
+      // 无已有配置时，从工艺路线预填工段列表
+      setStageEditForm(availableStages.map((name, i) => ({
+        stage_name: name,
+        duration_hours: 24,
+        color: STAGE_PRESET_COLORS[i % STAGE_PRESET_COLORS.length],
+      })))
+    } else {
+      setStageEditForm([])
+    }
     setStageEditOpen(true)
   }
 
@@ -426,7 +441,14 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
             {/* Section: 基本信息 */}
             <SectionHead label="基本信息" accentColor={accentColor} />
             {editing ? (
-              <InlineEditForm form={editForm} onSave={handleSaveEdit} onCancel={() => setEditing(false)} />
+              <InlineEditForm
+                form={editForm}
+                onSave={handleSaveEdit}
+                onCancel={() => { setEditing(false); setEditProductId(undefined) }}
+                products={products ?? []}
+                routes={editRoutes ?? []}
+                onProductChange={setEditProductId}
+              />
             ) : (
               <DetailView order={order} productName={productName} routeName={routeName} formatDate={formatDate} />
             )}
@@ -435,14 +457,17 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
 
             {/* Section: 计划项 */}
             <SectionHead label="计划项" count={order.items?.length ?? 0} accentColor={accentColor} />
-            <PlanItemSection
-              order={order}
-              productFilter={productFilter}
-              setProductFilter={setProductFilter}
-              productNames={productNames}
-              onOpenStageConfig={handleOpenStageConfig}
-              onRefresh={refetch}
+            <PlanItemTable
+              planOrderId={order.id}
+              planOrderStatus={order.status}
+              planOrderProductId={order.product_id}
+              planOrderProductName={order.items?.[0]?.product_name ?? order.title}
+              planOrderRouteId={order.route_id}
+              planOrderStageConfig={order.stage_config}
+              items={order.items}
               isLoading={isLoading}
+              onRefresh={refetch}
+              onOpenStageConfig={handleOpenStageConfig}
             />
 
             <div style={sectionDivider} />
@@ -478,12 +503,27 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
             width={560}
             destroyOnHidden
           >
-            {stageEditForm.length === 0 ? (
-              <Empty description="暂无工段配置" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            ) : (
-              stageEditForm.map((sc, idx) => (
-                <div key={`${sc.stage_name}-${idx}`} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                  <span style={{ width: 80, fontSize: 13 }}>{sc.stage_name}</span>
+            {availableStages.length === 0 && (
+              <Empty description="该计划单未关联工艺路线，无法配置工段" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ marginBottom: 16 }} />
+            )}
+            {stageEditForm.map((sc, idx) => {
+              // 当前行可选工段：availableStages 中排除已被其他行选中的
+              const taken = stageEditForm.filter((_, i) => i !== idx).map((s) => s.stage_name)
+              const selectable = availableStages.filter((n) => n === sc.stage_name || !taken.includes(n))
+              return (
+                <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                  <Select
+                    size="small"
+                    placeholder="选择工段"
+                    value={sc.stage_name || undefined}
+                    onChange={(v) => {
+                      const next = [...stageEditForm]
+                      next[idx] = { ...next[idx], stage_name: v }
+                      setStageEditForm(next)
+                    }}
+                    options={selectable.map((n) => ({ value: n, label: n }))}
+                    style={{ width: 120 }}
+                  />
                   <Space.Compact>
                     <InputNumber
                       size="small" min={0.5} step={0.5}
@@ -520,8 +560,22 @@ export function PlanOrderDetailDrawer({ orderId, onClose }: Props) {
                     onClick={() => setStageEditForm((prev) => prev.filter((_, i) => i !== idx))}
                   >删除</Button>
                 </div>
-              ))
-            )}
+              )
+            })}
+            {(() => {
+              const unused = availableStages.filter((n) => !stageEditForm.some((s) => s.stage_name === n))
+              return unused.length > 0 ? (
+                <Button
+                  type="dashed"
+                  size="small"
+                  block
+                  style={{ marginTop: stageEditForm.length > 0 ? 8 : 0 }}
+                  onClick={() => setStageEditForm((prev) => [...prev, { stage_name: unused[0], duration_hours: 24, color: STAGE_PRESET_COLORS[prev.length % STAGE_PRESET_COLORS.length] }])}
+                >
+                  + 添加工段
+                </Button>
+              ) : null
+            })()}
           </Modal>
         </>
       )}

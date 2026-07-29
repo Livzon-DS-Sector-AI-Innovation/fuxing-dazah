@@ -1,26 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { App, Drawer, Form, Input, Select, InputNumber, Button, Space } from 'antd'
 import { useEnergyStore } from '@/stores/energy'
 import { createAlertRule, updateAlertRule, getAlertRuleById } from '@/actions/energy'
-import { CreateRuleInput, UpdateRuleInput, EnergyType, MonitorMetric, ThresholdType, AlertLevel, NotifyFrequency, EffectiveTimeType } from '@/types/energy'
+import { CreateRuleInput, UpdateRuleInput, MonitorMetric, ThresholdType, AlertLevel, NotifyFrequency, EffectiveTimeType, EnergyTypeMeta } from '@/types/energy'
+import { fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 const { TextArea } = Input
 
 interface AlertConfigDrawerProps {
   onRefresh?: () => void
 }
-
-const energyTypeOptions = [
-  { label: '电耗数据',   value: 'electricity' },
-  { label: '水耗数据',   value: 'water' },
-  { label: '蒸汽数据',   value: 'steam' },
-  { label: '冷量数据',   value: 'cooling' },
-  { label: '压缩空气数据', value: 'compressed_air' },
-  { label: '氮气数据',   value: 'nitrogen' },
-  { label: '天然气数据', value: 'natural_gas' },
-]
 
 const monitorMetricOptions = [
   { label: '瞬时值', value: 'instant' },
@@ -59,7 +50,7 @@ const effectiveTimeOptions = [
 ]
 
 const DEFAULT_VALUES = {
-  energy_type: 'electricity' as EnergyType,
+  energy_type: 'electricity',
   monitor_metric: 'instant' as MonitorMetric,
   threshold_type: 'greater_than' as ThresholdType,
   alert_level: 'warning' as AlertLevel,
@@ -74,6 +65,14 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
   const { message } = App.useApp()
   const [submitting, setSubmitting] = useState(false)
 
+  // 动态能源类型选项
+  const [typeConfigs, setTypeConfigs] = useState<EnergyTypeMeta[]>([])
+
+  const energyTypeOptions = useMemo(
+    () => typeConfigs.map((c) => ({ label: c.display_name, value: c.type_code })),
+    [typeConfigs],
+  )
+
   const {
     alertConfigDrawerOpen,
     alertConfigDrawerMode,
@@ -86,31 +85,45 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
   useEffect(() => {
     if (!alertConfigDrawerOpen) return
     const timer = setTimeout(() => {
-      if (isEdit && alertConfigDrawerId) {
-        getAlertRuleById(alertConfigDrawerId)
-          .then((rule) => {
-            form.setFieldsValue({
-              rule_name: rule.rule_name,
-              rule_description: rule.rule_description,
-              energy_type: rule.energy_type,
-              monitor_metric: rule.monitor_metric,
-              threshold_type: rule.threshold_type,
-              threshold_value: rule.threshold_value,
-              unit: rule.unit,
-              alert_level: rule.alert_level,
-              notify_method: rule.notify_method,
-              notify_frequency: rule.notify_frequency,
-              effective_time: rule.effective_time,
-              is_enabled: rule.is_enabled,
+      // 加载能源类型选项
+      fetchEnabledTypeConfigsClient().then(configs => {
+        const metas: EnergyTypeMeta[] = configs.map(c => ({
+          type_code: c.type_code,
+          display_name: c.display_name,
+          unit: c.unit,
+          color: c.color,
+          icon: c.icon,
+        }))
+        setTypeConfigs(metas)
+        if (isEdit && alertConfigDrawerId) {
+          getAlertRuleById(alertConfigDrawerId)
+            .then((rule) => {
+              form.setFieldsValue({
+                rule_name: rule.rule_name,
+                rule_description: rule.rule_description,
+                energy_type: rule.energy_type,
+                monitor_metric: rule.monitor_metric,
+                threshold_type: rule.threshold_type,
+                threshold_value: rule.threshold_value,
+                alert_level: rule.alert_level,
+                notify_method: rule.notify_method,
+                notify_frequency: rule.notify_frequency,
+                effective_time: rule.effective_time,
+                is_enabled: rule.is_enabled,
+              })
             })
+            .catch(() => {
+              message.error('获取规则详情失败')
+            })
+        } else {
+          form.resetFields()
+          const defaultType = metas.length > 0 ? metas[0].type_code : undefined
+          form.setFieldsValue({
+            ...DEFAULT_VALUES,
+            energy_type: defaultType,
           })
-          .catch(() => {
-            message.error('获取规则详情失败')
-          })
-      } else {
-        form.resetFields()
-        form.setFieldsValue(DEFAULT_VALUES)
-      }
+        }
+      }).catch(() => {})
     }, 0)
     return () => clearTimeout(timer)
   }, [alertConfigDrawerOpen, alertConfigDrawerId, isEdit, form, message])
@@ -128,7 +141,6 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
           monitor_metric: values.monitor_metric,
           threshold_type: values.threshold_type,
           threshold_value: values.threshold_value,
-          unit: values.unit,
           alert_level: values.alert_level,
           notify_method: values.notify_method,
           notify_frequency: values.notify_frequency,
@@ -145,7 +157,6 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
           monitor_metric: values.monitor_metric,
           threshold_type: values.threshold_type,
           threshold_value: values.threshold_value,
-          unit: values.unit,
           alert_level: values.alert_level,
           notify_method: values.notify_method,
           notify_users: [],
@@ -222,10 +233,6 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
             <InputNumber min={0} style={{ width: '100%', height: 44 }} placeholder="数值" />
           </Form.Item>
         </div>
-
-        <Form.Item name="unit" label="单位" rules={[{ required: true, message: '请输入单位' }]}>
-          <Input placeholder="如：kWh、m³" style={{ height: 44, borderRadius: 8 }} />
-        </Form.Item>
 
         <Form.Item name="alert_level" label="预警级别" rules={[{ required: true }]}>
           <Select options={alertLevelOptions} style={{ height: 44 }} />
