@@ -325,14 +325,16 @@ export default function TrainingNotificationClient() {
   const handleExportExcel = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
-    const dateRange = values.training_date_range
     const singleDate = values.training_date
+    const faceDate = values.face_date
+    const selfStudyDate = values.self_study_date
 
     setSubmittingExcel(true)
     try {
-      const topic = [values.subject, values.content].filter(Boolean).join(' ')
-      const trainDate = singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : '')
+      // 培训日期：单模式取 training_date，双模式取 face_date
+      const trainDate = singleDate ? singleDate.format('YYYY-MM-DD') : (faceDate ? faceDate.format('YYYY-MM-DD') : '')
       if (!trainDate) throw new Error('请选择培训日期')
+      const topic = [values.subject, values.content].filter(Boolean).join(' ')
       const payload = {
         training_date: trainDate,
         training_time_start: values.training_time
