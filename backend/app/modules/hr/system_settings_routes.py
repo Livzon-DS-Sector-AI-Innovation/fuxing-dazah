@@ -38,7 +38,7 @@ async def save_settings(settings: dict, session: AsyncSession = Depends(get_db),
 # ─── 数据管理 ───
 
 # 排除这些表：岗位相关 + 邮箱相关（发件配置、邮件日志）+ alembic 版本表
-_SKIP_TABLES = {"positions", "position_trainings", "system_settings", "email_logs", "alembic_version"}
+_SKIP_TABLES = {"positions", "system_settings", "email_logs", "alembic_version"}
 
 # 表名 → 中文标签
 _TABLE_LABELS = {
