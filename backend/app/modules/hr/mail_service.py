@@ -2,6 +2,7 @@
 
 import logging
 import smtplib
+from email.header import Header
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -48,15 +49,15 @@ async def send_email(
         raise RuntimeError("SMTP 未配置，请先在系统设置中填写邮件服务器信息")
 
     msg = MIMEMultipart()
-    msg["From"] = formataddr((from_name, from_addr))
+    msg["From"] = formataddr((str(Header(from_name, "utf-8")), from_addr))
     msg["To"] = to
-    msg["Subject"] = subject
+    msg["Subject"] = Header(subject, "utf-8")
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     if attachments:
         for filename, content in attachments:
-            part = MIMEApplication(content, name=filename)
-            part.add_header("Content-Disposition", "attachment", filename=filename)
+            part = MIMEApplication(content, name=("utf-8", "", filename))
+            part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", filename))
             msg.attach(part)
 
     import asyncio
