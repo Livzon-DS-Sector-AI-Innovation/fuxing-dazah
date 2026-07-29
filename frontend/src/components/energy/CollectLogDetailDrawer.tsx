@@ -11,8 +11,9 @@ import {
   CollectLogDetail,
   CollectLogDeviceDetail,
   CollectStatus,
+  EnergyTypeMeta,
 } from '@/types/energy'
-import { fetchCollectLogDetailClient } from '@/lib/api/energy'
+import { fetchCollectLogDetailClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 // ── 轻奢 Pill ──
 
@@ -33,16 +34,6 @@ const statusConfig: Record<CollectStatus, ReturnType<typeof luxuryPill>> = {
   success: luxuryPill('#1aae39', '#d9f3e1'),
   partial: luxuryPill('#dd5b00', '#ffe8d4'),
   failed: luxuryPill('#e03131', '#fde0ec'),
-}
-
-const energyTypeConfig: Record<string, ReturnType<typeof luxuryPill>> = {
-  electricity:    luxuryPill('#0075de', '#dcecfa'),
-  water:          luxuryPill('#1aae39', '#d9f3e1'),
-  steam:          luxuryPill('#dd5b00', '#ffe8d4'),
-  cooling:        luxuryPill('#722ed1', '#f4ebfa'),
-  compressed_air: luxuryPill('#2f54eb', '#e8ecfc'),
-  nitrogen:       luxuryPill('#fa541c', '#ffede8'),
-  natural_gas:    luxuryPill('#faad14', '#fffbe6'),
 }
 
 // ── 表格样式 ──
@@ -168,9 +159,24 @@ export function CollectLogDetailDrawer({
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<CollectLogDetail | null>(null)
+  const [typeMetadata, setTypeMetadata] = useState<EnergyTypeMeta[]>([])
 
   useEffect(() => {
     if (!open || !logId) return
+
+    fetchEnabledTypeConfigsClient()
+      .then((configs) =>
+        setTypeMetadata(
+          configs.map((c) => ({
+            type_code: c.type_code,
+            display_name: c.display_name,
+            unit: c.unit,
+            color: c.color,
+            icon: c.icon,
+          }))
+        )
+      )
+      .catch(() => {})
 
     let cancelled = false
     setLoading(true)
@@ -223,14 +229,10 @@ export function CollectLogDetailDrawer({
       key: 'energy_type',
       width: 70,
       render: (type: string) => {
-        const s = energyTypeConfig[type]
-        const labelMap: Record<string, string> = {
-          electricity: '电耗', water: '水耗', steam: '蒸汽',
-          cooling: '冷量', compressed_air: '压缩空气', nitrogen: '氮气',
-          natural_gas: '天然气',
-        }
-        const label = labelMap[type] ?? type
-        return s ? <span style={s}>{label}</span> : label
+        const meta = typeMetadata.find((m) => m.type_code === type)
+        if (!meta) return type
+        const pill = luxuryPill(meta.color ?? '#666', '#f5f5f5')
+        return <span style={pill}>{meta.display_name}</span>
       },
     },
     {

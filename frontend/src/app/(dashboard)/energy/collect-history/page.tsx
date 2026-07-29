@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Table, DatePicker, App, Menu, Empty, Spin, Input, Button, Segmented } from 'antd'
+import { Table, DatePicker, App, Menu, Empty, Spin, Input, Button, Segmented, InputNumber } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { getEnergyDataHistory } from '@/actions/energy'
-import { fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
+import { fetchEnabledTypeConfigsClient, updateEnergyDataValue } from '@/lib/api/energy'
 import type { EnergyDataHistory, EnergyTypeMeta } from '@/types/energy'
 import dayjs, { type Dayjs } from 'dayjs'
 import { Line } from '@ant-design/charts'
@@ -31,8 +31,8 @@ interface DeptRow {
   key: string
   workshop: string
   total: number
-  areaCount: number
-  areaMap: Map<string, EnergyDataHistory[]>
+  deviceCount: number
+  deviceMap: Map<string, EnergyDataHistory[]>
 }
 
 export default function CollectHistoryPage() {
@@ -46,6 +46,11 @@ export default function CollectHistoryPage() {
   const [allRows, setAllRows] = useState<EnergyDataHistory[]>([])
   const [loading, setLoading] = useState(false)
   const [totalCount, setTotalCount] = useState(0)
+
+  // ---- 编辑模式 ----
+  const [editing, setEditing] = useState(false)
+  const [editingValues, setEditingValues] = useState<Record<string, number | undefined>>({})
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
 
   // ---- 搜索 & 多行展开 ----
   const [search, setSearch] = useState('')
@@ -103,26 +108,50 @@ export default function CollectHistoryPage() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
+  // ---- 编辑保存 ----
+  const handleSaveValue = useCallback(async (id: string) => {
+    const v = editingValues[id]
+    if (v === undefined) return
+    setSavingIds((prev) => new Set(prev).add(id))
+    try {
+      await updateEnergyDataValue(id, v)
+      message.success('已保存')
+      // 更新本地数据
+      setAllRows((prev) => prev.map((r) => (r.id === id ? { ...r, value: v } : r)))
+      setEditingValues((prev) => { const n = { ...prev }; delete n[id]; return n })
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setSavingIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+    }
+  }, [editingValues, message])
+
+  const handleValueChange = useCallback((id: string, value: number | null) => {
+    if (value != null) {
+      setEditingValues((prev) => ({ ...prev, [id]: value }))
+    }
+  }, [])
+
   const unit = allRows[0]?.unit || ''
 
-  // 按部门 + 区域分组
+  // 按部门 + 数据源分组
   const deptRows = useMemo(() => {
     const map = new Map<string, Map<string, EnergyDataHistory[]>>()
     for (const row of allRows) {
       const ws = row.workshop || '未知部门'
-      const pl = row.production_line || '未分类'
+      const dev = row.device_name || row.platform_device_code || '未知设备'
       if (!map.has(ws)) map.set(ws, new Map())
-      const plMap = map.get(ws)!
-      if (!plMap.has(pl)) plMap.set(pl, [])
-      plMap.get(pl)!.push(row)
+      const devMap = map.get(ws)!
+      if (!devMap.has(dev)) devMap.set(dev, [])
+      devMap.get(dev)!.push(row)
     }
     const list: DeptRow[] = []
-    for (const [workshop, areaMap] of map) {
+    for (const [workshop, deviceMap] of map) {
       let total = 0
-      for (const rows of areaMap.values()) {
+      for (const rows of deviceMap.values()) {
         total += rows.reduce((s, r) => s + r.value, 0)
       }
-      list.push({ key: workshop, workshop, total, areaCount: areaMap.size, areaMap })
+      list.push({ key: workshop, workshop, total, deviceCount: deviceMap.size, deviceMap })
     }
     list.sort((a, b) => b.total - a.total)
     return list
@@ -136,7 +165,7 @@ export default function CollectHistoryPage() {
   }, [deptRows, search])
 
   const activeMeta = typeMetadata.find((m) => m.type_code === activeType)
-  const totalAreaCount = filteredDepts.reduce((s, d) => s + d.areaCount, 0)
+  const totalDeviceCount = filteredDepts.reduce((s, d) => s + d.deviceCount, 0)
   const grandTotal = filteredDepts.reduce((s, d) => s + d.total, 0)
 
   // ---- 主表格列 ----
@@ -149,8 +178,8 @@ export default function CollectHistoryPage() {
       ),
     },
     {
-      title: '区域数', dataIndex: 'areaCount', key: 'areaCount', width: 80, align: 'center',
-      sorter: (a, b) => a.areaCount - b.areaCount,
+      title: '数据源数', dataIndex: 'deviceCount', key: 'deviceCount', width: 80, align: 'center',
+      sorter: (a, b) => a.deviceCount - b.deviceCount,
       render: (v: number) => (
         <span style={{ color: '#787671' }}>{v}</span>
       ),
@@ -218,7 +247,7 @@ export default function CollectHistoryPage() {
               采集历史{activeMeta ? ` · ${activeMeta.display_name}` : ''}
             </h1>
             <p style={{ fontSize: 13, color: '#a4a097', margin: '4px 0 0' }}>
-              {filteredDepts.length} 个部门 · {totalAreaCount} 个区域
+              {filteredDepts.length} 个部门 · {totalDeviceCount} 个数据源
               {totalCount > 0 && (
                 <span> · 共 {totalCount.toLocaleString('zh-CN')} 条记录</span>
               )}
@@ -276,7 +305,21 @@ export default function CollectHistoryPage() {
               </Button>
             )}
           </div>
-          <Segmented
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Button
+              type={editing ? 'primary' : 'default'}
+              size="small"
+              onClick={() => { setEditing(!editing); setEditingValues({}) }}
+              style={{
+                background: editing ? '#5645d4' : undefined,
+                borderColor: editing ? '#5645d4' : '#c8c4be',
+                color: editing ? '#fff' : '#787671',
+                borderRadius: 8, fontSize: 12, fontWeight: 500, height: 28,
+              }}
+            >
+              ✏️ {editing ? '退出编辑' : '编辑数据'}
+            </Button>
+            <Segmented
             value={granularity}
             onChange={(v) => handleGranularityChange(v as 'daily' | 'hourly')}
             options={[
@@ -285,6 +328,7 @@ export default function CollectHistoryPage() {
             ]}
             style={{ background: '#f5f3f0' }}
           />
+          </div>
         </div>
 
         {/* ---- 加载状态 ---- */}
@@ -332,7 +376,7 @@ export default function CollectHistoryPage() {
                     const chartColor = activeMeta?.color || '#5645d4'
 
                     // 图表模式按时间升序，列表模式按时间降序
-                    const areaEntries = [...dept.areaMap.entries()]
+                    const deviceEntries = [...dept.deviceMap.entries()]
                       .map(([name, rows]) => ({
                         name,
                         total: rows.reduce((s, r) => s + r.value, 0),
@@ -352,12 +396,12 @@ export default function CollectHistoryPage() {
                         border: '1px solid #ede9e4',
                         animation: 'fadeIn 0.2s ease',
                       }}>
-                        {areaEntries.map((area, idx) => (
-                          <div key={area.name}>
+                        {deviceEntries.map((dev, idx) => (
+                          <div key={dev.name}>
                             {idx > 0 && (
                               <div style={{ borderTop: '1px solid #e8e3f0', margin: isYesterday ? '10px 0' : '16px 0' }} />
                             )}
-                            {/* 区域标题 */}
+                            {/* 数据源标题 */}
                             <div style={{
                               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                               marginBottom: isYesterday ? 6 : 8,
@@ -365,13 +409,13 @@ export default function CollectHistoryPage() {
                               borderBottom: isYesterday ? '1px dashed #ede9e4' : 'none',
                             }}>
                               <span style={{ fontWeight: 600, fontSize: 13, color: '#37352f' }}>
-                                📍 {area.name}
+                                📊 {dev.name}
                                 <span style={{ fontWeight: 400, fontSize: 11, color: '#a4a097', marginLeft: 6 }}>
-                                  {area.rows.length} 条
+                                  {dev.rows.length} 条
                                 </span>
                               </span>
                               <span style={{ fontSize: 12, color: '#a4a097' }}>
-                                合计 {area.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                                合计 {dev.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
                                 <span style={{ marginLeft: 2 }}>{unit}</span>
                               </span>
                             </div>
@@ -379,7 +423,7 @@ export default function CollectHistoryPage() {
                             {/* 昨天 → 列表模式 */}
                             {isYesterday ? (
                               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                {area.rows.map((row) => (
+                                {dev.rows.map((row) => (
                                   <div
                                     key={row.id}
                                     style={{
@@ -396,7 +440,31 @@ export default function CollectHistoryPage() {
                                       }
                                     </span>
                                     <span style={{ fontSize: 13, color: '#37352f', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
-                                      {row.value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                                      {editing ? (
+                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                          <InputNumber
+                                            size="small"
+                                            value={editingValues[row.id] !== undefined ? editingValues[row.id] : row.value}
+                                            onChange={(v) => handleValueChange(row.id, v)}
+                                            onPressEnter={() => handleSaveValue(row.id)}
+                                            style={{ width: 120, height: 26, fontSize: 13 }}
+                                            precision={0}
+                                          />
+                                          <Button
+                                            type="link"
+                                            size="small"
+                                            loading={savingIds.has(row.id)}
+                                            onClick={() => handleSaveValue(row.id)}
+                                            style={{ padding: 0, height: 22, fontSize: 11 }}
+                                          >
+                                            保存
+                                          </Button>
+                                        </span>
+                                      ) : (
+                                        <span>
+                                          {row.value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                                        </span>
+                                      )}
                                       <span style={{ fontSize: 11, color: '#a4a097', marginLeft: 4, fontWeight: 400 }}>{unit}</span>
                                     </span>
                                   </div>
@@ -404,9 +472,9 @@ export default function CollectHistoryPage() {
                               </div>
                             ) : (
                               /* 多日 → 折线图 */
-                              area.rows.length >= 2 ? (
+                              dev.rows.length >= 2 ? (
                                 <Line
-                                  data={area.rows.map((r) => ({
+                                  data={dev.rows.map((r) => ({
                                     date: dayjs(r.timestamp).format(isHourly ? 'MM-DD HH:00' : 'MM-DD'),
                                     value: r.value,
                                   }))}
@@ -442,8 +510,8 @@ export default function CollectHistoryPage() {
                                   padding: '20px 0', textAlign: 'center', color: '#a4a097', fontSize: 13,
                                   background: '#fafaf9', borderRadius: 6,
                                 }}>
-                                  {area.rows.length === 1
-                                    ? `${dayjs(area.rows[0].timestamp).format(isHourly ? 'MM-DD HH:00' : 'YYYY-MM-DD')}  ·  ${area.rows[0].value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`
+                                  {dev.rows.length === 1
+                                    ? `${dayjs(dev.rows[0].timestamp).format(isHourly ? 'MM-DD HH:00' : 'YYYY-MM-DD')}  ·  ${dev.rows[0].value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`
                                     : '暂无数据'}
                                 </div>
                               )
@@ -492,7 +560,7 @@ export default function CollectHistoryPage() {
       </div>
 
       {/* ---- 展开动画 keyframes ---- */}
-      <style jsx global>{`
+      <style>{`
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(-4px); }
           to { opacity: 1; transform: translateY(0); }

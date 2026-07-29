@@ -9,7 +9,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.collect_settings import CST
@@ -17,8 +17,10 @@ from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
     EnergyCollectLog,
+    EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
+    EnergyNitrogenPushConfig,
     EnergyTypeConfig,
     EnergyWorkshopConfig,
 )
@@ -27,8 +29,12 @@ from app.modules.energy.schemas import (
     CollectTriggerRequest,
     EnergyAlertRuleCreate,
     EnergyAlertRuleUpdate,
+    EnergyDailyPushConfigCreate,
+    EnergyDailyPushConfigUpdate,
     EnergyDeviceConfigCreate,
     EnergyDeviceConfigUpdate,
+    EnergyNitrogenPushConfigCreate,
+    EnergyNitrogenPushConfigUpdate,
     EnergyTypeConfigCreate,
     EnergyTypeConfigUpdate,
     EnergyWorkshopConfigCreate,
@@ -57,6 +63,9 @@ async def create_device_config(
             f"{data.platform_code}:{data.platform_device_code}",
         )
     create_data = data.model_dump()
+    # 部门级别时，区域字段置空
+    if not create_data.get("is_region_level", False):
+        create_data["production_line"] = None
     create_data["unit"] = await _get_unit_by_energy_type(db, data.energy_type)
     return await repo.create_device_config(db, create_data)
 
@@ -110,6 +119,10 @@ async def update_device_config(
     # energy_type 变更时，同步 unit 为 EnergyTypeConfig 中的单位
     if "energy_type" in update_data:
         update_data["unit"] = await _get_unit_by_energy_type(db, update_data["energy_type"])
+
+    # 部门级别时，区域字段置空
+    if update_data.get("is_region_level") is False:
+        update_data["production_line"] = None
 
     result = await repo.update_device_config(db, config_id, update_data)
     assert result is not None  # already verified existence above
@@ -411,6 +424,19 @@ async def batch_delete_energy_data(db: AsyncSession, ids: list[UUID]) -> int:
     return await repo.batch_delete_energy_data(db, ids)
 
 
+async def update_energy_data(
+    db: AsyncSession, data_id: UUID, value: float,
+) -> EnergyData:
+    """修改单条能耗数据的值。"""
+    result = await repo.update_energy_data_value(db, data_id, value)
+    if result is None:
+        raise NotFoundException("能耗数据", str(data_id))
+    # UPDATE 后 re-fetch 避免 MissingGreenlet
+    updated = await repo.get_energy_data_by_id(db, data_id)
+    assert updated is not None
+    return updated
+
+
 async def list_collect_logs(
     db: AsyncSession,
     *,
@@ -575,7 +601,9 @@ async def get_overview(
 async def create_alert_rule(
     db: AsyncSession, data: EnergyAlertRuleCreate
 ) -> EnergyAlertRule:
-    return await repo.create_alert_rule(db, data.model_dump())
+    create_data = data.model_dump()
+    create_data["unit"] = await _get_unit_by_energy_type(db, data.energy_type)
+    return await repo.create_alert_rule(db, create_data)
 
 
 async def get_alert_rule(db: AsyncSession, rule_id: UUID) -> EnergyAlertRule:
@@ -610,8 +638,12 @@ async def update_alert_rule(
     existing = await repo.get_alert_rule_by_id(db, rule_id)
     if existing is None:
         raise NotFoundException("预警规则", str(rule_id))
+    update_data = data.model_dump(exclude_unset=True)
+    # energy_type 变更时，同步 unit 为 EnergyTypeConfig 中的单位
+    if "energy_type" in update_data:
+        update_data["unit"] = await _get_unit_by_energy_type(db, update_data["energy_type"])
     result = await repo.update_alert_rule(
-        db, rule_id, data.model_dump(exclude_unset=True)
+        db, rule_id, update_data
     )
     assert result is not None
     return result
@@ -735,6 +767,13 @@ async def create_workshop_config(
     existing = await repo.get_workshop_config_by_workshop(db, data.workshop)
     if existing is not None:
         raise DuplicateException("车间预警配置", data.workshop)
+    # 校验 alert_rule_id：若提供，必须存在且为用户手动创建的规则
+    if data.alert_rule_id:
+        alert_rule = await repo.get_alert_rule_by_id(db, UUID(data.alert_rule_id))
+        if alert_rule is None:
+            raise NotFoundException("预警规则", data.alert_rule_id)
+        if alert_rule.is_system:
+            raise AppException(message="不能关联系统自动生成的预警规则")
     create_data = data.model_dump()
     return await repo.create_workshop_config(db, create_data)
 
@@ -743,6 +782,7 @@ async def get_workshop_config(db: AsyncSession, config_id: UUID) -> EnergyWorksh
     obj = await repo.get_workshop_config_by_id(db, config_id)
     if obj is None:
         raise NotFoundException("车间预警配置", str(config_id))
+    await _populate_alert_rule_name(db, [obj])
     return obj
 
 
@@ -753,9 +793,25 @@ async def list_workshop_configs(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[EnergyWorkshopConfig], int]:
-    return await repo.list_workshop_configs(
+    items, total = await repo.list_workshop_configs(
         db, is_enabled=is_enabled, page=page, page_size=page_size
     )
+    await _populate_alert_rule_name(db, items)
+    return items, total
+
+
+async def _populate_alert_rule_name(
+    db: AsyncSession, configs: list[EnergyWorkshopConfig]
+) -> None:
+    """为车间配置列表批量填充 alert_rule_name（非持久化字段）。"""
+    rule_ids = [c.alert_rule_id for c in configs if c.alert_rule_id]
+    if not rule_ids:
+        return
+    rules = await repo.get_alert_rules_by_ids(db, rule_ids)
+    rule_name_map: dict[UUID, str] = {r.id: r.rule_name for r in rules}
+    for c in configs:
+        if c.alert_rule_id:
+            c.alert_rule_name = rule_name_map.get(c.alert_rule_id)  # type: ignore[attr-defined]
 
 
 async def update_workshop_config(
@@ -769,6 +825,13 @@ async def update_workshop_config(
         dup = await repo.get_workshop_config_by_workshop(db, update_data["workshop"])
         if dup is not None and dup.id != config_id:
             raise DuplicateException("车间预警配置", update_data["workshop"])
+    # 校验 alert_rule_id：若提供，必须存在且为用户手动创建的规则
+    if "alert_rule_id" in update_data and update_data["alert_rule_id"] is not None:
+        alert_rule = await repo.get_alert_rule_by_id(db, UUID(update_data["alert_rule_id"]))
+        if alert_rule is None:
+            raise NotFoundException("预警规则", update_data["alert_rule_id"])
+        if alert_rule.is_system:
+            raise AppException(message="不能关联系统自动生成的预警规则")
     result = await repo.update_workshop_config(db, config_id, update_data)
     assert result is not None
     return result
@@ -784,6 +847,20 @@ async def delete_workshop_config(db: AsyncSession, config_id: UUID) -> None:
 async def get_personnel_candidates(db: AsyncSession) -> list[dict[str, Any]]:
     """获取负责人候选人列表（从平台 identity.users 查询）。"""
     return await repo.get_personnel_candidates(db)
+
+
+async def list_available_alert_rules(
+    db: AsyncSession,
+) -> list[EnergyAlertRule]:
+    """获取可选的用户自定义预警规则列表（供车间配置下拉框使用）。"""
+    return await repo.list_user_alert_rules_for_select(db)
+
+
+async def list_workshop_options(
+    db: AsyncSession, energy_type: str | None = None
+) -> list[dict[str, str]]:
+    """获取可选设备配置列表（供车间配置下拉框使用），可选按能源类型过滤。"""
+    return await repo.get_device_options_by_energy_type(db, energy_type)
 
 
 # ── 车间预警评估 ──
@@ -811,9 +888,10 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
     if not configs:
         return {"checked": 0, "triggered": 0, "errors": 0}
 
-    # 获取所有能源类型单位映射
+    # 获取所有能源类型单位映射和显示名映射
     type_configs = await repo.list_enabled_type_configs(db)
     unit_map = {c.type_code: c.unit for c in type_configs}
+    display_name_map = {c.type_code: c.display_name for c in type_configs}
 
     # 获取所有车间-能源类型组合
     all_combos = await repo.get_distinct_workshop_energy_types(db)
@@ -828,6 +906,17 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
             if config.last_checked_at.date() == now.date():
                 continue
 
+        # 检查自定义通知时间：若设置了 notify_time，则仅在到达该时间后才评估
+        if config.notify_time:
+            try:
+                th, tm = config.notify_time.split(":")
+                target_minutes = int(th) * 60 + int(tm)
+                current_minutes = now.hour * 60 + now.minute
+                if current_minutes < target_minutes:
+                    continue
+            except (ValueError, AttributeError):
+                pass  # 格式异常时不阻塞，走默认逻辑
+
         # 该车间下的能源类型
         workshop_combos = [
             c for c in all_combos if c["workshop"] == config.workshop
@@ -835,13 +924,107 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
         if not workshop_combos:
             continue
 
+        # 获取 heads 中的 feishu_open_id 并构建 @ 提及字符串
+        heads = config.heads or []
+        open_ids = [h.get("feishu_open_id", "") for h in heads if h.get("feishu_open_id")]
+        # 飞书消息 @ 提及格式
+        heads_mention = " ".join(
+            f'<at user_id="{h.get("feishu_open_id", "")}">{h.get("name", "")}</at>'
+            for h in heads if h.get("feishu_open_id")
+        )
+
+        # ── 用户自定义规则分支 ──
+        if config.alert_rule_id:
+            try:
+                user_rule = await repo.get_alert_rule_by_id(db, config.alert_rule_id)
+                if user_rule is None or not user_rule.is_enabled:
+                    checked += 1
+                    continue
+
+                rule_energy_type = user_rule.energy_type
+                unit = user_rule.unit
+
+                # 查重
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                existing_record = await repo.find_today_alert_record(
+                    db, config.workshop, rule_energy_type, today_start
+                )
+                if existing_record is not None:
+                    checked += 1
+                    continue
+
+                # 查询昨日能耗
+                yesterday_consumption = await repo.get_workshop_daily_consumption(
+                    db, config.workshop, rule_energy_type, yesterday
+                )
+                if yesterday_consumption is None or yesterday_consumption == 0:
+                    checked += 1
+                    continue
+
+                # 使用规则中的阈值类型和阈值进行判断
+                threshold_value = float(user_rule.threshold_value)
+                threshold_fn = {
+                    "greater_than": lambda y, t: y > t,
+                    "less_than": lambda y, t: y < t,
+                    "equal": lambda y, t: y == t,
+                }.get(user_rule.threshold_type)
+                if threshold_fn is None or not threshold_fn(yesterday_consumption, threshold_value):
+                    checked += 1
+                    continue
+
+                from decimal import Decimal
+                _ = await repo.create_alert_record(db, {
+                    "rule_id": user_rule.id,
+                    "workshop": config.workshop,
+                    "energy_type": rule_energy_type,
+                    "alert_level": user_rule.alert_level,
+                    "trigger_value": Decimal(str(yesterday_consumption)),
+                    "threshold_value": user_rule.threshold_value,
+                    "unit": unit,
+                    "alert_time": now,
+                    "status": "pending",
+                })
+
+                # 发送飞书通知
+                display_name = display_name_map.get(rule_energy_type, rule_energy_type)
+                excess = yesterday_consumption - threshold_value
+                pct = (excess / threshold_value) * 100
+                notify_title = f"⚠️ 能耗预警 - {config.workshop}"
+                notify_content = (
+                    f"**{config.workshop}**（负责人：{heads_mention}）\n"
+                    f"{user_rule.rule_name} 阈值：{threshold_value:,.2f} {unit}"
+                    f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
+                    f"**超标量：{excess:,.2f} {unit}（+{pct:.1f}%）**"
+                )
+
+                for open_id in open_ids:
+                    success = await send_user_card(open_id, notify_title, notify_content)
+                    if not success:
+                        logger.warning(
+                            "车间预警飞书通知失败(自定义规则): workshop=%s, energy_type=%s, open_id=%s",
+                            config.workshop, rule_energy_type, open_id,
+                        )
+
+                triggered += 1
+                checked += 1
+                logger.info(
+                    "车间能耗预警触发(自定义规则): workshop=%s, energy_type=%s, "
+                    "rule=%s, threshold_type=%s, threshold_value=%.2f, yesterday=%.2f",
+                    config.workshop, rule_energy_type,
+                    user_rule.rule_name, user_rule.threshold_type,
+                    threshold_value, yesterday_consumption,
+                )
+            except Exception:
+                logger.exception(
+                    "车间预警评估异常(自定义规则): workshop=%s", config.workshop
+                )
+                errors += 1
+            continue
+        # ── 系统规则分支（原有逻辑） ──
+
         # 确保系统规则存在
         energy_types = [c["energy_type"] for c in workshop_combos]
         await repo.ensure_system_rules(db, config.workshop, energy_types, unit_map)
-
-        # 获取 heads 中的 feishu_open_id
-        heads = config.heads or []
-        open_ids = [h.get("feishu_open_id", "") for h in heads if h.get("feishu_open_id")]
 
         for combo in workshop_combos:
             energy_type = combo["energy_type"]
@@ -898,14 +1081,15 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
                 })
 
                 # 发送飞书通知
+                display_name = display_name_map.get(energy_type, energy_type)
+                excess = yesterday_consumption - avg_consumption
+                pct = (excess / avg_consumption) * 100
                 notify_title = f"⚠️ 能耗预警 - {config.workshop}"
                 notify_content = (
-                    f"**{config.workshop}** 车间昨日 **{energy_type}** 能耗异常：\n\n"
-                    f"- 昨日用量：**{yesterday_consumption:,.2f} {unit}**\n"
-                    f"- 近30日均值：{avg_consumption:,.2f} {unit}\n"
-                    f"- 预警阈值（均值×115%）：{threshold:,.2f} {unit}\n"
-                    f"- 超出比例：**{((yesterday_consumption / avg_consumption - 1) * 100):.1f}%**\n\n"
-                    f"检测时间：{now.strftime('%Y-%m-%d %H:%M')}"
+                    f"**{config.workshop}**（负责人：{heads_mention}）\n"
+                    f"日均标准：{avg_consumption:,.2f} {unit}"
+                    f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
+                    f"**超标量：{excess:,.2f} {unit}（+{pct:.1f}%）**"
                 )
 
                 for open_id in open_ids:
@@ -937,5 +1121,570 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
         await repo.update_workshop_config(db, config.id, {"last_checked_at": now})
 
     return {"checked": checked, "triggered": triggered, "errors": errors}
+
+
+# ── 能源日耗推送配置 ──
+
+# 主能源类型固定顺序
+_REPORT_ENERGY_TYPES = ["water", "electricity", "steam", "natural_gas"]
+
+# 中文数字序数词：🥇🥈🥉
+_MEDALS = ["🥇", "🥈", "🥉"]
+
+
+async def create_daily_push_config(
+    db: AsyncSession, data: EnergyDailyPushConfigCreate
+) -> EnergyDailyPushConfig:
+    create_data = data.model_dump()
+    return await repo.create_daily_push_config(db, create_data)
+
+
+async def get_daily_push_config(
+    db: AsyncSession, config_id: UUID
+) -> EnergyDailyPushConfig:
+    obj = await repo.get_daily_push_config_by_id(db, config_id)
+    if obj is None:
+        raise NotFoundException("能源总耗推送配置", str(config_id))
+    return obj
+
+
+async def list_daily_push_configs(
+    db: AsyncSession,
+    *,
+    is_enabled: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[EnergyDailyPushConfig], int]:
+    items, total = await repo.list_daily_push_configs(
+        db, is_enabled=is_enabled, page=page, page_size=page_size
+    )
+    # 填充设备名称
+    device_ids: list[UUID] = []
+    for c in items:
+        for did_attr in (
+            "solar_device_id", "pressure_device_id",
+            "rto1_gas_device_id", "rto2_gas_device_id",
+            "rto1_elec_device_id", "rto2_elec_device_id",
+        ):
+            did = getattr(c, did_attr)
+            if did:
+                device_ids.append(did)
+    device_name_map: dict[UUID, str] = {}
+    for did in device_ids:
+        dev = await repo.get_device_config_by_id(db, did)
+        if dev:
+            device_name_map[did] = dev.device_name
+    for c in items:
+        for attr in (
+            "solar_device_id", "pressure_device_id",
+            "rto1_gas_device_id", "rto2_gas_device_id",
+            "rto1_elec_device_id", "rto2_elec_device_id",
+        ):
+            did = getattr(c, attr)
+            setattr(c, f"{attr}_name", device_name_map.get(did) if did else None)
+    return items, total
+
+
+async def update_daily_push_config(
+    db: AsyncSession, config_id: UUID, data: EnergyDailyPushConfigUpdate
+) -> EnergyDailyPushConfig:
+    existing = await repo.get_daily_push_config_by_id(db, config_id)
+    if existing is None:
+        raise NotFoundException("能源总耗推送配置", str(config_id))
+    update_data = data.model_dump(exclude_unset=True)
+    result = await repo.update_daily_push_config(db, config_id, update_data)
+    assert result is not None
+    return result
+
+
+async def delete_daily_push_config(db: AsyncSession, config_id: UUID) -> None:
+    obj = await repo.get_daily_push_config_by_id(db, config_id)
+    if obj is None:
+        raise NotFoundException("能源总耗推送配置", str(config_id))
+    await repo.delete_daily_push_config(db, config_id)
+
+
+async def send_daily_energy_report(
+    db: AsyncSession,
+    config_id: UUID,
+    target_date: datetime,
+) -> dict[str, Any]:
+    """手动触发能源日耗推送。
+
+    Args:
+        config_id: 推送配置ID
+        target_date: 要报告的日期（仅日期部分有效，时间忽略）
+    Returns:
+        {"success": bool, "sent_to": int, "message": str}
+    """
+    from app.platform.integrations.feishu.notification import send_user_card
+
+    config = await repo.get_daily_push_config_by_id(db, config_id)
+    if config is None:
+        raise NotFoundException("能源总耗推送配置", str(config_id))
+
+    target_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    prev_date = target_date - timedelta(days=1)
+
+    # 读取能源类型配置（显示名 + 单位）
+    type_configs = await repo.list_enabled_type_configs(db)
+    display_name_map: dict[str, str] = {c.type_code: c.display_name for c in type_configs}
+    unit_map: dict[str, str] = {c.type_code: c.unit for c in type_configs}
+
+    # ── 报告头部 ──
+    now_cst = datetime.now(CST)
+    is_yesterday = target_date.date() == (now_cst - timedelta(days=1)).date()
+    date_label = f"{target_date.strftime('%Y年%m月%d日')}（昨日）" if is_yesterday else target_date.strftime("%Y年%m月%d日")
+    report_date_str = target_date.strftime("%Y-%m-%d")
+
+    lines: list[str] = [
+        "📊 能耗日统计分析报告",
+        f"报告日期：{date_label}",
+        "",
+        "一、主要能耗数据",
+    ]
+
+    # 环比数据收集
+    comparison_lines: list[str] = []
+
+    section_index = 0
+    for et in _REPORT_ENERGY_TYPES:
+        display_name = display_name_map.get(et, et)
+        unit = unit_map.get(et, "")
+
+        # 当日总量
+        today_total = await repo.get_daily_total_by_energy_type(db, et, target_date)
+        if today_total is None:
+            continue
+
+        section_index += 1
+
+        # 收集当前能源类型的所有行
+        section_lines: list[str] = []
+        section_lines.append(f"{section_index}. {display_name}")
+
+        # ── 天然气：先收集 RTO 数据再写总量行 ──
+        rto_data: dict[str, float | None] = {
+            "rto1_gas": None, "rto2_gas": None,
+            "rto1_elec": None, "rto2_elec": None,
+        }
+        rto_extra_lines: list[str] = []
+        if et == "natural_gas":
+            gas_unit = unit
+            if config.rto1_gas_device_id:
+                rto_data["rto1_gas"] = await repo.get_device_daily_value(db, config.rto1_gas_device_id, target_date)
+            if config.rto2_gas_device_id:
+                rto_data["rto2_gas"] = await repo.get_device_daily_value(db, config.rto2_gas_device_id, target_date)
+            # 构建用量括号说明
+            gas_parts: list[str] = []
+            if rto_data["rto1_gas"] is not None and rto_data["rto1_gas"] > 0:
+                gas_parts.append(f"一期 {rto_data['rto1_gas']:,.1f}")
+            if rto_data["rto2_gas"] is not None and rto_data["rto2_gas"] > 0:
+                gas_parts.append(f"二期 {rto_data['rto2_gas']:,.1f}")
+            total_gas_line = f"- 昨日总用气：{today_total:,.1f} {gas_unit}"
+            if gas_parts:
+                total_gas_line += f"（{' + '.join(gas_parts)}）"
+
+            # RTO 用气明细
+            if config.rto1_gas_device_id and rto_data["rto1_gas"] is not None and rto_data["rto1_gas"] > 0:
+                rto_extra_lines.append(f"- 一期RTO用气：{rto_data['rto1_gas']:,.1f} {gas_unit}")
+            if config.rto2_gas_device_id and rto_data["rto2_gas"] is not None and rto_data["rto2_gas"] > 0:
+                rto_extra_lines.append(f"- 二期RTO用气：{rto_data['rto2_gas']:,.1f} {gas_unit}")
+            # RTO 用电明细
+            if config.rto1_elec_device_id:
+                rto_data["rto1_elec"] = await repo.get_device_daily_value(db, config.rto1_elec_device_id, target_date)
+            if config.rto2_elec_device_id:
+                rto_data["rto2_elec"] = await repo.get_device_daily_value(db, config.rto2_elec_device_id, target_date)
+            elec_unit_str = unit_map.get("electricity", "kWh")
+            if rto_data["rto1_elec"] is not None and rto_data["rto1_elec"] > 0:
+                rto_extra_lines.append(f"- 一期RTO用电：{rto_data['rto1_elec']:,.1f} {elec_unit_str}")
+            if rto_data["rto2_elec"] is not None and rto_data["rto2_elec"] > 0:
+                rto_extra_lines.append(f"- 二期RTO用电：{rto_data['rto2_elec']:,.1f} {elec_unit_str}")
+
+            section_lines.append(total_gas_line)
+        else:
+            section_lines.append(f"- 昨日总{display_name}：{today_total:,.1f} {unit}")
+
+        # TOP3 部门
+        top_workshops = await repo.get_daily_top_workshops(db, et, target_date, limit=3)
+        if top_workshops:
+            section_lines.append("- 主要消耗部门TOP3：")
+            for idx, w in enumerate(top_workshops):
+                section_lines.append(
+                    f"  - {_MEDALS[idx]} {w['workshop']}：{w['total_value']:,.1f} {unit}（{w['percentage']}%）"
+                )
+
+        # ── 电耗：清洁能源发电 ──
+        if et == "electricity":
+            elec_unit = unit
+            clean_total = 0.0
+            clean_detail_lines: list[str] = []
+            if config.solar_device_id:
+                solar_val = await repo.get_device_daily_value(db, config.solar_device_id, target_date)
+                if solar_val is not None and solar_val > 0:
+                    clean_detail_lines.append(f"  - 光伏发电：{solar_val:,.1f} {elec_unit}")
+                    clean_total += solar_val
+            if config.pressure_device_id:
+                pressure_val = await repo.get_device_daily_value(db, config.pressure_device_id, target_date)
+                if pressure_val is not None and pressure_val > 0:
+                    clean_detail_lines.append(f"  - 蒸汽差压发电：{pressure_val:,.1f} {elec_unit}")
+                    clean_total += pressure_val
+            if clean_detail_lines:
+                section_lines.append("- 清洁能源发电：")
+                section_lines.extend(clean_detail_lines)
+                section_lines.append(f"  - 自发自用合计：{clean_total:,.1f} {elec_unit}")
+
+        # ── 天然气：追加 RTO 细分行 ──
+        if et == "natural_gas" and rto_extra_lines:
+            section_lines.extend(rto_extra_lines)
+
+        lines.extend(section_lines)
+
+        # ── 环比 ──
+        prev_total = await repo.get_daily_total_by_energy_type(db, et, prev_date)
+        if prev_total is not None and prev_total > 0:
+            change = today_total - prev_total
+            change_pct = (change / prev_total) * 100
+            arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+            abs_pct = abs(change_pct)
+            comparison_lines.append(
+                f"- 能耗类型: {display_name}, "
+                f"环比变化: {'+' if change >= 0 else ''}{change:,.1f} {unit}, "
+                f"变化率: {arrow} {abs_pct:.1f}%"
+            )
+        elif prev_total is not None:
+            comparison_lines.append(
+                f"- 能耗类型: {display_name}, 环比变化: 前日无数据, 变化率: —"
+            )
+
+    # ── 环比分析 section ──
+    if comparison_lines:
+        prev_label = prev_date.strftime("%m月%d日")
+        lines.append("")
+        lines.append("二、环比分析")
+        lines.append("")
+        lines.append(f"（与{prev_label}对比）")
+        lines.append("")
+        lines.extend(comparison_lines)
+
+    # ── 拼接并发送 ──
+    # 修正：如果有天然气 RTO 数据覆盖了总用气行，需要处理
+    # （上面的逻辑中 lines[-4] 的索引依赖于 section 结构，改为更稳健的方式）
+    content = "\n".join(lines)
+
+    title = f"能耗日统计报告 - {report_date_str}"
+
+    notify_users = config.notify_users or []
+    success_count = 0
+    for user_info in notify_users:
+        open_id = user_info.get("feishu_open_id", "")
+        if not open_id:
+            continue
+        sent = await send_user_card(open_id, title, content)
+        if sent:
+            success_count += 1
+        else:
+            logger.warning(
+                "能源日耗推送飞书通知失败: open_id=%s, name=%s",
+                open_id, user_info.get("name", ""),
+            )
+
+    # 更新 last_sent_at
+    await repo.update_daily_push_config(db, config_id, {"last_sent_at": now_cst})
+
+    return {
+        "success": success_count > 0,
+        "sent_to": success_count,
+        "total_users": len(notify_users),
+        "message": f"已发送给 {success_count}/{len(notify_users)} 人",
+    }
+
+
+async def evaluate_daily_push(db: AsyncSession) -> dict[str, Any]:
+    """定时任务入口：检查所有启用的定时推送配置，到达时间后触发推送。
+
+    与 evaluate_workshop_alerts 类似，由外部调度器周期性调用。
+    """
+    now = datetime.now(CST)
+    yesterday = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    configs = await repo.get_enabled_daily_push_configs(db)
+    if not configs:
+        return {"checked": 0, "sent": 0}
+
+    sent = 0
+    for config in configs:
+        if not config.notify_time:
+            continue
+        try:
+            th, tm = config.notify_time.split(":")
+            target_minutes = int(th) * 60 + int(tm)
+            current_minutes = now.hour * 60 + now.minute
+            if current_minutes < target_minutes:
+                continue
+        except (ValueError, AttributeError):
+            continue
+
+        # 防重复：今天已发送则跳过
+        if config.last_sent_at is not None:
+            if config.last_sent_at.date() == now.date():
+                continue
+
+        try:
+            await send_daily_energy_report(db, config.id, yesterday)
+            sent += 1
+        except Exception:
+            logger.exception(
+                "定时推送异常: config_id=%s, name=%s", config.id, config.name
+            )
+
+    return {"checked": len(configs), "sent": sent}
+
+
+# ── 氮气月度推送配置 ──
+
+
+async def create_nitrogen_push_config(
+    db: AsyncSession, data: EnergyNitrogenPushConfigCreate
+) -> EnergyNitrogenPushConfig:
+    create_data = data.model_dump()
+    # JSONB 字段存字符串即可
+    return await repo.create_nitrogen_push_config(db, create_data)
+
+
+async def get_nitrogen_push_config(
+    db: AsyncSession, config_id: UUID
+) -> EnergyNitrogenPushConfig:
+    obj = await repo.get_nitrogen_push_config_by_id(db, config_id)
+    if obj is None:
+        raise NotFoundException("氮气月度推送配置", str(config_id))
+    return obj
+
+
+async def list_nitrogen_push_configs(
+    db: AsyncSession,
+    *,
+    is_enabled: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[EnergyNitrogenPushConfig], int]:
+    items, total = await repo.list_nitrogen_push_configs(
+        db, is_enabled=is_enabled, page=page, page_size=page_size
+    )
+    # 填充设备名称
+    all_device_ids: list[UUID] = []
+    for c in items:
+        for did in c.nitrogen_device_ids or []:
+            if did not in all_device_ids:
+                all_device_ids.append(did)
+    device_name_map: dict[UUID, str] = {}
+    for did in all_device_ids:
+        dev = await repo.get_device_config_by_id(db, did)
+        if dev:
+            device_name_map[did] = dev.device_name
+    for c in items:
+        c.nitrogen_device_names = [  # type: ignore[attr-defined]
+            device_name_map.get(did, str(did))
+            for did in (c.nitrogen_device_ids or [])
+        ]
+    return items, total
+
+
+async def update_nitrogen_push_config(
+    db: AsyncSession, config_id: UUID, data: EnergyNitrogenPushConfigUpdate
+) -> EnergyNitrogenPushConfig:
+    existing = await repo.get_nitrogen_push_config_by_id(db, config_id)
+    if existing is None:
+        raise NotFoundException("氮气月度推送配置", str(config_id))
+    update_data = data.model_dump(exclude_unset=True)
+    result = await repo.update_nitrogen_push_config(db, config_id, update_data)
+    assert result is not None
+    return result
+
+
+async def delete_nitrogen_push_config(db: AsyncSession, config_id: UUID) -> None:
+    obj = await repo.get_nitrogen_push_config_by_id(db, config_id)
+    if obj is None:
+        raise NotFoundException("氮气月度推送配置", str(config_id))
+    await repo.delete_nitrogen_push_config(db, config_id)
+
+
+async def send_nitrogen_monthly_report(
+    db: AsyncSession,
+    config_id: UUID,
+    target_date: datetime,
+) -> dict[str, Any]:
+    """手动触发氮气月度进度推送。
+
+    先用平台适配器 API 拉取目标日期的日汇总数据（保证准确性），
+    写入 DB 后再查询月度累计用量生成报告。
+
+    Args:
+        config_id: 氮气推送配置ID
+        target_date: 目标日期（只取年月日部分）
+    """
+    import calendar
+
+    from app.platform.integrations.feishu.notification import send_user_card
+
+    config = await repo.get_nitrogen_push_config_by_id(db, config_id)
+    if config is None:
+        raise NotFoundException("氮气月度推送配置", str(config_id))
+
+    target_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    year = target_date.year
+    month = target_date.month
+    up_to_day = target_date.day
+    total_days = calendar.monthrange(year, month)[1]
+
+    device_ids = config.nitrogen_device_ids or []
+    if not device_ids:
+        return {"success": False, "sent_to": 0, "message": "未配置氮气设备，无法生成报告"}
+
+    # 从设备配置中获取氮气的单位
+    unit = "m³"
+    first_device = await repo.get_device_config_by_id(db, device_ids[0])
+    if first_device:
+        type_config = await repo.get_type_config_by_code(db, first_device.energy_type)
+        if type_config:
+            unit = type_config.unit
+
+    # ── 用 API 拉取目标日期的日汇总数据（保证准确性）──
+    for did in device_ids:
+        device = await repo.get_device_config_by_id(db, did)
+        if device is None:
+            continue
+        adapter = ADAPTERS.get(device.platform_code)
+        if adapter is None:
+            logger.warning("氮气推送: 未找到平台适配器 %s，跳过设备 %s", device.platform_code, device.device_name)
+            continue
+        try:
+            results = await adapter.fetch_energy_data(
+                [device.platform_device_code], target_date, device.api_endpoint, is_daily=True,
+            )
+            for cr in results:
+                if cr.device_code == device.platform_device_code:
+                    value = float(cr.value)
+                    await repo.upsert_energy_data(
+                        db,
+                        device_config_id=device.id,
+                        timestamp=target_date,
+                        value=value,
+                        unit=unit,
+                        platform_raw_data={"daily_sum": True, "source": "nitrogen_push"},
+                    )
+                    logger.info(
+                        "氮气推送: 拉取日汇总 device=%s day=%s value=%.2f",
+                        device.device_name, target_date.strftime("%Y-%m-%d"), value,
+                    )
+                    break
+        except NotImplementedError:
+            logger.debug("平台 %s 不支持 is_daily=True，跳过日汇总拉取", device.platform_code)
+        except Exception:
+            logger.exception(
+                "氮气推送: 拉取日汇总异常 device=%s day=%s",
+                device.device_name, target_date.strftime("%Y-%m-%d"),
+            )
+    await db.flush()
+
+    # ── 从 DB 查询月度累计用量 ──
+    accumulated = await repo.get_monthly_nitrogen_total(
+        db, device_ids, year, month, up_to_day
+    )
+    accumulated = accumulated or 0.0
+    guaranteed = float(config.monthly_guaranteed_consumption or 0)
+    remaining = guaranteed - accumulated
+
+    # 百分比
+    accumulated_pct = (accumulated / guaranteed * 100) if guaranteed > 0 else 0
+    remaining_pct = (remaining / guaranteed * 100) if guaranteed > 0 else 0
+
+    # 构建报告
+    month_label = f"{year}年{month:02d}月"
+    day_label = f"{month:02d}月{up_to_day:02d}日"
+
+    lines = [
+        "月度氮气进度报告",
+        "📊 月度氮气用量进度报告",
+        "",
+        f"统计周期：{month_label}（截至{day_label}）",
+        f"统计天数：{up_to_day}天 / {total_days}天",
+        "",
+        "---",
+        "",
+        "📈 用量统计",
+        "",
+        f"月度保底消费量：{guaranteed:,.0f} {unit} | 100%",
+        f"累计实际用量：{accumulated:,.1f} {unit} | {accumulated_pct:.2f}%",
+        f"剩余可用额度：{remaining:,.1f} {unit} | {remaining_pct:.2f}%",
+    ]
+
+    content = "\n".join(lines)
+    report_date_str = f"{year}-{month:02d}-{up_to_day:02d}"
+    title = f"月度氮气进度报告 - {report_date_str}"
+
+    notify_users = config.notify_users or []
+    success_count = 0
+    for user_info in notify_users:
+        open_id = user_info.get("feishu_open_id", "")
+        if not open_id:
+            continue
+        sent = await send_user_card(open_id, title, content)
+        if sent:
+            success_count += 1
+        else:
+            logger.warning(
+                "氮气月度推送飞书通知失败: open_id=%s, name=%s",
+                open_id, user_info.get("name", ""),
+            )
+
+    # 更新 last_sent_at
+    now_cst = datetime.now(CST)
+    await repo.update_nitrogen_push_config(db, config_id, {"last_sent_at": now_cst})
+
+    return {
+        "success": success_count > 0,
+        "sent_to": success_count,
+        "total_users": len(notify_users),
+        "message": f"已发送给 {success_count}/{len(notify_users)} 人",
+    }
+
+
+async def evaluate_nitrogen_push(db: AsyncSession) -> dict[str, Any]:
+    """定时任务入口：检查所有启用的氮气月度推送配置，到达时间后触发推送。"""
+    now = datetime.now(CST)
+    yesterday = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    configs = await repo.get_enabled_nitrogen_push_configs(db)
+    if not configs:
+        return {"checked": 0, "sent": 0}
+
+    sent = 0
+    for config in configs:
+        if not config.notify_time:
+            continue
+        try:
+            th, tm = config.notify_time.split(":")
+            target_minutes = int(th) * 60 + int(tm)
+            current_minutes = now.hour * 60 + now.minute
+            if current_minutes < target_minutes:
+                continue
+        except (ValueError, AttributeError):
+            continue
+
+        # 防重复：今天已发送则跳过
+        if config.last_sent_at is not None:
+            if config.last_sent_at.date() == now.date():
+                continue
+
+        try:
+            await send_nitrogen_monthly_report(db, config.id, yesterday)
+            sent += 1
+        except Exception:
+            logger.exception(
+                "氮气月度推送异常: config_id=%s, name=%s", config.id, config.name
+            )
+
+    return {"checked": len(configs), "sent": sent}
 
 

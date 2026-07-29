@@ -406,11 +406,11 @@ async def energy_collection_loop() -> None:
 
 
 async def energy_workshop_alert_coro() -> None:
-    """每分钟检查一次，当时间匹配 ENERGY_WORKSHOP_ALERT_TIME 时执行预警评估。
+    """每分钟检查一次车间能耗预警。
 
     由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
-    防重复：通过 DB 中 EnergyWorkshopConfig.last_checked_at 的日期判定，
-    同一天不重复检查。
+    每个车间配置可设置独立的 notify_time（HH:MM），到达指定时间后评估并发送飞书通知。
+    防重复：通过 DB 中 EnergyWorkshopConfig.last_checked_at 的日期判定，同一天不重复检查。
     """
     from datetime import datetime
 
@@ -421,18 +421,7 @@ async def energy_workshop_alert_coro() -> None:
     if not settings.ENERGY_WORKSHOP_ALERT_ENABLED:
         return
 
-    # 解析配置的 HH:MM 时间
-    try:
-        h, m = settings.ENERGY_WORKSHOP_ALERT_TIME.split(":")
-        target_hour, target_minute = int(h), int(m)
-    except (ValueError, AttributeError):
-        logger.warning("ENERGY_WORKSHOP_ALERT_TIME 格式无效: %s", settings.ENERGY_WORKSHOP_ALERT_TIME)
-        return
-
     now = datetime.now(CST)
-    if now.hour != target_hour or now.minute != target_minute:
-        return
-
     try:
         async with async_session_factory() as db:
             from app.modules.energy.service import evaluate_workshop_alerts

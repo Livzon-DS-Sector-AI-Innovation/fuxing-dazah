@@ -3,8 +3,7 @@
 import { Table, Tag, Space, Button, Popconfirm } from 'antd'
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
-import { AlertRule, AlertLevel, EnergyType } from '@/types/energy'
-import { energyTypeLabels } from './constants'
+import { AlertRule, AlertLevel, EnergyTypeMeta } from '@/types/energy'
 import { usePermission } from '@/hooks/usePermission'
 
 interface AlertRuleTableProps {
@@ -17,6 +16,7 @@ interface AlertRuleTableProps {
   onRefresh: () => void
   onEdit: (record: AlertRule) => void
   onDelete: (id: string) => void
+  typeMetadata: EnergyTypeMeta[]
 }
 
 const alertLevelLabels: Record<AlertLevel, { text: string; color: string }> = {
@@ -36,6 +36,7 @@ export function AlertRuleTable({
   onRefresh,
   onEdit,
   onDelete,
+  typeMetadata,
 }: AlertRuleTableProps) {
   const { hasPermission } = usePermission()
 
@@ -62,9 +63,11 @@ export function AlertRuleTable({
       dataIndex: 'energy_type',
       key: 'energy_type',
       width: 100,
-      render: (type: EnergyType) => {
-        const { text, color } = energyTypeLabels[type]
-        return <Tag color={color}>{text}</Tag>
+      render: (type: string) => {
+        const meta = typeMetadata.find(m => m.type_code === type)
+        if (!meta) return <Tag>{type}</Tag>
+        const color = meta.color || 'blue'
+        return <Tag color={color}>{meta.display_name}</Tag>
       },
     },
     {

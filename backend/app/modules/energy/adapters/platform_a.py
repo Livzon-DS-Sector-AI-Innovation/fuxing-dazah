@@ -57,8 +57,14 @@ class ZhihengWaterAdapter(BasePlatformAdapter):
             all_meter_ids.update(parse_formula_ids(code))
 
         # 2. 构造日期参数：智恒 API 的 endDate 不包含当天（半开区间），需 +1 天
-        beg_date = (target_hour - timedelta(days=2)).strftime("%Y-%m-%d")
-        end_date = (target_hour + timedelta(days=1)).strftime("%Y-%m-%d")
+        if is_daily:
+            # 日汇总模式：只查目标日当天
+            beg_date = target_hour.strftime("%Y-%m-%d")
+            end_date = (target_hour + timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            # 小时模式：宽范围拉取，由 _record_matches_hour 精确过滤
+            beg_date = (target_hour - timedelta(days=2)).strftime("%Y-%m-%d")
+            end_date = (target_hour + timedelta(days=1)).strftime("%Y-%m-%d")
 
         # 3. 确定 API 地址：优先使用设备配置的 api_endpoint
         api_url = resolve_api_url(api_endpoint, DEFAULT_API_URL)

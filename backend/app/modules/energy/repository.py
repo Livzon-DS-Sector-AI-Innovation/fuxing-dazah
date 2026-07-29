@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import exists, func, not_, or_, select
+from sqlalchemy import Date, cast, exists, func, not_, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,10 @@ from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
     EnergyCollectLog,
+    EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
+    EnergyNitrogenPushConfig,
     EnergyTypeConfig,
     EnergyWorkshopConfig,
 )
@@ -400,6 +402,26 @@ def _exclude_hourly_overlap(outer: type[EnergyData]) -> Any:
     )
 
 
+def _department_priority_filter(device_config: type[EnergyDeviceConfig]) -> Any:
+    """部门优先过滤：如果车间+能源类型存在部门级设备，只用部门级；否则汇总区域级。
+
+    避免同一车间下部门级总表和区域级子表数据重复累加。
+    """
+    inner = EnergyDeviceConfig.__table__.alias("d2")
+    return or_(
+        device_config.is_region_level == False,  # noqa: E712
+        not_(
+            exists().where(
+                inner.c.workshop == device_config.workshop,
+                inner.c.energy_type == device_config.energy_type,
+                inner.c.is_region_level == False,  # noqa: E712
+                inner.c.is_enabled == True,       # noqa: E712
+                inner.c.is_deleted == False,      # noqa: E712
+            )
+        ),
+    )
+
+
 async def get_energy_statistics(
     db: AsyncSession,
     *,
@@ -443,6 +465,7 @@ async def get_energy_statistics(
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
     )
@@ -498,6 +521,7 @@ async def get_overview_summary(
             EnergyData.timestamp <= end_time,
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
         )
         .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
     )
@@ -547,6 +571,7 @@ async def get_overview_trend(
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
         )
         .group_by(*group_cols)
         .order_by(order_col.asc())
@@ -596,6 +621,31 @@ async def batch_delete_energy_data(db: AsyncSession, ids: list[UUID]) -> int:
         .values(is_deleted=True)
     )
     return result.rowcount  # type: ignore[attr-defined,no-any-return]
+
+
+async def get_energy_data_by_id(db: AsyncSession, data_id: UUID) -> EnergyData | None:
+    result = await db.execute(
+        select(EnergyData).where(
+            EnergyData.id == data_id,
+            EnergyData.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def update_energy_data_value(
+    db: AsyncSession, data_id: UUID, value: float,
+) -> bool:
+    """修改能耗数据的值。返回 True 表示更新成功。"""
+    result = await db.execute(
+        sa_update(EnergyData)
+        .where(
+            EnergyData.id == data_id,
+            EnergyData.is_deleted == False,  # noqa: E712
+        )
+        .values(value=value)
+    )
+    return result.rowcount > 0  # type: ignore[attr-defined,no-any-return]
 
 
 async def create_collect_log(
@@ -706,6 +756,19 @@ async def get_alert_rule_by_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_alert_rules_by_ids(
+    db: AsyncSession, rule_ids: list[UUID]
+) -> list[EnergyAlertRule]:
+    """批量按ID查询预警规则（用于填充冗余字段）。"""
+    result = await db.execute(
+        select(EnergyAlertRule).where(
+            EnergyAlertRule.id.in_(rule_ids),
+            EnergyAlertRule.is_deleted == False,  # noqa: E712
+        )
+    )
+    return list(result.scalars().all())
 
 
 async def list_alert_rules(
@@ -1186,8 +1249,9 @@ async def get_workshop_daily_consumption(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.workshop == workshop,
             EnergyDeviceConfig.energy_type == energy_type,
-            cst_date == func.date(target_date),
+            cst_date == cast(target_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
         )
     )
     result = await db.execute(query)
@@ -1225,9 +1289,10 @@ async def get_workshop_avg_consumption(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.workshop == workshop,
             EnergyDeviceConfig.energy_type == energy_type,
-            cst_date >= func.date(start_date),
-            cst_date <= func.date(end_date),
+            cst_date >= cast(start_date.date(), Date),
+            cst_date <= cast(end_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
         )
         .group_by(cst_date)
         .subquery()
@@ -1265,6 +1330,47 @@ async def get_distinct_workshop_energy_types(
         {"workshop": row.workshop, "energy_type": row.energy_type}
         for row in result.all()
     ]
+
+
+async def get_device_options_by_energy_type(
+    db: AsyncSession, energy_type: str | None = None
+) -> list[dict[str, str]]:
+    """获取启用的设备配置列表（device_name, workshop），可选按能源类型过滤。
+
+    供车间预警配置的新建/编辑下拉框使用：展示数据源名称，值存车间名。
+    """
+    query = (
+        select(
+            EnergyDeviceConfig.device_name,
+            EnergyDeviceConfig.workshop,
+        )
+        .where(
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+        )
+    )
+    if energy_type:
+        query = query.where(EnergyDeviceConfig.energy_type == energy_type)
+    query = query.order_by(EnergyDeviceConfig.device_name)
+    result = await db.execute(query)
+    return [
+        {"device_name": row.device_name, "workshop": row.workshop}
+        for row in result.all()
+    ]
+
+
+async def get_distinct_workshops(db: AsyncSession) -> list[str]:
+    """获取所有启用的设备配置中的不重复车间名称列表。"""
+    result = await db.execute(
+        select(EnergyDeviceConfig.workshop)
+        .where(
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+        )
+        .distinct()
+        .order_by(EnergyDeviceConfig.workshop)
+    )
+    return [row.workshop for row in result.all()]
 
 
 # ── 系统规则管理 ──
@@ -1354,3 +1460,356 @@ async def get_personnel_candidates(db: AsyncSession) -> list[dict[str, Any]]:
         }
         for u in users
     ]
+
+
+async def list_user_alert_rules_for_select(
+    db: AsyncSession,
+) -> list[EnergyAlertRule]:
+    """查询用户手动创建的、已启用的预警规则列表，供车间配置下拉框使用。"""
+    result = await db.execute(
+        select(EnergyAlertRule).where(
+            EnergyAlertRule.is_deleted == False,  # noqa: E712
+            EnergyAlertRule.is_system == False,   # noqa: E712
+            EnergyAlertRule.is_enabled == True,   # noqa: E712
+        ).order_by(EnergyAlertRule.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+# ── 能源日耗推送配置 ──
+
+
+async def create_daily_push_config(
+    db: AsyncSession, data: dict[str, Any]
+) -> EnergyDailyPushConfig:
+    stmt = pg_insert(EnergyDailyPushConfig).values(**data).returning(EnergyDailyPushConfig)
+    result = await db.execute(stmt)
+    return result.scalar_one()
+
+
+async def get_daily_push_config_by_id(
+    db: AsyncSession, config_id: UUID
+) -> EnergyDailyPushConfig | None:
+    result = await db.execute(
+        select(EnergyDailyPushConfig).where(
+            EnergyDailyPushConfig.id == config_id,
+            EnergyDailyPushConfig.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_daily_push_configs(
+    db: AsyncSession,
+    *,
+    is_enabled: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[EnergyDailyPushConfig], int]:
+    query = select(EnergyDailyPushConfig).where(
+        EnergyDailyPushConfig.is_deleted == False  # noqa: E712
+    )
+    if is_enabled is not None:
+        query = query.where(EnergyDailyPushConfig.is_enabled == is_enabled)
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_query)).scalar() or 0
+
+    query = query.order_by(EnergyDailyPushConfig.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    return list(result.scalars().all()), total
+
+
+async def get_enabled_daily_push_configs(
+    db: AsyncSession,
+) -> list[EnergyDailyPushConfig]:
+    """返回所有启用且设置了定时推送时间的推送配置。"""
+    result = await db.execute(
+        select(EnergyDailyPushConfig).where(
+            EnergyDailyPushConfig.is_deleted == False,  # noqa: E712
+            EnergyDailyPushConfig.is_enabled == True,    # noqa: E712
+            EnergyDailyPushConfig.notify_time.isnot(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def update_daily_push_config(
+    db: AsyncSession, config_id: UUID, data: dict[str, Any]
+) -> EnergyDailyPushConfig | None:
+    result = await db.execute(
+        sa_update(EnergyDailyPushConfig)
+        .where(
+            EnergyDailyPushConfig.id == config_id,
+            EnergyDailyPushConfig.is_deleted == False,  # noqa: E712
+        )
+        .values(**data)
+        .returning(EnergyDailyPushConfig)
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_daily_push_config(db: AsyncSession, config_id: UUID) -> bool:
+    result = await db.execute(
+        sa_update(EnergyDailyPushConfig)
+        .where(
+            EnergyDailyPushConfig.id == config_id,
+            EnergyDailyPushConfig.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True)
+    )
+    return result.rowcount > 0
+
+
+# ── 能源日耗推送专用查询 ──
+
+
+async def get_daily_total_by_energy_type(
+    db: AsyncSession,
+    energy_type: str,
+    target_date: datetime,
+) -> float | None:
+    """按能源类型汇总指定日期的总能耗（跨所有车间），仅统计日汇总/按天采集的设备。
+
+    复用 _department_priority_filter 和 _exclude_hourly_overlap。
+    """
+    cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+    query = (
+        select(func.coalesce(func.sum(EnergyData.value), 0))
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyData.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.energy_type == energy_type,
+            cst_date == cast(target_date.date(), Date),
+            EnergyDeviceConfig.daily_collect_time.isnot(None),
+            _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
+        )
+    )
+    result = await db.execute(query)
+    total = result.scalar()
+    return float(total) if total is not None and total > 0 else None
+
+
+async def get_daily_top_workshops(
+    db: AsyncSession,
+    energy_type: str,
+    target_date: datetime,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """获取指定能源类型在某日用量最高的 TOP N 部门。
+
+    返回列表，每项包含 workshop, total_value, percentage。
+    """
+    cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+
+    # 先查总量
+    total_result = await db.execute(
+        select(func.coalesce(func.sum(EnergyData.value), 0))
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyData.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.energy_type == energy_type,
+            cst_date == cast(target_date.date(), Date),
+            EnergyDeviceConfig.daily_collect_time.isnot(None),
+            _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
+        )
+    )
+    grand_total = float(total_result.scalar() or 0)
+
+    if grand_total == 0:
+        return []
+
+    # 按部门汇总
+    query = (
+        select(
+            EnergyDeviceConfig.workshop,
+            func.sum(EnergyData.value).label("total_value"),
+        )
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyData.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.energy_type == energy_type,
+            cst_date == cast(target_date.date(), Date),
+            EnergyDeviceConfig.daily_collect_time.isnot(None),
+            _exclude_hourly_overlap(EnergyData),
+            _department_priority_filter(EnergyDeviceConfig),
+        )
+        .group_by(EnergyDeviceConfig.workshop)
+        .order_by(func.sum(EnergyData.value).desc())
+        .limit(limit)
+    )
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        {
+            "workshop": row.workshop,
+            "total_value": float(row.total_value or 0),
+            "percentage": round(float(row.total_value or 0) / grand_total * 100, 1),
+        }
+        for row in rows
+    ]
+
+
+async def get_device_daily_value(
+    db: AsyncSession,
+    device_id: UUID,
+    target_date: datetime,
+) -> float | None:
+    """查询指定设备在目标日期的采集值（日汇总优先，否则小时数据求和）。"""
+    cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+
+    query = (
+        select(func.coalesce(func.sum(EnergyData.value), 0))
+        .where(
+            EnergyData.device_config_id == device_id,
+            EnergyData.is_deleted == False,  # noqa: E712
+            cst_date == cast(target_date.date(), Date),
+            _exclude_hourly_overlap(EnergyData),
+        )
+    )
+    result = await db.execute(query)
+    total = result.scalar()
+    return float(total) if total is not None and total > 0 else None
+
+
+# ── 氮气月度推送配置 CRUD ──
+
+
+async def create_nitrogen_push_config(
+    db: AsyncSession, data: dict[str, Any]
+) -> EnergyNitrogenPushConfig:
+    stmt = (
+        pg_insert(EnergyNitrogenPushConfig)
+        .values(**data)
+        .returning(EnergyNitrogenPushConfig)
+    )
+    result = await db.execute(stmt)
+    obj = result.scalar_one()
+    await db.flush()
+    return obj
+
+
+async def get_nitrogen_push_config_by_id(
+    db: AsyncSession, config_id: UUID
+) -> EnergyNitrogenPushConfig | None:
+    result = await db.execute(
+        select(EnergyNitrogenPushConfig).where(
+            EnergyNitrogenPushConfig.id == config_id,
+            EnergyNitrogenPushConfig.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_nitrogen_push_configs(
+    db: AsyncSession,
+    *,
+    is_enabled: bool | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[EnergyNitrogenPushConfig], int]:
+    conditions: list[Any] = [EnergyNitrogenPushConfig.is_deleted == False]  # noqa: E712
+    if is_enabled is not None:
+        conditions.append(EnergyNitrogenPushConfig.is_enabled == is_enabled)  # noqa: E712
+
+    base_query = select(EnergyNitrogenPushConfig).where(*conditions)
+    total_result = await db.execute(
+        select(func.count()).select_from(base_query.subquery())
+    )
+    total = total_result.scalar() or 0
+
+    items_result = await db.execute(
+        base_query
+        .order_by(EnergyNitrogenPushConfig.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list(items_result.scalars().all()), total
+
+
+async def get_enabled_nitrogen_push_configs(
+    db: AsyncSession,
+) -> list[EnergyNitrogenPushConfig]:
+    """返回所有启用且设置了定时推送时间的氮气推送配置。"""
+    result = await db.execute(
+        select(EnergyNitrogenPushConfig).where(
+            EnergyNitrogenPushConfig.is_deleted == False,  # noqa: E712
+            EnergyNitrogenPushConfig.is_enabled == True,    # noqa: E712
+            EnergyNitrogenPushConfig.notify_time.isnot(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def update_nitrogen_push_config(
+    db: AsyncSession, config_id: UUID, data: dict[str, Any]
+) -> EnergyNitrogenPushConfig | None:
+    result = await db.execute(
+        sa_update(EnergyNitrogenPushConfig)
+        .where(
+            EnergyNitrogenPushConfig.id == config_id,
+            EnergyNitrogenPushConfig.is_deleted == False,  # noqa: E712
+        )
+        .values(**data)
+        .returning(EnergyNitrogenPushConfig)
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_nitrogen_push_config(db: AsyncSession, config_id: UUID) -> bool:
+    result = await db.execute(
+        sa_update(EnergyNitrogenPushConfig)
+        .where(
+            EnergyNitrogenPushConfig.id == config_id,
+            EnergyNitrogenPushConfig.is_deleted == False,  # noqa: E712
+        )
+        .values(is_deleted=True)
+    )
+    return result.rowcount > 0
+
+
+# ── 氮气月度查询 ──
+
+
+async def get_monthly_nitrogen_total(
+    db: AsyncSession,
+    device_ids: list[UUID],
+    year: int,
+    month: int,
+    up_to_day: int,
+) -> float | None:
+    """从月1日到 up_to_day 汇总所有指定氮气设备的累计用量。
+
+    使用 CST 时区，复用 _exclude_hourly_overlap 排除小时级数据重叠。
+    """
+    if not device_ids:
+        return None
+
+    cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+    query = (
+        select(func.coalesce(func.sum(EnergyData.value), 0))
+        .where(
+            EnergyData.device_config_id.in_(device_ids),
+            EnergyData.is_deleted == False,  # noqa: E712
+            func.extract('year', cst_date) == year,
+            func.extract('month', cst_date) == month,
+            func.extract('day', cst_date) <= up_to_day,
+            _exclude_hourly_overlap(EnergyData),
+        )
+    )
+    result = await db.execute(query)
+    total = result.scalar()
+    return float(total) if total is not None and total > 0 else None

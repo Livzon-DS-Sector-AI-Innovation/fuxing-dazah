@@ -6,7 +6,7 @@ import enum
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID as UUIDType
+from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
@@ -20,24 +20,11 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
-
-
-class EnergyType(enum.StrEnum):
-    ELECTRICITY = "electricity"
-    WATER = "water"
-    STEAM = "steam"
-    COOLING = "cooling"
-    COMPRESSED_AIR = "compressed_air"
-    NITROGEN = "nitrogen"
-    NATURAL_GAS = "natural_gas"
-
-# CHECK 约束中使用的能源类型列表（与 EnergyType 枚举保持同步）
-_ALL_ENERGY_TYPES = "', '".join(e.value for e in EnergyType)
-ENERGY_TYPE_CHECK = f"energy_type IN ('{_ALL_ENERGY_TYPES}')"
 
 
 class MonitorLevel(enum.StrEnum):
@@ -64,10 +51,6 @@ class EnergyDeviceConfig(BaseModel):
             name="uq_energy_device_config_platform_device",
         ),
         CheckConstraint(
-            ENERGY_TYPE_CHECK,
-            name="ck_energy_device_config_energy_type",
-        ),
-        CheckConstraint(
             "monitor_level IN ('normal', 'important', 'urgent')",
             name="ck_energy_device_config_monitor_level",
         ),
@@ -88,7 +71,7 @@ class EnergyDeviceConfig(BaseModel):
         String(200), nullable=False, comment="设备名称"
     )
     energy_type: Mapped[str] = mapped_column(
-        String(20), nullable=False, comment="能源类型: electricity/water/steam/cooling/compressed_air/nitrogen/natural_gas"
+        String(20), nullable=False, comment="能源类型编码，关联 energy_type_configs.type_code"
     )
     api_endpoint: Mapped[str] = mapped_column(
         String(500), nullable=False, comment="API 路径"
@@ -114,14 +97,17 @@ class EnergyDeviceConfig(BaseModel):
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用采集"
     )
-    equipment_id: Mapped[UUIDType | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True, comment="关联设备管理中的设备ID"
+    equipment_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="关联设备管理中的设备ID"
     )
     equipment_name: Mapped[str | None] = mapped_column(
         String(200), nullable=True, comment="关联设备名称（冗余存储，便于展示）"
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
+    )
+    is_region_level: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="是否区域级别（False=部门级别）"
     )
 
 
@@ -138,8 +124,8 @@ class EnergyData(BaseModel):
         {"schema": "energy"},
     )
 
-    device_config_id: Mapped[UUIDType] = mapped_column(
-        UUID(as_uuid=True),
+    device_config_id: Mapped[UUID] = mapped_column(
+        SA_UUID(as_uuid=True),
         nullable=False,
         comment="设备配置ID",
     )
@@ -238,10 +224,6 @@ class EnergyAlertRule(BaseModel):
     __tablename__ = "energy_alert_rules"
     __table_args__ = (
         CheckConstraint(
-            ENERGY_TYPE_CHECK,
-            name="ck_energy_alert_rule_energy_type",
-        ),
-        CheckConstraint(
             "alert_level IN ('info', 'warning', 'critical', 'emergency')",
             name="ck_energy_alert_rule_alert_level",
         ),
@@ -334,14 +316,14 @@ class EnergyAlertRecord(BaseModel):
         {"schema": "energy"},
     )
 
-    rule_id: Mapped[UUIDType] = mapped_column(
-        UUID(as_uuid=True),
+    rule_id: Mapped[UUID] = mapped_column(
+        SA_UUID(as_uuid=True),
         ForeignKey("energy.energy_alert_rules.id", ondelete="CASCADE"),
         nullable=False,
         comment="预警规则ID",
     )
-    device_config_id: Mapped[UUIDType | None] = mapped_column(
-        UUID(as_uuid=True),
+    device_config_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True),
         nullable=True,
         comment="关联设备配置ID",
     )
@@ -454,4 +436,92 @@ class EnergyWorkshopConfig(BaseModel):
     )
     last_checked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="上次预警检查时间"
+    )
+    alert_rule_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="关联的用户自定义预警规则ID"
+    )
+    notify_time: Mapped[str | None] = mapped_column(
+        String(5), nullable=True, comment="每日通知时间 HH:MM，如 09:00；NULL 表示使用全局默认时间"
+    )
+
+
+# ── 能源总耗推送配置 ──
+
+
+class EnergyDailyPushConfig(BaseModel):
+    """能源日耗推送配置表 — 管理定时推送与手动推送的接收人、设备绑定"""
+
+    __tablename__ = "energy_daily_push_configs"
+    __table_args__ = ({"schema": "energy"},)
+
+    name: Mapped[str] = mapped_column(
+        String(200), nullable=False, comment="配置名称"
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, comment="是否启用"
+    )
+    notify_time: Mapped[str | None] = mapped_column(
+        String(5), nullable=True, comment="每日定时推送时间 HH:MM，如 09:00；NULL 表示仅手动推送"
+    )
+    notify_users: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment='接收人列表 JSON: [{"name": "张三", "feishu_open_id": "ou_xxx"}]'
+    )
+    solar_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="光伏发电设备配置ID"
+    )
+    pressure_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="蒸汽差压发电设备配置ID"
+    )
+    rto1_gas_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="一期RTO用气设备配置ID"
+    )
+    rto2_gas_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="二期RTO用气设备配置ID"
+    )
+    rto1_elec_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="一期RTO用电设备配置ID"
+    )
+    rto2_elec_device_id: Mapped[UUID | None] = mapped_column(
+        SA_UUID(as_uuid=True), nullable=True, comment="二期RTO用电设备配置ID"
+    )
+    last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="上次推送时间"
+    )
+    remark: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="备注"
+    )
+
+
+class EnergyNitrogenPushConfig(BaseModel):
+    """氮气月度推送配置表 — 管理氮气月度用量定时/手动推送"""
+
+    __tablename__ = "energy_nitrogen_push_configs"
+    __table_args__ = ({"schema": "energy"},)
+
+    name: Mapped[str] = mapped_column(
+        String(200), nullable=False, comment="配置名称"
+    )
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, comment="是否启用"
+    )
+    notify_time: Mapped[str | None] = mapped_column(
+        String(5), nullable=True, comment="每日定时推送时间 HH:MM，如 09:00；NULL 表示仅手动推送"
+    )
+    notify_users: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment='接收人列表 JSON: [{"name": "张三", "feishu_open_id": "ou_xxx"}]'
+    )
+    nitrogen_device_ids: Mapped[list[UUID]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="氮气设备配置ID列表"
+    )
+    monthly_guaranteed_consumption: Mapped[float] = mapped_column(
+        Numeric(18, 4), nullable=False, default=0, comment="月度保底消费量"
+    )
+    last_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="上次推送时间"
+    )
+    remark: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="备注"
     )

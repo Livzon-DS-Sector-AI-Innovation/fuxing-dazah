@@ -57,12 +57,12 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/energy",
     permissions: ["energy:*:read"],
     children: [
+      { key: "visualization", label: "可视化视图", path: "/energy/visualization" },
+      { key: "collect-history", label: "采集历史", path: "/energy/collect-history" },
       { key: "type-config", label: "能源配置", path: "/energy/type-config" },
       { key: "devices", label: "数据源配置", path: "/energy/devices" },
       { key: "alerts", label: "预警管理", path: "/energy/alerts" },
       { key: "collect-logs", label: "采集日志", path: "/energy/collect-logs" },
-      { key: "collect-history", label: "采集历史", path: "/energy/collect-history" },
-      { key: "visualization", label: "可视化视图", path: "/energy/visualization" },
     ],
   },
   {
