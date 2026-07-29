@@ -252,16 +252,9 @@ def export_exam(data: dict) -> BytesIO:
         doc.add_heading(title, level=1)
         doc.add_paragraph("")
 
-    # 考试信息行
-    info = []
+    # 出卷人信息行
     if data.get("examiner"):
-        info.append(f"出卷人：{data['examiner']}")
-    if data.get("exam_date"):
-        info.append(f"考试日期：{data['exam_date']}")
-    if data.get("assessment_date"):
-        info.append(f"评估日期：{data['assessment_date']}")
-    if info:
-        doc.add_paragraph("  |  ".join(info))
+        doc.add_paragraph(f"出卷人：{data['examiner']}")
         doc.add_paragraph("")
 
     choice_qs = data.get("choice_questions", [])

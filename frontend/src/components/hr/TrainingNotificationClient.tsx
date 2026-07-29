@@ -30,8 +30,8 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
-  fetchDepartments,
-  fetchEmployees,
+  fetchDepartmentsAction,
+  fetchEmployeesAction,
   fetchTrainingLedgerPages,
   generateTrainingNotification,
   generateTrainingSignInSheet,
@@ -39,8 +39,15 @@ import {
   createTrainingLedgerPage,
   exportQaRecord,
   saveExamPaper,
-  API_BASE,
-} from '@/lib/hr'
+  fetchTrainers,
+  upsertTrainingEvaluation,
+  generateAssessmentQuestions,
+  fetchQuestionBank,
+  exportScoreReport,
+  exportQaRecordWithScores,
+  exportTrainingAssessmentScores,
+} from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { moduleMenus, type SubMenuItem } from '@/lib/menu-config'
 import EvaluationPreview from './EvaluationPreview'
 import AssessmentFlow from './AssessmentFlow'
@@ -128,7 +135,7 @@ export default function TrainingNotificationClient() {
   const router = useRouter()
 
   useEffect(() => {
-    fetchDepartments({ page_size: 100 }).then((res) => {
+    fetchDepartmentsAction({ page_size: 100 }).then((res) => {
       const list = (res.data || []).map((d: any) => ({ value: d.name, label: d.name }))
       setDepartments(list)
     })
@@ -175,7 +182,7 @@ export default function TrainingNotificationClient() {
     if (dept) {
       const deptName = decodeURIComponent(dept)
       setTrainerDept(deptName)
-      fetchEmployees({ department: deptName, page_size: 200 }).then(res => {
+      fetchEmployeesAction({ department: deptName, page_size: 200 }).then(res => {
         const emps = (res.data || []).map((e: any) => ({
           value: e.name, label: `${e.name} - ${e.department || deptName} (${e.employee_number})`,
           employee_number: e.employee_number,
@@ -200,8 +207,7 @@ export default function TrainingNotificationClient() {
     form.setFieldsValue({ trainer: undefined })
     if (!dept) { setTrainerEmployees([]); return }
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?department=${encodeURIComponent(dept)}&page_size=200`)
-      const d = await res.json()
+      const d = await fetchTrainers({ department: dept, page_size: 200 })
       setTrainerEmployees((d.data || []).map((t: any) => ({
         value: t.name,
         label: `${t.name} (${t.department})`,
@@ -222,7 +228,7 @@ export default function TrainingNotificationClient() {
     const deptMap: Record<string, string> = {}
     for (const dept of depts) {
       try {
-        const res = await fetchEmployees({ department: dept, page_size: 100 })
+        const res = await fetchEmployeesAction({ department: dept, page_size: 100 })
         const list = (res.data || []).map((e: any) => ({
           value: e.name,
           label: `${e.name} - ${e.department || dept} (${e.employee_number || ''})`,
@@ -305,7 +311,8 @@ export default function TrainingNotificationClient() {
           ? values.issue_date.format('YYYY-MM-DD')
           : (singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : undefined)),
       }
-      await generateTrainingNotification(payload)
+      const r = await generateTrainingNotification(payload)
+      downloadBase64File(r.base64, r.filename || '培训通知.docx')
       message.success('培训通知已生成')
     } catch (err: any) {
       message.error(err.message || '生成失败')
@@ -340,7 +347,8 @@ export default function TrainingNotificationClient() {
         employee_names: values.employee_names || [],
         employee_departments: values.employee_names?.length ? Object.fromEntries(values.employee_names.map((n: string) => [n, nameToDeptMap[n] || ''])) : {},
       }
-      await generateTrainingSignInSheet(payload)
+      const r = await generateTrainingSignInSheet(payload)
+      downloadBase64File(r.base64, r.filename || '培训签到表.docx')
       message.success('培训签到表已生成')
     } catch (err: any) {
       message.error(err.message || '生成失败')
@@ -440,17 +448,13 @@ export default function TrainingNotificationClient() {
           }
           // 同步写入评估补录表（培训内容+部门+应到人数）
           try {
-            const fd = new FormData()
-            fd.append('training_content', subject)
-            fd.append('department', department)
-            fd.append('expected_count', String(targets.length))
-            fd.append('training_method', method)
-            fd.append('trainer_name', trainerVal)
-            fd.append('assessment_method', values.assessment_method || '')
-            await fetch(`${API_BASE}/api/v1/hr/training-evaluations/upsert`, {
-              method: 'POST',
-              body: fd,
-              credentials: 'include' as const,
+            await upsertTrainingEvaluation({
+              training_content: subject,
+              department,
+              expected_count: targets.length,
+              training_method: method,
+              trainer_name: trainerVal,
+              assessment_method: values.assessment_method || '',
             })
           } catch { message.warning('评估补录同步失败，请手动录入') }
           message.success(
@@ -516,16 +520,7 @@ export default function TrainingNotificationClient() {
       formData.append('assessment_method', values.assessment_method || '笔试')
       formData.append('subject', values.subject || '')
 
-      const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/generate-assessment`, {
-        method: 'POST',
-        body: formData,
-        credentials: 'include' as const,
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || err.message || '生成失败')
-      }
-      const result = await res.json()
+      const result = await generateAssessmentQuestions(formData)
       setAssessmentQuestions(result.data)
       message.success('考核内容生成成功')
     } catch (err: any) {
@@ -692,7 +687,7 @@ export default function TrainingNotificationClient() {
                   if (!dept) return
                   // 自动加载该部门员工作为受训人员
                   try {
-                    const res = await fetchEmployees({ department: dept, page_size: 200 })
+                    const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
                     const emps = (res.data || []).map((e: any) => ({
                       value: e.name, label: `${e.name} - ${e.department || dept} (${e.employee_number})`,
                       employee_number: e.employee_number,
@@ -1219,8 +1214,7 @@ export default function TrainingNotificationClient() {
                 <Button icon={<SearchOutlined />} loading={loadingBank} onClick={async () => {
                   setLoadingBank(true)
                   try {
-                    const res = await fetch(`${API_BASE}/api/v1/hr/question-bank?page_size=500`, { credentials: 'include' })
-                    const d = await res.json()
+                    const d = await fetchQuestionBank({ page_size: 500 })
                     setBankQuestions(d.data || [])
                   } catch { message.error('加载题库失败') }
                   finally { setLoadingBank(false) }
@@ -1423,21 +1417,13 @@ export default function TrainingNotificationClient() {
                     return { name, department: nameToDeptMap[name] || v.department || '', wrong_questions: data.wrongIndices, total_score: maxScore - data.wrongIndices.reduce((s: number, i: number) => s + (questions[i]?.score || 0), 0) }
                   })
                   try {
-                    const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-score-report`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      credentials: 'include' as const,
-                      body: JSON.stringify({
-                        training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                        training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
-                        training_department: v.department || '',
-                        scores_json: JSON.stringify(scores),
-                      }),
+                    const r = await exportScoreReport({
+                      training_content: [v.subject, v.content].filter(Boolean).join(' - '),
+                      training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                      training_department: v.department || '',
+                      scores_json: JSON.stringify(scores),
                     })
-                    if (!res.ok) throw new Error('导出失败')
-                    const blob = await res.blob()
-                    const a = document.createElement('a'); a.href = window.URL.createObjectURL(blob)
-                    a.download = `成绩单_${v.training_date_range?.[0]?.format('YYYY-MM-DD') || 'export'}.docx`
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+                    downloadBase64File(r.base64, r.filename)
                     message.success('成绩单已导出')
                   } catch (err: any) { message.error(err.message || '导出失败') }
                 }}>导出成绩单</Button>
@@ -1452,24 +1438,16 @@ export default function TrainingNotificationClient() {
                     return { name, wrong_questions: data.wrongIndices, total_score: computed }
                   })
                   try {
-                    const res = await fetch(`${API_BASE}/api/v1/hr/training-notification/export-qa-record-with-scores`, {
-                      method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      credentials: 'include' as const,
-                      body: JSON.stringify({
-                        training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                        training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
-                        training_method: v.training_method || '问答',
-                        training_department: v.department || '',
-                        questions_json: JSON.stringify(questions),
-                        trainee_names_json: JSON.stringify(traineeNames),
-                        scores_json: JSON.stringify(scores),
-                      }),
+                    const r = await exportQaRecordWithScores({
+                      training_content: [v.subject, v.content].filter(Boolean).join(' - '),
+                      training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                      training_method: v.training_method || '问答',
+                      training_department: v.department || '',
+                      questions_json: JSON.stringify(questions),
+                      trainee_names_json: JSON.stringify(traineeNames),
+                      scores_json: JSON.stringify(scores),
                     })
-                    if (!res.ok) throw new Error('导出失败')
-                    const blob = await res.blob()
-                    const a = document.createElement('a'); a.href = window.URL.createObjectURL(blob)
-                    a.download = `问答实操记录表_${v.training_date_range?.[0]?.format('YYYY-MM-DD') || 'export'}.docx`
-                    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+                    downloadBase64File(r.base64, r.filename)
                     message.success('导出成功')
                   } catch (err: any) { message.error(err.message || '导出失败') }
                 }}>
@@ -1498,23 +1476,13 @@ export default function TrainingNotificationClient() {
             }))
             setExportingScore(true)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/training-assessment-scores/export`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                credentials: 'include' as const,
-                body: JSON.stringify({
-                  training_content: subjectValue,
-                  training_date: (singleDateValue || faceDateValue)?.format('YYYY-MM-DD') || '',
-                  department: traineeDepts.join('、') || deptValue || '',
-                  scores,
-                }),
+              const r = await exportTrainingAssessmentScores({
+                training_content: subjectValue,
+                training_date: (singleDateValue || faceDateValue)?.format('YYYY-MM-DD') || '',
+                department: traineeDepts.join('、') || deptValue || '',
+                scores,
               })
-              if (!res.ok) throw new Error('导出失败')
-              const blob = await res.blob()
-              const url = window.URL.createObjectURL(blob)
-              const a = document.createElement('a'); a.href = url
-              a.download = `考核成绩单_${subjectValue || 'training'}.docx`
-              document.body.appendChild(a); a.click(); document.body.removeChild(a)
-              window.URL.revokeObjectURL(url)
+              downloadBase64File(r.base64, r.filename)
               message.success('成绩单已导出')
             } catch { message.error('导出失败') }
             finally { setExportingScore(false) }

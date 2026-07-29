@@ -2341,10 +2341,15 @@ async def save_qa_scores(
                 score = max(0, full_score_val - len(wrong) * int(per_q))
             ledger_date = _d(payload.assessed_date) or train_date or _date.today()
             exist = (await session.execute(
-                text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
+                text("SELECT id FROM hr.training_ledgers WHERE employee_number = :en AND training_date = :td AND training_subject = :ts AND is_deleted = false"),
                 {"en": emp_no, "td": ledger_date, "ts": subj},
             )).first()
-            if not exist:
+            if exist:
+                await session.execute(
+                    text("UPDATE hr.training_ledgers SET assessment_result = :ar, training_method = :tm, trainer = :t, updated_at = now() WHERE id = :id"),
+                    {"ar": str(score), "tm": method, "t": trainer, "id": exist[0]},
+                )
+            else:
                 await session.execute(
                     text("INSERT INTO hr.training_ledgers (id, employee_number, training_date, training_subject, training_method, trainer, assessment_result, source_type) VALUES (gen_random_uuid(), :en, :td, :ts, :tm, :t, :ar, 'qa_assessment')"),
                     {"en": emp_no, "td": ledger_date, "ts": subj, "tm": method, "t": trainer, "ar": str(score)},
