@@ -16,11 +16,10 @@ import type { Dayjs } from 'dayjs'
 export function ScheduleView() {
   const queryClient = useQueryClient()
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>(() => {
-    // 泳道用宽范围（前后各 3 个月）
     const now = dayjs()
-    return [now.subtract(3, 'month').startOf('month'), now.add(3, 'month').endOf('month')]
+    return [now.startOf('month'), now.add(1, 'month').endOf('month')]
   })
-  const [productName, setProductName] = useState<string | undefined>()
+  const [productId, setProductId] = useState<string | undefined>()
   const [planOrderId, setPlanOrderId] = useState<string | undefined>()
 
   const { data: items, isLoading, refetch } = useQuery({
@@ -115,24 +114,20 @@ export function ScheduleView() {
   }, [])
 
   const productOptions = useMemo(() => (products ?? []).map((p: Product) => ({
-    value: p.product_name,
+    value: p.id,
     label: p.product_name,
   })), [products])
 
   const planOrderOptions = useMemo(() => {
     let orders = planOrders ?? []
-    // 选了产品后，只显示包含该产品的计划单
-    if (productName && items) {
-      const matchingOrderIds = new Set(
-        items.filter((i) => i.product_name === productName).map((i) => i.plan_order_id),
-      )
-      orders = orders.filter((po) => matchingOrderIds.has(po.id))
+    if (productId) {
+      orders = orders.filter((po) => po.product_id === productId)
     }
     return orders.map((po: PlanOrder) => ({
       value: po.id,
-      label: `${po.order_no} ${po.title}`.trim(),
+      label: po.title,
     }))
-  }, [planOrders, productName, items])
+  }, [planOrders, productId])
 
   const onRefresh = useCallback(() => { refetch(); queryClient.invalidateQueries({ queryKey: ['plan-orders'] }); queryClient.invalidateQueries({ queryKey: ['plan-order-detail'] }) }, [refetch, queryClient])
 
@@ -156,8 +151,8 @@ export function ScheduleView() {
           }}
           size="small"
           style={{ width: 220 }}
-          value={productName}
-          onChange={setProductName}
+          value={productId}
+          onChange={setProductId}
           options={productOptions}
         />
 
@@ -196,8 +191,9 @@ export function ScheduleView() {
         <ScheduleCardSwimlane
           items={items ?? []}
           planOrderId={planOrderId}
-          productName={productName}
+          productId={productId}
           onRefresh={onRefresh}
+          dateRange={dateRange}
         />
       )}
       </div>

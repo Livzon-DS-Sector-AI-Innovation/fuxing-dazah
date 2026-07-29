@@ -15,7 +15,6 @@ import {
   Spin,
   Table,
   Tag,
-  Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined } from '@ant-design/icons'
@@ -25,8 +24,6 @@ import type { PlanItem, StageConfigItem } from '@/types/production'
 import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
 import { ITEM_STATUS_CONFIG, PRIORITY_CONFIG } from './constants'
 import dayjs from 'dayjs'
-
-const { Text } = Typography
 
 // ── Form divider ──
 
@@ -185,9 +182,10 @@ interface Props {
   items: PlanItem[]
   isLoading?: boolean
   onRefresh: () => void
+  onOpenStageConfig?: () => void
 }
 
-export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId, planOrderProductName, planOrderRouteId, planOrderStageConfig, items, isLoading = false, onRefresh }: Props) {
+export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId, planOrderProductName, planOrderRouteId, planOrderStageConfig, items, isLoading = false, onRefresh, onOpenStageConfig }: Props) {
   const { message, modal } = App.useApp()
   const [addOpen, setAddOpen] = useState(false)
   const [addLoading, setAddLoading] = useState(false)
@@ -368,7 +366,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100, render: v => v || '—' },
     { title: '设备', dataIndex: 'equipment_id', key: 'equipment_id', width: 100, render: v => v || '—' },
     {
-      title: '计划时间', key: 'dates', width: 180,
+      title: '计划时间', key: 'dates', width: 200,
       render: (_, r) => `${formatDate(r.planned_start)} ~ ${formatDate(r.planned_end)}`,
     },
     {
@@ -412,8 +410,10 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <Text strong style={{ fontSize: 14 }}>计划项</Text>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        {canEdit && onOpenStageConfig && (
+          <Button size="small" onClick={onOpenStageConfig}>工段配置</Button>
+        )}
         {canEdit && (
           <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
             添加计划项

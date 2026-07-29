@@ -4,6 +4,18 @@
   to { opacity: 1; }
 }
 
+/* cardEnter — 泳道卡片入场：从左向右擦入，呼应时间推进 */
+@keyframes cardEnter {
+  from {
+    opacity: 0;
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+}
+
 /* 计划中枢 Tabs — 全链路 flex 撑满，确保 TabPane 内容区无缝吃满剩余高度 */
 .planning-tabs.ant-tabs {
   flex: 1;

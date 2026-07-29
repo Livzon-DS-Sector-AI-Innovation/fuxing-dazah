@@ -196,6 +196,7 @@ export interface ScheduleViewItem {
   order_scheduled_end: string | null
   item_id: string
   item_no: number
+  product_id: string
   product_name: string
   equipment_id: string | null
   planned_quantity: number | null

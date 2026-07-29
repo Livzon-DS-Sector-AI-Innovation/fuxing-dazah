@@ -9,8 +9,9 @@ import dayjs, { type Dayjs } from 'dayjs'
 interface Props {
   items: ScheduleViewItem[]
   planOrderId?: string
-  productName?: string
+  productId?: string
   onRefresh: () => void
+  dateRange?: [dayjs.Dayjs, dayjs.Dayjs]
 }
 
 interface LaneItem extends ScheduleViewItem {
@@ -80,7 +81,7 @@ const LANE_GAP = 8
 const HEADER_HEIGHT = 72
 const DAY_WIDTH_PX = 36
 
-export function ScheduleCardSwimlane({ items, planOrderId, productName, onRefresh }: Props) {
+export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh, dateRange }: Props) {
   const { message, modal } = App.useApp()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingValues, setEditingValues] = useState<{
@@ -92,11 +93,18 @@ export function ScheduleCardSwimlane({ items, planOrderId, productName, onRefres
   const [saving, setSaving] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // 时间轴范围：覆盖所有排程项日期，最少 3 个月
+  // 时间轴范围：以选择的日期范围为基准，若排程项超出则自动扩展
   const { timelineStart, timelineEnd, totalDays } = useMemo(() => {
-    const now = dayjs()
-    let start = now.subtract(1, 'month').startOf('month')
-    let end = now.add(1, 'month').endOf('month')
+    let start: dayjs.Dayjs
+    let end: dayjs.Dayjs
+    if (dateRange) {
+      start = dateRange[0].startOf('month')
+      end = dateRange[1].endOf('month')
+    } else {
+      const now = dayjs()
+      start = now.subtract(1, 'month').startOf('month')
+      end = now.add(1, 'month').endOf('month')
+    }
 
     for (const item of items) {
       if (item.planned_start && item.planned_end) {
@@ -109,21 +117,21 @@ export function ScheduleCardSwimlane({ items, planOrderId, productName, onRefres
 
     const days = end.diff(start, 'day') + 1
     return { timelineStart: start, timelineEnd: end, totalDays: days }
-  }, [items])
+  }, [items, dateRange])
 
   // 过滤 + 分配泳道
   const { laneItems, totalLanes, unscheduledItems } = useMemo(() => {
     let filtered = planOrderId
       ? items.filter((i) => i.plan_order_id === planOrderId)
       : items
-    if (productName) {
-      filtered = filtered.filter((i) => i.product_name === productName)
+    if (productId && !planOrderId) {
+      filtered = filtered.filter((i) => i.product_id === productId)
     }
     const scheduled = filtered.filter((i) => i.planned_start && i.planned_end)
     const unscheduled = filtered.filter((i) => !i.planned_start || !i.planned_end)
     const { laneItems, totalLanes } = assignLanes(scheduled)
     return { laneItems, totalLanes, unscheduledItems: unscheduled }
-  }, [items, planOrderId, productName])
+  }, [items, planOrderId, productId])
 
   // 内层内容总宽度（px），保证 header 和 body 天然对齐
   const innerWidthPx = Math.max(totalDays * DAY_WIDTH_PX, 800)
@@ -420,7 +428,8 @@ export function ScheduleCardSwimlane({ items, planOrderId, productName, onRefres
                       ? `0 8px 32px ${hexToRgba(statusColor, 0.18)}, inset 0 3px 0 0 ${statusColor}`
                       : `0 1px 3px rgba(0,0,0,0.04), inset 0 3px 0 0 ${statusColor}`,
                     zIndex: isExpanded ? 20 : 1,
-                    transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease',
+                    transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1), left 0.35s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease, transform 0.2s ease, padding 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease',
+                    animation: 'cardEnter 0.35s cubic-bezier(0.4, 0, 0.2, 1) both',
                   }}
                   onClick={(e) => { e.stopPropagation(); handleCardClick(item) }}
                   onMouseEnter={(e) => {
