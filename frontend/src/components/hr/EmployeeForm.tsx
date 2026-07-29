@@ -6,7 +6,7 @@ import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee, EmployeeCreateInput, EmployeeUpdateInput, Department } from '@/types/hr'
 import { createEmployee, updateEmployee } from '@/actions/hr'
-import { fetchDepartments, fetchPositions, API_BASE } from '@/lib/hr'
+import { fetchDepartmentsAction, fetchPositions, createPosition } from '@/actions/hr'
 
 interface EmployeeFormProps {
   open: boolean
@@ -28,7 +28,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
 
   useEffect(() => {
     if (open) {
-      fetchDepartments({ page_size: 100 })
+      fetchDepartmentsAction({ page_size: 100 })
         .then((res) => setDepartments(res.data))
         .catch(() => setDepartments([]))
 
@@ -286,21 +286,13 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
         onOk={async () => {
           if (!newPosName.trim()) { message.warning('请输入职位名称'); return }
           try {
-            const res = await fetch(`${API_BASE}/api/v1/hr/positions`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ department: newPosDept, name: newPosName.trim() }),
-              credentials: 'include' as const,
-            })
-            if (res.ok) {
-              message.success('职位创建成功')
-              setNewPosModalOpen(false)
-              const data = await fetchPositions()
-              setPositions(data)
-              form.setFieldValue('position', newPosName.trim())
-            } else {
-              const d = await res.json(); message.error(d.message || '创建失败')
-            }
-          } catch { message.error('创建失败') }
+            await createPosition({ department: newPosDept, name: newPosName.trim() })
+            message.success('职位创建成功')
+            setNewPosModalOpen(false)
+            const data = await fetchPositions()
+            setPositions(data)
+            form.setFieldValue('position', newPosName.trim())
+          } catch (err) { message.error((err as Error)?.message || '创建失败') }
         }} okText="创建">
         <div className="mt-4 space-y-3">
           <div><strong>部门：</strong>{newPosDept}</div>

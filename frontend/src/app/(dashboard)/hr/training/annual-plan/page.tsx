@@ -5,24 +5,16 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import { App, Card, Row, Col, Select, Input, Upload, Button, Space, Spin, Table, Popconfirm, Modal, Form, DatePicker, InputNumber } from 'antd'
 import { UploadOutlined, SearchOutlined, ReloadOutlined, DeleteOutlined, ArrowLeftOutlined, BellOutlined, PlusOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
-
-/** 安全的 JSON fetch：检查 HTTP 状态码 + 容错非 JSON 响应 */
-async function safeFetch(url: string, init?: RequestInit): Promise<any> {
-  let r: Response
-  try { r = await fetch(url, init) }
-  catch { throw new Error('无法连接后端服务，请确认后端已启动') }
-  const text = await r.text()
-  if (!r.ok) {
-    let errMsg = `HTTP ${r.status}`
-    try { const body = JSON.parse(text); if (body.message) errMsg = body.message }
-    catch { errMsg += `: ${text.slice(0, 200)}` }
-    throw new Error(errMsg)
-  }
-  try { return JSON.parse(text) }
-  catch { throw new Error(`服务器返回非JSON响应: ${text.slice(0, 200)}`) }
-}
+import {
+  fetchAnnualPlanItems,
+  uploadAnnualTrainingPlans,
+  fetchPlanItems,
+  fetchAnnualTrainingPlans,
+  deleteAnnualPlanItem,
+  createAnnualPlanItem,
+  fetchSopDepartments,
+  fetchTrainers,
+} from '@/actions/hr'
 
 // ─── 列表视图：按部门卡片 ───
 function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }: {
@@ -37,10 +29,7 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
   const load = async () => {
     setLoading(true)
     try {
-      const sp = new URLSearchParams()
-      if (year) sp.set('year', String(year))
-      if (keyword) sp.set('keyword', keyword)
-      const d = await safeFetch(`${API_BASE}/api/v1/hr/annual-plan-items?${sp}`, { credentials: 'include' })
+      const d = await fetchAnnualPlanItems({ year: year || undefined, keyword: keyword || undefined })
       setData(d.data || [])
     } catch (err: any) {
       logError('加载年度计划列表失败', { error: err.message })
@@ -73,15 +62,9 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
             <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
               const fd = new FormData(); fd.append('file', file as File)
               try {
-                const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, {
-                  method: 'POST', body: fd, credentials: 'include',
-                })
-                const text = await res.text()
-                let d: any = {}
-                try { d = JSON.parse(text) } catch { /* ignore */ }
-                if (res.ok) { message.success(d.message || '上传成功'); onReload() }
-                else message.error(d.message || `上传失败 (HTTP ${res.status})`)
-              } catch { message.error('上传失败，请检查后端服务是否正常运行') }
+                const d = await uploadAnnualTrainingPlans(fd)
+                message.success(d.message || '上传成功'); onReload()
+              } catch (err) { message.error((err as Error)?.message || '上传失败') }
             }}>
               <Button icon={<UploadOutlined />}>上传计划明细</Button>
             </Upload>
@@ -140,11 +123,10 @@ function PlanDetailView({ planId }: { planId: string }) {
   const load = async () => {
     setLoading(true)
     try {
-      const d = await safeFetch(`${API_BASE}/api/v1/hr/annual-training-plans/${planId}/items`, { credentials: 'include' })
+      const d = await fetchPlanItems(planId)
       setItems(d.data || [])
 
-      const sp = new URLSearchParams({ page_size: '200' })
-      const plans = await safeFetch(`${API_BASE}/api/v1/hr/annual-training-plans?${sp}`, { credentials: 'include' })
+      const plans = await fetchAnnualTrainingPlans({ page_size: 200 })
       const plan = (plans.data || []).find((p: any) => p.id === planId)
       if (plan) setPlanInfo({ dept: plan.department, year: plan.year })
     } catch (err: any) {
@@ -157,11 +139,8 @@ function PlanDetailView({ planId }: { planId: string }) {
 
   const handleDelete = async (itemId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${planId}/items/${itemId}`, {
-        method: 'DELETE', credentials: 'include',
-      })
-      if (res.ok) { message.success('已删除'); load() }
-      else message.error('删除失败')
+      await deleteAnnualPlanItem(planId, itemId)
+      message.success('已删除'); load()
     } catch { message.error('删除失败') }
   }
 
@@ -173,10 +152,10 @@ function PlanDetailView({ planId }: { planId: string }) {
 
   // 加载部门选项和培训师选项
   useEffect(() => {
-    safeFetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' })
+    fetchSopDepartments()
       .then(d => setDeptOptions((d.data||[]).map((v:string)=>({value:v,label:v}))))
       .catch(() => {})
-    safeFetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`, { credentials: 'include' })
+    fetchTrainers({ page_size: 200 })
       .then(d => setTrainerOptions((d.data||[]).map((t:any)=>({value:t.name,label:`${t.name}(${t.department})`}))))
       .catch(() => {})
   }, [])
@@ -193,23 +172,12 @@ function PlanDetailView({ planId }: { planId: string }) {
         else if (k === 'target_audience') payload[k] = (v as string[]).join('，')
         else payload[k] = v
       }
-      const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${planId}/items`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload), credentials: 'include',
-      })
-      const text = await res.text()
-      if (res.ok) {
-        message.success('创建成功')
-        setCreateOpen(false)
-        createForm.resetFields()
-        load()
-      } else {
-        let msg = `创建失败 (HTTP ${res.status})`
-        try { const d = JSON.parse(text); if (d.message) msg = d.message }
-        catch { msg += `: ${text.slice(0, 200)}` }
-        message.error(msg)
-      }
-    } catch { message.error('创建失败') }
+      await createAnnualPlanItem(planId, payload)
+      message.success('创建成功')
+      setCreateOpen(false)
+      createForm.resetFields()
+      load()
+    } catch (err) { message.error((err as Error)?.message || '创建失败') }
     finally { setCreating(false) }
   }
 

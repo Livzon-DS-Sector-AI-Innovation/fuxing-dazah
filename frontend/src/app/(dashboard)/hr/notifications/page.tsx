@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Card, Table, Tag } from 'antd'
 
-import { API_BASE } from '@/lib/hr'
+import { fetchNotificationLogs } from '@/actions/hr'
 
 export default function NotificationsPage() {
   const [logs, setLogs] = useState<any[]>([])
@@ -11,8 +11,8 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     setLoading(true)
-    fetch(`${API_BASE}/api/v1/hr/notification-logs?page_size=100`, { credentials: 'include' })
-      .then(r => r.json()).then(d => setLogs(d.data || [])).catch(() => {})
+    fetchNotificationLogs({ page_size: 100 })
+      .then(d => setLogs(d.data || [])).catch(() => {})
       .finally(() => setLoading(false))
   }, [])
 

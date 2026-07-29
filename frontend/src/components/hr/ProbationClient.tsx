@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Button, Card, DatePicker, Modal, Select, Space, Table, Tag, message } from 'antd'
 import { ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, EditOutlined, HistoryOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { fetchDepartments, API_BASE } from '@/lib/hr'
+import { fetchDepartmentsAction, fetchProbationExpiring, updateEmployee, batchRegularizeEmployees, fetchProbationExtensions } from '@/actions/hr'
 
 interface ProbationEmployee {
   id: string
@@ -38,15 +38,14 @@ export default function ProbationClient() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/probation-expiring?days=${expireDays}${filterDept ? `&department=${encodeURIComponent(filterDept)}` : ''}`, { credentials: 'include' })
-      const d = await res.json()
+      const d = await fetchProbationExpiring({ days: expireDays, department: filterDept })
       setEmployees(d.data || [])
     } catch { message.error('加载失败') }
     finally { setLoading(false) }
   }
 
   useEffect(() => {
-    fetchDepartments({ page_size: 200 }).then(res => {
+    fetchDepartmentsAction({ page_size: 200 }).then(res => {
       setDepartments((res.data || []).map((d: any) => d.name))
     })
     loadData()
@@ -68,12 +67,7 @@ export default function ProbationClient() {
       content: `确认将 ${record.name}（${record.employee_number}）转为正式员工？转正后自动写入培训台账。`,
       onOk: async () => {
         try {
-          const res = await fetch(`${API_BASE}/api/v1/hr/employees/${record.id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: '在职', regularization_date: dayjs().format('YYYY-MM-DD') }),
-            credentials: 'include',
-          })
-          if (!res.ok) throw new Error('操作失败')
+          await updateEmployee(record.id, { status: '在职', regularization_date: dayjs().format('YYYY-MM-DD') })
           message.success(`${record.name} 已转正，已自动写入培训台账`)
           loadData()
         } catch (err: any) { message.error(err.message || '操作失败') }
@@ -89,12 +83,7 @@ export default function ProbationClient() {
       okType: 'danger',
       onOk: async () => {
         try {
-          const res = await fetch(`${API_BASE}/api/v1/hr/employees/${record.id}`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: '离职', departure_date: dayjs().format('YYYY-MM-DD') }),
-            credentials: 'include',
-          })
-          if (!res.ok) throw new Error('操作失败')
+          await updateEmployee(record.id, { status: '离职', departure_date: dayjs().format('YYYY-MM-DD') })
           const msg = `${record.name} 已标记离职，离职台账+培训台账已自动生成`
           message.success(msg)
           loadData()
@@ -111,13 +100,7 @@ export default function ProbationClient() {
       onOk: async () => {
         setBatchLoading(true)
         try {
-          const res = await fetch(`${API_BASE}/api/v1/hr/employees/batch-regularize`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(selectedRowKeys),
-            credentials: 'include',
-          })
-          const d = await res.json()
-          if (!res.ok) throw new Error(d.message || '操作失败')
+          const d = await batchRegularizeEmployees(selectedRowKeys)
           message.success(`已转正 ${d.data?.count || selectedRowKeys.length} 人，已自动写入培训台账`)
           setSelectedRowKeys([])
           loadData()
@@ -136,12 +119,7 @@ export default function ProbationClient() {
     const record = editModal.record
     if (!record) return
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${record.id}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ probation_end_date: editProbationEnd ? editProbationEnd.format('YYYY-MM-DD') : null }),
-        credentials: 'include',
-      })
-      if (!res.ok) throw new Error('保存失败')
+      await updateEmployee(record.id, { probation_end_date: editProbationEnd ? editProbationEnd.format('YYYY-MM-DD') : null })
       message.success('已更新（延期记录已自动保存）')
       setEditModal({ open: false, record: null })
       loadData()
@@ -151,8 +129,7 @@ export default function ProbationClient() {
   const handleHistory = async (record: ProbationEmployee) => {
     setHistoryModal({ open: true, record })
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${record.id}/probation-extensions`, { credentials: 'include' })
-      const d = await res.json()
+      const d = await fetchProbationExtensions(record.id)
       setExtensions(d.data || [])
     } catch { setExtensions([]) }
   }

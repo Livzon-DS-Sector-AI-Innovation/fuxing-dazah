@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
-import { fetchEmployees, fetchPrejobTrainingPlan } from '@/lib/hr'
+import { fetchEmployeesAction, fetchPrejobTrainingPlan } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 const DEPT_CONTENT_MAP: Record<string, string[]> = {
   '人事行政部': [
@@ -25,7 +26,7 @@ export default function PreJobPlanClient() {
 
   useEffect(() => {
     setLoading(true)
-    fetchEmployees({ page_size: 200 })
+    fetchEmployeesAction({ page_size: 200 })
       .then((res) => {
         setEmployees(res.data || [])
       })
@@ -46,7 +47,8 @@ export default function PreJobPlanClient() {
     }
     setDownloading(true)
     try {
-      await fetchPrejobTrainingPlan(selectedEmployee.id, selectedEmployee.name)
+      const r = await fetchPrejobTrainingPlan(selectedEmployee.id, selectedEmployee.name)
+      downloadBase64File(r.base64, r.filename)
       message.success('岗前培训计划已导出')
     } catch (err: any) {
       message.error(err.message || '导出失败')

@@ -5,27 +5,15 @@ import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
-import { logApiError } from '@/lib/hr'
+import { downloadBase64File } from '@/lib/hr'
 import {
-  fetchOnboardingRecords,
-  API_BASE,
-} from '@/lib/hr'
-
-/** 安全的 JSON fetch：检查 HTTP 状态码 + 容错非 JSON 响应 */
-async function safeFetch(url: string, init?: RequestInit): Promise<any> {
-  let r: Response
-  try { r = await fetch(url, init) }
-  catch { throw new Error('无法连接后端服务，请确认后端已启动') }
-  const text = await r.text()
-  if (!r.ok) {
-    let errMsg = `HTTP ${r.status}`
-    try { const body = JSON.parse(text); if (body.message) errMsg = body.message }
-    catch { errMsg += `: ${text.slice(0, 200)}` }
-    throw new Error(errMsg)
-  }
-  try { return JSON.parse(text) }
-  catch { throw new Error(`服务器返回非JSON响应: ${text.slice(0, 200)}`) }
-}
+  fetchTrainingCandidates,
+  fetchPositionTrainings,
+  fetchTrainers,
+  downloadPrejobTrainingPlan,
+  downloadEmployeeTrainingRecord,
+  downloadWorkPermit,
+} from '@/actions/hr'
 
 const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
 const LABEL = { ...CELL, background: '#f5f5f5', fontWeight: 600, textAlign: 'center' as const, width: '15%' }
@@ -49,9 +37,7 @@ export default function OnboardingPrejobClient() {
   const loadEmployees = async (keyword?: string) => {
     setLoading(true)
     try {
-      const sp = new URLSearchParams()
-      if (keyword) sp.set('keyword', keyword)
-      const d = await safeFetch(`${API_BASE}/api/v1/hr/employees/training-candidates?${sp}`, { credentials: 'include' })
+      const d = await fetchTrainingCandidates(keyword)
       setEmployees(d.data || [])
     } catch (err: any) {
       message.error('加载失败: ' + (err.message || '未知错误'))
@@ -71,9 +57,7 @@ export default function OnboardingPrejobClient() {
     const dept = selectedEmployee.department
     if (!pos) return
 
-    const params = new URLSearchParams({ position_name: pos })
-    if (dept) params.set('department', dept)
-    safeFetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`, { credentials: 'include' as const })
+    fetchPositionTrainings({ position_name: pos, department: dept || undefined })
       .then(res => {
         const items: any[] = res.data || []
         if (items.length === 0) {
@@ -106,7 +90,7 @@ export default function OnboardingPrejobClient() {
 
   // 加载培训师列表
   useEffect(() => {
-    safeFetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`, { credentials: 'include' as const })
+    fetchTrainers({ page_size: 200 })
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
       .catch(() => {})
   }, [])
@@ -136,59 +120,49 @@ export default function OnboardingPrejobClient() {
     plan_date: sopPlanDates[s.id] || '',
   }))
 
-  const downloadDoc = async (url: string, method: string, filename: string, setLoading: (v: boolean) => void, body?: any) => {
-    setLoading(true)
-    try {
-      const opts: any = { method, headers: {}, credentials: 'include' }
-      if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
-      const res = await fetch(url, opts)
-      if (!res.ok) {
-        let detail = '导出失败'
-        try { const d = await res.json(); detail = d.message || d.detail || detail } catch { /* ignore */ }
-        logApiError(method, url, res.status, detail)
-        throw new Error(detail)
-      }
-      const blob = await res.blob()
-      const a = document.createElement('a')
-      a.href = window.URL.createObjectURL(blob)
-      a.download = filename
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      message.success('导出成功')
-    } catch (err: any) { message.error(err.message || '导出失败') }
-    finally { setLoading(false) }
-  }
-
   const handleExportPlan = async () => {
     if (!selectedEmployee) return message.warning('请先选择员工')
-    await downloadDoc(
-      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_id || selectedEmployee.id}/prejob-training-plan`,
-      'POST',
-      `岗前培训计划_${selectedEmployee.name || 'employee'}.docx`,
-      setDownloadingWord,
-      { training_items: buildItems() },
-    )
+    setDownloadingWord(true)
+    try {
+      const r = await downloadPrejobTrainingPlan(
+        selectedEmployee.employee_id || selectedEmployee.id,
+        selectedEmployee.name || 'employee',
+        buildItems(),
+      )
+      downloadBase64File(r.base64, r.filename)
+      message.success('导出成功')
+    } catch (err) { message.error((err as Error)?.message || '导出失败') }
+    finally { setDownloadingWord(false) }
   }
 
   const handleExportRecord = async () => {
     if (!selectedEmployee) return message.warning('请先选择员工')
-    await downloadDoc(
-      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/training-record`,
-      'POST',
-      `培训记录_${selectedEmployee.name}.docx`,
-      setDownloadingRecord,
-      { training_items: buildItems() },
-    )
+    setDownloadingRecord(true)
+    try {
+      const r = await downloadEmployeeTrainingRecord(
+        selectedEmployee.employee_number,
+        selectedEmployee.name,
+        buildItems(),
+      )
+      downloadBase64File(r.base64, r.filename)
+      message.success('导出成功')
+    } catch (err) { message.error((err as Error)?.message || '导出失败') }
+    finally { setDownloadingRecord(false) }
   }
 
   const handleExportPermit = async () => {
     if (!selectedEmployee) return message.warning('请先选择员工')
-    await downloadDoc(
-      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/work-permit`,
-      'POST',
-      `上岗证_${selectedEmployee.name}.docx`,
-      setDownloadingPermit,
-      { training_items: buildItems() },
-    )
+    setDownloadingPermit(true)
+    try {
+      const r = await downloadWorkPermit(
+        selectedEmployee.employee_number,
+        selectedEmployee.name,
+        buildItems(),
+      )
+      downloadBase64File(r.base64, r.filename)
+      message.success('导出成功')
+    } catch (err) { message.error((err as Error)?.message || '导出失败') }
+    finally { setDownloadingPermit(false) }
   }
 
   return (

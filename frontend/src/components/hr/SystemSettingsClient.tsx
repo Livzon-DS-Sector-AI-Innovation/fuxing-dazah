@@ -4,25 +4,7 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Select, Alert, Spin, Table, Checkbox, Popconfirm, Space, Divider } from 'antd'
 import { SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
-
-/** 安全的 JSON fetch：检查 HTTP 状态码 + 容错非 JSON 响应，返回解析后的 JSON 对象 */
-async function safeJsonFetch(url: string, init?: RequestInit): Promise<any> {
-  let r: Response
-  try { r = await fetch(url, init) }
-  catch { throw new Error('无法连接后端服务，请确认后端已启动') }
-  const text = await r.text()
-  if (!r.ok) {
-    let errMsg = `HTTP ${r.status}`
-    try {
-      const body = JSON.parse(text)
-      if (body.message) errMsg = body.message
-      if (body.detail) errMsg += `: ${body.detail}`
-    } catch { errMsg += `: ${text.slice(0, 200)}` }
-    throw new Error(errMsg)
-  }
-  try { return JSON.parse(text) }
-  catch { throw new Error(`服务器返回非JSON响应: ${text.slice(0, 200)}`) }
-}
+import { fetchDataTables, clearDataTables, getSystemSettings, updateSystemSettings } from '@/actions/hr'
 
 export default function SystemSettingsClient() {
   const { message } = App.useApp()
@@ -35,7 +17,7 @@ export default function SystemSettingsClient() {
 
   const loadTables = () => {
     setTablesLoading(true)
-    safeJsonFetch('/api/v1/hr/data-management/tables', { credentials: 'include' })
+    fetchDataTables()
       .then(d => setTables(d?.data || []))
       .catch((err: any) => { message.error('加载数据管理列表失败: ' + (err.message || '未知错误')) })
       .finally(() => setTablesLoading(false))
@@ -45,27 +27,21 @@ export default function SystemSettingsClient() {
   const toggleSelect = (table: string) => setSelected(prev => prev.includes(table) ? prev.filter(t => t !== table) : [...prev, table])
   const handleClearSelected = () => {
     if (!selected.length) return message.warning('请选择要清空的表')
-    safeJsonFetch('/api/v1/hr/data-management/clear', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-      body: JSON.stringify(selected),
-    }).then(d => {
+    clearDataTables(selected).then(d => {
       message.success(d.message || '已清空')
       setSelected([])
       loadTables()
     }).catch((err: any) => { message.error(err.message || '操作失败') })
   }
   const handleClearAll = () => {
-    safeJsonFetch('/api/v1/hr/data-management/clear', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
-      body: JSON.stringify(tables.map(t => t.table)),
-    }).then(d => {
+    clearDataTables(tables.map(t => t.table)).then(d => {
       message.success(d.message || '已清空')
       loadTables()
     }).catch((err: any) => { message.error(err.message || '操作失败') })
   }
 
   useEffect(() => {
-    safeJsonFetch('/api/v1/hr/system-settings', { credentials: 'include' })
+    getSystemSettings()
       .then(d => form.setFieldsValue(d.data || {}))
       .catch((err: any) => {
         logError('加载系统设置失败', { error: err?.message })
@@ -77,10 +53,7 @@ export default function SystemSettingsClient() {
     const values = await form.validateFields()
     setLoading(true)
     try {
-      const d = await safeJsonFetch('/api/v1/hr/system-settings', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values), credentials: 'include',
-      })
+      const d = await updateSystemSettings(values)
       message.success(d.message || '已保存')
     } catch (err: any) { message.error(err.message || '保存失败') }
     finally { setLoading(false) }

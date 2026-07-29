@@ -21,8 +21,7 @@ import {
   SearchOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
-import { fetchQuestionBank, API_BASE } from '@/lib/hr'
-import { addQuestionBankItems, deleteQuestionBankItem } from '@/actions/hr'
+import { fetchQuestionBank, addQuestionBankItems, deleteQuestionBankItem, importQuestionBankDocx } from '@/actions/hr'
 import { QuestionBankItem } from '@/types/hr'
 
 export default function QuestionBankClient() {
@@ -75,11 +74,7 @@ export default function QuestionBankClient() {
               const fd = new FormData(); fd.append('file', file as File)
               setLoading(true)
               try {
-                const r = await fetch(`${API_BASE}/api/v1/hr/question-bank/import-docx`, {
-                  method: 'POST', body: fd, credentials: 'include',
-                })
-                const d = await r.json()
-                if (!r.ok) throw new Error(d.message || d.detail || `HTTP ${r.status}`)
+                const d = await importQuestionBankDocx(fd)
                 message.success(d.message || '导入成功')
                 loadBank(1)
               } catch (err: any) { message.error(err.message || '导入失败'); setLoading(false) }

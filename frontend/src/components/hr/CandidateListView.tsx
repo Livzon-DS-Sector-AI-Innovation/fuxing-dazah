@@ -5,6 +5,7 @@ import { Table, Tag, Space, Popconfirm, Input, Modal, message } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { EyeOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons'
 import { Candidate } from '@/types/hr'
+import { sendOfferAction } from '@/actions/hr'
 
 interface CandidateListViewProps {
   candidates: Candidate[]
@@ -26,7 +27,6 @@ export default function CandidateListView({
   onDelete,
 }: CandidateListViewProps) {
   const router = useRouter()
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
   const handleRowClick = (record: Candidate) => {
     const ids = candidates.map((c) => c.id)
@@ -121,9 +121,7 @@ export default function CandidateListView({
                 if (!email) { message.warning('请填写邮箱'); return Promise.reject() }
                 const fd = new FormData(); fd.append('candidate_email', email)
                 try {
-                  const r = await fetch(`${API_BASE}/api/v1/hr/candidates/${record.id}/send-offer`, { method: 'POST', body: fd, credentials: 'include' })
-                  const d = await r.json()
-                  if (!r.ok) throw new Error(d.message || '发送失败')
+                  await sendOfferAction(record.id, fd)
                   message.success('Offer 已发送')
                 } catch (err: any) { message.error(err.message || '发送失败') }
               },

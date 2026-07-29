@@ -26,24 +26,25 @@ import {
   SearchOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
-import { exportTrainingLedger } from '@/lib/hr'
+import { downloadBase64File } from '@/lib/hr'
 import dayjs from 'dayjs'
 import { Employee, TrainingLedgerRecord } from '@/types/hr'
 import {
-  fetchEmployeeByNumber,
-  fetchEmployees,
+  fetchEmployeeByNumberAction,
+  fetchEmployeesAction,
   fetchTrainingLedgers,
   fetchTrainingLedgersAdmin,
   batchUpdateScores,
   fetchTrainingLedgerStats,
   fetchLedgerDepartments,
   fetchLedgerSubjects,
-  fetchDepartments,
+  fetchDepartmentsAction,
   exportTrainingEvaluationReport,
+  exportTrainingLedger,
   createTrainingLedger,
   updateTrainingLedger,
   deleteTrainingLedger,
-} from '@/lib/hr'
+} from '@/actions/hr'
 
 interface TrainingLedgerClientProps {
   employeeNumber: string
@@ -115,7 +116,7 @@ export default function TrainingLedgerClient({
     if (!keyword || keyword.length < 1) { setSearchOptions([]); return }
     setSearching(true)
     try {
-      const res = await fetchEmployees({ keyword, page_size: 20 })
+      const res = await fetchEmployeesAction({ keyword, page_size: 20 })
       const emps = res.data || []
       setSearchOptions(emps.map((e: any) => ({
         value: e.employee_number,
@@ -129,7 +130,7 @@ export default function TrainingLedgerClient({
     setLoading(true)
     try {
       if (employeeNumber) {
-        const empRes = await fetchEmployeeByNumber(employeeNumber)
+        const empRes = await fetchEmployeeByNumberAction(employeeNumber)
         setEmployee(empRes.data)
       }
       if (!employeeNumber) {
@@ -177,7 +178,7 @@ export default function TrainingLedgerClient({
       setDepartments(res.data || [])
     } catch {
       try {
-        const res = await fetchDepartments({ page_size: 200 })
+        const res = await fetchDepartmentsAction({ page_size: 200 })
         setDepartments((res.data || []).map((d: any) => d.name))
       } catch { /* ignore */ }
     }
@@ -275,7 +276,7 @@ export default function TrainingLedgerClient({
     const unqualifiedCount = scores.filter(s => Number(s.result) < 60).length
 
     try {
-      await exportTrainingEvaluationReport({
+      const r = await exportTrainingEvaluationReport({
         department: filterDept,
         training_subject: filterSubject,
         training_date: adminDateRange ? adminDateRange[0] : (records[0]?.training_date || undefined),
@@ -288,6 +289,7 @@ export default function TrainingLedgerClient({
         qualified_count: qualifiedCount,
         unqualified_count: unqualifiedCount,
       })
+      downloadBase64File(r.base64, r.filename)
       message.success('评估表已导出')
     } catch (err: any) {
       message.error(err.message || '导出失败')
@@ -299,7 +301,8 @@ export default function TrainingLedgerClient({
 
   const handleExport = async () => {
     try {
-      await exportTrainingLedger(employeeNumber)
+      const r = await exportTrainingLedger(employeeNumber)
+      downloadBase64File(r.base64, r.filename)
       message.success('导出成功')
     } catch (err: any) {
       message.error(err.message || '导出失败')

@@ -15,14 +15,12 @@ import type { Candidate, Interview, AiEvaluation } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   transitionCandidateStatus,
-} from '@/actions/hr'
-import {
-  fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews, API_BASE,
-} from '@/lib/hr'
-import {
   createInterview, updateInterview, deleteInterview, evaluateInterview,
   pushCandidateReview, decideCandidateReview,
+  fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
+  onboardCandidate, fetchResumePreview,
 } from '@/actions/hr'
+import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
 
 interface CandidateDetailClientProps {
@@ -33,6 +31,22 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const router = useRouter()
   const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState(false)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+
+  // 简历 PDF 通过 Server Action 获取（不经 /api rewrite 代理），转 blob URL 嵌入 iframe
+  useEffect(() => {
+    let objectUrl: string | null = null
+    fetchResumePreview(candidate.id)
+      .then((r) => {
+        objectUrl = base64ToObjectUrl(r.base64, 'application/pdf')
+        setPdfUrl(objectUrl)
+      })
+      .catch(() => {
+        setPdfError(true)
+        setPdfLoading(false)
+      })
+    return () => { if (objectUrl) window.URL.revokeObjectURL(objectUrl) }
+  }, [candidate.id])
   const [recommendationLevel, setRecommendationLevel] = useState(candidate.recommendation_level || '')
   const [updating, setUpdating] = useState(false)
   const [navContext, setNavContext] = useState<{ ids: string[]; currentIndex: number } | null>(null)
@@ -82,11 +96,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
       onOk: async () => {
         setOnboardLoading(true)
         try {
-          const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidate.id}/onboard`, {
-            method: 'POST', credentials: 'include',
-          })
-          const d = await res.json()
-          if (!res.ok) throw new Error(d.message || '入职失败')
+          const d = await onboardCandidate(candidate.id)
           message.success(`入职成功！工号：${d.data?.employee_number || ''}`)
           router.refresh()
         } catch (err: any) { message.error(err.message || '入职失败') }
@@ -291,8 +301,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     setReviewLoading(true)
     try {
       // 获取最近的review_id
-      const r = await fetch(`${API_BASE}/api/v1/hr/candidates/pending-review`, { credentials: 'include' })
-      const d = await r.json()
+      const d = await fetchPendingReviews()
       const myReview = (d.data || []).find((item: any) => item.review?.candidate_id === candidate.id)
       if (!myReview?.review?.id) { message.error('未找到审核记录'); return }
       await decideCandidateReview(candidate.id, { review_id: myReview.review.id, decision, review_comment: comment })
@@ -315,8 +324,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             <Button onClick={() => window.location.reload()}>刷新页面</Button>
           </div>
         )}
-        <iframe src={`/api/v1/hr/candidates/${candidate.id}/resume-preview`} className="w-full h-full border-0"
-          onLoad={() => setPdfLoading(false)} title="简历预览" />
+        {pdfUrl && (
+          <iframe src={pdfUrl} className="w-full h-full border-0"
+            onLoad={() => setPdfLoading(false)} title="简历预览" />
+        )}
       </div>
       <div className="flex-[2] bg-white rounded-xl border border-[#e5e3df] p-6 overflow-auto">
         <div className="flex items-center justify-between mb-4">

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, Popconfirm, Space, Table, Tag } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
-import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord } from '@/lib/hr'
-import { deleteQaAssessment } from '@/actions/hr'
+import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord, deleteQaAssessment } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { QaAssessment, QaAssessmentScore } from '@/types/hr'
 
 export default function QaAssessmentClient() {
@@ -62,7 +62,7 @@ export default function QaAssessmentClient() {
                 <Space size="small">
                   <Button size="small" icon={<SearchOutlined />} onClick={() => viewDetail(a)}>成绩</Button>
                   <Button size="small" icon={<EditOutlined />}
-                    onClick={async () => { try { await downloadQaAssessmentRecord(a.id); message.success('已下载') } catch (err: any) { message.error(err.message || '下载失败') } }}>
+                    onClick={async () => { try { const r = await downloadQaAssessmentRecord(a.id); downloadBase64File(r.base64, r.filename); message.success('已下载') } catch (err: any) { message.error(err.message || '下载失败') } }}>
                     记录表
                   </Button>
                   <Popconfirm title="确认删除？" onConfirm={async () => {

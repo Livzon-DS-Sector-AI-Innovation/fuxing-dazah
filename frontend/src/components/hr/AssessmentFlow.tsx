@@ -20,10 +20,14 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchQuestionBank,
+  createQaAssessment,
+  saveQaAssessmentScores,
+  syncQaAssessmentLedger,
   downloadQaAssessmentRecord,
   downloadQaAssessmentEvaluation,
-  API_BASE,
-} from '@/lib/hr'
+  downloadQaAssessmentScores,
+} from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { QaAssessment, QuestionBankItem } from '@/types/hr'
 
 interface AssessmentFlowProps {
@@ -94,26 +98,16 @@ export default function AssessmentFlow({
     if (pickedQuestions.length === 0) { message.warning('请先从题库选题'); return }
     setCreating(true)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include' as const,
-        body: JSON.stringify({
-          subject, department,
-          training_date: trainingDate,
-          training_method: trainingMethod, trainer,
-          question_count: pickedQuestions.length,
-          questions: pickedQuestions.map((q) => ({
-            file_no: q.file_no, question: q.question, answer: q.answer, score: q.score,
-          })),
-          trainee_names: employeeNames,
-        }),
+      const data = await createQaAssessment({
+        subject, department,
+        training_date: trainingDate,
+        training_method: trainingMethod, trainer,
+        question_count: pickedQuestions.length,
+        questions: pickedQuestions.map((q) => ({
+          file_no: q.file_no, question: q.question, answer: q.answer, score: q.score,
+        })),
+        trainee_names: employeeNames,
       })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.message || err.detail || '创建考核失败')
-      }
-      const data = await res.json()
       const id = data.data?.id
       if (!id) throw new Error('创建失败：未返回ID')
       setAssessmentId(id)
@@ -167,32 +161,26 @@ export default function AssessmentFlow({
     if (!assessmentId) return
     setExporting(`${kind}-${assessmentId}`)
     try {
-      if (kind === 'record') await downloadQaAssessmentRecord(assessmentId)
-      else if (kind === 'evaluation') await downloadQaAssessmentEvaluation(assessmentId)
-      else {
+      if (kind === 'record') {
+        const r = await downloadQaAssessmentRecord(assessmentId)
+        downloadBase64File(r.base64, r.filename)
+      } else if (kind === 'evaluation') {
+        const r = await downloadQaAssessmentEvaluation(assessmentId)
+        downloadBase64File(r.base64, r.filename)
+      } else {
         // 先保存成绩（含台账同步）
-        const saveRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/scores`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
-            scores: scoreRows.map((r) => ({
-              employee_name: r.employee_name,
-              employee_number: r.employee_number,
-              wrong_questions: [...r.wrong].sort((a, b) => a - b),
-            })),
-          }),
-        })
-        const saveData = await saveRes.json().catch(() => ({}))
+        const saveData = await saveQaAssessmentScores(assessmentId, {
+          assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
+          scores: scoreRows.map((r) => ({
+            employee_name: r.employee_name,
+            employee_number: r.employee_number,
+            wrong_questions: [...r.wrong].sort((a, b) => a - b),
+          })),
+        }).catch(() => ({} as any))
         // 再下载成绩单
-        const r = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/export-scores`, { credentials: 'include' as const })
-        if (!r.ok) throw new Error('导出失败')
-        const blob = await r.blob()
-        const a = document.createElement('a')
-        a.href = window.URL.createObjectURL(blob)
-        a.download = '成绩单.docx'
-        document.body.appendChild(a); a.click(); document.body.removeChild(a)
-        message.success(saveData.message || '成绩单已导出，已同步培训台账')
+        const r = await downloadQaAssessmentScores(assessmentId)
+        downloadBase64File(r.base64, r.filename)
+        message.success((saveData as any)?.message || '成绩单已导出，已同步培训台账')
         return
       }
       message.success('导出成功')
@@ -205,29 +193,16 @@ export default function AssessmentFlow({
     // 先保存成绩，再同步台账
     setSaving(true)
     try {
-      const saveRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/scores`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
-          scores: scoreRows.map((r) => ({
-            employee_name: r.employee_name,
-            employee_number: r.employee_number,
-            wrong_questions: [...r.wrong].sort((a, b) => a - b),
-          })),
-        }),
+      await saveQaAssessmentScores(assessmentId, {
+        assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
+        scores: scoreRows.map((r) => ({
+          employee_name: r.employee_name,
+          employee_number: r.employee_number,
+          wrong_questions: [...r.wrong].sort((a, b) => a - b),
+        })),
       })
-      if (!saveRes.ok) {
-        const err = await saveRes.json().catch(() => ({}))
-        throw new Error(err.message || '保存失败')
-      }
       // 再同步台账
-      const syncRes = await fetch(`/api/v1/hr/qa-assessments/${assessmentId}/sync-ledger`, { method: 'POST', credentials: 'include' as const })
-      if (!syncRes.ok) {
-        const err = await syncRes.json().catch(() => ({}))
-        throw new Error(err.message || err.detail || '同步失败')
-      }
-      const syncData = await syncRes.json()
+      const syncData = await syncQaAssessmentLedger(assessmentId)
       message.success(syncData.message || '已同步到培训台账')
     } catch (err: any) { message.error(err.message || '操作失败') }
     finally { setSaving(false) }

@@ -5,7 +5,7 @@ import { App, Table, Button, Space, Tag, Input, Select, Modal, Form, DatePicker,
 import { SearchOutlined, EditOutlined, EyeOutlined, SwapOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
-import { API_BASE } from '@/lib/hr'
+import { fetchPositions, fetchDepartmentsAction, fetchTransfers, createTransfer } from '@/actions/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeInfoModal from './EmployeeInfoModal'
 
@@ -50,10 +50,10 @@ export default function EmployeeTable({
   const watchedToDept = Form.useWatch('to_department', transferForm)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/positions`, { credentials: 'include' })
-      .then(r => r.json()).then(d => {
+    fetchPositions()
+      .then(list => {
         const map: Record<string, string[]> = {}
-        ;(d.data || []).forEach((p: any) => {
+        list.forEach((p) => {
           if (!map[p.department]) map[p.department] = []
           map[p.department].push(p.name)
         })
@@ -71,8 +71,8 @@ export default function EmployeeTable({
 
   const [deptOptions, setDeptOptions] = useState<string[]>([])
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/departments?page_size=200`, { credentials: 'include' })
-      .then(r => r.json()).then(d => setDeptOptions((d.data || []).map((x: any) => x.name)))
+    fetchDepartmentsAction({ page_size: 200 })
+      .then(d => setDeptOptions((d.data || []).map((x: any) => x.name)))
       .catch(() => {})
   }, [])
 
@@ -86,8 +86,7 @@ export default function EmployeeTable({
 
   const loadTransfers = async (employeeId: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/transfers?employee_id=${employeeId}&page_size=50`, { credentials: 'include' })
-      const d = await res.json()
+      const d = await fetchTransfers({ employee_id: employeeId, page_size: 50 })
       setTransfers(d.data || [])
     } catch { setTransfers([]) }
   }
@@ -107,22 +106,16 @@ export default function EmployeeTable({
   const handleCreateTransfer = async () => {
     const values = await transferForm.validateFields()
     try {
-      const res = await fetch(`${API_BASE}/api/v1/hr/transfers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employee_id: transferEmp!.id,
-          transfer_type: values.transfer_type,
-          from_department: values.from_department || null,
-          to_department: values.to_department || null,
-          from_position: values.from_position || null,
-          to_position: values.to_position || null,
-          effective_date: values.effective_date.format('YYYY-MM-DD'),
-          reason: values.reason || null,
-        }),
-        credentials: 'include',
+      await createTransfer({
+        employee_id: transferEmp!.id,
+        transfer_type: values.transfer_type,
+        from_department: values.from_department || null,
+        to_department: values.to_department || null,
+        from_position: values.from_position || null,
+        to_position: values.to_position || null,
+        effective_date: values.effective_date.format('YYYY-MM-DD'),
+        reason: values.reason || null,
       })
-      if (!res.ok) throw new Error('创建失败')
       message.success('异动记录已添加')
       transferForm.resetFields()
       loadTransfers(transferEmp!.id)

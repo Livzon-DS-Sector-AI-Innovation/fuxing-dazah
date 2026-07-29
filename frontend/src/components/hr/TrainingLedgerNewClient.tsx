@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartments, fetchEmployees, createTrainingLedgerPage } from '@/lib/hr'
+import { fetchDepartmentsAction, fetchEmployeesAction, createTrainingLedgerPage } from '@/actions/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
@@ -16,7 +16,7 @@ export default function TrainingLedgerNewClient() {
 
   useEffect(() => {
     setLoading(true)
-    fetchDepartments({ page_size: 200 })
+    fetchDepartmentsAction({ page_size: 200 })
       .then((res) => {
         const names = (res.data || []).map((d: any) => d.name)
         setDepartments(names)
@@ -30,7 +30,7 @@ export default function TrainingLedgerNewClient() {
     form.setFieldValue('employee_number', undefined)
     setEmployees([])
     if (!dept) return
-    fetchEmployees({ department: dept, page_size: 100 })
+    fetchEmployeesAction({ department: dept, page_size: 100 })
       .then((res) => {
         setEmployees(res.data || [])
       })
