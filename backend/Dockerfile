@@ -15,8 +15,6 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock* ./
 RUN uv sync --frozen --no-dev
-# WeasyPrint 用于 HTML→PDF（需系统库，已在上一行 apt 安装），dev 环境可选
-RUN uv pip install weasyprint
 
 COPY . .
 

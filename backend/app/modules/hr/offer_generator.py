@@ -54,10 +54,9 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
     pdf.add_page()
     fn = "Helvetica"
     try:
-        regular = find_font("NotoSansSC-Regular.ttf")
-        bold = find_font("NotoSansSC-Bold.ttf")
-        pdf.add_font("NotoSans", "", str(regular))
-        pdf.add_font("NotoSans", "B", str(bold))
+        font_path = find_font("NotoSansSC.ttf")
+        pdf.add_font("NotoSans", "", str(font_path))
+        pdf.add_font("NotoSans", "B", str(font_path))
         fn = "NotoSans"
     except FileNotFoundError:
         pass
@@ -134,8 +133,7 @@ def generate_offer_html(**kwargs) -> str:
     stamp_b64 = base64.b64encode(stamp_path.read_bytes()).decode()
     logo_b64 = base64.b64encode(logo_path.read_bytes()).decode()
 
-    font_regular = find_font("NotoSansSC-Regular.ttf")
-    font_bold = find_font("NotoSansSC-Bold.ttf")
+    font_path = find_font("NotoSansSC.ttf")
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -144,8 +142,7 @@ def generate_offer_html(**kwargs) -> str:
 <style>
   @page {{ size: A4; margin: 2cm 2.5cm 2cm 2.5cm; }}
   @media screen {{ body {{ max-width: 700px; margin: 30px auto; padding: 20px; }} }}
-  @font-face {{ font-family: "NotoSansSC"; src: url("file://{font_regular}"); font-weight: normal; }}
-  @font-face {{ font-family: "NotoSansSC"; src: url("file://{font_bold}"); font-weight: bold; }}
+  @font-face {{ font-family: "NotoSansSC"; src: url("file://{font_path}"); }}
   body {{ font-family: "NotoSansSC", sans-serif; font-size: 12pt; line-height: 1.8; color: #000; }}
   .center {{ text-align: center; }}
   .right {{ text-align: right; }}
