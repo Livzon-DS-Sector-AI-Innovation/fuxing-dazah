@@ -32,8 +32,8 @@ def _build_vals(**kwargs) -> dict[str, str]:
 
 def generate_offer_pdf(**kwargs) -> BytesIO:
     """生成 Offer PDF：优先 WeasyPrint（需系统库），无则降级 fpdf2。"""
-    html = generate_offer_html(**kwargs)
     try:
+        html = generate_offer_html(**kwargs)
         from weasyprint import HTML
         buf = BytesIO()
         HTML(string=html).write_pdf(buf)

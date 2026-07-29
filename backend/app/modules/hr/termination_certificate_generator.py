@@ -23,12 +23,12 @@ def generate_termination_certificate_pdf(
     leave_reason: str = "个人原因",
 ) -> BytesIO:
     """生成解除劳动关系证明 PDF：优先 WeasyPrint（Docker），无系统库时降级 fpdf2。"""
-    html = generate_termination_certificate_html(
-        name=name, id_number=id_number, department=department,
-        position=position, entry_date=entry_date, leave_date=leave_date,
-        leave_reason=leave_reason,
-    )
     try:
+        html = generate_termination_certificate_html(
+            name=name, id_number=id_number, department=department,
+            position=position, entry_date=entry_date, leave_date=leave_date,
+            leave_reason=leave_reason,
+        )
         from weasyprint import HTML
         buf = BytesIO()
         HTML(string=html).write_pdf(buf)
