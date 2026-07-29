@@ -288,7 +288,7 @@ export default function TrainingNotificationClient() {
 
       const payload = {
         department: values.department,
-        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : undefined,
+        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : dateStart,
         training_date_start: dateStart,
         training_date_end: isDual ? dateEnd : undefined,
         subject: values.subject,
