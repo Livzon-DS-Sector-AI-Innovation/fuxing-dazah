@@ -336,6 +336,8 @@ export default function TrainingNotificationClient() {
       if (!trainDate) throw new Error('请选择培训日期')
       const topic = [values.subject, values.content].filter(Boolean).join(' ')
       const faceTimeForSignIn = values.face_time
+      const selfStudyTime = values.self_study_time
+      const faceDateVal = values.face_date
       const payload = {
         training_date: trainDate,
         training_time_start: faceTimeForSignIn
@@ -344,6 +346,12 @@ export default function TrainingNotificationClient() {
         training_time_end: faceTimeForSignIn
           ? dayjs(faceTimeForSignIn[1]).format('HH:mm')
           : (values.training_time ? dayjs(values.training_time[1]).format('HH:mm') : undefined),
+        face_to_face_time_start: faceTimeForSignIn ? dayjs(faceTimeForSignIn[0]).format('HH:mm') : undefined,
+        face_to_face_time_end: faceTimeForSignIn ? dayjs(faceTimeForSignIn[1]).format('HH:mm') : undefined,
+        self_study_time_start: selfStudyTime ? dayjs(selfStudyTime[0]).format('HH:mm') : undefined,
+        self_study_time_end: selfStudyTime ? dayjs(selfStudyTime[1]).format('HH:mm') : undefined,
+        face_date: faceDateVal ? faceDateVal.format('YYYY-MM-DD') : undefined,
+        self_study_date: values.self_study_date ? values.self_study_date.format('YYYY-MM-DD') : undefined,
         department: traineeDepts[0] || values.department,
         topic,
         instructor: values.trainer,
