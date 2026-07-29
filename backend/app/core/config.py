@@ -89,15 +89,6 @@ class Settings(BaseSettings):
     # Permission System
     ADMIN_EMPLOYEE_NOS: list[str] = []
 
-    # HR 模块 — 飞书多维表格同步
-    HR_BITABLE_APP_TOKEN: str = ""
-    HR_BITABLE_EMPLOYEE_TABLE_ID: str = ""
-    HR_BITABLE_DEPARTMENT_TABLE_ID: str = ""
-    HR_BITABLE_OFFBOARDING_TABLE_ID: str = ""
-    HR_BITABLE_ONBOARDING_TABLE_ID: str = ""
-    HR_BITABLE_DEPARTURE_TABLE_ID: str = ""
-    HR_BITABLE_APPROVAL_TABLE_ID: str = ""
-
     # HR 模块 — AI 离职分析
     HR_AI_API_KEY: str = ""
     HR_AI_MODEL: str = "deepseek-chat"
