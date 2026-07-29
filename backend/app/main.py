@@ -111,8 +111,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
     scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
 
-    from app.modules.energy.scheduler import ENERGY_WORKSHOP_ALERT_TASK
+    from app.modules.energy.scheduler import (
+        ENERGY_DAILY_PUSH_TASK,
+        ENERGY_NITROGEN_PUSH_TASK,
+        ENERGY_WORKSHOP_ALERT_TASK,
+    )
     scheduler_registry.register_task(ENERGY_WORKSHOP_ALERT_TASK)
+    scheduler_registry.register_task(ENERGY_DAILY_PUSH_TASK)
+    scheduler_registry.register_task(ENERGY_NITROGEN_PUSH_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 
