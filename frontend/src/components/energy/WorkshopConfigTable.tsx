@@ -37,6 +37,16 @@ export function WorkshopConfigTable({
       width: 140,
     },
     {
+      title: '关联规则',
+      dataIndex: 'alert_rule_name',
+      key: 'alert_rule_name',
+      width: 180,
+      render: (name: string | null) => {
+        if (!name) return <span style={{ color: '#a4a097' }}>未关联</span>
+        return <Tag color="purple">{name}</Tag>
+      },
+    },
+    {
       title: '负责人',
       dataIndex: 'heads',
       key: 'heads',

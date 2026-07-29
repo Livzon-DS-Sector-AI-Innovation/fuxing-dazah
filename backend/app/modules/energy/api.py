@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -19,33 +20,41 @@ from app.modules.energy.collect_settings import (
 )
 from app.modules.energy.schemas import (
     AlertRecordProcessRequest,
+    AlertRuleCandidate,
     CollectLogResponse,
     CollectSettingsResponse,
     CollectSettingsUpdate,
     CollectTriggerRequest,
+    DailyReportSendRequest,
     EnergyAlertRecordResponse,
     EnergyAlertRuleCreate,
     EnergyAlertRuleResponse,
     EnergyAlertRuleUpdate,
+    EnergyDailyPushConfigCreate,
+    EnergyDailyPushConfigResponse,
+    EnergyDailyPushConfigUpdate,
     EnergyDataDeleteRequest,
     EnergyDataResponse,
+    EnergyDataUpdateRequest,
     EnergyDeviceConfigCreate,
     EnergyDeviceConfigResponse,
     EnergyDeviceConfigUpdate,
+    EnergyNitrogenPushConfigCreate,
+    EnergyNitrogenPushConfigResponse,
+    EnergyNitrogenPushConfigUpdate,
     EnergyTypeConfigCreate,
     EnergyTypeConfigResponse,
     EnergyTypeConfigUpdate,
     EnergyWorkshopConfigCreate,
     EnergyWorkshopConfigResponse,
     EnergyWorkshopConfigUpdate,
+    NitrogenReportSendRequest,
     PersonnelCandidate,
 )
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +80,8 @@ alert_router = APIRouter(dependencies=[_log_dep])
 alert_record_router = APIRouter(dependencies=[_log_dep])
 type_config_router = APIRouter(dependencies=[_log_dep])
 workshop_config_router = APIRouter(dependencies=[_log_dep])
+daily_report_router = APIRouter(dependencies=[_log_dep])
+nitrogen_report_router = APIRouter(dependencies=[_log_dep])
 
 
 # ── 平台信息 ──
@@ -253,6 +264,20 @@ async def delete_energy_data(
 ) -> JSONResponse:
     await service.delete_energy_data(db, data_id)
     return success_response(None, message="删除成功")
+
+
+@data_router.put("/{data_id}", summary="修改能耗数据值")
+async def update_energy_data(
+    data_id: UUID,
+    request: EnergyDataUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:delete")),
+) -> JSONResponse:
+    obj = await service.update_energy_data(db, data_id, request.value)
+    return success_response(
+        EnergyDataResponse.model_validate(obj).model_dump(),
+        message="修改成功",
+    )
 
 
 @data_router.delete("", summary="批量删除能耗数据")
@@ -624,6 +649,30 @@ async def get_personnel_candidates(
     )
 
 
+@workshop_config_router.get("/available-rules", summary="获取可选预警规则列表（供车间配置下拉框）")
+async def get_available_alert_rules(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:workshop_config:read")),
+) -> JSONResponse:
+    """返回用户手动创建的、已启用的预警规则列表，供车间配置关联使用。"""
+    rules = await service.list_available_alert_rules(db)
+    return success_response(
+        [AlertRuleCandidate.model_validate(r).model_dump() for r in rules]
+    )
+
+
+@workshop_config_router.get("/workshop-options", summary="获取可选设备配置列表（供车间配置下拉框，可按能源类型过滤）")
+async def get_workshop_options(
+    energy_type: str | None = Query(default=None, description="按能源类型过滤（可选）"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:workshop_config:read")),
+) -> JSONResponse:
+    """返回已启用设备配置列表，每项包含 device_name（展示用）和 workshop（存储用）。
+    可选按能源类型过滤，未选择时返回全部。"""
+    options = await service.list_workshop_options(db, energy_type)
+    return success_response(options)
+
+
 @workshop_config_router.get("/{config_id}", summary="查询单个车间预警配置")
 async def get_workshop_config(
     config_id: UUID,
@@ -659,6 +708,188 @@ async def delete_workshop_config(
     return success_response(None, message="删除成功")
 
 
+# ── 能源总耗推送配置 ──
+
+
+@daily_report_router.post("/configs", summary="新增能源总耗推送配置")
+async def create_daily_push_config(
+    data: EnergyDailyPushConfigCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:create")),
+) -> JSONResponse:
+    obj = await service.create_daily_push_config(db, data)
+    return success_response(
+        EnergyDailyPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@daily_report_router.get("/configs", summary="查询能源总耗推送配置列表")
+async def list_daily_push_configs(
+    is_enabled: bool | None = Query(default=None, description="是否启用"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=20, ge=1, le=100, description="每页条数"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:read")),
+) -> JSONResponse:
+    items, total = await service.list_daily_push_configs(
+        db, is_enabled=is_enabled, page=page, page_size=page_size
+    )
+    data = [EnergyDailyPushConfigResponse.model_validate(i).model_dump() for i in items]
+    return paginated_response(data, page, page_size, total)
+
+
+@daily_report_router.get("/configs/{config_id}", summary="查询单个能源总耗推送配置")
+async def get_daily_push_config(
+    config_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:read")),
+) -> JSONResponse:
+    obj = await service.get_daily_push_config(db, config_id)
+    return success_response(
+        EnergyDailyPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@daily_report_router.put("/configs/{config_id}", summary="修改能源总耗推送配置")
+async def update_daily_push_config(
+    config_id: UUID,
+    data: EnergyDailyPushConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:update")),
+) -> JSONResponse:
+    obj = await service.update_daily_push_config(db, config_id, data)
+    return success_response(
+        EnergyDailyPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@daily_report_router.delete("/configs/{config_id}", summary="删除能源总耗推送配置")
+async def delete_daily_push_config(
+    config_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:delete")),
+) -> JSONResponse:
+    await service.delete_daily_push_config(db, config_id)
+    return success_response(None, message="删除成功")
+
+
+@daily_report_router.post("/send", summary="手动触发能源日耗推送")
+async def send_daily_report(
+    request: DailyReportSendRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:send")),
+) -> JSONResponse:
+    from datetime import datetime as dt
+    target_date = dt.fromisoformat(request.target_date)
+    result = await service.send_daily_energy_report(
+        db, UUID(request.config_id), target_date
+    )
+    return success_response(result, message=result.get("message", ""))
+
+
+@daily_report_router.get("/personnel-candidates", summary="获取可选接收人列表")
+async def get_daily_push_personnel_candidates(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:daily_report:read")),
+) -> JSONResponse:
+    """从平台 identity.users 查询所有用户，作为推送接收人候选人列表。"""
+    candidates = await service.get_personnel_candidates(db)
+    return success_response(
+        [PersonnelCandidate(**c).model_dump(mode="json") for c in candidates]
+    )
+
+
+# ── 氮气月度推送配置 ──
+
+
+@nitrogen_report_router.post("/configs", summary="新增氮气月度推送配置")
+async def create_nitrogen_push_config(
+    data: EnergyNitrogenPushConfigCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:create")),
+) -> JSONResponse:
+    obj = await service.create_nitrogen_push_config(db, data)
+    return success_response(
+        EnergyNitrogenPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@nitrogen_report_router.get("/configs", summary="查询氮气月度推送配置列表")
+async def list_nitrogen_push_configs(
+    is_enabled: bool | None = Query(default=None, description="是否启用"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=20, ge=1, le=100, description="每页条数"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:read")),
+) -> JSONResponse:
+    items, total = await service.list_nitrogen_push_configs(
+        db, is_enabled=is_enabled, page=page, page_size=page_size
+    )
+    data = [EnergyNitrogenPushConfigResponse.model_validate(i).model_dump() for i in items]
+    return paginated_response(data, page, page_size, total)
+
+
+@nitrogen_report_router.get("/configs/{config_id}", summary="查询单个氮气月度推送配置")
+async def get_nitrogen_push_config(
+    config_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:read")),
+) -> JSONResponse:
+    obj = await service.get_nitrogen_push_config(db, config_id)
+    return success_response(
+        EnergyNitrogenPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@nitrogen_report_router.put("/configs/{config_id}", summary="修改氮气月度推送配置")
+async def update_nitrogen_push_config(
+    config_id: UUID,
+    data: EnergyNitrogenPushConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:update")),
+) -> JSONResponse:
+    obj = await service.update_nitrogen_push_config(db, config_id, data)
+    return success_response(
+        EnergyNitrogenPushConfigResponse.model_validate(obj).model_dump()
+    )
+
+
+@nitrogen_report_router.delete("/configs/{config_id}", summary="删除氮气月度推送配置")
+async def delete_nitrogen_push_config(
+    config_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:delete")),
+) -> JSONResponse:
+    await service.delete_nitrogen_push_config(db, config_id)
+    return success_response(None, message="删除成功")
+
+
+@nitrogen_report_router.post("/send", summary="手动触发氮气月度推送")
+async def send_nitrogen_report(
+    request: NitrogenReportSendRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:send")),
+) -> JSONResponse:
+    from datetime import datetime as dt
+    target_date = dt.fromisoformat(request.target_date)
+    result = await service.send_nitrogen_monthly_report(
+        db, UUID(request.config_id), target_date
+    )
+    return success_response(result, message=result.get("message", ""))
+
+
+@nitrogen_report_router.get("/personnel-candidates", summary="获取可选接收人列表")
+async def get_nitrogen_push_personnel_candidates(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:nitrogen_report:read")),
+) -> JSONResponse:
+    """从平台 identity.users 查询所有用户，作为推送接收人候选人列表。"""
+    candidates = await service.get_personnel_candidates(db)
+    return success_response(
+        [PersonnelCandidate(**c).model_dump(mode="json") for c in candidates]
+    )
+
+
 router.include_router(device_router, prefix="/devices")
 router.include_router(data_router, prefix="/data")
 router.include_router(collect_router, prefix="/collect")
@@ -666,3 +897,5 @@ router.include_router(alert_router, prefix="/alerts/rules")
 router.include_router(alert_record_router, prefix="/alerts/records")
 router.include_router(type_config_router, prefix="/type-configs")
 router.include_router(workshop_config_router, prefix="/workshop-configs")
+router.include_router(daily_report_router, prefix="/daily-report")
+router.include_router(nitrogen_report_router, prefix="/nitrogen-report")

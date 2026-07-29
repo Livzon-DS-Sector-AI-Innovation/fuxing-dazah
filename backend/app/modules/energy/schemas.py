@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, Field
 
 StrUUID = Annotated[str, BeforeValidator(str)]
-EnergyType = Literal["electricity", "water", "steam", "cooling", "compressed_air", "nitrogen", "natural_gas"]
+EnergyType = str
 MonitorLevel = Literal["normal", "important", "urgent"]
 CollectStatus = Literal["success", "partial", "failed"]
 
@@ -34,6 +34,7 @@ class EnergyDeviceConfigCreate(BaseModel):
     equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
     remark: str | None = Field(default=None, max_length=500, description="备注")
+    is_region_level: bool = Field(default=False, description="是否区域级别（False=部门级别）")
 
 
 class EnergyDeviceConfigUpdate(BaseModel):
@@ -53,6 +54,7 @@ class EnergyDeviceConfigUpdate(BaseModel):
     equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
     remark: str | None = Field(default=None, max_length=500)
+    is_region_level: bool | None = Field(default=None, description="是否区域级别")
 
 
 class EnergyDeviceConfigResponse(BaseModel):
@@ -72,6 +74,7 @@ class EnergyDeviceConfigResponse(BaseModel):
     equipment_id: str | None
     equipment_name: str | None
     remark: str | None
+    is_region_level: bool
     created_at: datetime
     updated_at: datetime
 
@@ -92,6 +95,11 @@ class EnergyDataResponse(BaseModel):
 class EnergyDataDeleteRequest(BaseModel):
     """批量删除能耗数据请求"""
     ids: list[StrUUID] = Field(..., min_length=1, max_length=200, description="能耗数据ID列表")
+
+
+class EnergyDataUpdateRequest(BaseModel):
+    """修改能耗数据请求"""
+    value: float = Field(..., description="修改后的能耗值")
 
 
 class CollectLogResponse(BaseModel):
@@ -147,7 +155,7 @@ class EnergyAlertRuleCreate(BaseModel):
     monitor_metric: MonitorMetric = Field(..., description="监控指标")
     threshold_type: ThresholdType = Field(..., description="阈值类型")
     threshold_value: float = Field(..., gt=0, description="阈值")
-    unit: str = Field(..., min_length=1, max_length=20, description="计量单位")
+    unit: str = Field(default="", max_length=20, description="计量单位（由能源类型自动确定，可不传）")
     alert_level: AlertLevel = Field(..., description="预警等级")
     notify_method: list[str] = Field(..., min_length=1, description="通知方式")
     notify_users: list[str] = Field(..., min_length=1, description="通知用户列表")
@@ -168,7 +176,7 @@ class EnergyAlertRuleUpdate(BaseModel):
     monitor_metric: MonitorMetric | None = Field(default=None)
     threshold_type: ThresholdType | None = Field(default=None)
     threshold_value: float | None = Field(default=None, gt=0)
-    unit: str | None = Field(default=None, min_length=1, max_length=20)
+    unit: str | None = Field(default=None, max_length=20, description="计量单位（变更能源类型时自动更新）")
     alert_level: AlertLevel | None = Field(default=None)
     notify_method: list[str] | None = Field(default=None, min_length=1)
     notify_users: list[str] | None = Field(default=None, min_length=1)
@@ -243,6 +251,10 @@ class EnergyWorkshopConfigCreate(BaseModel):
     )
     auto_notify_enabled: bool = Field(default=True, description="是否启用自动预警通知")
     is_enabled: bool = Field(default=True, description="是否启用该车间配置")
+    alert_rule_id: str | None = Field(default=None, description="关联的用户自定义预警规则ID")
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日通知时间 HH:MM"
+    )
 
 
 class EnergyWorkshopConfigUpdate(BaseModel):
@@ -251,6 +263,10 @@ class EnergyWorkshopConfigUpdate(BaseModel):
     heads: list[dict[str, str]] | None = Field(default=None, description="负责人列表")
     auto_notify_enabled: bool | None = Field(default=None, description="是否启用自动预警通知")
     is_enabled: bool | None = Field(default=None, description="是否启用该车间配置")
+    alert_rule_id: str | None = Field(default=None, description="关联的用户自定义预警规则ID")
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日通知时间 HH:MM"
+    )
 
 
 class EnergyWorkshopConfigResponse(BaseModel):
@@ -260,6 +276,9 @@ class EnergyWorkshopConfigResponse(BaseModel):
     auto_notify_enabled: bool
     is_enabled: bool
     last_checked_at: datetime | None
+    alert_rule_id: str | None
+    alert_rule_name: str | None = None  # 冗余字段，join 查询填充
+    notify_time: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -271,6 +290,17 @@ class PersonnelCandidate(BaseModel):
     name: str
     feishu_open_id: str
     department: str | None = None
+
+
+class AlertRuleCandidate(BaseModel):
+    """可选预警规则（供车间配置下拉框使用，仅返回用户手动创建的规则）。"""
+    id: StrUUID
+    rule_name: str
+    energy_type: str
+    alert_level: str
+    unit: str
+
+    model_config = {"from_attributes": True}
 
 
 # ── 能源类型可视化配置 ──
@@ -313,3 +343,132 @@ class EnergyTypeConfigResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ── 能源总耗推送配置 ──
+
+
+class EnergyDailyPushConfigCreate(BaseModel):
+    """创建能源日耗推送配置"""
+    name: str = Field(..., min_length=1, max_length=200, description="配置名称")
+    is_enabled: bool = Field(default=True, description="是否启用")
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日定时推送时间 HH:MM"
+    )
+    notify_users: list[dict[str, str]] = Field(
+        default_factory=list,
+        description='接收人列表 JSON: [{"name": "张三", "feishu_open_id": "ou_xxx"}]',
+    )
+    solar_device_id: StrUUID | None = Field(default=None, description="光伏发电设备配置ID")
+    pressure_device_id: StrUUID | None = Field(default=None, description="蒸汽差压发电设备配置ID")
+    rto1_gas_device_id: StrUUID | None = Field(default=None, description="一期RTO用气设备配置ID")
+    rto2_gas_device_id: StrUUID | None = Field(default=None, description="二期RTO用气设备配置ID")
+    rto1_elec_device_id: StrUUID | None = Field(default=None, description="一期RTO用电设备配置ID")
+    rto2_elec_device_id: StrUUID | None = Field(default=None, description="二期RTO用电设备配置ID")
+    remark: str | None = Field(default=None, max_length=500, description="备注")
+
+
+class EnergyDailyPushConfigUpdate(BaseModel):
+    """更新能源日耗推送配置"""
+    name: str | None = Field(default=None, min_length=1, max_length=200, description="配置名称")
+    is_enabled: bool | None = Field(default=None, description="是否启用")
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日定时推送时间 HH:MM"
+    )
+    notify_users: list[dict[str, str]] | None = Field(default=None, description="接收人列表")
+    solar_device_id: StrUUID | None = Field(default=None, description="光伏发电设备配置ID")
+    pressure_device_id: StrUUID | None = Field(default=None, description="蒸汽差压发电设备配置ID")
+    rto1_gas_device_id: StrUUID | None = Field(default=None, description="一期RTO用气设备配置ID")
+    rto2_gas_device_id: StrUUID | None = Field(default=None, description="二期RTO用气设备配置ID")
+    rto1_elec_device_id: StrUUID | None = Field(default=None, description="一期RTO用电设备配置ID")
+    rto2_elec_device_id: StrUUID | None = Field(default=None, description="二期RTO用电设备配置ID")
+    remark: str | None = Field(default=None, max_length=500, description="备注")
+
+
+class EnergyDailyPushConfigResponse(BaseModel):
+    id: StrUUID
+    name: str
+    is_enabled: bool
+    notify_time: str | None
+    notify_users: list[dict[str, str]]
+    solar_device_id: StrUUID | None
+    solar_device_name: str | None = None
+    pressure_device_id: StrUUID | None
+    pressure_device_name: str | None = None
+    rto1_gas_device_id: StrUUID | None
+    rto1_gas_device_name: str | None = None
+    rto2_gas_device_id: StrUUID | None
+    rto2_gas_device_name: str | None = None
+    rto1_elec_device_id: StrUUID | None
+    rto1_elec_device_name: str | None = None
+    rto2_elec_device_id: StrUUID | None
+    rto2_elec_device_name: str | None = None
+    last_sent_at: datetime | None
+    remark: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DailyReportSendRequest(BaseModel):
+    config_id: StrUUID = Field(..., description="推送配置ID")
+    target_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="目标日期 YYYY-MM-DD")
+
+
+# ── 氮气月度推送配置 ──
+
+
+class EnergyNitrogenPushConfigCreate(BaseModel):
+    """创建氮气月度推送配置"""
+    name: str = Field(..., min_length=1, max_length=200, description="配置名称")
+    is_enabled: bool = Field(default=True, description="是否启用")
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日定时推送时间 HH:MM"
+    )
+    notify_users: list[dict[str, str]] = Field(
+        default_factory=list,
+        description='接收人列表 JSON: [{"name": "张三", "feishu_open_id": "ou_xxx"}]',
+    )
+    nitrogen_device_ids: list[StrUUID] = Field(
+        default_factory=list, description="氮气设备配置ID列表"
+    )
+    monthly_guaranteed_consumption: float = Field(
+        ..., ge=0, description="月度保底消费量"
+    )
+    remark: str | None = Field(default=None, max_length=500, description="备注")
+
+
+class EnergyNitrogenPushConfigUpdate(BaseModel):
+    """更新氮气月度推送配置"""
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    is_enabled: bool | None = Field(default=None)
+    notify_time: str | None = Field(
+        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5
+    )
+    notify_users: list[dict[str, str]] | None = Field(default=None)
+    nitrogen_device_ids: list[StrUUID] | None = Field(default=None)
+    monthly_guaranteed_consumption: float | None = Field(default=None, ge=0)
+    remark: str | None = Field(default=None, max_length=500)
+
+
+class EnergyNitrogenPushConfigResponse(BaseModel):
+    id: StrUUID
+    name: str
+    is_enabled: bool
+    notify_time: str | None
+    notify_users: list[dict[str, str]]
+    nitrogen_device_ids: list[StrUUID]
+    nitrogen_device_names: list[str] = []
+    monthly_guaranteed_consumption: float
+    last_sent_at: datetime | None
+    remark: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NitrogenReportSendRequest(BaseModel):
+    config_id: StrUUID = Field(..., description="推送配置ID")
+    target_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="目标日期 YYYY-MM-DD")

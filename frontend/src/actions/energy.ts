@@ -32,6 +32,22 @@ import {
   updateWorkshopConfig as apiUpdateWorkshopConfig,
   deleteWorkshopConfig as apiDeleteWorkshopConfig,
   fetchWorkshopPersonnelCandidates,
+  fetchAvailableRules,
+  fetchWorkshopOptions,
+  fetchDailyPushConfigs,
+  fetchDailyPushConfigById,
+  createDailyPushConfig as apiCreateDailyPushConfig,
+  updateDailyPushConfig as apiUpdateDailyPushConfig,
+  deleteDailyPushConfig as apiDeleteDailyPushConfig,
+  sendDailyReport as apiSendDailyReport,
+  fetchDailyPushPersonnelCandidates,
+  fetchNitrogenPushConfigs,
+  fetchNitrogenPushConfigById,
+  createNitrogenPushConfig as apiCreateNitrogenPushConfig,
+  updateNitrogenPushConfig as apiUpdateNitrogenPushConfig,
+  deleteNitrogenPushConfig as apiDeleteNitrogenPushConfig,
+  sendNitrogenReport as apiSendNitrogenReport,
+  fetchNitrogenPushPersonnelCandidates,
 } from '@/lib/api/energy'
 import {
   CreateDeviceInput,
@@ -49,6 +65,12 @@ import {
   HistoryQueryParams,
   CreateWorkshopConfigInput,
   UpdateWorkshopConfigInput,
+  CreateDailyPushConfigInput,
+  UpdateDailyPushConfigInput,
+  DailyReportSendRequest,
+  CreateNitrogenPushConfigInput,
+  UpdateNitrogenPushConfigInput,
+  NitrogenReportSendRequest,
 } from '@/types/energy'
 
 // 数据源配置 Server Actions
@@ -202,5 +224,86 @@ export async function deleteWorkshopConfig(id: string) {
 
 export async function getWorkshopPersonnelCandidates() {
   return fetchWorkshopPersonnelCandidates()
+}
+
+export async function getAvailableRules() {
+  return fetchAvailableRules()
+}
+
+export async function getWorkshopOptions(energyType?: string) {
+  return fetchWorkshopOptions(energyType)
+}
+
+// 能源总耗推送配置 Server Actions
+export async function getDailyPushConfigs(page = 1, pageSize = 20, isEnabled?: boolean) {
+  return fetchDailyPushConfigs(page, pageSize, isEnabled)
+}
+
+export async function getDailyPushConfigById(id: string) {
+  return fetchDailyPushConfigById(id)
+}
+
+export async function createDailyPushConfig(data: CreateDailyPushConfigInput) {
+  const result = await apiCreateDailyPushConfig(data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function updateDailyPushConfig(id: string, data: UpdateDailyPushConfigInput) {
+  const result = await apiUpdateDailyPushConfig(id, data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function deleteDailyPushConfig(id: string) {
+  await apiDeleteDailyPushConfig(id)
+  revalidatePath('/energy/alerts')
+}
+
+export async function sendDailyReport(data: DailyReportSendRequest) {
+  const result = await apiSendDailyReport(data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function getDailyPushPersonnelCandidates() {
+  return fetchDailyPushPersonnelCandidates()
+}
+
+
+// 氮气月度推送配置 Server Actions
+export async function getNitrogenPushConfigs(page = 1, pageSize = 20, isEnabled?: boolean) {
+  return fetchNitrogenPushConfigs(page, pageSize, isEnabled)
+}
+
+export async function getNitrogenPushConfigById(id: string) {
+  return fetchNitrogenPushConfigById(id)
+}
+
+export async function createNitrogenPushConfig(data: CreateNitrogenPushConfigInput) {
+  const result = await apiCreateNitrogenPushConfig(data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function updateNitrogenPushConfig(id: string, data: UpdateNitrogenPushConfigInput) {
+  const result = await apiUpdateNitrogenPushConfig(id, data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function deleteNitrogenPushConfig(id: string) {
+  await apiDeleteNitrogenPushConfig(id)
+  revalidatePath('/energy/alerts')
+}
+
+export async function sendNitrogenReport(data: NitrogenReportSendRequest) {
+  const result = await apiSendNitrogenReport(data)
+  revalidatePath('/energy/alerts')
+  return result
+}
+
+export async function getNitrogenPushPersonnelCandidates() {
+  return fetchNitrogenPushPersonnelCandidates()
 }
 

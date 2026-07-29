@@ -48,19 +48,27 @@ export function CalibrationAlertPanel({ source }: Props) {
     }
   }
 
-  // 加载部门列表（独立于筛选结果，确保下拉选项始终完整）
+  // 加载部门列表（根据 source 只加载对应表的部门）
   useEffect(() => {
     async function loadDepts() {
       try {
-        const [instDepts, detDepts] = await Promise.all([
-          getInstrumentDepartments(),
-          getGasDetectorDepartments(),
-        ])
-        setDepartments([...new Set([...instDepts, ...detDepts].filter(Boolean))].sort() as string[])
+        if (source === 'instrument') {
+          const instDepts = await getInstrumentDepartments()
+          setDepartments(instDepts.filter(Boolean).sort() as string[])
+        } else if (source === 'gas_detector') {
+          const detDepts = await getGasDetectorDepartments()
+          setDepartments(detDepts.filter(Boolean).sort() as string[])
+        } else {
+          const [instDepts, detDepts] = await Promise.all([
+            getInstrumentDepartments(),
+            getGasDetectorDepartments(),
+          ])
+          setDepartments([...new Set([...instDepts, ...detDepts].filter(Boolean))].sort() as string[])
+        }
       } catch { /* 非关键，失败不影响主体功能 */ }
     }
     loadDepts()
-  }, [])
+  }, [source])
 
   const fetchAlerts = useCallback(async () => {
     setLoading(true)
@@ -146,7 +154,7 @@ export function CalibrationAlertPanel({ source }: Props) {
         columns={columns}
         dataSource={alerts}
         loading={loading}
-        pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{ defaultPageSize: 10, showTotal: (t) => `共 ${t} 条` }}
         size="small"
         scroll={{ x: 900 }}
       />

@@ -26,7 +26,7 @@ import {
   updateEnergyDevice,
   getEnergyDeviceById,
 } from '@/actions/energy'
-import { fetchPlatformsClient } from '@/lib/api/energy'
+import { fetchPlatformsClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 const { TextArea } = Input
 
@@ -46,6 +46,7 @@ const DEFAULT_VALUES = {
   collection_interval: 1,  // 小时
   monitor_level: 'normal',
   is_enabled: true,
+  is_region_level: false,
 }
 
 const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7]
@@ -92,6 +93,9 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const [equipmentLoading, setEquipmentLoading] = useState(false)
   const equipmentNameMap = useRef<Map<string, string>>(new Map())
 
+  // 能源类型选项（动态加载）
+  const [energyTypeOptions, setEnergyTypeOptions] = useState<{ label: string; value: string }[]>([])
+
   const {
     deviceDrawerOpen,
     deviceDrawerMode,
@@ -102,6 +106,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const isEdit = deviceDrawerMode === 'edit'
   const selectedPlatform = Form.useWatch('platform_code', form)
   const watchInterval = Form.useWatch('collection_interval', form)
+  const watchIsRegionLevel = Form.useWatch('is_region_level', form)
 
   // 获取平台列表
   const loadPlatforms = async () => {
@@ -198,6 +203,9 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     if (deviceDrawerOpen) {
       loadPlatforms()
       loadDepartments()
+      fetchEnabledTypeConfigsClient().then(configs => {
+        setEnergyTypeOptions(configs.map(c => ({ label: c.display_name, value: c.type_code })))
+      }).catch(() => {})
       if (isEdit && deviceDrawerId) {
         loadDeviceData(deviceDrawerId)
       } else {
@@ -462,15 +470,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               style={{ marginBottom: 16 }}
             >
               <Select
-                options={[
-                  { label: '电耗数据',   value: 'electricity' },
-                  { label: '水耗数据',   value: 'water' },
-                  { label: '蒸汽数据',   value: 'steam' },
-                  { label: '冷量数据',   value: 'cooling' },
-                  { label: '压缩空气数据', value: 'compressed_air' },
-                  { label: '氮气数据',   value: 'nitrogen' },
-                  { label: '天然气数据', value: 'natural_gas' },
-                ]}
+                options={energyTypeOptions}
                 style={{ height: 44 }}
               />
             </Form.Item>
@@ -497,20 +497,54 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               />
             </Form.Item>
 
-            <Form.Item
-              name="production_line"
-              label={
-                <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                  所属区域
-                </span>
-              }
-              style={{ marginBottom: 24 }}
+            {/* 区域级别开关 */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 16px',
+                marginBottom: 16,
+                borderRadius: 8,
+                background: '#f6f5f4',
+              }}
             >
-              <Input
-                placeholder="可选，如：A 区"
-                style={{ height: 44, borderRadius: 8 }}
-              />
-            </Form.Item>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
+                  区域级别
+                </div>
+                <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4 }}>
+                  开启后该数据源归为区域级别，需填写所属区域
+                </div>
+              </div>
+              <Form.Item name="is_region_level" valuePropName="checked" style={{ marginBottom: 0 }}>
+                <Switch
+                  onChange={(checked) => {
+                    if (!checked) {
+                      form.setFieldValue('production_line', null)
+                    }
+                  }}
+                />
+              </Form.Item>
+            </div>
+
+            {watchIsRegionLevel && (
+              <Form.Item
+                name="production_line"
+                label={
+                  <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
+                    所属区域
+                  </span>
+                }
+                rules={[{ required: true, message: '区域级别必须填写所属区域' }]}
+                style={{ marginBottom: 24 }}
+              >
+                <Input
+                  placeholder="如：A 区"
+                  style={{ height: 44, borderRadius: 8 }}
+                />
+              </Form.Item>
+            )}
 
             {/* ── 采集设置 ── */}
             <SectionLabel icon={<SettingOutlined />} text="采集设置" />

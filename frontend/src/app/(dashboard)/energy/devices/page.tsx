@@ -7,7 +7,8 @@ import { useEnergyStore } from '@/stores/energy'
 import { DeviceTable } from '@/components/energy/DeviceTable'
 import { DeviceDrawer } from '@/components/energy/DeviceDrawer'
 import { getEnergyDevices } from '@/actions/energy'
-import { EnergyDeviceConfig, PaginatedResponse } from '@/types/energy'
+import { EnergyDeviceConfig, PaginatedResponse, EnergyTypeMeta } from '@/types/energy'
+import { fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 export default function DevicesPage() {
   const { deviceFilters, setDeviceFilters, openDeviceDrawer } = useEnergyStore()
@@ -19,6 +20,21 @@ export default function DevicesPage() {
     page: 1,
     page_size: 10,
   })
+
+  // 能源类型元数据（动态加载）
+  const [typeMetadata, setTypeMetadata] = useState<EnergyTypeMeta[]>([])
+
+  useEffect(() => {
+    fetchEnabledTypeConfigsClient().then(configs => {
+      setTypeMetadata(configs.map(c => ({
+        type_code: c.type_code,
+        display_name: c.display_name,
+        unit: c.unit,
+        color: c.color,
+        icon: c.icon,
+      })))
+    }).catch(() => {})
+  }, [])
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -107,15 +123,10 @@ export default function DevicesPage() {
           style={{ width: 110, ...filledInputStyle }}
           value={deviceFilters.energy_type}
           onChange={(value) => setDeviceFilters({ energy_type: value, page: 1 })}
-          options={[
-            { label: '电耗数据',   value: 'electricity' },
-            { label: '水耗数据',   value: 'water' },
-            { label: '蒸汽数据',   value: 'steam' },
-            { label: '冷量数据',   value: 'cooling' },
-            { label: '压缩空气数据', value: 'compressed_air' },
-            { label: '氮气数据',   value: 'nitrogen' },
-            { label: '天然气数据', value: 'natural_gas' },
-          ]}
+          options={typeMetadata.map(t => ({
+            label: t.display_name,
+            value: t.type_code,
+          }))}
         />
 
         <Select
@@ -157,6 +168,7 @@ export default function DevicesPage() {
         loading={loading}
         total={data.total}
         onRefresh={fetchData}
+        typeMetadata={typeMetadata}
       />
 
       <DeviceDrawer onRefresh={fetchData} />
