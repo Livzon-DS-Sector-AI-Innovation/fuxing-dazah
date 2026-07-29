@@ -446,3 +446,93 @@ ENERGY_WORKSHOP_ALERT_TASK = TaskDefinition(
     settings_toggle_key="ENERGY_WORKSHOP_ALERT_ENABLED",
     module="energy",
 )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 能源日耗推送定时检查
+# ═══════════════════════════════════════════════════════════════
+
+
+async def energy_daily_push_coro() -> None:
+    """每分钟检查一次能源日耗推送配置。
+
+    由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
+    每个配置可设置独立的 notify_time（HH:MM），到达指定时间后生成并发送飞书报告。
+    防重复：通过 DB 中 EnergyDailyPushConfig.last_sent_at 的日期判定，同一天不重复发送。
+    """
+    from app.core.config import get_settings
+    from app.core.database import async_session_factory
+
+    settings = get_settings()
+    if not settings.ENERGY_DAILY_PUSH_ENABLED:
+        return
+
+    try:
+        async with async_session_factory() as db:
+            from app.modules.energy.service import evaluate_daily_push
+
+            result = await evaluate_daily_push(db)
+            await db.commit()
+
+            logger.info(
+                "能源日耗推送检查完成: checked=%d, sent=%d",
+                result["checked"], result["sent"],
+            )
+    except Exception:
+        logger.exception("能源日耗推送检查异常")
+
+
+ENERGY_DAILY_PUSH_TASK = TaskDefinition(
+    name="energy.daily_push",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+    ),
+    coro=energy_daily_push_coro,
+    settings_toggle_key="ENERGY_DAILY_PUSH_ENABLED",
+    module="energy",
+)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 氮气月度推送定时检查
+# ═══════════════════════════════════════════════════════════════
+
+
+async def energy_nitrogen_push_coro() -> None:
+    """每分钟检查一次氮气月度推送配置。
+
+    由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
+    每个配置可设置独立的 notify_time（HH:MM），到达指定时间后生成并发送飞书报告。
+    防重复：通过 DB 中 EnergyNitrogenPushConfig.last_sent_at 的日期判定，同一天不重复发送。
+    """
+    from app.core.config import get_settings
+    from app.core.database import async_session_factory
+
+    settings = get_settings()
+    if not settings.ENERGY_NITROGEN_PUSH_ENABLED:
+        return
+
+    try:
+        async with async_session_factory() as db:
+            from app.modules.energy.service import evaluate_nitrogen_push
+
+            result = await evaluate_nitrogen_push(db)
+            await db.commit()
+
+            logger.info(
+                "氮气月度推送检查完成: checked=%d, sent=%d",
+                result["checked"], result["sent"],
+            )
+    except Exception:
+        logger.exception("氮气月度推送检查异常")
+
+
+ENERGY_NITROGEN_PUSH_TASK = TaskDefinition(
+    name="energy.nitrogen_push",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+    ),
+    coro=energy_nitrogen_push_coro,
+    settings_toggle_key="ENERGY_NITROGEN_PUSH_ENABLED",
+    module="energy",
+)
