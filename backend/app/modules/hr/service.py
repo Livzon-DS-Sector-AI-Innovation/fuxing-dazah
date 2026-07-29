@@ -1544,6 +1544,52 @@ class CandidateService:
     async def get_status_logs(self, candidate_id: UUID) -> list[CandidateStatusLog]:
         return await self.log_repo.list_by_candidate(candidate_id)
 
+    async def onboard(self, candidate_id: UUID) -> tuple[Candidate, OnboardingRecord, str]:
+        """候选人入职：校验状态、生成工号、创建入职记录、更新岗位需求 hired_count。"""
+        from datetime import date as date_type
+        import uuid as _uuid
+
+        from app.modules.hr.models import OnboardingRecord
+        from app.modules.hr.repository import CandidateRepository, JobRequirementRepository
+        from app.modules.hr.schemas import CandidateUpdate
+
+        # SELECT FOR UPDATE 防止并发入职
+        candidate_repo = CandidateRepository(self.repo.session)
+        c = await candidate_repo.get_by_id_for_update(candidate_id)
+        if not c:
+            raise NotFoundException("候选人", str(candidate_id))
+        if c.status != "已录用":
+            raise ValueError("候选人状态必须为「已录用」才能入职")
+
+        # 生成工号
+        emp_no = f"ZP{date_type.today().strftime('%y%m%d')}{str(_uuid.uuid4())[:4].upper()}"
+
+        onboarding = OnboardingRecord(
+            employee_number=emp_no,
+            name=c.name or "",
+            department=c.department or "未分配",
+            position=c.position or "未分配",
+            hire_date=date_type.today(),
+            phone=c.phone,
+            email=c.email,
+            education=c.education,
+            school=c.school,
+            major=c.major,
+            source="recruitment",
+        )
+        self.repo.session.add(onboarding)
+        await self.repo.session.flush()
+
+        # 更新候选人状态
+        await self.update(candidate_id, CandidateUpdate(status="已入职", offer_status="已接受"))
+
+        # 更新岗位需求 hired_count
+        if c.job_requirement_id:
+            jd_repo = JobRequirementRepository(self.repo.session)
+            await jd_repo.increment_hired_count(c.job_requirement_id)
+
+        return c, onboarding, emp_no
+
 
 class InterviewService:
     def __init__(self, session: AsyncSession) -> None:
@@ -1723,6 +1769,10 @@ class CandidateReviewService:
         if not reviewer:
             raise ValueError("岗位需求未设置负责人，无法推送审核")
 
+        # 候选人状态前置校验：已入职/已录用/已拒绝 不可推送审核
+        if c.status in ("已录用", "已入职", "已拒绝"):
+            raise ValueError(f"候选人状态为「{c.status}」，无法推送审核")
+
         rv = CandidateReview(
             candidate_id=candidate_id,
             job_requirement_id=c.job_requirement_id,
@@ -1761,9 +1811,11 @@ class CandidateReviewService:
         rv.reviewed_at = datetime.now()
         result = await self.repo.update(rv)
 
-        # 候选人状态更新
+        # 候选人状态更新（需校验候选人仍在待审核状态，防止已录用/已入职候选人被覆盖）
         c = await self.candidate_repo.get_by_id(rv.candidate_id)
         if c:
+            if c.status not in ("待部门审核", "面试中"):
+                raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
             new_status = "面试中" if decision == "已同意" else "已拒绝"
             old_status = c.status
             c.status = new_status

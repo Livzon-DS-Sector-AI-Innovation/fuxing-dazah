@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
 import { App, Button, Tabs, Upload } from 'antd'
 import { UploadOutlined } from '@ant-design/icons'
-import { fetchEmployees, fetchDepartments, API_BASE } from '@/lib/hr'
+import { fetchEmployeesAction, fetchDepartmentsAction, uploadEmployees } from '@/actions/hr'
 import { Employee, Department } from '@/types/hr'
 import { useHrStore } from '@/stores/hr'
 import EmployeeTable from './EmployeeTable'
@@ -49,7 +49,7 @@ export default function EmployeeProfileClient({
 
   const loadData = useCallback(async () => {
     try {
-      const res = await fetchEmployees({
+      const res = await fetchEmployeesAction({
         keyword: searchKeyword || undefined,
         department: activeDepartment || undefined,
         status: filterStatus || undefined,
@@ -64,7 +64,7 @@ export default function EmployeeProfileClient({
 
   const loadDepartments = useCallback(async () => {
     try {
-      const res = await fetchDepartments({ page_size: 100 })
+      const res = await fetchDepartmentsAction({ page_size: 100 })
       setDepartments(res.data)
     } catch {
       setDepartments([])
@@ -128,12 +128,7 @@ export default function EmployeeProfileClient({
         <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={async (file) => {
           const fd = new FormData(); fd.append('file', file as File)
           try {
-            const r = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, { method: 'POST', body: fd, credentials: 'include' })
-            const d = await r.json()
-            if (!r.ok) {
-              const errMsg = d.message || d.detail || `HTTP ${r.status}`
-              throw new Error(errMsg)
-            }
+            const d = await uploadEmployees(fd)
             const { created, updated, errors } = d.data
             if (errors && errors.length > 0) {
               modal.warning({

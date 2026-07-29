@@ -75,7 +75,10 @@ async def send_email(
             server.sendmail(from_addr, [to], msg.as_string())
         finally:
             if server:
-                server.quit()
+                try:
+                    server.quit()
+                except Exception:
+                    pass  # 关闭连接失败不掩盖原始异常
 
     try:
         await loop.run_in_executor(None, _send)

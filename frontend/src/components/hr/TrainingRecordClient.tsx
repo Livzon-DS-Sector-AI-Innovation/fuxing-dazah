@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space, Spin } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
-import { fetchEmployees, fetchOnboardingTrainingRecord } from '@/lib/hr'
+import { fetchEmployeesAction, fetchOnboardingTrainingRecord } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 export default function TrainingRecordClient() {
   const { message } = App.useApp()
@@ -15,7 +16,7 @@ export default function TrainingRecordClient() {
 
   useEffect(() => {
     setLoading(true)
-    fetchEmployees({ page_size: 200 })
+    fetchEmployeesAction({ page_size: 200 })
       .then((res) => {
         // eslint-disable-next-line no-console
         console.log('fetchEmployees success:', res)
@@ -40,7 +41,8 @@ export default function TrainingRecordClient() {
     }
     setDownloading(true)
     try {
-      await fetchOnboardingTrainingRecord(selectedEmployee.id, selectedEmployee.name)
+      const r = await fetchOnboardingTrainingRecord(selectedEmployee.id, selectedEmployee.name)
+      downloadBase64File(r.base64, r.filename)
       message.success('培训记录已导出')
     } catch (err: any) {
       message.error(err.message || '导出失败')

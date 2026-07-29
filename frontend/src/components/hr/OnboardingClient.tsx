@@ -5,7 +5,7 @@ import { App, Button, Card, Table, Space, Input, Tag, Select, Popconfirm } from 
 import type { ColumnsType } from 'antd/es/table'
 import { SearchOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { OnboardingRecord } from '@/types/hr'
-import { fetchOnboardingRecords, fetchDepartments, API_BASE } from '@/lib/hr'
+import { fetchOnboardingRecords, fetchDepartmentsAction, deleteOnboardingRecord } from '@/actions/hr'
 import EmployeeForm from './EmployeeForm'
 
 interface OnboardingClientProps {
@@ -26,7 +26,7 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
 
   useEffect(() => {
-    fetchDepartments({ page_size: 100 }).then(res => {
+    fetchDepartmentsAction({ page_size: 100 }).then(res => {
       setDepartments((res.data || []).map((d: any) => ({ value: d.name, label: d.name })))
     }).catch(() => {})
   }, [])
@@ -63,9 +63,10 @@ export default function OnboardingClient({ initialRecords, initialTotal }: Onboa
     { title: '操作', key: 'action', width: 80,
       render: (_: any, record: OnboardingRecord) => (
         <Popconfirm title="确认删除？" onConfirm={async () => {
-          const res = await fetch(`${API_BASE}/api/v1/hr/onboarding-records/${record.id}`, { method: 'DELETE', credentials: 'include' as const })
-          if (res.ok) { message.success('已删除'); loadData() }
-          else message.error('删除失败')
+          try {
+            await deleteOnboardingRecord(record.id)
+            message.success('已删除'); loadData()
+          } catch { message.error('删除失败') }
         }}>
           <Button type="text" size="small" danger icon={<DeleteOutlined />} />
         </Popconfirm>

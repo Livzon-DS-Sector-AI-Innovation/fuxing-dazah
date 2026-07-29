@@ -4,8 +4,7 @@ import { useState, useEffect } from 'react'
 import { App, Button, Card, Form, InputNumber, Select, Spin } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
-import { createAnnualTrainingPlan } from '@/actions/hr'
-import { fetchDepartments } from '@/lib/hr'
+import { createAnnualTrainingPlan, fetchDepartmentsAction } from '@/actions/hr'
 
 export default function AnnualPlanForm() {
   const { message } = App.useApp()
@@ -17,7 +16,7 @@ export default function AnnualPlanForm() {
 
   useEffect(() => {
     setLoading(true)
-    fetchDepartments({ page_size: 200 })
+    fetchDepartmentsAction({ page_size: 200 })
       .then((res) => {
         const names = (res.data || []).map((d: any) => d.name)
         setDepartments(names)

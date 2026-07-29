@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Space, Table, Tabs, Tag, message, Modal } from 'antd'
 import { CheckCircleOutlined, CloseCircleOutlined, SendOutlined } from '@ant-design/icons'
-import { API_BASE } from '@/lib/hr'
+import { fetchOnboardingApplications, fetchOffboardingApplications, approveApplication } from '@/actions/hr'
 
 export default function OnboardingApplyClient() {
   const [onboardingApps, setOnboardingApps] = useState<any[]>([])
@@ -16,8 +16,8 @@ export default function OnboardingApplyClient() {
   const loadData = async () => {
     try {
       const [onbRes, offbRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/hr/onboarding-applications`, { credentials: 'include' }).then(r => r.json()),
-        fetch(`${API_BASE}/api/v1/hr/offboarding-applications`, { credentials: 'include' }).then(r => r.json()),
+        fetchOnboardingApplications(),
+        fetchOffboardingApplications(),
       ])
       setOnboardingApps(onbRes.data || [])
       setOffboardingApps(offbRes.data || [])
@@ -25,7 +25,6 @@ export default function OnboardingApplyClient() {
   }
 
   const handleApprove = async (type: 'onboarding' | 'offboarding', appId: string, status: string) => {
-    const prefix = type === 'onboarding' ? 'onboarding' : 'offboarding'
     Modal.confirm({
       title: status === '已通过' ? '确认通过' : '确认拒绝',
       content: status === '已通过'
@@ -33,12 +32,7 @@ export default function OnboardingApplyClient() {
         : '拒绝此申请？',
       onOk: async () => {
         try {
-          const res = await fetch(`${API_BASE}/api/v1/hr/${prefix}-applications/${appId}/approve`, {
-            method: 'PUT', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status }),
-            credentials: 'include',
-          })
-          if (!res.ok) throw new Error('操作失败')
+          await approveApplication(type, appId, status)
           message.success(status === '已通过' ? '审批通过' : '已拒绝')
           loadData()
         } catch (err: any) { message.error(err.message || '操作失败') }

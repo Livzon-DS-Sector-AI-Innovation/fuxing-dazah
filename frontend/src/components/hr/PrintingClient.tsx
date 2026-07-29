@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Col, Row, Select } from 'antd'
 import { DownloadOutlined, PrinterOutlined, SolutionOutlined, IdcardOutlined } from '@ant-design/icons'
-import { downloadRoster, downloadTrainingRegistration } from '@/lib/hr'
+import { downloadRoster, downloadTrainingRegistration } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 import { Department } from '@/types/hr'
 
 interface PrintingClientProps {
@@ -24,14 +25,20 @@ const documents: PrintableDocument[] = [
     title: '员工花名册',
     desc: '按部门下载员工花名册（Word），不选部门时下载全部',
     icon: <SolutionOutlined className="text-2xl text-[var(--color-primary)]" />,
-    download: downloadRoster,
+    download: async (department?: string) => {
+      const r = await downloadRoster(department)
+      downloadBase64File(r.base64, r.filename)
+    },
   },
   {
     key: 'training-registration',
     title: '个人培训登记表',
     desc: '以员工档案自动填写，整个部门合并为一个文件（每人一页）',
     icon: <IdcardOutlined className="text-2xl text-[var(--color-primary)]" />,
-    download: downloadTrainingRegistration,
+    download: async (department?: string) => {
+      const r = await downloadTrainingRegistration(department)
+      downloadBase64File(r.base64, r.filename)
+    },
   },
   {
     key: 'exam-paper',
@@ -40,8 +47,9 @@ const documents: PrintableDocument[] = [
     icon: <PrinterOutlined className="text-2xl text-[var(--color-primary)]" />,
     download: async (paperId?: string) => {
       if (!paperId) return
-      const { downloadExamPaper } = await import('@/lib/hr')
-      await downloadExamPaper(paperId)
+      const { downloadExamPaper } = await import('@/actions/hr')
+      const r = await downloadExamPaper(paperId)
+      downloadBase64File(r.base64, r.filename)
     },
   },
 ]
@@ -56,8 +64,8 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
   const [departments, setDepartments] = useState(initialDepartments)
   useEffect(() => {
     if (initialDepartments.length === 0) {
-      import('@/lib/hr').then(({ fetchDepartments }) => {
-        fetchDepartments({ page_size: 200 }).then(res => setDepartments(res.data || [])).catch(() => {})
+      import('@/actions/hr').then(({ fetchDepartmentsAction }) => {
+        fetchDepartmentsAction({ page_size: 200 }).then(res => setDepartments(res.data || [])).catch(() => {})
       })
     }
   }, [])
@@ -68,7 +76,7 @@ export default function PrintingClient({ initialDepartments }: PrintingClientPro
     if (examPapers.length > 0) return
     setPapersLoading(true)
     try {
-      const { fetchExamPapers } = await import('@/lib/hr')
+      const { fetchExamPapers } = await import('@/actions/hr')
       const res = await fetchExamPapers({ page_size: 200 })
       setExamPapers((res.data || []).map((p: any) => ({
         value: p.id,

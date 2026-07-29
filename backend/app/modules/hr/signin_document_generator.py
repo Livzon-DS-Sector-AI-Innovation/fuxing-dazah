@@ -88,13 +88,33 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
     _set_cell_text(table.rows[1].cells[1], data.department)
     # Row 1, Col 3: 培训方式
     _set_cell_text(table.rows[1].cells[3], data.training_method or "")
-    # Row 2, Col 1: 课时
-    hours = _compute_duration_hours(data.training_time_start, data.training_time_end)
+    # Row 2, Col 1: 课时（仅按面授时间计算）
+    face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
+    face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
+    hours = _compute_duration_hours(face_start, face_end)
     _set_cell_text(table.rows[2].cells[1], hours)
     # Row 2, Col 3: 考核方式
     _set_cell_text(table.rows[2].cells[3], data.assessment_method or "")
-    # Row 3, Col 1: 培训日期 (merged cols 1-3)
-    _set_cell_text(table.rows[3].cells[1], str(data.training_date) if data.training_date else "")
+    # Row 3, Col 1: 培训日期含时间 (merged cols 1-3)
+    def _fmt_date(d, t_start, t_end, label):
+        if not d or not t_start:
+            return ""
+        ds = f"{d.year}年{d.month}月{d.day}日"
+        if t_start and t_end:
+            return f"{label}：{ds} {t_start}—{t_end}"
+        return f"{label}：{ds} {t_start}"
+    face_date = getattr(data, "face_date", None) or data.training_date
+    self_date = getattr(data, "self_study_date", None)
+    self_start = getattr(data, "self_study_time_start", None)
+    self_end = getattr(data, "self_study_time_end", None)
+    parts = []
+    face_part = _fmt_date(face_date, face_start, face_end, "面授")
+    if face_part:
+        parts.append(face_part)
+    if self_date and self_start:
+        parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
+    date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
+    _set_cell_text(table.rows[3].cells[1], date_text)
 
 
 def _fill_employee_rows(table, employee_names: list[str], employee_departments: dict[str, str], default_department: str) -> None:

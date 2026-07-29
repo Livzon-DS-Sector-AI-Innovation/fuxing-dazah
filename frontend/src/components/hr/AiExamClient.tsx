@@ -30,7 +30,8 @@ import {
   ExamExportData,
   TrueFalseQuestion,
 } from '@/types/hr'
-import { generateExamQuestions, exportExam } from '@/lib/hr'
+import { generateExamQuestions, exportExam, saveExamPaper } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 const { Title, Text } = Typography
 
@@ -41,7 +42,7 @@ const BORDER_STYLE_CENTER = { border: '1px solid #1f2937', padding: '8px', textA
 export default function AiExamClient() {
   // 手动输入字段
   const [title, setTitle] = useState('')
-  const [assessmentDate, setAssessmentDate] = useState(dayjs().format('YYYY-MM-DD'))
+  const [assessmentDate, setAssessmentDate] = useState('')
 
   // 上传和出题状态
   const [fileList, setFileList] = useState<UploadFile[]>([])
@@ -84,10 +85,13 @@ export default function AiExamClient() {
         multi_choice_count: multiEnabled ? multiCount : 0,
         fill_blank_count: fillEnabled ? fillCount : 0,
       }
-      const res: ExamGenerateResponse = await generateExamQuestions(
-        fileList[0].originFileObj,
-        config
-      )
+      const fd = new FormData()
+      fd.append('file', fileList[0].originFileObj)
+      fd.append('choice_count', String(config.choice_count))
+      fd.append('true_false_count', String(config.true_false_count))
+      fd.append('multi_choice_count', String(config.multi_choice_count))
+      fd.append('fill_blank_count', String(config.fill_blank_count))
+      const res: ExamGenerateResponse = await generateExamQuestions(fd)
       if (res.data?.choice_questions) setChoiceQuestions(res.data.choice_questions)
       if (res.data?.true_false_questions) setTrueFalseQuestions(res.data.true_false_questions)
       if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
@@ -116,22 +120,14 @@ export default function AiExamClient() {
         title: title.trim(),
         examiner: '',
         exam_date: '',
-        assessment_date: assessmentDate,
+        assessment_date: '',
         choice_questions: choiceQuestions,
         true_false_questions: trueFalseQuestions,
         multi_choice_questions: multiQuestions,
         fill_blank_questions: fillQuestions,
       }
-      const blob = await exportExam(data)
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      const safeTitle = title.replace(/[\\/:*?"<>|]/g, '_')
-      link.download = `${safeTitle}.docx`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
+      const r = await exportExam(data)
+      downloadBase64File(r.base64, r.filename)
       message.success('试卷导出成功')
     } catch (err: any) {
       message.error(err.message || '导出失败')
@@ -151,28 +147,21 @@ export default function AiExamClient() {
       return
     }
     try {
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
-      const res = await fetch(`${API}/api/v1/hr/exam-papers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          subject: title,
-          training_date: assessmentDate,
-          questions: {
-            choice_questions: choiceQuestions,
-            true_false_questions: trueFalseQuestions,
-            multi_choice_questions: multiQuestions,
-            fill_blank_questions: fillQuestions,
-          },
-          full_score: 100,
-          choice_count: choiceQuestions.length,
-          true_false_count: trueFalseQuestions.length,
-          multi_choice_count: multiQuestions.length,
-          fill_blank_count: fillQuestions.length,
-        }),
+      await saveExamPaper({
+        subject: title,
+        training_date: assessmentDate,
+        questions: {
+          choice_questions: choiceQuestions,
+          true_false_questions: trueFalseQuestions,
+          multi_choice_questions: multiQuestions,
+          fill_blank_questions: fillQuestions,
+        },
+        full_score: 100,
+        choice_count: choiceQuestions.length,
+        true_false_count: trueFalseQuestions.length,
+        multi_choice_count: multiQuestions.length,
+        fill_blank_count: fillQuestions.length,
       })
-      if (!res.ok) throw new Error('保存失败')
       message.success('试卷已保存，可在「资料下载」中查看下载')
     } catch (err: any) {
       message.error(err.message || '保存失败')

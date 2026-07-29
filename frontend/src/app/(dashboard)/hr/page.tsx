@@ -9,7 +9,7 @@ import {
   AuditOutlined, ClockCircleOutlined, SwapOutlined, FileProtectOutlined,
 } from '@ant-design/icons'
 
-import { API_BASE } from '@/lib/hr'
+import { fetchDashboardStats } from '@/actions/hr'
 
 const modules = [
   { key: 'profile', title: '员工档案', desc: '管理员工基本信息、入职离职、岗位变动等', icon: <TeamOutlined className="text-2xl text-[var(--color-primary)]" />, path: '/hr/profile' },
@@ -36,8 +36,8 @@ export default function HrPage() {
   const [contractModal, setContractModal] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/dashboard-stats`, { credentials: 'include' })
-      .then(r => r.json()).then(d => setStats(d.data || {})).catch(() => {})
+    fetchDashboardStats()
+      .then(d => setStats(d.data || {})).catch(() => {})
   }, [])
 
   const transfers = stats.recent_transfer_list || []

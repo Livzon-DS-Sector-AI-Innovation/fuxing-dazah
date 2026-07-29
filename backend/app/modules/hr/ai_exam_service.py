@@ -216,14 +216,12 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict | None = 
 
 
 def _find_exam_template() -> str:
-    """查找试卷模板文件。"""
-    from pathlib import Path
-    base = Path(__file__).parent.parent.parent.parent
-    for p in [base / "assets/hr/试卷模板.docx", Path("assets/hr/试卷模板.docx")]:
-        if p.exists():
-            return str(p)
-    # 无模板时返回空字符串，走空白文档兜底
-    return ""
+    """查找试卷模板文件，复用 find_hr_template 的多路径搜索逻辑。"""
+    from app.modules.hr.template_utils import find_hr_template
+    try:
+        return str(find_hr_template("试卷模板.docx"))
+    except FileNotFoundError:
+        return ""
 
 
 def export_exam(data: dict) -> BytesIO:
@@ -254,16 +252,9 @@ def export_exam(data: dict) -> BytesIO:
         doc.add_heading(title, level=1)
         doc.add_paragraph("")
 
-    # 考试信息行
-    info = []
+    # 出卷人信息行
     if data.get("examiner"):
-        info.append(f"出卷人：{data['examiner']}")
-    if data.get("exam_date"):
-        info.append(f"考试日期：{data['exam_date']}")
-    if data.get("assessment_date"):
-        info.append(f"评估日期：{data['assessment_date']}")
-    if info:
-        doc.add_paragraph("  |  ".join(info))
+        doc.add_paragraph(f"出卷人：{data['examiner']}")
         doc.add_paragraph("")
 
     choice_qs = data.get("choice_questions", [])

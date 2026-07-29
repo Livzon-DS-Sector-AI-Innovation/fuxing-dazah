@@ -8,7 +8,12 @@ import {
 import { SearchOutlined, UploadOutlined, EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 
-import { API_BASE } from '@/lib/hr'
+import {
+  fetchSopDepartments, fetchTrainers, createTrainer, updateTrainer, deleteTrainer,
+  uploadTrainers, clearTrainers,
+  fetchDeptTrainingPersonnel, createDeptTrainingPersonnel, updateDeptTrainingPersonnel,
+  deleteDeptTrainingPersonnel, uploadDeptTrainingPersonnel,
+} from '@/actions/hr'
 
 // ─── 内训师台账 Tab ───
 
@@ -27,20 +32,18 @@ function TrainersTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
-      .then((r) => r.json())
+    fetchSopDepartments()
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
+      .catch(() => {})
   }, [])
 
   const load = async (p = 1) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ page: String(p), page_size: '50' })
-      if (keyword) params.set('keyword', keyword)
-      if (dept) params.set('department', dept)
-      if (level1) params.set('is_level1', level1)
-      const res = await fetch(`${API_BASE}/api/v1/hr/trainers?${params.toString()}`, { credentials: 'include' })
-      const d = await res.json()
+      const d = await fetchTrainers({
+        keyword: keyword || undefined, department: dept, is_level1: level1,
+        page: p, page_size: 50,
+      })
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
     } finally { setLoading(false) }
@@ -76,30 +79,25 @@ function TrainersTab() {
     if (payload.confirmation_date) payload.confirmation_date = payload.confirmation_date.format('YYYY-MM-DD')
     if (payload.confirmation_reminder) payload.confirmation_reminder = payload.confirmation_reminder.format('YYYY-MM-DD')
 
-    const url = editing
-      ? `${API_BASE}/api/v1/hr/trainers/${editing.id}`
-      : `${API_BASE}/api/v1/hr/trainers`
-    const method = editing ? 'PUT' : 'POST'
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      credentials: 'include',
-    })
-    if (res.ok) {
+    try {
+      if (editing) await updateTrainer(editing.id, payload)
+      else await createTrainer(payload)
       message.success(editing ? '已更新' : '已创建')
       setModalOpen(false)
       load(page)
-    } else {
-      const d = await res.json()
-      message.error(d.message || '操作失败')
+    } catch (err: any) {
+      message.error(err.message || '操作失败')
     }
   }
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/hr/trainers/${id}`, { method: 'DELETE', credentials: 'include' })
-    if (res.ok) { message.success('已删除'); load(page) }
-    else message.error('删除失败')
+    try {
+      await deleteTrainer(id)
+      message.success('已删除')
+      load(page)
+    } catch {
+      message.error('删除失败')
+    }
   }
 
   return (
@@ -111,19 +109,21 @@ function TrainersTab() {
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
             const fd = new FormData(); fd.append('file', file as File)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/trainers/upload`, { method: 'POST', body: fd, credentials: 'include' })
-              const d = await res.json()
-              if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-              else message.error(d.message || '上传失败')
+              const d = await uploadTrainers(fd)
+              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
               load(1)
-            } catch { message.error('上传失败') }
+            } catch (err) { message.error((err as Error)?.message || '上传失败') }
           }}>
             <Button icon={<UploadOutlined />}>上传内训师</Button>
           </Upload>
           <Popconfirm title="确认清空全部内训师？此操作不可恢复" onConfirm={async () => {
-            const res = await fetch(`${API_BASE}/api/v1/hr/trainers`, { method: 'DELETE', credentials: 'include' })
-            if (res.ok) { message.success('已清空'); load(1) }
-            else message.error('清空失败')
+            try {
+              await clearTrainers()
+              message.success('已清空')
+              load(1)
+            } catch {
+              message.error('清空失败')
+            }
           }}>
             <Button danger>清空全部</Button>
           </Popconfirm>
@@ -206,19 +206,17 @@ function DeptPersonnelTab() {
   const [form] = Form.useForm()
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
-      .then((r) => r.json())
+    fetchSopDepartments()
       .then((res) => setDepts((res.data || []).map((d: string) => ({ value: d, label: d }))))
+      .catch(() => {})
   }, [])
 
   const load = async (p = 1) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ page: String(p), page_size: '50' })
-      if (keyword) params.set('keyword', keyword)
-      if (dept) params.set('department', dept)
-      const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel?${params.toString()}`, { credentials: 'include' })
-      const d = await res.json()
+      const d = await fetchDeptTrainingPersonnel({
+        keyword: keyword || undefined, department: dept, page: p, page_size: 50,
+      })
       setData(d.data || [])
       setTotal(d.meta?.total || 0)
     } finally { setLoading(false) }
@@ -239,30 +237,25 @@ function DeptPersonnelTab() {
 
   const handleSave = async () => {
     const vals = await form.validateFields()
-    const url = editing
-      ? `${API_BASE}/api/v1/hr/dept-training-personnel/${editing.id}`
-      : `${API_BASE}/api/v1/hr/dept-training-personnel`
-    const method = editing ? 'PUT' : 'POST'
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(vals),
-      credentials: 'include',
-    })
-    if (res.ok) {
+    try {
+      if (editing) await updateDeptTrainingPersonnel(editing.id, vals)
+      else await createDeptTrainingPersonnel(vals)
       message.success(editing ? '已更新' : '已创建')
       setModalOpen(false)
       load(page)
-    } else {
-      const d = await res.json()
-      message.error(d.message || '操作失败')
+    } catch (err: any) {
+      message.error(err.message || '操作失败')
     }
   }
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/${id}`, { method: 'DELETE', credentials: 'include' })
-    if (res.ok) { message.success('已删除'); load(page) }
-    else message.error('删除失败')
+    try {
+      await deleteDeptTrainingPersonnel(id)
+      message.success('已删除')
+      load(page)
+    } catch {
+      message.error('删除失败')
+    }
   }
 
   return (
@@ -274,14 +267,10 @@ function DeptPersonnelTab() {
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
             const fd = new FormData(); fd.append('file', file as File)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/dept-training-personnel/upload`, {
-                method: 'POST', body: fd, credentials: 'include',
-              })
-              const d = await res.json()
-              if (res.ok) message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
-              else message.error(d.message || '上传失败')
+              const d = await uploadDeptTrainingPersonnel(fd)
+              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`)
               load(1)
-            } catch { message.error('上传失败') }
+            } catch (err) { message.error((err as Error)?.message || '上传失败') }
           }}>
             <Button icon={<UploadOutlined />}>上传Excel</Button>
           </Upload>

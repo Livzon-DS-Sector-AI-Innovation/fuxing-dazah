@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { Select, Collapse, Tag, Spin, Empty, Button, App, Input, Modal, Form, Popconfirm, Upload, Space } from 'antd'
 import { SearchOutlined, PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons'
 
-import { API_BASE } from '@/lib/hr'
+import { fetchSopDepartments, fetchSopCatalog, uploadSopCatalog, deletePositionByName, deleteSopItem, createPositionTraining, fetchPositions } from '@/actions/hr'
 
 interface SopItem {
   id: string
@@ -33,8 +33,7 @@ export default function SopCatalogPage() {
 
   // 加载部门列表
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/hr/sop-catalog/departments`, { credentials: 'include' as const })
-      .then(r => r.json())
+    fetchSopDepartments()
       .then(res => setDepartments(res.data || []))
       .catch(() => {})
   }, [])
@@ -46,12 +45,7 @@ export default function SopCatalogPage() {
       let all: SopItem[] = []
       let page = 1
       while (true) {
-        const params = new URLSearchParams()
-        params.set('page', String(page))
-        params.set('page_size', '200')
-        if (selectedDept) params.set('department', selectedDept)
-        const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog?${params}`, { credentials: 'include' })
-        const d = await res.json()
+        const d = await fetchSopCatalog({ department: selectedDept, page, page_size: 200 })
         const items = d.data || []
         all = all.concat(items)
         if (items.length < 200) break
@@ -102,16 +96,12 @@ export default function SopCatalogPage() {
           <Upload accept=".xlsx,.xls" showUploadList={false} customRequest={async ({ file }) => {
             const fd = new FormData(); fd.append('file', file as File)
             try {
-              const res = await fetch(`${API_BASE}/api/v1/hr/sop-catalog/upload`, { method: 'POST', body: fd, credentials: 'include' })
-              const d = await res.json()
-              if (res.ok) {
-                if (d.data.errors?.length) {
-                  Modal.warning({ title: `上传完成但有${d.data.errors.length}条错误`, content: <ul>{d.data.errors.slice(0,10).map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>, width: 500 })
-                }
-                message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
+              const d = await uploadSopCatalog(fd)
+              if (d.data.errors?.length) {
+                Modal.warning({ title: `上传完成但有${d.data.errors.length}条错误`, content: <ul>{d.data.errors.slice(0,10).map((e:string,i:number)=><li key={i}>{e}</li>)}</ul>, width: 500 })
               }
-              else message.error(d.message || '上传失败')
-            } catch { message.error('上传失败') }
+              message.success(`上传完成：新增${d.data.created}，更新${d.data.updated}`); loadAll()
+            } catch (err) { message.error((err as Error)?.message || '上传失败') }
           }}>
             <Button icon={<UploadOutlined />}>上传SOP</Button>
           </Upload>
@@ -147,9 +137,8 @@ export default function SopCatalogPage() {
                     <Tag className="ml-2">{catEntries.length} 个培训类别</Tag>
                     <Tag color="blue">{totalSops} 条SOP</Tag>
                     <Popconfirm title={`删除岗位「${posName}」及其全部培训内容？`} onConfirm={async () => {
-                      const res = await fetch(`${API_BASE}/api/v1/hr/positions/by-name/${encodeURIComponent(posName)}?department=${encodeURIComponent(selectedDept || '')}`, { method: 'DELETE', credentials: 'include' })
-                      if (res.ok) { message.success('已删除'); loadAll() }
-                      else message.error('删除失败')
+                      try { await deletePositionByName(posName, selectedDept || ''); message.success('已删除'); loadAll() }
+                      catch { message.error('删除失败') }
                     }}>
                       <Button type="text" size="small" danger icon={<DeleteOutlined />} style={{ marginLeft: 8 }} />
                     </Popconfirm>
@@ -161,7 +150,7 @@ export default function SopCatalogPage() {
                     <Tag color="blue" closable onClose={async (e) => {
                       e.preventDefault()
                       for (const s of sops) {
-                        await fetch(`${API_BASE}/api/v1/hr/sop-catalog/${s.id}`, { method: 'DELETE', credentials: 'include' })
+                        await deleteSopItem(s.id).catch(() => {})
                       }
                       message.success(`已删除「${catName}」`)
                       loadAll()
@@ -181,20 +170,17 @@ export default function SopCatalogPage() {
             ...vals,
             file_name: vals.file_name || vals.training_category,
           }
-          const res = await fetch(`${API_BASE}/api/v1/hr/position-trainings`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload), credentials: 'include' as const,
-          })
-          if (res.ok) { message.success('创建成功'); setModalOpen(false); form.resetFields(); loadAll() }
-          else { const d = await res.json(); message.error(d.message || '创建失败') }
+          try {
+            await createPositionTraining(payload)
+            message.success('创建成功'); setModalOpen(false); form.resetFields(); loadAll()
+          } catch (err) { message.error((err as Error)?.message || '创建失败') }
         }} okText="创建">
         <Form form={form} layout="vertical" className="mt-4">
           <Form.Item name="department" label="部门" rules={[{ required: true }]}>
             <Select placeholder="选择部门" showSearch options={departments.map(d => ({value:d,label:d}))}
               onChange={async (dept) => {
-                const res = await fetch(`${API_BASE}/api/v1/hr/positions?department=${encodeURIComponent(dept)}`, { credentials: 'include' as const })
-                const d = await res.json()
-                setPositions((d.data || []).map((p: any) => p.name))
+                const list = await fetchPositions(dept)
+                setPositions(list.map((p) => p.name))
               }} />
           </Form.Item>
           <Form.Item name="position_name" label="岗位" rules={[{ required: true }]}>

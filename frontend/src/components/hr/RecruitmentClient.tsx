@@ -7,13 +7,11 @@ import { App, Button, Card, DatePicker, Empty, Form, Input, InputNumber, Modal, 
 import { PlusOutlined, UploadOutlined, SendOutlined } from '@ant-design/icons'
 import CandidateCardView from './CandidateCardView'
 import {
-  fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
-  fetchCandidateComparison, fetchRecruitmentStats, API_BASE,
-} from '@/lib/hr'
-import {
   createJobRequirement, updateJobRequirement, deleteJobRequirement,
   createCandidate, deleteCandidate,
   sendOfferAction, parseResumeAction,
+  fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
+  fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
 } from '@/actions/hr'
 import type { JobRequirement, Candidate } from '@/types/hr'
 
@@ -183,9 +181,7 @@ export default function RecruitmentClient() {
     const fd = new FormData()
     Object.entries(v).forEach(([k, val]) => fd.append(k, (k.endsWith('_date') ? fmtDate(val) : (val as string)) || ''))
     try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/candidates/${offerCandidate!.id}/preview-offer`, { method: 'POST', body: fd, credentials: 'include' })
-      if (!r.ok) throw new Error('预览失败')
-      const html = await r.text()
+      const html = await previewOffer(offerCandidate!.id, fd)
       const w = window.open('', '_blank')
       if (w) { w.document.write(html); w.document.close() }
     } catch (err: any) { msg.error(err.message || '预览失败') }

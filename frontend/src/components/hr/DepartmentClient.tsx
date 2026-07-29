@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation'
 import { App, Button, Table, Space, Popconfirm, Input, Modal, Tag, Descriptions } from 'antd'
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { Department, Employee } from '@/types/hr'
-import { fetchDepartmentsAction, deleteDepartment } from '@/actions/hr'
-import { fetchEmployees } from '@/lib/hr'
+import { fetchDepartmentsAction, fetchEmployeesAction, deleteDepartment } from '@/actions/hr'
 import DepartmentForm from './DepartmentForm'
 import TeamClient from './TeamClient'
 
@@ -108,7 +107,7 @@ export default function DepartmentClient({
       let page = 1
       const pageSize = 200
       while (true) {
-        const res = await fetchEmployees({ department: deptName, page, page_size: pageSize })
+        const res = await fetchEmployeesAction({ department: deptName, page, page_size: pageSize })
         const data = res.data || []
         allEmployees = allEmployees.concat(data)
         if (data.length < pageSize) break

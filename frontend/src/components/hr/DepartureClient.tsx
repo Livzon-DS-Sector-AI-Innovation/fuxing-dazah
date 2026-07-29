@@ -10,8 +10,15 @@ import {
   DeleteOutlined,
   SendOutlined } from '@ant-design/icons'
 import { DepartureRecord } from '@/types/hr'
-import { fetchDepartureRecords, fetchDepartments, API_BASE } from '@/lib/hr'
-import { deleteDepartureRecordAction } from '@/actions/hr'
+import {
+  fetchDepartureRecords,
+  fetchDepartmentsAction,
+  fetchEmployeesAction,
+  createDepartureRecord,
+  previewDepartureCertificate,
+  sendDepartureCertificate,
+  deleteDepartureRecordAction,
+} from '@/actions/hr'
 
 interface DepartureClientProps {
   initialRecords: DepartureRecord[]
@@ -46,7 +53,7 @@ export default function DepartureClient({
   const [certSending, setCertSending] = useState(false)
 
   useEffect(() => {
-    fetchDepartments({ page_size: 200 }).then(r => {
+    fetchDepartmentsAction({ page_size: 200 }).then(r => {
       setDepartments((r.data||[]).map((d:any) => ({ value: d.name, label: d.name })))
     })
   }, [])
@@ -56,10 +63,7 @@ export default function DepartureClient({
     createForm.setFieldValue('employee', undefined)
     if (!dept) { setDeptEmployees([]); return }
     try {
-      const url = `${API_BASE}/api/v1/hr/employees?department=${encodeURIComponent(dept)}&page=1&page_size=200`
-      const res = await fetch(url, { credentials: 'include' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const d = await res.json()
+      const d = await fetchEmployeesAction({ department: dept, page: 1, page_size: 200 })
       const list = (d.data||[]).map((e:any) => ({
         value: e.id, label: `${e.employee_number} ${e.name} (${e.position||''})`,
         name: e.name, department: e.department, position: e.position
@@ -74,17 +78,13 @@ export default function DepartureClient({
       const vals = await createForm.validateFields()
       setCreateLoading(true)
       const emp = deptEmployees.find((e:any) => e.value === vals.employee)
-      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records`, { credentials: 'include' as const,
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: emp?.name || '', department: selectedDept,
-          position: emp?.position || '',
-          offboarding_date: vals.offboarding_date?.format('YYYY-MM-DD'),
-          offboarding_type: vals.offboarding_type || '辞职',
-          reason: vals.reason || '',
-        }),
+      await createDepartureRecord({
+        name: emp?.name || '', department: selectedDept,
+        position: emp?.position || '',
+        offboarding_date: vals.offboarding_date?.format('YYYY-MM-DD'),
+        offboarding_type: vals.offboarding_type || '辞职',
+        reason: vals.reason || '',
       })
-      if (!res.ok) throw new Error('创建失败')
       message.success('离职记录创建成功')
       setCreateOpen(false); createForm.resetFields(); loadData()
     } catch (err: any) { message.error(err.message || '创建失败') }
@@ -123,9 +123,7 @@ export default function DepartureClient({
   const handlePreviewCert = async () => {
     if (!certRecord) return
     try {
-      const r = await fetch(`${API_BASE}/api/v1/hr/departure-records/${certRecord.id}/preview-certificate`, { method: 'POST', credentials: 'include' })
-      if (!r.ok) throw new Error('预览失败')
-      const html = await r.text()
+      const html = await previewDepartureCertificate(certRecord.id)
       const w = window.open('', '_blank')
       if (w) { w.document.write(html); w.document.close() }
     } catch (err: any) { message.error(err.message || '预览失败') }
@@ -137,8 +135,7 @@ export default function DepartureClient({
     try {
       const fd = new FormData()
       fd.append('employee_email', certEmail)
-      const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${certRecord.id}/send-certificate`, { method: 'POST', body: fd, credentials: 'include' })
-      if (!res.ok) { const d = await res.json(); throw new Error(d.message || '发送失败') }
+      await sendDepartureCertificate(certRecord.id, fd)
       message.success('离职证明已发送')
       setCertOpen(false)
     } catch (err: any) { message.error(err.message || '发送失败') }

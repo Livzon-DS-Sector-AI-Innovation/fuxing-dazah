@@ -59,16 +59,16 @@ class AiChatService:
                 yield {"type": "content", "text": content}
 
     @staticmethod
-    async def call_json(prompt: str, system_prompt: str | None = None) -> dict:
+    async def call_json(prompt: str, system_prompt: str | None = None, model: str | None = None) -> dict:
         """Non-streaming call that returns parsed JSON. Used for structured evaluation."""
         import json
         import re
 
         settings = get_settings()
-        from app.modules.hr.config import HR_AI_MODEL as _model
         api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
-        model = _model or "deepseek-chat"
+        from app.modules.hr.config import HR_AI_MODEL
+        model = model or HR_AI_MODEL or "deepseek-chat"
         messages: list[dict[str, str]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})

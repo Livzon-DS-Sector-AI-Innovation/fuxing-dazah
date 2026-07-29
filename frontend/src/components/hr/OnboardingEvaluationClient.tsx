@@ -18,7 +18,8 @@ import {
   FileTextOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { generateOnboardingEvaluation } from '@/lib/hr'
+import { generateOnboardingEvaluation } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 export default function OnboardingEvaluationClient() {
   const [form] = Form.useForm()
@@ -80,7 +81,8 @@ export default function OnboardingEvaluationClient() {
           ? values.approval_date.format('YYYY-MM-DD')
           : undefined,
       }
-      await generateOnboardingEvaluation(payload)
+      const r = await generateOnboardingEvaluation(payload)
+      downloadBase64File(r.base64, r.filename)
       message.success('员工上岗评估表已生成')
     } catch (err: any) {
       message.error(err.message || '生成失败')

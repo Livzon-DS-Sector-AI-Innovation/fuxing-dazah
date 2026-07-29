@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card, Tag, Button, Input, Popconfirm, message, Select, Space, Table } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 
-import { API_BASE } from '@/lib/hr'
+import { fetchPositions, createPosition, deletePositionByName } from '@/actions/hr'
 
 interface PositionRow { department: string; name: string; categories?: string[] }
 
@@ -18,11 +18,8 @@ export default function PositionManager() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const deptParam = filterDept ? `?department=${encodeURIComponent(filterDept)}` : ''
-      const res = await fetch(`${API_BASE}/api/v1/hr/positions${deptParam}`, { credentials: 'include' })
-      if (!res.ok) { setPositions([]); return }
-      const data = (await res.json()).data || []
-      setPositions(data.map((p: any) => ({ department: p.department, name: p.name, categories: p.categories || [] })))
+      const data = await fetchPositions(filterDept)
+      setPositions(data.map((p) => ({ department: p.department, name: p.name, categories: p.categories || [] })))
     } catch { setPositions([]) }
     finally { setLoading(false) }
   }
@@ -31,11 +28,7 @@ export default function PositionManager() {
     const name = newName.trim(); const dept = newDept.trim()
     if (!name || !dept) { message.warning('请填写部门和岗位'); return }
     try {
-      await fetch(`${API_BASE}/api/v1/hr/positions`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ department: dept, name }),
-        credentials: 'include',
-      })
+      await createPosition({ department: dept, name }).catch(() => {})
       message.success('已添加')
       setNewName(''); loadData()
     } catch { message.error('添加失败') }
@@ -43,9 +36,7 @@ export default function PositionManager() {
 
   const handleDelete = async (dept: string, name: string) => {
     try {
-      await fetch(`${API_BASE}/api/v1/hr/positions/by-name/${encodeURIComponent(name)}?department=${encodeURIComponent(dept)}`, {
-        method: 'DELETE', credentials: 'include',
-      })
+      await deletePositionByName(name, dept).catch(() => {})
       message.success('已删除')
       loadData()
     } catch { message.error('删除失败') }

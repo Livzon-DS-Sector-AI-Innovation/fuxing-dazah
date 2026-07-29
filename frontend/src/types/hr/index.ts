@@ -186,6 +186,9 @@ export interface EmployeeUpdateInput {
   transfer_history?: string
   remarks?: string[]
   status?: string
+  probation_end_date?: string | null
+  regularization_date?: string
+  departure_date?: string
 }
 
 export interface EmployeeListResponse {
@@ -800,4 +803,84 @@ export interface QuestionBankItem {
   department?: string | null
   usage_count: number
   last_used_date?: string | null
+}
+
+// ─── 培训文档生成 / 台账页面 / 职位选项（原 lib/hr/api.ts 中的类型） ───
+
+export interface TrainingSignInSheetData {
+  training_date: string
+  training_time_start?: string
+  training_time_end?: string
+  department: string
+  training_subject?: string
+  topic: string
+  instructor?: string
+  location?: string
+  training_method?: string
+  assessment_method?: string
+  employee_names: string[]
+  remarks?: string
+}
+
+export interface TrainingNotificationData {
+  department: string
+  training_date?: string
+  training_date_start?: string
+  training_date_end?: string
+  subject: string
+  training_time_start?: string
+  training_time_end?: string
+  face_to_face_time_start?: string
+  face_to_face_time_end?: string
+  self_study_time_start?: string
+  self_study_time_end?: string
+  location?: string
+  trainer?: string
+  training_method?: string
+  assessment_method?: string
+  content?: string
+  trainee_names: string[]
+  issuer_department?: string
+  issue_date?: string
+}
+
+export interface OnboardingEvaluationData {
+  employee_name: string
+  employee_number?: string
+  gender?: string
+  department_position?: string
+  hire_date?: string
+  training_period?: string
+  regularization_date?: string
+  assessment_contents?: string[]
+  comprehensive_comment?: string
+  is_qualified?: boolean
+  assigned_position?: string
+  assessment_method?: string
+  dept_manager_signature?: string
+  signature_date?: string
+  remarks?: string
+  dept_manager_agree?: boolean
+  hr_manager_agree?: boolean
+  qa_manager_agree?: boolean
+  dept_manager?: string
+  hr_manager?: string
+  qa_manager?: string
+  approval_date?: string
+}
+
+export interface TrainingLedgerPageRecord {
+  id: string
+  employee_number: string
+  employee_name: string
+  department?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface PositionOption {
+  id: string
+  department: string
+  name: string
+  categories?: string[]
 }

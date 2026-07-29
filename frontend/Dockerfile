@@ -19,9 +19,11 @@ ENV SHARP_DIST_BASE_URL=https://npmmirror.com/mirrors/sharp
 
 RUN pnpm install --frozen-lockfile
 
-# 客户端 API 地址（构建时 bake 进 JS），默认值可通过 docker compose build --build-arg 覆盖
+# API 地址（构建时 bake 进 JS + rewrite 代理），默认值可通过 docker compose build --build-arg 覆盖
 ARG NEXT_PUBLIC_API_BASE_URL=http://192.168.3.100:8000
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+ARG API_BASE_URL=http://192.168.3.100:8000
+ENV API_BASE_URL=${API_BASE_URL}
 
 # 复制源码（.env.production 中的值会被 ARG/ENV 覆盖）
 COPY . .
@@ -54,7 +56,7 @@ USER nextjs
 
 EXPOSE 3000
 
-# API_BASE_URL 是服务端变量，运行时通过 docker run -e 覆盖
-ENV API_BASE_URL=http://localhost:8000
+# API_BASE_URL 是服务端变量，运行时通过 docker run -e 或 docker-compose environment 覆盖
+ENV API_BASE_URL=http://192.168.3.100:8000
 
 CMD ["node", "server.js"]
