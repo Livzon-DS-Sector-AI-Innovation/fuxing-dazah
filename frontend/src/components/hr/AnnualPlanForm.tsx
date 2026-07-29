@@ -5,7 +5,7 @@ import { App, Button, Card, Form, InputNumber, Select, Spin } from 'antd'
 import { SaveOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { createAnnualTrainingPlan } from '@/actions/hr'
-import { fetchDepartments } from '@/lib/api/hr'
+import { fetchDepartments } from '@/lib/hr'
 
 export default function AnnualPlanForm() {
   const { message } = App.useApp()
@@ -52,7 +52,7 @@ export default function AnnualPlanForm() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" description="加载中..." />
       </div>
     )
   }

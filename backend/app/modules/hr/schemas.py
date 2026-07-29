@@ -77,7 +77,9 @@ class EmployeeBase(BaseModel):
     job_category: str | None = Field(None, max_length=32, description="职类")
     level: str | None = Field(None, max_length=32, description="级别")
     concurrent_departments: str | None = Field(None, max_length=256, description="兼任部门")
+    concurrent_variety: str | None = Field(None, max_length=256, description="兼任品种")
     variety: str | None = Field(None, max_length=128, description="品种")
+    certificates: str | None = Field(None, max_length=512, description="证书")
 
     # Qualifications
     qualifications: list[str] | None = Field(None, description="职称／职业资格")
@@ -255,6 +257,7 @@ class TrainingSignInSheetInput(BaseModel):
     training_method: str | None = Field(None, max_length=32, description="培训方式")
     assessment_method: str | None = Field(None, max_length=32, description="考核方式")
     employee_names: list[str] = Field(default_factory=list, description="应出席受训人员姓名列表")
+    employee_departments: dict[str, str] = Field(default_factory=dict, description="员工姓名→部门映射")
     remarks: str | None = Field(None, max_length=512, description="备注")
 
 
@@ -708,6 +711,9 @@ class AnnualTrainingPlanItemBase(BaseModel):
     target_audience: str | None = Field(None, max_length=256, description="培训对象")
     position_and_count: str | None = Field(None, max_length=256, description="参加岗位/参加人数")
     training_method: str | None = Field(None, max_length=64, description="培训方式")
+    location: str | None = Field(None, max_length=128, description="培训地点")
+    assessment_method: str | None = Field(None, max_length=64, description="考核方式")
+    notes: str | None = Field(None, max_length=512, description="注意事项")
     training_hours: float | None = Field(None, description="培训学时")
     confirmer: str | None = Field(None, max_length=64, description="确认者")
     confirm_date: date | None = Field(None, description="确认日期")
@@ -783,6 +789,48 @@ class TrainerListResponse(BaseModel):
     meta: dict | None = None
 
 
+# ─── Department Training Personnel Schemas ───
+
+
+class DeptTrainingPersonnelResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    display_department: str
+    variety: str | None = None
+    department: str
+    training_admin: str | None = None
+    department_head: str | None = None
+    level1_trainer: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class DeptTrainingPersonnelCreate(BaseModel):
+    display_department: str = Field(..., max_length=128)
+    variety: str | None = Field(None, max_length=64)
+    department: str = Field(..., max_length=128)
+    training_admin: str | None = Field(None, max_length=256)
+    department_head: str | None = Field(None, max_length=64)
+    level1_trainer: str | None = Field(None, max_length=64)
+
+
+class DeptTrainingPersonnelUpdate(BaseModel):
+    display_department: str | None = Field(None, max_length=128)
+    variety: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=128)
+    training_admin: str | None = Field(None, max_length=256)
+    department_head: str | None = Field(None, max_length=64)
+    level1_trainer: str | None = Field(None, max_length=64)
+
+
+class DeptTrainingPersonnelListResponse(BaseModel):
+    code: int = 0
+    message: str = "ok"
+    data: list[DeptTrainingPersonnelResponse] = Field(default_factory=list)
+    meta: dict | None = None
+
+
 # ─── SOP Catalog Schemas ───
 
 class SopCatalogResponse(BaseModel):
@@ -795,8 +843,253 @@ class SopCatalogResponse(BaseModel):
     position_name: str | None = None
 
 
+class BatchScoreItem(BaseModel):
+    id: UUID
+    assessment_result: str | None = None
+
+
+class BatchScoreUpdate(BaseModel):
+    records: list[BatchScoreItem]
+
+
 class SopCatalogListResponse(BaseModel):
     code: int = 0
     message: str = "ok"
     data: list[SopCatalogResponse] = Field(default_factory=list)
     meta: dict | None = None
+
+
+class TransferCreate(BaseModel):
+    """创建异动记录的请求体"""
+    employee_id: UUID
+    transfer_type: str = Field(default="调动", max_length=16)
+    from_department: str | None = Field(None, max_length=64)
+    to_department: str | None = Field(None, max_length=64)
+    from_position: str | None = Field(None, max_length=64)
+    to_position: str | None = Field(None, max_length=64)
+    effective_date: date
+    reason: str | None = Field(None, max_length=256)
+
+
+# ─── Recruitment: Job Requirement Schemas ───
+
+
+class JobRequirementCreate(BaseModel):
+    position_name: str = Field(..., max_length=64)
+    department: str = Field(..., max_length=64)
+    headcount: int = Field(default=1, ge=1)
+    requirements: str | None = None
+    urgency: str | None = Field(None, max_length=8, description="紧急/普通")
+    owner: str | None = Field(None, max_length=64)
+    deadline: date | None = None
+
+
+class JobRequirementUpdate(BaseModel):
+    position_name: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    headcount: int | None = Field(None, ge=1)
+    requirements: str | None = None
+    status: str | None = Field(None, max_length=16)
+    urgency: str | None = Field(None, max_length=8)
+    owner: str | None = Field(None, max_length=64)
+    deadline: date | None = None
+
+
+class JobRequirementResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    position_name: str
+    department: str
+    headcount: int
+    hired_count: int
+    requirements: str | None = None
+    status: str
+    urgency: str | None = None
+    owner: str | None = None
+    deadline: date | None = None
+    created_at: datetime | None = None
+
+
+# ─── Recruitment: Candidate Schemas ───
+
+
+class CandidateCreate(BaseModel):
+    name: str = Field(..., max_length=64)
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=128)
+    position: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    gender: str | None = Field(None, max_length=8)
+    school: str | None = Field(None, max_length=128)
+    education: str | None = Field(None, max_length=16)
+    major: str | None = Field(None, max_length=64)
+    graduation_date: date | None = None
+    resume_url: str | None = Field(None, max_length=512)
+    status: str = Field(default="待筛选", max_length=16)
+    recommendation_level: str | None = Field(None, max_length=8)
+    job_requirement_id: UUID | None = None
+    candidate_type: str = Field(default="职能", max_length=8, description="普工/职能")
+    source: str | None = Field(None, max_length=32)
+    expected_salary: str | None = Field(None, max_length=32)
+    current_company: str | None = Field(None, max_length=128)
+    work_years: int | None = None
+    notes: str | None = None
+
+
+class CandidateUpdate(BaseModel):
+    name: str | None = Field(None, max_length=64)
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=128)
+    position: str | None = Field(None, max_length=64)
+    department: str | None = Field(None, max_length=64)
+    gender: str | None = Field(None, max_length=8)
+    school: str | None = Field(None, max_length=128)
+    education: str | None = Field(None, max_length=16)
+    major: str | None = Field(None, max_length=64)
+    graduation_date: date | None = None
+    status: str | None = Field(None, max_length=16)
+    recommendation_level: str | None = Field(None, max_length=8)
+    job_requirement_id: UUID | None = None
+    candidate_type: str | None = Field(None, max_length=8)
+    offer_status: str | None = Field(None, max_length=16)
+    offer_sent_at: date | None = None
+    source: str | None = Field(None, max_length=32)
+    expected_salary: str | None = Field(None, max_length=32)
+    current_company: str | None = Field(None, max_length=128)
+    work_years: int | None = None
+    notes: str | None = None
+
+
+class CandidateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    phone: str | None = None
+    email: str | None = None
+    position: str | None = None
+    department: str | None = None
+    gender: str | None = None
+    school: str | None = None
+    education: str | None = None
+    major: str | None = None
+    graduation_date: date | None = None
+    resume_url: str | None = None
+    status: str
+    recommendation_level: str | None = None
+    job_requirement_id: UUID | None = None
+    candidate_type: str
+    offer_status: str | None = None
+    offer_sent_at: date | None = None
+    source: str | None = None
+    expected_salary: str | None = None
+    current_company: str | None = None
+    work_years: int | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class CandidateStatusTransition(BaseModel):
+    """候选人状态流转请求"""
+    status: str = Field(..., max_length=16)
+    remark: str | None = Field(None, max_length=256)
+
+
+# ─── Recruitment: Interview Schemas ───
+
+
+class InterviewCreate(BaseModel):
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_type: str = Field(default="初试", max_length=16, description="初试/复试/终试")
+    interview_date: date | None = None
+    interviewer: str | None = Field(None, max_length=64)
+    location: str | None = Field(None, max_length=256)
+    notes: str | None = None
+
+
+class InterviewUpdate(BaseModel):
+    interview_type: str | None = Field(None, max_length=16)
+    interview_date: date | None = None
+    interviewer: str | None = Field(None, max_length=64)
+    location: str | None = Field(None, max_length=256)
+    status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
+    transcript_text: str | None = None
+    notes: str | None = None
+
+
+class InterviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_type: str
+    interview_date: date | None = None
+    interviewer: str | None = None
+    location: str | None = None
+    status: str
+    transcript_text: str | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+
+
+# ─── Recruitment: AI Evaluation Schemas ───
+
+
+class AiEvaluationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    interview_id: UUID | None = None
+    jd_match_score: float | None = None
+    professional_score: float | None = None
+    communication_score: float | None = None
+    learning_score: float | None = None
+    stability_score: float | None = None
+    overall_score: float | None = None
+    strengths: str | None = None
+    weaknesses: str | None = None
+    ai_summary: str | None = None
+    risk_flags: str | None = None
+    model_version: str | None = None
+    evaluated_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class CandidateComparisonItem(BaseModel):
+    """候选人对比视图单项"""
+    candidate_id: UUID
+    candidate_name: str
+    evaluation: AiEvaluationResponse | None = None
+    interviews: list[InterviewResponse] = Field(default_factory=list)
+    recommendation_level: str | None = None
+    status: str
+
+
+# ─── Recruitment: Candidate Review Schemas ───
+
+
+class PushReviewRequest(BaseModel):
+    pushed_by: str | None = Field(None, description="推送人")
+    push_note: str | None = Field(None, description="HR推送备注")
+
+
+class DecideReviewRequest(BaseModel):
+    review_id: str = Field(..., description="审核记录ID")
+    decision: str = Field(..., max_length=16, description="已同意/已拒绝")
+    review_comment: str | None = Field(None, description="审核意见（拒绝时必填）")
+
+
+class CandidateReviewResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None = None
+    pushed_by: str | None = None
+    push_note: str | None = None
+    reviewer: str | None = None
+    status: str
+    review_comment: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime | None = None

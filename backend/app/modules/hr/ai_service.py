@@ -13,12 +13,12 @@ from app.core.config import get_settings
 
 
 class AiChatService:
-    """Service for streaming chat completions via Moonshot API."""
+    """Service for streaming chat completions via DeepSeek API."""
 
-    def __init__(self, api_key: str, model: str = "moonshot-v1-32k") -> None:
+    def __init__(self, api_key: str, model: str = "deepseek-chat") -> None:
         self.client = openai.AsyncOpenAI(
             api_key=api_key,
-            base_url="https://api.moonshot.cn/v1",
+            base_url="https://api.deepseek.com/v1",
         )
         self.model = model
 
@@ -59,10 +59,41 @@ class AiChatService:
                 yield {"type": "content", "text": content}
 
     @staticmethod
+    async def call_json(prompt: str, system_prompt: str | None = None) -> dict:
+        """Non-streaming call that returns parsed JSON. Used for structured evaluation."""
+        import json
+        import re
+
+        settings = get_settings()
+        from app.modules.hr.config import HR_AI_MODEL as _model
+        api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
+        client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        model = _model or "deepseek-chat"
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=0.3,
+            max_tokens=4096,
+        )
+        content = resp.choices[0].message.content or ""
+        # 去掉 markdown 代码围栏
+        content = re.sub(r"```(?:json)?\s*", "", content)
+        content = content.strip()
+        # 提取 JSON
+        m = re.search(r"\{[\s\S]*\}", content)
+        if m:
+            return json.loads(m.group())
+        return json.loads(content)
+
+    @staticmethod
     def build_system_prompt(page: str | None = None) -> str:
         """Build the system prompt for the HR assistant."""
-        settings = get_settings()
-        prompt = settings.HR_AI_SYSTEM_PROMPT
+        from app.modules.hr.config import HR_AI_SYSTEM_PROMPT
+        prompt = HR_AI_SYSTEM_PROMPT
 
         if page:
             prompt += f"\n当前页面：{page}"

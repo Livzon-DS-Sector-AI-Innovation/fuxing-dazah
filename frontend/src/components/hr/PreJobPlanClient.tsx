@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
-import { fetchEmployees, fetchPrejobTrainingPlan } from '@/lib/api/hr'
+import { fetchEmployees, fetchPrejobTrainingPlan } from '@/lib/hr'
 
 const DEPT_CONTENT_MAP: Record<string, string[]> = {
   '人事行政部': [

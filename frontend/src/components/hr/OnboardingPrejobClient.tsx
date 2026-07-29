@@ -5,9 +5,27 @@ import { App, Button, Card, Select, Space, Input, DatePicker } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { Employee } from '@/types/hr'
+import { logApiError } from '@/lib/hr'
 import {
   fetchOnboardingRecords,
-} from '@/lib/api/hr'
+  API_BASE,
+} from '@/lib/hr'
+
+/** 安全的 JSON fetch：检查 HTTP 状态码 + 容错非 JSON 响应 */
+async function safeFetch(url: string, init?: RequestInit): Promise<any> {
+  let r: Response
+  try { r = await fetch(url, init) }
+  catch { throw new Error('无法连接后端服务，请确认后端已启动') }
+  const text = await r.text()
+  if (!r.ok) {
+    let errMsg = `HTTP ${r.status}`
+    try { const body = JSON.parse(text); if (body.message) errMsg = body.message }
+    catch { errMsg += `: ${text.slice(0, 200)}` }
+    throw new Error(errMsg)
+  }
+  try { return JSON.parse(text) }
+  catch { throw new Error(`服务器返回非JSON响应: ${text.slice(0, 200)}`) }
+}
 
 const CELL = { border: '1px solid #999', padding: '6px 10px', fontSize: '13px' } as const
 const LABEL = { ...CELL, background: '#f5f5f5', fontWeight: 600, textAlign: 'center' as const, width: '15%' }
@@ -19,40 +37,43 @@ export default function OnboardingPrejobClient() {
   const [loading, setLoading] = useState(false)
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null)
   const [downloadingWord, setDownloadingWord] = useState(false)
+  const [downloadingRecord, setDownloadingRecord] = useState(false)
+  const [downloadingPermit, setDownloadingPermit] = useState(false)
   const [selectedSops, setSelectedSops] = useState<any[]>([])
   const [trainers, setTrainers] = useState<{value:string,label:string}[]>([])
 
   useEffect(() => {
-    setLoading(true)
-    fetchOnboardingRecords({ page_size: 200 })
-      .then((res) => setEmployees(res.data || []))
-      .catch((err) => message.error('加载入职台账失败: ' + (err.message || '未知错误')))
-      .finally(() => setLoading(false))
+    loadEmployees()
   }, [])
 
-  const handleSearch = async (keyword: string) => {
-    if (!keyword || keyword.length < 1) return
+  const loadEmployees = async (keyword?: string) => {
     setLoading(true)
     try {
-      const res = await fetchOnboardingRecords({ keyword, page_size: 30 })
-      setEmployees(res.data || [])
+      const sp = new URLSearchParams()
+      if (keyword) sp.set('keyword', keyword)
+      const d = await safeFetch(`${API_BASE}/api/v1/hr/employees/training-candidates?${sp}`, { credentials: 'include' })
+      setEmployees(d.data || [])
     } catch (err: any) {
-      message.error('搜索失败: ' + (err.message || '未知错误'))
+      message.error('加载失败: ' + (err.message || '未知错误'))
     } finally { setLoading(false) }
+  }
+
+  const handleSearch = async (keyword: string) => {
+    loadEmployees(keyword || undefined)
   }
 
   const selectedEmployee = employees.find((e: any) => e.id === selectedEmployeeId)
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-
-  // 选中员工后，根据岗位自动加载关联培训大类
+  // 选中员工后，根据岗位+部门自动加载关联培训大类
   useEffect(() => {
     if (!selectedEmployee) return
     const pos = selectedEmployee.position
+    const dept = selectedEmployee.department
     if (!pos) return
 
-    fetch(`${API_BASE}/api/v1/hr/position-trainings?position_name=${encodeURIComponent(pos)}`)
-      .then(r => r.json())
+    const params = new URLSearchParams({ position_name: pos })
+    if (dept) params.set('department', dept)
+    safeFetch(`${API_BASE}/api/v1/hr/position-trainings?${params}`, { credentials: 'include' as const })
       .then(res => {
         const items: any[] = res.data || []
         if (items.length === 0) {
@@ -80,13 +101,14 @@ export default function OnboardingPrejobClient() {
         setSelectedSops(categories)
         message.success(`已根据岗位「${pos}」加载 ${categories.length} 个培训大类`)
       })
-      .catch(() => message.error('加载培训内容失败'))
+      .catch((err: any) => message.error('加载培训内容失败: ' + (err.message || '未知错误')))
   }, [selectedEmployeeId])
 
   // 加载培训师列表
   useEffect(() => {
-    fetch(`http://localhost:8000/api/v1/hr/trainers?page_size=200`).then(r => r.json())
+    safeFetch(`${API_BASE}/api/v1/hr/trainers?page_size=200`, { credentials: 'include' as const })
       .then(res => setTrainers((res.data||[]).map((t:any) => ({value:t.name,label:`${t.name}(${t.department})`}))))
+      .catch(() => {})
   }, [])
 
   const [sopMethods, setSopMethods] = useState<Record<string, string>>({})
@@ -105,34 +127,68 @@ export default function OnboardingPrejobClient() {
     })
   }
 
-  const handleExportWord = async () => {
-    if (!selectedEmployee) return message.warning('请先选择员工')
-    setDownloadingWord(true)
+  const buildItems = () => selectedSops.map(s => ({
+    sop_number: s.sop_number || '',
+    file_name: s.file_name || '',
+    content: s.file_name || '',
+    method: sopMethods[s.id] || '',
+    trainer: sopTrainers[s.id] || '',
+    plan_date: sopPlanDates[s.id] || '',
+  }))
+
+  const downloadDoc = async (url: string, method: string, filename: string, setLoading: (v: boolean) => void, body?: any) => {
+    setLoading(true)
     try {
-      const items = selectedSops.map(s => ({
-        sop_number: s.sop_number || '',
-        file_name: s.file_name || '',
-        content: s.file_name || '',
-        method: sopMethods[s.id] || '',
-        trainer: sopTrainers[s.id] || '',
-      }))
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-      const res = await fetch(`${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/onboarding-training-record`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ training_items: items }),
-      })
-      if (!res.ok) throw new Error('导出失败')
+      const opts: any = { method, headers: {}, credentials: 'include' }
+      if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
+      const res = await fetch(url, opts)
+      if (!res.ok) {
+        let detail = '导出失败'
+        try { const d = await res.json(); detail = d.message || d.detail || detail } catch { /* ignore */ }
+        logApiError(method, url, res.status, detail)
+        throw new Error(detail)
+      }
       const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
-      a.download = `入职培训记录_${selectedEmployee.name || 'employee'}.docx`
+      a.href = window.URL.createObjectURL(blob)
+      a.download = filename
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      window.URL.revokeObjectURL(url)
-      message.success('入职培训记录已导出')
+      message.success('导出成功')
     } catch (err: any) { message.error(err.message || '导出失败') }
-    finally { setDownloadingWord(false) }
+    finally { setLoading(false) }
+  }
+
+  const handleExportPlan = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_id || selectedEmployee.id}/prejob-training-plan`,
+      'POST',
+      `岗前培训计划_${selectedEmployee.name || 'employee'}.docx`,
+      setDownloadingWord,
+      { training_items: buildItems() },
+    )
+  }
+
+  const handleExportRecord = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/training-record`,
+      'POST',
+      `培训记录_${selectedEmployee.name}.docx`,
+      setDownloadingRecord,
+      { training_items: buildItems() },
+    )
+  }
+
+  const handleExportPermit = async () => {
+    if (!selectedEmployee) return message.warning('请先选择员工')
+    await downloadDoc(
+      `${API_BASE}/api/v1/hr/employees/${selectedEmployee.employee_number}/work-permit`,
+      'POST',
+      `上岗证_${selectedEmployee.name}.docx`,
+      setDownloadingPermit,
+      { training_items: buildItems() },
+    )
   }
 
   return (
@@ -146,14 +202,16 @@ export default function OnboardingPrejobClient() {
             onChange={setSelectedEmployeeId}
             options={employees.map((e) => ({
               value: e.id,
-              label: `${e.employee_number} - ${e.name} (${e.department})`,
+              label: `${e.employee_number} - ${e.name} (${e.department}) [${e.source || '新入职'}]`,
             }))}
             onSearch={handleSearch}
             loading={loading}
             filterOption={false}
             style={{ minWidth: 320 }}
           />
-          <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportWord} loading={downloadingWord}>导出岗位员工培训计划(Word)</Button>
+          <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportPlan} loading={downloadingWord}>导出岗前培训计划</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportRecord} loading={downloadingRecord}>导出培训记录</Button>
+          <Button icon={<DownloadOutlined />} onClick={handleExportPermit} loading={downloadingPermit}>导出上岗证</Button>
         </Space>
       </Card>
 
@@ -176,7 +234,7 @@ export default function OnboardingPrejobClient() {
                 <tr>
                   <td style={LABEL}>姓名<br/>Name</td><td style={VALUE}>{selectedEmployee.name}</td>
                   <td style={LABEL}>学历<br/>Education</td><td style={VALUE}>{selectedEmployee.education || ''}</td>
-                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>新员工</td>
+                  <td style={LABEL}>类别<br/>Type</td><td style={VALUE}>{selectedEmployee.source || '新入职'}</td>
                 </tr>
                 <tr>
                   <td style={LABEL}>毕业院校<br/>Graduation school</td><td style={VALUE}>{selectedEmployee.school || ''}</td>

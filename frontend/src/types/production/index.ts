@@ -5,6 +5,7 @@ export * from './execution'
 export * from './trace'
 export * from './intermediate'
 export * from './legacy'
+export * from './planning'
 export type {
   AssignedNodeInfo,
   AssignedRouteInfo,

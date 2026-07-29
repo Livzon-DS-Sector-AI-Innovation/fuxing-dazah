@@ -1,6 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
+import { getAuthHeaders } from '@/lib/auth'
 import {
   EmployeeCreateInput,
   EmployeeUpdateInput,
@@ -11,12 +13,20 @@ import {
   TeamCreateInput,
   TeamUpdateInput,
   TeamListResponse,
-  OffboardingRecordCreateInput,
-  OffboardingRecordUpdateInput,
-  OffboardingRecordListResponse,
+  AnnualTrainingPlanCreateInput,
+  CandidateCreateInput,
+  CandidateUpdateInput,
+  CandidateStatusTransition,
+  JobRequirementCreateInput,
+  JobRequirementUpdateInput,
+  InterviewCreateInput,
+  InterviewUpdateInput,
+  AnnualTrainingPlanUpdateInput,
+  AnnualTrainingPlanListResponse,
+  AnnualTrainingPlanItemBatchUpdateInput,
 } from '@/types/hr'
 
-const API_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:8000'
+const API_BASE = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 export async function fetchEmployeesAction(
   params?: {
@@ -36,6 +46,7 @@ export async function fetchEmployeesAction(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/employees?${searchParams.toString()}`, {
     cache: 'no-store',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) throw new Error('获取员工列表失败')
   return res.json()
@@ -44,7 +55,7 @@ export async function fetchEmployeesAction(
 export async function createEmployee(data: EmployeeCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/employees`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -55,10 +66,19 @@ export async function createEmployee(data: EmployeeCreateInput) {
   return res.json()
 }
 
+export async function fetchEmployeeByNumberAction(employeeNumber: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/employees/by-number/${encodeURIComponent(employeeNumber)}`, {
+    cache: 'no-store',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error('获取员工详情失败')
+  return res.json()
+}
+
 export async function updateEmployee(id: string, data: EmployeeUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/employees/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -72,52 +92,11 @@ export async function updateEmployee(id: string, data: EmployeeUpdateInput) {
 export async function deleteEmployee(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/employees/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.message || '删除员工失败')
-  }
-  revalidatePath('/hr/profile')
-  return res.json()
-}
-
-export async function uploadEmployeesAction(formData: FormData) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/upload`, {
-    method: 'POST',
-    // 不设置 Content-Type，让 fetch 自动生成带 boundary 的 multipart/form-data
-    body: formData,
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '上传员工名单失败')
-  }
-  revalidatePath('/hr/profile')
-  return res.json()
-}
-
-// ─── Feishu Sync Actions ───
-
-export async function syncFromFeishuAction() {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/sync-from-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '从飞书同步失败')
-  }
-  revalidatePath('/hr/profile')
-  return res.json()
-}
-
-export async function syncToFeishuAction(id: string) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/employees/${id}/sync-to-feishu`, {
-    method: 'POST',
-    cache: 'no-store',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '同步到飞书失败')
   }
   revalidatePath('/hr/profile')
   return res.json()
@@ -139,6 +118,7 @@ export async function fetchDepartmentsAction(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/departments?${searchParams.toString()}`, {
     cache: 'no-store',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) throw new Error('获取部门列表失败')
   return res.json()
@@ -147,7 +127,7 @@ export async function fetchDepartmentsAction(
 export async function createDepartment(data: DepartmentCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -161,7 +141,7 @@ export async function createDepartment(data: DepartmentCreateInput) {
 export async function updateDepartment(id: string, data: DepartmentUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -175,6 +155,7 @@ export async function updateDepartment(id: string, data: DepartmentUpdateInput) 
 export async function deleteDepartment(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departments/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -187,6 +168,7 @@ export async function deleteDepartment(id: string) {
 export async function deleteDepartureRecordAction(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/departure-records/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -214,6 +196,7 @@ export async function fetchTeamsAction(
 
   const res = await fetch(`${API_BASE}/api/v1/hr/teams?${searchParams.toString()}`, {
     cache: 'no-store',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) throw new Error('获取班组列表失败')
   return res.json()
@@ -222,7 +205,7 @@ export async function fetchTeamsAction(
 export async function createTeam(data: TeamCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -236,7 +219,7 @@ export async function createTeam(data: TeamCreateInput) {
 export async function updateTeam(id: string, data: TeamUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -250,6 +233,7 @@ export async function updateTeam(id: string, data: TeamUpdateInput) {
 export async function deleteTeam(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/teams/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -259,104 +243,12 @@ export async function deleteTeam(id: string) {
   return res.json()
 }
 
-// ─── OffboardingRecord Actions ───
-
-export async function fetchOffboardingRecordsAction(
-  params?: {
-    employee_id?: string
-    keyword?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<OffboardingRecordListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.employee_id) searchParams.set('employee_id', params.employee_id)
-  if (params?.keyword) searchParams.set('keyword', params.keyword)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 20))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/offboarding-records?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取离职记录失败')
-  return res.json()
-}
-
-export async function createOffboardingRecord(data: OffboardingRecordCreateInput) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/offboarding-records`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '创建离职记录失败')
-  }
-  revalidatePath('/hr/offboarding')
-  revalidatePath('/hr/profile')
-  return res.json()
-}
-
-export async function updateOffboardingRecord(id: string, data: OffboardingRecordUpdateInput) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/offboarding-records/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '更新离职记录失败')
-  }
-  revalidatePath('/hr/offboarding')
-  return res.json()
-}
-
-export async function deleteOffboardingRecord(id: string) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/offboarding-records/${id}`, {
-    method: 'DELETE',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '删除离职记录失败')
-  }
-  revalidatePath('/hr/offboarding')
-  return res.json()
-}
-
 // ─── AnnualTrainingPlan Actions ───
-
-import {
-  AnnualTrainingPlanCreateInput,
-  AnnualTrainingPlanListResponse,
-  AnnualTrainingPlanUpdateInput,
-  AnnualTrainingPlanItemBatchUpdateInput,
-} from '@/types/hr'
-
-export async function fetchAnnualTrainingPlansAction(
-  params?: {
-    year?: number
-    department?: string
-    page?: number
-    page_size?: number
-  }
-): Promise<AnnualTrainingPlanListResponse> {
-  const searchParams = new URLSearchParams()
-  if (params?.year) searchParams.set('year', String(params.year))
-  if (params?.department) searchParams.set('department', params.department)
-  searchParams.set('page', String(params?.page || 1))
-  searchParams.set('page_size', String(params?.page_size || 100))
-
-  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans?${searchParams.toString()}`, {
-    cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取年度培训计划列表失败')
-  return res.json()
-}
 
 export async function createAnnualTrainingPlan(data: AnnualTrainingPlanCreateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -367,23 +259,10 @@ export async function createAnnualTrainingPlan(data: AnnualTrainingPlanCreateInp
   return res.json()
 }
 
-export async function updateAnnualTrainingPlan(id: string, data: AnnualTrainingPlanUpdateInput) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '更新年度培训计划失败')
-  }
-  revalidatePath('/hr/training/annual-plan')
-  return res.json()
-}
-
 export async function deleteAnnualTrainingPlan(id: string) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}`, {
     method: 'DELETE',
+    headers: await getAuthHeaders(),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -393,22 +272,10 @@ export async function deleteAnnualTrainingPlan(id: string) {
   return res.json()
 }
 
-export async function uploadAnnualPlanAction(formData: FormData) {
-  const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/upload`, {
-    method: 'POST',
-    body: formData,
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || '上传年度培训计划失败')
-  }
-  return res.json()
-}
-
 export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanItemBatchUpdateInput) {
   const res = await fetch(`${API_BASE}/api/v1/hr/annual-training-plans/${id}/items/batch`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await getAuthHeaders(),
     body: JSON.stringify(data),
   })
   if (!res.ok) {
@@ -419,32 +286,373 @@ export async function batchUpdatePlanItems(id: string, data: AnnualTrainingPlanI
   return res.json()
 }
 
-// ─── 招聘候选人（待后端实现）───
+// ─── 招聘候选人 ───
 
-export async function createCandidateAction(_formData: FormData): Promise<{ data: any }> {
-  throw new Error('招聘功能暂未实现')
+export async function parseResumePreviewAction(formData: FormData): Promise<{ data: any }> {
+  const headers = await getAuthHeaders(); delete headers['Content-Type']
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/parse-resume`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '简历解析失败') }
+  return res.json()
 }
 
-export async function deleteCandidateAction(_id: string): Promise<void> {
-  throw new Error('招聘功能暂未实现')
+export async function createCandidateAction(formData: FormData): Promise<{ data: any }> {
+  // Construct JSON from FormData fields (as originally sent by CreateCandidateModal)
+  const data: Record<string, unknown> = {}
+  const keys = ['name', 'phone', 'email', 'position', 'department', 'gender', 'school', 'education', 'major', 'status', 'recommendation_level', 'match_report', 'resume_file_path']
+  for (const k of keys) {
+    const v = formData.get(k)
+    if (v) data[k] = v
+  }
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates`, {
+    method: 'POST', headers: await getAuthHeaders(), body: JSON.stringify(data),
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '创建失败') }
+  return res.json()
 }
 
-export async function syncCandidatesFromFeishuAction(): Promise<{ data: any; message: string }> {
-  throw new Error('招聘功能暂未实现')
+export async function updateCandidateAction(id: string, data: Record<string, unknown>): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'PUT', headers: await getAuthHeaders(), body: JSON.stringify(data),
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '更新失败') }
 }
 
-export async function syncCandidateToFeishuAction(_id: string): Promise<void> {
-  throw new Error('招聘功能暂未实现')
+export async function deleteCandidateAction(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'DELETE', headers: await getAuthHeaders(),
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '删除失败') }
 }
 
-export async function updateCandidateAction(_id: string, _data: Record<string, unknown>): Promise<void> {
-  throw new Error('招聘功能暂未实现')
+export async function updateCandidateRecommendationLevelAction(id: string, level: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'PUT', headers: await getAuthHeaders(), body: JSON.stringify({ recommendation_level: level }),
+  })
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || '更新失败') }
 }
 
-export async function updateCandidateRecommendationLevelAction(_id: string, _level: string): Promise<void> {
-  throw new Error('招聘功能暂未实现')
+// ─── 问答/实操考核 Actions ───
+
+export async function createQaAssessment(data: import('@/types/hr').QaAssessmentCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '创建考核场次失败')
+  }
+  revalidatePath('/hr/training/notification')
+  return res.json()
 }
 
-export async function parseResumePreviewAction(_formData: FormData): Promise<{ data: any }> {
-  throw new Error('招聘功能暂未实现')
+export async function saveQaAssessmentScores(id: string, data: import('@/types/hr').QaScoreSaveInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments/${id}/scores`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '保存成绩失败')
+  }
+  return res.json()
+}
+
+export async function deleteQaAssessment(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/qa-assessments/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '删除考核场次失败')
+  }
+  revalidatePath('/hr/training/notification')
+  return res.json()
+}
+
+export async function addQuestionBankItems(items: {
+  file_no?: string; subject?: string; question: string; answer?: string; score?: number; department?: string
+}[], source = '手工录入') {
+  const res = await fetch(`${API_BASE}/api/v1/hr/question-bank`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify({ items, source }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '题目入库失败')
+  }
+  return res.json()
+}
+
+export async function fetchDataTables(): Promise<{ data: any[] }> {
+  const cookieStore = await cookies()
+  const allCookies = cookieStore.getAll().map(c => `${c.name}=${c.value}`).join('; ')
+  const res = await fetch(`${API_BASE}/api/v1/hr/data-management/tables`, {
+    headers: { Cookie: allCookies },
+    cache: 'no-store',
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`)
+  }
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(`Invalid JSON response: ${text.slice(0, 200)}`)
+  }
+}
+
+export async function clearDataTables(tables: string[]): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/api/v1/hr/data-management/clear`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(tables),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || `HTTP ${res.status}`)
+  }
+  revalidatePath('/hr/settings')
+  return res.json()
+}
+
+export async function deleteQuestionBankItem(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/question-bank/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '删除题目失败')
+  }
+  return res.json()
+}
+
+// ─── 招聘：岗位需求 ───
+
+export async function createJobRequirement(data: JobRequirementCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = err.detail ? `${err.message}: ${err.detail}` : (err.message || '创建岗位需求失败')
+    throw new Error(msg)
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateJobRequirement(id: string, data: JobRequirementUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    const msg = err.detail ? `${err.message}: ${err.detail}` : (err.message || '更新岗位需求失败')
+    throw new Error(msg)
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteJobRequirement(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/job-requirements/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除岗位需求失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：候选人 ───
+
+export async function createCandidate(data: CandidateCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '创建候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateCandidate(id: string, data: CandidateUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '更新候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteCandidate(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '删除候选人失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function transitionCandidateStatus(id: string, data: CandidateStatusTransition) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${id}/status`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '状态流转失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function parseResumeAction(formData: FormData) {
+  const headers = await getAuthHeaders(); delete headers['Content-Type']
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/parse-resume`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '简历解析失败')
+  }
+  return res.json()
+}
+
+// ─── 招聘：面试管理 ───
+
+export async function createInterview(data: InterviewCreateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '安排面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function updateInterview(id: string, data: InterviewUpdateInput) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}`, {
+    method: 'PUT',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '更新面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function deleteInterview(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}`, {
+    method: 'DELETE',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '取消面试失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：AI评估 ───
+
+export async function evaluateInterview(id: string) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/interviews/${id}/evaluate`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || 'AI评估失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：Offer ───
+
+export async function sendOfferAction(candidateId: string, formData: FormData) {
+  const headers = await getAuthHeaders(); delete headers['Content-Type']
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/send-offer`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || '发送Offer失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+// ─── 招聘：推送审核 ───
+
+export async function pushCandidateReview(candidateId: string, data: { pushed_by: string; push_note?: string }) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/push-review`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '推送审核失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
+}
+
+export async function decideCandidateReview(candidateId: string, data: { review_id: string; decision: string; review_comment?: string }) {
+  const res = await fetch(`${API_BASE}/api/v1/hr/candidates/${candidateId}/decide-review`, {
+    method: 'POST',
+    headers: await getAuthHeaders(),
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || err.detail || '审核操作失败')
+  }
+  revalidatePath('/hr/recruitment')
+  return res.json()
 }

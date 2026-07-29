@@ -1,13 +1,6 @@
-import { fetchOnboardingRecords } from '@/lib/api/hr'
+import { Suspense } from 'react'
 import { OnboardingClient } from '@/components/hr'
 
-export default async function OnboardingPage() {
-  const res = await fetchOnboardingRecords({ page: 1, page_size: 20 })
-
-  return (
-    <OnboardingClient
-      initialRecords={res.data}
-      initialTotal={res.meta?.total || 0}
-    />
-  )
+export default function OnboardingPage() {
+  return <Suspense fallback={<div className="h-64" />}><OnboardingClient initialRecords={[]} initialTotal={0} /></Suspense>
 }

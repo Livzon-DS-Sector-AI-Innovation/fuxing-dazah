@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Select, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
-import { fetchDepartments, fetchEmployees, createTrainingLedgerPage } from '@/lib/api/hr'
+import { fetchDepartments, fetchEmployees, createTrainingLedgerPage } from '@/lib/hr'
 
 export default function TrainingLedgerNewClient() {
   const { message } = App.useApp()
@@ -65,7 +65,7 @@ export default function TrainingLedgerNewClient() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" description="加载中..." />
       </div>
     )
   }

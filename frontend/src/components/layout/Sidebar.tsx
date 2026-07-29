@@ -63,6 +63,16 @@ function findSelectedKey(items: SubMenuItem[], pathname: string): string | undef
   return match?.key
 }
 
+// ── 收集所有有子项的 key（用于默认展开所有分组）──
+function collectAllSubMenuKeys(items: SubMenuItem[]): string[] {
+  return items.flatMap((item) => {
+    if (item.children && item.children.length > 0) {
+      return [item.key, ...collectAllSubMenuKeys(item.children)]
+    }
+    return []
+  })
+}
+
 // ── 收集选中路径的所有祖先 key（用于 auto-open）──
 function collectAncestorKeys(items: SubMenuItem[], pathname: string): string[] {
   for (const item of items) {
@@ -101,10 +111,14 @@ export function Sidebar() {
     ? findSelectedKey(currentModule.children, pathname)
     : undefined
 
-  // 自动展开包含当前选中项的 SubMenu
-  const [openKeys, setOpenKeys] = useState<string[]>(() =>
-    currentModule ? collectAncestorKeys(currentModule.children, pathname) : []
-  )
+  // 生产管理模块默认全展开所有子菜单
+  const [openKeys, setOpenKeys] = useState<string[]>(() => {
+    if (!currentModule) return []
+    const ancestors = collectAncestorKeys(currentModule.children, pathname)
+    return moduleKey === "production"
+      ? [...new Set([...collectAllSubMenuKeys(currentModule.children), ...ancestors])]
+      : ancestors
+  })
 
   const handleOpenChange = (keys: string[]) => {
     setOpenKeys(keys)

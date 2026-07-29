@@ -27,8 +27,8 @@ export default function CreateCandidateModal({
     school: '',
     education: '',
     major: '',
-    match_report: '',
-    recommendation_level: '' })
+    recommendation_level: '',
+    resume_file_path: '' })
 
   const handleParse = async () => {
     const values = form.getFieldsValue()
@@ -82,8 +82,8 @@ export default function CreateCandidateModal({
       formData.append('school', previewData.school)
       formData.append('education', previewData.education)
       formData.append('major', previewData.major)
-      formData.append('match_report', previewData.match_report)
       formData.append('recommendation_level', previewData.recommendation_level)
+      if (previewData.resume_file_path) formData.append('resume_file_path', previewData.resume_file_path)
 
       await createCandidateAction(formData)
       message.success('候选人创建成功')
@@ -105,8 +105,8 @@ export default function CreateCandidateModal({
       school: '',
       education: '',
       major: '',
-      match_report: '',
-      recommendation_level: '' })
+      recommendation_level: '',
+    resume_file_path: '' })
   }
 
   const handleCancel = () => {
@@ -216,18 +216,6 @@ export default function CreateCandidateModal({
                   { value: '待定', label: '待定' },
                   { value: '不推荐', label: '不推荐' },
                 ]}
-              />
-            </Form.Item>
-            <Form.Item label="AI 匹配度报告">
-              <Input.TextArea
-                value={previewData.match_report}
-                onChange={(e) =>
-                  setPreviewData({
-                    ...previewData,
-                    match_report: e.target.value })
-                }
-                rows={4}
-                placeholder="AI 匹配度报告"
               />
             </Form.Item>
             <div className="flex gap-2 justify-end">

@@ -25,11 +25,11 @@ function LoginForm() {
         topColor="#7b3ff2"
         bottomColor="#ff64c8"
         className="pointer-events-none"
-        pillarWidth={4}
+        pillarWidth={8}
         pillarRotation={30}
         quality="medium"
         noiseIntensity={0}
-        mixBlendMode="normal"
+        mixBlendMode="screen"
       />
       <div className="relative z-10 w-full max-w-md mx-4">
         <SpotlightCard

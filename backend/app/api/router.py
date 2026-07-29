@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.modules.administration import router as administration_router
-from app.modules.ai_exam import router as ai_exam_router
+from app.modules.hr import ai_exam_router
 from app.modules.energy import router as energy_router
 from app.modules.environment import router as environment_router
 from app.modules.equipment import router as equipment_router
@@ -49,7 +49,7 @@ api_router.include_router(
     tags=["行政管理"],
 )
 api_router.include_router(hr_router, prefix="/hr", tags=["人事管理"])
-api_router.include_router(ai_exam_router, prefix="/ai", tags=["AI 出题"])
+api_router.include_router(ai_exam_router, prefix="/hr", tags=["AI 出题"])
 api_router.include_router(research_router, prefix="/research", tags=["研发管理"])
 api_router.include_router(
     registration_router,

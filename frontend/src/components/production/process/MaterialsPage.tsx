@@ -1,41 +1,24 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   App,
-  Button,
   ConfigProvider,
   Empty,
-  Form,
   Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Switch,
   Table,
   Tag,
   Spin,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import {
-  PlusOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  InboxOutlined,
-} from '@ant-design/icons'
+import { InboxOutlined } from '@ant-design/icons'
 import zhCN from 'antd/locale/zh_CN'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { antdTheme } from '@/lib/antd-theme'
 import {
   fetchMaterialsClient,
   fetchMaterialMovementsClient,
-  fetchProductsClient,
 } from '@/lib/api/production-client'
-import {
-  createIntermediateType,
-  updateIntermediateType,
-  deleteIntermediateType,
-} from '@/actions/production'
 import type { IntermediateType, MaterialMovement } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 
@@ -58,102 +41,6 @@ const T = {
   surface: '#fafaf9',
   hairline: '#e5e3df',
   navy: '#0a1530',
-}
-
-// ── 表单弹窗（结构保持，样式微调） ──
-
-interface FormModalProps {
-  open: boolean
-  editItem: IntermediateType | null
-  onClose: () => void
-  onSaved: () => void
-}
-
-function MaterialFormModal({ open, editItem, onClose, onSaved }: FormModalProps) {
-  const [form] = Form.useForm()
-  const { message } = App.useApp()
-
-  const { data: products } = useQuery({
-    queryKey: ['products-select'],
-    queryFn: () => fetchProductsClient(),
-    enabled: open,
-  })
-
-  const isProduct = Form.useWatch('is_product', form)
-
-  useEffect(() => {
-    if (open) {
-      form.setFieldsValue(
-        editItem ?? {
-          code: '', name: '', category: '', default_unit: '', description: '',
-          is_product: false, product_id: null,
-        },
-      )
-    }
-  }, [open, editItem, form])
-
-  const handleOk = async () => {
-    try {
-      const values = await form.validateFields().catch(() => null)
-      if (!values) return
-      let result
-      if (editItem) {
-        result = await updateIntermediateType(editItem.id, values)
-      } else {
-        result = await createIntermediateType(values as Parameters<typeof createIntermediateType>[0])
-      }
-      if (result.success) {
-        message.success(editItem ? '产出物已更新' : '产出物已创建')
-        onSaved()
-      } else {
-        message.error(result.error)
-      }
-    } catch (e: unknown) {
-      message.error(e instanceof Error ? e.message : '操作失败')
-    }
-  }
-
-  return (
-    <Modal
-      title={editItem ? '编辑产出物' : '新增产出物'}
-      open={open}
-      onOk={handleOk}
-      onCancel={onClose}
-      destroyOnHidden
-    >
-      <Form form={form} layout="vertical">
-        <Form.Item name="code" label="编码" rules={[{ required: true, message: '请输入编码' }]}>
-          <Input maxLength={50} disabled={!!editItem} />
-        </Form.Item>
-        <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-          <Input maxLength={200} />
-        </Form.Item>
-        <Form.Item name="category" label="分类">
-          <Input maxLength={100} placeholder="如：发酵液、结晶粉、湿品" />
-        </Form.Item>
-        <Form.Item name="default_unit" label="默认单位">
-          <Input maxLength={20} placeholder="如：kg、L" />
-        </Form.Item>
-        <Form.Item name="description" label="说明">
-          <Input.TextArea rows={2} />
-        </Form.Item>
-        <Form.Item name="is_product" label="标记为成品" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item name="product_id" label="关联产品">
-          <Select
-            allowClear
-            placeholder="选择关联的产品"
-            disabled={!isProduct}
-            options={(products ?? []).map((p) => ({
-              value: p.id,
-              label: p.product_name,
-            }))}
-          />
-        </Form.Item>
-      </Form>
-    </Modal>
-  )
 }
 
 // ── 库存概览卡片（签名元素） ──
@@ -407,14 +294,10 @@ function MaterialListItem({
   item,
   isSelected,
   onClick,
-  onEdit,
-  onDelete,
 }: {
   item: IntermediateType
   isSelected: boolean
   onClick: () => void
-  onEdit: () => void
-  onDelete: () => void
 }) {
   return (
     <div
@@ -469,33 +352,6 @@ function MaterialListItem({
         </div>
       </div>
 
-      {/* 快捷操作 — hover 时显示 */}
-      <div
-        style={{ display: 'flex', gap: 2, flexShrink: 0, marginLeft: 8 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Button
-          type="text"
-          size="small"
-          icon={<EditOutlined style={{ fontSize: 13, color: T.steel }} />}
-          onClick={(e) => { e.stopPropagation(); onEdit() }}
-          style={{ minWidth: 28, height: 28 }}
-        />
-        <Popconfirm
-          title={`确定删除「${item.name}」？`}
-          onConfirm={(e) => { e?.stopPropagation(); onDelete() }}
-          onCancel={(e) => e?.stopPropagation()}
-        >
-          <Button
-            type="text"
-            size="small"
-            danger
-            icon={<DeleteOutlined style={{ fontSize: 13 }} />}
-            onClick={(e) => e.stopPropagation()}
-            style={{ minWidth: 28, height: 28 }}
-          />
-        </Popconfirm>
-      </div>
     </div>
   )
 }
@@ -610,10 +466,6 @@ function DetailPanel({ material }: { material: IntermediateType }) {
 // ── 主页面 ──
 
 function MaterialsContent() {
-  const { message } = App.useApp()
-  const queryClient = useQueryClient()
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editItem, setEditItem] = useState<IntermediateType | null>(null)
   const [keyword, setKeyword] = useState('')
   const [selected, setSelected] = useState<IntermediateType | null>(null)
   const [filter, setFilter] = useState<'all' | 'intermediate' | 'product'>('all')
@@ -621,16 +473,6 @@ function MaterialsContent() {
   const { data, isLoading } = useQuery({
     queryKey: ['materials', keyword],
     queryFn: () => fetchMaterialsClient({ keyword, page_size: 200 }),
-  })
-
-  const deleteMut = useMutation({
-    mutationFn: deleteIntermediateType,
-    onSuccess: (_data, deletedId) => {
-      message.success('产出物已删除')
-      if (selected && selected.id === deletedId) setSelected(null)
-      queryClient.invalidateQueries({ queryKey: ['materials'] })
-    },
-    onError: (e: Error) => message.error(e.message),
   })
 
   // 按筛选条件过滤
@@ -657,15 +499,6 @@ function MaterialsContent() {
     }
   }, [filteredItems, selected])
 
-  const handleSaved = useCallback(() => {
-    setModalOpen(false)
-    setEditItem(null)
-    queryClient.invalidateQueries({ queryKey: ['materials'] })
-    if (selected) {
-      queryClient.invalidateQueries({ queryKey: ['material-movements', selected.id] })
-    }
-  }, [queryClient, selected])
-
   return (
     <div>
       {/* 页头 */}
@@ -679,10 +512,10 @@ function MaterialsContent() {
             letterSpacing: '-0.3px',
           }}
         >
-          产出物管理
+          产出物流水
         </h2>
         <span style={{ color: T.steel, fontSize: 14 }}>
-          管理中间体字典，追踪批次库存与物料追溯
+          追踪批次库存与物料追溯
         </span>
       </div>
 
@@ -701,22 +534,14 @@ function MaterialsContent() {
         >
           {/* 搜索 & 操作 */}
           <div style={{ padding: '14px 14px 0' }}>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <div style={{ marginBottom: 12 }}>
               <Input
                 placeholder="搜索产出物..."
                 allowClear
                 size="middle"
                 onChange={(e) => setKeyword(e.target.value)}
                 onPressEnter={(e) => setKeyword((e.target as HTMLInputElement).value)}
-                style={{ flex: 1 }}
               />
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => { setEditItem(null); setModalOpen(true) }}
-              >
-                新增
-              </Button>
             </div>
 
             {/* 筛选选项卡 */}
@@ -773,8 +598,6 @@ function MaterialsContent() {
                   item={item}
                   isSelected={selected?.id === item.id}
                   onClick={() => setSelected(item)}
-                  onEdit={() => { setEditItem(item); setModalOpen(true) }}
-                  onDelete={() => deleteMut.mutate(item.id)}
                 />
               ))
             )}
@@ -814,13 +637,6 @@ function MaterialsContent() {
         </div>
       </div>
 
-      {/* 表单弹窗 */}
-      <MaterialFormModal
-        open={modalOpen}
-        editItem={editItem}
-        onClose={() => { setModalOpen(false); setEditItem(null) }}
-        onSaved={handleSaved}
-      />
     </div>
   )
 }

@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import CheckConstraint, Index, String, Text, text
+from sqlalchemy import CheckConstraint, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -21,8 +21,12 @@ class Batch(BaseModel):
         ),
         Index("ix_production_batches_product_status", "product_id", "status"),
         CheckConstraint(
-            "status IN ('pending', 'in_progress', 'completed', 'cancelled')",
+            "status IN ('draft', 'scheduled', 'released', 'pending', 'in_progress', 'completed', 'cancelled')",
             name="ck_production_batches_status",
+        ),
+        CheckConstraint(
+            "creation_type IN ('plan', 'rework', 'outsource', 'trial', 'direct')",
+            name="ck_production_batches_creation_type",
         ),
         {"schema": "production"},
     )
@@ -31,13 +35,19 @@ class Batch(BaseModel):
     product_id: Mapped[uuid.UUID] = mapped_column(comment="产品")
     route_id: Mapped[uuid.UUID] = mapped_column(comment="创建时锁定的路线版本")
     status: Mapped[str] = mapped_column(
-        String(20), default="pending", comment="pending/in_progress/completed/cancelled"
+        String(20), default="pending", comment="draft/scheduled/released/pending/in_progress/completed/cancelled"
     )
     quantity: Mapped[float | None] = mapped_column(nullable=True, comment="本批数量")
     unit: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="单位")
     entry_node_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
         comment="入口节点：derive/merge 产生的批次记录边界边的 to_node；根批次为空",
+    )
+    creation_type: Mapped[str] = mapped_column(
+        String(20), default="direct", comment="plan/rework/outsource/trial/direct"
+    )
+    plan_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="由计划生成时记录所依据的计划版本"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
 

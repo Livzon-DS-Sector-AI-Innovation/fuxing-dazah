@@ -257,6 +257,7 @@ body {
   background: #1a1a1a;
 }
 
+
 /* 树样式 */
 .ant-tree-title {
   font-size: 14px;
@@ -447,4 +448,10 @@ body {
   html {
     @apply font-sans;
   }
+}
+
+/* SVAR Gantt: 高度链条 — 每一层都需要显式高度才能撑满容器 */
+.wx-theme,
+.wx-gantt {
+  height: 100%;
 }

@@ -30,7 +30,7 @@ import {
   ExamExportData,
   TrueFalseQuestion,
 } from '@/types/hr'
-import { generateExamQuestions, exportExam } from '@/lib/api/ai'
+import { generateExamQuestions, exportExam } from '@/lib/hr'
 
 const { Title, Text } = Typography
 
@@ -41,8 +41,6 @@ const BORDER_STYLE_CENTER = { border: '1px solid #1f2937', padding: '8px', textA
 export default function AiExamClient() {
   // 手动输入字段
   const [title, setTitle] = useState('')
-  const [examiner, setExaminer] = useState('')
-  const [examDate, setExamDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [assessmentDate, setAssessmentDate] = useState(dayjs().format('YYYY-MM-DD'))
 
   // 上传和出题状态
@@ -93,9 +91,6 @@ export default function AiExamClient() {
       if (res.data?.choice_questions) setChoiceQuestions(res.data.choice_questions)
       if (res.data?.true_false_questions) setTrueFalseQuestions(res.data.true_false_questions)
       if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
-      console.log('API返回:', res.data)
-      console.log('多选:', res.data?.multi_choice_questions?.length, '填空:', res.data?.fill_blank_questions?.length)
-      if (res.data?.multi_choice_questions) setMultiQuestions(res.data.multi_choice_questions)
       if (res.data?.fill_blank_questions) setFillQuestions(res.data.fill_blank_questions)
       message.success('试卷题目生成成功')
     } catch (err: any) {
@@ -110,10 +105,6 @@ export default function AiExamClient() {
       message.warning('请输入试卷标题')
       return
     }
-    if (!examiner.trim()) {
-      message.warning('请输入出卷人')
-      return
-    }
     if (choiceQuestions.length === 0 && trueFalseQuestions.length === 0 && multiQuestions.length === 0 && fillQuestions.length === 0) {
       message.warning('请先生成题目')
       return
@@ -123,8 +114,8 @@ export default function AiExamClient() {
     try {
       const data: ExamExportData = {
         title: title.trim(),
-        examiner: examiner.trim(),
-        exam_date: examDate,
+        examiner: '',
+        exam_date: '',
         assessment_date: assessmentDate,
         choice_questions: choiceQuestions,
         true_false_questions: trueFalseQuestions,
@@ -146,6 +137,45 @@ export default function AiExamClient() {
       message.error(err.message || '导出失败')
     } finally {
       setExporting(false)
+    }
+  }
+
+  const handleSave = async () => {
+    if (!title.trim()) {
+      message.warning('请输入试卷标题')
+      return
+    }
+    const total = choiceQuestions.length + trueFalseQuestions.length + multiQuestions.length + fillQuestions.length
+    if (total === 0) {
+      message.warning('请先生成题目')
+      return
+    }
+    try {
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
+      const res = await fetch(`${API}/api/v1/hr/exam-papers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          subject: title,
+          training_date: assessmentDate,
+          questions: {
+            choice_questions: choiceQuestions,
+            true_false_questions: trueFalseQuestions,
+            multi_choice_questions: multiQuestions,
+            fill_blank_questions: fillQuestions,
+          },
+          full_score: 100,
+          choice_count: choiceQuestions.length,
+          true_false_count: trueFalseQuestions.length,
+          multi_choice_count: multiQuestions.length,
+          fill_blank_count: fillQuestions.length,
+        }),
+      })
+      if (!res.ok) throw new Error('保存失败')
+      message.success('试卷已保存，可在「资料下载」中查看下载')
+    } catch (err: any) {
+      message.error(err.message || '保存失败')
     }
   }
 
@@ -184,47 +214,21 @@ export default function AiExamClient() {
     <div className="space-y-6">
       {/* ─── 手动输入区域 ─── */}
       <Card title="试卷基本信息" className="shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="md:col-span-2">
-            <Text className="block mb-1">试卷标题</Text>
-            <Input
-              placeholder="请输入试卷标题（对应文档页眉作为试卷题目）"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              maxLength={100}
-              showCount
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">出卷人</Text>
-            <Input
-              placeholder="请输入出卷人"
-              value={examiner}
-              onChange={(e) => setExaminer(e.target.value)}
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">出卷时间</Text>
-            <Input
-              type="date"
-              value={examDate}
-              onChange={(e) => setExamDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <Text className="block mb-1">考核时间</Text>
-            <Input
-              type="date"
-              value={assessmentDate}
-              onChange={(e) => setAssessmentDate(e.target.value)}
-            />
-          </div>
+        <div>
+          <Text className="block mb-1">试卷标题</Text>
+          <Input
+            placeholder="请输入试卷标题"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={100}
+            showCount
+          />
         </div>
       </Card>
 
       {/* ─── 文件上传区域 ─── */}
       <Card title="上传培训文件" className="shadow-sm">
-        <Space direction="vertical" size="middle" className="w-full">
+        <Space orientation="vertical" size="middle" className="w-full">
           <Upload
             fileList={fileList}
             onChange={handleUploadChange}
@@ -280,14 +284,22 @@ export default function AiExamClient() {
           title="试卷预览（可直接编辑）"
           className="shadow-sm"
           extra={
-            <Button
-              type="primary"
-              icon={<DownloadOutlined />}
-              onClick={handleExport}
-              loading={exporting}
-            >
-              导出试卷
-            </Button>
+            <Space>
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={handleExport}
+                loading={exporting}
+              >
+                导出试卷
+              </Button>
+              <Button
+                type="primary"
+                icon={<FileTextOutlined />}
+                onClick={handleSave}
+              >
+                保存试卷
+              </Button>
+            </Space>
           }
         >
           <Spin spinning={generating}>

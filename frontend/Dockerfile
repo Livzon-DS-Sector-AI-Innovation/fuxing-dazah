@@ -19,7 +19,11 @@ ENV SHARP_DIST_BASE_URL=https://npmmirror.com/mirrors/sharp
 
 RUN pnpm install --frozen-lockfile
 
-# 复制源码和 .env.production（Next.js 构建时自动读取）
+# 客户端 API 地址（构建时 bake 进 JS），默认值可通过 docker compose build --build-arg 覆盖
+ARG NEXT_PUBLIC_API_BASE_URL=http://192.168.3.100:8000
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+
+# 复制源码（.env.production 中的值会被 ARG/ENV 覆盖）
 COPY . .
 
 # 执行构建（产生 .next/standalone/）

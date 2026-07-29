@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Select, Space, Spin } from 'antd'
 import { FileTextOutlined, PrinterOutlined, DownloadOutlined } from '@ant-design/icons'
 import { Employee } from '@/types/hr'
-import { fetchEmployees, fetchOnboardingTrainingRecord } from '@/lib/api/hr'
+import { fetchEmployees, fetchOnboardingTrainingRecord } from '@/lib/hr'
 
 export default function TrainingRecordClient() {
   const { message } = App.useApp()

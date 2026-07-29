@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Select, Modal, Descriptions, Empty, Spin, App } from 'antd'
 import {
   ClockCircleOutlined, PlayCircleOutlined, CheckCircleOutlined,
-  InboxOutlined, MergeCellsOutlined, SettingOutlined,
+  InboxOutlined, MergeCellsOutlined, SettingOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useState, useMemo, useRef } from 'react'
 import { fetchWorkbench, completeBatch, fetchBatchOutputs, fetchBatchConsumptions } from '@/actions/production'
@@ -321,7 +321,7 @@ export function WorkbenchInner() {
   const [filterRoute, setFilterRoute] = useState<string | undefined>(undefined)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['production-workbench'],
     queryFn: async () => {
       const r = await fetchWorkbench()
@@ -451,6 +451,15 @@ export function WorkbenchInner() {
         <span style={{ fontSize: 14, color: '#787671' }}>
           {stageOwner ? '管理工段任务与工序负责人分配' : '我的工序待办'}
         </span>
+        <div style={{ flex: 1, minWidth: 0 }} />
+        <Button
+          icon={<ReloadOutlined spin={isFetching} />}
+          size="small"
+          onClick={() => refetch()}
+          style={{ borderRadius: 6 }}
+        >
+          刷新
+        </Button>
       </div>
 
       {isLoading ? (

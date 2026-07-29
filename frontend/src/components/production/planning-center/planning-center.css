@@ -1,0 +1,71 @@
+/* fadeIn — inline 编辑表单淡入 */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 计划中枢 Tabs — 全链路 flex 撑满，确保 TabPane 内容区无缝吃满剩余高度 */
+.planning-tabs.ant-tabs {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.planning-tabs > .ant-tabs-nav {
+  flex-shrink: 0;
+}
+.planning-tabs > .ant-tabs-content-holder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.planning-tabs > .ant-tabs-content-holder > .ant-tabs-content {
+  flex: 1;
+  min-height: 0;
+}
+.planning-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane-active {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 计划单卡片 hover — 轻微上浮 + 阴影 */
+.plan-order-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+/* 泳道滚动条 — 细窄、低调 */
+.swimlane-scroll::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.swimlane-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.swimlane-scroll::-webkit-scrollbar-thumb {
+  background: #c8c4be;
+  border-radius: 3px;
+}
+.swimlane-scroll::-webkit-scrollbar-thumb:hover {
+  background: #a4a097;
+}
+.swimlane-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.swimlane-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #c8c4be transparent;
+}
+
+/* 溢出菜单触发按钮 — 低调，hover时显现 */
+.plan-order-card .ant-btn-icon-only {
+  color: var(--color-stone);
+  border-color: transparent;
+}
+.plan-order-card:hover .ant-btn-icon-only {
+  color: var(--color-slate);
+  border-color: var(--color-hairline);
+}

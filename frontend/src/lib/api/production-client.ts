@@ -132,6 +132,39 @@ export async function fetchMaterialMovementsClient(
   return apiGet<MaterialMovements>(`${API_BASE}/api/v1/production/materials/${id}/movements${queryString ? `?${queryString}` : ''}`)
 }
 
+// ── 计划排程视图 ──
+export async function fetchScheduleViewClient(params: {
+  from_time?: string
+  to_time?: string
+  equipment_id?: string
+}): Promise<import('@/types/production').ScheduleViewItem[]> {
+  const s = qs({
+    from_time: params.from_time ?? null,
+    to_time: params.to_time ?? null,
+    equipment_id: params.equipment_id ?? null,
+  })
+  return apiGet(`${API_BASE}/api/v1/production/plan-items/schedule-view?${s}`)
+}
+
+export async function fetchPlanOrdersClient(params: {
+  status?: string
+  keyword?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<import('@/types/production').PlanOrder[]> {
+  const s = qs({
+    status: params.status ?? null,
+    keyword: params.keyword ?? null,
+    page: params.page ?? 1,
+    page_size: params.page_size ?? 100,
+  })
+  return apiGet(`${API_BASE}/api/v1/production/plan-orders?${s}`)
+}
+
+export async function fetchPlanOrderClient(id: string): Promise<import('@/types/production').PlanOrderDetail> {
+  return apiGet(`${API_BASE}/api/v1/production/plan-orders/${id}`)
+}
+
 // ── 身份人员（全公司员工，供人员选择组件使用）──
 // 已迁移到 @/lib/api/identity，此处保留重导出以兼容旧引用
 export { type IdentityPersonnel, fetchIdentityPersonnel } from './identity'
