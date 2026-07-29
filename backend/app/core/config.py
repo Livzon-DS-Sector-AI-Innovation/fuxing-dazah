@@ -76,8 +76,6 @@ class Settings(BaseSettings):
     ENERGY_AUTO_COLLECT_INTERVAL_SECONDS: int = 3600  # 默认 60 分钟
     ENERGY_WORKSHOP_ALERT_ENABLED: bool = False
     ENERGY_WORKSHOP_ALERT_TIME: str = "18:00"  # HH:MM 每日检查时间
-    ENERGY_DAILY_PUSH_ENABLED: bool = False
-    ENERGY_NITROGEN_PUSH_ENABLED: bool = False
 
     # Maintenance Plan — 自动生成工单
     MAINTENANCE_PLAN_AUTO_ENABLED: bool = True
@@ -91,7 +89,24 @@ class Settings(BaseSettings):
     # Permission System
     ADMIN_EMPLOYEE_NOS: list[str] = []
 
-    # HR 模块配置已收敛到 app/modules/hr/config.py（SMTP、AI 等）
+    # HR 模块 — 飞书多维表格同步
+    HR_BITABLE_APP_TOKEN: str = ""
+    HR_BITABLE_EMPLOYEE_TABLE_ID: str = ""
+    HR_BITABLE_DEPARTMENT_TABLE_ID: str = ""
+    HR_BITABLE_OFFBOARDING_TABLE_ID: str = ""
+    HR_BITABLE_ONBOARDING_TABLE_ID: str = ""
+    HR_BITABLE_DEPARTURE_TABLE_ID: str = ""
+    HR_BITABLE_APPROVAL_TABLE_ID: str = ""
+
+    # HR 模块 — AI 离职分析
+    HR_AI_API_KEY: str = ""
+    HR_AI_MODEL: str = "deepseek-chat"
+    HR_AI_SYSTEM_PROMPT: str = (
+        "你是「小H」，原料药工厂人事管理助手。"
+        "只基于查询结果回答人事问题，禁止编造。"
+        "回答极其简洁，只陈述事实，不分析、不解释、不推理。"
+        "禁止出现'根据规则'、'依据以上信息'等元话语。"
+    )
 
     # MCP — AI Agent 认证
     MCP_AGENT_API_KEYS: str = ""
