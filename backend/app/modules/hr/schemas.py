@@ -271,6 +271,8 @@ class TrainingNotificationInput(BaseModel):
     face_to_face_time_end: str | None = Field(None, max_length=32, description="面授结束时间")
     self_study_time_start: str | None = Field(None, max_length=32, description="自学开始时间")
     self_study_time_end: str | None = Field(None, max_length=32, description="自学结束时间")
+    face_date: date | None = Field(None, description="面授日期")
+    self_study_date: date | None = Field(None, description="自学日期")
     location: str | None = Field(None, max_length=128, description="培训地点")
     trainer: str | None = Field(None, max_length=64, description="培训师")
     training_method: str | None = Field(None, max_length=32, description="培训方式")

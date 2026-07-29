@@ -96,13 +96,24 @@ def _fill_metadata(table, data: TrainingSignInSheetInput) -> None:
     # Row 2, Col 3: 考核方式
     _set_cell_text(table.rows[2].cells[3], data.assessment_method or "")
     # Row 3, Col 1: 培训日期含时间 (merged cols 1-3)
-    date_text = str(data.training_date) if data.training_date else ""
+    def _fmt_date(d, t_start, t_end, label):
+        if not d or not t_start:
+            return ""
+        ds = f"{d.year}年{d.month}月{d.day}日"
+        if t_start and t_end:
+            return f"{label}：{ds} {t_start}—{t_end}"
+        return f"{label}：{ds} {t_start}"
+    face_date = getattr(data, "face_date", None) or data.training_date
+    self_date = getattr(data, "self_study_date", None)
     self_start = getattr(data, "self_study_time_start", None)
     self_end = getattr(data, "self_study_time_end", None)
-    if face_start and face_end:
-        date_text += f" 面授 {face_start}—{face_end}"
-        if self_start and self_end:
-            date_text += f"；自学 {self_start}—{self_end}"
+    parts = []
+    face_part = _fmt_date(face_date, face_start, face_end, "面授")
+    if face_part:
+        parts.append(face_part)
+    if self_date and self_start:
+        parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
+    date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
     _set_cell_text(table.rows[3].cells[1], date_text)
 
 
