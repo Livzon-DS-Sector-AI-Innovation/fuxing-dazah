@@ -7,16 +7,6 @@ import { Employee } from '@/types/hr'
 import { fetchEmployeesAction, fetchPrejobTrainingPlan } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 
-const DEPT_CONTENT_MAP: Record<string, string[]> = {
-  '人事行政部': [
-    '公司级公用文件(详见附件一)',
-    '部门级公用文件(详见附件二)',
-    '人事行政部人事行政专员岗位文件(详见附件三)',
-    '人事行政专员岗位职责(QP.PM.053)',
-    '生产安全知识',
-    '岗前培训计划',
-  ] }
-
 export default function PreJobPlanClient() {
   const { message } = App.useApp()
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -161,7 +151,7 @@ export default function PreJobPlanClient() {
                 </thead>
                 <tbody>
                   {(() => {
-                    const contents = DEPT_CONTENT_MAP[selectedEmployee.department || ''] || []
+                    const contents: string[] = []
                     return Array.from({ length: 10 }, (_, i) => (
                       <tr key={i} className="border border-gray-300">
                         <td className="border border-gray-300 px-3 py-2 text-center">{i + 1}</td>
