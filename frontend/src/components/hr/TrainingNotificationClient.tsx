@@ -292,8 +292,9 @@ export default function TrainingNotificationClient() {
         training_date_start: dateStart,
         training_date_end: isDual ? dateEnd : undefined,
         subject: values.subject,
-        training_time_start: trainingTime ? dayjs(trainingTime[0]).format('HH:mm') : undefined,
-        training_time_end: trainingTime ? dayjs(trainingTime[1]).format('HH:mm') : undefined,
+        // 课时：双模式时取面授时间，单模式时取 training_time
+        training_time_start: faceTime ? dayjs(faceTime[0]).format('HH:mm') : (trainingTime ? dayjs(trainingTime[0]).format('HH:mm') : undefined),
+        training_time_end: faceTime ? dayjs(faceTime[1]).format('HH:mm') : (trainingTime ? dayjs(trainingTime[1]).format('HH:mm') : undefined),
         face_to_face_time_start: faceTime ? dayjs(faceTime[0]).format('HH:mm') : undefined,
         face_to_face_time_end: faceTime ? dayjs(faceTime[1]).format('HH:mm') : undefined,
         self_study_time_start: selfStudyTime ? dayjs(selfStudyTime[0]).format('HH:mm') : undefined,
@@ -330,8 +331,10 @@ export default function TrainingNotificationClient() {
     setSubmittingExcel(true)
     try {
       const topic = [values.subject, values.content].filter(Boolean).join(' ')
+      const trainDate = singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : '')
+      if (!trainDate) throw new Error('请选择培训日期')
       const payload = {
-        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : ''),
+        training_date: trainDate,
         training_time_start: values.training_time
           ? dayjs(values.training_time[0]).format('HH:mm')
           : undefined,
