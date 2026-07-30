@@ -10,10 +10,14 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
+from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
+from app.modules.hr.deps import HrAccessContext, get_hr_scope, require_hr_basic
 from app.modules.hr.document_generator import generate_onboarding_training_record
 from app.modules.hr.evaluation_document_generator import generate_training_evaluation
 from app.modules.hr.interview_routes import router as interview_router
@@ -77,12 +81,9 @@ from app.modules.hr.service import (
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 from app.modules.hr.system_settings_routes import router as system_settings_router
-from app.modules.hr.analysis_api import router as analysis_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
-
-from app.modules.hr.deps import HrAccessContext, get_scoped_department, require_hr_access, require_hr_basic
 
 router = create_module_router(
     MODULES_BY_CODE["hr"],
@@ -153,6 +154,27 @@ def get_annual_training_plan_item_service(
     return AnnualTrainingPlanItemService(session)
 
 
+async def _ensure_ledger_access(record, hr_scope: HrAccessContext, session: AsyncSession) -> None:
+    """按台账工号反查员工并校验数据范围，越界抛 403。"""
+    if hr_scope.is_unrestricted:
+        return
+    from app.modules.hr.repository import EmployeeRepository
+    emp = await EmployeeRepository(session).get_by_employee_number(record.employee_number)
+    if emp is None:
+        raise ForbiddenException("数据范围限制：无法确认该记录所属员工")
+    hr_scope.ensure_can_access_employee(emp)
+
+
+def _ensure_qa_assessment_access(hr_scope: HrAccessContext, department: str | None) -> None:
+    """考核场次数据范围校验：受限用户仅可访问本部门场次（self_only 无对应场次）。"""
+    if hr_scope.is_unrestricted:
+        return
+    if not hr_scope.scoped_department:
+        raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+    if department != hr_scope.scoped_department:
+        raise ForbiddenException("数据范围限制：仅可访问本部门考核场次")
+
+
 # ─── Employee Routes ───
 
 @router.get("/employees", summary="员工列表")
@@ -162,11 +184,14 @@ async def list_employees(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     page_params: PageParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
-    scoped_department: str | None = Depends(get_scoped_department),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    # 数据范围限制：非全部权限时强制只看本部门
-    if scoped_department:
-        department = department or scoped_department
+    # 数据范围限制：非全部权限时强制收敛，忽略前端传入的 department 参数
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_department:
+            department = hr_scope.scoped_department
+        else:
+            keyword = hr_scope.employee_number
     employees, total = await service.list_employees(
         department=department,
         status=status,
@@ -174,6 +199,10 @@ async def list_employees(
         page=page_params.page,
         page_size=page_params.page_size,
     )
+    if not hr_scope.is_unrestricted and not hr_scope.scoped_department:
+        # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
+        employees = [e for e in employees if e.employee_number == hr_scope.employee_number]
+        total = len(employees)
     data = [
         EmployeeResponse.model_validate(e).model_dump(mode="json")
         for e in employees
@@ -219,10 +248,12 @@ async def upload_employees(
 async def download_roster(
     department: str | None = Query(None),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按部门下载员工花名册 Excel。"""
     from app.modules.hr.models import Employee
     from app.modules.hr.roster_generator import generate_roster_sync
+    department = hr_scope.resolve_export_department(department)
     r = await session.execute(
         select(Employee).where(Employee.is_deleted == False, Employee.status != "离职").order_by(Employee.department, Employee.employee_number)
     )
@@ -242,6 +273,7 @@ async def download_roster(
 async def download_training_registration(
     department: str | None = Query(None),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按部门下载个人培训登记表，整个部门合并为一个 docx 文件。"""
     from app.modules.hr.models import Employee
@@ -249,6 +281,7 @@ async def download_training_registration(
         generate_training_registration_sync,
     )
 
+    department = hr_scope.resolve_export_department(department)
     stmt = select(Employee).where(
         Employee.is_deleted == False,
         Employee.status != "离职",
@@ -285,6 +318,7 @@ async def download_training_registration(
 async def training_candidates(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """返回入职台账中在职的员工列表，同时关联员工表获取异动等完整信息。"""
     from app.modules.hr.models import Employee, OnboardingRecord, TransferRecord
@@ -292,6 +326,8 @@ async def training_candidates(
         OnboardingRecord.is_deleted == False,
         OnboardingRecord.is_employed == "是",
     )
+    # 数据范围受限时强制收敛到本部门/本人
+    stmt = hr_scope.apply_list_scope(stmt, OnboardingRecord)
     if keyword:
         stmt = stmt.where(
             OnboardingRecord.name.ilike(f"{keyword}%")
@@ -351,8 +387,10 @@ async def training_candidates(
 async def get_employee_by_number(
     employee_number: str,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     employee = await service.get_employee_by_number(employee_number)
+    hr_scope.ensure_can_access_employee(employee)
     return success_response(
         data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
     )
@@ -362,8 +400,10 @@ async def get_employee_by_number(
 async def get_employee(
     employee_id: UUID,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     employee = await service.get_employee(employee_id)
+    hr_scope.ensure_can_access_employee(employee)
     return success_response(
         data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
     )
@@ -374,7 +414,10 @@ async def update_employee(
     employee_id: UUID,
     payload: EmployeeUpdate,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    employee = await service.get_employee(employee_id)
+    hr_scope.ensure_can_access_employee(employee)
     employee = await service.update_employee(employee_id, payload)
     return success_response(
         data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
@@ -386,7 +429,10 @@ async def update_employee(
 async def delete_employee(
     employee_id: UUID,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    employee = await service.get_employee(employee_id)
+    hr_scope.ensure_can_access_employee(employee)
     await service.delete_employee(employee_id)
     return success_response(message="员工删除成功")
 
@@ -1080,7 +1126,11 @@ async def list_departments(
     keyword: str | None = Query(None, description="部门名称或编码关键词"),
     page_params: PageParams = Depends(),
     service: DepartmentService = Depends(get_department_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    # 数据范围限制：只返回本部门
+    if hr_scope.scoped_department:
+        keyword = keyword or hr_scope.scoped_department
     departments, total = await service.list_departments(
         keyword=keyword,
         page=page_params.page,
@@ -1239,7 +1289,12 @@ async def delete_position_by_name(
 @router.get("/positions/departments", summary="职位表中所有部门")
 async def list_position_departments(
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    depts = {row[0] for row in (await session.execute(select(HrPosition.department).where(HrPosition.is_deleted == False).distinct().order_by(HrPosition.department))).all()}
+    if hr_scope.scoped_department:
+        depts = {d for d in depts if d == hr_scope.scoped_department}
+    return success_response(data=sorted(depts))
     """返回职位表中所有不重复的部门名称。"""
     from app.modules.hr.models import HrPosition
 
@@ -1427,13 +1482,34 @@ async def list_offboarding_records(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     page_params: PageParams = Depends(),
     service: OffboardingRecordService = Depends(get_offboarding_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    records, total = await service.list_records(
-        employee_id=employee_id,
-        keyword=keyword,
-        page=page_params.page,
-        page_size=page_params.page_size,
-    )
+    if hr_scope.is_unrestricted:
+        records, total = await service.list_records(
+            employee_id=employee_id,
+            keyword=keyword,
+            page=page_params.page,
+            page_size=page_params.page_size,
+        )
+    else:
+        # 数据范围受限：离职记录无部门字段，join 员工表强制收敛到本部门/本人
+        from app.modules.hr.models import Employee, OffboardingRecord
+        stmt = (
+            select(OffboardingRecord)
+            .where(OffboardingRecord.is_deleted == False)
+            .options(selectinload(OffboardingRecord.employee))
+            .join(Employee, OffboardingRecord.employee_id == Employee.id)
+        )
+        if employee_id: stmt = stmt.where(OffboardingRecord.employee_id == employee_id)
+        if keyword: stmt = stmt.where(Employee.name.ilike(f"%{keyword}%") | Employee.employee_number.ilike(f"%{keyword}%"))
+        stmt = hr_scope.apply_list_scope(stmt, Employee)
+        total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+        records = list((await session.execute(
+            stmt.order_by(OffboardingRecord.created_at.desc())
+            .offset((page_params.page - 1) * page_params.page_size)
+            .limit(page_params.page_size)
+        )).scalars().all())
     data = [
         OffboardingRecordResponse.model_validate(r).model_dump(mode="json")
         for r in records
@@ -1519,10 +1595,14 @@ async def list_onboarding_records(
     sort_order: str = Query("desc", description="排序方向"),
     page_params: PageParams = Depends(),
     service: OnboardingRecordService = Depends(get_onboarding_service),
-    scoped_department: str | None = Depends(get_scoped_department),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    if scoped_department:
-        department = department or scoped_department
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_department:
+            # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+            department = hr_scope.scoped_department
+        else:
+            keyword = hr_scope.employee_number
     records, total = await service.list_records(
         department=department,
         position=position,
@@ -1533,6 +1613,10 @@ async def list_onboarding_records(
         page=page_params.page,
         page_size=page_params.page_size,
     )
+    if not hr_scope.is_unrestricted and not hr_scope.scoped_department:
+        # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
+        records = [r for r in records if r.employee_number == hr_scope.employee_number]
+        total = len(records)
     data = [
         OnboardingRecordResponse.model_validate(r).model_dump(mode="json")
         for r in records
@@ -1576,10 +1660,14 @@ async def list_departure_records(
     sort_order: str = Query("desc", description="排序方向"),
     page_params: PageParams = Depends(),
     service: DepartureRecordService = Depends(get_departure_service),
-    scoped_department: str | None = Depends(get_scoped_department),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    if scoped_department:
-        department = department or scoped_department
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 离职台账无工号字段，self_only 无法定位本人记录
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     records, total = await service.list_records(
         department=department,
         offboarding_type=offboarding_type,
@@ -1710,16 +1798,38 @@ async def list_training_ledgers(
     date_to: date | None = Query(None, description="培训日期止"),
     page_params: PageParams = Depends(),
     service: TrainingLedgerService = Depends(get_training_ledger_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    records, total = await service.list_records(
-        employee_number=employee_number,
-        date_from=date_from,
-        date_to=date_to,
-        page=page_params.page,
-        page_size=page_params.page_size,
-        sort_by="training_date",
-        sort_order="asc",
-    )
+    if hr_scope.is_unrestricted:
+        records, total = await service.list_records(
+            employee_number=employee_number,
+            date_from=date_from,
+            date_to=date_to,
+            page=page_params.page,
+            page_size=page_params.page_size,
+            sort_by="training_date",
+            sort_order="asc",
+        )
+    else:
+        # 数据范围受限：join 员工表强制收敛到本部门/本人，查别部门工号返回空
+        from app.modules.hr.models import Employee, OnboardingRecord, TrainingLedger
+        departed_subq = select(OnboardingRecord.employee_number).where(
+            OnboardingRecord.is_deleted == False, OnboardingRecord.is_employed == "否")
+        stmt = (select(TrainingLedger)
+            .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
+            .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False,
+                   TrainingLedger.employee_number.not_in(departed_subq)))
+        if employee_number: stmt = stmt.where(TrainingLedger.employee_number == employee_number)
+        if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
+        if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
+        stmt = hr_scope.apply_list_scope(stmt, Employee)
+        total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
+        records = list((await session.execute(
+            stmt.order_by(TrainingLedger.training_date.asc())
+            .offset((page_params.page - 1) * page_params.page_size)
+            .limit(page_params.page_size)
+        )).scalars().all())
     data = [
         TrainingLedgerResponse.model_validate(r).model_dump(mode="json")
         for r in records
@@ -1776,8 +1886,15 @@ async def batch_update_scores(
 @router.get("/training-ledgers/pages", summary="已创建的培训台账页面列表")
 async def list_training_ledger_pages(
     service: TrainingLedgerPageService = Depends(get_training_ledger_page_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     pages_with_dept = await service.list_pages_with_department()
+    # 数据范围受限时只保留本部门/本人的台账页面
+    if not hr_scope.is_unrestricted:
+        if hr_scope.scoped_department:
+            pages_with_dept = [(p, d) for p, d in pages_with_dept if d == hr_scope.scoped_department]
+        else:
+            pages_with_dept = [(p, d) for p, d in pages_with_dept if p.employee_number == hr_scope.employee_number]
     data = [
         {
             "id": str(page.id),
@@ -1957,11 +2074,13 @@ async def export_training_ledger(
     employee_number: str = Query(..., description="员工工号"),
     ledger_service: TrainingLedgerService = Depends(get_training_ledger_service),
     employee_service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据员工数据生成并导出培训台账 Excel 文件。"""
     employee = await employee_service.get_employee_by_number(employee_number)
     if not employee:
         raise HTTPException(status_code=404, detail="未找到该员工")
+    hr_scope.ensure_can_access_employee(employee)
 
     records, _ = await ledger_service.list_records(
         employee_number=employee_number,
@@ -1994,13 +2113,12 @@ async def export_training_ledger(
 
 
 @router.get("/training-ledgers/admin", summary="管理员培训台账总览")
-async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db), scoped_department: str | None = Depends(get_scoped_department)):
-    if scoped_department:
-        department = department or scoped_department
+async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
     from app.modules.hr.models import Employee, TrainingLedger
     cols = (TrainingLedger.id, TrainingLedger.employee_number, Employee.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, Employee.department)
     stmt = select(*cols).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
-    if department: stmt = stmt.where(Employee.department == department)
+    if hr_scope.is_unrestricted and department: stmt = stmt.where(Employee.department == department)
+    stmt = hr_scope.apply_list_scope(stmt, Employee)
     if training_subject: stmt = stmt.where(TrainingLedger.training_subject.ilike(f"%{training_subject}%"))
     if date_from: stmt = stmt.where(TrainingLedger.training_date >= date_from)
     if date_to: stmt = stmt.where(TrainingLedger.training_date <= date_to)
@@ -2010,35 +2128,35 @@ async def ledger_admin(department: str | None = Query(None), training_subject: s
 
 
 @router.get("/training-ledgers/admin/departments", summary="台账中的部门列表")
-async def ledger_admin_departments(session: AsyncSession = Depends(get_db)):
+async def ledger_admin_departments(session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
     from app.modules.hr.models import Employee, TrainingLedger
-    r = (await session.execute(
-        select(Employee.department).select_from(TrainingLedger)
+    stmt = (select(Employee.department).select_from(TrainingLedger)
         .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
-        .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
-        .distinct().order_by(Employee.department)
-    )).all()
+        .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False))
+    # 数据范围受限角色的下拉框只给本部门/本人
+    stmt = hr_scope.apply_list_scope(stmt, Employee)
+    r = (await session.execute(stmt.distinct().order_by(Employee.department))).all()
     return success_response(data=[d[0] for d in r if d[0]])
 
 
 @router.get("/training-ledgers/admin/subjects", summary="台账中的培训内容列表")
-async def ledger_admin_subjects(department: str | None = Query(None), session: AsyncSession = Depends(get_db)):
+async def ledger_admin_subjects(department: str | None = Query(None), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
     from app.modules.hr.models import Employee, TrainingLedger
     stmt = (select(TrainingLedger.training_subject).select_from(TrainingLedger)
         .join(Employee, TrainingLedger.employee_number == Employee.employee_number)
         .where(TrainingLedger.is_deleted == False, Employee.is_deleted == False))
-    if department: stmt = stmt.where(Employee.department == department)
+    if hr_scope.is_unrestricted and department: stmt = stmt.where(Employee.department == department)
+    stmt = hr_scope.apply_list_scope(stmt, Employee)
     r = (await session.execute(stmt.distinct().order_by(TrainingLedger.training_subject))).all()
     return success_response(data=[s[0] for s in r if s[0]])
 
 
 @router.get("/training-ledgers/admin/stats", summary="培训台账统计")
-async def ledger_admin_stats(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), session: AsyncSession = Depends(get_db), scoped_department: str | None = Depends(get_scoped_department)):
-    if scoped_department:
-        department = department or scoped_department
+async def ledger_admin_stats(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), session: AsyncSession = Depends(get_db), hr_scope: HrAccessContext = Depends(get_hr_scope)):
     from app.modules.hr.models import Employee, TrainingLedger
     base = select(TrainingLedger.assessment_result).select_from(TrainingLedger).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
-    if department: base = base.where(Employee.department == department)
+    if hr_scope.is_unrestricted and department: base = base.where(Employee.department == department)
+    base = hr_scope.apply_list_scope(base, Employee)
     if training_subject: base = base.where(TrainingLedger.training_subject == training_subject)
     if date_from: base = base.where(TrainingLedger.training_date >= date_from)
     if date_to: base = base.where(TrainingLedger.training_date <= date_to)
@@ -2173,11 +2291,15 @@ async def list_qa_assessments(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     session: AsyncSession = Depends(get_db),
-    scoped_department: str | None = Depends(get_scoped_department),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按部门查询考核场次列表。"""
-    if scoped_department:
-        department = department or scoped_department
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # self_only 用户对考核场次无意义
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     where = "WHERE is_deleted = false"
     params: dict = {"lim": page_size, "off": (page - 1) * page_size}
     if department:
@@ -2212,6 +2334,7 @@ class QaScoreSaveBody(BaseModel):
 async def get_qa_assessment(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """获取考核详情，含题目和成绩。"""
     import json as _json
@@ -2221,6 +2344,7 @@ async def get_qa_assessment(
     )).fetchone()
     if not row:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, row[2])
 
     scores = (await session.execute(
         text("SELECT id, employee_name, employee_number, wrong_questions, total_score, grade, result_text, assessed_date FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
@@ -2255,6 +2379,7 @@ async def save_qa_scores(
     assessment_id: UUID,
     payload: QaScoreSaveBody,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """保存或更新考核成绩。"""
     import json as _json
@@ -2270,9 +2395,11 @@ async def save_qa_scores(
 
     # 获取考核场次题目信息用于准确计分
     assess_row = (await session.execute(
-        text("SELECT questions, full_score, excellent_line, pass_line FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
+        text("SELECT questions, full_score, excellent_line, pass_line, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
+    if assess_row:
+        _ensure_qa_assessment_access(hr_scope, assess_row[4])
     questions_data: list[dict] = []
     full_score_val = 100
     if assess_row:
@@ -2381,19 +2508,21 @@ async def save_qa_scores(
 async def sync_qa_to_ledger(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """将考核场次的成绩批量同步到培训台账。"""
     from datetime import date as _date
 
     # 获取考核场次
     assess = (await session.execute(
-        text("SELECT subject, training_date, training_method, trainer FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
+        text("SELECT subject, training_date, training_method, trainer, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
     if not assess:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, assess[4])
 
-    subj, train_date, method, trainer = assess
+    subj, train_date, method, trainer = assess[0], assess[1], assess[2], assess[3]
     td = train_date or _date.today()
 
     # 获取所有成绩
@@ -2635,6 +2764,7 @@ async def export_training_qa_record(
 async def export_qa_record(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出问答实操记录表 docx。"""
     import json as _json
@@ -2647,6 +2777,7 @@ async def export_qa_record(
     )).fetchone()
     if not row:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, row[1])
 
     scores = (await session.execute(
         text("SELECT employee_name, employee_number, wrong_questions, total_score, assessed_date FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
@@ -2694,6 +2825,7 @@ async def export_qa_record(
 async def export_qa_evaluation(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出培训效果评估表 docx。自动从成绩数据汇总统计。"""
     from app.modules.hr.evaluation_document_generator import (
@@ -2707,6 +2839,7 @@ async def export_qa_evaluation(
     )).fetchone()
     if not row:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, row[1])
 
     scores = (await session.execute(
         text("SELECT employee_name, total_score FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
@@ -2759,6 +2892,7 @@ async def export_qa_evaluation(
 async def export_qa_scores(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出成绩单 docx（使用成绩单模板），并自动同步成绩到培训台账。"""
     from datetime import date as _date
@@ -2771,6 +2905,7 @@ async def export_qa_scores(
     )).fetchone()
     if not row:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, row[1])
 
     subj, dept, train_date, method, trainer = row
 
@@ -2834,8 +2969,11 @@ async def export_qa_scores(
 async def get_training_ledger(
     record_id: UUID,
     service: TrainingLedgerService = Depends(get_training_ledger_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     record = await service.get_record(record_id)
+    await _ensure_ledger_access(record, hr_scope, session)
     return success_response(
         data=TrainingLedgerResponse.model_validate(record).model_dump(mode="json"),
     )
@@ -2846,7 +2984,11 @@ async def update_training_ledger(
     record_id: UUID,
     payload: TrainingLedgerUpdate,
     service: TrainingLedgerService = Depends(get_training_ledger_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    await _ensure_ledger_access(record, hr_scope, session)
     record = await service.update_record(record_id, payload)
     return success_response(
         data=TrainingLedgerResponse.model_validate(record).model_dump(mode="json"),
@@ -2858,7 +3000,11 @@ async def update_training_ledger(
 async def delete_training_ledger(
     record_id: UUID,
     service: TrainingLedgerService = Depends(get_training_ledger_service),
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    await _ensure_ledger_access(record, hr_scope, session)
     await service.delete_record(record_id)
     return success_response(message="培训台账记录删除成功")
 
@@ -2892,7 +3038,14 @@ async def list_annual_training_plans(
     page_params: PageParams = Depends(),
     service: AnnualTrainingPlanService = Depends(get_annual_training_plan_service),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 年度计划按部门归属，self_only 无对应数据
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     plans, total = await service.list_plans(
         year=year,
         department=department,
@@ -2976,10 +3129,17 @@ async def list_all_annual_plan_items(
     department: str | None = Query(None, description="部门筛选"),
     keyword: str | None = Query(None, description="培训内容关键词"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """返回所有年度计划明细的扁平列表，关联部门信息，用于表格展示。"""
     conditions = ["i.is_deleted = false", "p.is_deleted = false"]
     params: dict = {}
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 年度计划按部门归属，self_only 无对应数据
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     if year is not None:
         conditions.append("p.year = :year")
         params["year"] = year
@@ -3307,10 +3467,17 @@ async def list_trainers(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.core.response import paginated_response
     from app.modules.hr.models import HrTrainer
 
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 内训师按部门归属，self_only 无对应数据
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     query = select(HrTrainer).where(HrTrainer.is_deleted == False)
     count_q = select(func.count()).select_from(HrTrainer).where(HrTrainer.is_deleted == False)
     if department:
@@ -3398,9 +3565,16 @@ async def list_dept_training_personnel(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import DeptTrainingPersonnel
 
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 部门培训人员按部门归属，self_only 无对应数据
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本体现部门，忽略前端传入的 department 参数
+        department = hr_scope.scoped_department
     query = select(DeptTrainingPersonnel).where(DeptTrainingPersonnel.is_deleted == False)
     count_q = select(func.count()).select_from(DeptTrainingPersonnel).where(DeptTrainingPersonnel.is_deleted == False)
 
@@ -3785,11 +3959,19 @@ async def list_exam_papers(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """列出已保存的笔试试卷。"""
     from app.modules.hr.models import ExamPaper
     q = select(ExamPaper).where(ExamPaper.is_deleted == False).order_by(ExamPaper.created_at.desc())
     total_q = select(func.count()).select_from(ExamPaper).where(ExamPaper.is_deleted == False)
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_department:
+            # 试卷按培训部门归属，self_only 无对应数据
+            raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+        # 数据范围受限角色强制只看本部门试卷
+        q = q.where(ExamPaper.department == hr_scope.scoped_department)
+        total_q = total_q.where(ExamPaper.department == hr_scope.scoped_department)
     total = (await session.execute(total_q)).scalar() or 0
     papers = (await session.execute(q.offset((page - 1) * page_size).limit(page_size))).scalars().all()
     data = [{
@@ -3842,11 +4024,19 @@ async def list_transfers(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """查询某员工的异动记录（分页）。"""
     from sqlalchemy import func
 
-    from app.modules.hr.models import TransferRecord
+    from app.modules.hr.models import Employee, TransferRecord
+    if not hr_scope.is_unrestricted:
+        emp = (await session.execute(
+            select(Employee).where(Employee.id == employee_id, Employee.is_deleted == False)
+        )).scalar_one_or_none()
+        if not emp:
+            raise HTTPException(404, "员工不存在")
+        hr_scope.ensure_can_access_employee(emp)
     base = select(TransferRecord).where(
         TransferRecord.employee_id == employee_id, TransferRecord.is_deleted == False
     )
