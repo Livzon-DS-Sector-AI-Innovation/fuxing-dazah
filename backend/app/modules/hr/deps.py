@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
 from app.platform.identity.models import User
@@ -107,6 +108,7 @@ def require_hr_access(*codes: str):
 async def get_scoped_department(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> str | None:
     """获取当前用户 HR 数据范围对应的部门名，不额外校验权限。
 
@@ -114,7 +116,7 @@ async def get_scoped_department(
     但不强制要求特定权限码，避免培训管理员等角色因缺少某资源权限而绕过过滤。
     """
     from app.platform.identity.deps import get_current_user
-    user = await get_current_user(request, db)
+    user = await get_current_user(request, db=db, settings=settings)
     if user is None:
         return None
     scope = await _perm_repo.get_effective_data_scope(db, user.id, "hr")
