@@ -546,6 +546,31 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               </Form.Item>
             )}
 
+            {/* 不参与能源总耗统计 */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 16px',
+                marginBottom: 16,
+                borderRadius: 8,
+                background: '#f6f5f4',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
+                  不参与能源总耗统计
+                </div>
+                <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4 }}>
+                  开启后该数据源不计入总耗统计与可视化分析
+                </div>
+              </div>
+              <Form.Item name="exclude_from_stats" valuePropName="checked" style={{ marginBottom: 0 }}>
+                <Switch />
+              </Form.Item>
+            </div>
+
             {/* ── 采集设置 ── */}
             <SectionLabel icon={<SettingOutlined />} text="采集设置" />
 
