@@ -1128,9 +1128,9 @@ async def list_departments(
     service: DepartmentService = Depends(get_department_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    # 数据范围限制：只返回本部门
+    # 数据范围限制：只返回本部门，不受前端 keyword 影响
     if hr_scope.scoped_department:
-        keyword = keyword or hr_scope.scoped_department
+        keyword = hr_scope.scoped_department
     departments, total = await service.list_departments(
         keyword=keyword,
         page=page_params.page,
