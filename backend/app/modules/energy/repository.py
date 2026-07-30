@@ -466,6 +466,7 @@ async def get_energy_statistics(
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
     )
@@ -522,6 +523,7 @@ async def get_overview_summary(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
     )
@@ -572,6 +574,7 @@ async def get_overview_trend(
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(*group_cols)
         .order_by(order_col.asc())
@@ -1252,6 +1255,7 @@ async def get_workshop_daily_consumption(
             cst_date == cast(target_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1293,6 +1297,7 @@ async def get_workshop_avg_consumption(
             cst_date <= cast(end_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(cst_date)
         .subquery()
@@ -1321,6 +1326,7 @@ async def get_distinct_workshop_energy_types(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop, EnergyDeviceConfig.energy_type)
@@ -1347,6 +1353,7 @@ async def get_device_options_by_energy_type(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     if energy_type:
@@ -1366,6 +1373,7 @@ async def get_distinct_workshops(db: AsyncSession) -> list[str]:
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop)
@@ -1588,6 +1596,7 @@ async def get_daily_total_by_energy_type(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1621,6 +1630,7 @@ async def get_daily_top_workshops(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     grand_total = float(total_result.scalar() or 0)
@@ -1645,6 +1655,7 @@ async def get_daily_top_workshops(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.workshop)
         .order_by(func.sum(EnergyData.value).desc())

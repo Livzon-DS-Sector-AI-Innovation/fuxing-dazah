@@ -293,6 +293,17 @@ export function DeviceTable({
       ),
     },
     {
+      title: '统计',
+      dataIndex: 'exclude_from_stats',
+      key: 'exclude_from_stats',
+      width: 90,
+      render: (excluded: boolean) => (
+        excluded
+          ? <span style={luxuryPill('#dd5b00', '#ffe8d4')}>不参与</span>
+          : <span style={luxuryPill('#1aae39', '#d9f3e1')}>参与统计</span>
+      ),
+    },
+    {
       title: '',
       key: 'action',
       width: 100,

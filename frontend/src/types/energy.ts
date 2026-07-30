@@ -22,6 +22,7 @@ export interface EnergyDeviceConfig {
   equipment_name?: string | null
   daily_collect_time?: string | null
   is_region_level: boolean
+  exclude_from_stats: boolean
   remark?: string
   created_at: string
   updated_at: string
@@ -44,6 +45,7 @@ export interface CreateDeviceInput {
   equipment_name?: string | null
   daily_collect_time?: string | null
   is_region_level?: boolean
+  exclude_from_stats?: boolean
   remark?: string
 }
 export interface UpdateDeviceInput {
@@ -62,6 +64,7 @@ export interface UpdateDeviceInput {
   equipment_name?: string | null
   daily_collect_time?: string | null
   is_region_level?: boolean
+  exclude_from_stats?: boolean
   remark?: string
 }
 

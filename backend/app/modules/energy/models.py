@@ -109,6 +109,9 @@ class EnergyDeviceConfig(BaseModel):
     is_region_level: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, comment="是否区域级别（False=部门级别）"
     )
+    exclude_from_stats: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="是否不参与能源总耗统计与可视化"
+    )
 
 
 class EnergyData(BaseModel):
