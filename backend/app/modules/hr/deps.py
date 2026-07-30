@@ -104,6 +104,32 @@ def require_hr_access(*codes: str):
     return _dependency
 
 
+async def get_scoped_department(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> str | None:
+    """获取当前用户 HR 数据范围对应的部门名，不额外校验权限。
+
+    用于列表接口自动过滤部门数据。逻辑与 require_hr_access 中一致，
+    但不强制要求特定权限码，避免培训管理员等角色因缺少某资源权限而绕过过滤。
+    """
+    from app.platform.identity.deps import get_current_user
+    user = await get_current_user(request, db)
+    if user is None:
+        return None
+    scope = await _perm_repo.get_effective_data_scope(db, user.id, "hr")
+    if scope in ("all", "self_only"):
+        return None
+    if user.employee_no:
+        from app.modules.hr.repository import EmployeeRepository
+        emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
+        if emp:
+            return emp.department
+    if user.department:
+        return user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+    return None
+
+
 # ── 路径 → 权限码映射（用于自动权限校验） ──
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
