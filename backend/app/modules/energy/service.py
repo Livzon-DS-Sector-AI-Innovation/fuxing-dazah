@@ -694,7 +694,7 @@ async def process_alert_record(
         {
             "status": request.status,
             "process_note": request.process_note,
-            "processed_at": datetime.now(),
+            "processed_at": datetime.now(CST),
         },
     )
     assert result is not None
@@ -877,8 +877,6 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
     Returns:
         {"checked": int, "triggered": int, "errors": int}
     """
-    from datetime import datetime, timedelta
-
     from app.platform.integrations.feishu.notification import send_user_card
 
     now = datetime.now(CST)
@@ -939,185 +937,186 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
                 user_rule = await repo.get_alert_rule_by_id(db, config.alert_rule_id)
                 if user_rule is None or not user_rule.is_enabled:
                     checked += 1
-                    continue
+                else:
+                    rule_energy_type = user_rule.energy_type
+                    unit = user_rule.unit
 
-                rule_energy_type = user_rule.energy_type
-                unit = user_rule.unit
-
-                # 查重
-                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                existing_record = await repo.find_today_alert_record(
-                    db, config.workshop, rule_energy_type, today_start
-                )
-                if existing_record is not None:
-                    checked += 1
-                    continue
-
-                # 查询昨日能耗
-                yesterday_consumption = await repo.get_workshop_daily_consumption(
-                    db, config.workshop, rule_energy_type, yesterday
-                )
-                if yesterday_consumption is None or yesterday_consumption == 0:
-                    checked += 1
-                    continue
-
-                # 使用规则中的阈值类型和阈值进行判断
-                threshold_value = float(user_rule.threshold_value)
-                threshold_fn = {
-                    "greater_than": lambda y, t: y > t,
-                    "less_than": lambda y, t: y < t,
-                    "equal": lambda y, t: y == t,
-                }.get(user_rule.threshold_type)
-                if threshold_fn is None or not threshold_fn(yesterday_consumption, threshold_value):
-                    checked += 1
-                    continue
-
-                from decimal import Decimal
-                _ = await repo.create_alert_record(db, {
-                    "rule_id": user_rule.id,
-                    "workshop": config.workshop,
-                    "energy_type": rule_energy_type,
-                    "alert_level": user_rule.alert_level,
-                    "trigger_value": Decimal(str(yesterday_consumption)),
-                    "threshold_value": user_rule.threshold_value,
-                    "unit": unit,
-                    "alert_time": now,
-                    "status": "pending",
-                })
-
-                # 发送飞书通知
-                display_name = display_name_map.get(rule_energy_type, rule_energy_type)
-                excess = yesterday_consumption - threshold_value
-                pct = (excess / threshold_value) * 100
-                notify_title = f"⚠️ 能耗预警 - {config.workshop}"
-                notify_content = (
-                    f"**{config.workshop}**（负责人：{heads_mention}）\n"
-                    f"{user_rule.rule_name} 阈值：{threshold_value:,.2f} {unit}"
-                    f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
-                    f"**超标量：{excess:,.2f} {unit}（+{pct:.1f}%）**"
-                )
-
-                for open_id in open_ids:
-                    success = await send_user_card(open_id, notify_title, notify_content)
-                    if not success:
-                        logger.warning(
-                            "车间预警飞书通知失败(自定义规则): workshop=%s, energy_type=%s, open_id=%s",
-                            config.workshop, rule_energy_type, open_id,
+                    # 查重
+                    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    existing_record = await repo.find_today_alert_record(
+                        db, config.workshop, rule_energy_type, today_start
+                    )
+                    if existing_record is not None:
+                        checked += 1
+                    else:
+                        # 查询昨日能耗
+                        yesterday_consumption = await repo.get_workshop_daily_consumption(
+                            db, config.workshop, rule_energy_type, yesterday
                         )
+                        if yesterday_consumption is None or yesterday_consumption == 0:
+                            checked += 1
+                        else:
+                            # 使用规则中的阈值类型和阈值进行判断
+                            threshold_value = float(user_rule.threshold_value)
+                            threshold_fn = {
+                                "greater_than": lambda y, t: y > t,
+                                "less_than": lambda y, t: y < t,
+                                "equal": lambda y, t: y == t,
+                            }.get(user_rule.threshold_type)
+                            if threshold_fn is None or not threshold_fn(yesterday_consumption, threshold_value):
+                                checked += 1
+                            else:
+                                from decimal import Decimal
+                                _ = await repo.create_alert_record(db, {
+                                    "rule_id": user_rule.id,
+                                    "workshop": config.workshop,
+                                    "energy_type": rule_energy_type,
+                                    "alert_level": user_rule.alert_level,
+                                    "trigger_value": Decimal(str(yesterday_consumption)),
+                                    "threshold_value": user_rule.threshold_value,
+                                    "unit": unit,
+                                    "alert_time": now,
+                                    "status": "pending",
+                                })
 
-                triggered += 1
-                checked += 1
-                logger.info(
-                    "车间能耗预警触发(自定义规则): workshop=%s, energy_type=%s, "
-                    "rule=%s, threshold_type=%s, threshold_value=%.2f, yesterday=%.2f",
-                    config.workshop, rule_energy_type,
-                    user_rule.rule_name, user_rule.threshold_type,
-                    threshold_value, yesterday_consumption,
-                )
+                                # 发送飞书通知
+                                display_name = display_name_map.get(rule_energy_type, rule_energy_type)
+                                if user_rule.threshold_type == "less_than":
+                                    excess = threshold_value - yesterday_consumption
+                                elif user_rule.threshold_type == "equal":
+                                    excess = abs(yesterday_consumption - threshold_value)
+                                else:
+                                    excess = yesterday_consumption - threshold_value
+                                pct = (excess / threshold_value) * 100
+                                notify_title = f"⚠️ 能耗预警 - {config.workshop}"
+                                notify_content = (
+                                    f"**{config.workshop}**（负责人：{heads_mention}）\n"
+                                    f"{user_rule.rule_name} 阈值：{threshold_value:,.2f} {unit}"
+                                    f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
+                                    f"**偏移量：{excess:,.2f} {unit}（{pct:.1f}%）**"
+                                )
+
+                                for open_id in open_ids:
+                                    success = await send_user_card(open_id, notify_title, notify_content)
+                                    if not success:
+                                        logger.warning(
+                                            "车间预警飞书通知失败(自定义规则): workshop=%s, energy_type=%s, open_id=%s",
+                                            config.workshop, rule_energy_type, open_id,
+                                        )
+
+                                triggered += 1
+                                checked += 1
+                                logger.info(
+                                    "车间能耗预警触发(自定义规则): workshop=%s, energy_type=%s, "
+                                    "rule=%s, threshold_type=%s, threshold_value=%.2f, yesterday=%.2f",
+                                    config.workshop, rule_energy_type,
+                                    user_rule.rule_name, user_rule.threshold_type,
+                                    threshold_value, yesterday_consumption,
+                                )
             except Exception:
                 logger.exception(
                     "车间预警评估异常(自定义规则): workshop=%s", config.workshop
                 )
                 errors += 1
-            continue
-        # ── 系统规则分支（原有逻辑） ──
+        else:
+            # ── 系统规则分支（原有逻辑） ──
 
-        # 确保系统规则存在
-        energy_types = [c["energy_type"] for c in workshop_combos]
-        await repo.ensure_system_rules(db, config.workshop, energy_types, unit_map)
+            # 确保系统规则存在
+            energy_types = [c["energy_type"] for c in workshop_combos]
+            await repo.ensure_system_rules(db, config.workshop, energy_types, unit_map)
 
-        for combo in workshop_combos:
-            energy_type = combo["energy_type"]
-            unit = unit_map.get(energy_type, "")
+            for combo in workshop_combos:
+                energy_type = combo["energy_type"]
+                unit = unit_map.get(energy_type, "")
 
-            try:
-                # 查重：当天已有预警则跳过
-                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                existing_record = await repo.find_today_alert_record(
-                    db, config.workshop, energy_type, today_start
-                )
-                if existing_record is not None:
-                    checked += 1
-                    continue
+                try:
+                    # 查重：当天已有预警则跳过
+                    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                    existing_record = await repo.find_today_alert_record(
+                        db, config.workshop, energy_type, today_start
+                    )
+                    if existing_record is not None:
+                        checked += 1
+                        continue
 
-                # 查询昨日能耗
-                yesterday_consumption = await repo.get_workshop_daily_consumption(
-                    db, config.workshop, energy_type, yesterday
-                )
-                if yesterday_consumption is None or yesterday_consumption == 0:
-                    checked += 1
-                    continue
+                    # 查询昨日能耗
+                    yesterday_consumption = await repo.get_workshop_daily_consumption(
+                        db, config.workshop, energy_type, yesterday
+                    )
+                    if yesterday_consumption is None or yesterday_consumption == 0:
+                        checked += 1
+                        continue
 
-                # 计算近 30 天平均值
-                avg_consumption = await repo.get_workshop_avg_consumption(
-                    db, config.workshop, energy_type, yesterday, max_days=30
-                )
-                if avg_consumption is None or avg_consumption == 0:
-                    checked += 1
-                    continue
+                    # 计算近 30 天平均值
+                    avg_consumption = await repo.get_workshop_avg_consumption(
+                        db, config.workshop, energy_type, yesterday, max_days=30
+                    )
+                    if avg_consumption is None or avg_consumption == 0:
+                        checked += 1
+                        continue
 
-                # 判断是否超过 115%
-                threshold = avg_consumption * 1.15
-                if yesterday_consumption <= threshold:
-                    checked += 1
-                    continue
+                    # 判断是否超过 115%
+                    threshold = avg_consumption * 1.15
+                    if yesterday_consumption <= threshold:
+                        checked += 1
+                        continue
 
-                # 获取系统规则
-                sys_rule = await repo.get_system_alert_rule(db, config.workshop, energy_type)
-                rule_id = sys_rule.id if sys_rule else None
+                    # 获取系统规则
+                    sys_rule = await repo.get_system_alert_rule(db, config.workshop, energy_type)
+                    rule_id = sys_rule.id if sys_rule else None
 
-                # 创建预警记录
-                from decimal import Decimal
-                _ = await repo.create_alert_record(db, {
-                    "rule_id": rule_id,
-                    "workshop": config.workshop,
-                    "energy_type": energy_type,
-                    "alert_level": "warning",
-                    "trigger_value": Decimal(str(yesterday_consumption)),
-                    "threshold_value": Decimal(str(threshold)),
-                    "unit": unit,
-                    "alert_time": now,
-                    "status": "pending",
-                })
+                    # 创建预警记录
+                    from decimal import Decimal
+                    _ = await repo.create_alert_record(db, {
+                        "rule_id": rule_id,
+                        "workshop": config.workshop,
+                        "energy_type": energy_type,
+                        "alert_level": "warning",
+                        "trigger_value": Decimal(str(yesterday_consumption)),
+                        "threshold_value": Decimal(str(threshold)),
+                        "unit": unit,
+                        "alert_time": now,
+                        "status": "pending",
+                    })
 
-                # 发送飞书通知
-                display_name = display_name_map.get(energy_type, energy_type)
-                excess = yesterday_consumption - avg_consumption
-                pct = (excess / avg_consumption) * 100
-                notify_title = f"⚠️ 能耗预警 - {config.workshop}"
-                notify_content = (
-                    f"**{config.workshop}**（负责人：{heads_mention}）\n"
-                    f"日均标准：{avg_consumption:,.2f} {unit}"
-                    f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
-                    f"**超标量：{excess:,.2f} {unit}（+{pct:.1f}%）**"
-                )
+                    # 发送飞书通知
+                    display_name = display_name_map.get(energy_type, energy_type)
+                    excess = yesterday_consumption - avg_consumption
+                    pct = (excess / avg_consumption) * 100
+                    notify_title = f"⚠️ 能耗预警 - {config.workshop}"
+                    notify_content = (
+                        f"**{config.workshop}**（负责人：{heads_mention}）\n"
+                        f"日均标准：{avg_consumption:,.2f} {unit}"
+                        f" | 实际{display_name}：{yesterday_consumption:,.2f} {unit}\n"
+                        f"**超标量：{excess:,.2f} {unit}（+{pct:.1f}%）**"
+                    )
 
-                for open_id in open_ids:
-                    success = await send_user_card(open_id, notify_title, notify_content)
-                    if not success:
-                        logger.warning(
-                            "车间预警飞书通知失败: workshop=%s, energy_type=%s, open_id=%s",
-                            config.workshop, energy_type, open_id,
-                        )
+                    for open_id in open_ids:
+                        success = await send_user_card(open_id, notify_title, notify_content)
+                        if not success:
+                            logger.warning(
+                                "车间预警飞书通知失败: workshop=%s, energy_type=%s, open_id=%s",
+                                config.workshop, energy_type, open_id,
+                            )
 
-                triggered += 1
-                logger.info(
-                    "车间能耗预警触发: workshop=%s, energy_type=%s, "
-                    "yesterday=%.2f, avg=%.2f, threshold=%.2f",
-                    config.workshop, energy_type,
-                    yesterday_consumption, avg_consumption, threshold,
-                )
+                    triggered += 1
+                    logger.info(
+                        "车间能耗预警触发: workshop=%s, energy_type=%s, "
+                        "yesterday=%.2f, avg=%.2f, threshold=%.2f",
+                        config.workshop, energy_type,
+                        yesterday_consumption, avg_consumption, threshold,
+                    )
 
-            except Exception:
-                logger.exception(
-                    "车间能耗预警评估异常: workshop=%s, energy_type=%s",
-                    config.workshop, energy_type,
-                )
-                errors += 1
+                except Exception:
+                    logger.exception(
+                        "车间能耗预警评估异常: workshop=%s, energy_type=%s",
+                        config.workshop, energy_type,
+                    )
+                    errors += 1
 
-            checked += 1
+                checked += 1
 
-        # 更新 last_checked_at
+        # 更新 last_checked_at（自定义规则和系统规则分支都统一在此更新）
         await repo.update_workshop_config(db, config.id, {"last_checked_at": now})
 
     return {"checked": checked, "triggered": triggered, "errors": errors}
