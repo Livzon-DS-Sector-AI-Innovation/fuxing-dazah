@@ -162,7 +162,11 @@ async def list_employees(
     keyword: str | None = Query(None, description="姓名或工号关键词"),
     page_params: PageParams = Depends(),
     service: EmployeeService = Depends(get_employee_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:profile:read")),
 ):
+    # 数据范围限制：非全部权限时强制只看本部门
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     employees, total = await service.list_employees(
         department=department,
         status=status,
@@ -1515,7 +1519,10 @@ async def list_onboarding_records(
     sort_order: str = Query("desc", description="排序方向"),
     page_params: PageParams = Depends(),
     service: OnboardingRecordService = Depends(get_onboarding_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:onboarding:read")),
 ):
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     records, total = await service.list_records(
         department=department,
         position=position,
@@ -1569,7 +1576,10 @@ async def list_departure_records(
     sort_order: str = Query("desc", description="排序方向"),
     page_params: PageParams = Depends(),
     service: DepartureRecordService = Depends(get_departure_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:departure:read")),
 ):
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     records, total = await service.list_records(
         department=department,
         offboarding_type=offboarding_type,
@@ -1984,7 +1994,9 @@ async def export_training_ledger(
 
 
 @router.get("/training-ledgers/admin", summary="管理员培训台账总览")
-async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db)):
+async def ledger_admin(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=200), session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:training:read"))):
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     from app.modules.hr.models import Employee, TrainingLedger
     cols = (TrainingLedger.id, TrainingLedger.employee_number, Employee.name.label("employee_name"), TrainingLedger.training_subject, TrainingLedger.training_date, TrainingLedger.training_method, TrainingLedger.trainer, TrainingLedger.assessment_result, Employee.department)
     stmt = select(*cols).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
@@ -2021,7 +2033,9 @@ async def ledger_admin_subjects(department: str | None = Query(None), session: A
 
 
 @router.get("/training-ledgers/admin/stats", summary="培训台账统计")
-async def ledger_admin_stats(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), session: AsyncSession = Depends(get_db)):
+async def ledger_admin_stats(department: str | None = Query(None), training_subject: str | None = Query(None), date_from: date | None = Query(None), date_to: date | None = Query(None), session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:training:read"))):
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     from app.modules.hr.models import Employee, TrainingLedger
     base = select(TrainingLedger.assessment_result).select_from(TrainingLedger).join(Employee, TrainingLedger.employee_number == Employee.employee_number).where(TrainingLedger.is_deleted == False, Employee.is_deleted == False)
     if department: base = base.where(Employee.department == department)
@@ -2159,8 +2173,11 @@ async def list_qa_assessments(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     session: AsyncSession = Depends(get_db),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:training:assessment")),
 ):
     """按部门查询考核场次列表。"""
+    if ctx.scoped_department:
+        department = department or ctx.scoped_department
     where = "WHERE is_deleted = false"
     params: dict = {"lim": page_size, "off": (page - 1) * page_size}
     if department:
