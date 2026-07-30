@@ -2171,6 +2171,30 @@ def _parse_score(v: str | None) -> int:
     except: return 0
 
 
+class AddQuestionItems(BaseModel):
+    items: list[dict]
+    source: str = "手工录入"
+
+
+@router.post("/question-bank", summary="添加题目")
+async def add_question_bank_items(
+    payload: AddQuestionItems,
+    session: AsyncSession = Depends(get_db),
+):
+    """手动添加题目到题库。"""
+    inserted = 0
+    for q in payload.items:
+        if not q.get("question"):
+            continue
+        await session.execute(
+            text("INSERT INTO hr.question_bank (id, file_no, question, answer, score, source) VALUES (gen_random_uuid(), :fn, :q, :a, :s, :src)"),
+            {"fn": q.get("file_no"), "q": q["question"], "a": q.get("answer"), "s": q.get("score", 10), "src": payload.source},
+        )
+        inserted += 1
+    await session.commit()
+    return success_response(data={"inserted": inserted}, message=f"已添加 {inserted} 题")
+
+
 @router.get("/question-bank", summary="题库检索")
 async def qbank_search(file_no: str | None = Query(None), keyword: str | None = Query(None), page: int = Query(1, ge=1), page_size: int = Query(200, ge=1, le=500), session: AsyncSession = Depends(get_db)):
     where = "WHERE is_deleted = false"
@@ -2179,6 +2203,17 @@ async def qbank_search(file_no: str | None = Query(None), keyword: str | None = 
     if keyword: where += " AND (question ILIKE :kw OR subject ILIKE :kw)"; params["kw"] = f"%{keyword}%"
     r = await session.execute(text(f"SELECT id, file_no, question, answer, score, source, usage_count FROM hr.question_bank {where} ORDER BY usage_count DESC LIMIT :lim OFFSET :off"), params)
     return success_response(data=[{"id":str(row[0]),"file_no":row[1],"question":row[2],"answer":row[3],"score":row[4],"source":row[5],"usage_count":row[6]} for row in r])
+
+
+@router.delete("/question-bank/{item_id}", summary="删除题目")
+async def delete_question_bank_item(
+    item_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    await session.execute(
+        text("DELETE FROM hr.question_bank WHERE id = :id"), {"id": item_id})
+    await session.commit()
+    return success_response(message="已删除")
 
 
 @router.post("/question-bank/import-docx", summary="从培训记录 docx 导入题库")
