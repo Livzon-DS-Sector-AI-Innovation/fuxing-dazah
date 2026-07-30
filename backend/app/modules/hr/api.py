@@ -82,7 +82,7 @@ from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
 
-from app.modules.hr.deps import require_hr_basic
+from app.modules.hr.deps import HrAccessContext, require_hr_access, require_hr_basic
 
 router = create_module_router(
     MODULES_BY_CODE["hr"],
