@@ -158,7 +158,7 @@ class EnergyAlertRuleCreate(BaseModel):
     unit: str = Field(default="", max_length=20, description="计量单位（由能源类型自动确定，可不传）")
     alert_level: AlertLevel = Field(..., description="预警等级")
     notify_method: list[str] = Field(..., min_length=1, description="通知方式")
-    notify_users: list[str] = Field(..., min_length=1, description="通知用户列表")
+    notify_users: list[str] = Field(default_factory=list, description="通知用户列表")
     notify_frequency: NotifyFrequency = Field(default="first", description="通知频率")
     effective_time: EffectiveTime = Field(default="all_day", description="生效时段类型")
     custom_time_start: str | None = Field(default=None, description="自定义开始时间")
@@ -276,7 +276,7 @@ class EnergyWorkshopConfigResponse(BaseModel):
     auto_notify_enabled: bool
     is_enabled: bool
     last_checked_at: datetime | None
-    alert_rule_id: str | None
+    alert_rule_id: StrUUID | None
     alert_rule_name: str | None = None  # 冗余字段，join 查询填充
     notify_time: str | None = None
     created_at: datetime

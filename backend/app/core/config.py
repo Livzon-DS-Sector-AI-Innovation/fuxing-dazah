@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     ENERGY_AUTO_COLLECT_INTERVAL_SECONDS: int = 3600  # 默认 60 分钟
     ENERGY_WORKSHOP_ALERT_ENABLED: bool = False
     ENERGY_WORKSHOP_ALERT_TIME: str = "18:00"  # HH:MM 每日检查时间
+    ENERGY_DAILY_PUSH_ENABLED: bool = False
+    ENERGY_NITROGEN_PUSH_ENABLED: bool = False
 
     # Maintenance Plan — 自动生成工单
     MAINTENANCE_PLAN_AUTO_ENABLED: bool = True

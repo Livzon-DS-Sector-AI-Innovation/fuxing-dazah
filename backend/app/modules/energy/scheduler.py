@@ -17,7 +17,12 @@ from app.modules.energy.collect_settings import (
 )
 from app.modules.energy.models import EnergyDeviceConfig
 from app.modules.energy.service import _collect_daily_summary, _get_unit_by_energy_type
-from app.platform.scheduler import ScheduleConfig, ScheduleStrategy, TaskDefinition
+from app.platform.scheduler import (
+    ScheduleConfig,
+    SchedulerRegistry,
+    ScheduleStrategy,
+    TaskDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -412,8 +417,6 @@ async def energy_workshop_alert_coro() -> None:
     每个车间配置可设置独立的 notify_time（HH:MM），到达指定时间后评估并发送飞书通知。
     防重复：通过 DB 中 EnergyWorkshopConfig.last_checked_at 的日期判定，同一天不重复检查。
     """
-    from datetime import datetime
-
     from app.core.config import get_settings
     from app.core.database import async_session_factory
 
@@ -421,7 +424,6 @@ async def energy_workshop_alert_coro() -> None:
     if not settings.ENERGY_WORKSHOP_ALERT_ENABLED:
         return
 
-    now = datetime.now(CST)
     try:
         async with async_session_factory() as db:
             from app.modules.energy.service import evaluate_workshop_alerts
@@ -536,3 +538,10 @@ ENERGY_NITROGEN_PUSH_TASK = TaskDefinition(
     settings_toggle_key="ENERGY_NITROGEN_PUSH_ENABLED",
     module="energy",
 )
+
+
+def register_tasks(registry: SchedulerRegistry) -> None:
+    """向调度引擎注册 energy 模块的所有定时任务。"""
+    registry.register_task(ENERGY_WORKSHOP_ALERT_TASK)
+    registry.register_task(ENERGY_DAILY_PUSH_TASK)
+    registry.register_task(ENERGY_NITROGEN_PUSH_TASK)

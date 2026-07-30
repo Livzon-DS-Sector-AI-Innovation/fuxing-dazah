@@ -94,7 +94,7 @@ export default function VisualizationPage() {
       if (t.value > peakVal) { peakVal = t.value; peakDay = t.time }
     }
 
-    // 最高车间（当前能源类型）
+    // 最高部门（当前能源类型）
     const ws = overview?.workshop_distribution || []
     const typeWs = selectedType ? ws.filter((w) => w.energy_type === selectedType) : ws
     const wm: Record<string, number> = {}
@@ -155,7 +155,7 @@ export default function VisualizationPage() {
     color: areaColors,
   }), [areaData, areaColors, unitMap])
 
-  // ── 车间排名 ──
+  // ── 部门排名 ──
   const workshopData = useMemo(() => {
     const rows = overview?.workshop_distribution || []
     const filtered = selectedType ? rows.filter((r) => r.energy_type === selectedType) : rows
@@ -185,7 +185,7 @@ export default function VisualizationPage() {
   const workshopColors = ['#5645d4', '#1677ff', '#1aae39', '#dd5b00', '#722ed1', '#2f54eb', '#fa541c', '#faad14']
 
   const plBarConfig = useMemo(() => {
-    // 按车间分配颜色
+    // 按部门分配颜色
     const colorMap: Record<string, string> = {}
     const uniqueWorkshops = [...new Set(plBarData.map((d) => d.workshop).filter((w) => w && w !== '未知'))]
     uniqueWorkshops.forEach((w, i) => { colorMap[w] = workshopColors[i % workshopColors.length] })
@@ -237,21 +237,21 @@ export default function VisualizationPage() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(trendRows), '趋势数据')
     }
 
-    // Sheet 2: 车间分布
+    // Sheet 2: 部门分布
     const wsRows = (overview.workshop_distribution || []).map((w) => ({
-      '车间': w.group_key || '未知',
+      '部门': w.group_key || '未知',
       '能源类型': metadata.find((m) => m.type_code === w.energy_type)?.display_name || w.energy_type,
       '用量': w.total_value,
       '单位': metadata.find((m) => m.type_code === w.energy_type)?.unit || '',
     }))
     if (wsRows.length > 0) {
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(wsRows), '车间分布')
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(wsRows), '部门分布')
     }
 
     // Sheet 3: 区域分布
     const plRows = (overview.production_line_distribution || []).map((p) => ({
       '区域': p.group_key || '未知',
-      '车间': p.workshop || '未知',
+      '部门': p.workshop || '未知',
       '能源类型': metadata.find((m) => m.type_code === p.energy_type)?.display_name || p.energy_type,
       '用量': p.total_value,
       '单位': metadata.find((m) => m.type_code === p.energy_type)?.unit || '',
@@ -319,7 +319,7 @@ export default function VisualizationPage() {
                   icon: kpi.pctChange >= 0 ? '↑' : '↓',
                 },
                 { label: '峰值日', value: kpi.peakDay, suffix: '', color: '#dd5b00', bg: '#fff7e6' },
-                { label: '最高车间', value: kpi.topWorkshop || '—', suffix: '', color: '#722ed1', bg: '#f9f0ff' },
+                { label: '最高部门', value: kpi.topWorkshop || '—', suffix: '', color: '#722ed1', bg: '#f9f0ff' },
               ] as const).map((item) => (
                 <div key={item.label} style={{
                   background: item.bg, borderRadius: 12, padding: '16px 20px',
@@ -381,15 +381,15 @@ export default function VisualizationPage() {
               {areaData.length > 0 ? <Line {...lineConfig} /> : <Empty description="暂无趋势" style={{ padding: '40px 0' }} />}
             </div>
 
-            {/* ── 车间排名 + 矩形树图 ── */}
+            {/* ── 部门排名 + 矩形树图 ── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 20 }}>
-              {/* 车间排名表 */}
+              {/* 部门排名表 */}
               <div style={{
                 background: '#fff', borderRadius: 12, padding: '20px 24px',
                 border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
               }}>
                 <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
-                  车间用量排名
+                  部门用量排名
                   {selectedType && (
                     <span style={{ fontSize: 12, fontWeight: 400, color: metadata.find((m) => m.type_code === selectedType)?.color || '#1677ff', marginLeft: 8 }}>
                       · {metadata.find((m) => m.type_code === selectedType)?.display_name}
@@ -461,7 +461,7 @@ export default function VisualizationPage() {
                 {plBarData.length > 0 ? (
                   <Bar {...plBarConfig} />
                 ) : (
-                  <Empty description={selectedWorkshop ? '该车间暂无区域数据' : '暂无区域数据'} style={{ padding: '40px 0' }} />
+                  <Empty description={selectedWorkshop ? '该部门暂无区域数据' : '暂无区域数据'} style={{ padding: '40px 0' }} />
                 )}
               </div>
             </div>

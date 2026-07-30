@@ -129,17 +129,17 @@ async def send_user_card(
         resp = await client.im.v1.message.acreate(req)
         if not resp.success():
             logger.error(
-                "❌ send_user_card FAILED: open_id=%s, code=%s, msg=%s, "
+                "[FAILED] send_user_card: open_id=%s, code=%s, msg=%s, "
                 "status_code=%s",
                 open_id, resp.code, resp.msg,
                 resp.status_code if hasattr(resp, "status_code") else "N/A",
             )
             return False
-        logger.info("✅ Card sent to open_id=%s: %s", open_id, title)
+        logger.info("[OK] Card sent to open_id=%s: %s", open_id, title)
         return True
     except Exception as e:
         logger.error(
-            "❌ send_user_card EXCEPTION for open_id=%s: %s: %s",
+            "[EXCEPTION] send_user_card for open_id=%s: %s: %s",
             open_id, type(e).__name__, e,
         )
         return False
