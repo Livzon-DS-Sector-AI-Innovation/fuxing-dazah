@@ -1293,8 +1293,9 @@ class TrainingLedgerService:
         return await self.repo.update(record)
 
     async def delete_record(self, record_id: UUID) -> None:
-        await self.get_record(record_id)
-        await self.repo.session.execute(text("DELETE FROM hr.training_ledgers WHERE id = :id"), {"id": record_id})
+        record = await self.get_record(record_id)
+        record.is_deleted = True
+        await self.repo.session.flush()
 
     async def list_records(
         self,
@@ -1587,6 +1588,9 @@ class CandidateService:
         if c.job_requirement_id:
             jd_repo = JobRequirementRepository(self.repo.session)
             await jd_repo.increment_hired_count(c.job_requirement_id)
+
+        # UPDATE 后 re-fetch，确保返回最新状态
+        c = await candidate_repo.get_by_id(candidate_id) or c
 
         return c, onboarding, emp_no
 

@@ -129,8 +129,9 @@ async def delete_inspection_record(
         imp.is_deleted = True
 
     await db.flush()
-    # UPDATE 后 re-fetch
-    return await get_inspection_record(db, record_id)
+    # UPDATE 后 re-fetch（不过滤 is_deleted，确保软删除后也能查到）
+    stmt = select(InspectionRecord).where(InspectionRecord.id == record_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 # ─── 杂质明细 ───
@@ -257,52 +258,51 @@ async def get_summary_by_product(
     date_from: datetime | None = None,
     date_to: datetime | None = None,
 ) -> dict:
-    """按产品/时间段聚合汇总统计。"""
-    stmt = select(InspectionRecord).where(
-        InspectionRecord.is_deleted == False  # noqa: E712
-    )
+    """按产品/时间段聚合汇总统计（SQL 聚合，不加载全量数据）。"""
+    from sqlalchemy import case
+
+    # 总体统计
+    base_where = [InspectionRecord.is_deleted == False]  # noqa: E712
     if product_name:
-        stmt = stmt.where(InspectionRecord.product_name == product_name)
+        base_where.append(InspectionRecord.product_name == product_name)
     if date_from:
-        stmt = stmt.where(InspectionRecord.created_at >= date_from)
+        base_where.append(InspectionRecord.created_at >= date_from)
     if date_to:
-        stmt = stmt.where(InspectionRecord.created_at <= date_to)
+        base_where.append(InspectionRecord.created_at <= date_to)
 
-    records = list((await db.execute(stmt)).scalars())
+    agg = select(
+        func.count().label("total"),
+        func.count().filter(InspectionRecord.all_pass == True).label("pass_count"),  # noqa: E712
+        func.count().filter(InspectionRecord.has_oot == True).label("oot_count"),  # noqa: E712
+    ).where(*base_where)
+    row = (await db.execute(agg)).one()
+    total, pass_count, oot_count = row.total, row.pass_count, row.oot_count
 
-    if not records:
+    if total == 0:
         return {
-            "total": 0,
-            "pass_count": 0,
-            "fail_count": 0,
-            "oot_count": 0,
-            "pass_rate": 0.0,
-            "products": [],
+            "total": 0, "pass_count": 0, "fail_count": 0,
+            "oot_count": 0, "pass_rate": 0.0, "products": [],
         }
 
-    # 按产品分组统计
-    product_stats: dict[str, dict] = {}
-    for r in records:
-        if r.product_name not in product_stats:
-            product_stats[r.product_name] = {
-                "product_name": r.product_name,
-                "total": 0,
-                "pass_count": 0,
-                "fail_count": 0,
-                "oot_count": 0,
-            }
-        ps = product_stats[r.product_name]
-        ps["total"] += 1
-        if r.all_pass:
-            ps["pass_count"] += 1
-        else:
-            ps["fail_count"] += 1
-        if r.has_oot:
-            ps["oot_count"] += 1
+    # 按产品分组
+    product_agg = select(
+        InspectionRecord.product_name,
+        func.count().label("total"),
+        func.count().filter(InspectionRecord.all_pass == True).label("pass_count"),  # noqa: E712
+        func.count().filter(InspectionRecord.has_oot == True).label("oot_count"),  # noqa: E712
+    ).where(*base_where).group_by(InspectionRecord.product_name).order_by(InspectionRecord.product_name)
+    product_rows = (await db.execute(product_agg)).all()
 
-    total = len(records)
-    pass_count = sum(1 for r in records if r.all_pass)
-    oot_count = sum(1 for r in records if r.has_oot)
+    products = [
+        {
+            "product_name": r.product_name,
+            "total": r.total,
+            "pass_count": r.pass_count,
+            "fail_count": r.total - r.pass_count,
+            "oot_count": r.oot_count,
+        }
+        for r in product_rows
+    ]
 
     return {
         "total": total,
@@ -310,7 +310,7 @@ async def get_summary_by_product(
         "fail_count": total - pass_count,
         "oot_count": oot_count,
         "pass_rate": round(pass_count / total * 100, 1),
-        "products": list(product_stats.values()),
+        "products": products,
     }
 
 
@@ -388,7 +388,9 @@ async def delete_product_standard(
         return None
     std.is_deleted = True
     await db.flush()
-    return std
+    # UPDATE 后 re-fetch（不过滤 is_deleted，确保软删除后也能查到）
+    stmt = select(ProductStandard).where(ProductStandard.id == standard_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 async def get_standards_by_product(
