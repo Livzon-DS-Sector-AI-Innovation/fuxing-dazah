@@ -71,7 +71,10 @@ import {
   CreateNitrogenPushConfigInput,
   UpdateNitrogenPushConfigInput,
   NitrogenReportSendRequest,
+  EnergyOverview,
+  EnergyTypeMeta,
 } from '@/types/energy'
+import { apiGet, apiPut } from '@/lib/http-client'
 
 // 数据源配置 Server Actions
 export async function getEnergyDevices(params: DeviceQueryParams = {}) {
@@ -305,5 +308,35 @@ export async function sendNitrogenReport(data: NitrogenReportSendRequest) {
 
 export async function getNitrogenPushPersonnelCandidates() {
   return fetchNitrogenPushPersonnelCandidates()
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 能源总览 & 公共数据（Server Action — 服务端调用，解决退出重登录后 cookie 问题）
+// ═══════════════════════════════════════════════════════════════
+
+const _ENERGY_API = `${process.env.API_BASE_URL || 'http://localhost:8000'}/api/v1/energy`
+
+export async function getEnergyOverview(params: {
+  start_time: string
+  end_time: string
+  energy_type?: string
+  granularity?: string
+}): Promise<EnergyOverview> {
+  const sp = new URLSearchParams()
+  sp.set('start_time', params.start_time)
+  sp.set('end_time', params.end_time)
+  if (params.energy_type) sp.set('energy_type', params.energy_type)
+  sp.set('granularity', params.granularity || 'daily')
+  const json = await apiGet<any>(`${_ENERGY_API}/overview?${sp.toString()}`)
+  return (json as any).data ?? json
+}
+
+export async function getEnabledTypeConfigs(): Promise<EnergyTypeMeta[]> {
+  const json = await apiGet<any>(`${_ENERGY_API}/type-configs/enabled`)
+  return (json as any).data ?? (json as any)
+}
+
+export async function updateEnergyDataValue(dataId: string, value: number): Promise<void> {
+  await apiPut(`${_ENERGY_API}/data/${dataId}`, { value })
 }
 

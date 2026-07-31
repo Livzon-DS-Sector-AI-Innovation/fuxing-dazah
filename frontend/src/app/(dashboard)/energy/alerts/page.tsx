@@ -26,9 +26,9 @@ import {
   getNitrogenPushConfigs,
   deleteNitrogenPushConfig,
   sendNitrogenReport,
+  getEnabledTypeConfigs,
 } from '@/actions/energy'
 import { useEnergyStore } from '@/stores/energy'
-import { fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 export default function AlertsPage() {
   const { message } = App.useApp()
@@ -77,7 +77,7 @@ export default function AlertsPage() {
   const [typeMetadata, setTypeMetadata] = useState<EnergyTypeMeta[]>([])
 
   useEffect(() => {
-    fetchEnabledTypeConfigsClient().then(configs => {
+    getEnabledTypeConfigs().then(configs => {
       setTypeMetadata(configs.map(c => ({
         type_code: c.type_code,
         display_name: c.display_name,
