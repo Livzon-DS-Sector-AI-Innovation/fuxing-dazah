@@ -6,9 +6,8 @@ import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
 import { DeviceTable } from '@/components/energy/DeviceTable'
 import { DeviceDrawer } from '@/components/energy/DeviceDrawer'
-import { getEnergyDevices } from '@/actions/energy'
+import { getEnergyDevices, getEnabledTypeConfigs } from '@/actions/energy'
 import { EnergyDeviceConfig, PaginatedResponse, EnergyTypeMeta } from '@/types/energy'
-import { fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
 
 export default function DevicesPage() {
   const { deviceFilters, setDeviceFilters, openDeviceDrawer } = useEnergyStore()
@@ -25,7 +24,7 @@ export default function DevicesPage() {
   const [typeMetadata, setTypeMetadata] = useState<EnergyTypeMeta[]>([])
 
   useEffect(() => {
-    fetchEnabledTypeConfigsClient().then(configs => {
+    getEnabledTypeConfigs().then(configs => {
       setTypeMetadata(configs.map(c => ({
         type_code: c.type_code,
         display_name: c.display_name,

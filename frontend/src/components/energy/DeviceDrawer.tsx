@@ -636,7 +636,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                   <div>
                     <InputNumber
                       min={0.25}
-                      max={23.75}
                       step={0.25}
                       placeholder="1"
                       suffix="小时"

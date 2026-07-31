@@ -4,8 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Table, DatePicker, App, Menu, Empty, Spin, Input, Button, Segmented, InputNumber } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
-import { getEnergyDataHistory } from '@/actions/energy'
-import { fetchEnabledTypeConfigsClient, updateEnergyDataValue } from '@/lib/api/energy'
+import { getEnergyDataHistory, getEnabledTypeConfigs, updateEnergyDataValue } from '@/actions/energy'
 import type { EnergyDataHistory, EnergyTypeMeta } from '@/types/energy'
 import dayjs, { type Dayjs } from 'dayjs'
 import { Line } from '@ant-design/charts'
@@ -70,7 +69,7 @@ export default function CollectHistoryPage() {
 
   // 加载能源类型列表
   useEffect(() => {
-    fetchEnabledTypeConfigsClient().then((list) => {
+    getEnabledTypeConfigs().then((list) => {
       setTypeMetadata(list)
       if (list.length > 0 && !activeType) setActiveType(list[0].type_code)
     }).catch(() => {})

@@ -6,7 +6,7 @@ import { Line, Bar } from '@ant-design/charts'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import * as XLSX from 'xlsx'
-import { fetchEnergyOverview } from '@/lib/api/energy'
+import { getEnergyOverview } from '@/actions/energy'
 import type { EnergyOverview, EnergyTypeMeta } from '@/types/energy'
 
 const { RangePicker } = DatePicker
@@ -35,13 +35,13 @@ export default function VisualizationPage() {
     try {
       const d = range[1].diff(range[0], 'day') + 1
       const [curr, prev] = await Promise.all([
-        fetchEnergyOverview({
+        getEnergyOverview({
           start_time: range[0].toISOString(),
           end_time: range[1].toISOString(),
           granularity: 'daily',
           energy_type: selectedType || undefined,
         }),
-        fetchEnergyOverview({
+        getEnergyOverview({
           start_time: range[0].subtract(d, 'day').toISOString(),
           end_time: range[1].subtract(d, 'day').toISOString(),
           granularity: 'daily',
