@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.main import app
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
 from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
 from tests.conftest import (
@@ -34,11 +35,14 @@ _ALL_HR_PERMS: set[str] = {
     "hr:employee:read", "hr:employee:create", "hr:employee:update", "hr:employee:delete",
     "hr:employee:export", "hr:employee:transfer",
     "hr:org:read", "hr:org:manage",
+    "hr:position:read", "hr:position:manage",
+    "hr:trainer:read", "hr:trainer:manage",
     "hr:settings:manage",
     "hr:onboarding:approve", "hr:onboarding:manage",
     "hr:departure:manage",
     "hr:training:plan", "hr:training:assessment", "hr:training:questionbank",
     "hr:training:exam", "hr:training:document", "hr:training:manage",
+    "hr:training:export", "hr:profile:export", "hr:profile:transfer",
     "hr:recruitment:manage",
 }
 
@@ -116,8 +120,18 @@ async def client(db_session: AsyncSession, test_user: User) -> AsyncIterator[Asy
     async def _override_get_current_user() -> User:
         return test_user
 
+    async def _override_get_hr_scope() -> HrAccessContext:
+        # 与 get_effective_data_scope mock 的 "all" 保持一致：测试不限制数据范围
+        return HrAccessContext(
+            user=test_user,
+            data_scope="all",
+            department=None,
+            employee_number=test_user.employee_no,
+        )
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = _override_get_current_user
+    app.dependency_overrides[get_hr_scope] = _override_get_hr_scope
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

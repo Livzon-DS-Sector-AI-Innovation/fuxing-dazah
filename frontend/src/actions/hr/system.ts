@@ -49,13 +49,44 @@ export async function updateSystemSettings(data: Record<string, unknown>): Promi
   })
 }
 
-// ─── 仪表盘 / 通知记录 ───
-
-export async function fetchDashboardStats(): Promise<{ data: Record<string, unknown> }> {
-  return fetchHrApi('/hr/dashboard-stats', { errorMessage: '获取统计数据失败' })
-}
+// ─── 通知记录 ───
 
 export async function fetchNotificationLogs(params?: { page_size?: number }): Promise<{ data: unknown[] }> {
   const pageSize = params?.page_size || 100
   return fetchHrApi(`/hr/notification-logs?page_size=${pageSize}`, { errorMessage: '获取通知记录失败' })
+}
+
+// ─── 用户多部门访问授权 ───
+
+export async function fetchTrainingAdmins(): Promise<{ data: unknown[] }> {
+  return fetchHrApi('/hr/training-admins', { errorMessage: '加载培训管理员列表失败' })
+}
+
+export async function fetchHrDepartments(): Promise<{ data: string[] }> {
+  return fetchHrApi('/hr/departments?page_size=200', { errorMessage: '加载部门列表失败' })
+}
+
+export async function fetchUserDeptAccess(params?: { page?: number; page_size?: number }): Promise<{ data: unknown[]; meta: unknown }> {
+  const page = params?.page || 1
+  const pageSize = params?.page_size || 50
+  return fetchHrApi(`/hr/user-department-access?page=${page}&page_size=${pageSize}`, { errorMessage: '加载访问授权失败' })
+}
+
+export async function createUserDeptAccess(data: { user_id: string; department: string }): Promise<{ message: string }> {
+  const res = await fetchHrApi('/hr/user-department-access', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    errorMessage: '添加授权失败',
+  })
+  revalidatePath('/hr/settings')
+  return res
+}
+
+export async function deleteUserDeptAccess(id: string): Promise<{ message: string }> {
+  const res = await fetchHrApi(`/hr/user-department-access/${id}`, {
+    method: 'DELETE',
+    errorMessage: '移除授权失败',
+  })
+  revalidatePath('/hr/settings')
+  return res
 }

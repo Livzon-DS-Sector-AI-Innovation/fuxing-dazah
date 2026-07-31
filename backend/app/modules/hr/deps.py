@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from fastapi import Depends, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -35,6 +36,7 @@ class HrAccessContext:
     data_scope: str  # "all" | "department" | "department_and_children" | "self_only"
     department: str | None  # 登录人在员工档案中的体现部门（数据范围受限时解析）
     employee_number: str | None
+    scoped_departments: frozenset[str] = frozenset()  # 多部门数据范围（含本部门 + hr.user_department_access）
 
     @property
     def is_unrestricted(self) -> bool:
@@ -42,8 +44,11 @@ class HrAccessContext:
 
     @property
     def scoped_department(self) -> str | None:
-        """需要按部门过滤时返回部门名，否则 None。"""
+        """需要按部门过滤时返回部门名，否则 None。
+        多部门时返回第一个部门（向后兼容），仍建议新代码使用 scoped_departments。"""
         if self.data_scope in ("department", "department_and_children"):
+            if self.scoped_departments:
+                return next(iter(self.scoped_departments))
             return self.department
         return None
 
@@ -54,6 +59,9 @@ class HrAccessContext:
         if self.data_scope == "self_only":
             if employee.employee_number != self.employee_number:
                 raise ForbiddenException("数据范围限制：仅可访问本人记录")
+        elif self.scoped_departments:
+            if employee.department not in self.scoped_departments:
+                raise ForbiddenException("数据范围限制：仅可访问授权部门员工")
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
 
@@ -62,21 +70,25 @@ class HrAccessContext:
 
         - all：原样返回（调用方可继续使用前端传入的 department 筛选参数）
         - self_only：按工号过滤到本人
-        - department / department_and_children：按体现部门过滤
+        - department / department_and_children：按体现部门过滤（支持多部门）
         """
         if self.is_unrestricted:
             return stmt
         if self.data_scope == "self_only":
             return stmt.where(employee.employee_number == self.employee_number)
+        if self.scoped_departments:
+            return stmt.where(employee.department.in_(self.scoped_departments))
         return stmt.where(employee.department == self.department)
 
     def resolve_export_department(self, requested: str | None) -> str | None:
         """文档导出时按数据范围收敛部门参数。"""
         if self.is_unrestricted:
             return requested
-        if not self.scoped_department:
+        if not self.scoped_departments:
             raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
-        return self.scoped_department
+        if requested and requested not in self.scoped_departments:
+            raise ForbiddenException(f"数据范围限制：您无权访问部门 '{requested}'")
+        return requested or (next(iter(self.scoped_departments)) if len(self.scoped_departments) == 1 else None)
 
 
 def require_hr_access(*codes: str):
@@ -100,19 +112,38 @@ def require_hr_access(*codes: str):
         )
         department: str | None = None
         if scope != "all":
-            if user.employee_no:
+            # 飞书部门为主（权限管理体现的部门），取叶子部门名
+            if user.department:
+                department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+            # 飞书无部门时兜底查员工档案
+            if not department and user.employee_no:
                 from app.modules.hr.repository import EmployeeRepository
                 emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
                 if emp:
                     department = emp.department
-            # 员工档案里找不到 → 用飞书用户表的部门兜底（取叶子部门名）
-            if not department and user.department:
-                department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+
+        # 计算多部门数据范围：员工档案部门 + user_department_access 合并
+        scoped_departments: frozenset[str] = frozenset()
+        if scope in ("department", "department_and_children"):
+            dept_set: set[str] = set()
+            if department:
+                dept_set.add(department)
+            from app.modules.hr.models import HrUserDepartmentAccess
+            extra_depts = (await db.execute(
+                select(HrUserDepartmentAccess.department).where(
+                    HrUserDepartmentAccess.user_id == user.id,
+                    HrUserDepartmentAccess.is_deleted == False,  # noqa: E712
+                )
+            )).scalars().all()
+            dept_set.update(extra_depts)
+            scoped_departments = frozenset(dept_set)
+
         return HrAccessContext(
             user=user,
             data_scope=scope,
             department=department,
             employee_number=user.employee_no,
+            scoped_departments=scoped_departments,
         )
 
     return _dependency
@@ -151,23 +182,45 @@ async def get_hr_scope(
         raise ForbiddenException("请先登录")
     resource = _resource_for_path(request.url.path, request.method)
     scope = await _perm_repo.get_effective_data_scope(db, user.id, "hr", resource=resource)
+    import logging
+    _log = logging.getLogger(__name__)
+    _log.info("get_hr_scope: user=%s path=%s method=%s resource=%s scope=%s", user.name, request.url.path, request.method, resource, scope)
     department: str | None = None
     if scope in ("department", "department_and_children"):
-        if user.employee_no:
+        # 飞书部门为主（权限管理体现的部门），取叶子部门名
+        if user.department:
+            department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+        # 飞书无部门时兜底查员工档案
+        if not department and user.employee_no:
             from app.modules.hr.repository import EmployeeRepository
             emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
             if emp:
                 department = emp.department
-        # 员工档案里找不到 → 用飞书用户表的部门兜底（取叶子部门名）
-        if not department and user.department:
-            department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
         if not department:
             raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
+
+    # 计算多部门数据范围：飞书部门 + user_department_access 合并
+    scoped_departments: frozenset[str] = frozenset()
+    if scope in ("department", "department_and_children"):
+        dept_set: set[str] = set()
+        if department:
+            dept_set.add(department)
+        from app.modules.hr.models import HrUserDepartmentAccess
+        extra_depts = (await db.execute(
+            select(HrUserDepartmentAccess.department).where(
+                HrUserDepartmentAccess.user_id == user.id,
+                HrUserDepartmentAccess.is_deleted == False,  # noqa: E712
+            )
+        )).scalars().all()
+        dept_set.update(extra_depts)
+        scoped_departments = frozenset(dept_set)
+
     return HrAccessContext(
         user=user,
         data_scope=scope,
         department=department,
         employee_number=user.employee_no,
+        scoped_departments=scoped_departments,
     )
 
 
@@ -277,6 +330,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                             "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     # 系统设置
     (r"/system-settings", {"GET": "hr:settings:manage", "PUT": "hr:settings:manage", "POST": "hr:settings:manage"}),
+    (r"/user-department-access", {"GET": "hr:settings:manage", "POST": "hr:settings:manage",
+                                   "DELETE": "hr:settings:manage"}),
     (r"/data-management", {"GET": "hr:settings:manage", "POST": "hr:settings:manage"}),
 ]
 
