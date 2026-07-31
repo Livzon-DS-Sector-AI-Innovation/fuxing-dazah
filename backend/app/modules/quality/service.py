@@ -10,6 +10,7 @@ from app.modules.quality.repository import (
     create_impurities,
     create_inspection_record,
     get_impurities_by_record,
+    get_inspection_by_batch,
     get_inspection_record,
 )
 from app.modules.quality.schemas import (
@@ -112,7 +113,49 @@ class LcReportService:
         filename: str,
     ) -> uuid.UUID:
         """将解析结果持久化到数据库。"""
-        # 检查是否已有同产品+批号的记录（软删除约束）
+        # 检查是否已有同产品+批号的记录，有则更新
+        existing = await get_inspection_by_batch(db, raw.product_name, raw.batch_number)
+        if existing:
+            existing.form_id = raw.form_id or None
+            existing.standard_type = raw.standard_type or None
+            existing.total_peak_area_a_first = raw.total_peak_area_a_first or None
+            existing.total_peak_area_a_second = raw.total_peak_area_a_second or None
+            existing.main_peak_area_a_first = raw.main_peak_area_a_first or None
+            existing.main_peak_area_a_second = raw.main_peak_area_a_second or None
+            existing.total_impurity_area_first = raw.total_impurity_area_first or None
+            existing.total_impurity_area_second = raw.total_impurity_area_second or None
+            existing.any_unknown_impurity_first = raw.any_unknown_impurity_first or None
+            existing.any_unknown_impurity_second = raw.any_unknown_impurity_second or None
+            existing.main_peak_area_b_first = raw.main_peak_area_b_first or None
+            existing.main_peak_area_b_second = raw.main_peak_area_b_second or None
+            existing.all_pass = report.all_pass
+            existing.has_oot = report.has_oot
+            existing.raw_data = report.model_dump(mode="json")
+            existing.excel_filename = filename
+            await db.flush()
+            # 软删除旧杂质 + 写入新杂质
+            old_impurities = await get_impurities_by_record(db, existing.id)
+            for imp in old_impurities:
+                imp.is_deleted = True
+            await db.flush()
+            record_id = existing.id
+            # 保存新杂质明细
+            impurity_data = []
+            for imp in raw.impurity_results:
+                impurity_data.append({
+                    "name": imp.name,
+                    "first_percent": imp.first_percent,
+                    "second_percent": imp.second_percent,
+                    "limit": imp.limit,
+                    "oot_haf": imp.oot_haf,
+                    "oot_haa": imp.oot_haa,
+                    "is_pass": imp.is_pass,
+                    "is_oot": imp.is_oot,
+                })
+            if impurity_data:
+                await create_impurities(db, record_id, impurity_data)
+            return record_id
+
         record = await create_inspection_record(
             db=db,
             product_name=raw.product_name,

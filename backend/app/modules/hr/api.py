@@ -2236,9 +2236,14 @@ async def delete_question_bank_item(
     item_id: UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    await session.execute(
-        text("DELETE FROM hr.question_bank WHERE id = :id"), {"id": item_id})
-    await session.commit()
+    from app.modules.hr.models import QuestionBank
+    q = (await session.execute(
+        select(QuestionBank).where(QuestionBank.id == item_id, QuestionBank.is_deleted == False)
+    )).scalar_one_or_none()
+    if not q:
+        raise HTTPException(404, "题目不存在")
+    q.is_deleted = True
+    await session.flush()
     return success_response(message="已删除")
 
 
@@ -2464,8 +2469,9 @@ async def save_qa_scores(
         text("SELECT questions, full_score, excellent_line, pass_line, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
-    if assess_row:
-        _ensure_qa_assessment_access(hr_scope, assess_row[4])
+    if not assess_row:
+        raise HTTPException(404, "考核场次不存在或已删除")
+    _ensure_qa_assessment_access(hr_scope, assess_row[4])
     questions_data: list[dict] = []
     full_score_val = 100
     if assess_row:

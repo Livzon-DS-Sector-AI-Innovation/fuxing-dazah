@@ -9,23 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
-from app.modules.hr.deps import HrAccessContext, get_hr_scope, require_hr_access
+from app.modules.hr.deps import HrAccessContext, require_hr_access
 
 router = APIRouter(tags=["HR-多部门访问控制"])
-
-
-@router.get("/my-scope", summary="调试：查看当前用户的数据范围")
-async def my_scope(
-    hr_scope: HrAccessContext = Depends(get_hr_scope),
-):
-    """返回当前用户的有效数据范围信息（调试用）。"""
-    return success_response(data={
-        "data_scope": hr_scope.data_scope,
-        "own_department": hr_scope.department,
-        "scoped_departments": sorted(hr_scope.scoped_departments) if hr_scope.scoped_departments else None,
-        "is_unrestricted": hr_scope.is_unrestricted,
-        "employee_number": hr_scope.employee_number,
-    })
 
 
 @router.get("/training-admins", summary="培训管理员候选列表（来自部门培训人员表）")
