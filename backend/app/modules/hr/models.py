@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -1136,3 +1137,21 @@ class CandidateReview(BaseModel):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="待审核", server_default="待审核", comment="待审核/已同意/已拒绝")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="审核意见")
     reviewed_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="审核时间")
+
+
+# ─── HR 内部多部门数据范围 ───
+
+
+class HrUserDepartmentAccess(BaseModel):
+    """多部门访问权限：允许用户访问其本部门之外的其他部门数据。"""
+
+    __tablename__ = "user_department_access"
+    __table_args__ = (
+        Index("ix_uda_user_id", "user_id"),
+        Index("uq_uda_user_dept_active", "user_id", "department", unique=True,
+              postgresql_where=text("is_deleted = false")),
+        {"schema": "hr"},
+    )
+
+    user_id: Mapped[UUID] = mapped_column(nullable=False, comment="用户ID (identity.users)")
+    department: Mapped[str] = mapped_column(String(128), nullable=False, comment="可访问的部门名称")
