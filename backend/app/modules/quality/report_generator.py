@@ -13,14 +13,12 @@
 from __future__ import annotations
 
 import re
-from copy import deepcopy
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 from docx import Document
-
 
 # ─── 占位符解析 ───
 

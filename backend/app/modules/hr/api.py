@@ -81,6 +81,7 @@ from app.modules.hr.service import (
 )
 from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 from app.modules.hr.system_settings_routes import router as system_settings_router
+from app.modules.hr.user_department_access_routes import router as uda_router
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 from app.shared.schemas import PageParams
@@ -90,6 +91,7 @@ router = create_module_router(
     dependencies=[Depends(require_hr_basic)],
 )
 router.include_router(system_settings_router)
+router.include_router(uda_router)
 router.include_router(candidate_router)
 router.include_router(interview_router)
 router.include_router(job_requirement_router)
@@ -166,12 +168,12 @@ async def _ensure_ledger_access(record, hr_scope: HrAccessContext, session: Asyn
 
 
 def _ensure_qa_assessment_access(hr_scope: HrAccessContext, department: str | None) -> None:
-    """考核场次数据范围校验：受限用户仅可访问本部门场次（self_only 无对应场次）。"""
+    """考核场次数据范围校验：受限用户仅可访问授权部门场次（self_only 无对应场次）。"""
     if hr_scope.is_unrestricted:
         return
-    if not hr_scope.scoped_department:
+    if not hr_scope.scoped_departments:
         raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-    if department != hr_scope.scoped_department:
+    if department not in hr_scope.scoped_departments:
         raise ForbiddenException("数据范围限制：仅可访问本部门考核场次")
 
 
@@ -188,8 +190,10 @@ async def list_employees(
 ):
     # 数据范围限制：非全部权限时强制收敛，忽略前端传入的 department 参数
     if not hr_scope.is_unrestricted:
-        if hr_scope.scoped_department:
-            department = hr_scope.scoped_department
+        if hr_scope.scoped_departments:
+            if len(hr_scope.scoped_departments) == 1:
+                department = next(iter(hr_scope.scoped_departments))
+            # 多部门：department 保持 None，service 不过滤，由下方 post-filter 处理
         else:
             keyword = hr_scope.employee_number
     employees, total = await service.list_employees(
@@ -199,10 +203,15 @@ async def list_employees(
         page=page_params.page,
         page_size=page_params.page_size,
     )
-    if not hr_scope.is_unrestricted and not hr_scope.scoped_department:
-        # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
-        employees = [e for e in employees if e.employee_number == hr_scope.employee_number]
-        total = len(employees)
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
+            employees = [e for e in employees if e.employee_number == hr_scope.employee_number]
+            total = len(employees)
+        elif len(hr_scope.scoped_departments) > 1:
+            # 多部门：按授权部门集合过滤
+            employees = [e for e in employees if e.department in hr_scope.scoped_departments]
+            total = len(employees)
     data = [
         EmployeeResponse.model_validate(e).model_dump(mode="json")
         for e in employees
@@ -260,6 +269,8 @@ async def download_roster(
     employees = [(e.name, e.department, e.gender or "", e.education or "", e.hire_date, e.status) for e in r.scalars().all()]
     if department:
         employees = [e for e in employees if e[1] == department]
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
+        employees = [e for e in employees if e[1] in hr_scope.scoped_departments]
     buffer = generate_roster_sync(employees, department)
     filename = f"花名册_{department or '全部'}.docx"
     return StreamingResponse(
@@ -288,6 +299,8 @@ async def download_training_registration(
     ).order_by(Employee.department, Employee.employee_number)
     if department:
         stmt = stmt.where(Employee.department == department)
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
+        stmt = stmt.where(Employee.department.in_(hr_scope.scoped_departments))
 
     r = await session.execute(stmt)
     records = []
@@ -1128,14 +1141,26 @@ async def list_departments(
     service: DepartmentService = Depends(get_department_service),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    # 数据范围限制：只返回本部门，不受前端 keyword 影响
-    if hr_scope.scoped_department:
-        keyword = hr_scope.scoped_department
-    departments, total = await service.list_departments(
-        keyword=keyword,
-        page=page_params.page,
-        page_size=page_params.page_size,
-    )
+    # 数据范围限制：只返回授权部门
+    if hr_scope.scoped_departments:
+        if len(hr_scope.scoped_departments) == 1:
+            keyword = next(iter(hr_scope.scoped_departments))
+            departments, total = await service.list_departments(
+                keyword=keyword, page=page_params.page, page_size=page_params.page_size,
+            )
+        else:
+            # 多部门：全量拉取 + 过滤 + 内存分页
+            all_deps, _ = await service.list_departments(
+                keyword=None, page=1, page_size=1000,
+            )
+            filtered = [d for d in all_deps if d.name in hr_scope.scoped_departments]
+            total = len(filtered)
+            start = (page_params.page - 1) * page_params.page_size
+            departments = filtered[start:start + page_params.page_size]
+    else:
+        departments, total = await service.list_departments(
+            keyword=keyword, page=page_params.page, page_size=page_params.page_size,
+        )
     data = [
         DepartmentResponse.model_validate(d).model_dump(mode="json")
         for d in departments
@@ -1291,20 +1316,11 @@ async def list_position_departments(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    depts = {row[0] for row in (await session.execute(select(HrPosition.department).where(HrPosition.is_deleted == False).distinct().order_by(HrPosition.department))).all()}
-    if hr_scope.scoped_department:
-        depts = {d for d in depts if d == hr_scope.scoped_department}
-    return success_response(data=sorted(depts))
-    """返回职位表中所有不重复的部门名称。"""
     from app.modules.hr.models import HrPosition
-
-    result = await session.execute(
-        select(HrPosition.department)
-        .where(HrPosition.is_deleted == False)
-        .distinct()
-        .order_by(HrPosition.department)
-    )
-    return success_response(data=[row[0] for row in result.all()])
+    depts = {row[0] for row in (await session.execute(select(HrPosition.department).where(HrPosition.is_deleted == False).distinct().order_by(HrPosition.department))).all()}
+    if hr_scope.scoped_departments:
+        depts = depts & hr_scope.scoped_departments
+    return success_response(data=sorted(depts))
 
 
 # ─── Position Training Routes ───
@@ -1598,9 +1614,10 @@ async def list_onboarding_records(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     if not hr_scope.is_unrestricted:
-        if hr_scope.scoped_department:
-            # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-            department = hr_scope.scoped_department
+        if hr_scope.scoped_departments:
+            if len(hr_scope.scoped_departments) == 1:
+                department = next(iter(hr_scope.scoped_departments))
+            # 多部门：department 保持 None，service 不过滤，由下方 post-filter 处理
         else:
             keyword = hr_scope.employee_number
     records, total = await service.list_records(
@@ -1613,10 +1630,15 @@ async def list_onboarding_records(
         page=page_params.page,
         page_size=page_params.page_size,
     )
-    if not hr_scope.is_unrestricted and not hr_scope.scoped_department:
-        # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
-        records = [r for r in records if r.employee_number == hr_scope.employee_number]
-        total = len(records)
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            # self_only：keyword 为前缀匹配，再按工号精确收敛到本人
+            records = [r for r in records if r.employee_number == hr_scope.employee_number]
+            total = len(records)
+        elif len(hr_scope.scoped_departments) > 1:
+            # 多部门：按授权部门集合过滤
+            records = [r for r in records if r.department in hr_scope.scoped_departments]
+            total = len(records)
     data = [
         OnboardingRecordResponse.model_validate(r).model_dump(mode="json")
         for r in records
@@ -1663,11 +1685,12 @@ async def list_departure_records(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 离职台账无工号字段，self_only 无法定位本人记录
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        # 多部门：department 保持 None，service 不过滤，由下方 post-filter 处理
     records, total = await service.list_records(
         department=department,
         offboarding_type=offboarding_type,
@@ -1677,6 +1700,9 @@ async def list_departure_records(
         page=page_params.page,
         page_size=page_params.page_size,
     )
+    if not hr_scope.is_unrestricted and len(hr_scope.scoped_departments) > 1:
+        records = [r for r in records if r.department in hr_scope.scoped_departments]
+        total = len(records)
     data = [
         DepartureRecordResponse.model_validate(r).model_dump(mode="json")
         for r in records
@@ -1889,10 +1915,10 @@ async def list_training_ledger_pages(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     pages_with_dept = await service.list_pages_with_department()
-    # 数据范围受限时只保留本部门/本人的台账页面
+    # 数据范围受限时只保留授权部门/本人的台账页面
     if not hr_scope.is_unrestricted:
-        if hr_scope.scoped_department:
-            pages_with_dept = [(p, d) for p, d in pages_with_dept if d == hr_scope.scoped_department]
+        if hr_scope.scoped_departments:
+            pages_with_dept = [(p, d) for p, d in pages_with_dept if d in hr_scope.scoped_departments]
         else:
             pages_with_dept = [(p, d) for p, d in pages_with_dept if p.employee_number == hr_scope.employee_number]
     data = [
@@ -2330,16 +2356,21 @@ async def list_qa_assessments(
 ):
     """按部门查询考核场次列表。"""
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # self_only 用户对考核场次无意义
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        # 数据范围受限角色强制只看授权部门，忽略前端传入的 department 参数
+        department = next(iter(hr_scope.scoped_departments)) if len(hr_scope.scoped_departments) == 1 else None
     where = "WHERE is_deleted = false"
     params: dict = {"lim": page_size, "off": (page - 1) * page_size}
     if department:
         where += " AND department = :dept"
         params["dept"] = department
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments and len(hr_scope.scoped_departments) > 1:
+        placeholders = ", ".join(f":dept_{i}" for i in range(len(hr_scope.scoped_departments)))
+        where += f" AND department IN ({placeholders})"
+        for i, d in enumerate(hr_scope.scoped_departments):
+            params[f"dept_{i}"] = d
     total = (await session.execute(
         text(f"SELECT count(*) FROM hr.qa_assessments {where}"),
         {k: v for k, v in params.items() if k != "lim" and k != "off"},
@@ -3076,17 +3107,21 @@ async def list_annual_training_plans(
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 年度计划按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        # 多部门：department 保持 None，service 不过滤，由下方 post-filter 处理
     plans, total = await service.list_plans(
         year=year,
         department=department,
         page=page_params.page,
         page_size=page_params.page_size,
     )
+    if not hr_scope.is_unrestricted and len(hr_scope.scoped_departments) > 1:
+        plans = [p for p in plans if p.department in hr_scope.scoped_departments]
+        total = len(plans)
     # 批量查每个计划的培训完成进度
     plan_ids = [p.id for p in plans]
     progress_map: dict = {}
@@ -3170,17 +3205,23 @@ async def list_all_annual_plan_items(
     conditions = ["i.is_deleted = false", "p.is_deleted = false"]
     params: dict = {}
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 年度计划按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        # 多部门：department 保持 None，参数在下方用 IN 子句处理
     if year is not None:
         conditions.append("p.year = :year")
         params["year"] = year
     if department:
         conditions.append("p.department ILIKE :dept")
         params["dept"] = f"%{department}%"
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments and len(hr_scope.scoped_departments) > 1:
+        placeholders = ", ".join(f":dept_{i}" for i in range(len(hr_scope.scoped_departments)))
+        conditions.append(f"p.department IN ({placeholders})")
+        for i, d in enumerate(hr_scope.scoped_departments):
+            params[f"dept_{i}"] = d
     if keyword:
         conditions.append("i.content_and_textbook ILIKE :kw")
         params["kw"] = f"%{keyword}%"
@@ -3508,16 +3549,20 @@ async def list_trainers(
     from app.modules.hr.models import HrTrainer
 
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 内训师按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        # 多部门：department 保持 None，在 query 层用 IN 处理
     query = select(HrTrainer).where(HrTrainer.is_deleted == False)
     count_q = select(func.count()).select_from(HrTrainer).where(HrTrainer.is_deleted == False)
     if department:
         query = query.where(HrTrainer.department == department)
         count_q = count_q.where(HrTrainer.department == department)
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
+        query = query.where(HrTrainer.department.in_(hr_scope.scoped_departments))
+        count_q = count_q.where(HrTrainer.department.in_(hr_scope.scoped_departments))
     if is_level1:
         query = query.where(HrTrainer.is_level1 == is_level1)
         count_q = count_q.where(HrTrainer.is_level1 == is_level1)
@@ -3605,11 +3650,12 @@ async def list_dept_training_personnel(
     from app.modules.hr.models import DeptTrainingPersonnel
 
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 部门培训人员按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本体现部门，忽略前端传入的 department 参数
-        department = hr_scope.scoped_department
+        if len(hr_scope.scoped_departments) == 1:
+            department = next(iter(hr_scope.scoped_departments))
+        # 多部门：department 保持 None，在 query 层用 IN 处理
     query = select(DeptTrainingPersonnel).where(DeptTrainingPersonnel.is_deleted == False)
     count_q = select(func.count()).select_from(DeptTrainingPersonnel).where(DeptTrainingPersonnel.is_deleted == False)
 
@@ -3624,6 +3670,19 @@ async def list_dept_training_personnel(
             or_(
                 DeptTrainingPersonnel.department == department,
                 DeptTrainingPersonnel.display_department == department,
+            )
+        )
+    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments:
+        query = query.where(
+            or_(
+                DeptTrainingPersonnel.department.in_(hr_scope.scoped_departments),
+                DeptTrainingPersonnel.display_department.in_(hr_scope.scoped_departments),
+            )
+        )
+        count_q = count_q.where(
+            or_(
+                DeptTrainingPersonnel.department.in_(hr_scope.scoped_departments),
+                DeptTrainingPersonnel.display_department.in_(hr_scope.scoped_departments),
             )
         )
     if keyword:
@@ -4001,12 +4060,12 @@ async def list_exam_papers(
     q = select(ExamPaper).where(ExamPaper.is_deleted == False).order_by(ExamPaper.created_at.desc())
     total_q = select(func.count()).select_from(ExamPaper).where(ExamPaper.is_deleted == False)
     if not hr_scope.is_unrestricted:
-        if not hr_scope.scoped_department:
+        if not hr_scope.scoped_departments:
             # 试卷按培训部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        # 数据范围受限角色强制只看本部门试卷
-        q = q.where(ExamPaper.department == hr_scope.scoped_department)
-        total_q = total_q.where(ExamPaper.department == hr_scope.scoped_department)
+        # 数据范围受限角色强制只看授权部门试卷
+        q = q.where(ExamPaper.department.in_(hr_scope.scoped_departments))
+        total_q = total_q.where(ExamPaper.department.in_(hr_scope.scoped_departments))
     total = (await session.execute(total_q)).scalar() or 0
     papers = (await session.execute(q.offset((page - 1) * page_size).limit(page_size))).scalars().all()
     data = [{

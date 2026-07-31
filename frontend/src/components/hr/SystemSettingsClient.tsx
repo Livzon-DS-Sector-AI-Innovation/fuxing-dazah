@@ -88,24 +88,24 @@ export default function SystemSettingsClient() {
               />
             </Form.Item>
             <Form.Item name="smtp_host" label="SMTP 服务器" rules={[{ required: true, message: '请填写SMTP服务器地址' }]}>
-              <Input placeholder="smtp.exmail.qq.com" />
+              <Input placeholder="smtp.exmail.qq.com" autoComplete="off" />
             </Form.Item>
             <Form.Item name="smtp_port" label="端口">
-              <Input placeholder="587" />
+              <Input placeholder="587" autoComplete="off" />
             </Form.Item>
             <Form.Item name="smtp_from" label="发件邮箱地址" rules={[{ required: true, message: '请填写发件邮箱' }]}>
-              <Input placeholder="hr@livzon.cn" />
+              <Input placeholder="hr@livzon.cn" autoComplete="off" />
             </Form.Item>
             <Form.Item name="smtp_from_name" label="发件人名称" initialValue="丽珠集团福州福兴医药有限公司">
-              <Input placeholder="丽珠集团福州福兴医药有限公司" />
+              <Input placeholder="丽珠集团福州福兴医药有限公司" autoComplete="off" />
             </Form.Item>
             <Form.Item name="smtp_user" label="用户名">
-              <Input placeholder="通常和发件邮箱地址相同" />
+              <Input placeholder="通常和发件邮箱地址相同" autoComplete="off" />
             </Form.Item>
             <Form.Item name="smtp_password" label="密码 / 授权码"
               tooltip="不是邮箱登录密码，需要在邮箱设置中单独生成"
             >
-              <Input.Password placeholder="邮箱授权码，非登录密码" />
+              <Input.Password placeholder="邮箱授权码，非登录密码" autoComplete="off" />
             </Form.Item>
 
             <Button type="primary" size="large" icon={<SaveOutlined />} loading={loading} onClick={handleSave} block>
@@ -137,7 +137,7 @@ export default function SystemSettingsClient() {
             </div>
             <Divider style={{ margin: '8px 0' }} />
             <Alert type="warning" showIcon
-              message="重要提示"
+              title="重要提示"
               description="「密码」字段填授权码，不是邮箱登录密码。授权码通常是一串16位字母，每个邮箱单独生成。"
               style={{ marginTop: 12 }}
             />
