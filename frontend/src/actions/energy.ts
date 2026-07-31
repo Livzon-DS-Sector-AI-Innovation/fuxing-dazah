@@ -128,7 +128,7 @@ export async function getCollectSettings() {
   return apiFetchCollectSettings()
 }
 
-export async function updateCollectSettings(data: { auto_collect_enabled?: boolean; auto_collect_interval_seconds?: number }) {
+export async function updateCollectSettings(data: { auto_collect_enabled?: boolean }) {
   const result = await apiUpdateCollectSettings(data)
   revalidatePath('/energy/collect-logs')
   return result

@@ -73,7 +73,6 @@ class Settings(BaseSettings):
 
     # Energy
     ENERGY_AUTO_COLLECT_ENABLED: bool = False
-    ENERGY_AUTO_COLLECT_INTERVAL_SECONDS: int = 3600  # 默认 60 分钟
     ENERGY_WORKSHOP_ALERT_ENABLED: bool = False
     ENERGY_DAILY_PUSH_ENABLED: bool = False
     ENERGY_NITROGEN_PUSH_ENABLED: bool = False
