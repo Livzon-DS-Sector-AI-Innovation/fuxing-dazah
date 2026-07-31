@@ -14,9 +14,7 @@ from app.modules.energy import service
 from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.collect_settings import (
     get_auto_collect_enabled,
-    get_auto_collect_interval_seconds,
     set_auto_collect_enabled,
-    set_auto_collect_interval_seconds,
 )
 from app.modules.energy.schemas import (
     AlertRecordProcessRequest,
@@ -332,7 +330,6 @@ async def get_collect_settings(
     return success_response(
         CollectSettingsResponse(
             auto_collect_enabled=get_auto_collect_enabled(),
-            auto_collect_interval_seconds=get_auto_collect_interval_seconds(),
         ).model_dump()
     )
 
@@ -342,15 +339,12 @@ async def update_collect_settings(
     data: CollectSettingsUpdate,
     user: User = Depends(require_permission("energy:collect:trigger")),
 ) -> JSONResponse:
-    """运行时更新自动采集的启用状态或间隔（无需重启）。"""
+    """运行时更新自动采集的启用状态（无需重启）。"""
     if data.auto_collect_enabled is not None:
         set_auto_collect_enabled(data.auto_collect_enabled)
-    if data.auto_collect_interval_seconds is not None:
-        set_auto_collect_interval_seconds(data.auto_collect_interval_seconds)
     return success_response(
         CollectSettingsResponse(
             auto_collect_enabled=get_auto_collect_enabled(),
-            auto_collect_interval_seconds=get_auto_collect_interval_seconds(),
         ).model_dump(),
         message="设置已更新",
     )
