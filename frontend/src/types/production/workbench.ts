@@ -3,6 +3,13 @@ export interface NodeAssigneeInfo {
   name: string | null
 }
 
+export interface StageNodeInfo {
+  node_id: string
+  node_name: string
+  sort_order: number
+  status: 'completed' | 'in_progress' | 'pending'
+}
+
 export interface WorkbenchItem {
   type: 'pending_receive' | 'pending_start' | 'pending_complete' | 'ready_to_complete'
   batch_no: string | null
@@ -23,6 +30,7 @@ export interface WorkbenchItem {
   owner_name: string | null
   started_at: string | null
   is_last_in_stage: boolean
+  stage_nodes: StageNodeInfo[]
 }
 
 export interface AssignedNodeInfo {
@@ -124,4 +132,32 @@ export interface ReceiveAndStartInput {
 export interface ReceiveAndStartResult {
   children: Array<{ id: string; batch_no: string }>
   execution: unknown | null
+}
+
+export interface PlannedStageInfo {
+  stage_name: string
+  duration_hours: number
+  color: string
+}
+
+export interface PlannedBatchItem {
+  batch_id: string
+  batch_no: string
+  product_name: string | null
+  route_id: string
+  route_name: string
+  route_version: number | null
+  plan_item_id: string
+  plan_order_no: string
+  planned_start: string | null
+  planned_end: string | null
+  stage_times: Record<string, string>
+  current_stage: string | null
+  current_stage_progress: 'not_started' | 'in_progress' | 'completed' | null
+  stage_config: PlannedStageInfo[] | null
+  is_first_stage_owner: boolean
+}
+
+export interface PlannedBatchData {
+  items: PlannedBatchItem[]
 }

@@ -37,7 +37,7 @@ interface Props {
   onClose: () => void
 }
 
-function nodeToTreeData(node: TraceNode): any {
+function nodeToTreeData(node: TraceNode): object {
   return {
     key: `${node.type}:${node.id}`,
     title: (

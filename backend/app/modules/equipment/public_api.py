@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.equipment.deps import build_access_context
 from app.modules.equipment.models import Equipment
 from app.modules.equipment.repository import equipment as equipment_repo
-from app.platform.identity.models import User
+from app.platform.identity.models import Department, User
 
 
 @dataclass(frozen=True)
@@ -64,3 +64,37 @@ async def list_equipments_for_user(
         EquipmentBrief(id=e.id, equipment_no=e.equipment_no, name=e.name)
         for e in equipments
     ], total
+
+
+@dataclass(frozen=True)
+class EquipmentDeptBrief:
+    """设备部门摘要：编号、名称、归属部门。"""
+
+    equipment_no: str
+    name: str
+    department_name: str
+
+
+async def list_all_equipment_dept(
+    db: AsyncSession,
+) -> list[EquipmentDeptBrief]:
+    """获取所有未删除设备的编号、名称、归属部门名称。"""
+    stmt = (
+        select(
+            Equipment.equipment_no,
+            Equipment.name,
+            Department.name.label("department_name"),
+        )
+        .outerjoin(Department, Equipment.department_id == Department.id)
+        .where(Equipment.is_deleted == False)  # noqa: E712
+        .order_by(Equipment.equipment_no)
+    )
+    result = await db.execute(stmt)
+    return [
+        EquipmentDeptBrief(
+            equipment_no=row.equipment_no,
+            name=row.name,
+            department_name=row.department_name or "",
+        )
+        for row in result
+    ]

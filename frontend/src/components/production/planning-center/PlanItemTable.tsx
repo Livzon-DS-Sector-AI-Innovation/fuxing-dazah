@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import {
   App,
   Button,
@@ -15,14 +15,16 @@ import {
   Spin,
   Table,
   Tag,
+  Tooltip,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { createPlanItem, updatePlanItem, deletePlanItem, schedulePlanItem } from '@/actions/production'
-import type { PlanItem, StageConfigItem } from '@/types/production'
+import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/production'
 import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
 import { ITEM_STATUS_CONFIG, PRIORITY_CONFIG } from './constants'
+import { incrementBatchNo } from '@/lib/utils'
 import dayjs from 'dayjs'
 
 // ── Form divider ──
@@ -40,6 +42,107 @@ const sectionLabel: React.CSSProperties = {
   fontWeight: 600,
   color: 'var(--color-steel)',
   marginBottom: 8,
+}
+
+// ── Status accent strip colors ──
+
+const ITEM_ACCENT: Record<string, string> = {
+  draft: 'var(--color-stone)',
+  scheduled: '#0075de',
+  allocated: '#5645d4',
+  in_progress: '#dd5b00',
+  completed: '#1aae39',
+  cancelled: '#e03131',
+}
+
+// ── Stage Progress Bar ──
+
+export function StageProgressBar({
+  stageDurations,
+  batchProgress,
+}: {
+  stageDurations?: StageConfigItem[] | null
+  batchProgress?: PlanItemBatchProgress | null
+}) {
+  if (!stageDurations?.length) {
+    return <span style={{ fontSize: 12, color: 'var(--color-stone)' }}>—</span>
+  }
+
+  const currentIdx = batchProgress?.latest_stage
+    ? stageDurations.findIndex((s) => s.stage_name === batchProgress.latest_stage)
+    : -1
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 160 }}>
+      {/* Segments bar */}
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center', height: 8 }}>
+        {stageDurations.map((s, i) => {
+          const isCompleted = currentIdx >= 0 && i < currentIdx
+          const isCurrent = currentIdx >= 0 && i === currentIdx
+          const hasProgress = currentIdx >= 0
+
+          return (
+            <Tooltip key={i} title={`${s.stage_name} · ${s.duration_hours}h`}>
+              <div
+                style={{
+                  flex: 1,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: hasProgress
+                    ? isCompleted || isCurrent
+                      ? s.color
+                      : 'var(--color-hairline)'
+                    : 'var(--color-hairline)',
+                  opacity: hasProgress && !isCompleted && !isCurrent ? 0.5 : 1,
+                  transition: 'background-color 0.3s ease',
+                  boxShadow: isCurrent
+                    ? `0 0 0 2px var(--color-canvas), 0 0 0 4px ${s.color}40`
+                    : undefined,
+                  position: 'relative',
+                }}
+              >
+                {isCurrent && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      borderRadius: 4,
+                      background: s.color,
+                      animation: 'stagePulse 1.8s ease-in-out infinite',
+                    }}
+                  />
+                )}
+              </div>
+            </Tooltip>
+          )
+        })}
+      </div>
+      {/* Stage labels */}
+      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+        {stageDurations.map((s, i) => {
+          const isCurrent = currentIdx >= 0 && i === currentIdx
+          return (
+            <span
+              key={i}
+              style={{
+                fontSize: 10,
+                lineHeight: 1.3,
+                color: isCurrent ? 'var(--color-charcoal)' : 'var(--color-steel)',
+                fontWeight: isCurrent ? 600 : 400,
+                textAlign: 'center',
+                flex: 1,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {s.stage_name}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 // ── Stage Duration Editor ──
@@ -150,7 +253,7 @@ function PlanItemFormFields({
         <Form.Item name="equipment_id" label="设备ID" style={{ marginBottom: 12 }}>
           <Input />
         </Form.Item>
-        <Form.Item name="priority" label="优先级" initialValue="medium" style={{ marginBottom: 0 }}>
+        <Form.Item name="priority" label="优先级" style={{ marginBottom: 0 }}>
           <Select
             options={Object.entries(PRIORITY_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
           />
@@ -197,6 +300,14 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   const [editForm] = Form.useForm()
   const canEdit = planOrderStatus === 'draft'
 
+  // 批量生成
+  const [batchGenOpen, setBatchGenOpen] = useState(false)
+  const [batchStartNo, setBatchStartNo] = useState('')
+  const [batchCount, setBatchCount] = useState(1)
+  const [batchIntervalDays, setBatchIntervalDays] = useState(1)
+  const [batchGroupSize, setBatchGroupSize] = useState(1)
+  const [batchGenLoading, setBatchGenLoading] = useState(false)
+
   const { data: productData } = useQuery({
     queryKey: ['products', productKeyword],
     queryFn: () => fetchProductsClient(productKeyword || undefined),
@@ -206,18 +317,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
 
   const { data: routesData } = useQuery({
     queryKey: ['routes', selectedProductId],
-    queryFn: () => fetchRoutesClient(selectedProductId!),
+    queryFn: () => fetchRoutesClient(selectedProductId!, 'published'),
     enabled: !!selectedProductId,
     staleTime: 30_000,
   })
   const routes = routesData ?? []
-
-  const nextBatchNo = useCallback((current: string): string => {
-    const m = current.match(/^(.*?)(\d+)(.*)$/)
-    if (!m) return current + '-1'
-    const n = String(parseInt(m[2], 10) + 1).padStart(m[2].length, '0')
-    return m[1] + n + m[3]
-  }, [])
 
   const handleAdd = async () => {
     const values = await addForm.validateFields().catch(() => null)
@@ -251,7 +355,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         product_id: values.product_id,
         product_name: values.product_name,
         route_id: values.route_id,
-        batch_no: nextBatchNo(values.batch_no),
+        batch_no: incrementBatchNo(values.batch_no),
         planned_quantity: undefined,
         unit: undefined,
         planned_start: undefined,
@@ -264,6 +368,62 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     } finally {
       setAddLoading(false)
     }
+  }
+
+  const handleBatchGenerate = async () => {
+    if (!batchStartNo || batchCount <= 0) return
+    if (items.length === 0) { message.error('请先添加至少一个计划项'); return }
+    if (!planOrderProductId) { message.error('计划单未关联产品，无法批量生成'); return }
+    const lastItem = items[items.length - 1]
+    const lastStart = lastItem.planned_start ? new Date(lastItem.planned_start) : new Date()
+    const lastEnd = lastItem.planned_end ? new Date(lastItem.planned_end) : new Date()
+
+    setBatchGenLoading(true)
+    let currentNo = batchStartNo
+    let created = 0
+    const startBase = lastStart.getTime()
+    const endBase = lastEnd.getTime()
+    try {
+      for (let i = 0; i < batchCount; i++) {
+        const idx = i + 1
+        const dayOffset = Math.floor(idx / batchGroupSize) * batchIntervalDays + (idx % batchGroupSize)
+        const msOffset = dayOffset * 86400000
+
+        const r = await createPlanItem(planOrderId, {
+          product_id: planOrderProductId,
+          product_name: planOrderProductName ?? '',
+          route_id: planOrderRouteId ?? undefined,
+          batch_no: currentNo,
+          priority: 'medium',
+          stage_durations: planOrderStageConfig?.length ? planOrderStageConfig : undefined,
+        })
+        if (!r.success) { message.error(`批号 ${currentNo} 创建失败: ${r.error}`); break }
+
+        const newItemId = r.data!.id
+        await schedulePlanItem(newItemId, {
+          planned_start: new Date(startBase + msOffset).toISOString(),
+          planned_end: new Date(endBase + msOffset).toISOString(),
+        })
+        created++
+        currentNo = incrementBatchNo(currentNo)
+      }
+      if (created > 0) {
+        message.success(`已生成 ${created} 个计划项`)
+        setBatchGenOpen(false)
+        onRefresh()
+      }
+    } finally {
+      setBatchGenLoading(false)
+    }
+  }
+
+  const handleOpenBatchGen = () => {
+    const lastItem = items[items.length - 1]
+    setBatchStartNo(lastItem?.batch_no ? incrementBatchNo(lastItem.batch_no) : '')
+    setBatchCount(1)
+    setBatchIntervalDays(1)
+    setBatchGroupSize(1)
+    setBatchGenOpen(true)
   }
 
   const handleEdit = async () => {
@@ -310,19 +470,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     })
   }
 
-  useEffect(() => {
-    if (addOpen && planOrderProductId) {
-      addForm.setFieldsValue({
-        product_id: planOrderProductId,
-        product_name: planOrderProductName,
-        route_id: planOrderRouteId,
-        batch_no: '',
-        priority: 'medium',
-      })
-      setSelectedProductId(planOrderProductId)
-      setItemStages(planOrderStageConfig ? planOrderStageConfig.map(s => ({ ...s })) : [])
-    }
-  }, [addOpen, planOrderProductId, planOrderProductName, planOrderRouteId, planOrderStageConfig, addForm])
+  const handleOpenAddModal = () => {
+    setSelectedProductId(planOrderProductId ?? undefined)
+    setItemStages(planOrderStageConfig ? planOrderStageConfig.map(s => ({ ...s })) : [])
+    setAddOpen(true)
+  }
 
   const openEditModal = (item: PlanItem) => {
     setEditItem(item)
@@ -336,57 +488,83 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     )
   }
 
-  useEffect(() => {
-    if (editItem) {
-      editForm.setFieldsValue({
-        product_id: editItem.product_id,
-        product_name: editItem.product_name,
-        route_id: editItem.route_id,
-        equipment_id: editItem.equipment_id,
-        planned_quantity: editItem.planned_quantity,
-        unit: editItem.unit,
-        batch_no: editItem.batch_no,
-        planned_start: editItem.planned_start ? dayjs(editItem.planned_start) : undefined,
-        planned_end: editItem.planned_end ? dayjs(editItem.planned_end) : undefined,
-        priority: editItem.priority,
-        remark: editItem.remark,
-      })
-    }
-  }, [editItem, editForm])
-
-  const formatDate = (d: string | null) => (d ? new Date(d).toLocaleDateString('zh-CN') : '—')
+  const formatDate = (d: string | null) => {
+    if (!d) return '—'
+    return dayjs(d).format('MM/DD')
+  }
 
   const columns: ColumnsType<PlanItem> = [
-    { title: '项号', dataIndex: 'item_no', key: 'item_no', width: 60 },
-    { title: '产品', dataIndex: 'product_name', key: 'product_name', width: 140 },
     {
-      title: '计划数量', key: 'qty', width: 100,
-      render: (_, r) => r.planned_quantity != null ? `${r.planned_quantity}${r.unit ? ` ${r.unit}` : ''}` : '—',
+      title: '批次号',
+      dataIndex: 'batch_no',
+      key: 'batch_no',
+      width: 150,
+      render: (v: string, r: PlanItem) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--color-charcoal)' }}>
+            {v || '—'}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--color-steel)' }}>
+            {r.product_name || '—'}
+            {r.equipment_id ? ` · ${r.equipment_id}` : ''}
+          </span>
+        </div>
+      ),
     },
-    { title: '批次号', dataIndex: 'batch_no', key: 'batch_no', width: 100, render: v => v || '—' },
-    { title: '设备', dataIndex: 'equipment_id', key: 'equipment_id', width: 100, render: v => v || '—' },
     {
-      title: '计划时间', key: 'dates', width: 200,
-      render: (_, r) => `${formatDate(r.planned_start)} ~ ${formatDate(r.planned_end)}`,
+      title: '计划时间',
+      key: 'dates',
+      width: 130,
+      render: (_, r: PlanItem) => (
+        <span style={{ fontSize: 13, color: 'var(--color-charcoal)', whiteSpace: 'nowrap' }}>
+          {formatDate(r.planned_start)} ~ {formatDate(r.planned_end)}
+        </span>
+      ),
     },
     {
-      title: '状态', dataIndex: 'status', key: 'status', width: 80,
+      title: '数量',
+      key: 'qty',
+      width: 90,
+      render: (_, r: PlanItem) => (
+        <span style={{ fontSize: 13, color: 'var(--color-charcoal)' }}>
+          {r.planned_quantity != null ? `${r.planned_quantity}${r.unit ? ` ${r.unit}` : ''}` : '—'}
+        </span>
+      ),
+    },
+    {
+      title: '工序进度',
+      key: 'stage_progress',
+      width: 200,
+      render: (_, r: PlanItem) => (
+        <StageProgressBar
+          stageDurations={r.stage_durations}
+          batchProgress={r.batch_progress}
+        />
+      ),
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      key: 'status',
+      width: 75,
       render: (s: string) => {
         const c = ITEM_STATUS_CONFIG[s] ?? { label: s, color: 'default' }
-        return <Tag color={c.color}>{c.label}</Tag>
+        return (
+          <Tag
+            color={c.color}
+            style={{ fontSize: 11, lineHeight: '18px', margin: 0, borderRadius: 4 }}
+          >
+            {c.label}
+          </Tag>
+        )
       },
     },
     {
-      title: '优先级', dataIndex: 'priority', key: 'priority', width: 70,
-      render: (p: string) => {
-        const c = PRIORITY_CONFIG[p] ?? { label: p, color: 'default' }
-        return <Tag color={c.color}>{c.label}</Tag>
-      },
-    },
-    {
-      title: '操作', key: 'actions', width: 160,
-      render: (_, r) => (
-        <Space size="small">
+      title: '操作',
+      key: 'actions',
+      width: 120,
+      render: (_, r: PlanItem) => (
+        <Space size={4}>
           {canEdit && (
             <>
               <Button size="small" type="link" onClick={() => openEditModal(r)}>编辑</Button>
@@ -410,14 +588,22 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
 
   return (
     <div>
+      {/* Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
         {canEdit && onOpenStageConfig && (
           <Button size="small" onClick={onOpenStageConfig}>工段配置</Button>
         )}
         {canEdit && (
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleOpenAddModal}>
             添加计划项
           </Button>
+        )}
+        {canEdit && (
+          <Tooltip title={items.length === 0 ? '请先添加至少一个计划项' : undefined}>
+            <span>
+              <Button size="small" disabled={items.length === 0} onClick={handleOpenBatchGen}>批量生成</Button>
+            </span>
+          </Tooltip>
         )}
       </div>
 
@@ -430,7 +616,12 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
           rowKey="id"
           size="small"
           pagination={false}
-          scroll={{ x: 800 }}
+          scroll={{ x: 780 }}
+          onRow={(record) => ({
+            style: {
+              borderLeft: `3px solid ${ITEM_ACCENT[record.status] ?? ITEM_ACCENT.draft}`,
+            },
+          })}
         />
       )}
 
@@ -445,7 +636,13 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         width={520}
         destroyOnHidden
       >
-        <Form form={addForm} layout="vertical">
+        <Form form={addForm} layout="vertical" initialValues={{
+            product_id: planOrderProductId ?? undefined,
+            product_name: planOrderProductName ?? undefined,
+            route_id: planOrderRouteId ?? undefined,
+            batch_no: '',
+            priority: 'medium',
+          }}>
           <PlanItemFormFields
             products={products}
             routes={routes}
@@ -458,6 +655,39 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         </Form>
       </Modal>
 
+      {/* 批量生成 Modal */}
+      <Modal
+        title="批量生成计划项"
+        open={batchGenOpen}
+        onOk={handleBatchGenerate}
+        confirmLoading={batchGenLoading}
+        onCancel={() => setBatchGenOpen(false)}
+        width={520}
+        destroyOnHidden
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>起始批号</span>
+            <Input placeholder="如 A1" value={batchStartNo} onChange={e => setBatchStartNo(e.target.value)} style={{ flex: 1 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>数量</span>
+            <InputNumber min={1} value={batchCount} onChange={v => setBatchCount(v ?? 1)} style={{ flex: 1 }} />
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>间隔规则</span>
+            <span style={{ fontSize: 13 }}>每</span>
+            <InputNumber min={1} value={batchIntervalDays} onChange={v => setBatchIntervalDays(v ?? 1)} style={{ width: 60 }} />
+            <span style={{ fontSize: 13 }}>天生成</span>
+            <InputNumber min={1} value={batchGroupSize} onChange={v => setBatchGroupSize(v ?? 1)} style={{ width: 60 }} />
+            <span style={{ fontSize: 13 }}>批</span>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--color-slate)', marginTop: 4 }}>
+            批号自动取最后一项递增；日期基于最后一项的时间按规则偏移，保持相同持续时长
+          </div>
+        </div>
+      </Modal>
+
       {/* 编辑 Modal */}
       <Modal
         title="编辑计划项"
@@ -467,7 +697,19 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         width={520}
         destroyOnHidden
       >
-        <Form form={editForm} layout="vertical">
+        <Form form={editForm} layout="vertical" key={editItem?.id} initialValues={editItem ? {
+            product_id: editItem.product_id,
+            product_name: editItem.product_name,
+            route_id: editItem.route_id,
+            equipment_id: editItem.equipment_id,
+            planned_quantity: editItem.planned_quantity,
+            unit: editItem.unit,
+            batch_no: editItem.batch_no,
+            planned_start: editItem.planned_start ? dayjs(editItem.planned_start) : undefined,
+            planned_end: editItem.planned_end ? dayjs(editItem.planned_end) : undefined,
+            priority: editItem.priority,
+            remark: editItem.remark,
+          } : undefined}>
           <PlanItemFormFields
             products={products}
             routes={routes}

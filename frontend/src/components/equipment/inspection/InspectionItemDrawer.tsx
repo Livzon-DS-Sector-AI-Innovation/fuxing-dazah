@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { App, Drawer, Button, Table, Form, Input, InputNumber, Select, Typography, Empty, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined, CloseOutlined, OrderedListOutlined } from '@ant-design/icons'
+import { App, Drawer, Table, Form, Input, InputNumber, Select, Typography, Empty, Popconfirm } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, OrderedListOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createInspectionTemplateItem, updateInspectionTemplateItem, deleteInspectionTemplateItem } from '@/actions/equipment'
@@ -22,10 +22,9 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
   const [form] = Form.useForm<ItemFormValues>()
   const [s, setS] = useState(false)
   const watchDataType = Form.useWatch('data_type', form)
-  useEffect(() => {
-    if (mode === 'create') { form.resetFields(); form.setFieldsValue({ sort_order: itemsCount, item_name: '', item_description: '', expected_result: '', check_method: '', data_type: 'numeric', unit: '' }) }
-    else if (initialValues) form.setFieldsValue(initialValues)
-  }, [mode, itemsCount, initialValues, form])
+  // ponytail: derive form defaults from props on mount (mode key forces remount on mode change)
+  const createDefaults: ItemFormValues = { sort_order: itemsCount, item_name: '', item_description: '', expected_result: '', check_method: '', data_type: 'numeric', unit: '' }
+  const formInitialValues = mode === 'create' ? createDefaults : initialValues
 
   const submit = async () => {
     let v: any
@@ -47,7 +46,7 @@ function ItemForm({ mode, templateId, itemsCount, initialValues, onSuccess, onCa
   return (
     <div style={{ marginBottom: 16, padding: 16, background: C.surfaceSoft, borderRadius: 10, border: `1px solid ${C.hairline}` }}>
       <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 12, color: C.ink }}>{mode === 'create' ? '新增检查项' : '编辑检查项'}</Text>
-      <Form form={form} layout="vertical" requiredMark={false}>
+      <Form form={form} key={mode} layout="vertical" requiredMark={false} initialValues={formInitialValues}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
           <Form.Item name="item_name" label="检查项名称" rules={[{ required: true, message: '请输入' }]}><Input placeholder="如：温度检查" style={{ borderRadius: 8 }} /></Form.Item>
           <Form.Item name="sort_order" label="排序"><InputNumber min={0} style={{ width: '100%', borderRadius: 8 }} /></Form.Item>
@@ -77,8 +76,13 @@ export function InspectionItemDrawer() {
   const { inspectionItemDrawerOpen, inspectionItemTemplateId, editingInspectionItem, closeInspectionItemDrawer } = useEquipmentStore()
   const [items, setItems] = useState<InspectionTemplateItem[]>([])
   const [loading, setLoading] = useState(false)
-  const [formMode, setFormMode] = useState<'create' | string | null>(null)
-  const [editingData, setEditingData] = useState<InspectionTemplateItem | null>(null)
+  // ponytail: lazy init from store on mount (destroyOnHidden ensures fresh mount each open)
+  const [formMode, setFormMode] = useState<'create' | string | null>(
+    () => editingInspectionItem ? editingInspectionItem.id : null
+  )
+  const [editingData, setEditingData] = useState<InspectionTemplateItem | null>(
+    () => editingInspectionItem ?? null
+  )
 
   const load = useCallback(async () => {
     if (!inspectionItemTemplateId) return; setLoading(true)
@@ -87,8 +91,9 @@ export function InspectionItemDrawer() {
   }, [inspectionItemTemplateId, message])
 
   useEffect(() => {
-    if (inspectionItemDrawerOpen && inspectionItemTemplateId) { load(); if (editingInspectionItem) { setEditingData(editingInspectionItem); setFormMode(editingInspectionItem.id) } else { setFormMode(null); setEditingData(null) } }
-  }, [inspectionItemDrawerOpen, inspectionItemTemplateId, editingInspectionItem, load])
+    if (inspectionItemDrawerOpen && inspectionItemTemplateId) { load() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inspectionItemDrawerOpen, inspectionItemTemplateId])
 
   const close = () => { setFormMode(null); closeInspectionItemDrawer() }
   const startEdit = (item: InspectionTemplateItem) => { setEditingData(item); setFormMode(item.id) }

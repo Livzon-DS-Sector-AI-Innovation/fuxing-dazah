@@ -6,8 +6,9 @@ ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV UV_PYTHON_PREFERENCE=only-system
 
 # WeasyPrint 系统依赖（渲染 HTML→PDF）+ CJK 字体在 assets/fonts/ 随代码打包
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0 \
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 \
     libffi8 shared-mime-info && \
     rm -rf /var/lib/apt/lists/*
 

@@ -1,8 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space } from 'antd'
-import { useEffect } from 'react'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createCategory, updateCategory } from '@/actions/equipment'
 
@@ -19,22 +18,17 @@ export function CategoryDrawer({ onRefresh }: { onRefresh?: () => void }) {
     categories,
   } = useEquipmentStore()
 
-  useEffect(() => {
-    if (!categoryDrawerOpen) return
-    const timer = setTimeout(() => {
-      if (editingCategory) {
-        form.setFieldsValue({
-          name: editingCategory.name,
-          code: editingCategory.code,
-          parent_id: editingCategory.parent_id ?? undefined,
-          description: editingCategory.description ?? undefined,
-        })
-      } else {
-        form.resetFields()
+  const initialValues = useMemo(() => {
+    if (editingCategory) {
+      return {
+        name: editingCategory.name,
+        code: editingCategory.code,
+        parent_id: editingCategory.parent_id ?? undefined,
+        description: editingCategory.description ?? undefined,
       }
-    }, 0)
-    return () => clearTimeout(timer)
-  }, [categoryDrawerOpen, editingCategory, form])
+    }
+    return undefined
+  }, [editingCategory])
 
   const handleSubmit = async () => {
     let values: any
@@ -106,7 +100,7 @@ export function CategoryDrawer({ onRefresh }: { onRefresh?: () => void }) {
         </Space>
       }
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" initialValues={initialValues}>
         <Form.Item
           name="name"
           label="分类名称"

@@ -313,10 +313,10 @@ async def send_inspection_start_notification(
                 task.task_no,
             )
 
-    except Exception as e:
-        logger.error(
-            "❌ send_inspection_start_notification FAILED for task %s: %s: %s",
-            task.task_no, type(e).__name__, e,
+    except Exception:
+        logger.exception(
+            "❌ send_inspection_start_notification FAILED for task %s",
+            task.task_no,
         )
 
 
@@ -388,11 +388,9 @@ async def send_work_order_notification(
                 "❌ Failed to send work order notification for %s",
                 work_order.work_order_no,
             )
-    except Exception as e:
-        logger.error(
-            "❌ send_work_order_notification FAILED for %s: %s: %s",
+    except Exception:
+        logger.exception(
+            "❌ send_work_order_notification FAILED for %s",
             work_order.work_order_no,
-            type(e).__name__,
-            e,
         )
 

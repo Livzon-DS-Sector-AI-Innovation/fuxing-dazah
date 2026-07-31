@@ -9,6 +9,9 @@ import { fetchBatchesClient } from '@/lib/api/production-client'
 import type { ProductionBatch } from '@/types/production'
 
 export const BATCH_STATUS_META: Record<string, { color: string; label: string }> = {
+  draft: { color: 'default', label: '草稿' },
+  scheduled: { color: 'blue', label: '已排程' },
+  released: { color: 'cyan', label: '已下达' },
   pending: { color: 'default', label: '待开工' },
   in_progress: { color: 'blue', label: '生产中' },
   completed: { color: 'green', label: '已完成' },

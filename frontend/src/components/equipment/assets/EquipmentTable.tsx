@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Table, Space, Input, Select, Button } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, ImportOutlined, EyeOutlined } from '@ant-design/icons'
 import { Equipment } from '@/types/equipment'
@@ -28,15 +28,13 @@ interface EquipmentTableProps {
   loading?: boolean
   onPageChange: (page: number, pageSize: number) => void
   onImportClick?: () => void
-  /** 变化时重置分页到第一页 */
-  resetKey: number
 }
 
 
-export function EquipmentTable({ loading = false, onPageChange, onImportClick, resetKey }: EquipmentTableProps) {
+export function EquipmentTable({ loading = false, onPageChange, onImportClick }: EquipmentTableProps) {
   const { message, modal } = App.useApp()
   const {
-    equipments, total,
+    equipments, total, page, pageSize,
     statusFilter, keyword,
     departments, departmentFilter, setDepartmentFilter,
     setStatusFilter, setKeyword,
@@ -44,15 +42,6 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick, r
   } = useEquipmentStore()
 
   const { hasPermission } = usePermission()
-
-  // 本地分页
-  const [localPage, setLocalPage] = useState(1)
-  const [localPageSize, setLocalPageSize] = useState(20)
-
-  // resetKey 变化 → 重置到第一页
-  useEffect(() => {
-    setLocalPage(1)
-  }, [resetKey])
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailEquipment, setDetailEquipment] = useState<Equipment | null>(null)
@@ -89,10 +78,10 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick, r
           return
         }
         message.success('删除设备成功')
-        onPageChange(localPage, localPageSize)
+        onPageChange(page, pageSize)
       },
     })
-  }, [modal, message, onPageChange, localPage, localPageSize])
+  }, [modal, message, onPageChange, page, pageSize])
 
   const columns = [
     { title: '设备编号', dataIndex: 'equipment_no', key: 'equipment_no', width: 140, fixed: 'start' as const },
@@ -158,15 +147,13 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick, r
           columns={columns} dataSource={equipments} rowKey="id" size="small"
           loading={loading} scroll={{ x: 'max-content', y: scrollY || undefined }}
           pagination={{
-            current: localPage,
-            pageSize: localPageSize,
+            current: page,
+            pageSize: pageSize,
             total: total,
             showSizeChanger: true,
             showQuickJumper: true,
             showTotal: (t) => `共 ${t} 条`,
             onChange: (p, ps) => {
-              setLocalPage(p)
-              if (ps !== localPageSize) setLocalPageSize(ps)
               onPageChange(p, ps)
             },
           }}

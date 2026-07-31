@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { App, Drawer, Form, Select, InputNumber, Button, Space, Empty } from 'antd'
 import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { consumeMaterials } from '@/actions/equipment'
@@ -18,12 +18,11 @@ export function MaterialConsumeDrawer({ workOrderId, spareParts, onRefresh }: Ma
   const [loading, setLoading] = useState(false)
   const [form] = Form.useForm()
 
-  useEffect(() => {
-    if (open) {
-      form.resetFields()
-      form.setFieldsValue({ items: [{ spare_part_id: undefined, quantity: 1 }] })
-    }
-  }, [open, form])
+  const handleOpen = () => {
+    form.resetFields()
+    form.setFieldsValue({ items: [{ spare_part_id: undefined, quantity: 1 }] })
+    setOpen(true)
+  }
 
   const handleSubmit = async () => {
     let values: any
@@ -50,7 +49,7 @@ export function MaterialConsumeDrawer({ workOrderId, spareParts, onRefresh }: Ma
 
   return (
     <>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+      <Button type="primary" icon={<PlusOutlined />} onClick={handleOpen}>
         领料
       </Button>
       <Drawer

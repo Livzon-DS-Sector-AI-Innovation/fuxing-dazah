@@ -279,16 +279,23 @@ async def create_equipment(
     try:
         equipment = await repo.create_equipment(db, equipment_data)
     except IntegrityError:
+        logger.warning("创建设备失败：编号重复 equipment_no=%s", data.equipment_no)
         raise DuplicateException("设备编号", data.equipment_no)
 
     # 记录初始状态/运行状态基线，作为开动率统计起点
-    await record_status_change(
-        db, equipment.id, None, equipment.status, source="create"
-    )
-    await record_status_change(
-        db, equipment.id, None, equipment.running_status,
-        source="create", log_type="running",
-    )
+    try:
+        await record_status_change(
+            db, equipment.id, None, equipment.status, source="create"
+        )
+        await record_status_change(
+            db, equipment.id, None, equipment.running_status,
+            source="create", log_type="running",
+        )
+    except Exception:
+        logger.exception(
+            "设备状态日志写入失败: equipment_id=%s equipment_no=%s",
+            equipment.id, equipment.equipment_no,
+        )
     return equipment
 
 
@@ -351,16 +358,26 @@ async def update_equipment(
 
     new_status = update_data.get("status")
     if new_status:
-        await record_status_change(
-            db, equipment_id, old_status, new_status,
-            source="manual", operator_id=ctx.user.id,
-        )
+        try:
+            await record_status_change(
+                db, equipment_id, old_status, new_status,
+                source="manual", operator_id=ctx.user.id,
+            )
+        except Exception:
+            logger.exception(
+                "设备状态日志写入失败: equipment_id=%s", equipment_id,
+            )
     new_running_status = update_data.get("running_status")
     if new_running_status:
-        await record_status_change(
-            db, equipment_id, old_running_status, new_running_status,
-            source="manual", operator_id=ctx.user.id, log_type="running",
-        )
+        try:
+            await record_status_change(
+                db, equipment_id, old_running_status, new_running_status,
+                source="manual", operator_id=ctx.user.id, log_type="running",
+            )
+        except Exception:
+            logger.exception(
+                "设备运行状态日志写入失败: equipment_id=%s", equipment_id,
+            )
     return updated
 
 

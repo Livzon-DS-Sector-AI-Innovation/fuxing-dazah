@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useMemo } from 'react'
 import { App, Drawer, Form, Input, InputNumber, Switch, Button, Space } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createFailureCode, updateFailureCode } from '@/actions/equipment'
@@ -23,22 +23,18 @@ export function FailureCodeDrawer({ onRefresh }: FailureCodeDrawerProps) {
   const [form] = Form.useForm()
   const { failureCodeDrawerOpen, failureCodeDrawerType, editingFailureCode, closeFailureCodeDrawer } = useEquipmentStore()
 
-  useEffect(() => {
-    if (failureCodeDrawerOpen) {
-      if (editingFailureCode) {
-        form.setFieldsValue({
-          code: editingFailureCode.code,
-          name: editingFailureCode.name,
-          description: editingFailureCode.description,
-          sort_order: editingFailureCode.sort_order,
-          is_active: editingFailureCode.is_active,
-        })
-      } else {
-        form.resetFields()
-        form.setFieldsValue({ sort_order: 0, is_active: true })
+  const initialValues = useMemo(() => {
+    if (editingFailureCode) {
+      return {
+        code: editingFailureCode.code,
+        name: editingFailureCode.name,
+        description: editingFailureCode.description,
+        sort_order: editingFailureCode.sort_order,
+        is_active: editingFailureCode.is_active,
       }
     }
-  }, [failureCodeDrawerOpen, editingFailureCode, form])
+    return { sort_order: 0, is_active: true }
+  }, [editingFailureCode])
 
   const handleSubmit = async () => {
     let values: any
@@ -82,7 +78,7 @@ export function FailureCodeDrawer({ onRefresh }: FailureCodeDrawerProps) {
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>
+      <Form form={form} layout="vertical" requiredMark="optional" preserve={false} initialValues={initialValues}>
         <Form.Item name="code" label="代码" rules={[{ required: true, message: '请输入代码' }, { max: 50, message: '代码不超过50个字符' }]}>
           <Input placeholder="例如: NOISE, WEAR, REPLACE" />
         </Form.Item>

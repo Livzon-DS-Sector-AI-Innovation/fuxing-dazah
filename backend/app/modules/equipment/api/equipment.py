@@ -1,5 +1,6 @@
 """设备台账 API 路由."""
 
+import logging
 import uuid
 from datetime import date, timedelta
 
@@ -8,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import AppException, NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import repository as repo
 from app.modules.equipment import service
@@ -30,6 +31,8 @@ from app.modules.equipment.schemas import (
     LocationUpdate,
     SparePartResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -296,8 +299,14 @@ async def get_equipment_availability(
     ),
 ) -> AvailabilityResponse:
     """按运行状态变更日志计算时间范围内各设备的时间开动率（开机时长/日历时长），报废设备不参与。"""
-    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
-    td = date.fromisoformat(to_date) if to_date else date.today()
+    try:
+        fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
+        td = date.fromisoformat(to_date) if to_date else date.today()
+    except ValueError:
+        raise AppException(
+            message="日期格式无效，请使用 YYYY-MM-DD 格式",
+            status_code=400,
+        ) from None
     return await service.get_availability(db, ctx, fd, td)
 
 
@@ -459,4 +468,5 @@ async def import_equipments(
         await db.commit()
         return success_response(data=result.model_dump())
     except ValueError as e:
+        logger.warning("设备 Excel 导入失败: %s", e)
         return JSONResponse(status_code=400, content={"message": str(e)})

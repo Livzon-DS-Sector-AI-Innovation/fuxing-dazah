@@ -7,15 +7,21 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppException
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch, BatchLink, NodeExecution
+from app.modules.production.models.planning import PlanAllocation
+from app.modules.production.models.route import RouteNode
 from app.modules.production.schemas.assignment import (
     AssignedNodeInfo,
     AssignedRouteInfo,
     AssignedStageInfo,
     NodeAssigneeInfo,
+    PlannedBatchItem,
+    PlannedBatchOut,
     ReceiveAndStartIn,
     RecentCompletedItem,
+    StageNodeInfo,
     WorkbenchItem,
     WorkbenchOut,
 )
@@ -42,6 +48,280 @@ async def _get_user_names(
 def _build_assignee_info(assignments) -> list[NodeAssigneeInfo]:
     """将 NodeAssignment 列表转为 NodeAssigneeInfo。"""
     return [NodeAssigneeInfo(user_id=a.user_id) for a in assignments]
+
+
+def _build_stage_nodes(
+    stage_nodes: list[RouteNode],
+    completed: set[uuid.UUID],
+    in_progress: set[uuid.UUID],
+) -> list[StageNodeInfo]:
+    """构建工序面包屑：预排序的工段内工序，标记完成状态。ponytail: 调用方预分组，避免重复过滤排序。"""
+    if not stage_nodes:
+        return []
+    result: list[StageNodeInfo] = []
+    for n in stage_nodes:
+        if n.id in completed:
+            status = "completed"
+        elif n.id in in_progress:
+            status = "in_progress"
+        else:
+            status = "pending"
+        result.append(StageNodeInfo(
+            node_id=n.id,
+            node_name=n.name,
+            sort_order=n.sort_order,
+            status=status,
+        ))
+    return result
+
+
+# ── 计划批次辅助 ──
+
+
+def _build_stage_order(nodes: list[RouteNode]) -> list[str]:
+    """从路线节点提取有序工段列表（按 sort_order 首次出现顺序）。"""
+    seen: dict[str, int] = {}
+    for n in sorted(nodes, key=lambda n: n.sort_order):
+        sn = n.stage_name or "未分组"
+        if sn not in seen:
+            seen[sn] = n.sort_order
+    return sorted(seen.keys(), key=lambda s: seen[s])
+
+
+def _calc_stage_times(
+    planned_start: datetime | None,
+    stage_durations: list | None,
+    stage_order: list[str],
+) -> dict[str, str]:
+    """计算每工段预计开始时间 = planned_start + 前序工段时长累加。
+
+    stage_durations 为空时全部回退到 planned_start。
+    """
+    if not planned_start:
+        return {}
+    durations: dict[str, float] = {}
+    if stage_durations:
+        for d in stage_durations:
+            durations[d.get("stage_name", "")] = d.get("duration_hours", 0)
+    result: dict[str, str] = {}
+    accumulated = timedelta(0)
+    for sn in stage_order:
+        result[sn] = (planned_start + accumulated).isoformat()
+        if stage_durations:
+            accumulated += timedelta(hours=durations.get(sn, 0))
+    return result
+
+
+def _calc_current_progress(
+    stage_order: list[str],
+    stage_node_ids: dict[str, set[uuid.UUID]],
+    completed: set[uuid.UUID],
+    in_progress: set[uuid.UUID],
+) -> tuple[str | None, str | None]:
+    """判断批次当前在哪个工段及进度状态。
+
+    Returns (current_stage, progress): progress ∈ {not_started, in_progress, completed}
+    """
+    for sn in stage_order:
+        sn_ids = stage_node_ids.get(sn, set())
+        if not sn_ids:
+            continue
+        if sn_ids & in_progress:
+            return sn, "in_progress"
+        if not sn_ids.issubset(completed):
+            return sn, "not_started"
+    # 全部工段完成 — 但空路由无任何工段，不应标记为 completed
+    if not stage_order:
+        return None, None
+    return stage_order[-1], "completed"
+
+
+# ── 计划批次查询 ──
+
+
+async def activate_planned_batch(
+    db: AsyncSession, batch_id: uuid.UUID, user: User,
+) -> Batch:
+    """激活计划批次：scheduled → pending，第一工段负责人接收后进入待办区。"""
+    batch = await repo.get_batch(db, batch_id)
+    if not batch:
+        raise AppException(status_code=404, message=f"批次 {batch_id} 不存在")
+    if batch.status != "scheduled":
+        raise AppException(status_code=400, message="仅 scheduled 批次可激活")
+    if batch.creation_type != "plan":
+        raise AppException(status_code=400, message="仅计划批次可激活")
+
+    # verify user owns the first stage of this batch's route
+    user_stages = await repo.get_user_stages(db, user.id)
+    user_route_stages = {
+        s.stage_name for s in user_stages if s.route_id == batch.route_id
+    }
+    if not user_route_stages:
+        raise AppException(status_code=403, message="您无权激活此批次")
+    nodes = await repo.get_route_nodes(db, batch.route_id)
+    stage_order = _build_stage_order(nodes)
+    if not stage_order or stage_order[0] not in user_route_stages:
+        raise AppException(status_code=403, message="仅路线第一工段负责人可激活批次")
+
+    batch.status = "pending"
+    batch.updated_by = user.id if user else None
+    await db.flush()
+    # re-fetch per SQLAlchemy async rule: UPDATE flush doesn't use RETURNING
+    refreshed = await repo.get_batch(db, batch_id)
+    assert refreshed is not None
+    return refreshed
+
+
+async def query_planned_batches(
+    db: AsyncSession, user_id: uuid.UUID,
+) -> PlannedBatchOut:
+    """查询用户负责工段对应的计划批次排期。
+
+    只返回 scheduled + creation_type=plan 的批次。
+    每个工段负责人看到自己工段的预计开始时间。
+    """
+    stages = await repo.get_user_stages(db, user_id)
+    if not stages:
+        return PlannedBatchOut(items=[])
+
+    # per-route stage name mapping: avoid cross-route name collision (e.g. "清洗" on Route-A vs Route-B)
+    route_stage_names: dict[uuid.UUID, set[str]] = defaultdict(set)
+    for s in stages:
+        route_stage_names[s.route_id].add(s.stage_name)
+    route_ids = list({s.route_id for s in stages})
+
+    routes = await repo.get_routes_by_ids(db, route_ids)
+    routes = [r for r in routes if r.status == "published"]
+    if not routes:
+        return PlannedBatchOut(items=[])
+    route_map = {r.id: r for r in routes}
+    published_route_ids = set(route_map.keys())
+
+    product_ids = {r.product_id for r in routes}
+    products = await repo.get_products_by_ids(db, list(product_ids))
+    product_map = {p.id: p for p in products}
+
+    # 查 scheduled plan 批次
+    batch_stmt = select(Batch).where(
+        Batch.route_id.in_(list(published_route_ids)),
+        Batch.status == "scheduled",
+        Batch.creation_type == "plan",
+        Batch.is_deleted == False,  # noqa: E712
+    )
+    scheduled_batches: list[Batch] = list((await db.execute(batch_stmt)).scalars())
+    if not scheduled_batches:
+        return PlannedBatchOut(items=[])
+
+    batch_map = {b.id: b for b in scheduled_batches}
+
+    # PlanAllocation → PlanItem → PlanOrder
+    allocs = await repo.get_plan_allocations_by_batches(db, list(batch_map.keys()))
+    alloc_by_batch: dict[uuid.UUID, PlanAllocation] = {}
+    item_ids: set[uuid.UUID] = set()
+    for a in allocs:
+        alloc_by_batch[a.batch_id] = a
+        item_ids.add(a.plan_item_id)
+
+    items = await repo.get_plan_items_by_ids(db, list(item_ids))
+    item_map = {i.id: i for i in items}
+
+    order_ids = {i.plan_order_id for i in items}
+    order_map = await repo.get_plan_orders_by_ids(db, list(order_ids))
+
+    # 路线节点缓存 + 每路线预计算 stage_order / stage_node_ids
+    route_stage_order: dict[uuid.UUID, list[str]] = {}
+    route_stage_node_ids: dict[uuid.UUID, dict[str, set[uuid.UUID]]] = {}
+    for rid in published_route_ids:
+        nodes = await repo.get_route_nodes(db, rid)
+        stage_order = _build_stage_order(nodes)
+        route_stage_order[rid] = stage_order
+        route_stage_node_ids[rid] = {
+            sn: {n.id for n in nodes if (n.stage_name or "未分组") == sn}
+            for sn in stage_order
+        }
+
+    # 批次执行状态 — 一次查询（ponytail: merged completed + in_progress）
+    all_batch_ids = list(batch_map.keys())
+    batch_completed: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    batch_in_progress: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    if all_batch_ids:
+        for row in (await db.execute(
+            select(NodeExecution.batch_id, NodeExecution.node_id, NodeExecution.status).where(
+                NodeExecution.batch_id.in_(all_batch_ids),
+                NodeExecution.status.in_(["completed", "in_progress"]),
+                NodeExecution.is_deleted == False,  # noqa: E712
+            )
+        )).all():
+            if row.status == "completed":
+                batch_completed[row.batch_id].add(row.node_id)
+            else:
+                batch_in_progress[row.batch_id].add(row.node_id)
+
+    now = datetime.now(UTC)
+
+    result: list[PlannedBatchItem] = []
+    for batch in scheduled_batches:
+        alloc = alloc_by_batch.get(batch.id)
+        if not alloc:
+            continue
+        item = item_map.get(alloc.plan_item_id)
+        if not item:
+            continue
+        order = order_map.get(item.plan_order_id)
+
+        route = route_map[batch.route_id]
+        product = product_map.get(route.product_id)
+
+        stage_order = route_stage_order[batch.route_id]
+        user_stages = [s for s in stage_order if s in route_stage_names.get(batch.route_id, set())]
+        if not user_stages:
+            continue
+
+        stage_times = _calc_stage_times(item.planned_start, item.stage_durations, stage_order)
+        completed = batch_completed.get(batch.id, set())
+        in_progress = batch_in_progress.get(batch.id, set())
+        stage_node_ids = route_stage_node_ids[batch.route_id]
+        current_stage, current_progress = _calc_current_progress(
+            stage_order, stage_node_ids, completed, in_progress,
+        )
+
+        # 时间过滤：±30天
+        if item.planned_start:
+            one_month = timedelta(days=30)
+            if item.planned_start > now + one_month:
+                continue
+            if item.planned_end and item.planned_end < now - one_month:
+                continue
+
+        # 标记该用户是否为第一工段负责人
+        first_user_stage = user_stages[0]
+        is_first_stage_owner = (first_user_stage == stage_order[0])
+
+        # 如果当前执行进度已超过该用户的所有工段 → 不显示
+        if current_stage and current_stage not in user_stages:
+            if stage_order.index(current_stage) > max(stage_order.index(us) for us in user_stages):
+                continue
+
+        result.append(PlannedBatchItem(
+            batch_id=batch.id,
+            batch_no=batch.batch_no,
+            product_name=product.product_name if product else None,
+            route_id=route.id,
+            route_name=route.name,
+            route_version=route.version,
+            plan_item_id=item.id,
+            plan_order_no=order.order_no if order else "",
+            planned_start=item.planned_start.isoformat() if item.planned_start else None,
+            planned_end=item.planned_end.isoformat() if item.planned_end else None,
+            stage_times=stage_times,
+            current_stage=current_stage,
+            current_stage_progress=current_progress,
+            stage_config=item.stage_durations or (order.stage_config if order else None),
+            is_first_stage_owner=is_first_stage_owner,
+        ))
+
+    result.sort(key=lambda x: x.planned_start or "")
+    return PlannedBatchOut(items=result)
 
 
 async def query_workbench(
@@ -140,24 +420,17 @@ async def query_workbench(
     if all_batch_ids_for_status:
         for row in (
             await db.execute(
-                select(NodeExecution.batch_id, NodeExecution.node_id).where(
+                select(NodeExecution.batch_id, NodeExecution.node_id, NodeExecution.status).where(
                     NodeExecution.batch_id.in_(all_batch_ids_for_status),
-                    NodeExecution.status == "completed",
+                    NodeExecution.status.in_(["completed", "in_progress"]),
                     NodeExecution.is_deleted == False,  # noqa: E712
                 )
             )
         ).all():
-            batch_completed[row.batch_id].add(row.node_id)
-        for row in (
-            await db.execute(
-                select(NodeExecution.batch_id, NodeExecution.node_id).where(
-                    NodeExecution.batch_id.in_(all_active_ids),
-                    NodeExecution.status == "in_progress",
-                    NodeExecution.is_deleted == False,  # noqa: E712
-                )
-            )
-        ).all():
-            batch_in_progress[row.batch_id].add(row.node_id)
+            if row.status == "completed":
+                batch_completed[row.batch_id].add(row.node_id)
+            else:
+                batch_in_progress[row.batch_id].add(row.node_id)
 
     linked_pairs: set[tuple] = set()
     all_boundary_edge_ids = {
@@ -198,6 +471,14 @@ async def query_workbench(
         nodes = route_nodes_cache[route_id]
         edges = route_edges_cache[route_id]
         node_map = {n.id: n for n in nodes}
+
+        # 预分组：工段 → 已排序节点列表（ponytail: 避免 _build_stage_nodes 内重复过滤和排序）
+        nodes_by_stage: dict[str, list[RouteNode]] = {}
+        for n in nodes:
+            sn = n.stage_name or "未分组"
+            nodes_by_stage.setdefault(sn, []).append(n)
+        for lst in nodes_by_stage.values():
+            lst.sort(key=lambda n: n.sort_order)
 
         # 用户在此路线有权限的节点
         if role == "stage_owner":
@@ -268,6 +549,7 @@ async def query_workbench(
                     stage_name=node.stage_name,
                     predecessor_batches=[],
                     node_assignees=[],
+                    stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
                 ))
 
         # ── pending_receive ──
@@ -302,6 +584,7 @@ async def query_workbench(
             if is_merge:
                 parent_ids = list({b.id for _, b in pairs})
                 parent_nos = [b.batch_no for _, b in pairs]
+                # 合并接收无单一 batch_id，面包屑全显示 pending
                 items.append(WorkbenchItem(
                     type="pending_receive",
                     route_id=route_id,
@@ -314,9 +597,12 @@ async def query_workbench(
                     parent_batch_ids=parent_ids,
                     predecessor_batches=parent_nos,
                     node_assignees=[],
+                    stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), set(), set()),
                 ))
             else:
                 for edge, b in pairs:
+                    batch_comp = batch_completed.get(b.id, set())
+                    batch_ip = batch_in_progress.get(b.id, set())
                     items.append(WorkbenchItem(
                         type="pending_receive",
                         batch_id=b.id,
@@ -332,6 +618,7 @@ async def query_workbench(
                         parent_batch_ids=[b.id],
                         predecessor_batches=[],
                         node_assignees=[],
+                        stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), batch_comp, batch_ip),
                     ))
 
         # ── pending_complete：用户权限节点上有进行中的执行 ──
@@ -375,6 +662,7 @@ async def query_workbench(
                 is_last_in_stage=is_last,
                 predecessor_batches=[],
                 node_assignees=[],
+                stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
             ))
 
         # ── ready_to_complete：工段内所有节点已完成且有批次边界出边 ──
@@ -424,6 +712,7 @@ async def query_workbench(
                     stage_name=stage_name,
                     predecessor_batches=[],
                     node_assignees=[],
+                    stage_nodes=_build_stage_nodes(nodes_by_stage.get(stage_name or "未分组", []), comp, ip),
                 ))
 
     # 批量填充 predecessor_batches（替代 N+1 的 _get_predecessor_batch_nos 调用）
@@ -514,6 +803,7 @@ async def query_workbench(
             finished_at=ex.finished_at.isoformat() if ex.finished_at else None,
         ))
 
+    items.sort(key=lambda x: x.batch_no or "")
     return WorkbenchOut(
         role=role, stage_names=stage_names,
         assigned_routes=assigned_routes, items=items,

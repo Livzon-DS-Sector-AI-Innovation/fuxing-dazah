@@ -1,5 +1,6 @@
 """Equipment personnel service."""
 
+import logging
 import uuid
 from typing import cast
 
@@ -32,6 +33,8 @@ from app.modules.equipment.schemas.personnel import (
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
 from app.platform.identity.models import User
+
+logger = logging.getLogger(__name__)
 
 # ── 角色 Service ──
 
@@ -154,6 +157,7 @@ async def add_personnel(
             await db.flush()
             result.added.append(personnel.id)
         except Exception as e:
+            logger.warning("批量添加人员失败: user_id=%s, reason=%s", user_id, e)
             result.errors.append({"user_id": str(user_id), "reason": str(e)})
 
     return result

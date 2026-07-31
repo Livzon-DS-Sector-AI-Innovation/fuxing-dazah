@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button, Descriptions, Drawer, Empty, Tag } from 'antd'
 import type { FieldDef, FieldDefIn, RouteNode } from '@/types/production'
 import { FieldsEditorTable } from './FieldsEditorTable'
@@ -70,13 +70,9 @@ interface Props {
 
 export function NodeFieldsDrawer({ open, node, editable, onClose, onSave }: Props) {
   const isEdit = editable && !!onSave
-  const [localFields, setLocalFields] = useState<FieldDefIn[]>([])
-  useEffect(() => {
-    if (open && node) setLocalFields(node.fields.map(toFieldIn))
-    // 依赖 node?.id 而非 node：RouteGraphEditor 每次 render 内联构造新 node 对象，
-    // 依赖整个 node 会在父级重渲染时重置 localFields，丢失用户正在编辑的内容
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, node?.id])
+  const [localFields, setLocalFields] = useState<FieldDefIn[]>(() =>
+    node ? node.fields.map(toFieldIn) : [],
+  )
 
   const startFields = node?.fields.filter(f => f.phase === 'start') ?? []
   const endFields = node?.fields.filter(f => f.phase === 'end') ?? []

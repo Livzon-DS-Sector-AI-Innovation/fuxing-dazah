@@ -31,7 +31,7 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
 
   const { data: routes, refetch: refetchRoutes } = useQuery({
     queryKey: ['production-routes', selectedProductId],
-    queryFn: () => fetchRoutesClient(selectedProductId!),
+    queryFn: () => fetchRoutesClient(selectedProductId!, undefined),
     enabled: !!selectedProductId,
   })
 
@@ -144,6 +144,7 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
         </div>
       </div>
       <NodeFieldsDrawer
+        key={fieldsNode?.id ?? 'empty'}
         open={!!fieldsNodeId}
         node={fieldsNode}
         editable={false}

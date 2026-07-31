@@ -43,8 +43,10 @@ export async function fetchIntermediateTypesClient(params: {
   )
 }
 
-export async function fetchRoutesClient(productId: string): Promise<ProcessRoute[]> {
-  const s = qs({ product_id: productId, page: 1, page_size: 50 })
+export async function fetchRoutesClient(productId: string, status?: string): Promise<ProcessRoute[]> {
+  const params: Record<string, string | number | undefined> = { product_id: productId, page: 1, page_size: 50 }
+  if (status) { params.status = status }
+  const s = qs(params)
   return apiGet<ProcessRoute[]>(`${API_BASE}/api/v1/production/routes?${s}`)
 }
 

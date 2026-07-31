@@ -1,6 +1,6 @@
 import type { Execution } from './execution'
 
-export type ProductionBatchStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled'
+export type ProductionBatchStatus = 'draft' | 'scheduled' | 'released' | 'pending' | 'in_progress' | 'completed' | 'cancelled'
 
 export interface ProductionBatch {
   id: string

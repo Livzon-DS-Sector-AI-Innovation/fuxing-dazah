@@ -10,7 +10,7 @@ import { PersonnelTable } from './PersonnelTable'
 import { RoleManagePanel } from './RoleManagePanel'
 import { PersonnelDrawer } from './PersonnelDrawer'
 import { PersonnelCategoryDrawer } from './PersonnelCategoryDrawer'
-import type { EquipmentRole, Personnel } from '@/types/equipment'
+import type { Personnel } from '@/types/equipment'
 import { usePermission } from '@/hooks/usePermission'
 
 export function PersonnelPage() {
@@ -196,6 +196,7 @@ export function PersonnelPage() {
       </Modal>
 
       <PersonnelCategoryDrawer
+        key={categoryPersonnel?.id ?? 'none'}
         open={!!categoryPersonnel}
         onClose={() => setCategoryPersonnel(null)}
         personnelId={categoryPersonnel?.id ?? ''}

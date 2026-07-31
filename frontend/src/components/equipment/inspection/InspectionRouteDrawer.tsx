@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useMemo } from 'react'
 import { App, Drawer, Form, Input } from 'antd'
 import { EnvironmentOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useInspectionStore } from '@/stores/inspection'
@@ -25,18 +25,15 @@ export function InspectionRouteDrawer() {
   const [form] = Form.useForm()
   const isEdit = !!editingRoute
 
-  useEffect(() => {
-    if (routeDrawerOpen) {
-      if (editingRoute) {
-        form.setFieldsValue({
-          name: editingRoute.name,
-          description: editingRoute.description ?? undefined,
-        })
-      } else {
-        form.resetFields()
+  const initialValues = useMemo(() => {
+    if (editingRoute) {
+      return {
+        name: editingRoute.name,
+        description: editingRoute.description ?? undefined,
       }
     }
-  }, [routeDrawerOpen, editingRoute, form])
+    return undefined
+  }, [editingRoute])
 
   const handleSubmit = async () => {
     try {
@@ -83,7 +80,7 @@ export function InspectionRouteDrawer() {
 
       {/* ═══ FORM ═══ */}
       <div style={{ padding: '24px 28px 100px' }}>
-        <Form form={form} layout="vertical" requiredMark={false}>
+        <Form form={form} layout="vertical" requiredMark={false} initialValues={initialValues}>
           {/* 路线名称 */}
           <div style={{ marginBottom: 24 }}>
             <div style={{

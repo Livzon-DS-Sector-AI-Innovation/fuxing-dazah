@@ -90,6 +90,43 @@ API_BASE_URL=http://localhost:8000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
+## useEffect 中禁止同步 setState
+
+**反模式：在 effect 里同步调用 setState 将 props 复制到 state。**
+
+```tsx
+// ❌ 坏：effect 里同步 setState → 触发 cascading render
+useEffect(() => {
+  if (open && props.productId) {
+    setSelectedId(props.productId)     // props → state 拷贝
+    setStages(props.stages ?? [])      // 同上
+  }
+}, [open, props.productId, props.stages])
+```
+
+流程：`setOpen(true)` → 渲染#1 → effect 触发 → `setSelectedId` + `setStages` → 渲染#2。一次操作两次渲染。
+
+**三类常见场景及修正：**
+
+| 场景 | 反模式 | 修正 |
+|------|--------|------|
+| 弹窗/表单初始化 | effect 监听 `open`，设初始 state | 在打开事件处理器里一次性设好，React 18 自动批处理 |
+| 派生计算 | `useEffect` 监听 A/B，算出 C 写入 state | 渲染期间直接计算：`const c = a + b`，昂贵的用 `useMemo` |
+| props 变化重置 state | effect 监听 props，重新 setState | 给组件加 `key={props.id}`，变化时自动卸载重建 |
+
+```tsx
+// ✅ 好：初始化逻辑放在事件处理器
+const handleOpen = () => {
+  setSelectedId(props.productId ?? undefined)
+  setStages(props.stages ?? [])
+  form.setFieldsValue({ ... })
+  setOpen(true)
+}
+// effect 删掉，不需要了
+```
+
+**判断标准：effect 里的 setState 是不是在"同步响应某个 props/state 变化"？如果是，大概率应该改成派生计算或事件处理器初始化。**
+
 ## 写操作必须用 Server Actions
 
 所有 POST/PUT/DELETE 操作写在 actions/ 目录，不要在 Client 组件里直接 fetch 写接口。

@@ -46,11 +46,14 @@ async def get_routes_by_ids(
 
 
 async def list_routes(
-    db: AsyncSession, product_id: uuid.UUID | None, page: int, page_size: int
+    db: AsyncSession, product_id: uuid.UUID | None, page: int, page_size: int,
+    status: str | None = None,
 ) -> tuple[list[ProcessRoute], int]:
     stmt = select(ProcessRoute).where(ProcessRoute.is_deleted == False)  # noqa: E712
     if product_id:
         stmt = stmt.where(ProcessRoute.product_id == product_id)
+    if status:
+        stmt = stmt.where(ProcessRoute.status == status)
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()

@@ -8,6 +8,7 @@ import type {
   Demand,
   CreatePlanOrderInput,
   UpdatePlanOrderInput,
+  PlanOrderChangeRequest,
   PlanOrder,
   CreatePlanItemInput,
   UpdatePlanItemInput,
@@ -142,6 +143,20 @@ export async function createDemandAllocation(demandId: string, input: CreateDema
 
 export async function deleteDemandAllocation(id: string): Promise<ActionResult<{ id: string }>> {
   const result = await actionFetch<{ id: string }>(`${BASE}/demand-allocations/${id}`, { method: 'DELETE' })
+  if (result.success) revalidate()
+  return result
+}
+
+// ── PlanOrder Change ──
+
+export async function changePlanOrder(
+  orderId: string,
+  input: PlanOrderChangeRequest,
+): Promise<ActionResult<PlanOrder>> {
+  const result = await actionFetch<PlanOrder>(
+    `${BASE}/plan-orders/${orderId}/change`,
+    { method: 'POST', body: JSON.stringify(input) },
+  )
   if (result.success) revalidate()
   return result
 }

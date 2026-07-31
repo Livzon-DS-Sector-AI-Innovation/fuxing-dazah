@@ -83,6 +83,28 @@ class PermissionRepository:
         await db.flush()
         return role
 
+    async def get_user_ids_by_role_id(
+        self, db: AsyncSession, role_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """获取拥有某角色的所有用户 ID（用于缓存失效）。"""
+        stmt = select(UserRole.user_id).where(
+            UserRole.role_id == role_id,
+            UserRole.is_deleted == False,  # noqa: E712
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars())
+
+    async def delete_role_associations(
+        self, db: AsyncSession, role_id: uuid.UUID
+    ) -> None:
+        """硬删除角色的所有关联数据。"""
+        await db.execute(delete(UserRole).where(UserRole.role_id == role_id))
+        await db.execute(delete(RolePermission).where(RolePermission.role_id == role_id))
+        await db.execute(
+            delete(RoleDataScopeOverride).where(RoleDataScopeOverride.role_id == role_id)
+        )
+        await db.flush()
+
     async def soft_delete_role(self, db: AsyncSession, role_id: uuid.UUID) -> bool:
         stmt = select(Role).where(
             Role.id == role_id,
@@ -175,10 +197,12 @@ class PermissionRepository:
         stmt = (
             select(Permission.code)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(UserRole, UserRole.role_id == Role.id)
             .where(
                 UserRole.user_id == user_id,
                 Permission.is_deleted == False,  # noqa: E712
+                Role.is_deleted == False,  # noqa: E712
             )
         )
         result = await db.execute(stmt)
@@ -358,10 +382,12 @@ class PermissionRepository:
         stmt = (
             select(Permission.module, Permission.resource)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .join(UserRole, UserRole.role_id == Role.id)
             .where(
                 UserRole.user_id == user_id,
                 Permission.is_deleted == False,  # noqa: E712
+                Role.is_deleted == False,  # noqa: E712
             )
             .distinct()
         )

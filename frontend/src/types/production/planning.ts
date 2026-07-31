@@ -74,6 +74,7 @@ export interface PlanOrder {
 export interface PlanOrderDetail extends PlanOrder {
   items: PlanItem[]
   demand_allocations: DemandAllocation[]
+  change_logs: PlanOrderChangeLog[]
 }
 
 export interface CreatePlanOrderInput {
@@ -123,6 +124,7 @@ export interface PlanItem {
   updated_at: string
   allocations: PlanAllocation[]
   demand_allocations: DemandAllocation[]
+  batch_progress?: PlanItemBatchProgress | null
 }
 
 export interface CreatePlanItemInput {
@@ -220,4 +222,51 @@ export interface TraceNode {
   unit: string | null
   status: string | null
   children: TraceNode[]
+}
+
+// ── Change ──
+
+export interface PlanItemBatchProgress {
+  batch_no: string
+  batch_status: string
+  latest_stage: string | null
+  latest_stage_status: string | null
+}
+
+export interface PlanOrderChangeLog {
+  id: string
+  plan_version: number
+  change_reason: string
+  changed_by: string | null
+  changed_by_name: string
+  created_at: string
+}
+
+export interface PlanOrderChangeItem {
+  id?: string
+  product_id?: string
+  product_name?: string
+  route_id?: string
+  equipment_id?: string
+  planned_quantity?: number
+  unit?: string
+  batch_no?: string
+  stage_durations?: StageConfigItem[]
+  planned_start?: string
+  planned_end?: string
+  priority?: string
+  remark?: string
+  sort_order?: number
+}
+
+export interface PlanOrderChangeRequest {
+  change_reason: string
+  title?: string
+  stage_config?: StageConfigItem[]
+  scheduled_start?: string
+  scheduled_end?: string
+  priority?: string
+  remark?: string
+  items_upsert?: PlanOrderChangeItem[]
+  items_delete?: string[]
 }

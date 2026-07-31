@@ -58,6 +58,7 @@ export { SparePartDrawer } from './spare-parts/SparePartDrawer'
 export { SparePartEquipmentDrawer } from './spare-parts/SparePartEquipmentDrawer'
 export { StockInboundDrawer } from './spare-parts/StockInboundDrawer'
 export { StockWarningTable } from './spare-parts/StockWarningTable'
+export { SparePartImportModal } from './spare-parts/SparePartImportModal'
 
 // ==================== stats（仪表盘） ====================
 export { StatsDashboard } from './stats/StatsDashboard'

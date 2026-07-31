@@ -34,9 +34,6 @@ export function SparePartEquipmentDrawer({ onRefresh }: Props) {
           label: `${e.equipment_no} - ${e.name}`,
         }))))
         .catch(() => setOptions([]))
-      setSelectedIds([])
-      setLinkingQuantity(1)
-      setSearchKeyword('')
     }
   }, [sparePartEquipmentDrawerOpen, equipmentManagingSparePart])
 

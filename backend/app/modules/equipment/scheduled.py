@@ -45,10 +45,11 @@ class InspectionScheduleGenerator(TaskGenerator):
 
     async def execute_one(self, session, item) -> None:
         now = app_time.now()
+        route_id = getattr(item, 'route_id', 'unknown')
 
         if not item.assigned_to:
             logger.warning(
-                "Schedule route=%s has no assigned_to, skip", item.route_id,
+                "Schedule route=%s has no assigned_to, skip", route_id,
             )
             return
 
@@ -62,7 +63,7 @@ class InspectionScheduleGenerator(TaskGenerator):
         if user is None:
             logger.error(
                 "Assigned user %s not found for schedule route=%s, skip",
-                item.assigned_to, item.route_id,
+                item.assigned_to, route_id,
             )
             return
 
@@ -72,24 +73,31 @@ class InspectionScheduleGenerator(TaskGenerator):
             department_user_ids=[user.id],
         )
 
-        task = await create_task(session, {
-            "plan_type": "线路巡检",
-            "route_id": str(item.route_id),
-            "assigned_to": str(item.assigned_to),
-            "planned_time": now,
-        }, ctx)
+        try:
+            task = await create_task(session, {
+                "plan_type": "线路巡检",
+                "route_id": str(item.route_id),
+                "assigned_to": str(item.assigned_to),
+                "planned_time": now,
+            }, ctx)
 
-        await start_task(session, task.id, ctx)
+            await start_task(session, task.id, ctx)
 
-        item.last_triggered_at = now
-        item.next_trigger_at = compute_next_cron(
-            item.cron_expression, now,
-        )
+            item.last_triggered_at = now
+            item.next_trigger_at = compute_next_cron(
+                item.cron_expression, now,
+            )
 
-        logger.info(
-            "Schedule triggered: route=%s task=%s",
-            item.route_id, task.task_no,
-        )
+            logger.info(
+                "Schedule triggered: route=%s task=%s",
+                route_id, task.task_no,
+            )
+        except Exception:
+            logger.exception(
+                "Schedule execute failed: route=%s assigned_to=%s",
+                route_id, item.assigned_to,
+            )
+            raise
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -122,6 +130,7 @@ async def _auto_close_stale() -> None:
                     task.task_no,
                 )
             except Exception:
+                await session.rollback()
                 skipped_tasks += 1
                 logger.exception(
                     "Failed to auto-close task %s", task.task_no,
@@ -143,6 +152,7 @@ async def _auto_close_stale() -> None:
                     "Skip auto-close WO %s: invalid state", wo.work_order_no,
                 )
             except Exception:
+                await session.rollback()
                 skipped_wos += 1
                 logger.exception(
                     "Failed to auto-close WO %s", wo.work_order_no,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space, Upload } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import type { UploadFile } from 'antd/es/upload'
@@ -27,23 +27,22 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
 
   const selectedEquipment = equipments.find(e => e.id === repairEquipmentId)
 
+  // ponytail: async data load kept, form seeding moved to initialValues (destroyOnHidden recreates form)
   useEffect(() => {
     if (repairDrawerOpen) {
-      form.resetFields()
-      const defaultPriority = selectedEquipment?.importance ?? '中'
-      form.setFieldsValue({
-        equipment_id: repairEquipmentId,
-        order_type: '故障维修',
-        priority: defaultPriority,
-      })
-      setFileList([])
       fetchAllUsersClient().then(setMaintainers).catch(() => {})
-      // 默认填入设备责任人
-      if (selectedEquipment?.responsible_person_id) {
-        form.setFieldsValue({ responsible_person_id: selectedEquipment.responsible_person_id })
-      }
     }
-  }, [repairDrawerOpen, repairEquipmentId, form, selectedEquipment?.importance])
+  }, [repairDrawerOpen])
+
+  const initialValues = useMemo(() => {
+    const defaultPriority = selectedEquipment?.importance ?? '中'
+    return {
+      equipment_id: repairEquipmentId,
+      order_type: '故障维修',
+      priority: defaultPriority,
+      responsible_person_id: selectedEquipment?.responsible_person_id ?? undefined,
+    }
+  }, [repairEquipmentId, selectedEquipment?.importance, selectedEquipment?.responsible_person_id])
 
   const handleSubmit = async () => {
     let values: any
@@ -102,7 +101,7 @@ export function RepairDrawer({ equipments, symptoms, onRefresh }: RepairDrawerPr
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>
+      <Form form={form} layout="vertical" requiredMark="optional" preserve={false} initialValues={initialValues}>
         <Form.Item name="equipment_id" label="关联设备">
           <div style={{ padding: '8px 12px', background: '#f5f4f2', borderRadius: 6, fontSize: 14, color: '#37352f' }}>
             {selectedEquipment ? `${selectedEquipment.equipment_no} - ${selectedEquipment.name}` : '-'}

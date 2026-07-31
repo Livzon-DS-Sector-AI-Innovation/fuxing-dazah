@@ -33,6 +33,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   })
   if (!res.ok) {
+    // ponytail: client-side 401 → redirect login, re-auth clears expired cookie
+    if (typeof window !== 'undefined' && res.status === 401) {
+      window.location.href = '/login'
+      throw new Error('登录已过期，正在跳转...')
+    }
     const body = await res.text().catch(() => '')
     let msg = `请求失败: ${res.status}`
     try { msg = JSON.parse(body).message || msg } catch { /* not JSON */ }
