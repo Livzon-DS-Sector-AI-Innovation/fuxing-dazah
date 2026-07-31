@@ -424,10 +424,11 @@ async def energy_workshop_alert_coro() -> None:
             result = await evaluate_workshop_alerts(db)
             await db.commit()
 
-            logger.info(
-                "车间能耗预警检查完成: checked=%d, triggered=%d, errors=%d",
-                result["checked"], result["triggered"], result["errors"],
-            )
+            if result["checked"] > 0 or result["triggered"] > 0 or result["errors"] > 0:
+                logger.info(
+                    "车间能耗预警检查完成: checked=%d, triggered=%d, errors=%d",
+                    result["checked"], result["triggered"], result["errors"],
+                )
     except Exception:
         logger.exception("车间能耗预警检查异常")
 
@@ -435,7 +436,7 @@ async def energy_workshop_alert_coro() -> None:
 ENERGY_WORKSHOP_ALERT_TASK = TaskDefinition(
     name="energy.workshop_alert",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600,
     ),
     coro=energy_workshop_alert_coro,
     settings_toggle_key="ENERGY_WORKSHOP_ALERT_ENABLED",
@@ -462,10 +463,11 @@ async def energy_daily_push_coro() -> None:
             result = await evaluate_daily_push(db)
             await db.commit()
 
-            logger.info(
-                "能源日耗推送检查完成: checked=%d, sent=%d",
-                result["checked"], result["sent"],
-            )
+            if result["checked"] > 0 or result["sent"] > 0:
+                logger.info(
+                    "能源日耗推送检查完成: checked=%d, sent=%d",
+                    result["checked"], result["sent"],
+                )
     except Exception:
         logger.exception("能源日耗推送检查异常")
 
@@ -473,7 +475,7 @@ async def energy_daily_push_coro() -> None:
 ENERGY_DAILY_PUSH_TASK = TaskDefinition(
     name="energy.daily_push",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600,
     ),
     coro=energy_daily_push_coro,
     settings_toggle_key="ENERGY_DAILY_PUSH_ENABLED",
@@ -500,10 +502,11 @@ async def energy_nitrogen_push_coro() -> None:
             result = await evaluate_nitrogen_push(db)
             await db.commit()
 
-            logger.info(
-                "氮气月度推送检查完成: checked=%d, sent=%d",
-                result["checked"], result["sent"],
-            )
+            if result["checked"] > 0 or result["sent"] > 0:
+                logger.info(
+                    "氮气月度推送检查完成: checked=%d, sent=%d",
+                    result["checked"], result["sent"],
+                )
     except Exception:
         logger.exception("氮气月度推送检查异常")
 
@@ -511,7 +514,7 @@ async def energy_nitrogen_push_coro() -> None:
 ENERGY_NITROGEN_PUSH_TASK = TaskDefinition(
     name="energy.nitrogen_push",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600,
     ),
     coro=energy_nitrogen_push_coro,
     settings_toggle_key="ENERGY_NITROGEN_PUSH_ENABLED",
