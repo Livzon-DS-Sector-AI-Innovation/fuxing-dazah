@@ -217,7 +217,6 @@ export interface LogQueryParams {
 // 自动采集运行时设置
 export interface CollectSettings {
   auto_collect_enabled: boolean
-  auto_collect_interval_seconds: number
 }
 
 // 分页响应
