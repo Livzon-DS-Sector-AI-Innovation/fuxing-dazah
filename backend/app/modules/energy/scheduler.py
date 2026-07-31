@@ -417,13 +417,6 @@ async def energy_workshop_alert_coro() -> None:
     每个车间配置可设置独立的 notify_time（HH:MM），到达指定时间后评估并发送飞书通知。
     防重复：通过 DB 中 EnergyWorkshopConfig.last_checked_at 的日期判定，同一天不重复检查。
     """
-    from app.core.config import get_settings
-    from app.core.database import async_session_factory
-
-    settings = get_settings()
-    if not settings.ENERGY_WORKSHOP_ALERT_ENABLED:
-        return
-
     try:
         async with async_session_factory() as db:
             from app.modules.energy.service import evaluate_workshop_alerts
@@ -462,13 +455,6 @@ async def energy_daily_push_coro() -> None:
     每个配置可设置独立的 notify_time（HH:MM），到达指定时间后生成并发送飞书报告。
     防重复：通过 DB 中 EnergyDailyPushConfig.last_sent_at 的日期判定，同一天不重复发送。
     """
-    from app.core.config import get_settings
-    from app.core.database import async_session_factory
-
-    settings = get_settings()
-    if not settings.ENERGY_DAILY_PUSH_ENABLED:
-        return
-
     try:
         async with async_session_factory() as db:
             from app.modules.energy.service import evaluate_daily_push
@@ -507,13 +493,6 @@ async def energy_nitrogen_push_coro() -> None:
     每个配置可设置独立的 notify_time（HH:MM），到达指定时间后生成并发送飞书报告。
     防重复：通过 DB 中 EnergyNitrogenPushConfig.last_sent_at 的日期判定，同一天不重复发送。
     """
-    from app.core.config import get_settings
-    from app.core.database import async_session_factory
-
-    settings = get_settings()
-    if not settings.ENERGY_NITROGEN_PUSH_ENABLED:
-        return
-
     try:
         async with async_session_factory() as db:
             from app.modules.energy.service import evaluate_nitrogen_push
