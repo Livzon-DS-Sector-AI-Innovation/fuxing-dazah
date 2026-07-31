@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.core.exceptions import ForbiddenException
 from app.platform.identity.models import User
@@ -55,6 +56,19 @@ class HrAccessContext:
                 raise ForbiddenException("数据范围限制：仅可访问本人记录")
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
+
+    def apply_list_scope(self, stmt, employee):
+        """对关联了员工表的列表查询施加数据范围过滤。
+
+        - all：原样返回（调用方可继续使用前端传入的 department 筛选参数）
+        - self_only：按工号过滤到本人
+        - department / department_and_children：按体现部门过滤
+        """
+        if self.is_unrestricted:
+            return stmt
+        if self.data_scope == "self_only":
+            return stmt.where(employee.employee_number == self.employee_number)
+        return stmt.where(employee.department == self.department)
 
     def resolve_export_department(self, requested: str | None) -> str | None:
         """文档导出时按数据范围收敛部门参数。"""
@@ -104,6 +118,59 @@ def require_hr_access(*codes: str):
     return _dependency
 
 
+def _resource_for_path(path: str, method: str) -> str | None:
+    """按路径+方法在 _HR_PATH_PERMISSIONS 中查找权限码，提取 resource 段。
+
+    用于数据范围按 resource 计算：只有拥有该 resource 权限的角色参与范围合并，
+    避免用户凭其他资源的 data_scope=all 角色在整个 HR 模块被抬权。
+    """
+    for pattern, val in _HR_PATH_PERMISSIONS:
+        if re.search(pattern, path):
+            code = val.get(method) or val.get("*") if isinstance(val, dict) else val
+            if code and ":" in code:
+                return code.split(":")[1]
+            return None
+    return None
+
+
+async def get_hr_scope(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> HrAccessContext:
+    """列表/导出接口的数据范围依赖（权限码校验由 router 级 require_hr_basic 把守，此处不重复）。
+
+    fail-closed 语义：
+    - 未登录 → 403（HR 所有端点都在 require_hr_basic 门禁之后，匿名访问本身就是异常）
+    - department / department_and_children 但部门无法解析（员工档案无此工号且飞书部门为空）→ 403
+    - self_only → 不解 department，由 apply_list_scope / ensure_can_access_employee 按工号过滤
+    """
+    from app.platform.identity.deps import get_current_user
+    user = await get_current_user(request, db=db, settings=settings)
+    if user is None:
+        raise ForbiddenException("请先登录")
+    resource = _resource_for_path(request.url.path, request.method)
+    scope = await _perm_repo.get_effective_data_scope(db, user.id, "hr", resource=resource)
+    department: str | None = None
+    if scope in ("department", "department_and_children"):
+        if user.employee_no:
+            from app.modules.hr.repository import EmployeeRepository
+            emp = await EmployeeRepository(db).get_by_employee_number(user.employee_no)
+            if emp:
+                department = emp.department
+        # 员工档案里找不到 → 用飞书用户表的部门兜底（取叶子部门名）
+        if not department and user.department:
+            department = user.department.rsplit("/", 1)[-1] if "/" in user.department else user.department
+        if not department:
+            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
+    return HrAccessContext(
+        user=user,
+        data_scope=scope,
+        department=department,
+        employee_number=user.employee_no,
+    )
+
+
 # ── 路径 → 权限码映射（用于自动权限校验） ──
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
@@ -120,18 +187,23 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/employees", {"GET": "hr:profile:read", "POST": "hr:profile:create",
                      "PUT": "hr:profile:update", "DELETE": "hr:profile:delete"}),
     # 花名册
-    (r"/roster", "hr:profile:export"),
+    (r"/roster", "hr:roster:read"),
     # 组织架构
     (r"/departments/", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
     (r"/departments$", {"GET": "hr:org:read", "POST": "hr:org:manage",
                         "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
-    # 班组 & 职位 & 内训师 & SOP（系统设置）
-    (r"/teams", "hr:settings:manage"),
-    (r"/positions", "hr:settings:manage"),
-    (r"/position-trainings", "hr:settings:manage"),
-    (r"/trainers", "hr:settings:manage"),
-    (r"/sop-catalog", "hr:settings:manage"),
+    # 班组（组织架构）& 职位 & 内训师 & SOP/岗位培训（培训内容）
+    (r"/teams", {"GET": "hr:org:read", "POST": "hr:org:manage",
+                 "PUT": "hr:org:manage", "DELETE": "hr:org:manage"}),
+    (r"/positions", {"GET": "hr:position:read", "POST": "hr:position:manage",
+                     "PUT": "hr:position:manage", "DELETE": "hr:position:manage"}),
+    (r"/position-trainings", {"GET": "hr:training:read", "POST": "hr:training:manage",
+                              "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
+    (r"/trainers", {"GET": "hr:trainer:read", "POST": "hr:trainer:manage",
+                    "PUT": "hr:trainer:manage", "DELETE": "hr:trainer:manage"}),
+    (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
+                       "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     (r"/dept-training-personnel", {"GET": "hr:training:read", "POST": "hr:training:manage",
                                     "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # 入职管理
@@ -185,11 +257,11 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),
     # 培训登记表
-    (r"/training-registration", "hr:profile:export"),
+    (r"/training-registration", "hr:roster:read"),
     # 员工异动
     (r"/transfers", "hr:profile:transfer"),
     # 人事看板
-    (r"/dashboard-stats", "hr:dashboard:read"),
+    # （dashboard-stats 功能待后续实现后恢复映射）
     # 招聘管理 — 注意：具体路径必须在通用路径之前（re.search 首匹配即 break）
     (r"/candidates/pending-review", "hr:recruitment:read"),
     (r"/candidates/.*/push-review", "hr:recruitment:manage"),
