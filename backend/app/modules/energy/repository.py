@@ -466,6 +466,7 @@ async def get_energy_statistics(
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
@@ -523,6 +524,7 @@ async def get_overview_summary(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
@@ -574,6 +576,7 @@ async def get_overview_trend(
             EnergyData.timestamp <= end_time,
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(*group_cols)
@@ -1255,6 +1258,7 @@ async def get_workshop_daily_consumption(
             cst_date == cast(target_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
@@ -1297,6 +1301,7 @@ async def get_workshop_avg_consumption(
             cst_date <= cast(end_date.date(), Date),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(cst_date)
@@ -1596,6 +1601,7 @@ async def get_daily_total_by_energy_type(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
@@ -1630,6 +1636,7 @@ async def get_daily_top_workshops(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
@@ -1655,6 +1662,7 @@ async def get_daily_top_workshops(
             EnergyDeviceConfig.daily_collect_time.isnot(None),
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.workshop)
