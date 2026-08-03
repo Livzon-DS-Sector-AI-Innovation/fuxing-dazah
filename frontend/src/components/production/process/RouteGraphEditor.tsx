@@ -424,6 +424,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       </div>
 
       <NodeFieldsDrawer
+        key={String(fieldsIdx)}
         open={fieldsIdx !== null}
         node={
           fieldsIdx !== null

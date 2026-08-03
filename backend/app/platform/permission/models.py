@@ -53,13 +53,11 @@ class Role(BaseModel):
 
     __tablename__ = "roles"
     __table_args__ = (
-        UniqueConstraint("code", name="uq_permission_roles_code"),
         {"schema": "permission"},
     )
 
     code: Mapped[str] = mapped_column(
         String(50),
-        unique=True,
         nullable=False,
         comment="角色编码，如 equipment_inspector",
     )

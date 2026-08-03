@@ -12,6 +12,7 @@ import { SparePartTable } from './SparePartTable'
 import { SparePartDrawer } from './SparePartDrawer'
 import { SparePartEquipmentDrawer } from './SparePartEquipmentDrawer'
 import { StockInboundDrawer } from './StockInboundDrawer'
+import { SparePartImportModal } from './SparePartImportModal'
 
 const txColumns: ColumnsType<OutboundTransaction> = [
   { title: '备件编码', dataIndex: 'spare_part_code', key: 'spare_part_code', width: 110, render: (v: string | null) => v || '-' },
@@ -52,6 +53,8 @@ export function SparePartsPage({
 
   // Tab 切换
   const [tab, setTab] = useState('parts')
+  // 导入弹窗
+  const [importModalOpen, setImportModalOpen] = useState(false)
 
   // 库存流水
   const [transactions, setTransactions] = useState<OutboundTransaction[]>([])
@@ -112,7 +115,7 @@ export function SparePartsPage({
     {
       key: 'parts',
       label: '备件管理',
-      children: <SparePartTable onRefresh={fetchData} />,
+      children: <SparePartTable onRefresh={fetchData} onImportClick={() => setImportModalOpen(true)} />,
     },
     {
       key: 'consumption',
@@ -183,6 +186,11 @@ export function SparePartsPage({
         <SparePartDrawer onRefresh={fetchData} userDepartmentName={userDepartmentName} />
         <SparePartEquipmentDrawer onRefresh={fetchData} />
         <StockInboundDrawer onRefresh={fetchData} />
+        <SparePartImportModal
+          open={importModalOpen}
+          onClose={() => setImportModalOpen(false)}
+          onImported={fetchData}
+        />
       </App>
     </ConfigProvider>
   )

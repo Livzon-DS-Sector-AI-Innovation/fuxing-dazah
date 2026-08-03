@@ -32,14 +32,13 @@ function aggregateRate(cells: AnomalyMatrixCell[]): number {
 
 export function AnomalySection() {
   const { message } = App.useApp()
-  const [dateRange, setDateRange] = useState<[string, string] | null>(null)
+  // ponytail: lazy initializer avoids extra render on mount
+  const [dateRange, setDateRange] = useState<[string, string] | null>(() => {
+    const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 30)
+    return [s.toISOString().slice(0, 10), e.toISOString().slice(0, 10)]
+  })
   const [matrix, setMatrix] = useState<AnomalyMatrixCell[]>([])
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 30)
-    setDateRange([s.toISOString().slice(0, 10), e.toISOString().slice(0, 10)])
-  }, [])
 
   useEffect(() => {
     if (!dateRange) return

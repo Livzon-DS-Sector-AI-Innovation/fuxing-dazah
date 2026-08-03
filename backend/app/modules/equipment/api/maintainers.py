@@ -1,7 +1,5 @@
 """维修人员 API 路由."""
 
-import logging
-
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -15,8 +13,6 @@ from app.modules.equipment.deps import (
 )
 from app.modules.equipment.models.personnel import EquipmentPersonnel
 from app.platform.identity.models import User
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 

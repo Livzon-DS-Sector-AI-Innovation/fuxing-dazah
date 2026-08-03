@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { App, DatePicker, Form, Input, InputNumber, Modal, Select, Button, Space } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { createPlanOrder } from '@/actions/production'
@@ -110,7 +110,8 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
 
   const [selectedProductId, setSelectedProductId] = useState<string | undefined>()
   const [selectedRouteId, setSelectedRouteId] = useState<string | undefined>()
-  const [stageConfig, setStageConfig] = useState<StageConfigItem[]>([])
+  // 用户编辑后的工段配置；null 表示尚未手动修改，使用默认值
+  const [userStageConfig, setUserStageConfig] = useState<StageConfigItem[] | null>(null)
 
   const { data: products } = useQuery({
     queryKey: ['products'],
@@ -120,7 +121,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
 
   const { data: routes } = useQuery({
     queryKey: ['routes', selectedProductId],
-    queryFn: () => fetchRoutesClient(selectedProductId!),
+    queryFn: () => fetchRoutesClient(selectedProductId!, 'published'),
     enabled: !!selectedProductId,
     staleTime: 30_000,
   })
@@ -140,24 +141,17 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
     return [...names]
   }, [routeGraph])
 
-  useEffect(() => {
-    if (stageNames.length > 0) {
-      setStageConfig(stageNames.map((name, i) => ({
-        stage_name: name,
-        duration_hours: 24,
-        color: STAGE_PRESET_COLORS[i % STAGE_PRESET_COLORS.length],
-      })))
-    }
+  // 默认工段配置：从工艺路线图的工段名派生，渲染期间直接计算，避免 effect 里同步 setState
+  const defaultStageConfig = useMemo(() => {
+    if (stageNames.length === 0) return []
+    return stageNames.map((name, i) => ({
+      stage_name: name,
+      duration_hours: 24,
+      color: STAGE_PRESET_COLORS[i % STAGE_PRESET_COLORS.length],
+    }))
   }, [stageNames])
 
-  useEffect(() => {
-    if (open) {
-      form.resetFields()
-      setStageConfig([])
-      setSelectedProductId(undefined)
-      setSelectedRouteId(undefined)
-    }
-  }, [open, form])
+  const stageConfig = userStageConfig ?? defaultStageConfig
 
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
@@ -170,7 +164,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
     if (r.success) {
       message.success('计划单已创建')
       form.resetFields()
-      setStageConfig([])
+      setUserStageConfig(null)
       setSelectedProductId(undefined)
       setSelectedRouteId(undefined)
       onSuccess?.()
@@ -184,7 +178,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
       title="新建计划单"
       open={open}
       onOk={handleOk}
-      onCancel={() => { form.resetFields(); setStageConfig([]); onClose() }}
+      onCancel={() => { form.resetFields(); setUserStageConfig(null); onClose() }}
       destroyOnHidden
       width={600}
     >
@@ -203,7 +197,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
               showSearch
               placeholder="搜索并选择产品"
               filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
-              onChange={(id: string) => { setSelectedProductId(id); form.setFieldValue('route_id', undefined); setSelectedRouteId(undefined); setStageConfig([]) }}
+              onChange={(id: string) => { setSelectedProductId(id); form.setFieldValue('route_id', undefined); setSelectedRouteId(undefined); setUserStageConfig(null) }}
               options={(products ?? []).map((p) => ({ value: p.id, label: p.product_name }))}
             />
           </Form.Item>
@@ -211,7 +205,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
             <Select
               placeholder="先选产品"
               disabled={!selectedProductId}
-              onChange={(id: string) => setSelectedRouteId(id)}
+              onChange={(id: string) => { setSelectedRouteId(id); setUserStageConfig(null) }}
               options={(routes ?? []).map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
             />
           </Form.Item>
@@ -221,7 +215,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
         {stageConfig.length > 0 && (
           <>
             <SectionLabel>工段时长</SectionLabel>
-            <StageConfigEditor stageConfig={stageConfig} onChange={setStageConfig} />
+            <StageConfigEditor stageConfig={stageConfig} onChange={setUserStageConfig} />
           </>
         )}
 

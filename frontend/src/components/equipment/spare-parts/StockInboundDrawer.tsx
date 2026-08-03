@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect } from 'react'
 import { App, Drawer, Form, Input, InputNumber, Button, Space } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { stockInbound } from '@/actions/equipment'
@@ -16,12 +15,6 @@ export function StockInboundDrawer({ onRefresh }: StockInboundDrawerProps) {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const { stockInboundDrawerOpen, stockInboundSparePartId, closeStockInboundDrawer } = useEquipmentStore()
-
-  useEffect(() => {
-    if (stockInboundDrawerOpen) {
-      form.resetFields()
-    }
-  }, [stockInboundDrawerOpen, form])
 
   const handleSubmit = async () => {
     if (!stockInboundSparePartId) return

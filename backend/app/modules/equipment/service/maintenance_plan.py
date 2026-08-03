@@ -338,6 +338,10 @@ async def generate_due_work_orders(
                     break
                 except IntegrityError:
                     if attempt < _MAX_RETRIES - 1:
+                        logger.debug(
+                            "维护计划工单号冲突重试: attempt=%d/%d plan=%s wo_no=%s",
+                            attempt + 1, _MAX_RETRIES, plan.plan_name, wo_no,
+                        )
                         continue
                     logger.error(
                         "维护计划 %s 工单号生成失败（重试 %d 次后放弃）",

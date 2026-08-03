@@ -45,6 +45,14 @@ class NodeAssigneeInfo(BaseModel):
 
 # ── 工作台 ──
 
+class StageNodeInfo(BaseModel):
+    """工序面包屑节点：工段内单个工序及其进度状态。"""
+    node_id: uuid.UUID
+    node_name: str
+    sort_order: int
+    status: str  # "completed" | "in_progress" | "pending"
+
+
 class WorkbenchItem(BaseModel):
     type: str  # pending_receive | pending_start | pending_complete | ready_to_complete
     batch_no: str | None = None
@@ -67,6 +75,8 @@ class WorkbenchItem(BaseModel):
     owner_name: str | None = None
     started_at: str | None = None
     is_last_in_stage: bool = False  # 是否是工段内最后一个节点，完成即可提交批次
+    # 工序面包屑：当前工段内所有工序及其完成状态
+    stage_nodes: list[StageNodeInfo] = []
 
 
 class AssignedNodeInfo(BaseModel):
@@ -107,6 +117,40 @@ class WorkbenchOut(BaseModel):
     assigned_routes: list[AssignedRouteInfo] = []
     items: list[WorkbenchItem] = []
     recent_completed: list[RecentCompletedItem] = []
+
+
+# ── 计划批次 ──
+
+
+class PlannedStageInfo(BaseModel):
+    """工段时间信息，供前端渲染 mini 时间条。ponytail: 与 StageConfigItem 同构但独立避免循环导入。"""
+    stage_name: str
+    duration_hours: float
+    color: str = "#cccccc"
+
+
+class PlannedBatchItem(BaseModel):
+    """计划批次（工作台排期区可见），纯只读。"""
+    batch_id: uuid.UUID
+    batch_no: str
+    product_name: str | None = None
+    route_id: uuid.UUID
+    route_name: str
+    route_version: int | None = None
+    plan_item_id: uuid.UUID
+    plan_order_no: str
+    planned_start: str | None = None
+    planned_end: str | None = None
+    stage_times: dict[str, str] = {}        # stage_name → ISO datetime
+    current_stage: str | None = None         # 批次当前所在的工段
+    current_stage_progress: str | None = None  # not_started | in_progress | completed
+    stage_config: list[PlannedStageInfo] | None = None  # 工段时间配置（用于 timeline bar）
+    is_first_stage_owner: bool = False       # 当前用户是否为路线第一工段负责人
+
+
+class PlannedBatchOut(BaseModel):
+    """计划批次查询响应。"""
+    items: list[PlannedBatchItem] = []
 
 
 # ── 接收并开始 ──

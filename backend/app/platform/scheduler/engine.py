@@ -162,21 +162,20 @@ class SchedulerEngine:
                     if self._stop_flag.is_set():
                         break
                     try:
-                        await asyncio.wait_for(
-                            gen.execute_one(session, item),
-                            timeout=gen.timeout_seconds,
-                        )
+                        async with session.begin_nested():
+                            await asyncio.wait_for(
+                                gen.execute_one(session, item),
+                                timeout=gen.timeout_seconds,
+                            )
                     except TimeoutError:
                         logger.error(
                             "Generator '%s' item timed out after %ds",
                             gen.name, gen.timeout_seconds,
                         )
-                        await session.rollback()
                     except Exception:
                         logger.exception(
                             "Generator '%s' item failed", gen.name,
                         )
-                        await session.rollback()
 
                 await session.commit()
                 logger.debug(

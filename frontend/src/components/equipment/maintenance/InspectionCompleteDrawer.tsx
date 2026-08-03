@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -29,18 +29,19 @@ export function InspectionCompleteDrawer({ onRefresh }: InspectionCompleteDrawer
   const [form] = Form.useForm<{ records: InspectionRow[] }>()
   const records = Form.useWatch(['records'], form) as InspectionRow[] | undefined
 
-  useEffect(() => {
-    if (inspectionCompleteDrawerOpen && completingTemplateItems.length > 0) {
-      form.setFieldsValue({
+  const initialValues = useMemo(() => {
+    if (completingTemplateItems.length > 0) {
+      return {
         records: completingTemplateItems.map((item) => ({
           ...item,
           result: '正常' as const,
           actual_value: '',
           remark: '',
         })),
-      })
+      }
     }
-  }, [inspectionCompleteDrawerOpen, completingTemplateItems, form])
+    return undefined
+  }, [completingTemplateItems])
 
   const handleSubmit = async () => {
     let values: any
@@ -118,7 +119,7 @@ export function InspectionCompleteDrawer({ onRefresh }: InspectionCompleteDrawer
         </Space>
       }
     >
-      <Form form={form} layout="vertical" preserve={false}>
+      <Form form={form} layout="vertical" preserve={false} initialValues={initialValues}>
         <Table
           columns={columns}
           dataSource={records || []}

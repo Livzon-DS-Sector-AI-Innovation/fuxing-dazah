@@ -1,8 +1,11 @@
 """巡检 API 路由."""
 
+from __future__ import annotations
+
+import logging
 import os
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -10,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import NotFoundException
+from app.core.exceptions import AppException, NotFoundException
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import repository as repo
 from app.modules.equipment.deps import (
@@ -45,6 +48,51 @@ from app.modules.equipment.schemas.inspection import (
     TrendResponse,
 )
 from app.modules.equipment.service import inspection as inspection_svc
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_date(value: str | None, default: date | None = None) -> date | None:
+    """安全解析 ISO 日期字符串，格式错误时抛出 AppException 并记录日志。"""
+    if not value:
+        return default
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        logger.warning("日期格式无效: %s，期望 YYYY-MM-DD 格式", value)
+        raise AppException(
+            message=f"日期格式无效: {value}，请使用 YYYY-MM-DD 格式",
+            status_code=400,
+        ) from None
+
+
+def _parse_datetime(value: str | None) -> datetime | None:
+    """安全解析 ISO 日期时间字符串。"""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        logger.warning("日期时间格式无效: %s", value)
+        raise AppException(
+            message=f"日期时间格式无效: {value}",
+            status_code=400,
+        ) from None
+
+
+def _parse_uuid_list(value: str) -> list[uuid.UUID]:
+    """安全解析逗号分隔的 UUID 列表。"""
+    if not value.strip():
+        return []
+    try:
+        return [uuid.UUID(s.strip()) for s in value.split(",") if s.strip()]
+    except ValueError:
+        logger.warning("UUID 格式无效: %s", value)
+        raise AppException(
+            message=f"UUID 格式无效: {value}",
+            status_code=400,
+        ) from None
+
 
 router = APIRouter()
 
@@ -311,18 +359,8 @@ async def list_tasks(
         require_equipment_access("equipment:inspection:read"),
     ),
 ) -> JSONResponse:
-    from datetime import datetime as dt_type
-
-    pt_from = (
-        dt_type.fromisoformat(planned_time_from)
-        if planned_time_from
-        else None
-    )
-    pt_to = (
-        dt_type.fromisoformat(planned_time_to)
-        if planned_time_to
-        else None
-    )
+    pt_from = _parse_datetime(planned_time_from)
+    pt_to = _parse_datetime(planned_time_to)
 
     tasks, total = await inspection_svc.get_tasks(
         db,
@@ -513,17 +551,24 @@ async def serve_photo(
 
     photo = await repo.get_photo_by_id(db, photo_id)
     if not photo:
+        logger.warning("巡检照片未找到: photo_id=%s", photo_id)
         raise NotFoundException("照片", str(photo_id))
 
     if minio_enabled():
-        result = get_object("equipment", photo.file_path)
+        try:
+            result = get_object("equipment", photo.file_path)
+        except Exception:
+            logger.exception("MinIO 读取照片失败: path=%s", photo.file_path)
+            raise NotFoundException("照片文件")
         if result is None:
+            logger.warning("MinIO 照片文件不存在: path=%s", photo.file_path)
             raise NotFoundException("照片文件")
         data, content_type = result
         return StreamingResponse(BytesIO(data), media_type=content_type)
 
     # 本地文件系统模式
     if not os.path.exists(photo.file_path):
+        logger.warning("本地照片文件不存在: path=%s", photo.file_path)
         raise NotFoundException("照片文件")
     return FileResponse(photo.file_path)
 
@@ -596,10 +641,8 @@ async def get_history(
         require_equipment_access("equipment:inspection:read"),
     ),
 ) -> JSONResponse:
-    from datetime import date as date_type
-
-    d_from = date_type.fromisoformat(date_from) if date_from else None
-    d_to = date_type.fromisoformat(date_to) if date_to else None
+    d_from = _parse_date(date_from)
+    d_to = _parse_date(date_to)
 
     tasks, total = await inspection_svc.get_history(
         db,
@@ -767,9 +810,9 @@ async def analytics_trend(
     ),
 ):
     """查询设备指定检查项在时间段内的数值趋势，用于绘制折线图。"""
-    items = [uuid.UUID(s.strip()) for s in item_ids.split(",") if s.strip()]
-    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
-    td = date.fromisoformat(to_date) if to_date else date.today()
+    items = _parse_uuid_list(item_ids)
+    fd = _parse_date(from_date, date.today() - timedelta(days=30)) or date.today()
+    td = _parse_date(to_date, date.today()) or date.today()
 
     return await inspection_svc.get_trend(db, equipment_id, items, fd, td, ctx)
 
@@ -784,8 +827,8 @@ async def analytics_anomaly(
     ),
 ):
     """查询设备异常率排行、检查项异常率排行和月度异常趋势。"""
-    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=30)
-    td = date.fromisoformat(to_date) if to_date else date.today()
+    fd = _parse_date(from_date, date.today() - timedelta(days=30)) or date.today()
+    td = _parse_date(to_date, date.today()) or date.today()
 
     return await inspection_svc.get_anomaly(db, fd, td, ctx)
 
@@ -817,7 +860,7 @@ async def analytics_linkage(
     ),
 ):
     """按月叠加巡检异常数与各类型工单量，展示巡检投入与维修产出的联动关系。"""
-    fd = date.fromisoformat(from_date) if from_date else date.today() - timedelta(days=365)
-    td = date.fromisoformat(to_date) if to_date else date.today()
+    fd = _parse_date(from_date, date.today() - timedelta(days=365)) or date.today()
+    td = _parse_date(to_date, date.today()) or date.today()
 
     return await inspection_svc.get_linkage(db, fd, td, ctx)

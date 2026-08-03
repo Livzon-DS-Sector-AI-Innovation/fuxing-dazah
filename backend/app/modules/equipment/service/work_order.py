@@ -162,6 +162,10 @@ async def create_work_order(
             return result
         except IntegrityError:
             if attempt < _MAX_RETRIES - 1:
+                logger.debug(
+                    "工单号冲突重试: attempt=%d/%d wo_no=%s",
+                    attempt + 1, _MAX_RETRIES, wo_no,
+                )
                 await db.rollback()
                 continue
             raise AppException(message="工单号生成失败，请重试")

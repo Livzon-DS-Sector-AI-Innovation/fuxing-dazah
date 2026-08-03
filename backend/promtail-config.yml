@@ -1,0 +1,32 @@
+# Promtail — 采集 JSON Lines 日志推送到 Loki
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: dazah
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: dazah
+          __path__: /var/log/app/*.log
+    pipeline_stages:
+      - json:
+          expressions:
+            ts: ts
+            level: level
+            msg: msg
+            module: module
+            rid: rid
+      - labels:
+          level: ""
+          module: ""
+      - timestamp:
+          source: ts
+          format: "2006-01-02T15:04:05.000000-07:00"
+      - output:
+          source: msg

@@ -128,15 +128,11 @@ class CollectTriggerRequest(BaseModel):
 class CollectSettingsResponse(BaseModel):
     """自动采集运行时设置"""
     auto_collect_enabled: bool = Field(description="是否启用自动采集")
-    auto_collect_interval_seconds: int = Field(description="自动采集间隔（秒），范围 3600~86400（1h~24h）")
 
 
 class CollectSettingsUpdate(BaseModel):
     """更新自动采集运行时设置"""
     auto_collect_enabled: bool | None = Field(default=None, description="是否启用自动采集")
-    auto_collect_interval_seconds: int | None = Field(
-        default=None, ge=3600, le=86400, description="自动采集间隔（秒），最小 3600（1h），最大 86400（24h）"
-    )
 
 
 # ── 预警系统 ──

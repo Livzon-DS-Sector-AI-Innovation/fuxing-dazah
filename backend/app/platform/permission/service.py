@@ -79,7 +79,19 @@ class PermissionService:
             raise NotFoundException("角色", str(role_id))
         if role.is_system:
             raise ForbiddenException("系统内置角色不可删除")
+
+        # 1. 找出受影响的用户（用于后续缓存失效）
+        affected_user_ids = await _repo.get_user_ids_by_role_id(db, role_id)
+
+        # 2. 硬删除所有关联记录
+        await _repo.delete_role_associations(db, role_id)
+
+        # 3. 软删除角色
         await _repo.soft_delete_role(db, role_id)
+
+        # 4. 失效受影响用户的权限缓存
+        for uid in affected_user_ids:
+            await invalidate_user_cache(str(uid))
 
     async def assign_role_to_user(
         self,

@@ -197,17 +197,21 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
   )
 
   const handleCardClick = (item: ScheduleViewItem) => {
-    if (READONLY_ORDER_STATUSES.has(item.order_status)) return
     if (expandedId === item.item_id) {
       setExpandedId(null)
     } else {
       setExpandedId(item.item_id)
-      setEditingValues({
-        planned_start: item.planned_start ?? undefined,
-        planned_end: item.planned_end ?? undefined,
-        equipment_id: item.equipment_id ?? undefined,
-        batch_no: item.batch_no ?? undefined,
-      })
+      // 始终重置 editingValues，避免只读卡展开时复用上一个可编辑卡的残留值
+      if (!READONLY_ORDER_STATUSES.has(item.order_status)) {
+        setEditingValues({
+          planned_start: item.planned_start ?? undefined,
+          planned_end: item.planned_end ?? undefined,
+          equipment_id: item.equipment_id ?? undefined,
+          batch_no: item.batch_no ?? undefined,
+        })
+      } else {
+        setEditingValues({})
+      }
       // 展开后滚动到卡片位置，确保编辑区可见
       requestAnimationFrame(() => {
         const el = scrollRef.current?.querySelector(`[data-card-id="${item.item_id}"]`)
@@ -261,6 +265,23 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
       },
     })
   }, [expandedId, modal, message, onRefresh])
+
+  // 滚轮横向滚动：普通滚轮→时间轴左右，Shift+滚轮→泳道上下
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.shiftKey) {
+        e.preventDefault()
+        el.scrollTop += e.deltaY
+      } else {
+        e.preventDefault()
+        el.scrollLeft += e.deltaY
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
 
   // 点击外部收起
   useEffect(() => {
@@ -422,8 +443,8 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                     border: `1px solid ${isExpanded ? statusColor : '#ede9e4'}`,
                     borderRadius: 8,
                     padding: isExpanded ? '10px 14px' : '5px 10px',
-                    cursor: isReadonly ? 'default' : 'pointer',
-                    opacity: isReadonly ? 0.55 : 1,
+                    cursor: 'pointer',
+                    opacity: isReadonly ? 0.65 : 1,
                     boxShadow: isExpanded
                       ? `0 8px 32px ${hexToRgba(statusColor, 0.18)}, inset 0 3px 0 0 ${statusColor}`
                       : `0 1px 3px rgba(0,0,0,0.04), inset 0 3px 0 0 ${statusColor}`,
@@ -433,12 +454,12 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                   }}
                   onClick={(e) => { e.stopPropagation(); handleCardClick(item) }}
                   onMouseEnter={(e) => {
-                    if (isReadonly || isExpanded) return
+                    if (isExpanded) return
                     e.currentTarget.style.transform = 'translateY(-1px)'
                     e.currentTarget.style.boxShadow = `0 4px 12px rgba(0,0,0,0.08), inset 0 3px 0 0 ${statusColor}`
                   }}
                   onMouseLeave={(e) => {
-                    if (isReadonly || isExpanded) return
+                    if (isExpanded) return
                     e.currentTarget.style.transform = ''
                     e.currentTarget.style.boxShadow = `0 1px 3px rgba(0,0,0,0.04), inset 0 3px 0 0 ${statusColor}`
                   }}
@@ -508,9 +529,10 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                         </div>
 
                         {/* 工段时间推算 */}
-                        {isExpanded && item.stage_durations && item.stage_durations.length > 0 && editingValues.planned_start && (() => {
+                        {isExpanded && item.stage_durations && item.stage_durations.length > 0 && (item.planned_start || editingValues.planned_start) && (() => {
                           const rows: { stage: StageConfigItem; start: dayjs.Dayjs; end: dayjs.Dayjs }[] = []
-                          let cursor = dayjs(editingValues.planned_start)
+                          const baseStart = editingValues.planned_start || item.planned_start
+                          let cursor = dayjs(baseStart)
                           for (const s of item.stage_durations) {
                             const end = cursor.add(s.duration_hours, 'hour')
                             rows.push({ stage: s, start: cursor, end })
@@ -532,34 +554,40 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                           )
                         })()}
 
-                        {/* 编辑字段 — 纵向排列 */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>计划开始</span>
-                            <DatePicker size="small" value={editingValues.planned_start ? dayjs(editingValues.planned_start) : null}
-                              onChange={(d: Dayjs | null) => setEditingValues((v) => ({ ...v, planned_start: d?.toISOString() }))}
-                              style={{ width: '100%' }} showTime={{ format: 'HH:mm' }} />
+                        {/* 编辑字段 — 只读时禁用 */}
+                        {!isReadonly && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>计划开始</span>
+                              <DatePicker size="small" value={editingValues.planned_start ? dayjs(editingValues.planned_start) : null}
+                                onChange={(d: Dayjs | null) => setEditingValues((v) => ({ ...v, planned_start: d?.toISOString() }))}
+                                style={{ width: '100%' }} showTime={{ format: 'HH:mm' }} />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>计划结束</span>
+                              <DatePicker size="small" value={editingValues.planned_end ? dayjs(editingValues.planned_end) : null}
+                                onChange={(d: Dayjs | null) => setEditingValues((v) => ({ ...v, planned_end: d?.toISOString() }))}
+                                style={{ width: '100%' }} showTime={{ format: 'HH:mm' }} />
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>批次号</span>
+                              <Input size="small" value={editingValues.batch_no ?? ''}
+                                onChange={(e) => setEditingValues((v) => ({ ...v, batch_no: e.target.value }))}
+                                style={{ width: '100%' }} placeholder="输入批次号" />
+                            </div>
                           </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>计划结束</span>
-                            <DatePicker size="small" value={editingValues.planned_end ? dayjs(editingValues.planned_end) : null}
-                              onChange={(d: Dayjs | null) => setEditingValues((v) => ({ ...v, planned_end: d?.toISOString() }))}
-                              style={{ width: '100%' }} showTime={{ format: 'HH:mm' }} />
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            <span style={{ fontSize: 11, color: '#a4a097', fontWeight: 500 }}>批次号</span>
-                            <Input size="small" value={editingValues.batch_no ?? ''}
-                              onChange={(e) => setEditingValues((v) => ({ ...v, batch_no: e.target.value }))}
-                              style={{ width: '100%' }} placeholder="输入批次号" />
-                          </div>
-                        </div>
+                        )}
 
                         {/* 操作按钮 */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
-                          <Button size="small" danger onClick={handleDelete}>删除</Button>
+                        <div style={{ display: 'flex', justifyContent: isReadonly ? 'flex-end' : 'space-between', gap: 8, marginTop: 12 }}>
+                          {!isReadonly && (
+                            <Button size="small" danger onClick={handleDelete}>删除</Button>
+                          )}
                           <div style={{ display: 'flex', gap: 8 }}>
-                            <Button size="small" onClick={() => setExpandedId(null)}>取消</Button>
-                            <Button size="small" type="primary" loading={saving} onClick={handleSave}>保存</Button>
+                            <Button size="small" onClick={() => setExpandedId(null)}>{isReadonly ? '关闭' : '取消'}</Button>
+                            {!isReadonly && (
+                              <Button size="small" type="primary" loading={saving} onClick={handleSave}>保存</Button>
+                            )}
                           </div>
                         </div>
                       </div>

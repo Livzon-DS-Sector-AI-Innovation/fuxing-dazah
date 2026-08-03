@@ -137,7 +137,7 @@ export function ScheduleView() {
       <div className="flex items-center gap-3 flex-wrap">
         <DatePicker.RangePicker
           value={dateRange}
-          onChange={handleDateRangeChange as any}
+          onChange={handleDateRangeChange}
           size="small"
           style={{ width: 240 }}
           picker="month"

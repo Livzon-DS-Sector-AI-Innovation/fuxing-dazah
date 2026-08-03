@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, Button, Space } from 'antd'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createLocation, updateLocation } from '@/actions/equipment'
@@ -18,22 +18,17 @@ export function LocationDrawer({ onRefresh }: { onRefresh?: () => void }) {
     locations,
   } = useEquipmentStore()
 
-  useEffect(() => {
-    if (!locationDrawerOpen) return
-    const timer = setTimeout(() => {
-      if (editingLocation) {
-        form.setFieldsValue({
-          name: editingLocation.name,
-          code: editingLocation.code,
-          parent_id: editingLocation.parent_id ?? undefined,
-          description: editingLocation.description ?? undefined,
-        })
-      } else {
-        form.resetFields()
+  const initialValues = useMemo(() => {
+    if (editingLocation) {
+      return {
+        name: editingLocation.name,
+        code: editingLocation.code,
+        parent_id: editingLocation.parent_id ?? undefined,
+        description: editingLocation.description ?? undefined,
       }
-    }, 0)
-    return () => clearTimeout(timer)
-  }, [locationDrawerOpen, editingLocation, form])
+    }
+    return undefined
+  }, [editingLocation])
 
   const handleSubmit = async () => {
     let values: any
@@ -104,7 +99,7 @@ export function LocationDrawer({ onRefresh }: { onRefresh?: () => void }) {
         </Space>
       }
     >
-      <Form form={form} layout="vertical">
+      <Form form={form} layout="vertical" initialValues={initialValues}>
         <Form.Item
           name="name"
           label="位置名称"

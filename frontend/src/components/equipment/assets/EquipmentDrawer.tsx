@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, DatePicker, Button, Space } from 'antd'
 import dayjs from 'dayjs'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -53,13 +53,6 @@ function flattenLocations(locations: Location[], prefix = ''): { label: string; 
   return result
 }
 
-interface StaffOption {
-  id: string
-  name: string
-  employee_no: string | null
-  department: string | null
-}
-
 interface EquipmentDrawerProps {
   onRefresh?: () => void
   defaultDepartmentId?: string | null
@@ -70,7 +63,6 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
   const { message } = App.useApp()
   const [submitting, setSubmitting] = useState(false)
   const [staffKeyword, setStaffKeyword] = useState('')
-  const [staffOptions, setStaffOptions] = useState<{ label: string; value: string }[]>([])
   const [staffLoading, setStaffLoading] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const {
@@ -84,6 +76,39 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
 
   const categoryOptions = flattenCategories(categories)
   const locationOptions = flattenLocations(locations)
+
+  // ponytail: derive initial staff options from editing equipment on mount (destroyOnHidden recreates)
+  const [staffOptions, setStaffOptions] = useState<{ label: string; value: string }[]>(() => {
+    if (editingEquipment?.responsible_person_id && editingEquipment?.responsible_person_name) {
+      return [{ label: editingEquipment.responsible_person_name, value: editingEquipment.responsible_person_id }]
+    }
+    return []
+  })
+
+  // ponytail: derive form initialValues from editingEquipment
+  const initialValues = useMemo(() => {
+    if (editingEquipment) {
+      return {
+        name: editingEquipment.name,
+        equipment_no: editingEquipment.equipment_no,
+        category_ids: editingEquipment.category_ids || [],
+        location_id: editingEquipment.location_id,
+        status: editingEquipment.status,
+        running_status: editingEquipment.running_status,
+        model: editingEquipment.model ?? undefined,
+        specification: editingEquipment.specification ?? undefined,
+        manufacturer: editingEquipment.manufacturer ?? undefined,
+        supplier: editingEquipment.supplier ?? undefined,
+        production_date: editingEquipment.production_date ? dayjs(editingEquipment.production_date) : undefined,
+        commissioning_date: editingEquipment.commissioning_date ? dayjs(editingEquipment.commissioning_date) : undefined,
+        description: editingEquipment.description ?? undefined,
+        department_id: editingEquipment.department_id ?? undefined,
+        responsible_person_id: editingEquipment.responsible_person_id ?? undefined,
+        importance: editingEquipment.importance ?? '低',
+      }
+    }
+    return { running_status: '开机' }
+  }, [editingEquipment])
 
   // 搜索员工：输入关键字后延迟 300ms 从 identity/personnel 查询
   const handleStaffSearch = (value: string) => {
@@ -114,48 +139,13 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
     }, 300)
   }
 
+  // ponytail: only handle default department pre-fill for new equipment (side effect chain)
   useEffect(() => {
-    if (equipmentDrawerOpen) {
-      if (editingEquipment) {
-        // 编辑模式：用后端返回的 responsible_person_name 直接构造初始选项
-        const initialOptions: { label: string; value: string }[] = []
-        if (editingEquipment.responsible_person_id && editingEquipment.responsible_person_name) {
-          initialOptions.push({
-            label: editingEquipment.responsible_person_name,
-            value: editingEquipment.responsible_person_id,
-          })
-        }
-        setStaffOptions(initialOptions)
-
-        form.setFieldsValue({
-          name: editingEquipment.name,
-          equipment_no: editingEquipment.equipment_no,
-          category_ids: editingEquipment.category_ids || [],
-          location_id: editingEquipment.location_id,
-          status: editingEquipment.status,
-          running_status: editingEquipment.running_status,
-          model: editingEquipment.model ?? undefined,
-          specification: editingEquipment.specification ?? undefined,
-          manufacturer: editingEquipment.manufacturer ?? undefined,
-          supplier: editingEquipment.supplier ?? undefined,
-          production_date: editingEquipment.production_date ? dayjs(editingEquipment.production_date) : undefined,
-          commissioning_date: editingEquipment.commissioning_date ? dayjs(editingEquipment.commissioning_date) : undefined,
-          description: editingEquipment.description ?? undefined,
-          department_id: editingEquipment.department_id ?? undefined,
-          responsible_person_id: editingEquipment.responsible_person_id ?? undefined,
-          importance: editingEquipment.importance ?? '低',
-        })
-      } else {
-        form.resetFields()
-        setStaffOptions([])
-        // 新建设备时预填登录用户所在部门，负责人由 handleDepartmentChange 自动填入部门负责人
-        if (defaultDepartmentId) {
-          form.setFieldsValue({ department_id: defaultDepartmentId })
-          handleDepartmentChange(defaultDepartmentId)
-        }
-      }
+    if (equipmentDrawerOpen && !editingEquipment && defaultDepartmentId) {
+      form.setFieldsValue({ department_id: defaultDepartmentId })
+      handleDepartmentChange(defaultDepartmentId)
     }
-  }, [equipmentDrawerOpen, editingEquipment, form])
+  }, [equipmentDrawerOpen])
 
   // 选择部门后自动填入负责人（默认为部门负责人，但可手动修改）
   const handleDepartmentChange = (deptId: string | undefined) => {
@@ -239,6 +229,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
         form={form}
         layout="vertical"
         requiredMark="optional"
+        initialValues={initialValues}
         styles={{ label: { fontWeight: 500, color: '#1a1a1a' } }}
       >
         <Form.Item
@@ -312,7 +303,6 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
         <Form.Item
           name="running_status"
           label="运行状态"
-          initialValue="开机"
           rules={[{ required: true, message: '请选择运行状态' }]}
         >
           <Select placeholder="请选择运行状态" options={runningStatusOptions} />

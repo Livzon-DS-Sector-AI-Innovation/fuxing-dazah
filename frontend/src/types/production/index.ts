@@ -11,6 +11,7 @@ export type {
   AssignedRouteInfo,
   AssignedStageInfo,
   NodeAssigneeInfo,
+  StageNodeInfo,
   WorkbenchItem,
   WorkbenchData,
   StageAssignment,
@@ -20,4 +21,7 @@ export type {
   IntermediateConsumptionInput,
   ReceiveAndStartInput,
   ReceiveAndStartResult,
+  PlannedBatchItem,
+  PlannedBatchData,
+  PlannedStageInfo,
 } from './workbench'

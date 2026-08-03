@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Modal, Form, Input, Select, DatePicker, InputNumber, App } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Demand, CreateDemandInput, UpdateDemandInput } from '@/types/production'
@@ -27,19 +27,6 @@ export function DemandFormModal({ open, demand, onClose }: Props) {
     queryFn: () => fetchProductsClient(productKeyword || undefined),
     staleTime: 30_000,
   })
-
-  useEffect(() => {
-    if (open) {
-      if (demand) {
-        form.setFieldsValue({
-          ...demand,
-          demand_date: demand.demand_date ? dayjs(demand.demand_date) : undefined,
-        })
-      } else {
-        form.resetFields()
-      }
-    }
-  }, [open, demand, form])
 
   const mut = useMutation({
     mutationFn: async (vals: unknown) => {
@@ -78,8 +65,18 @@ export function DemandFormModal({ open, demand, onClose }: Props) {
       onOk={() => form.submit()}
       confirmLoading={mut.isPending}
       width={560}
+      destroyOnHidden
     >
-      <Form form={form} layout="vertical" onFinish={vals => mut.mutate(vals)}>
+      <Form
+        form={form}
+        layout="vertical"
+        key={demand?.id ?? 'new'}
+        initialValues={demand ? {
+          ...demand,
+          demand_date: demand.demand_date ? dayjs(demand.demand_date) : undefined,
+        } : undefined}
+        onFinish={vals => mut.mutate(vals)}
+      >
         <Form.Item name="demand_no" label="需求编号" rules={[{ required: !isEdit }]}>
           <Input disabled={isEdit} placeholder="留空自动生成" />
         </Form.Item>

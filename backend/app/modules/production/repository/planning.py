@@ -11,6 +11,7 @@ from app.modules.production.models.planning import (
     Demand,
     DemandAllocation,
     PlanAllocation,
+    PlanChangeLog,
     PlanItem,
     PlanOrder,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "find_overlapping_items",
     "get_plan_allocations_by_item",
     "get_plan_allocations_by_batch",
+    "get_plan_allocations_by_batches",
     "get_demand_allocations",
     "get_demand_allocation_by_id",
     "get_demand_allocations_by_item",
@@ -38,6 +40,10 @@ __all__ = [
     "get_batches_for_allocations",
     "get_batch_by_no",
     "get_plan_item_by_batch_no",
+    "get_batch_single_branch_tip",
+    "get_node_execution_progress",
+    "get_change_logs",
+    "get_batches_by_plan_items",
 ]
 
 
@@ -262,6 +268,19 @@ async def get_plan_allocations_by_batch(db: AsyncSession, batch_id: uuid.UUID) -
     return list((await db.execute(stmt)).scalars())
 
 
+async def get_plan_allocations_by_batches(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
+) -> list[PlanAllocation]:
+    """批量反向查询：batch → plan_item，供工作台计划批次可见性。ponytail: .in_ 版本。"""
+    if not batch_ids:
+        return []
+    stmt = select(PlanAllocation).where(
+        PlanAllocation.batch_id.in_(batch_ids),
+        PlanAllocation.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
 # ── DemandAllocation ──
 
 
@@ -340,3 +359,84 @@ async def get_plan_item_by_batch_no(
     if exclude_item_id:
         stmt = stmt.where(PlanItem.id != exclude_item_id)
     return (await db.execute(stmt)).scalars().first()
+
+
+# ── 批次追溯 / 执行进度 / 变更日志 ──
+
+
+async def get_batch_single_branch_tip(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
+    """沿单分支链追溯：子批次=1时继续，≠1时停止，返回停止节点的Batch。"""
+    from app.modules.production.models.batch import BatchLink
+
+    current_id = batch_id
+    while True:
+        child_stmt = (
+            select(BatchLink.child_batch_id)
+            .where(
+                BatchLink.parent_batch_id == current_id,
+                BatchLink.is_deleted == False,  # noqa: E712
+            )
+            .distinct()
+        )
+        child_ids = list((await db.execute(child_stmt)).scalars())
+        if len(child_ids) != 1:
+            break
+        current_id = child_ids[0]
+    stmt = select(Batch).where(Batch.id == current_id, Batch.is_deleted == False)  # noqa: E712
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_node_execution_progress(
+    db: AsyncSession, batch_id: uuid.UUID,
+) -> tuple[str | None, str | None]:
+    """返回 (latest_node_name, latest_node_status)，该批次最远执行到的工序名称和状态。"""
+    from app.modules.production.models.execution import NodeExecution
+    from app.modules.production.models.route import RouteNode
+
+    stmt = (
+        select(RouteNode.name, NodeExecution.status)
+        .join(NodeExecution, NodeExecution.node_id == RouteNode.id)
+        .where(
+            NodeExecution.batch_id == batch_id,
+            NodeExecution.is_deleted == False,  # noqa: E712
+            RouteNode.is_deleted == False,  # noqa: E712
+        )
+        .order_by(RouteNode.sort_order.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        return None, None
+    return row[0], row[1]
+
+
+async def get_change_logs(db: AsyncSession, plan_order_id: uuid.UUID) -> list[PlanChangeLog]:
+    """获取计划单变更日志，按版本倒序。"""
+    stmt = (
+        select(PlanChangeLog)
+        .where(
+            PlanChangeLog.plan_order_id == plan_order_id,
+            PlanChangeLog.is_deleted == False,  # noqa: E712
+        )
+        .order_by(PlanChangeLog.plan_version.desc())
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_batches_by_plan_items(
+    db: AsyncSession, item_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, Batch]:
+    """PlanItem → Batch 批量映射。"""
+    if not item_ids:
+        return {}
+    stmt = (
+        select(PlanAllocation.plan_item_id, Batch)
+        .join(Batch, Batch.id == PlanAllocation.batch_id)
+        .where(
+            PlanAllocation.plan_item_id.in_(item_ids),
+            PlanAllocation.is_deleted == False,  # noqa: E712
+            Batch.is_deleted == False,  # noqa: E712
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    return {row[0]: row[1] for row in rows}

@@ -1,7 +1,6 @@
 'use client'
 
 import { App, Form, Input, Modal } from 'antd'
-import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { createProduct, updateProduct } from '@/actions/production'
 import type { Product } from '@/types/production'
@@ -16,14 +15,6 @@ export function ProductFormModal({ open, product, onClose }: Props) {
   const [form] = Form.useForm()
   const { message } = App.useApp()
   const queryClient = useQueryClient()
-
-  useEffect(() => {
-    if (open) {
-      form.setFieldsValue(
-        product ?? { product_code: '', product_name: '', unit: 'kg', remark: '' },
-      )
-    }
-  }, [open, product, form])
 
   const handleOk = async () => {
     const values = await form.validateFields()
@@ -47,7 +38,11 @@ export function ProductFormModal({ open, product, onClose }: Props) {
       onCancel={onClose}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical">
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={product ?? { product_code: '', product_name: '', unit: 'kg', remark: '' }}
+      >
         <Form.Item
           name="product_code"
           label="产品编码"

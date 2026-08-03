@@ -28,13 +28,12 @@ function ratePercent(rate: number | null): string {
 export function AvailabilityAnalyticsPage() {
   const { message } = App.useApp()
   const [data, setData] = useState<AvailabilityResponse | null>(null)
-  const [dateRange, setDateRange] = useState<[string, string] | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
+  // ponytail: lazy initializer avoids extra render on mount
+  const [dateRange, setDateRange] = useState<[string, string] | null>(() => {
     const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 30)
-    setDateRange([s.toISOString().slice(0, 10), e.toISOString().slice(0, 10)])
-  }, [])
+    return [s.toISOString().slice(0, 10), e.toISOString().slice(0, 10)]
+  })
+  const [loading, setLoading] = useState(false)
 
   const loadData = useCallback(async () => {
     if (!dateRange) return

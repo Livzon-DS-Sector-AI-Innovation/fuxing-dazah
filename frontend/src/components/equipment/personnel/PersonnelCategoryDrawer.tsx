@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   App, Drawer, TreeSelect, Select, Button, Tag, Typography, Tooltip,
 } from 'antd'
@@ -38,19 +38,14 @@ export function PersonnelCategoryDrawer({
 }: Props) {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
-  const [items, setItems] = useState<CategoryAssignItem[]>([])
+  // ponytail: lazy init from existingCategories on mount (parent key forces remount per personnel)
+  const [items, setItems] = useState<CategoryAssignItem[]>(() =>
+    existingCategories.map(c => ({
+      role_id: c.role_id,
+      category_id: c.category_id,
+    }))
+  )
   const [submitting, setSubmitting] = useState(false)
-
-  useEffect(() => {
-    if (open && existingCategories.length > 0) {
-      setItems(existingCategories.map(c => ({
-        role_id: c.role_id,
-        category_id: c.category_id,
-      })))
-    } else if (open) {
-      setItems([])
-    }
-  }, [open, existingCategories])
 
   const { data: categories = [] } = useQuery({
     queryKey: ['equipment-categories-tree'],

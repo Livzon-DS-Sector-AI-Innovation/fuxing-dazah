@@ -428,9 +428,10 @@ async def list_products_paged(
 
 
 async def list_routes_paged(
-    db: AsyncSession, product_id: uuid.UUID | None, page: int, page_size: int
+    db: AsyncSession, product_id: uuid.UUID | None, page: int, page_size: int,
+    status: str | None = None,
 ) -> tuple[list[ProcessRoute], int]:
-    return await repo.list_routes(db, product_id, page, page_size)
+    return await repo.list_routes(db, product_id, page, page_size, status=status)
 
 
 async def get_product_or_404(db: AsyncSession, product_id: uuid.UUID) -> Product:

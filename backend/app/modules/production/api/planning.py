@@ -19,6 +19,7 @@ from app.modules.production.schemas.planning import (
     PlanItemOut,
     PlanItemScheduleIn,
     PlanItemUpdate,
+    PlanOrderChangeRequest,
     PlanOrderCreate,
     PlanOrderOut,
     PlanOrderUpdate,
@@ -222,6 +223,17 @@ async def close_plan_order(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     order = await planning_service.close_plan_order(db, order_id, user)
+    return success_response(PlanOrderOut.model_validate(order).model_dump(mode="json"))
+
+
+@router.post("/plan-orders/{order_id}/change", summary="变更已下达的计划单")
+async def change_plan_order(
+    order_id: uuid.UUID,
+    payload: PlanOrderChangeRequest,
+    user: User = Depends(_submit),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    order = await planning_service.change_plan_order(db, order_id, payload, user)
     return success_response(PlanOrderOut.model_validate(order).model_dump(mode="json"))
 
 

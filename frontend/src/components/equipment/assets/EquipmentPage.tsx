@@ -7,7 +7,7 @@ import { MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined } from '@ant-desig
 import { EquipmentCategory, Location, Equipment, EquipmentStatistics } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { antdTheme } from '@/lib/antd-theme'
-import { fetchEquipmentsClient, fetchEquipmentStatisticsClient, fetchCategoriesClient, fetchLocationsClient, fetchDepartmentsClient } from '@/lib/api/equipment-client'
+import { fetchEquipmentsClient, fetchCategoriesClient, fetchLocationsClient, fetchDepartmentsClient } from '@/lib/api/equipment-client'
 import { StatsCards } from './StatsCards'
 import { EquipmentTable } from './EquipmentTable'
 import { CategoryTree } from '../shared/CategoryTree'
@@ -61,11 +61,11 @@ export function EquipmentPage({
     setTotal,
     setLoading,
     setDepartments,
+    setPage,
   } = useEquipmentStore()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [importModalOpen, setImportModalOpen] = useState(false)
-  const [resetKey, setResetKey] = useState(0)
 
   // 初始化 store 数据（包含 SSR 数据）
   useEffect(() => {
@@ -109,6 +109,7 @@ export function EquipmentPage({
 
   // 获取列表数据
   const fetchData = useCallback(async (p: number, ps: number) => {
+    setPage(p)
     setLoading(true)
     try {
       const equipmentsResponse = await fetchEquipmentsClient({
@@ -127,15 +128,7 @@ export function EquipmentPage({
     } finally {
       setLoading(false)
     }
-  }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword, setEquipments, setTotal, setLoading])
-
-  // 单独刷新统计（仅 mount 或需要时使用）
-  const refreshStatistics = useCallback(async () => {
-    try {
-      const stats = await fetchEquipmentStatisticsClient()
-      setStatistics(stats)
-    } catch { /* 静默 */ }
-  }, [setStatistics])
+  }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword, setEquipments, setTotal, setLoading, setPage])
 
   // 刷新分类和位置树
   const refreshCategoriesAndLocations = useCallback(async () => {
@@ -151,7 +144,6 @@ export function EquipmentPage({
   // 筛选变化时重置到第一页（含首次加载）
   useEffect(() => {
     fetchData(1, 20)
-    setResetKey(k => k + 1)
   }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword])
 
   const tabItems = [
@@ -250,7 +242,6 @@ export function EquipmentPage({
             <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
               <EquipmentTable
                 loading={loading}
-                resetKey={resetKey}
                 onPageChange={(p, ps) => fetchData(p, ps)}
                 onImportClick={() => setImportModalOpen(true)}
               />
@@ -259,11 +250,11 @@ export function EquipmentPage({
         </div>
 
         {/* 抽屉组件 */}
-        <EquipmentDrawer onRefresh={() => { fetchData(1, 20); setResetKey(k => k + 1) }} defaultDepartmentId={initialUserDepartmentId} />
+        <EquipmentDrawer onRefresh={() => { fetchData(1, 20) }} defaultDepartmentId={initialUserDepartmentId} />
         <EquipmentImportModal
           open={importModalOpen}
           onClose={() => setImportModalOpen(false)}
-          onImported={() => { fetchData(1, 20); setResetKey(k => k + 1) }}
+          onImported={() => { fetchData(1, 20) }}
         />
         <CategoryDrawer onRefresh={refreshCategoriesAndLocations} />
         <LocationDrawer onRefresh={refreshCategoriesAndLocations} />

@@ -43,10 +43,10 @@
   height: 100%;
 }
 
-/* 计划单卡片 hover — 轻微上浮 + 阴影 */
+/* 计划单卡片 hover — 轻微上浮 + 增强阴影 */
 .plan-order-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.10);
 }
 
 /* 泳道滚动条 — 细窄、低调 */
@@ -72,12 +72,12 @@
   scrollbar-color: #c8c4be transparent;
 }
 
-/* 溢出菜单触发按钮 — 低调，hover时显现 */
-.plan-order-card .ant-btn-icon-only {
-  color: var(--color-stone);
-  border-color: transparent;
+/* 计划单卡片内操作按钮 — 低调，hover 时显现 */
+.plan-order-action-btn {
+  opacity: 0.4;
 }
-.plan-order-card:hover .ant-btn-icon-only {
+.plan-order-card:hover .plan-order-action-btn {
+  opacity: 1;
   color: var(--color-slate);
   border-color: var(--color-hairline);
 }
