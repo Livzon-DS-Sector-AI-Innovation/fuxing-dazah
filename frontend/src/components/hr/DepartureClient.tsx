@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker, Popconfirm, Image } from 'antd'
+import { App, Button, Table, Space, Input, Tag, Modal, Form, Select, DatePicker, Popconfirm } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
@@ -211,15 +211,6 @@ export default function DepartureClient({
       ],
       onFilter: (value, record: DepartureRecord) => record.offboarding_type === String(value) },
     {
-      title: '签署状态',
-      dataIndex: 'cert_sign_status',
-      key: 'cert_sign_status',
-      width: 100,
-      render: (val: string) => (
-        <Tag color={val === 'signed' ? 'green' : 'orange'}>{val === 'signed' ? '已签署' : '待签署'}</Tag>
-      ),
-    },
-    {
       title: '离职时司龄',
       dataIndex: 'company_tenure_at_leave',
       key: 'company_tenure_at_leave',
@@ -388,22 +379,6 @@ export default function DepartureClient({
                   <td style={{ padding: '8px 12px', border: '1px solid #eee' }}>{val || '-'}</td>
                 </tr>
               ))}
-              <tr>
-                <td style={{ padding: '8px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600 }}>签署状态</td>
-                <td style={{ padding: '8px 12px', border: '1px solid #eee' }}>
-                  {detailRecord.cert_sign_status === 'signed'
-                    ? <Tag color="green">已签署 · {detailRecord.cert_sign_name} · {detailRecord.cert_signed_at ? new Date(detailRecord.cert_signed_at).toLocaleString('zh-CN') : ''}</Tag>
-                    : <Tag color="orange">待签署</Tag>}
-                </td>
-              </tr>
-              {detailRecord.cert_sign_image && (
-                <tr>
-                  <td style={{ padding: '8px 12px', border: '1px solid #eee', background: '#f5f5f5', fontWeight: 600 }}>手写签名</td>
-                  <td style={{ padding: '8px 12px', border: '1px solid #eee' }}>
-                    <Image src={detailRecord.cert_sign_image} alt="签名" style={{ maxHeight: 100 }} />
-                  </td>
-                </tr>
-              )}
             </tbody>
           </table>
         )}
