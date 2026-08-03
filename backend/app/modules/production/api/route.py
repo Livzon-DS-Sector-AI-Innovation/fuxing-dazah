@@ -21,12 +21,13 @@ _read = require_permission("production:batch:read")
 @router.get("/routes", summary="工艺路线列表")
 async def list_routes(
     product_id: uuid.UUID | None = None,
+    status: str | None = Query(default=None, description="按状态过滤: draft/published/archived"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    items, total = await route_service.list_routes_paged(db, product_id, page, page_size)
+    items, total = await route_service.list_routes_paged(db, product_id, page, page_size, status=status)
     return paginated_response(
         [RouteOut.model_validate(i).model_dump(mode="json") for i in items],
         page,

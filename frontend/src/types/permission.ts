@@ -57,6 +57,15 @@ export interface UserRole {
   role_code: string
 }
 
+export interface RoleUser {
+  id: string
+  name: string
+  employee_no: string | null
+  department: string | null
+  position: string | null
+  avatar_url: string | null
+}
+
 export interface UserPermissionDetail {
   user_id: string
   user_name: string

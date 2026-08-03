@@ -60,12 +60,6 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
     return { order_type: '故障维修', priority: '中' }
   }, [editingWorkOrder])
 
-  // 每次打开/关闭时重置表单
-  useEffect(() => {
-    if (workOrderDrawerOpen) {
-      form.setFieldsValue(initialValues)
-    }
-  }, [workOrderDrawerOpen, initialValues])
 
   const handleSubmit = async () => {
     let values: any
@@ -114,7 +108,7 @@ export function WorkOrderDrawer({ equipments, symptoms, onRefresh }: WorkOrderDr
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional">
+      <Form form={form} layout="vertical" requiredMark="optional" initialValues={initialValues}>
         <Form.Item name="equipment_id" label="关联设备" rules={[{ required: true, message: '请选择设备' }]}>
           <Select
             placeholder="选择设备"

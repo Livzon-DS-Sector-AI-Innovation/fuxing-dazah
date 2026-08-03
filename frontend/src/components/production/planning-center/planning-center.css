@@ -43,10 +43,54 @@
   height: 100%;
 }
 
-/* 计划单卡片 hover — 轻微上浮 + 阴影 */
+/* 计划单按状态分组 — 组头：状态色点 + 名称 + 计数，右侧细线延伸成"状态带" */
+.plan-order-group + .plan-order-group {
+  margin-top: 28px;
+}
+.plan-order-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.plan-order-group-header::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-hairline);
+  margin-left: 4px;
+}
+.plan-order-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.plan-order-group-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-charcoal);
+}
+.plan-order-group-count {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 8px;
+  border-radius: 9999px;
+}
+
+/* 计划单卡片 hover — 轻微上浮 + 增强阴影 */
 .plan-order-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.10);
+}
+
+/* 已关闭卡片 — 终态灰化，hover 时还原 */
+.plan-order-card--closed {
+  opacity: 0.62;
+}
+.plan-order-card--closed:hover {
+  opacity: 1;
 }
 
 /* 泳道滚动条 — 细窄、低调 */
@@ -72,12 +116,12 @@
   scrollbar-color: #c8c4be transparent;
 }
 
-/* 溢出菜单触发按钮 — 低调，hover时显现 */
-.plan-order-card .ant-btn-icon-only {
-  color: var(--color-stone);
-  border-color: transparent;
+/* 计划单卡片内操作按钮 — 低调，hover 时显现 */
+.plan-order-action-btn {
+  opacity: 0.4;
 }
-.plan-order-card:hover .ant-btn-icon-only {
+.plan-order-card:hover .plan-order-action-btn {
+  opacity: 1;
   color: var(--color-slate);
   border-color: var(--color-hairline);
 }

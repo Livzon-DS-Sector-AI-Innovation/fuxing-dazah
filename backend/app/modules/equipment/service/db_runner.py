@@ -5,9 +5,12 @@
 """
 
 import asyncio
+import logging
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 async def run_db[T](fn: Callable[[], Awaitable[T]]) -> T:
@@ -30,6 +33,7 @@ async def run_db[T](fn: Callable[[], Awaitable[T]]) -> T:
             coro = fn()
             result_holder.append(loop.run_until_complete(coro))
         except Exception as exc:
+            logger.exception("后台线程 DB 操作异常")
             error_holder.append(exc)
         finally:
             loop.close()

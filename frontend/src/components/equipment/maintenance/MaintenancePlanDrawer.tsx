@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, InputNumber, DatePicker, Button, Space, Radio, TreeSelect } from 'antd'
 import dayjs from 'dayjs'
 import { useEquipmentStore } from '@/stores/equipment'
@@ -44,43 +44,39 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
   const { maintenancePlanDrawerOpen, editingMaintenancePlan, closeMaintenancePlanDrawer } = useEquipmentStore()
   const [personnel, setPersonnel] = useState<Personnel[]>([])
   const [categories, setCategories] = useState<EquipmentCategory[]>([])
-  const [planMode, setPlanMode] = useState<'equipment' | 'category'>('equipment')
+  // ponytail: derive planMode from editingMaintenancePlan on mount (destroyOnHidden recreates component)
+  const [planMode, setPlanMode] = useState<'equipment' | 'category'>(
+    () => editingMaintenancePlan?.category_id ? 'category' : 'equipment'
+  )
 
+  // Async data loading only — keep in effect
   useEffect(() => {
     if (!maintenancePlanDrawerOpen) return
-
-    // Load personnel and categories in parallel
     Promise.all([
       fetchPersonnelList({}).then(r => setPersonnel(r.items.filter(p => p.is_active))),
       fetchCategoriesClient().then(setCategories),
     ]).catch(err => console.warn('MaintenancePlanDrawer: 加载数据失败', err))
+  }, [maintenancePlanDrawerOpen])
 
-    // 延迟确保 Form 字段在 destroyOnHidden 后重新挂载完毕
-    const timer = setTimeout(() => {
-      if (editingMaintenancePlan) {
-        // Determine plan mode from existing data
-        setPlanMode(editingMaintenancePlan.category_id ? 'category' : 'equipment')
-        form.setFieldsValue({
-          equipment_id: editingMaintenancePlan.equipment_id || undefined,
-          category_id: editingMaintenancePlan.category_id || undefined,
-          plan_name: editingMaintenancePlan.plan_name,
-          plan_type: editingMaintenancePlan.plan_type,
-          frequency: editingMaintenancePlan.frequency,
-          frequency_unit: editingMaintenancePlan.frequency_unit,
-          last_maintenance_date: editingMaintenancePlan.last_maintenance_date ? dayjs(editingMaintenancePlan.last_maintenance_date) : undefined,
-          executor_id: editingMaintenancePlan.executor_id || undefined,
-          maintenance_content: editingMaintenancePlan.maintenance_content,
-          remark: editingMaintenancePlan.remark,
-          status: editingMaintenancePlan.status,
-        })
-      } else {
-        form.resetFields()
-        setPlanMode('equipment')
-        form.setFieldsValue({ plan_type: '预防性维护', frequency_unit: '月' })
+  // ponytail: derive form initialValues from editingMaintenancePlan on mount
+  const initialValues = useMemo(() => {
+    if (editingMaintenancePlan) {
+      return {
+        equipment_id: editingMaintenancePlan.equipment_id || undefined,
+        category_id: editingMaintenancePlan.category_id || undefined,
+        plan_name: editingMaintenancePlan.plan_name,
+        plan_type: editingMaintenancePlan.plan_type,
+        frequency: editingMaintenancePlan.frequency,
+        frequency_unit: editingMaintenancePlan.frequency_unit,
+        last_maintenance_date: editingMaintenancePlan.last_maintenance_date ? dayjs(editingMaintenancePlan.last_maintenance_date) : undefined,
+        executor_id: editingMaintenancePlan.executor_id || undefined,
+        maintenance_content: editingMaintenancePlan.maintenance_content,
+        remark: editingMaintenancePlan.remark,
+        status: editingMaintenancePlan.status,
       }
-    }, 0)
-    return () => clearTimeout(timer)
-  }, [maintenancePlanDrawerOpen, editingMaintenancePlan, form])
+    }
+    return { plan_type: '预防性维护', frequency_unit: '月' }
+  }, [editingMaintenancePlan])
 
   const handleSubmit = async () => {
     let values: any
@@ -135,7 +131,7 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
         </Space>
       }
     >
-      <Form form={form} layout="vertical" requiredMark="optional" preserve={false}>
+      <Form form={form} layout="vertical" requiredMark="optional" preserve={false} initialValues={initialValues}>
         {!editingMaintenancePlan && (
           <>
             <Form.Item label="关联方式">

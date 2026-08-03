@@ -10,9 +10,9 @@ import { deleteSparePart } from '@/actions/equipment'
 import { linkPrimary, linkDanger, linkPurple } from '@/components/equipment/shared/shared-styles'
 import { usePermission } from '@/hooks/usePermission'
 
-interface Props { onRefresh?: () => void }
+interface Props { onRefresh?: () => void; onImportClick?: () => void }
 
-export function SparePartTable({ onRefresh }: Props) {
+export function SparePartTable({ onRefresh, onImportClick }: Props) {
   const { message, modal } = App.useApp()
   const {
     spareParts, sparePartTotal, sparePartPage, sparePartPageSize,
@@ -98,9 +98,14 @@ export function SparePartTable({ onRefresh }: Props) {
           onSearch={v => setSparePartKeyword(v)}
         />
         {hasPermission('equipment:spare_part:create') && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>
-            新建备件
-          </Button>
+          <Space>
+            {onImportClick && (
+              <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
+            )}
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => openSparePartDrawer()}>
+              新建备件
+            </Button>
+          </Space>
         )}
       </div>
 

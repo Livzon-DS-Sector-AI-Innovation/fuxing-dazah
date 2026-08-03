@@ -303,6 +303,10 @@ async def create_task(
             return await repo.create_task(db, data)
         except IntegrityError:
             if attempt < _MAX_RETRIES - 1:
+                logger.debug(
+                    "任务号冲突重试: attempt=%d/%d task_no=%s",
+                    attempt + 1, _MAX_RETRIES, task_no,
+                )
                 await db.rollback()
                 continue
             raise AppException(message="任务号生成失败，请重试")
@@ -537,6 +541,10 @@ async def _create_anomaly_work_order(
             break
         except IntegrityError:
             if attempt < _MAX_RETRIES - 1:
+                logger.debug(
+                    "异常工单号冲突重试: attempt=%d/%d wo_no=%s",
+                    attempt + 1, _MAX_RETRIES, wo.work_order_no,
+                )
                 await db.rollback()
                 continue
             raise

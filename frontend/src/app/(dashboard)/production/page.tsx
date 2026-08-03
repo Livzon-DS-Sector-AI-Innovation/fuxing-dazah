@@ -159,29 +159,29 @@ export default function ProductionDashboard() {
   const [recentBatches, setRecentBatches] = useState<BatchRecord[]>([])
   const [loading, setLoading] = useState(true)
 
+  // 页面加载时获取数据
   useEffect(() => {
-    loadDashboardData()
-  }, [])
-
-  const loadDashboardData = async () => {
-    try {
-      const response = await getBatches({ page_size: 100 })
-      if (response.code === 200) {
-        const batches = response.data || []
-        setStats({
-          totalBatches: batches.length,
-          inProgressBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.IN_PROGRESS).length,
-          completedBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.COMPLETED).length,
-          draftBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.DRAFT).length,
-        })
-        setRecentBatches(batches.slice(0, 5))
+    const load = async () => {
+      try {
+        const response = await getBatches({ page_size: 100 })
+        if (response.code === 200) {
+          const batches = response.data || []
+          setStats({
+            totalBatches: batches.length,
+            inProgressBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.IN_PROGRESS).length,
+            completedBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.COMPLETED).length,
+            draftBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.DRAFT).length,
+          })
+          setRecentBatches(batches.slice(0, 5))
+        }
+      } catch (error) {
+        console.error('Failed to load dashboard data:', error)
+      } finally {
+        setLoading(false)
       }
-    } catch (error) {
-      console.error('Failed to load dashboard data:', error)
-    } finally {
-      setLoading(false)
     }
-  }
+    load()
+  }, [])
 
   const statValues: Record<string, number> = {
     total: stats.totalBatches,

@@ -488,3 +488,41 @@ export async function importEquipments(formData: FormData): Promise<ActionResult
     return { success: false, error: (err as Error).message || '导入失败' }
   }
 }
+
+// ==================== 备件 Excel 导入 ====================
+export async function downloadSparePartImportTemplate(): Promise<ActionResult<string>> {
+  try {
+    const authHeaders = await getAuthHeaders()
+    const res = await fetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/import/template`, {
+      headers: authHeaders,
+    })
+    if (!res.ok) return { success: false, error: '下载模板失败' }
+    const blob = await res.blob()
+    const arrayBuffer = await blob.arrayBuffer()
+    return { success: true, data: Buffer.from(arrayBuffer).toString('base64') }
+  } catch (err) {
+    return { success: false, error: (err as Error).message || '下载模板失败' }
+  }
+}
+
+export async function importSpareParts(formData: FormData): Promise<ActionResult<ImportResult>> {
+  try {
+    const authHeaders = await getAuthHeaders()
+    const { 'Content-Type': _ct, ...uploadHeaders } = authHeaders
+    const res = await fetch(`${API_BASE_URL}/api/v1/equipment/spare-parts/import`, {
+      method: 'POST',
+      headers: uploadHeaders,
+      body: formData,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      return { success: false, error: (err as any).message || '导入失败' }
+    }
+    const json = await res.json()
+    const data = (json.data ?? json) as ImportResult
+    revalidatePath('/equipment')
+    return { success: true, data }
+  } catch (err) {
+    return { success: false, error: (err as Error).message || '导入失败' }
+  }
+}

@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useCallback } from 'react'
 import {
   App,
   Button,
@@ -56,14 +56,6 @@ function ProductFormModal({
   const [form] = Form.useForm()
   const { message } = App.useApp()
 
-  useEffect(() => {
-    if (open) {
-      form.setFieldsValue(
-        product ?? { product_code: '', product_name: '', unit: 'kg', remark: '' },
-      )
-    }
-  }, [open, product, form])
-
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -86,7 +78,11 @@ function ProductFormModal({
       onCancel={onClose}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical">
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={product ?? { product_code: '', product_name: '', unit: 'kg', remark: '' }}
+      >
         <Form.Item name="product_code" label="产品编码">
           <Input maxLength={50} />
         </Form.Item>
@@ -128,17 +124,6 @@ function IntermediateTypeFormModal({
 
   const isProduct = Form.useWatch('is_product', form)
 
-  useEffect(() => {
-    if (open) {
-      form.setFieldsValue(
-        editItem ?? {
-          code: '', name: '', category: '', default_unit: '', description: '',
-          is_product: false, product_id: null,
-        },
-      )
-    }
-  }, [open, editItem, form])
-
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -161,7 +146,14 @@ function IntermediateTypeFormModal({
       onCancel={onClose}
       destroyOnHidden
     >
-      <Form form={form} layout="vertical">
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={editItem ?? {
+          code: '', name: '', category: '', default_unit: '', description: '',
+          is_product: false, product_id: null,
+        }}
+      >
         <Form.Item name="code" label="编码" rules={[{ required: true, message: '请输入编码' }]}>
           <Input maxLength={50} disabled={!!editItem} />
         </Form.Item>
@@ -201,7 +193,7 @@ function IntermediateTypeFormModal({
 function ProductDetail({ product }: { product: Product }) {
   const { data: routes } = useQuery({
     queryKey: ['production-routes', product.id],
-    queryFn: () => fetchRoutesClient(product.id),
+    queryFn: () => fetchRoutesClient(product.id, undefined),
     enabled: !!product.id,
   })
 

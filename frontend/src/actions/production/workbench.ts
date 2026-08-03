@@ -8,6 +8,7 @@ import type {
   NodeAssignment,
   ReceiveAndStartInput,
   ReceiveAndStartResult,
+  PlannedBatchData,
 } from '@/types/production'
 
 export async function fetchWorkbench(): Promise<ActionResult<WorkbenchData>> {
@@ -81,6 +82,24 @@ export async function receiveAndStart(
   const result = await actionFetch<ReceiveAndStartResult>(
     `${API_BASE}/production/workbench/receive-and-start`,
     { method: 'POST', body: JSON.stringify(data) },
+  )
+  if (result.success) revalidatePath('/production/workbench')
+  return result
+}
+
+export async function fetchPlannedBatches(): Promise<ActionResult<PlannedBatchData>> {
+  return actionFetch<PlannedBatchData>(
+    `${API_BASE}/production/workbench/planned`,
+    { method: 'GET' },
+  )
+}
+
+export async function activatePlannedBatch(
+  batchId: string,
+): Promise<ActionResult<{ id: string; batch_no: string; status: string }>> {
+  const result = await actionFetch<{ id: string; batch_no: string; status: string }>(
+    `${API_BASE}/production/workbench/activate-planned/${batchId}`,
+    { method: 'POST' },
   )
   if (result.success) revalidatePath('/production/workbench')
   return result

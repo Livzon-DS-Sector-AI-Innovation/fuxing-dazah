@@ -1,5 +1,6 @@
 """工单图片 API 路由."""
 
+import logging
 import os
 import uuid
 from io import BytesIO
@@ -15,6 +16,8 @@ from app.modules.equipment import repository as repo
 from app.modules.equipment import service
 from app.modules.equipment.deps import EquipmentAccessContext, require_equipment_access
 from app.modules.equipment.schemas import WorkOrderImageResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -62,16 +65,23 @@ async def serve_work_order_image(
 
     image = await repo.get_image_by_id(db, image_id)
     if not image or str(image.work_order_id) != str(work_order_id):
+        logger.warning("图片未找到: image_id=%s work_order_id=%s", image_id, work_order_id)
         raise NotFoundException("图片", str(image_id))
 
     if minio_enabled():
-        result = get_object("equipment", image.file_path)
+        try:
+            result = get_object("equipment", image.file_path)
+        except Exception:
+            logger.exception("MinIO 读取图片失败: path=%s", image.file_path)
+            raise NotFoundException("图片文件")
         if result is None:
+            logger.warning("MinIO 图片文件不存在: path=%s", image.file_path)
             raise NotFoundException("图片文件")
         data, content_type = result
         return StreamingResponse(BytesIO(data), media_type=content_type)
 
     if not os.path.exists(image.file_path):
+        logger.warning("本地图片文件不存在: path=%s", image.file_path)
         raise NotFoundException("图片文件")
     return FileResponse(image.file_path)
 

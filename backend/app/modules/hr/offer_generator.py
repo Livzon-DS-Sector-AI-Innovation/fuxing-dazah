@@ -49,8 +49,8 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
     from fpdf import FPDF
     vals = _build_vals(**kwargs)
     pdf = FPDF(unit="mm", format="A4")
-    pdf.set_margin(20)
-    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_margin(15)
+    pdf.set_auto_page_break(auto=True, margin=12)
     pdf.add_page()
     fn = "Helvetica"
     try:
@@ -65,23 +65,23 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
 
     # 页眉：公司名 + logo
     logo_path = find_hr_template("company_logo.png")
-    pdf.image(str(logo_path), x=pdf.w - pdf.r_margin - 40, y=pdf.t_margin, h=14)
-    pdf.set_font(fn, "B", 12)
-    pdf.cell(0, 14, "丽珠集团福州福兴医药有限公司", ln=True, align="L")
-    pdf.line(pdf.l_margin, pdf.get_y() + 2, pdf.w - pdf.r_margin, pdf.get_y() + 2)
-    pdf.ln(4)
-    pdf.set_font(fn, "", 8)
+    pdf.image(str(logo_path), x=pdf.w - pdf.r_margin - 35, y=pdf.t_margin, h=12)
+    pdf.set_font(fn, "B", 11)
+    pdf.cell(0, 12, "丽珠集团福州福兴医药有限公司", ln=True, align="L")
+    pdf.line(pdf.l_margin, pdf.get_y() + 1, pdf.w - pdf.r_margin, pdf.get_y() + 1)
+    pdf.ln(3)
+    pdf.set_font(fn, "", 7)
     pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 6, "HR-RE-006", ln=True, align="R")
+    pdf.cell(0, 5, "HR-RE-006", ln=True, align="R")
     pdf.set_text_color(0, 0, 0)
+    pdf.ln(3)
+    pdf.set_font(fn, "B", 16)
+    pdf.cell(0, 12, "录用通知函", ln=True, align="C")
     pdf.ln(4)
-    pdf.set_font(fn, "B", 18)
-    pdf.cell(0, 14, "录用通知函", ln=True, align="C")
-    pdf.ln(6)
-    pdf.set_font(fn, "", 12)
-    pdf.cell(0, 10, f"{vals['name']}同学：", ln=True)
-    pdf.ln(2)
-    pdf.set_font(fn, "", 10)
+    pdf.set_font(fn, "", 11)
+    pdf.cell(0, 8, f"{vals['name']}同学：", ln=True)
+    pdf.ln(1)
+    pdf.set_font(fn, "", 9)
     items = [
         "恭喜您从众多应聘者中脱颖而出，成为丽珠大家庭的一员。根据您的经验、技能、学历和各方综合素质，并与您本人协商后，我公司对您的入职相关事宜做以下安排：",
         f"一、职  位：{vals['position']}",
@@ -102,21 +102,21 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
     ]
     for item in items:
         bold = item.startswith("一、") or item.startswith("二、") or item.startswith("三、") or item.startswith("四、") or item.startswith("五、")
-        pdf.set_font(fn, "B" if bold else "", 10)
+        pdf.set_font(fn, "B" if bold else "", 9)
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(w, 6, item)
-        pdf.ln(1)
-    pdf.ln(6)
+        pdf.multi_cell(w, 5, item)
+        if not bold:
+            pdf.ln(0.5)
+    pdf.ln(4)
     stamp_path = find_hr_template("company_stamp.png")
-    # 公章叠在落款上：Y-3 让公章几乎贴着文字，字在公章下半部分穿过
-    pdf.image(str(stamp_path), x=pdf.w - pdf.r_margin - 40, y=pdf.get_y() - 28, w=40)
-    pdf.set_font(fn, "", 10)
-    pdf.cell(0, 8, "丽珠集团福州福兴医药有限公司", ln=True, align="R")
-    pdf.cell(0, 8, vals["send_date"], ln=True, align="R")
-    pdf.ln(8)
-    pdf.set_font(fn, "", 8)
-    pdf.cell(0, 6, "公司地址：福建省福州市福清市江阴工业集中区  联系人：王琳18650755207", ln=True)
-    pdf.cell(0, 6, "邮箱：wanglin03@livzon.cn", ln=True)
+    pdf.image(str(stamp_path), x=pdf.w - pdf.r_margin - 38, y=pdf.get_y() - 26, w=38)
+    pdf.set_font(fn, "", 9)
+    pdf.cell(0, 7, "丽珠集团福州福兴医药有限公司", ln=True, align="R")
+    pdf.cell(0, 7, vals["send_date"], ln=True, align="R")
+    pdf.ln(6)
+    pdf.set_font(fn, "", 7)
+    pdf.cell(0, 5, "公司地址：福建省福州市福清市江阴工业集中区  联系人：王琳18650755207", ln=True)
+    pdf.cell(0, 5, "邮箱：wanglin03@livzon.cn", ln=True)
     buf = BytesIO()
     pdf.output(buf)
     buf.seek(0)
@@ -140,22 +140,22 @@ def generate_offer_html(**kwargs) -> str:
 <head>
 <meta charset="utf-8">
 <style>
-  @page {{ size: A4; margin: 2cm 2.5cm 2cm 2.5cm; }}
+  @page {{ size: A4; margin: 1.5cm 2cm 1.5cm 2cm; }}
   @media screen {{ body {{ max-width: 700px; margin: 30px auto; padding: 20px; }} }}
   @font-face {{ font-family: "NotoSansSC"; src: url("file://{font_path}"); }}
-  body {{ font-family: "NotoSansSC", sans-serif; font-size: 12pt; line-height: 1.8; color: #000; }}
+  body {{ font-family: "NotoSansSC", sans-serif; font-size: 10.5pt; line-height: 1.6; color: #000; }}
   .center {{ text-align: center; }}
   .right {{ text-align: right; }}
   .indent {{ text-indent: 2em; }}
-  .title {{ font-size: 18pt; font-weight: bold; margin: 12px 0 8px 0; }}
-  .letterhead {{ margin: 0 0 16px 0; }}
+  .title {{ font-size: 16pt; font-weight: bold; margin: 8px 0 4px 0; }}
+  .letterhead {{ margin: 0 0 10px 0; }}
   .letterhead-row {{ display: flex; justify-content: space-between; align-items: center; }}
-  .letterhead-name {{ font-size: 12pt; font-weight: bold; margin: 0; text-align: left; }}
-  .letterhead-logo {{ height: 50px; }}
-  .letterhead-line {{ border: none; border-top: 1px solid #000; margin: 8px 0 0 0; }}
-  .signature {{ text-align: right; margin-top: 24px; }}
-  .signature-stamp {{ display: block; width: 6cm; margin-left: auto; }}
-  .signature-text {{ margin-top: -3.5cm; font-size: 12pt; }}
+  .letterhead-name {{ font-size: 11pt; font-weight: bold; margin: 0; text-align: left; }}
+  .letterhead-logo {{ height: 40px; }}
+  .letterhead-line {{ border: none; border-top: 1px solid #000; margin: 5px 0 0 0; }}
+  .signature {{ text-align: right; margin-top: 16px; }}
+  .signature-stamp {{ display: block; width: 5cm; margin-left: auto; }}
+  .signature-text {{ margin-top: -3cm; font-size: 10.5pt; }}
 </style>
 </head>
 <body>
@@ -193,7 +193,7 @@ def generate_offer_html(**kwargs) -> str:
   <p class="signature-text">丽珠集团福州福兴医药有限公司</p>
   <p class="right" style="margin-top:0;">{vals["send_date"]}</p>
 </div>
-<p style="margin-top:24px;">公司地址：福建省福州市福清市江阴工业集中区&emsp;联系人：王琳18650755207</p>
-<p>邮箱：wanglin03@livzon.cn</p>
+<p style="margin-top:16px; font-size:9pt;">公司地址：福建省福州市福清市江阴工业集中区&emsp;联系人：王琳18650755207</p>
+<p style="font-size:9pt;">邮箱：wanglin03@livzon.cn</p>
 </body>
 </html>"""

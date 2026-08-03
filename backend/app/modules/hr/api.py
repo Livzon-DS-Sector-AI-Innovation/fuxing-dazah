@@ -1772,12 +1772,27 @@ async def preview_departure_certificate(
         generate_termination_certificate_html,
     )
     record = await service.get_record(record_id)
+
+    # 兜底：离职台账缺少的字段从员工档案补
+    id_number = record.id_card or ""
+    entry_date = record.livo_entry_date or record.factory_entry_date or None
+    if (not id_number or not entry_date) and record.name:
+        from app.modules.hr.models import Employee
+        emp_row = (await service.repo.session.execute(
+            select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
+        )).scalars().first()
+        if emp_row:
+            if not id_number:
+                id_number = emp_row.id_card or ""
+            if not entry_date:
+                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+
     html = generate_termination_certificate_html(
-        name=record.name or "", id_number=getattr(record, "id_card", "") or "",
+        name=record.name or "", id_number=id_number or "",
         department=record.department or "", position=record.position or "",
-        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        entry_date=entry_date or "",
         leave_date=record.offboarding_date or "",
-        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+        leave_reason=record.offboarding_type or "个人原因",
     )
     return HTMLResponse(content=html)
 
@@ -1795,10 +1810,25 @@ async def send_departure_certificate(
     )
     record = await service.get_record(record_id)
     name = record.name or "员工"
+
+    # 兜底：离职台账缺少的字段从员工档案补
+    id_number = record.id_card or ""
+    entry_date = record.livo_entry_date or record.factory_entry_date or None
+    if (not id_number or not entry_date) and record.name:
+        from app.modules.hr.models import Employee
+        emp_row = (await service.repo.session.execute(
+            select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
+        )).scalars().first()
+        if emp_row:
+            if not id_number:
+                id_number = emp_row.id_card or ""
+            if not entry_date:
+                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+
     pdf_buf = generate_termination_certificate_pdf(
-        name=name, id_number=getattr(record, "id_card", "") or "",
+        name=name, id_number=id_number or "",
         department=record.department or "", position=record.position or "",
-        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        entry_date=entry_date or "",
         leave_date=record.offboarding_date or "",
         leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
     )
@@ -2236,9 +2266,14 @@ async def delete_question_bank_item(
     item_id: UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    await session.execute(
-        text("DELETE FROM hr.question_bank WHERE id = :id"), {"id": item_id})
-    await session.commit()
+    from app.modules.hr.models import QuestionBank
+    q = (await session.execute(
+        select(QuestionBank).where(QuestionBank.id == item_id, QuestionBank.is_deleted == False)
+    )).scalar_one_or_none()
+    if not q:
+        raise HTTPException(404, "题目不存在")
+    q.is_deleted = True
+    await session.flush()
     return success_response(message="已删除")
 
 
@@ -2464,8 +2499,9 @@ async def save_qa_scores(
         text("SELECT questions, full_score, excellent_line, pass_line, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
-    if assess_row:
-        _ensure_qa_assessment_access(hr_scope, assess_row[4])
+    if not assess_row:
+        raise HTTPException(404, "考核场次不存在或已删除")
+    _ensure_qa_assessment_access(hr_scope, assess_row[4])
     questions_data: list[dict] = []
     full_score_val = 100
     if assess_row:

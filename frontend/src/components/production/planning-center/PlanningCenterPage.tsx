@@ -14,7 +14,7 @@ import './planning-center.css'
 function PlanningCenterInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const activeTab = searchParams.get('tab') ?? 'demands'
+  const activeTab = searchParams.get('tab') ?? 'plan-orders'
 
   const setTab = (tab: string) => {
     const q = new URLSearchParams(searchParams.toString())

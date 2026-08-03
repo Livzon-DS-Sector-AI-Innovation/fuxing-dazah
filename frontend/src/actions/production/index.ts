@@ -34,6 +34,8 @@ export {
   createNodeAssignment,
   deleteNodeAssignment,
   receiveAndStart,
+  fetchPlannedBatches,
+  activatePlannedBatch,
 } from './workbench'
 export {
   createDemand,
@@ -47,6 +49,7 @@ export {
   confirmPlanOrder,
   releasePlanOrder,
   closePlanOrder,
+  changePlanOrder,
   createPlanItem,
   updatePlanItem,
   deletePlanItem,

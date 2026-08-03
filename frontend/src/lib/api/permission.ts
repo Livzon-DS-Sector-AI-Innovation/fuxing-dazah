@@ -5,6 +5,7 @@ import type {
   UserPermissionDetail,
   PersonnelListResponse,
   DepartmentItem,
+  RoleUser,
 } from '@/types/permission'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
@@ -31,6 +32,16 @@ export async function fetchRoles(token: string): Promise<Role[]> {
     const body = await res.text().catch(() => '')
     throw new Error(`获取角色列表失败 (${res.status}): ${body}`)
   }
+  const json = await res.json()
+  return json.data
+}
+
+export async function fetchRoleUsers(token: string, roleId: string): Promise<RoleUser[]> {
+  const res = await fetch(`${API_BASE}/api/v1/permission/roles/${roleId}/users`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取角色用户失败')
   const json = await res.json()
   return json.data
 }

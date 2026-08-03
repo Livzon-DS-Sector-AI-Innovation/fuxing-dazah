@@ -1,9 +1,19 @@
 """计划中枢业务逻辑：需求、计划单、计划项、分配、下达、追溯。"""
 
+from __future__ import annotations
+
 import uuid
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from app.modules.production.schemas.planning import (
+        PlanItemBatchProgress,
+        PlanOrderChangeRequest,
+    )
 
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.production import repository as repo
@@ -26,6 +36,7 @@ from app.modules.production.schemas.planning import (
     PlanItemOut,
     PlanItemScheduleIn,
     PlanItemUpdate,
+    PlanOrderChangeLogOut,
     PlanOrderCreate,
     PlanOrderDetailOut,
     PlanOrderUpdate,
@@ -93,17 +104,42 @@ def _stage_config_to_dict(items: list | None) -> list[dict[str, object]] | None:
 
 
 def _validate_item_releasable(item: PlanItem) -> None:
-    """校验计划项满足下达/分配条件（有工艺路线和计划数量）。"""
+    """校验计划项满足下达/分配条件（有工艺路线即可，数量不填不阻塞）。"""
     if not item.route_id:
         raise AppException(
             status_code=400,
             message=f"计划项 {item.item_no} 未指定工艺路线，无法生成批次",
         )
-    if item.planned_quantity is None:
-        raise AppException(
-            status_code=400,
-            message=f"计划项 {item.item_no} 未指定计划数量，无法生成批次",
+
+
+async def _require_route_not_draft(db: AsyncSession, route_id: uuid.UUID) -> None:
+    """校验工艺路线存在且非草稿。ponytail: 4 处调用共享。"""
+    route = await repo.get_route(db, route_id)
+    if not route:
+        raise NotFoundException("工艺路线", str(route_id))
+    if route.status == "draft":
+        raise AppException(status_code=400, message="不能选择草稿状态的工艺路线")
+
+
+async def _compute_item_batch_progress(
+    db: AsyncSession, batch: Batch,
+) -> PlanItemBatchProgress | None:
+    """计算批次的生产进度。ponytail: 独立函数便于复用，不从 schema 动态 import 避免循环。"""
+    from app.modules.production.schemas.planning import PlanItemBatchProgress
+
+    tip = await repo.get_batch_single_branch_tip(db, batch.id)
+    if tip is None:
+        return PlanItemBatchProgress(
+            batch_no=batch.batch_no,
+            batch_status=batch.status,
         )
+    stage, stage_status = await repo.get_node_execution_progress(db, tip.id)
+    return PlanItemBatchProgress(
+        batch_no=tip.batch_no,
+        batch_status=tip.status,
+        latest_stage=stage,
+        latest_stage_status=stage_status,
+    )
 
 
 # ═══════════════════════════════════════════
@@ -262,6 +298,7 @@ async def create_plan_order(
         payload.order_no = _generate_order_no()
     if await repo.get_plan_order_by_no(db, payload.order_no):
         raise DuplicateException("计划单号", payload.order_no)
+    await _require_route_not_draft(db, payload.route_id)
     order = PlanOrder(
         order_no=payload.order_no,
         title=payload.title,
@@ -288,6 +325,9 @@ async def update_plan_order(
     if order.status != "draft":
         raise AppException(status_code=400, message="仅 draft 状态的计划单可编辑")
     update_data = payload.model_dump(exclude_unset=True)
+    # 校验工艺路线非 draft
+    if "route_id" in update_data and update_data["route_id"] is not None:
+        await _require_route_not_draft(db, update_data["route_id"])
     for field, value in update_data.items():
         setattr(order, field, value)
     order.updated_by = user.id if user else None
@@ -380,11 +420,191 @@ async def close_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User | N
     order = await repo.get_plan_order(db, order_id)
     if not order:
         raise NotFoundException("计划单", str(order_id))
-    if order.status not in ("released", "completed"):
-        raise AppException(status_code=400, message="仅 released/completed 状态的计划单可关闭")
+    if order.status not in ("confirmed", "released", "completed"):
+        raise AppException(status_code=400, message="仅 confirmed/released/completed 状态的计划单可关闭")
     order.status = "closed"
     order.updated_by = user.id if user else None
     await db.flush()
+    refreshed = await repo.get_plan_order(db, order_id)
+    assert refreshed is not None
+    return refreshed
+
+
+async def change_plan_order(
+    db: AsyncSession, order_id: uuid.UUID, payload: PlanOrderChangeRequest, user: User | None,
+) -> PlanOrder:
+    """对已下达的计划单执行变更。"""
+    from app.modules.production.models.planning import PlanChangeLog
+
+    order = await repo.get_plan_order(db, order_id)
+    if not order:
+        raise NotFoundException("计划单", str(order_id))
+    if order.status != "released":
+        raise AppException(status_code=400, message="仅 released 状态的计划单可变更")
+
+    # ── 预处理：收集涉及 PlanItem，批量查 Batch 状态 ──
+    upsert_ids = [i.id for i in (payload.items_upsert or []) if i.id is not None]
+    delete_ids = payload.items_delete or []
+    all_item_ids = upsert_ids + delete_ids
+    item_batch_map = await repo.get_batches_by_plan_items(db, all_item_ids) if all_item_ids else {}
+    # 删除项也需要查（可能没有 allocation）
+    for item_id in delete_ids:
+        if item_id not in item_batch_map:
+            allocs = await repo.get_plan_allocations_by_item(db, item_id)
+            if allocs:
+                batch_stmt = select(Batch).where(
+                    Batch.id == allocs[0].batch_id, Batch.is_deleted == False  # noqa: E712
+                )
+                batch = (await db.execute(batch_stmt)).scalar_one_or_none()
+                if batch:
+                    item_batch_map[item_id] = batch
+
+    # 校验不可变更的项（batch 已进入生产）
+    blocked_ids: set[uuid.UUID] = set()
+    for item_id, batch in item_batch_map.items():
+        if batch.status not in ("scheduled", "cancelled"):
+            blocked_ids.add(item_id)
+
+    # ── 删除计划项 ──
+    if payload.items_delete:
+        for item_id in payload.items_delete:
+            if item_id in blocked_ids:
+                item = await repo.get_plan_item(db, item_id)
+                item_no = item.item_no if item else "?"
+                raise AppException(
+                    status_code=400,
+                    message=f"计划项 {item_no} 对应批次已进入生产，无法删除",
+                )
+            batch = item_batch_map.get(item_id)
+            if batch:
+                batch.status = "cancelled"
+                batch.updated_by = user.id if user else None
+            plan_allocs = await repo.get_plan_allocations_by_item(db, item_id)
+            for pa in plan_allocs:
+                pa.is_deleted = True
+                pa.updated_by = user.id if user else None
+            item = await repo.get_plan_item(db, item_id)
+            if item:
+                item.is_deleted = True
+                item.updated_by = user.id if user else None
+
+    # ── 更新/新增计划项 ──
+    if payload.items_upsert:
+        for ci in payload.items_upsert:
+            if ci.id is not None:
+                # 更新：批次生产中 → 跳过，不报错（删除仍会报错）
+                if ci.id in blocked_ids:
+                    continue
+                item = await repo.get_plan_item(db, ci.id)
+                if not item:
+                    raise NotFoundException("计划项", str(ci.id))
+                if ci.batch_no is not None and ci.batch_no != item.batch_no:
+                    await _check_batch_no_unique(db, ci.batch_no, ci.id)
+                update_data = ci.model_dump(exclude_unset=True, exclude={"id"})
+                qty_changed = "planned_quantity" in update_data
+                for field, value in update_data.items():
+                    setattr(item, field, value)
+                item.updated_by = user.id if user else None
+                if qty_changed:
+                    batch = item_batch_map.get(ci.id)
+                    if batch:
+                        batch.quantity = ci.planned_quantity
+                        batch.updated_by = user.id if user else None
+                    plan_allocs = await repo.get_plan_allocations_by_item(db, ci.id)
+                    for pa in plan_allocs:
+                        pa.allocated_quantity = ci.planned_quantity
+                        pa.updated_by = user.id if user else None
+            else:
+                # 新增
+                product_id = ci.product_id if ci.product_id else order.product_id
+                if not product_id:
+                    raise AppException(status_code=400, message="新增计划项缺少 product_id")
+                route_id = ci.route_id if ci.route_id else order.route_id
+                if not route_id:
+                    raise AppException(status_code=400, message="新增计划项缺少 route_id")
+                batch_no_input = ci.batch_no or ""
+                if batch_no_input:
+                    await _check_batch_no_unique(db, batch_no_input)
+                max_no = await repo.get_max_item_no(db, order_id)
+                item_no = max_no + 1
+                stage_durations = _stage_config_to_dict(ci.stage_durations)
+                if stage_durations is None:
+                    stage_durations = order.stage_config
+                new_item = PlanItem(
+                    plan_order_id=order_id,
+                    item_no=item_no,
+                    product_id=product_id,
+                    product_name=ci.product_name or "",
+                    route_id=route_id,
+                    equipment_id=ci.equipment_id,
+                    planned_quantity=ci.planned_quantity,
+                    unit=ci.unit,
+                    batch_no=ci.batch_no,
+                    priority=ci.priority or "medium",
+                    remark=ci.remark,
+                    stage_durations=stage_durations,
+                    sort_order=ci.sort_order or 0,
+                    status="allocated",
+                    created_by=user.id if user else None,
+                )
+                db.add(new_item)
+                await db.flush()
+                base_no = ci.batch_no if ci.batch_no else f"{order.order_no}-{item_no}"
+                new_batch_no = await _ensure_unique_batch_no(db, base_no)
+                batch = Batch(
+                    batch_no=new_batch_no,
+                    product_id=product_id,
+                    route_id=route_id,
+                    status="scheduled",
+                    quantity=ci.planned_quantity,
+                    unit=ci.unit,
+                    creation_type="plan",
+                    plan_version=order.plan_version + 1,
+                    created_by=user.id if user else None,
+                )
+                db.add(batch)
+                await db.flush()
+                alloc = PlanAllocation(
+                    plan_item_id=new_item.id,
+                    batch_id=batch.id,
+                    allocated_quantity=ci.planned_quantity,
+                    created_by=user.id if user else None,
+                )
+                db.add(alloc)
+
+    # ── 更新计划单头部 ──
+    update_data = payload.model_dump(
+        exclude_unset=True, exclude={"change_reason", "items_upsert", "items_delete"},
+    )
+    for field, value in update_data.items():
+        setattr(order, field, value)
+    order.plan_version += 1
+    order.updated_by = user.id if user else None
+
+    # ── 写变更日志 ──
+    log = PlanChangeLog(
+        plan_order_id=order_id,
+        plan_version=order.plan_version,
+        change_reason=payload.change_reason,
+        changed_by=user.id if user else None,
+    )
+    db.add(log)
+
+    await db.flush()
+
+    # ── 需求履约重算 ──
+    all_items = await repo.list_plan_items(db, order_id)
+    if all_items:
+        item_ids = [i.id for i in all_items]
+        all_das = await repo.get_demand_allocations_by_items(db, item_ids)
+        demand_ids = {da.demand_id for da in all_das}
+        for did in demand_ids:
+            demand = await repo.get_demand(db, did)
+            if demand:
+                das_for_demand = [da for da in all_das if da.demand_id == did]
+                _recalc_demand_fulfillment(demand, das_for_demand)
+                _update_demand_status(demand)
+
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
     return refreshed
@@ -414,6 +634,10 @@ async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOr
         if plan_allocs:
             batch_ids = [a.batch_id for a in plan_allocs]
             batch_map = await repo.get_batches_for_allocations(db, batch_ids)
+            # 注入 batch_progress（复用已有 batch_map）
+            first_batch = batch_map.get(plan_allocs[0].batch_id) if batch_map else None
+            if first_batch:
+                pio.batch_progress = await _compute_item_batch_progress(db, first_batch)
             for pa in plan_allocs:
                 pao = PlanAllocationOut.model_validate(pa)
                 b = batch_map.get(pa.batch_id)
@@ -436,6 +660,14 @@ async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOr
         item_outs.append(pio)
     detail = PlanOrderDetailOut.model_validate(order)
     detail.items = item_outs
+    # 注入变更日志
+    logs = await repo.get_change_logs(db, order_id)
+    log_outs: list[PlanOrderChangeLogOut] = []
+    for log_entry in logs:
+        lo = PlanOrderChangeLogOut.model_validate(log_entry)
+        lo.changed_by_name = ""  # ponytail: 暂不查 identity 姓名
+        log_outs.append(lo)
+    detail.change_logs = log_outs
     return detail
 
 
@@ -472,6 +704,9 @@ async def create_plan_item(
     # 继承：若未传则使用计划单的 product_id / route_id
     product_id = payload.product_id if payload.product_id else order.product_id
     route_id = payload.route_id if payload.route_id else order.route_id
+    # 校验工艺路线非 draft
+    if route_id:
+        await _require_route_not_draft(db, route_id)
     # 继承：若未传 stage_durations 则使用计划单的 stage_config
     stage_durations = _stage_config_to_dict(payload.stage_durations)
     if stage_durations is None:
@@ -507,6 +742,9 @@ async def update_plan_item(
     if payload.batch_no is not None:
         await _check_batch_no_unique(db, payload.batch_no, item.id)
     update_data = payload.model_dump(exclude_unset=True)
+    # 校验工艺路线非 draft
+    if "route_id" in update_data and update_data["route_id"] is not None:
+        await _require_route_not_draft(db, update_data["route_id"])
     for field, value in update_data.items():
         setattr(item, field, value)
     item.updated_by = user.id if user else None
@@ -788,6 +1026,7 @@ __all__ = [
     "confirm_plan_order",
     "release_plan_order",
     "close_plan_order",
+    "change_plan_order",
     "get_plan_order_detail",
     "list_plan_orders_paged",
     "create_plan_item",

@@ -1,8 +1,12 @@
 """Spare part service: business logic for spare parts and stock."""
 
+import io
+import logging
 import uuid
-from typing import cast
+from typing import Any, cast
 
+import openpyxl
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
@@ -12,6 +16,10 @@ from app.modules.equipment.models.spare_part import (
     SparePart,
     SparePartStock,
 )
+from app.modules.equipment.schemas.equipment import (
+    EquipmentImportResponse,
+    ImportRowError,
+)
 from app.modules.equipment.schemas.spare_part import (
     SparePartCreate,
     SparePartUpdate,
@@ -20,6 +28,8 @@ from app.modules.equipment.schemas.spare_part import (
     StockWarningResponse,
 )
 from app.modules.equipment.service.data_scope import verify_write_ownership
+
+logger = logging.getLogger(__name__)
 
 
 async def create_spare_part(
@@ -247,3 +257,237 @@ async def get_stock_warnings(
             )
         )
     return result
+
+
+# ==================== Excel 导入 ====================
+
+# 模板列（0-based）
+SP_COL_CODE = 0          # A: 备件编码 *
+SP_COL_NAME = 1           # B: 备件名称 *
+SP_COL_SPECIFICATION = 2  # C: 规格型号
+SP_COL_UNIT = 3           # D: 计量单位 *
+SP_COL_CATEGORY = 4       # E: 备件分类
+SP_COL_DEFAULT_SUPPLIER = 5  # F: 默认供应商
+SP_COL_UNIT_PRICE = 6     # G: 参考单价（元）
+
+SP_TEMPLATE_HEADERS = [
+    ("备件编码 *", 18),       # A
+    ("备件名称 *", 24),       # B
+    ("规格型号", 22),         # C
+    ("计量单位 *", 12),       # D
+    ("备件分类", 16),         # E
+    ("默认供应商", 22),       # F
+    ("参考单价（元）", 16),    # G
+]
+
+
+def _sp_cell_str(row: tuple[Any, ...], col: int) -> str | None:
+    val = row[col] if col < len(row) else None
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s if s else None
+
+
+def _parse_decimal(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def generate_spare_part_template_bytes() -> io.BytesIO:
+    """生成备件导入模板 Excel 文件的字节流"""
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "备件管理"
+
+    header_font = Font(name="微软雅黑", size=10, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    example_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+
+    ws.freeze_panes = "A3"
+
+    # 表头（第1行）
+    for i, (label, width) in enumerate(SP_TEMPLATE_HEADERS, start=1):
+        cell = ws.cell(row=1, column=i, value=label)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = thin_border
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    # 示例数据（第2行）
+    examples = [
+        "SP-001",
+        "轴承密封圈",
+        "Φ50×Φ34×7",
+        "个",
+        "机械密封",
+        "XX密封件有限公司",
+        "85.50",
+    ]
+    ws.row_dimensions[2].height = 28
+    for i, example in enumerate(examples, start=1):
+        cell = ws.cell(row=2, column=i, value=example)
+        cell.fill = example_fill
+        cell.border = thin_border
+        cell.alignment = Alignment(vertical="center")
+        cell.font = Font(name="微软雅黑", size=9, italic=True, color="808080")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+async def import_spare_parts_from_excel(
+    db: AsyncSession,
+    file_bytes: bytes,
+    ctx: EquipmentAccessContext,
+) -> EquipmentImportResponse:
+    """从 Excel 文件字节流导入备件"""
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+
+    if "备件管理" not in wb.sheetnames:
+        raise ValueError("Excel 中缺少「备件管理」工作表，请使用模板文件")
+
+    ws = wb["备件管理"]
+    rows = list(ws.iter_rows(min_row=3, values_only=True))
+
+    imported = 0
+    skipped = 0
+    errors: list[ImportRowError] = []
+    warnings: list[ImportRowError] = []
+
+    # ── 预加载系统数据 ──
+    existing_result = await db.execute(
+        select(SparePart.code).where(SparePart.is_deleted == False)  # noqa: E712
+    )
+    existing_codes: set[str] = {r[0] for r in existing_result.all()}
+
+    # 确定导入目标部门
+    if ctx.visible_department_ids:
+        default_dept_id = ctx.visible_department_ids[0]
+    else:
+        default_dept_id = None
+
+    for row_num, row in enumerate(rows, start=3):
+        try:
+            values = [_sp_cell_str(row, c) for c in range(7)]
+            if not any(values):
+                continue
+
+            code = values[SP_COL_CODE]
+            name = values[SP_COL_NAME]
+            unit = values[SP_COL_UNIT]
+
+            # 必填校验
+            missing = []
+            if not code:
+                missing.append("备件编码")
+            if not name:
+                missing.append("备件名称")
+            if not unit:
+                missing.append("计量单位")
+            if missing:
+                warnings.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"缺少必填项: {', '.join(missing)}，已跳过",
+                    )
+                )
+                skipped += 1
+                continue
+            assert code is not None and name is not None and unit is not None
+            
+            # 编码重复
+            if code in existing_codes:
+                errors.append(
+                    ImportRowError(
+                        row=row_num,
+                        message=f"备件编码「{code}」已存在",
+                    )
+                )
+                skipped += 1
+                continue
+
+            # 部门权限校验
+            department_id = default_dept_id
+            if not ctx.is_unrestricted:
+                if not department_id:
+                    errors.append(
+                        ImportRowError(
+                            row=row_num,
+                            message="无法确定归属部门，导入失败",
+                        )
+                    )
+                    skipped += 1
+                    continue
+
+            # 解析单价
+            raw_price = row[SP_COL_UNIT_PRICE] if SP_COL_UNIT_PRICE < len(row) else None
+            unit_price = _parse_decimal(raw_price)
+
+            # 创建备件（使用 SAVEPOINT 隔离每行）
+            async with db.begin_nested():
+                spare_part = SparePart(
+                    code=code,
+                    name=name,
+                    specification=values[SP_COL_SPECIFICATION],
+                    unit=unit,
+                    category=values[SP_COL_CATEGORY],
+                    default_supplier=values[SP_COL_DEFAULT_SUPPLIER],
+                    unit_price=unit_price,
+                    is_active=True,
+                    department_id=department_id,
+                    created_by=ctx.user.id if ctx else None,
+                    updated_by=ctx.user.id if ctx else None,
+                )
+                db.add(spare_part)
+                await db.flush()
+
+                # 创建库存记录
+                db.add(SparePartStock(spare_part_id=spare_part.id))
+                await db.flush()
+
+                # 记录入库流水
+                await repo.create_transaction(
+                    db,
+                    {
+                        "spare_part_id": spare_part.id,
+                        "transaction_type": "入库",
+                        "quantity": 0,
+                        "remark": "Excel导入创建",
+                    },
+                )
+
+            existing_codes.add(code)
+            imported += 1
+
+        except Exception as e:
+            errors.append(
+                ImportRowError(
+                    row=row_num,
+                    message=f"导入异常: {e}",
+                )
+            )
+            skipped += 1
+            logger.warning("备件导入行 %d 失败: %s", row_num, e)
+
+    return EquipmentImportResponse(
+        imported=imported,
+        skipped=skipped,
+        errors=errors,
+        warnings=warnings,
+    )

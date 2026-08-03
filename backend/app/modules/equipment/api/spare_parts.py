@@ -1,9 +1,10 @@
 """备件管理 API 路由."""
 
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -27,6 +28,8 @@ from app.modules.equipment.schemas import (
     StockResponse,
     StockWarningResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -108,6 +111,48 @@ async def list_outbound_transactions(
     )
 
 
+# ==================== Excel 导入 ====================
+@router.get("/import/template", summary="下载备件导入模板")
+async def download_spare_part_import_template(
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:create"),
+    ),
+) -> StreamingResponse:
+    """下载备件 Excel 导入模板"""
+    buf = service.generate_spare_part_template_bytes()
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''%E5%A4%87%E4%BB%B6%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx"
+        },
+    )
+
+
+@router.post("/import", summary="批量导入备件")
+async def import_spare_parts(
+    file: UploadFile = File(..., description="Excel 文件（.xlsx）"),
+    db: AsyncSession = Depends(get_db),
+    ctx: EquipmentAccessContext = Depends(
+        require_equipment_access("equipment:spare_part:create"),
+    ),
+) -> JSONResponse:
+    """从 Excel 文件批量导入备件"""
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        return JSONResponse(
+            status_code=400,
+            content={"message": "仅支持 .xlsx 格式的 Excel 文件"},
+        )
+    try:
+        file_bytes = await file.read()
+        result = await service.import_spare_parts_from_excel(db, file_bytes, ctx=ctx)
+        await db.commit()
+        return success_response(data=result.model_dump())
+    except ValueError as e:
+        logger.warning("备件 Excel 导入失败: %s", e)
+        return JSONResponse(status_code=400, content={"message": str(e)})
+
+
 @router.get("/{spare_part_id}/equipments", summary="查看备件关联的设备")
 async def get_spare_part_equipments(
     spare_part_id: uuid.UUID,
@@ -151,6 +196,10 @@ async def link_spare_part_equipment(
         return success_response(data=EquipmentSparePartResponse.model_validate(link))
     except IntegrityError:
         await db.rollback()
+        logger.warning(
+            "备件关联设备失败: spare_part_id=%s equipment_id=%s",
+            spare_part_id, data.equipment_id,
+        )
         raise AppException(message="该设备已关联此备件，请勿重复添加")
 
 

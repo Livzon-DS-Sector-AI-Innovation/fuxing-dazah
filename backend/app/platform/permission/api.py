@@ -20,6 +20,7 @@ from app.platform.permission.schemas import (
     PermissionModuleGroup,
     PermissionOut,
     RoleOut,
+    RoleUserOut,
     UpdateRoleInput,
     UserPermissionOut,
     UserRoleOut,
@@ -156,6 +157,17 @@ async def delete_role(
 ) -> JSONResponse:
     await _service.delete_role(db, role_id)
     return success_response(message="角色删除成功")
+
+
+@router.get("/roles/{role_id}/users", summary="获取角色下的用户列表")
+async def get_role_users(
+    role_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    users = await _repo.get_role_users(db, role_id)
+    result = [RoleUserOut.model_validate(u).model_dump(mode="json") for u in users]
+    return success_response(data=result)
 
 
 @router.get("/users/{user_id}/roles", summary="获取用户的角色列表")

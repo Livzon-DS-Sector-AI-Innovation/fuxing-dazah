@@ -195,7 +195,7 @@ class PlanAllocation(BaseModel):
 
     plan_item_id: Mapped[uuid.UUID] = mapped_column(comment="计划项")
     batch_id: Mapped[uuid.UUID] = mapped_column(comment="批次")
-    allocated_quantity: Mapped[float] = mapped_column(Float, comment="本批次承担数量")
+    allocated_quantity: Mapped[float | None] = mapped_column(Float, nullable=True, default=None, comment="本批次承担数量")
 
 
 class DemandAllocation(BaseModel):
@@ -216,3 +216,24 @@ class DemandAllocation(BaseModel):
     demand_id: Mapped[uuid.UUID] = mapped_column(comment="需求")
     plan_item_id: Mapped[uuid.UUID] = mapped_column(comment="计划项")
     allocated_quantity: Mapped[float] = mapped_column(Float, comment="该计划项为此需求承担的数量")
+
+
+class PlanChangeLog(BaseModel):
+    """计划单变更日志：记录每次下达后变更的原因和版本。"""
+
+    __tablename__ = "plan_change_logs"
+    __table_args__ = (
+        Index(
+            "ix_production_plan_change_logs_order",
+            "plan_order_id",
+            "plan_version",
+        ),
+        {"schema": "production"},
+    )
+
+    plan_order_id: Mapped[uuid.UUID] = mapped_column(comment="关联计划单")
+    plan_version: Mapped[int] = mapped_column(Integer, comment="变更后的版本号")
+    change_reason: Mapped[str] = mapped_column(Text, comment="变更原因")
+    changed_by: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="变更人"
+    )

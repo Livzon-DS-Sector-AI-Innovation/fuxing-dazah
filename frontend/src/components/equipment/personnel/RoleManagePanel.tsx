@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
-  App, Button, Modal, Form, Input, Select, Switch, Popconfirm, Tag, Empty, Typography,
+  App, Button, Modal, Form, Input, Select, Switch, Popconfirm, Tag, Typography,
 } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
@@ -47,16 +47,10 @@ export function RoleManagePanel({ roles }: Props) {
     setModalOpen(true)
   }
 
-  useEffect(() => {
-    if (modalOpen) {
-      if (editingRole) {
-        form.setFieldsValue(editingRole)
-      } else {
-        form.resetFields()
-        form.setFieldsValue({ scope: 'global', is_active: true })
-      }
-    }
-  }, [modalOpen, editingRole, form])
+  const initialValues = useMemo(() => {
+    if (editingRole) return editingRole
+    return { scope: 'global', is_active: true }
+  }, [editingRole])
 
   const handleDelete = async (id: string) => {
     try {
@@ -292,7 +286,7 @@ export function RoleManagePanel({ roles }: Props) {
           </div>
         }
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" initialValues={initialValues}>
           <Form.Item
             name="name"
             label="角色名称"

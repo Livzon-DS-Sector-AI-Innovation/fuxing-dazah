@@ -15,6 +15,7 @@ async function fetchInitialPermissions() {
       dataScopes: (data.data_scopes as Record<string, string>) ?? {},
     }
   } catch {
+    // ponytail: only client-side http-client handles 401 redirect; server-side degrades gracefully for transient failures
     return { permissions: [], roles: [], dataScopes: {} }
   }
 }

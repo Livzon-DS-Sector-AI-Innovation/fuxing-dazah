@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { App, Drawer, Form, Input, Select, Switch, Tooltip } from 'antd'
 import { FileTextOutlined } from '@ant-design/icons'
 import { useEquipmentStore } from '@/stores/equipment'
 import { createInspectionTemplate, updateInspectionTemplate } from '@/actions/equipment'
 import { fetchInspectionTemplateByIdClient } from '@/lib/api/equipment-client'
-import { CreateInspectionTemplateInput, UpdateInspectionTemplateInput, InspectionTemplate } from '@/types/equipment'
+import { InspectionTemplate } from '@/types/equipment'
 
 const C = { navy: '#0a1530', purple: '#5645d4', slate: '#5d5b54', stone: '#a4a097', hairline: '#e5e3df', hairlineSoft: '#ede9e4', surface: '#f6f5f4', surfaceSoft: '#fafaf9', canvas: '#ffffff' }
 
@@ -27,12 +27,17 @@ export function InspectionTemplateDrawer({ categories, onRefresh }: Props) {
     } else setLiveTemplate(null)
   }, [inspectionTemplateDrawerOpen, editingInspectionTemplate])
 
-  useEffect(() => {
-    if (inspectionTemplateDrawerOpen) {
-      if (editingInspectionTemplate) form.setFieldsValue({ name: editingInspectionTemplate.name, description: editingInspectionTemplate.description ?? undefined, equipment_category_id: editingInspectionTemplate.equipment_category_id ?? undefined, is_active: editingInspectionTemplate.is_active })
-      else form.setFieldsValue({ is_active: false })
+  const initialValues = useMemo(() => {
+    if (editingInspectionTemplate) {
+      return {
+        name: editingInspectionTemplate.name,
+        description: editingInspectionTemplate.description ?? undefined,
+        equipment_category_id: editingInspectionTemplate.equipment_category_id ?? undefined,
+        is_active: editingInspectionTemplate.is_active,
+      }
     }
-  }, [inspectionTemplateDrawerOpen, editingInspectionTemplate, form])
+    return { is_active: false }
+  }, [editingInspectionTemplate])
 
   const handleSubmit = async () => {
     let v: any
@@ -59,7 +64,7 @@ export function InspectionTemplateDrawer({ categories, onRefresh }: Props) {
         <div style={{ fontSize: 18, fontWeight: 600, color: '#fff' }}>{isNew ? '新建巡检模板' : '编辑巡检模板'}</div>
       </div>
       <div style={{ padding: '24px 28px 100px' }}>
-        <Form form={form} layout="vertical" requiredMark={false}>
+        <Form form={form} layout="vertical" requiredMark={false} initialValues={initialValues}>
           <div style={{ marginBottom: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <FileTextOutlined style={{ color: C.purple, fontSize: 13 }} />

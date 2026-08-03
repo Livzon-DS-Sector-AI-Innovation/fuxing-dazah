@@ -199,9 +199,9 @@ async def send_verification_card(
             return False
         logger.info("验收卡片已发送: user=%s, wo=%s", feishu_user_id, work_order_no)
         return True
-    except Exception as e:
-        logger.error(
-            "send_verification_card 异常: user=%s, %s: %s",
-            feishu_user_id, type(e).__name__, e,
+    except Exception:
+        logger.exception(
+            "send_verification_card 异常: user=%s",
+            feishu_user_id,
         )
         return False

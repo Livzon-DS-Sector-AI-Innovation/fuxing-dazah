@@ -116,6 +116,61 @@ class PlanOrderOut(BaseModel):
 class PlanOrderDetailOut(PlanOrderOut):
     items: list["PlanItemOut"] = []
     demand_allocations: list["DemandAllocationOut"] = []
+    change_logs: list["PlanOrderChangeLogOut"] = []
+
+
+# ── PlanOrder Change ──
+
+
+class PlanItemChangeItem(BaseModel):
+    """计划项变更条目：id 非空为更新，id 为空为新增。"""
+    id: uuid.UUID | None = None
+    product_id: uuid.UUID | None = None
+    product_name: str | None = Field(default=None, max_length=200)
+    route_id: uuid.UUID | None = None
+    equipment_id: str | None = Field(default=None, max_length=100)
+    planned_quantity: float | None = None
+    unit: str | None = Field(default=None, max_length=20)
+    batch_no: str | None = Field(default=None, max_length=50)
+    stage_durations: list[StageConfigItem] | None = None
+    planned_start: datetime | None = None
+    planned_end: datetime | None = None
+    priority: str | None = Field(default=None, pattern="^(urgent|high|medium|low)$")
+    remark: str | None = None
+    sort_order: int | None = None
+
+
+class PlanOrderChangeRequest(BaseModel):
+    """计划单变更请求。"""
+    change_reason: str = Field(..., min_length=1, description="变更原因")
+    title: str | None = Field(default=None, max_length=200)
+    stage_config: list[StageConfigItem] | None = None
+    scheduled_start: date | None = None
+    scheduled_end: date | None = None
+    priority: str | None = Field(default=None, pattern="^(urgent|high|medium|low)$")
+    remark: str | None = None
+    items_upsert: list[PlanItemChangeItem] | None = None
+    items_delete: list[uuid.UUID] | None = None
+
+
+class PlanItemBatchProgress(BaseModel):
+    """计划项对应批次的生产进度（单分支最远工序）。"""
+    batch_no: str
+    batch_status: str
+    latest_stage: str | None = None
+    latest_stage_status: str | None = None
+
+
+class PlanOrderChangeLogOut(BaseModel):
+    """变更日志出参。"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    plan_version: int
+    change_reason: str
+    changed_by: uuid.UUID | None = None
+    changed_by_name: str = ""
+    created_at: datetime
 
 
 # ── PlanItem ──
@@ -178,6 +233,7 @@ class PlanItemOut(BaseModel):
     # ponytail: __init__ 注入 allocations，不另建 Detail 类
     allocations: list["PlanAllocationOut"] = []
     demand_allocations: list["DemandAllocationOut"] = []
+    batch_progress: PlanItemBatchProgress | None = None  # 新增
 
 
 # ── PlanAllocation ──
@@ -188,7 +244,7 @@ class PlanAllocationOut(BaseModel):
     id: uuid.UUID
     plan_item_id: uuid.UUID
     batch_id: uuid.UUID
-    allocated_quantity: float
+    allocated_quantity: float | None = None
     # ponytail: batch 简要信息只注入 batch_status/batch_no，不深层展开
     batch_no: str = ""
     batch_status: str = ""
