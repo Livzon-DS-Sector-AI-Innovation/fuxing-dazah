@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.platform.identity.models import User
 from app.platform.permission.models import (
     Permission,
     Role,
@@ -90,6 +91,21 @@ class PermissionRepository:
         stmt = select(UserRole.user_id).where(
             UserRole.role_id == role_id,
             UserRole.is_deleted == False,  # noqa: E712
+        )
+        result = await db.execute(stmt)
+        return list(result.scalars())
+
+    async def get_role_users(self, db: AsyncSession, role_id: uuid.UUID) -> list[User]:
+        """获取拥有某角色的用户列表（用于角色分配弹窗展示）。"""
+        stmt = (
+            select(User)
+            .join(UserRole, UserRole.user_id == User.id)
+            .where(
+                UserRole.role_id == role_id,
+                UserRole.is_deleted == False,  # noqa: E712
+                User.is_deleted == False,  # noqa: E712
+            )
+            .order_by(User.name)
         )
         result = await db.execute(stmt)
         return list(result.scalars())

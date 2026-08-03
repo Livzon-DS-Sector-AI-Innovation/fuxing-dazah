@@ -1,6 +1,6 @@
 import { getAuthHeaders } from '@/lib/auth'
 import { fetchPermissions, fetchRoles } from '@/lib/api/permission'
-import { RoleList } from '@/components/permission'
+import { RoleList, PermissionQueryProvider } from '@/components/permission'
 
 export default async function RolesPage() {
   const headers = await getAuthHeaders()
@@ -11,5 +11,9 @@ export default async function RolesPage() {
     fetchPermissions(token),
   ])
 
-  return <RoleList initialRoles={roles} permissionGroups={permissionGroups} />
+  return (
+    <PermissionQueryProvider>
+      <RoleList initialRoles={roles} permissionGroups={permissionGroups} apiToken={token} />
+    </PermissionQueryProvider>
+  )
 }

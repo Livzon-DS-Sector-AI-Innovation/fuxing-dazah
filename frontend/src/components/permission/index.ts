@@ -1,3 +1,4 @@
+export { PermissionQueryProvider } from './PermissionQueryProvider'
 export { PermissionTree } from './PermissionTree'
 export { RoleForm } from './RoleForm'
 export { RoleList } from './RoleList'

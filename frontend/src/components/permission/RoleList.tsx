@@ -2,15 +2,17 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button, Popconfirm, App, Empty, Input } from 'antd'
+import { Button, Popconfirm, App, Empty, Input, Modal, Tag, Avatar, Spin } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   SafetyCertificateOutlined, TeamOutlined, KeyOutlined,
-  SearchOutlined, UserAddOutlined,
+  SearchOutlined, UserAddOutlined, CloseOutlined,
 } from '@ant-design/icons'
 import { RoleForm } from './RoleForm'
-import { deleteRole } from '@/actions/permission'
-import type { Role, PermissionModuleGroup, DataScope } from '@/types/permission'
+import { deleteRole, assignRoleToUser, removeRoleFromUser } from '@/actions/permission'
+import { fetchRoleUsers } from '@/lib/api/permission'
+import { UserSelect } from '@/components/shared'
+import type { Role, PermissionModuleGroup, DataScope, RoleUser } from '@/types/permission'
 
 const SCOPE_LABELS: Record<DataScope, string> = {
   all: '全部数据',
@@ -42,15 +44,24 @@ function getCardTint(index: number) {
 interface Props {
   initialRoles: Role[]
   permissionGroups: PermissionModuleGroup[]
+  apiToken: string
 }
 
-export function RoleList({ initialRoles, permissionGroups }: Props) {
-  const { message } = App.useApp()
+export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
+  const { message, modal } = App.useApp()
   const router = useRouter()
   const [roles, setRoles] = useState(initialRoles)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingRole, setEditingRole] = useState<Role | null>(null)
   const [search, setSearch] = useState('')
+
+  // ── Assign user to role state ──
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignRole, setAssignRole] = useState<Role | null>(null)
+  const [assignUsers, setAssignUsers] = useState<RoleUser[]>([])
+  const [assignUsersLoading, setAssignUsersLoading] = useState(false)
+  const [assignUserId, setAssignUserId] = useState<string | undefined>()
+  const [assigning, setAssigning] = useState(false)
 
   const filteredRoles = roles.filter(
     (r) =>
@@ -72,6 +83,70 @@ export function RoleList({ initialRoles, permissionGroups }: Props) {
     } catch {
       message.error('删除失败')
     }
+  }
+
+  const refreshAssignUsers = async (roleId: string) => {
+    setAssignUsers(await fetchRoleUsers(apiToken, roleId))
+  }
+
+  const handleAssignOpen = async (role: Role) => {
+    setAssignRole(role)
+    setAssignUserId(undefined)
+    setAssignOpen(true)
+    setAssignUsersLoading(true)
+    try {
+      setAssignUsers(await fetchRoleUsers(apiToken, role.id))
+    } catch {
+      message.error('获取已分配用户失败')
+    } finally {
+      setAssignUsersLoading(false)
+    }
+  }
+
+  const handleAssignConfirm = async () => {
+    if (!assignRole || !assignUserId) return
+    const roleId = assignRole.id
+    const userId = assignUserId
+    setAssigning(true)
+    try {
+      await assignRoleToUser(userId, { role_id: roleId })
+      message.success('分配成功')
+      setAssignUserId(undefined)
+      await refreshAssignUsers(roleId)
+      // 本地更新 user_count（router.refresh 只刷新 props，state 不跟随）
+      setRoles((prev) =>
+        prev.map((r) => (r.id === roleId ? { ...r, user_count: r.user_count + 1 } : r))
+      )
+    } catch {
+      message.error('分配失败')
+    } finally {
+      setAssigning(false)
+    }
+  }
+
+  const handleRemoveAssign = (userId: string) => {
+    if (!assignRole) return
+    const roleId = assignRole.id
+    const userName = assignUsers.find((u) => u.id === userId)?.name ?? ''
+    modal.confirm({
+      title: '移除用户',
+      content: `确定移除「${userName}」的「${assignRole.name}」角色？移除后该用户将失去此角色的权限。`,
+      okText: '移除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await removeRoleFromUser(userId, roleId)
+          message.success('已移除')
+          await refreshAssignUsers(roleId)
+          setRoles((prev) =>
+            prev.map((r) => (r.id === roleId ? { ...r, user_count: r.user_count - 1 } : r))
+          )
+        } catch {
+          message.error('移除失败')
+        }
+      },
+    })
   }
 
   return (
@@ -324,7 +399,7 @@ export function RoleList({ initialRoles, permissionGroups }: Props) {
                       size="small"
                       icon={<UserAddOutlined />}
                       style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
-                      onClick={() => router.push('/permission/users')}
+                      onClick={() => handleAssignOpen(role)}
                     >
                       分配
                     </Button>
@@ -362,6 +437,74 @@ export function RoleList({ initialRoles, permissionGroups }: Props) {
         role={editingRole}
         permissionGroups={permissionGroups}
       />
+
+      {/* Assign user to role modal */}
+      <Modal
+        title={`分配用户 · ${assignRole?.name ?? ''}`}
+        open={assignOpen}
+        onCancel={() => setAssignOpen(false)}
+        onOk={handleAssignConfirm}
+        confirmLoading={assigning}
+        okText="确认分配"
+        cancelText="取消"
+        okButtonProps={{ disabled: !assignUserId }}
+      >
+        {/* 已分配用户 */}
+        <div className="mb-4">
+          <div className="text-[13px] font-medium text-[var(--color-charcoal)] mb-2">
+            已分配用户（{assignUsers.length}）
+          </div>
+          {assignUsersLoading ? (
+            <Spin />
+          ) : assignUsers.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {assignUsers.map((u) => (
+                <Tag
+                  key={u.id}
+                  closable
+                  closeIcon={<CloseOutlined style={{ fontSize: 10 }} />}
+                  onClose={(e) => {
+                    e.preventDefault() // 阻止 Tag 自动移除，等确认后才真正移除
+                    handleRemoveAssign(u.id)
+                  }}
+                  style={{ borderRadius: 6, fontSize: 12, margin: 0, padding: '2px 6px 2px 2px' }}
+                >
+                  <Avatar
+                    src={u.avatar_url}
+                    size={18}
+                    style={{
+                      backgroundColor: 'var(--color-primary)',
+                      fontSize: 10,
+                      marginRight: 4,
+                    }}
+                  >
+                    {u.name.charAt(0)}
+                  </Avatar>
+                  {u.name}
+                  {u.employee_no && (
+                    <code className="text-[10px] text-[var(--color-stone)] ml-1">
+                      {u.employee_no}
+                    </code>
+                  )}
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[13px] text-[var(--color-muted)]">暂无用户分配该角色</p>
+          )}
+        </div>
+
+        <p className="text-[13px] text-[var(--color-steel)] mb-3">
+          选择要分配「{assignRole?.name}」角色的用户：
+        </p>
+        <UserSelect
+          value={assignUserId}
+          onChange={(v) => setAssignUserId(v as string)}
+          excludeIds={assignUsers.map((u) => u.id)}
+          placeholder="搜索姓名或工号…"
+          style={{ width: '100%' }}
+        />
+      </Modal>
     </div>
   )
 }

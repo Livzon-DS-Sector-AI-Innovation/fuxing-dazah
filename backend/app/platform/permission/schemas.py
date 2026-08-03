@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # ── 权限 ──
 
@@ -83,6 +83,19 @@ class UserRoleOut(BaseModel):
     department_id: uuid.UUID | None
     role_name: str = ""
     role_code: str = ""
+
+
+class RoleUserOut(BaseModel):
+    """角色下的用户（角色分配弹窗展示用）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    employee_no: str | None = None
+    department: str | None = None
+    position: str | None = None
+    avatar_url: str | None = None
 
 
 class UserPermissionOut(BaseModel):
