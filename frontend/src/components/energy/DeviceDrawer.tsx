@@ -9,6 +9,7 @@ import {
   Select,
   InputNumber,
   Switch,
+  Radio,
   Button,
   Space,
   Spin,
@@ -47,6 +48,7 @@ const DEFAULT_VALUES = {
   monitor_level: 'normal',
   is_enabled: true,
   is_region_level: false,
+  stat_role: 'normal' as const,
 }
 
 const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7]
@@ -546,30 +548,22 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               </Form.Item>
             )}
 
-            {/* 不参与能源总耗统计 */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 16px',
-                marginBottom: 16,
-                borderRadius: 8,
-                background: '#f6f5f4',
-              }}
+            {/* 统计角色 */}
+            <Form.Item
+              name="stat_role"
+              label={
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
+                  统计角色
+                </span>
+              }
+              style={{ marginBottom: 16 }}
             >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
-                  不参与能源总耗统计
-                </div>
-                <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4 }}>
-                  开启后该数据源不计入总耗统计与可视化分析
-                </div>
-              </div>
-              <Form.Item name="exclude_from_stats" valuePropName="checked" style={{ marginBottom: 0 }}>
-                <Switch />
-              </Form.Item>
-            </div>
+              <Radio.Group optionType="button" buttonStyle="solid">
+                <Radio.Button value="normal">参与统计</Radio.Button>
+                <Radio.Button value="excluded">不参与</Radio.Button>
+                <Radio.Button value="total">作为总耗</Radio.Button>
+              </Radio.Group>
+            </Form.Item>
 
             {/* ── 采集设置 ── */}
             <SectionLabel icon={<SettingOutlined />} text="采集设置" />

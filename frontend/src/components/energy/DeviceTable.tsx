@@ -294,14 +294,22 @@ export function DeviceTable({
     },
     {
       title: '统计',
-      dataIndex: 'exclude_from_stats',
-      key: 'exclude_from_stats',
+      dataIndex: 'stat_role',
+      key: 'stat_role',
       width: 90,
-      render: (excluded: boolean) => (
-        excluded
-          ? <span style={luxuryPill('#dd5b00', '#ffe8d4')}>不参与</span>
-          : <span style={luxuryPill('#1aae39', '#d9f3e1')}>参与统计</span>
-      ),
+      render: (stat_role: string) => {
+        const map: Record<string, ReturnType<typeof luxuryPill>> = {
+          normal: luxuryPill('#1aae39', '#d9f3e1'),
+          excluded: luxuryPill('#dd5b00', '#ffe8d4'),
+          total: luxuryPill('#0075de', '#d9e8fa'),
+        }
+        const label: Record<string, string> = {
+          normal: '参与统计',
+          excluded: '不参与',
+          total: '作为总耗',
+        }
+        return <span style={map[stat_role] ?? map.normal}>{label[stat_role] ?? label.normal}</span>
+      },
     },
     {
       title: '',
