@@ -182,6 +182,10 @@ app.add_middleware(AuditMiddleware)
 
 app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
+# ── 公开签署路由（无需登录）──
+from app.modules.hr.certificate_sign_routes import router as cert_sign_router
+app.include_router(cert_sign_router, prefix="/api/v1/public")
+
 # 挂载静态文件目录（图片上传等）
 uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(uploads_dir, exist_ok=True)

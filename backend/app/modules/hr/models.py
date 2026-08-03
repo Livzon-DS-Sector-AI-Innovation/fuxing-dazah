@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import (
     JSON,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -434,6 +435,23 @@ class DepartureRecord(BaseModel):
     )
     feishu_synced_at: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="上次飞书同步时间"
+    )
+
+    # ─── 离职证明签署 ───
+    cert_sign_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, comment="签署链接 token"
+    )
+    cert_sign_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="签署状态: pending / signed"
+    )
+    cert_signed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="签署时间"
+    )
+    cert_sign_image: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="手写签名图片 base64"
+    )
+    cert_sign_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="签署人确认姓名"
     )
 
 

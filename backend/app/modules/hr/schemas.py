@@ -462,6 +462,11 @@ class DepartureRecordResponse(DepartureRecordBase):
     feishu_synced_at: date | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # 离职证明签署
+    cert_sign_status: str | None = None
+    cert_signed_at: datetime | None = None
+    cert_sign_name: str | None = None
+    cert_sign_image: str | None = None
 
 
 # ─── OnboardingRecord Schemas ───

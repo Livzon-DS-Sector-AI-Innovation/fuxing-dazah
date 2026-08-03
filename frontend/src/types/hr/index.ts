@@ -398,6 +398,10 @@ export interface DepartureRecord {
   feishu_synced_at?: string
   created_at?: string
   updated_at?: string
+  cert_sign_status?: string
+  cert_signed_at?: string
+  cert_sign_name?: string
+  cert_sign_image?: string
 }
 
 export interface DepartureRecordListResponse {

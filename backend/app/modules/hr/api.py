@@ -1797,52 +1797,55 @@ async def preview_departure_certificate(
     return HTMLResponse(content=html)
 
 
-@router.post("/departure-records/{record_id}/send-certificate", summary="发送离职证明邮件")
+@router.post("/departure-records/{record_id}/send-certificate", summary="发送离职证明签署链接")
 async def send_departure_certificate(
     record_id: UUID, employee_email: str = Form(...),
     service: DepartureRecordService = Depends(get_departure_service),
     session: AsyncSession = Depends(get_db),
 ):
+    import uuid as _uuid
     from app.modules.hr.mail_service import send_email
     from app.modules.hr.models import EmailLog
-    from app.modules.hr.termination_certificate_generator import (
-        generate_termination_certificate_pdf,
-    )
+
     record = await service.get_record(record_id)
     name = record.name or "员工"
 
-    # 兜底：离职台账缺少的字段从员工档案补
-    id_number = record.id_card or ""
-    entry_date = record.livo_entry_date or record.factory_entry_date or None
-    if (not id_number or not entry_date) and record.name:
-        from app.modules.hr.models import Employee
-        emp_row = (await service.repo.session.execute(
-            select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
-        )).scalars().first()
-        if emp_row:
-            if not id_number:
-                id_number = emp_row.id_card or ""
-            if not entry_date:
-                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+    # 生成签署 token
+    token = str(_uuid.uuid4())
+    record.cert_sign_token = token
+    record.cert_sign_status = "pending"
+    await session.flush()
 
-    pdf_buf = generate_termination_certificate_pdf(
-        name=name, id_number=id_number or "",
-        department=record.department or "", position=record.position or "",
-        entry_date=entry_date or "",
-        leave_date=record.offboarding_date or "",
-        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+    # 构建签署链接
+    from app.core.config import get_settings
+    settings = get_settings()
+    base = getattr(settings, "APP_BASE_URL", "") or "http://localhost:8000"
+    sign_url = f"{base}/api/v1/public/certificate-sign/{token}"
+
+    subj = f"离职证明签署 - {name}"
+    html = (
+        f"<html><body style=\"font-family:sans-serif;padding:20px;\">"
+        f"<h2>离职证明签署</h2>"
+        f"<p>{name}，您好！</p>"
+        f"<p>请点击以下链接查看并签署您的离职证明：</p>"
+        f"<p><a href=\"{sign_url}\">{sign_url}</a></p>"
+        f"<p>签署后系统将自动发送完整 PDF 至您的邮箱。</p>"
+        f"<p style=\"color:#999;font-size:12px;\">"
+        f"签署时需要验证您的姓名和身份证后四位。</p>"
+        f"</body></html>"
     )
-    filename = f"解除劳动关系证明_{name}.pdf"
-    subj = "解除劳动关系证明"
-    html = f"<html><body style=\"font-family:sans-serif;padding:20px;\"><h2>解除劳动关系证明</h2><p>{name}，您好！</p><p>附件是您的解除劳动关系证明，请查收。</p></body></html>"
+
     try:
-        await send_email(to=employee_email, subject=subj, html_body=html, attachments=[(filename, pdf_buf.read())], session=session); st, err = "sent", None
+        await send_email(to=employee_email, subject=subj, html_body=html, session=session)
+        st, err = "sent", None
     except Exception as e:
         st, err = "failed", str(e)
-    session.add(EmailLog(email_type="departure_cert", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))
+
+    session.add(EmailLog(email_type="departure_cert_sign", employee_name=name, recipient=employee_email, subject=subj, status=st, error_message=err))
     await session.commit()
-    if st == "failed": raise HTTPException(500, f"发送失败: {err}")
-    return success_response(message="离职证明已发送")
+    if st == "failed":
+        raise HTTPException(500, f"发送失败: {err}")
+    return success_response(message="签署链接已发送")
 
 
 # ─── TrainingLedger Routes ───
