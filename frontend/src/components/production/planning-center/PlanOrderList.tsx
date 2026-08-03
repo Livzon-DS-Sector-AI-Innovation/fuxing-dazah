@@ -31,16 +31,8 @@ import type { PlanOrder, Product } from '@/types/production'
 import { fetchPlanOrdersClient, fetchProductsClient } from '@/lib/api/production-client'
 import { PlanOrderDetailDrawer } from './PlanOrderDetailDrawer'
 import { CreatePlanOrderModal } from './CreatePlanOrderModal'
-import { STATUS_CONFIG } from './constants'
+import { PLAN_ORDER_STATUS_SEQUENCE, STATUS_CONFIG, STATUS_THEME } from './constants'
 import { formatDate } from '@/lib/utils'
-
-const STATUS_BAR_COLORS: Record<string, string> = {
-  draft: 'var(--color-stone)',
-  confirmed: 'var(--color-primary, #5645d4)',
-  released: '#7b3ff2',
-  completed: 'var(--color-success, #1aae39)',
-  closed: 'var(--color-stone)',
-}
 
 const PRIORITY_COLORS: Record<string, string> = {
   urgent: 'var(--color-error)',
@@ -85,14 +77,6 @@ export function PlanOrderList() {
     if (!productFilter) return orders
     return orders.filter((o) => o.product_id === productFilter)
   }, [orders, productFilter])
-
-  const stats = useMemo(() => {
-    const total = filteredOrders.length
-    const draft = filteredOrders.filter(o => o.status === 'draft').length
-    const confirmed = filteredOrders.filter(o => o.status === 'confirmed').length
-    const released = filteredOrders.filter(o => o.status === 'released').length
-    return { total, draft, confirmed, released }
-  }, [filteredOrders])
 
   const handleDelete = (order: PlanOrder) => {
     modal.confirm({
@@ -220,71 +204,79 @@ export function PlanOrderList() {
         </Button>
       </div>
 
-      {/* ── 统计条 ── */}
-      {filteredOrders.length > 0 && (
-        <div style={{ display: 'flex', gap: 20, marginBottom: 16, fontSize: 13, color: 'var(--color-slate)' }}>
-          <span>全部 <strong style={{ color: 'var(--color-charcoal)' }}>{stats.total}</strong></span>
-          <span>草稿 <strong style={{ color: 'var(--color-charcoal)' }}>{stats.draft}</strong></span>
-          <span>已确认 <strong style={{ color: 'var(--color-charcoal)' }}>{stats.confirmed}</strong></span>
-          <span>已下达 <strong style={{ color: 'var(--color-charcoal)' }}>{stats.released}</strong></span>
-        </div>
-      )}
-
       {filteredOrders.length === 0 ? (
         <Empty description="暂无计划单" />
       ) : (
-        <Row gutter={[16, 16]}>
-          {filteredOrders.map(order => {
-            const status = STATUS_CONFIG[order.status] ?? { label: order.status, color: 'default' }
-            const barColor = STATUS_BAR_COLORS[order.status] ?? 'var(--color-stone)'
-            const priorityColor = PRIORITY_COLORS[order.priority] ?? 'var(--color-stone)'
-            const menuItems = buildMenuItems(order)
+        <div className="plan-order-groups">
+          {PLAN_ORDER_STATUS_SEQUENCE.map(statusKey => {
+            const group = filteredOrders.filter(o => o.status === statusKey)
+            if (group.length === 0) return null
+            const theme = STATUS_THEME[statusKey] ?? STATUS_THEME.draft
+            const label = (STATUS_CONFIG[statusKey] ?? { label: statusKey }).label
 
             return (
-              <Col key={order.id} xs={24} sm={12} lg={8} xl={6}>
-                <div
-                  className="plan-order-card"
-                  onClick={() => setDetailOrderId(order.id)}
-                  style={{
-                    background: 'var(--color-canvas)',
-                    borderRadius: 10,
-                    border: '1px solid var(--color-hairline)',
-                    cursor: 'pointer',
-                    transition: 'transform 0.18s ease, box-shadow 0.18s ease',
-                    position: 'relative',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {/* 顶部状态色条 */}
-                  <div style={{
-                    height: 3,
-                    backgroundColor: barColor,
-                    borderTopLeftRadius: 10,
-                    borderTopRightRadius: 10,
-                  }} />
+              <section key={statusKey} className="plan-order-group">
+                {/* 组头 — 状态色点 + 名称 + 计数，右侧细线延伸 */}
+                <header className="plan-order-group-header">
+                  <span className="plan-order-group-dot" style={{ backgroundColor: theme.bar }} />
+                  <span className="plan-order-group-label">{label}</span>
+                  <span className="plan-order-group-count" style={{ color: theme.text, backgroundColor: theme.tint }}>
+                    {group.length}
+                  </span>
+                </header>
 
-                  <div style={{ padding: '14px 16px' }}>
-                    {/* 头部：编号 + 状态标签 */}
-                    <div style={{
-                      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-                      marginBottom: 6, gap: 8,
-                    }}>
-                      <span style={{
-                        fontSize: 15, fontWeight: 600, color: 'var(--color-charcoal)',
-                        lineHeight: 1.3, letterSpacing: '-0.01em',
-                      }}>
-                        {order.order_no}
-                      </span>
-                      <span style={{
-                        fontSize: 11, fontWeight: 600, lineHeight: '18px',
-                        padding: '1px 8px', borderRadius: 9999,
-                        backgroundColor: `${barColor}14`,
-                        color: barColor,
-                        flexShrink: 0, whiteSpace: 'nowrap',
-                      }}>
-                        {status.label}
-                      </span>
-                    </div>
+                <Row gutter={[16, 16]}>
+                  {group.map(order => {
+                    const cardTheme = STATUS_THEME[order.status] ?? STATUS_THEME.draft
+                    const cardLabel = (STATUS_CONFIG[order.status] ?? { label: order.status }).label
+                    const priorityColor = PRIORITY_COLORS[order.priority] ?? 'var(--color-stone)'
+                    const menuItems = buildMenuItems(order)
+
+                    return (
+                      <Col key={order.id} xs={24} sm={12} lg={8} xl={6}>
+                        <div
+                          className={`plan-order-card${order.status === 'closed' ? ' plan-order-card--closed' : ''}`}
+                          onClick={() => setDetailOrderId(order.id)}
+                          style={{
+                            background: 'var(--color-canvas)',
+                            borderRadius: 10,
+                            border: '1px solid var(--color-hairline)',
+                            cursor: 'pointer',
+                            transition: 'transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease',
+                            position: 'relative',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {/* 顶部状态色条 */}
+                          <div style={{
+                            height: 3,
+                            backgroundColor: cardTheme.bar,
+                            borderTopLeftRadius: 10,
+                            borderTopRightRadius: 10,
+                          }} />
+
+                          <div style={{ padding: '14px 16px' }}>
+                            {/* 头部：编号 + 状态徽章 */}
+                            <div style={{
+                              display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+                              marginBottom: 6, gap: 8,
+                            }}>
+                              <span style={{
+                                fontSize: 16, fontWeight: 650, color: 'var(--color-charcoal)',
+                                lineHeight: 1.3, letterSpacing: '-0.01em',
+                              }}>
+                                {order.order_no}
+                              </span>
+                              <span style={{
+                                fontSize: 11, fontWeight: 600, lineHeight: '18px',
+                                padding: '1px 8px', borderRadius: 9999,
+                                backgroundColor: cardTheme.tint,
+                                color: cardTheme.text,
+                                flexShrink: 0, whiteSpace: 'nowrap',
+                              }}>
+                                {cardLabel}
+                              </span>
+                            </div>
 
                     {/* 标题 */}
                     <div style={{
@@ -350,10 +342,14 @@ export function PlanOrderList() {
                     </div>
                   </div>
                 </div>
-              </Col>
+                    </Col>
+                  )
+                })}
+                </Row>
+              </section>
             )
           })}
-        </Row>
+        </div>
       )}
 
       <CreatePlanOrderModal

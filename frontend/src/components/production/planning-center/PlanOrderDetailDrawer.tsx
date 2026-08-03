@@ -32,22 +32,11 @@ import { fetchProductsClient, fetchRoutesClient, fetchRouteGraphClient } from '@
 import dayjs from 'dayjs'
 import { PlanItemTable, StageProgressBar } from './PlanItemTable'
 import { ReleaseConfirmModal } from './ReleaseConfirmModal'
-import { STATUS_CONFIG, PRIORITY_CONFIG, STAGE_PRESET_COLORS } from './constants'
+import { STATUS_CONFIG, STATUS_THEME, PRIORITY_CONFIG, STAGE_PRESET_COLORS } from './constants'
 import { incrementBatchNo } from '@/lib/utils'
 import { DownOutlined, RightOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
-
-// ── Status accent color helper ──
-
-const STATUS_ACCENT: Record<string, string> = {
-  blue: 'var(--color-primary)',
-  purple: 'var(--color-primary)',
-  green: 'var(--color-success)',
-  default: 'var(--color-stone)',
-  orange: 'var(--color-warning)',
-  red: 'var(--color-error)',
-}
 
 // ── Sub-components ──
 
@@ -357,7 +346,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   }, [routeId, routes])
 
   const status = order ? (STATUS_CONFIG[order.status] ?? { label: order.status, color: 'default' }) : null
-  const accentColor = STATUS_ACCENT[status?.color ?? ''] ?? STATUS_ACCENT.default
+  const accentColor = order ? (STATUS_THEME[order.status] ?? STATUS_THEME.draft).bar : 'var(--color-stone)'
 
   const formatDate = (d: string | null) => (d ? new Date(d).toLocaleDateString('zh-CN') : '—')
 

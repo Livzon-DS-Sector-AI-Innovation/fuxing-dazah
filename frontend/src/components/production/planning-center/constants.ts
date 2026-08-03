@@ -8,6 +8,19 @@ export const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   closed: { label: '已关闭', color: 'default' },
 }
 
+// 计划单状态视觉主题 — 沿 DESIGN.md 语义色：草稿浅灰(未生效) / 已确认蓝 / 已下达紫 / 已完成绿 / 已关闭深灰实心(归档终态)
+// tint=徽章/计数背景，text=其上文字，bar=卡片顶条与组头圆点
+export const STATUS_THEME: Record<string, { bar: string; tint: string; text: string }> = {
+  draft: { bar: '#a4a097', tint: '#f0eeec', text: '#5d5b54' },
+  confirmed: { bar: '#0075de', tint: '#dcecfa', text: '#005bab' },
+  released: { bar: '#7b3ff2', tint: '#e6e0f5', text: '#391c57' },
+  completed: { bar: '#1aae39', tint: '#d9f3e1', text: '#0e8326' },
+  closed: { bar: '#37352f', tint: '#37352f', text: '#ffffff' },
+}
+
+// 计划单列表分组顺序 = 生命周期推进顺序
+export const PLAN_ORDER_STATUS_SEQUENCE = ['draft', 'confirmed', 'released', 'completed', 'closed']
+
 export const PRIORITY_CONFIG: Record<string, { label: string; color: string }> = {
   urgent: { label: '紧急', color: 'red' },
   high: { label: '高', color: 'orange' },
