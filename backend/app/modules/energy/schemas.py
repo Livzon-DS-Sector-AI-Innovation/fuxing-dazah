@@ -35,7 +35,7 @@ class EnergyDeviceConfigCreate(BaseModel):
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
     remark: str | None = Field(default=None, max_length=500, description="备注")
     is_region_level: bool = Field(default=False, description="是否区域级别（False=部门级别）")
-    exclude_from_stats: bool = Field(default=False, description="是否不参与能源总耗统计与可视化")
+    stat_role: Literal["normal", "excluded", "total"] = Field(default="normal", description="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗")
 
 
 class EnergyDeviceConfigUpdate(BaseModel):
@@ -56,7 +56,7 @@ class EnergyDeviceConfigUpdate(BaseModel):
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
     remark: str | None = Field(default=None, max_length=500)
     is_region_level: bool | None = Field(default=None, description="是否区域级别")
-    exclude_from_stats: bool | None = Field(default=None, description="是否不参与能源总耗统计与可视化")
+    stat_role: Literal["normal", "excluded", "total"] | None = Field(default=None, description="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗")
 
 
 class EnergyDeviceConfigResponse(BaseModel):
@@ -77,7 +77,7 @@ class EnergyDeviceConfigResponse(BaseModel):
     equipment_name: str | None
     remark: str | None
     is_region_level: bool
-    exclude_from_stats: bool
+    stat_role: str
     created_at: datetime
     updated_at: datetime
 

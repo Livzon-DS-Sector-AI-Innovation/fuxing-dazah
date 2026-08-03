@@ -467,7 +467,7 @@ async def get_energy_statistics(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
     )
@@ -495,13 +495,66 @@ async def get_energy_statistics(
 # ── 总览统计 ──
 
 
+async def _get_total_device_ids(db: AsyncSession) -> dict[str, UUID]:
+    """返回 {energy_type: device_id} 映射，列出所有 stat_role='total' 的启用设备。"""
+    result = await db.execute(
+        select(EnergyDeviceConfig.energy_type, EnergyDeviceConfig.id).where(
+            EnergyDeviceConfig.stat_role == 'total',
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyDeviceConfig.is_enabled == True,    # noqa: E712
+        )
+    )
+    return {row.energy_type: row.id for row in result.all()}
+
+
 async def get_overview_summary(
     db: AsyncSession,
     start_time: datetime,
     end_time: datetime,
 ) -> list[dict[str, Any]]:
-    """按能源类型汇总能耗"""
-    query = (
+    """按能源类型汇总能耗。若某类型存在 stat_role='total' 的设备，直接取该设备值作为总耗。"""
+    total_device_ids = await _get_total_device_ids(db)
+    results: list[dict[str, Any]] = []
+    total_energy_types = set(total_device_ids.keys())
+
+    # 1. 有 total 设备的能源类型：直接查该设备的数据
+    if total_device_ids:
+        total_query = (
+            select(
+                EnergyDeviceConfig.energy_type,
+                func.sum(EnergyData.value).label("total_value"),
+                EnergyTypeConfig.unit,
+            )
+            .join(
+                EnergyData,
+                EnergyData.device_config_id == EnergyDeviceConfig.id,
+            )
+            .join(
+                EnergyTypeConfig,
+                (EnergyDeviceConfig.energy_type == EnergyTypeConfig.type_code)
+                & (EnergyTypeConfig.is_deleted == False),  # noqa: E712
+                isouter=True,
+            )
+            .where(
+                EnergyData.is_deleted == False,  # noqa: E712
+                EnergyData.timestamp >= start_time,
+                EnergyData.timestamp <= end_time,
+                _exclude_hourly_overlap(EnergyData),
+                EnergyDeviceConfig.id.in_(total_device_ids.values()),
+                EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            )
+            .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
+        )
+        total_result = await db.execute(total_query)
+        for row in total_result.all():
+            results.append({
+                "energy_type": row.energy_type,
+                "total_value": float(row.total_value or 0),
+                "unit": row.unit,
+            })
+
+    # 2. 其余能源类型：sum stat_role='normal' 设备
+    normal_query = (
         select(
             EnergyDeviceConfig.energy_type,
             func.sum(EnergyData.value).label("total_value"),
@@ -525,19 +578,23 @@ async def get_overview_summary(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
     )
-    result = await db.execute(query)
-    return [
-        {
+    if total_energy_types:
+        normal_query = normal_query.where(
+            ~EnergyDeviceConfig.energy_type.in_(total_energy_types)
+        )
+    normal_result = await db.execute(normal_query)
+    for row in normal_result.all():
+        results.append({
             "energy_type": row.energy_type,
             "total_value": float(row.total_value or 0),
             "unit": row.unit,
-        }
-        for row in result.all()
-    ]
+        })
+
+    return results
 
 
 async def get_overview_trend(
@@ -550,6 +607,7 @@ async def get_overview_trend(
     """获取能耗趋势数据。
 
     granularity: "hourly" 按小时分组, "daily" 按天分组（日汇总记录优先，小时数据自动聚合）
+    若某能源类型存在 stat_role='total' 的设备，直接取该设备的原始数据作为趋势。
     """
     if granularity == "daily":
         time_col = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp)).label("time_point")
@@ -560,7 +618,56 @@ async def get_overview_trend(
         group_cols = [EnergyData.timestamp, EnergyDeviceConfig.energy_type]
         order_col = EnergyData.timestamp
 
-    query = (
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        return {
+            "time": (
+                row.time_point.isoformat()
+                if granularity == "daily"
+                else row.timestamp.isoformat()
+            ),
+            "value": float(row.total_value or 0),
+            "type": row.energy_type,
+        }
+
+    total_device_ids = await _get_total_device_ids(db)
+
+    results: list[dict[str, Any]] = []
+
+    # 1. total 设备的原始数据（不聚合）
+    total_targets: dict[str, UUID] = {}
+    if energy_type:
+        if energy_type in total_device_ids:
+            total_targets = {energy_type: total_device_ids[energy_type]}
+    else:
+        total_targets = total_device_ids
+
+    if total_targets:
+        total_query = (
+            select(
+                time_col,
+                EnergyDeviceConfig.energy_type,
+                EnergyData.value.label("total_value"),
+            )
+            .join(
+                EnergyDeviceConfig,
+                EnergyData.device_config_id == EnergyDeviceConfig.id,
+            )
+            .where(
+                EnergyData.is_deleted == False,  # noqa: E712
+                EnergyData.timestamp >= start_time,
+                EnergyData.timestamp <= end_time,
+                _exclude_hourly_overlap(EnergyData),
+                EnergyDeviceConfig.id.in_(total_targets.values()),
+                EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            )
+            .order_by(order_col.asc())
+        )
+        total_result = await db.execute(total_query)
+        results.extend(_row_to_dict(row) for row in total_result.all())
+
+    # 2. normal 设备的聚合数据（排除已有 total 设备的能源类型）
+    excluded_types = set(total_targets.keys())
+    normal_query = (
         select(
             time_col,
             EnergyDeviceConfig.energy_type,
@@ -577,27 +684,23 @@ async def get_overview_trend(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .group_by(*group_cols)
         .order_by(order_col.asc())
     )
     if energy_type:
-        query = query.where(EnergyDeviceConfig.energy_type == energy_type)
+        normal_query = normal_query.where(EnergyDeviceConfig.energy_type == energy_type)
+    if excluded_types:
+        normal_query = normal_query.where(
+            ~EnergyDeviceConfig.energy_type.in_(excluded_types)
+        )
+    normal_result = await db.execute(normal_query)
+    results.extend(_row_to_dict(row) for row in normal_result.all())
 
-    result = await db.execute(query)
-    return [
-        {
-            "time": (
-                row.time_point.isoformat()
-                if granularity == "daily"
-                else row.timestamp.isoformat()
-            ),
-            "value": float(row.total_value or 0),
-            "type": row.energy_type,
-        }
-        for row in result.all()
-    ]
+    # 按时排序
+    results.sort(key=lambda r: r["time"])
+    return results
 
 
 # ── 能耗数据删除 ──
@@ -1259,7 +1362,7 @@ async def get_workshop_daily_consumption(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1302,7 +1405,7 @@ async def get_workshop_avg_consumption(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .group_by(cst_date)
         .subquery()
@@ -1331,7 +1434,7 @@ async def get_distinct_workshop_energy_types(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop, EnergyDeviceConfig.energy_type)
@@ -1358,7 +1461,7 @@ async def get_device_options_by_energy_type(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
     )
     if energy_type:
@@ -1378,7 +1481,7 @@ async def get_distinct_workshops(db: AsyncSession) -> list[str]:
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop)
@@ -1583,11 +1686,28 @@ async def get_daily_total_by_energy_type(
     energy_type: str,
     target_date: datetime,
 ) -> float | None:
-    """按能源类型汇总指定日期的总能耗（跨所有车间），仅统计日汇总/按天采集的设备。
+    """按能源类型汇总指定日期的总能耗（跨所有车间）。
 
-    复用 _department_priority_filter 和 _exclude_hourly_overlap。
+    若该 energy_type 存在 stat_role='total' 的设备，直接取该设备值；
+    否则 sum 所有 stat_role='normal' 的设备。
     """
+    total_device_ids = await _get_total_device_ids(db)
     cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+
+    # 有 total 设备：直接查该设备
+    if energy_type in total_device_ids:
+        result = await db.execute(
+            select(func.coalesce(func.sum(EnergyData.value), 0))
+            .where(
+                EnergyData.device_config_id == total_device_ids[energy_type],
+                EnergyData.is_deleted == False,  # noqa: E712
+                cst_date == cast(target_date.date(), Date),
+            )
+        )
+        total = result.scalar()
+        return float(total) if total is not None and total > 0 else None
+
+    # 没有 total 设备：sum normal 设备
     query = (
         select(func.coalesce(func.sum(EnergyData.value), 0))
         .join(
@@ -1602,7 +1722,7 @@ async def get_daily_total_by_energy_type(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1619,33 +1739,47 @@ async def get_daily_top_workshops(
     """获取指定能源类型在某日用量最高的 TOP N 部门。
 
     返回列表，每项包含 workshop, total_value, percentage。
+    分母（总量）：优先取 total 设备值，否则 sum normal 设备。
+    分子（部门）：仅使用 stat_role='normal' 设备。
     """
     cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+    total_device_ids = await _get_total_device_ids(db)
 
-    # 先查总量
-    total_result = await db.execute(
-        select(func.coalesce(func.sum(EnergyData.value), 0))
-        .join(
-            EnergyDeviceConfig,
-            EnergyData.device_config_id == EnergyDeviceConfig.id,
+    # 总量：优先取 total 设备值
+    if energy_type in total_device_ids:
+        total_result = await db.execute(
+            select(func.coalesce(func.sum(EnergyData.value), 0))
+            .where(
+                EnergyData.device_config_id == total_device_ids[energy_type],
+                EnergyData.is_deleted == False,  # noqa: E712
+                cst_date == cast(target_date.date(), Date),
+            )
         )
-        .where(
-            EnergyData.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.energy_type == energy_type,
-            cst_date == cast(target_date.date(), Date),
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
-            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+        grand_total = float(total_result.scalar() or 0)
+    else:
+        total_result = await db.execute(
+            select(func.coalesce(func.sum(EnergyData.value), 0))
+            .join(
+                EnergyDeviceConfig,
+                EnergyData.device_config_id == EnergyDeviceConfig.id,
+            )
+            .where(
+                EnergyData.is_deleted == False,  # noqa: E712
+                EnergyDeviceConfig.energy_type == energy_type,
+                cst_date == cast(target_date.date(), Date),
+                EnergyDeviceConfig.daily_collect_time.isnot(None),
+                _exclude_hourly_overlap(EnergyData),
+                _department_priority_filter(EnergyDeviceConfig),
+                EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+                EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
+            )
         )
-    )
-    grand_total = float(total_result.scalar() or 0)
+        grand_total = float(total_result.scalar() or 0)
 
     if grand_total == 0:
         return []
 
-    # 按部门汇总
+    # 按部门汇总（仅 normal 设备）
     query = (
         select(
             EnergyDeviceConfig.workshop,
@@ -1663,7 +1797,7 @@ async def get_daily_top_workshops(
             _exclude_hourly_overlap(EnergyData),
             _department_priority_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
+            EnergyDeviceConfig.stat_role == 'normal',  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.workshop)
         .order_by(func.sum(EnergyData.value).desc())

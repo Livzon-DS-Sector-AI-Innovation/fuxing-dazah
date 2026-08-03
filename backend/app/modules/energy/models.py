@@ -58,6 +58,10 @@ class EnergyDeviceConfig(BaseModel):
             "collection_interval > 0",
             name="ck_energy_device_config_interval_positive",
         ),
+        CheckConstraint(
+            "stat_role IN ('normal', 'excluded', 'total')",
+            name="ck_energy_device_config_stat_role",
+        ),
         {"schema": "energy"},
     )
 
@@ -109,8 +113,9 @@ class EnergyDeviceConfig(BaseModel):
     is_region_level: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, comment="是否区域级别（False=部门级别）"
     )
-    exclude_from_stats: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, comment="是否不参与能源总耗统计与可视化"
+    stat_role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="normal",
+        comment="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗",
     )
 
 
