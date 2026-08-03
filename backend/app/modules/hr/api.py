@@ -1772,12 +1772,27 @@ async def preview_departure_certificate(
         generate_termination_certificate_html,
     )
     record = await service.get_record(record_id)
+
+    # 兜底：离职台账缺少的字段从员工档案补
+    id_number = record.id_card or ""
+    entry_date = record.livo_entry_date or record.factory_entry_date or None
+    if (not id_number or not entry_date) and record.name:
+        from app.modules.hr.models import Employee
+        emp_row = (await service.repo.session.execute(
+            select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
+        )).scalars().first()
+        if emp_row:
+            if not id_number:
+                id_number = emp_row.id_card or ""
+            if not entry_date:
+                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+
     html = generate_termination_certificate_html(
-        name=record.name or "", id_number=getattr(record, "id_card", "") or "",
+        name=record.name or "", id_number=id_number or "",
         department=record.department or "", position=record.position or "",
-        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        entry_date=entry_date or "",
         leave_date=record.offboarding_date or "",
-        leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
+        leave_reason=record.offboarding_type or "个人原因",
     )
     return HTMLResponse(content=html)
 
@@ -1795,10 +1810,25 @@ async def send_departure_certificate(
     )
     record = await service.get_record(record_id)
     name = record.name or "员工"
+
+    # 兜底：离职台账缺少的字段从员工档案补
+    id_number = record.id_card or ""
+    entry_date = record.livo_entry_date or record.factory_entry_date or None
+    if (not id_number or not entry_date) and record.name:
+        from app.modules.hr.models import Employee
+        emp_row = (await service.repo.session.execute(
+            select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
+        )).scalars().first()
+        if emp_row:
+            if not id_number:
+                id_number = emp_row.id_card or ""
+            if not entry_date:
+                entry_date = emp_row.livo_entry_date or emp_row.factory_entry_date or emp_row.hire_date
+
     pdf_buf = generate_termination_certificate_pdf(
-        name=name, id_number=getattr(record, "id_card", "") or "",
+        name=name, id_number=id_number or "",
         department=record.department or "", position=record.position or "",
-        entry_date=getattr(record, "livo_entry_date", None) or getattr(record, "factory_entry_date", None) or "",
+        entry_date=entry_date or "",
         leave_date=record.offboarding_date or "",
         leave_reason=getattr(record, "offboarding_type", "") or "个人原因",
     )
