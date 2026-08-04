@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -222,6 +223,7 @@ async def list_instruments(
         calibration_date_before=filters.calibration_date_before,
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
+        has_report=filters.has_report,
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -293,6 +295,7 @@ async def get_all_instrument_ids(
         calibration_date_before=filters.calibration_date_before,
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
+        has_report=filters.has_report,
     )
 
 
@@ -351,6 +354,7 @@ async def list_gas_detectors(
         calibration_date_before=filters.calibration_date_before,
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
+        has_report=filters.has_report,
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -419,6 +423,7 @@ async def get_all_gas_detector_ids(
         calibration_date_before=filters.calibration_date_before,
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
+        has_report=filters.has_report,
     )
 
 
@@ -807,7 +812,7 @@ async def get_calibration_alerts(
 async def batch_extract_dates(
     db: AsyncSession, report_ids: list[UUID]
 ) -> dict[str, Any]:
-    """批量提取报告中的校准日期并更新对应仪表。"""
+    """批量提取报告中的校准日期并更新对应仪表（10 并发）。"""
 
     results: list[dict[str, Any]] = []
     success = 0
@@ -827,25 +832,47 @@ async def batch_extract_dates(
             ],
         }
 
-    for rid in report_ids:
+    semaphore = asyncio.Semaphore(10)
+
+    async def _process_one(rid: UUID) -> dict[str, Any]:
+        async with semaphore:
+            return await _extract_one_report(rid, config)
+
+    tasks = [_process_one(rid) for rid in report_ids]
+    all_results = await asyncio.gather(*tasks)
+
+    for r in all_results:
+        results.append(r)
+        if r["success"]:
+            success += 1
+        else:
+            failed += 1
+
+    return {
+        "total": len(report_ids),
+        "success": success,
+        "failed": failed,
+        "results": results,
+    }
+
+
+async def _extract_one_report(
+    rid: UUID,
+    config: dict[str, str],
+) -> dict[str, Any]:
+    """处理单份报告的 AI 日期提取 + 写库（独立 DB session，供并发调用）。"""
+    from app.core.database import async_session_factory
+
+    async with async_session_factory() as db:
         report = await repo.get_report_by_id(db, rid)
         if report is None:
-            failed += 1
-            results.append({
-                "report_id": str(rid), "file_name": "", "success": False,
-                "error": "报告不存在",
-            })
-            continue
+            return {"report_id": str(rid), "file_name": "", "success": False, "error": "报告不存在"}
 
         # 下载报告文件
         data = await download_report_data(report)
         if data is None:
-            failed += 1
-            results.append({
-                "report_id": str(rid), "file_name": report.file_name, "success": False,
-                "error": "文件不存在或 MinIO 未启用",
-            })
-            continue
+            return {"report_id": str(rid), "file_name": report.file_name, "success": False,
+                    "error": "文件不存在或 MinIO 未启用"}
 
         pdf_data, _ = data
 
@@ -866,68 +893,46 @@ async def batch_extract_dates(
                 pdf_data, config["api_url"], config["api_key"], config["model"], calibration_cycle
             )
         except Exception as e:
-            logger.exception(f"batch_extract_dates AI error for report {rid}")
-            failed += 1
-            results.append({
-                "report_id": str(rid), "file_name": report.file_name, "success": False,
-                "error": f"AI 提取失败: {e}",
-            })
-            continue
+            logger.exception("batch_extract_dates AI error for report %s", rid)
+            return {"report_id": str(rid), "file_name": report.file_name, "success": False,
+                    "error": f"AI 提取失败: {e}"}
 
         if not ai_result["success"]:
-            failed += 1
-            results.append({
-                "report_id": str(rid), "file_name": report.file_name, "success": False,
-                "error": ai_result.get("error", "AI 未识别到日期"),
-            })
-            continue
+            return {"report_id": str(rid), "file_name": report.file_name, "success": False,
+                    "error": ai_result.get("error", "AI 未识别到日期")}
 
         # 更新仪表日期
         try:
-            updates: dict[str, Any] = {
-                "calibration_date": date.fromisoformat(ai_result["calibration_date"])
-            }
+            cal_date = date.fromisoformat(ai_result["calibration_date"])
+            updates: dict[str, Any] = {"calibration_date": cal_date}
             if ai_result.get("next_calibration_date"):
                 updates["next_calibration_date"] = date.fromisoformat(ai_result["next_calibration_date"])
             if report.instrument_id:
                 await repo.update_instrument(db, report.instrument_id, updates)
             elif report.gas_detector_id:
                 await repo.update_gas_detector(db, report.gas_detector_id, updates)
+            await repo.update_report_date(db, rid, cal_date)
         except Exception as e:
-            logger.exception(f"batch_extract_dates update error for report {rid}")
-            failed += 1
-            results.append({
-                "report_id": str(rid), "file_name": report.file_name, "success": False,
-                "error": f"更新仪表失败: {e}",
-            })
-            continue
+            logger.exception("batch_extract_dates update error for report %s", rid)
+            return {"report_id": str(rid), "file_name": report.file_name, "success": False,
+                    "error": f"更新仪表失败: {e}"}
 
-        success += 1
-        results.append({
-            "report_id": str(rid),
-            "file_name": report.file_name,
-            "success": True,
+        await db.commit()
+        return {
+            "report_id": str(rid), "file_name": report.file_name, "success": True,
             "calibration_date": ai_result["calibration_date"],
             "next_calibration_date": ai_result.get("next_calibration_date"),
-        })
-
-    await db.commit()
-    return {
-        "total": len(report_ids),
-        "success": success,
-        "failed": failed,
-        "results": results,
-    }
+        }
 
 
 async def batch_extract_dates_stream(
     db: AsyncSession, report_ids: list[UUID],
 ) -> AsyncGenerator[str, None]:
-    """逐份 AI 识别报告日期并推送 SSE 进度事件。
+    """逐份 AI 识别报告日期并推送 SSE 进度事件（10 并发）。
 
-    与 batch_extract_dates 不同，此函数每处理完一份报告就 commit 一次，
-    确保客户端断开后已处理的数据不丢失。
+    每处理完一份报告就推送结果，确保客户端断开后已处理的数据不丢失。
     """
+
     yield _sse_event("start", {"total": len(report_ids)})
 
     # 从环境变量读取 AI 配置
@@ -941,103 +946,47 @@ async def batch_extract_dates_stream(
 
     success = 0
     failed = 0
+    processed = 0
+    total = len(report_ids)
     interrupted = False
 
-    for idx, rid in enumerate(report_ids):
-        current = idx + 1
-        total = len(report_ids)
+    semaphore = asyncio.Semaphore(10)
 
-        # 获取报告
-        report = await repo.get_report_by_id(db, rid)
-        if report is None:
-            failed += 1
-            yield _sse_event("progress", {"current": current, "total": total, "report_id": str(rid), "file_name": ""})
-            yield _sse_event("result", {
-                "report_id": str(rid), "file_name": "", "status": "failed",
-                "error": "报告不存在",
+    async def _process_one(rid: UUID) -> dict[str, Any]:
+        async with semaphore:
+            # 先推送 progress
+            return await _extract_one_report(rid, config)
+
+    pending = {asyncio.ensure_future(_process_one(rid)): rid for rid in report_ids}
+
+    try:
+        for coro in asyncio.as_completed(pending):
+            r = await coro
+            processed += 1
+
+            # 推送进度
+            yield _sse_event("progress", {
+                "current": processed, "total": total,
+                "report_id": r["report_id"], "file_name": r.get("file_name", ""),
             })
-            continue
 
-        # 推送进度事件
-        yield _sse_event("progress", {
-            "current": current, "total": total,
-            "report_id": str(rid), "file_name": report.file_name,
-        })
-
-        # 下载文件
-        data = await download_report_data(report)
-        if data is None:
-            failed += 1
-            yield _sse_event("result", {
-                "report_id": str(rid), "file_name": report.file_name, "status": "failed",
-                "error": "文件不存在或 MinIO 未启用",
-            })
-            continue
-
-        pdf_data, _ = data
-
-        # 获取关联仪表的检定周期
-        calibration_cycle = None
-        if report.instrument_id:
-            inst = await repo.get_instrument_by_id(db, report.instrument_id, include_reports=False)
-            if inst:
-                calibration_cycle = inst.calibration_cycle_months
-        elif report.gas_detector_id:
-            det = await repo.get_gas_detector_by_id(db, report.gas_detector_id, include_reports=False)
-            if det:
-                calibration_cycle = getattr(det, 'calibration_cycle_months', None)
-
-        # AI 识别
-        try:
-            ai_result = await ai_svc.extract_and_update_date(
-                pdf_data, config["api_url"], config["api_key"], config["model"], calibration_cycle,
-            )
-        except Exception as e:
-            logger.exception(f"batch_extract_dates_stream AI error for report {rid}")
-            failed += 1
-            yield _sse_event("result", {
-                "report_id": str(rid), "file_name": report.file_name, "status": "failed",
-                "error": f"AI 提取失败: {e}",
-            })
-            continue
-
-        if not ai_result["success"]:
-            failed += 1
-            yield _sse_event("result", {
-                "report_id": str(rid), "file_name": report.file_name, "status": "failed",
-                "error": ai_result.get("error", "AI 未识别到日期"),
-            })
-            continue
-
-        # 更新仪表日期
-        try:
-            updates: dict[str, Any] = {
-                "calibration_date": date.fromisoformat(ai_result["calibration_date"])
-            }
-            if ai_result.get("next_calibration_date"):
-                updates["next_calibration_date"] = date.fromisoformat(ai_result["next_calibration_date"])
-            if report.instrument_id:
-                await repo.update_instrument(db, report.instrument_id, updates)
-            elif report.gas_detector_id:
-                await repo.update_gas_detector(db, report.gas_detector_id, updates)
-        except Exception as e:
-            logger.exception(f"batch_extract_dates_stream update error for report {rid}")
-            failed += 1
-            yield _sse_event("result", {
-                "report_id": str(rid), "file_name": report.file_name, "status": "failed",
-                "error": f"更新仪表失败: {e}",
-            })
-            continue
-
-        # 逐份 commit，保证中断后已处理的数据不丢失
-        await db.commit()
-
-        success += 1
-        yield _sse_event("result", {
-            "report_id": str(rid), "file_name": report.file_name, "status": "success",
-            "calibration_date": ai_result["calibration_date"],
-            "next_calibration_date": ai_result.get("next_calibration_date"),
-        })
+            if r["success"]:
+                success += 1
+                yield _sse_event("result", {
+                    "report_id": r["report_id"], "file_name": r.get("file_name", ""), "status": "success",
+                    "calibration_date": r.get("calibration_date"),
+                    "next_calibration_date": r.get("next_calibration_date"),
+                })
+            else:
+                failed += 1
+                yield _sse_event("result", {
+                    "report_id": r["report_id"], "file_name": r.get("file_name", ""), "status": "failed",
+                    "error": r.get("error"),
+                })
+    except asyncio.CancelledError:
+        interrupted = True
+        for t in pending:
+            t.cancel()
 
     yield _sse_event("complete", {
         "total": len(report_ids), "success": success, "failed": failed,

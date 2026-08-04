@@ -69,6 +69,7 @@ export async function fetchInstruments(
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
   const qs = sp.toString()
@@ -97,6 +98,7 @@ export async function fetchInstrumentsClient(
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
   const qs = sp.toString()
@@ -177,6 +179,7 @@ export async function fetchGasDetectors(
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
   const qs = sp.toString()
@@ -206,6 +209,7 @@ export async function fetchGasDetectorsClient(
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
   const qs = sp.toString()
@@ -311,6 +315,22 @@ export async function batchUploadReports(formData: FormData): Promise<BatchUploa
     credentials: 'include',
   })
   if (!res.ok) throw new Error(`批量上传失败: ${res.status}`)
+  const json = await res.json()
+  return json.data ?? json
+}
+
+/** 客户端直连批量上传：绕过 Next.js rewrite 代理和 Server Action，直连后端避免大文件代理超时。 */
+export async function batchUploadReportsClient(formData: FormData): Promise<BatchUploadResult> {
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+  const res = await fetch(`${API_BASE}${BASE}/reports/batch`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: `批量上传失败: ${res.status}` }))
+    throw new Error(err.message || `批量上传失败: ${res.status}`)
+  }
   const json = await res.json()
   return json.data ?? json
 }

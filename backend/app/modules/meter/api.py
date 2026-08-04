@@ -1202,13 +1202,16 @@ async def extract_date(
 
         if ai_result["success"]:
             # 回写数据库（asyncpg 需要 Python date 对象，不能传字符串）
-            updates: dict[str, Any] = {"calibration_date": date.fromisoformat(ai_result["calibration_date"])}
+            cal_date = date.fromisoformat(ai_result["calibration_date"])
+            updates: dict[str, Any] = {"calibration_date": cal_date}
             if ai_result.get("next_calibration_date"):
                 updates["next_calibration_date"] = date.fromisoformat(ai_result["next_calibration_date"])
             if report.instrument_id:
                 await repo.update_instrument(db, report.instrument_id, updates)
             elif report.gas_detector_id:
                 await repo.update_gas_detector(db, report.gas_detector_id, updates)
+            # 同时将识别出的日期写入报告本身的 report_date
+            await repo.update_report_date(db, report_id, cal_date)
             await db.commit()
 
         return success_response(
