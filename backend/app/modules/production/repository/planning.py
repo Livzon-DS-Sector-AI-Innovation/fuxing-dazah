@@ -41,6 +41,8 @@ __all__ = [
     "get_batch_by_no",
     "get_plan_item_by_batch_no",
     "get_batch_single_branch_tip",
+    "get_parent_batch_id",
+    "get_child_batch_ids",
     "get_node_execution_progress",
     "get_change_logs",
     "get_batches_by_plan_items",
@@ -366,24 +368,48 @@ async def get_plan_item_by_batch_no(
 
 async def get_batch_single_branch_tip(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
     """沿单分支链追溯：子批次=1时继续，≠1时停止，返回停止节点的Batch。"""
-    from app.modules.production.models.batch import BatchLink
-
     current_id = batch_id
     while True:
-        child_stmt = (
-            select(BatchLink.child_batch_id)
-            .where(
-                BatchLink.parent_batch_id == current_id,
-                BatchLink.is_deleted == False,  # noqa: E712
-            )
-            .distinct()
-        )
-        child_ids = list((await db.execute(child_stmt)).scalars())
+        child_ids = await get_child_batch_ids(db, current_id)
         if len(child_ids) != 1:
             break
         current_id = child_ids[0]
     stmt = select(Batch).where(Batch.id == current_id, Batch.is_deleted == False)  # noqa: E712
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_parent_batch_id(
+    db: AsyncSession, child_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """按子批次查父批次（谱系回溯）。单线假设下父唯一，取第一条。"""
+    from app.modules.production.models.batch import BatchLink
+
+    stmt = (
+        select(BatchLink.parent_batch_id)
+        .where(
+            BatchLink.child_batch_id == child_id,
+            BatchLink.is_deleted == False,  # noqa: E712
+        )
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_child_batch_ids(
+    db: AsyncSession, parent_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """按父批次查全部非删除子批次 id。"""
+    from app.modules.production.models.batch import BatchLink
+
+    stmt = (
+        select(BatchLink.child_batch_id)
+        .where(
+            BatchLink.parent_batch_id == parent_id,
+            BatchLink.is_deleted == False,  # noqa: E712
+        )
+        .distinct()
+    )
+    return list((await db.execute(stmt)).scalars())
 
 
 async def get_node_execution_progress(

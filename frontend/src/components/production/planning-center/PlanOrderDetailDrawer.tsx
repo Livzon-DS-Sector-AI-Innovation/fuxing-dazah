@@ -13,8 +13,10 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd'
 import type { FormInstance } from 'antd'
@@ -28,6 +30,7 @@ import {
   changePlanOrder,
 } from '@/actions/production'
 import { StageConfigItem, type PlanOrderDetail, type PlanItem, type PlanItemBatchProgress, type PlanOrderChangeItem } from '@/types/production'
+import { batchGenDayOffset, batchRhythmWarning } from './utils'
 import { fetchProductsClient, fetchRoutesClient, fetchRouteGraphClient } from '@/lib/api/production-client'
 import dayjs from 'dayjs'
 import { PlanItemTable, StageProgressBar } from './PlanItemTable'
@@ -293,6 +296,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const [batchCount, setBatchCount] = useState(1)
   const [batchIntervalDays, setBatchIntervalDays] = useState(1) // m：每隔 m 天
   const [batchGroupSize, setBatchGroupSize] = useState(1) // n：生成 n 批
+  const [batchGapDays, setBatchGapDays] = useState(1) // k：每批间隔 k 天
+  const [batchIncludeFirst, setBatchIncludeFirst] = useState(true) // 前一项参与生成：参考项占序列第 1 位，新批次从其后续位置继续
 
   // 折叠区块
   const [showBasicInfo, setShowBasicInfo] = useState(false)
@@ -452,6 +457,12 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const handleBatchGenerate = () => {
     if (!batchStartNo || batchCount <= 0) return
     if (localItems.length === 0) { message.error('请先添加至少一个计划项'); return }
+    // 仅当生成批次足以跨组时组间才可能重叠（不足一组时全部落在同一组内、逐批间隔互不重叠）；
+    // 开启"前项参与"时参考项占组内第 1 位，新批次从第 2 位起，故跨组所需批次少一批
+    if (batchCount >= batchGroupSize + (batchIncludeFirst ? 0 : 1)) {
+      const warn = batchRhythmWarning(batchGroupSize, batchIntervalDays, batchGapDays)
+      if (warn) { message.warning(warn); return }
+    }
     const lastItem = localItems[localItems.length - 1]
     const lastStart = lastItem.planned_start ? new Date(lastItem.planned_start) : new Date()
     const lastEnd = lastItem.planned_end ? new Date(lastItem.planned_end) : new Date()
@@ -461,9 +472,11 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     const startBase = lastStart.getTime()
     const endBase = lastEnd.getTime()
 
-    for (let i = 0; i < batchCount; i++) {
-      const idx = i + 1
-      const dayOffset = Math.floor(idx / batchGroupSize) * batchIntervalDays + (idx % batchGroupSize)
+    for (let i = 1; i <= batchCount; i++) {
+      // 第 i 批：参考项作序列第 0 个（或开启"前一项参与生成"时作第 1 个，新批次从第 2 位继续），
+      // 第 i//n 组的起点偏移 i//n*m 天，组内第 i%n 批再间隔 (i%n)*k 天
+      const seqIdx = batchIncludeFirst ? i + 1 : i
+      const dayOffset = batchGenDayOffset(seqIdx, batchGroupSize, batchIntervalDays, batchGapDays)
       const msOffset = dayOffset * 86400000
 
       newItems.push({
@@ -501,6 +514,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     setBatchCount(1)
     setBatchIntervalDays(1)
     setBatchGroupSize(1)
+    setBatchGapDays(1)
+    setBatchIncludeFirst(true)
     setBatchGenOpen(true)
   }
 
@@ -803,7 +818,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       <InputNumber size="small" min={1} value={batchIntervalDays} onChange={v => setBatchIntervalDays(v ?? 1)} style={{ width: 50 }} />
                       <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天生成</span>
                       <InputNumber size="small" min={1} value={batchGroupSize} onChange={v => setBatchGroupSize(v ?? 1)} style={{ width: 50 }} />
-                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>批</span>
+                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>批，批间隔</span>
+                      <InputNumber size="small" min={0} value={batchGapDays} onChange={v => setBatchGapDays(v ?? 0)} style={{ width: 50 }} />
+                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天</span>
+                      <Tooltip title="开启后最后一项计入序列，新批次从其后一位继续；关闭则与最后一项同日排入">
+                        <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>前项参与</span>
+                        <Switch size="small" checked={batchIncludeFirst} onChange={setBatchIncludeFirst} />
+                      </Tooltip>
                       <Button size="small" type="primary" onClick={handleBatchGenerate} disabled={!batchStartNo}>生成</Button>
                       <Button size="small" onClick={() => setBatchGenOpen(false)}>收起</Button>
                     </Space>
@@ -836,7 +857,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                 planOrderId={order.id}
                 planOrderStatus={order.status}
                 planOrderProductId={order.product_id}
-                planOrderProductName={order.items?.[0]?.product_name ?? order.title}
+                planOrderProductName={productName ?? order.items?.[0]?.product_name ?? order.title}
                 planOrderRouteId={order.route_id}
                 planOrderStageConfig={order.stage_config}
                 items={order.items}

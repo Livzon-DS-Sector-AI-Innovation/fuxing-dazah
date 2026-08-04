@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
@@ -10,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
+    from app.modules.production.models.route import RouteNode
     from app.modules.production.schemas.planning import (
         PlanItemBatchProgress,
         PlanOrderChangeRequest,
@@ -44,6 +46,8 @@ from app.modules.production.schemas.planning import (
     TraceNode,
 )
 from app.platform.identity.models import User
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════
 # 辅助
@@ -122,10 +126,13 @@ async def _require_route_not_draft(db: AsyncSession, route_id: uuid.UUID) -> Non
 
 
 async def _compute_item_batch_progress(
-    db: AsyncSession, batch: Batch,
+    db: AsyncSession, batch: Batch, route_nodes: list[RouteNode] | None = None,
 ) -> PlanItemBatchProgress | None:
     """计算批次的生产进度。ponytail: 独立函数便于复用，不从 schema 动态 import 避免循环。"""
-    from app.modules.production.schemas.planning import PlanItemBatchProgress
+    from app.modules.production.schemas.planning import (
+        PlanItemBatchProgress,
+        RouteNodeBrief,
+    )
 
     tip = await repo.get_batch_single_branch_tip(db, batch.id)
     if tip is None:
@@ -134,11 +141,17 @@ async def _compute_item_batch_progress(
             batch_status=batch.status,
         )
     stage, stage_status = await repo.get_node_execution_progress(db, tip.id)
+    if route_nodes is None:
+        route_nodes = await repo.get_route_nodes(db, tip.route_id)
     return PlanItemBatchProgress(
         batch_no=tip.batch_no,
         batch_status=tip.status,
         latest_stage=stage,
         latest_stage_status=stage_status,
+        route_nodes=[
+            RouteNodeBrief(name=n.name, stage_name=n.stage_name)
+            for n in route_nodes
+        ] or None,
     )
 
 
@@ -626,6 +639,8 @@ async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOr
         raise NotFoundException("计划单", str(order_id))
     items = await repo.list_plan_items(db, order_id)
     item_outs: list[PlanItemOut] = []
+    # 同一计划单的 item 通常共享 route_id，按路线缓存节点查询避免 N 次重复 SELECT
+    route_nodes_cache: dict[uuid.UUID, list[RouteNode]] = {}
     for item in items:
         pio = PlanItemOut.model_validate(item)
         # 填充 allocations
@@ -637,7 +652,13 @@ async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOr
             # 注入 batch_progress（复用已有 batch_map）
             first_batch = batch_map.get(plan_allocs[0].batch_id) if batch_map else None
             if first_batch:
-                pio.batch_progress = await _compute_item_batch_progress(db, first_batch)
+                if first_batch.route_id not in route_nodes_cache:
+                    route_nodes_cache[first_batch.route_id] = await repo.get_route_nodes(
+                        db, first_batch.route_id,
+                    )
+                pio.batch_progress = await _compute_item_batch_progress(
+                    db, first_batch, route_nodes_cache[first_batch.route_id],
+                )
             for pa in plan_allocs:
                 pao = PlanAllocationOut.model_validate(pa)
                 b = batch_map.get(pa.batch_id)
@@ -849,6 +870,117 @@ async def allocate_plan_item(
     return refreshed
 
 
+async def sync_plan_item_status(db: AsyncSession, batch_id: uuid.UUID) -> None:
+    """批次/工序状态变化后联动计划项：allocated → in_progress → completed。
+
+    判定规则见 docs/superpowers/specs/2026-08-03-plan-item-batch-status-sync-design.md：
+    计划项配置工段 S 内全部工序节点，在单线谱系链（跳过 cancelled）上有 completed
+    执行即完成。cancelled 批次不打断判定、其节点不计。
+    """
+    batch = await repo.get_batch(db, batch_id)
+    if not batch:
+        return
+    item = await _find_plan_item_by_batch(db, batch_id)
+    if not item or item.status not in ("allocated", "in_progress"):
+        return
+    changed = False
+    chain = await _collect_chain_batches(db, item)
+    if item.status == "allocated":
+        # 开工判定以谱系根批次为准：同步触发点可能是子批次（含已报废的），
+        # 但 allocated → in_progress 取决于根批次是否已开工
+        root = chain[0] if chain else batch
+        if root.status == "in_progress":
+            item.status = "in_progress"
+            changed = True
+    if await _is_stage_covered(db, item, chain):
+        item.status = "completed"
+        changed = True
+    if changed:
+        item.updated_by = None
+        await db.flush()
+        # 铁律：UPDATE 后 select re-fetch，刷新 updated_at 等 onupdate 字段
+        refreshed = await repo.get_plan_item(db, item.id)
+        assert refreshed is not None
+
+
+async def _find_plan_item_by_batch(
+    db: AsyncSession, batch_id: uuid.UUID,
+) -> PlanItem | None:
+    """batch → 非删除 PlanAllocation → PlanItem；谱系子批次沿 BatchLink 回溯到有分配的祖先。"""
+    current_id = batch_id
+    while current_id:
+        allocs = await repo.get_plan_allocations_by_batch(db, current_id)
+        if allocs:
+            return await repo.get_plan_item(db, allocs[0].plan_item_id)
+        current_id = await repo.get_parent_batch_id(db, current_id)
+    return None
+
+
+async def _item_stage_names(db: AsyncSession, item: PlanItem) -> set[str]:
+    """计划项配置工段集合；为空时继承计划单 stage_config（JSONB dict 列表）。"""
+    if item.stage_durations:
+        return {s["stage_name"] for s in item.stage_durations if s.get("stage_name")}
+    order = await repo.get_plan_order(db, item.plan_order_id)
+    if order and order.stage_config:
+        return {s["stage_name"] for s in order.stage_config if s.get("stage_name")}
+    return set()
+
+
+async def _is_stage_covered(
+    db: AsyncSession, item: PlanItem, chain: list[Batch] | None = None,
+) -> bool:
+    """判定：配置工段 S 内全部工序节点，在谱系链（跳过 cancelled）上有 completed 执行。"""
+    nodes = await repo.get_route_nodes(db, item.route_id)
+    if not nodes:
+        return False
+    stages = await _item_stage_names(db, item)
+    target_ids = {
+        n.id for n in nodes if not stages or (n.stage_name and n.stage_name in stages)
+    }
+    if not target_ids:
+        return False
+    if chain is None:
+        chain = await _collect_chain_batches(db, item)
+    if not chain:
+        return False
+    completed_ids = await repo.get_completed_node_ids_by_batches(
+        db, [b.id for b in chain],
+    )
+    return target_ids <= completed_ids
+
+
+async def _collect_chain_batches(db: AsyncSession, item: PlanItem) -> list[Batch]:
+    """沿单线谱系链收集有效（非 cancelled）批次：根批次 → 唯一有效子批次。
+    cancelled 批次不打断判定、其节点不计：跳过并继续下钻。
+    ponytail: 单线假设，同层出现多个子批次时取第一个（业务上不会发生）。"""
+    allocs = await repo.get_plan_allocations_by_item(db, item.id)
+    if not allocs:
+        return []
+    chain: list[Batch] = []
+    current = await repo.get_batch(db, allocs[0].batch_id)
+    while current:
+        if current.status != "cancelled":
+            chain.append(current)
+        child_ids = await repo.get_child_batch_ids(db, current.id)
+        if not child_ids:
+            break
+        children = await repo.get_batches_by_ids(db, child_ids)
+        if not children:
+            break
+        valid = [b for b in children if b.status != "cancelled"]
+        if len(valid) > 1:
+            logger.warning(
+                "计划项 %s 谱系出现多有效子批次，仅追踪第一个（单线假设被打破）",
+                item.item_no,
+            )
+        if valid:
+            current = valid[0]
+            continue
+        # 全部子批次已报废：跳过 cancelled 继续下钻，不打断判定
+        current = children[0]
+    return chain
+
+
 # ═══════════════════════════════════════════
 # 排程视图
 # ═══════════════════════════════════════════
@@ -1034,6 +1166,7 @@ __all__ = [
     "delete_plan_item",
     "schedule_plan_item",
     "allocate_plan_item",
+    "sync_plan_item_status",
     "list_plan_items",
     "get_schedule_view",
     "create_demand_allocation",

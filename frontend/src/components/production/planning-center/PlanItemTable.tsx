@@ -13,6 +13,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -24,6 +25,7 @@ import { createPlanItem, updatePlanItem, deletePlanItem, schedulePlanItem } from
 import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/production'
 import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
 import { ITEM_STATUS_CONFIG, PRIORITY_CONFIG } from './constants'
+import { batchGenDayOffset, batchRhythmWarning } from './utils'
 import { incrementBatchNo } from '@/lib/utils'
 import dayjs from 'dayjs'
 
@@ -64,25 +66,51 @@ export function StageProgressBar({
   stageDurations?: StageConfigItem[] | null
   batchProgress?: PlanItemBatchProgress | null
 }) {
-  if (!stageDurations?.length) {
+  // 工序模式：段=已配置工段内的路线工序（超出配置工段的后续工序不展示），高亮按工序名匹配；无 route_nodes 时回退工段模式（旧数据）
+  const stageColorMap = new Map((stageDurations ?? []).map((s) => [s.stage_name, s.color]))
+  const nodes = batchProgress?.route_nodes?.length
+    ? batchProgress.route_nodes.filter((n) => !!n.stage_name && stageColorMap.has(n.stage_name))
+    : null
+  const segments = nodes?.length
+    ? nodes.map((n) => ({
+        key: n.name,
+        label: n.name,
+        // 工序颜色跟随其所属工段的配置色（filter 已保证 stage_name 命中配置）
+        color: stageColorMap.get(n.stage_name!)!,
+        tip: `${n.stage_name} · ${n.name}`,
+      }))
+    : stageDurations?.length
+      ? stageDurations.map((s) => ({
+          key: s.stage_name,
+          label: s.stage_name,
+          color: s.color,
+          tip: `${s.stage_name} · ${s.duration_hours}h`,
+        }))
+      : null
+
+  if (!segments?.length) {
     return <span style={{ fontSize: 12, color: 'var(--color-stone)' }}>—</span>
   }
 
-  const currentIdx = batchProgress?.latest_stage
-    ? stageDurations.findIndex((s) => s.stage_name === batchProgress.latest_stage)
+  const rawIdx = batchProgress?.latest_stage
+    ? segments.findIndex((s) => s.key === batchProgress.latest_stage)
     : -1
+  // 工序模式：最远执行工序已超出配置工段（route 在配置工段后继续）时视为配置段内全部完成
+  const currentIdx = nodes?.length && rawIdx === -1 && batchProgress?.latest_stage
+    ? segments.length
+    : rawIdx
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 160 }}>
       {/* Segments bar */}
       <div style={{ display: 'flex', gap: 3, alignItems: 'center', height: 8 }}>
-        {stageDurations.map((s, i) => {
+        {segments.map((s, i) => {
           const isCompleted = currentIdx >= 0 && i < currentIdx
           const isCurrent = currentIdx >= 0 && i === currentIdx
           const hasProgress = currentIdx >= 0
 
           return (
-            <Tooltip key={i} title={`${s.stage_name} · ${s.duration_hours}h`}>
+            <Tooltip key={i} title={s.tip}>
               <div
                 style={{
                   flex: 1,
@@ -119,7 +147,7 @@ export function StageProgressBar({
       </div>
       {/* Stage labels */}
       <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        {stageDurations.map((s, i) => {
+        {segments.map((s, i) => {
           const isCurrent = currentIdx >= 0 && i === currentIdx
           return (
             <span
@@ -136,7 +164,7 @@ export function StageProgressBar({
                 whiteSpace: 'nowrap',
               }}
             >
-              {s.stage_name}
+              {s.label}
             </span>
           )
         })}
@@ -304,9 +332,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   const [batchGenOpen, setBatchGenOpen] = useState(false)
   const [batchStartNo, setBatchStartNo] = useState('')
   const [batchCount, setBatchCount] = useState(1)
-  const [batchIntervalDays, setBatchIntervalDays] = useState(1)
-  const [batchGroupSize, setBatchGroupSize] = useState(1)
+  const [batchIntervalDays, setBatchIntervalDays] = useState(1) // m：每隔 m 天
+  const [batchGroupSize, setBatchGroupSize] = useState(1) // n：生成 n 批
+  const [batchGapDays, setBatchGapDays] = useState(1) // k：每批间隔 k 天
   const [batchGenLoading, setBatchGenLoading] = useState(false)
+  const [batchIncludeFirst, setBatchIncludeFirst] = useState(true) // 前一项参与生成：参考项占序列第 1 位，新批次从其后续位置继续
 
   const { data: productData } = useQuery({
     queryKey: ['products', productKeyword],
@@ -374,6 +404,12 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     if (!batchStartNo || batchCount <= 0) return
     if (items.length === 0) { message.error('请先添加至少一个计划项'); return }
     if (!planOrderProductId) { message.error('计划单未关联产品，无法批量生成'); return }
+    // 仅当生成批次足以跨组时组间才可能重叠（不足一组时全部落在同一组内、逐批间隔互不重叠）；
+    // 开启"前项参与"时参考项占组内第 1 位，新批次从第 2 位起，故跨组所需批次少一批
+    if (batchCount >= batchGroupSize + (batchIncludeFirst ? 0 : 1)) {
+      const warn = batchRhythmWarning(batchGroupSize, batchIntervalDays, batchGapDays)
+      if (warn) { message.warning(warn); return }
+    }
     const lastItem = items[items.length - 1]
     const lastStart = lastItem.planned_start ? new Date(lastItem.planned_start) : new Date()
     const lastEnd = lastItem.planned_end ? new Date(lastItem.planned_end) : new Date()
@@ -384,9 +420,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     const startBase = lastStart.getTime()
     const endBase = lastEnd.getTime()
     try {
-      for (let i = 0; i < batchCount; i++) {
-        const idx = i + 1
-        const dayOffset = Math.floor(idx / batchGroupSize) * batchIntervalDays + (idx % batchGroupSize)
+      for (let i = 1; i <= batchCount; i++) {
+        // 第 i 批：参考项作序列第 0 个（或开启"前一项参与生成"时作第 1 个，新批次从第 2 位继续），
+        // 第 i//n 组的起点偏移 i//n*m 天，组内第 i%n 批再间隔 (i%n)*k 天
+        const seqIdx = batchIncludeFirst ? i + 1 : i
+        const dayOffset = batchGenDayOffset(seqIdx, batchGroupSize, batchIntervalDays, batchGapDays)
         const msOffset = dayOffset * 86400000
 
         const r = await createPlanItem(planOrderId, {
@@ -423,6 +461,8 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     setBatchCount(1)
     setBatchIntervalDays(1)
     setBatchGroupSize(1)
+    setBatchGapDays(1)
+    setBatchIncludeFirst(true)
     setBatchGenOpen(true)
   }
 
@@ -665,27 +705,67 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         width={520}
         destroyOnHidden
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>起始批号</span>
-            <Input placeholder="如 A1" value={batchStartNo} onChange={e => setBatchStartNo(e.target.value)} style={{ flex: 1 }} />
+        <Form layout="vertical" style={{ marginTop: 4 }}>
+          <Form.Item label="起始批号" style={{ marginBottom: 12 }}>
+            <Input
+              placeholder="如 A1"
+              value={batchStartNo}
+              onChange={e => setBatchStartNo(e.target.value)}
+            />
+          </Form.Item>
+          <Form.Item label="生成批次" style={{ marginBottom: 12 }}>
+            <InputNumber
+              min={1}
+              value={batchCount}
+              onChange={v => setBatchCount(v ?? 1)}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+          <Form.Item
+            label="前一项参与生成"
+            extra="开启后，最后一项计入序列，新批次从其后一位继续；关闭则新批次与最后一项同日排入"
+            style={{ marginBottom: 0 }}
+          >
+            <Switch checked={batchIncludeFirst} onChange={setBatchIncludeFirst} />
+          </Form.Item>
+
+          <div style={formDivider} />
+
+          {/* 节奏规则 — 三个数字即一组序列公式，不做成"造句" */}
+          <div style={sectionLabel}>节奏规则</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--color-steel)', marginBottom: 6 }}>每周期天数</div>
+              <InputNumber
+                min={1}
+                value={batchIntervalDays}
+                onChange={v => setBatchIntervalDays(v ?? 1)}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--color-steel)', marginBottom: 6 }}>每周期批次</div>
+              <InputNumber
+                min={1}
+                value={batchGroupSize}
+                onChange={v => setBatchGroupSize(v ?? 1)}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: 'var(--color-steel)', marginBottom: 6 }}>批内间隔(天)</div>
+              <InputNumber
+                min={0}
+                value={batchGapDays}
+                onChange={v => setBatchGapDays(v ?? 0)}
+                style={{ width: '100%' }}
+              />
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>数量</span>
-            <InputNumber min={1} value={batchCount} onChange={v => setBatchCount(v ?? 1)} style={{ flex: 1 }} />
+          <div style={{ fontSize: 12, color: 'var(--color-slate)', marginTop: 8 }}>
+            第 1 批紧接最后一项开始，之后每 {batchIntervalDays} 天重复 {batchGroupSize} 批，批内逐批间隔 {batchGapDays} 天
           </div>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <span style={{ fontSize: 13, width: 70, flexShrink: 0 }}>间隔规则</span>
-            <span style={{ fontSize: 13 }}>每</span>
-            <InputNumber min={1} value={batchIntervalDays} onChange={v => setBatchIntervalDays(v ?? 1)} style={{ width: 60 }} />
-            <span style={{ fontSize: 13 }}>天生成</span>
-            <InputNumber min={1} value={batchGroupSize} onChange={v => setBatchGroupSize(v ?? 1)} style={{ width: 60 }} />
-            <span style={{ fontSize: 13 }}>批</span>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--color-slate)', marginTop: 4 }}>
-            批号自动取最后一项递增；日期基于最后一项的时间按规则偏移，保持相同持续时长
-          </div>
-        </div>
+        </Form>
       </Modal>
 
       {/* 编辑 Modal */}

@@ -21,6 +21,7 @@ __all__ = [
     "max_execution_seq",
     "has_in_progress_execution",
     "completed_node_ids",
+    "get_completed_node_ids_by_batches",
     "in_progress_node_ids",
     "get_field_values_by_executions",
     "get_equipments_by_executions",
@@ -100,15 +101,24 @@ async def has_in_progress_execution(
     return int((await db.execute(stmt)).scalar_one()) > 0
 
 
-async def completed_node_ids(
-    db: AsyncSession, batch_id: uuid.UUID
+async def get_completed_node_ids_by_batches(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
 ) -> set[uuid.UUID]:
+    """批量查询：这些批次上所有 completed 执行的节点 id 集合。"""
+    if not batch_ids:
+        return set()
     stmt = select(NodeExecution.node_id).where(
-        NodeExecution.batch_id == batch_id,
+        NodeExecution.batch_id.in_(batch_ids),
         NodeExecution.status == "completed",
         NodeExecution.is_deleted == False,  # noqa: E712
     )
     return set((await db.execute(stmt)).scalars())
+
+
+async def completed_node_ids(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> set[uuid.UUID]:
+    return await get_completed_node_ids_by_batches(db, [batch_id])
 
 
 async def in_progress_node_ids(

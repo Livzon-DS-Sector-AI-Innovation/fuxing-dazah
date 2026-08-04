@@ -153,12 +153,19 @@ class PlanOrderChangeRequest(BaseModel):
     items_delete: list[uuid.UUID] | None = None
 
 
+class RouteNodeBrief(BaseModel):
+    """进度条用的轻量工序节点，不带 fields/intermediates 避免懒加载。"""
+    name: str
+    stage_name: str | None = None
+
+
 class PlanItemBatchProgress(BaseModel):
     """计划项对应批次的生产进度（单分支最远工序）。"""
     batch_no: str
     batch_status: str
     latest_stage: str | None = None
     latest_stage_status: str | None = None
+    route_nodes: list[RouteNodeBrief] | None = None
 
 
 class PlanOrderChangeLogOut(BaseModel):

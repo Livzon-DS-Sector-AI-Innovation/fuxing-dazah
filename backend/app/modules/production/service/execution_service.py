@@ -25,6 +25,7 @@ from app.modules.production.schemas import (
     NodeExecutionListItem,
 )
 from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.planning_service import sync_plan_item_status
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -241,6 +242,7 @@ async def start_execution(
         resource_id=execution.id,
         extra={"batch_no": batch.batch_no, "seq": seq},
     )
+    await sync_plan_item_status(db, batch.id)
     return execution
 
 
@@ -306,6 +308,7 @@ async def complete_execution(
     )
     refreshed = await repo.get_execution(db, execution_id)
     assert refreshed is not None
+    await sync_plan_item_status(db, execution.batch_id)
     return refreshed
 
 
