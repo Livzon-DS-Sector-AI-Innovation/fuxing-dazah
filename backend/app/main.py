@@ -171,49 +171,6 @@ app = FastAPI(
     redoc_url="/redoc" if not settings.is_production else None,
 )
 
-# ── 修复 Starlette MultiPartParser 默认 max_part_size 仅 1MB 的问题 ──
-# Starlette Request.form() 和 _get_form() 各自硬编码了 max_part_size=1024*1024，
-# 批量文件上传中任意单个文件超过 1MB 即触发 MultiPartException → 400。
-# 使用 settings.MAX_UPLOAD_SIZE_MB 控制上限，与其他模块保持一致。
-# 必须同时 patch 两个方法才能生效。
-from starlette.requests import Request as _StarletteRequest
-
-_upload_limit = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-
-_form_original = _StarletteRequest.form
-_get_form_original = _StarletteRequest._get_form
-
-async def _patched_form(
-    self,
-    *,
-    max_files: int | float = 1000,
-    max_fields: int | float = 1000,
-    max_part_size: int = _upload_limit,
-):
-    return await _form_original(
-        self,
-        max_files=max_files,
-        max_fields=max_fields,
-        max_part_size=max_part_size,
-    )
-
-async def _patched_get_form(
-    self,
-    *,
-    max_files: int | float = 1000,
-    max_fields: int | float = 1000,
-    max_part_size: int = 400 * 1024 * 1024,
-):
-    return await _get_form_original(
-        self,
-        max_files=max_files,
-        max_fields=max_fields,
-        max_part_size=max_part_size,
-    )
-
-_StarletteRequest.form = _patched_form
-_StarletteRequest._get_form = _patched_get_form
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
