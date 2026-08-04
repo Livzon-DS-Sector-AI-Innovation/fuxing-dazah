@@ -17,6 +17,7 @@ from app.modules.production.schemas import (
     MergeIn,
 )
 from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.planning_service import sync_plan_item_status
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 
@@ -162,6 +163,7 @@ async def derive_batches(
         resource_id=parent.id,
         extra={"children": [c.batch_no for c in children]},
     )
+    await sync_plan_item_status(db, parent.id)
     return children
 
 
@@ -264,6 +266,7 @@ async def cancel_batch(
     )
     refreshed = await repo.get_batch(db, batch_id)
     assert refreshed is not None
+    await sync_plan_item_status(db, batch.id)
     return refreshed
 
 

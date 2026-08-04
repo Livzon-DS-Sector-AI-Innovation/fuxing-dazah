@@ -131,6 +131,30 @@ export function ScheduleView() {
 
   const onRefresh = useCallback(() => { refetch(); queryClient.invalidateQueries({ queryKey: ['plan-orders'] }); queryClient.invalidateQueries({ queryKey: ['plan-order-detail'] }) }, [refetch, queryClient])
 
+  // ── 选中产品的可见区间统计 ──
+  const monthStats = useMemo(() => {
+    if (!productId) return null
+    const [from, to] = dateRange
+    const fromT = from.startOf('day').valueOf()
+    const toT = to.endOf('day').valueOf()
+    const inRange = (d: string | null) => {
+      if (!d) return false
+      const t = dayjs(d).valueOf()
+      return t >= fromT && t <= toT
+    }
+    const filtered = (items ?? []).filter(i => i.product_id === productId)
+    const startCount = filtered.filter(i => inRange(i.planned_start)).length
+    const endCount = filtered.filter(i => inRange(i.planned_end)).length
+    const productName = (products ?? []).find(p => p.id === productId)?.product_name
+    return { startCount, endCount, productName }
+  }, [items, productId, dateRange, products])
+
+  // 默认区间为两个月（本月 + 下月），跨月时标签展示完整区间避免统计口径歧义
+  const selectedMonthLabel =
+    dateRange[0].format('YYYY年M月') === dateRange[1].format('YYYY年M月')
+      ? dateRange[0].format('YYYY年M月')
+      : `${dateRange[0].format('YYYY年M月')}-${dateRange[1].format('YYYY年M月')}`
+
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Filter bar + 工具栏 */}
@@ -180,6 +204,28 @@ export function ScheduleView() {
           </Button>
         )}
       </div>
+
+      {/* 当月统计 — 仅在选中产品时显示 */}
+      {monthStats && (
+        <div style={{
+          display: 'flex', gap: 16,
+          padding: '10px 16px',
+          background: 'var(--color-surface-soft)',
+          borderRadius: 8,
+          fontSize: 13,
+        }}>
+          <span style={{ color: 'var(--color-slate)', fontWeight: 500 }}>
+            {monthStats.productName} · {selectedMonthLabel}
+          </span>
+          <span style={{ color: 'var(--color-hairline-strong)' }}>|</span>
+          <span style={{ color: 'var(--color-charcoal)' }}>
+            区间内开始 <strong style={{ color: '#0075de', fontSize: 15 }}>{monthStats.startCount}</strong> 批
+          </span>
+          <span style={{ color: 'var(--color-charcoal)' }}>
+            区间内结束 <strong style={{ color: '#1aae39', fontSize: 15 }}>{monthStats.endCount}</strong> 批
+          </span>
+        </div>
+      )}
 
       {/* Content — flex-1 min-h-0 flex flex-col 确保子组件能吃到高度 */}
       <div className="flex-1 min-h-0 flex flex-col">
