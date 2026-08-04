@@ -1,7 +1,8 @@
-"""AI 日期提取服务 — PDF 文本提取 + 调用 OpenAI 兼容 API 识别校准日期."""
+"""AI 日期提取服务 — PDF 图片提取 + 多模态视觉 LLM 识别校准日期."""
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 AI_MAX_RETRIES = 3
 AI_RETRY_BACKOFF = 2.0  # 秒，指数退避基数
 
+# 视觉识图最多发送前 N 页（第一页通常就有日期）
+MAX_VISION_PAGES = 1
+
 
 def get_meter_ai_config() -> dict[str, str] | None:
     """从环境变量读取仪表 AI 配置。未配置时返回 None。
@@ -25,46 +29,44 @@ def get_meter_ai_config() -> dict[str, str] | None:
     所需环境变量：
     - METER_AI_BASE_URL：API 端点
     - METER_AI_API_KEY：API 密钥
-    - METER_AI_MODEL：模型名（默认 qwen3.6-flash）
+    - METER_AI_MODEL：模型名（默认 qwen3.7-plus，多模态）
     """
     api_url = os.getenv("METER_AI_BASE_URL", "")
     api_key = os.getenv("METER_AI_API_KEY", "")
-    model = os.getenv("METER_AI_MODEL", "qwen3.6-flash")
+    model = os.getenv("METER_AI_MODEL", "qwen3.7-plus")
     if not api_url or not api_key:
         return None
     return {"api_url": api_url, "api_key": api_key, "model": model}
 
-EXTRACT_PROMPT = """你是一个数据提取助手。从以下文档文本中找出"校准日期"、"检定日期"、"校准时间"、"检测日期"或"Calibration Date"对应的**本次**校准/检定的执行日期（不是下次检定日期）。
-返回格式必须是严格的 JSON：{{"date": "YYYY-MM-DD"}} 或 {{"error": "原因"}}。
+
+VISION_PROMPT = """你是一个数据提取助手。从以下文档图片中找出"校准日期"、"检定日期"、"校准时间"、"检测日期"或"Calibration Date"对应的**本次**校准/检定的执行日期（不是下次检定日期，不是有效期至/下次校准日期）。
+返回格式必须是严格的 JSON：{"date": "YYYY-MM-DD"} 或 {"error": "原因"}。
 如果同时存在多个日期，优先返回"校准日期"或"检定日期"对应的值。
-
-文档内容：
-__TEXT_PLACEHOLDER__"""
+如果图片中找不到任何日期，返回 {"error": "未在图片中找到日期"}。"""
 
 
-def _build_prompt(text: str) -> str:
-    """安全构建 prompt，避免 format() 的 {} 冲突。"""
-    return EXTRACT_PROMPT.replace("__TEXT_PLACEHOLDER__", text)
-
-
-def extract_pdf_text(file_data: bytes) -> str:
-    """从 PDF 二进制数据中提取纯文本。"""
-    text_parts = []
+def extract_pdf_images_as_base64(file_data: bytes, max_pages: int = MAX_VISION_PAGES) -> list[str]:
+    """将 PDF 前 N 页转为 base64 编码的 PNG 图片列表。"""
+    images: list[str] = []
     with pdfplumber.open(io.BytesIO(file_data)) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text_parts.append(page_text)
-    return "\n".join(text_parts)
+        for page in pdf.pages[:max_pages]:
+            try:
+                img = page.to_image(resolution=150)
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                images.append(base64.b64encode(buf.getvalue()).decode())
+            except Exception as e:
+                logger.warning("PDF 页面转图片失败: %s", e)
+    return images
 
 
-async def call_ai_extract_date(
+async def call_ai_vision_extract_date(
     api_url: str,
     api_key: str,
     model: str,
-    text: str,
+    images_base64: list[str],
 ) -> dict[str, Any]:
-    """调用 OpenAI 兼容 API 提取日期，失败时自动重试（最多 3 次）。"""
+    """调用多模态 LLM 从图片中提取日期，失败时自动重试（最多 3 次）。"""
     import asyncio
 
     url = f"{api_url.rstrip('/')}/chat/completions"
@@ -72,11 +74,19 @@ async def call_ai_extract_date(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
+
+    # 构建多模态消息内容
+    content_parts: list[dict[str, Any]] = []
+    for img_b64 in images_base64:
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+        })
+    content_parts.append({"type": "text", "text": VISION_PROMPT})
+
+    payload: dict[str, Any] = {
         "model": model,
-        "messages": [
-            {"role": "user", "content": _build_prompt(text[:16000])},
-        ],
+        "messages": [{"role": "user", "content": content_parts}],
         "temperature": 1,
         "max_tokens": 500,
     }
@@ -84,25 +94,24 @@ async def call_ai_extract_date(
     last_error: Exception | None = None
     for attempt in range(1, AI_MAX_RETRIES + 1):
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 if resp.status_code == 429 or resp.status_code >= 500:
-                    # 限流或服务端错误，可重试
                     raise Exception(f"AI API 返回 {resp.status_code}（可重试）")
                 if resp.status_code != 200:
-                    # 客户端错误（4xx 非 429），不重试
-                    logger.error(f"AI API error: {resp.status_code} body={resp.text[:500]}")
+                    logger.error("AI API error: %s body=%s", resp.status_code, resp.text[:500])
                     raise Exception(f"AI API 返回 {resp.status_code}: {resp.text[:300]}")
 
                 data = resp.json()
-                logger.info(f"AI raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+                logger.info("AI raw response: %s", json.dumps(data, ensure_ascii=False)[:500])
                 content = data["choices"][0]["message"]["content"]
                 if not content or not content.strip():
-                    logger.error(f"AI returned empty content. Full response: {json.dumps(data, ensure_ascii=False)[:1000]}")
+                    logger.error("AI returned empty content. Full response: %s", json.dumps(data, ensure_ascii=False)[:1000])
                     raise Exception("AI 返回了空内容，请检查代理是否正常")
                 content = content.strip()
-                logger.info(f"AI content: {content[:200]}")
-                # 提取 JSON（用正则清除 ``` 代码块包裹，支持 ```json / ``` 等）
+                logger.info("AI content: %s", content[:200])
+
+                # 提取 JSON（用正则清除 ``` 代码块包裹）
                 content = re.sub(r'```[\w-]*\s*', '', content)
                 content = content.strip()
 
@@ -134,7 +143,6 @@ async def call_ai_extract_date(
                 )
                 await asyncio.sleep(wait)
         except Exception as e:
-            # 判断是否可重试的错误
             msg = str(e)
             if ("429" in msg or "500" in msg or "502" in msg or "503" in msg or "504" in msg
                     or "可重试" in msg or "空内容" in msg):
@@ -149,7 +157,6 @@ async def call_ai_extract_date(
                     continue
             raise
 
-    # 所有重试耗尽
     raise Exception(f"AI API 调用失败（已重试 {AI_MAX_RETRIES} 次）: {last_error}")
 
 
@@ -160,25 +167,20 @@ async def extract_and_update_date(
     model: str,
     calibration_cycle_months: int | None,
 ) -> dict[str, Any]:
-    """完整流程：提取 PDF 文本 → AI 识别日期 → 返回结果。"""
-    # 1. 提取文本
+    """完整流程：提取 PDF 图片 → 多模态 AI 识别日期 → 返回结果。"""
+    # 1. 提取 PDF 页面图片
+    images = extract_pdf_images_as_base64(pdf_data)
+    if not images:
+        return {"success": False, "error": "PDF 无法提取页面图片，文件可能已损坏"}
+
+    logger.info("PDF images extracted: %d pages", len(images))
+
+    # 2. AI 视觉识别
     try:
-        text = extract_pdf_text(pdf_data)
+        result = await call_ai_vision_extract_date(api_url, api_key, model, images)
+        logger.info("AI vision response: %s", result)
     except Exception as e:
-        logger.error(f"PDF text extraction error: {e}")
-        return {"success": False, "error": f"PDF 文本提取失败: {e}"}
-
-    if not text.strip():
-        return {"success": False, "error": "PDF 无可提取文字，可能是扫描件"}
-
-    logger.info(f"PDF text extracted: {len(text)} chars, preview: {text[:200]}")
-
-    # 2. AI 识别
-    try:
-        result = await call_ai_extract_date(api_url, api_key, model, text)
-        logger.info(f"AI response: {result}")
-    except Exception as e:
-        logger.error(f"AI extraction error: {e}")
+        logger.error("AI vision extraction error: %s", e)
         return {"success": False, "error": f"AI 提取失败: {e}"}
 
     if "date" not in result:

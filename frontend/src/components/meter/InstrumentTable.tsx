@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState, type Key } from 'react'
-import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm } from 'antd'
+import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm, Radio } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { InstrumentRecord, InstrumentFilter, InstrumentFilterOptions } from '@/types/meter'
@@ -66,6 +66,7 @@ const INSTRUMENT_FILTER_KEY: Record<string, keyof InstrumentFilter> = {
   calibration_date_after: 'calibration_date_after',
   next_calibration_before: 'next_calibration_before',
   next_calibration_after: 'next_calibration_after',
+  report_count: 'has_report',
 }
 
 export function InstrumentTable() {
@@ -126,7 +127,10 @@ export function InstrumentTable() {
       // 合并列头筛选条件
       for (const [field, value] of Object.entries(columnFilters)) {
         const key = INSTRUMENT_FILTER_KEY[field]
-        if (key && value) (params as Record<string, unknown>)[key] = value
+        if (key && value) {
+          if (key === 'has_report') (params as Record<string, unknown>)[key] = value === 'true'
+          else (params as Record<string, unknown>)[key] = value
+        }
       }
       // 合并日期筛选条件
       for (const [field, value] of Object.entries(dateFilters)) {
@@ -193,7 +197,10 @@ export function InstrumentTable() {
       if (keyword) filterParams.keyword = keyword
       for (const [field, value] of Object.entries(columnFilters)) {
         const key = INSTRUMENT_FILTER_KEY[field]
-        if (key && value) (filterParams as Record<string, unknown>)[key] = value
+        if (key && value) {
+          if (key === 'has_report') (filterParams as Record<string, unknown>)[key] = value === 'true'
+          else (filterParams as Record<string, unknown>)[key] = value
+        }
       }
       for (const [field, value] of Object.entries(dateFilters)) {
         const key = INSTRUMENT_FILTER_KEY[field]
@@ -222,7 +229,10 @@ export function InstrumentTable() {
     if (keyword) params.keyword = keyword
     for (const [field, value] of Object.entries(columnFilters)) {
       const key = INSTRUMENT_FILTER_KEY[field]
-      if (key && value) (params as Record<string, unknown>)[key] = value
+      if (key && value) {
+        if (key === 'has_report') (params as Record<string, unknown>)[key] = value === 'true'
+        else (params as Record<string, unknown>)[key] = value
+      }
     }
     for (const [field, value] of Object.entries(dateFilters)) {
       const key = INSTRUMENT_FILTER_KEY[field]
@@ -466,8 +476,26 @@ export function InstrumentTable() {
       render: (v: string | null) => v || '-',
     },
     {
-      title: '报告', dataIndex: 'report_count', width: 60,
-      render: (v: number) => v > 0 ? <Tag color="blue">{v}</Tag> : '-',
+      title: '报告', dataIndex: 'report_count', width: 80,
+      filteredValue: columnFilters.report_count ? columnFilters.report_count.split(',') : null,
+      render: (v: number) => v > 0 ? <Tag color="blue">有</Tag> : <Tag>无</Tag>,
+      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: any) => (
+        <div style={{ padding: 8 }}>
+          <Radio.Group
+            value={selectedKeys[0]}
+            onChange={e => {
+              setSelectedKeys(e.target.value ? [e.target.value] : [])
+              setColumnFilter('report_count', e.target.value || undefined)
+            }}
+          >
+            <Radio.Button value="true">有</Radio.Button>
+            <Radio.Button value="false">无</Radio.Button>
+          </Radio.Group>
+          <div style={{ marginTop: 8 }}>
+            <a onClick={() => { setSelectedKeys([]); setColumnFilter('report_count', undefined) }}>重置</a>
+          </div>
+        </div>
+      ),
     },
     {
       title: '操作', key: 'actions', width: 120, fixed: 'right',

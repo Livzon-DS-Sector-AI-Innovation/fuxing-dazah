@@ -163,6 +163,7 @@ class InstrumentFilter(PageParams):
     calibration_date_before: date | None = Field(default=None, description="检定日期在此日期之前")
     calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索（匹配资产编号、器具名称、型号）")
+    has_report: bool | None = Field(default=None, description="是否有检测报告（True=有, False=无, None=不限）")
 
 
 # ═══════════════════════════════════════════
@@ -289,6 +290,7 @@ class GasDetectorFilter(PageParams):
     calibration_date_before: date | None = Field(default=None, description="检定日期在此日期之前")
     calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索")
+    has_report: bool | None = Field(default=None, description="是否有检测报告（True=有, False=无, None=不限）")
 
 
 # ═══════════════════════════════════════════

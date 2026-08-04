@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, File, Form, Query, Request, UploadFile
+from fastapi import Depends, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -370,7 +370,7 @@ async def batch_create_gas_detectors(
 
 @router.post("/instruments/import-ledger", summary="导入标准计量器具台账Excel（全量替换）")
 async def import_instrument_ledger(
-    file: UploadFile = File(..., description="Excel 文件 (.et 或 .xlsx)"),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """上传计量器具台账 Excel，全量替换现有标准计量器具数据。
@@ -378,8 +378,17 @@ async def import_instrument_ledger(
     支持 .et (WPS) 和 .xlsx 格式，文件限制 50MB。
     处理所有 sheet（跳过探测器 sheet）。
     """
+    from app.core.config import get_settings
+
+    settings_obj = get_settings()
+    form = await request.form(max_part_size=settings_obj.MAX_UPLOAD_SIZE_MB * 1024 * 1024)
+
+    file = form.get("file")
+    if file is None or not hasattr(file, "read"):
+        return JSONResponse(status_code=400, content={"code": 400, "message": "缺少 file 参数"})
+
     max_size = 50 * 1024 * 1024
-    filename = file.filename or "unknown"
+    filename = (file.filename if hasattr(file, "filename") else None) or "unknown"
 
     try:
         file_data = await file.read()
@@ -417,7 +426,7 @@ async def import_instrument_ledger(
 
 @router.post("/gas-detectors/import-ledger", summary="导入有毒有害探测器台账Excel（全量替换）")
 async def import_gas_detector_ledger(
-    file: UploadFile = File(..., description="Excel 文件 (.et 或 .xlsx)"),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """上传探测器台账 Excel，全量替换现有探测器数据。
@@ -425,11 +434,20 @@ async def import_gas_detector_ledger(
     仅处理探测器 sheet（含"可燃""有毒""探测器"等关键词的 sheet 或 Sheet 0）。
     支持 .et (WPS) 和 .xlsx 格式，文件限制 50MB。
     """
+    from app.core.config import get_settings
+
+    settings_obj = get_settings()
+    form = await request.form(max_part_size=settings_obj.MAX_UPLOAD_SIZE_MB * 1024 * 1024)
+
+    file_obj = form.get("file")
+    if file_obj is None or not hasattr(file_obj, "read"):
+        return JSONResponse(status_code=400, content={"code": 400, "message": "缺少 file 参数"})
+
     max_size = 50 * 1024 * 1024
-    filename = file.filename or "unknown"
+    filename = (file_obj.filename if hasattr(file_obj, "filename") else None) or "unknown"
 
     try:
-        file_data = await file.read()
+        file_data = await file_obj.read()
         if len(file_data) > max_size:
             return JSONResponse(
                 status_code=400,
@@ -857,20 +875,51 @@ async def list_gas_detector_departments(
 
 @router.post("/reports", summary="上传检测报告")
 async def upload_report(
-    file: UploadFile = File(..., description="检测报告文件（最大50MB）"),
-    instrument_id: UUID | None = Form(default=None, description="标准计量器具 ID"),
-    gas_detector_id: UUID | None = Form(default=None, description="探测器 ID"),
-    report_date: date | None = Form(default=None, description="报告日期"),
-    remark: str | None = Form(default=None, description="备注"),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    from app.core.config import get_settings
+
+    settings_obj = get_settings()
+    form = await request.form(max_part_size=settings_obj.MAX_UPLOAD_SIZE_MB * 1024 * 1024)
+
+    file = form.get("file")
+    if file is None or not hasattr(file, "read"):
+        return JSONResponse(status_code=400, content={"code": 400, "message": "缺少 file 参数"})
+
+    instrument_id_raw = form.get("instrument_id")
+    instrument_id: UUID | None = None
+    if instrument_id_raw:
+        try:
+            instrument_id = UUID(str(instrument_id_raw))
+        except ValueError:
+            pass
+
+    gas_detector_id_raw = form.get("gas_detector_id")
+    gas_detector_id: UUID | None = None
+    if gas_detector_id_raw:
+        try:
+            gas_detector_id = UUID(str(gas_detector_id_raw))
+        except ValueError:
+            pass
+
+    report_date_raw = form.get("report_date")
+    report_date_val: date | None = None
+    if report_date_raw:
+        try:
+            report_date_val = date.fromisoformat(str(report_date_raw))
+        except ValueError:
+            pass
+
+    remark_val: str | None = str(form.get("remark")) if form.get("remark") else None
+
     report = await service.upload_report(
         db,
-        file=file,
+        file=file,  # type: ignore[arg-type]
         instrument_id=instrument_id,
         gas_detector_id=gas_detector_id,
-        report_date=report_date,
-        remark=remark,
+        report_date=report_date_val,
+        remark=remark_val,
     )
     return success_response(
         ReportResponse(
@@ -992,24 +1041,44 @@ async def match_files(
 
 @router.post("/reports/batch", summary="批量上传检测报告（单次最多 200 份）")
 async def batch_upload_reports(
-    files: list[UploadFile] = File(..., max_length=200, description="报告文件列表（最多200份）"),
-    items_json: str = Form(..., description="JSON: [{filename, instrument_id, gas_detector_id, report_date, remark}]"),
-    report_date: date | None = Form(default=None, description="报告日期（统一）"),
-    remark: str | None = Form(default=None, description="备注（统一）"),
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
+    from app.core.config import get_settings
+
+    settings_obj = get_settings()
+    form = await request.form(max_part_size=settings_obj.MAX_UPLOAD_SIZE_MB * 1024 * 1024)
+
     import json
+
+    items_json = form.get("items_json")
+    if not items_json:
+        return JSONResponse(status_code=400, content={"code": 400, "message": "缺少 items_json 参数"})
     try:
-        items = json.loads(items_json)
+        items = json.loads(str(items_json))
     except json.JSONDecodeError:
         return JSONResponse(status_code=400, content={"code": 400, "message": "items_json JSON 格式错误"})
 
-    file_list = []
-    for f in files:
-        data = await f.read()
-        file_list.append((f.filename or "unknown", data, f.content_type or "application/octet-stream"))
+    report_date_raw = form.get("report_date")
+    report_date_val: date | None = None
+    if report_date_raw:
+        try:
+            report_date_val = date.fromisoformat(str(report_date_raw))
+        except ValueError:
+            pass
 
-    result = await service.batch_upload_reports(db, file_list, items, report_date=report_date, remark=remark)
+    remark_val: str | None = str(form.get("remark")) if form.get("remark") else None
+
+    files_raw = form.getlist("files")
+    file_list: list[tuple[str, bytes, str]] = []
+    for f in files_raw:
+        if hasattr(f, "read"):
+            data = await f.read()
+            fn = f.filename if hasattr(f, "filename") else "unknown"
+            ct = f.content_type if hasattr(f, "content_type") else "application/octet-stream"
+            file_list.append((fn or "unknown", data, ct or "application/octet-stream"))
+
+    result = await service.batch_upload_reports(db, file_list, items, report_date=report_date_val, remark=remark_val)
     return success_response(result, status_code=201 if result["success"] > 0 else 200)
 
 
@@ -1202,13 +1271,16 @@ async def extract_date(
 
         if ai_result["success"]:
             # 回写数据库（asyncpg 需要 Python date 对象，不能传字符串）
-            updates: dict[str, Any] = {"calibration_date": date.fromisoformat(ai_result["calibration_date"])}
+            cal_date = date.fromisoformat(ai_result["calibration_date"])
+            updates: dict[str, Any] = {"calibration_date": cal_date}
             if ai_result.get("next_calibration_date"):
                 updates["next_calibration_date"] = date.fromisoformat(ai_result["next_calibration_date"])
             if report.instrument_id:
                 await repo.update_instrument(db, report.instrument_id, updates)
             elif report.gas_detector_id:
                 await repo.update_gas_detector(db, report.gas_detector_id, updates)
+            # 同时将识别出的日期写入报告本身的 report_date
+            await repo.update_report_date(db, report_id, cal_date)
             await db.commit()
 
         return success_response(
