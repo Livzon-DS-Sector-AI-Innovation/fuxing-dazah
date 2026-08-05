@@ -85,7 +85,6 @@ function PlannedCard({
           {item.route_name && (
             <div style={{ fontSize: 12, color: '#a4a097', marginTop: 1 }}>
               {item.route_name}
-              {item.route_version ? <span> v{item.route_version}</span> : null}
             </div>
           )}
         </div>

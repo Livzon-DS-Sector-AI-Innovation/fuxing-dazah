@@ -207,10 +207,9 @@ function BatchCard({
                   </span>
                 )}
               </div>
-              {(item.product_name || item.route_version) && (
+              {item.product_name && item.route_name && (
                 <div style={{ fontSize: 13, color: '#787671', marginTop: 1 }}>
-                  {item.product_name ? item.route_name : ''}
-                  {item.route_version ? <span style={{ color: '#a4a097' }}> v{item.route_version}</span> : null}
+                  {item.route_name}
                 </div>
               )}
             </div>
@@ -256,7 +255,6 @@ function BatchCard({
               {item.product_name && <span>{item.product_name}</span>}
               {item.product_name && item.route_name && <span style={{ color: '#c8c4be' }}> · </span>}
               {item.route_name && <span>{item.route_name}</span>}
-              {item.route_version ? <span style={{ color: '#a4a097' }}> v{item.route_version}</span> : null}
             </div>
           )}
 
@@ -466,7 +464,6 @@ export function WorkbenchInner() {
         routes: Object.entries(routes).map(([routeId, batches]) => ({
           routeId,
           routeName: Object.values(batches)[0].route_name,
-          routeVersion: Object.values(batches)[0].route_version,
           productName: Object.values(batches)[0].product_name,
           items: Object.values(batches),
         })),

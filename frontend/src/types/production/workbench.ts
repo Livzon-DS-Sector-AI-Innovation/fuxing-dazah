@@ -17,7 +17,6 @@ export interface WorkbenchItem {
   product_name: string | null
   route_id: string
   route_name: string
-  route_version: number | null
   node_id: string
   node_name: string
   stage_name: string | null
@@ -46,7 +45,6 @@ export interface AssignedStageInfo {
 export interface AssignedRouteInfo {
   route_id: string
   route_name: string
-  route_version: number | null
   product_name: string | null
   stages: AssignedStageInfo[]
 }
@@ -146,7 +144,6 @@ export interface PlannedBatchItem {
   product_name: string | null
   route_id: string
   route_name: string
-  route_version: number | null
   plan_item_id: string
   plan_order_no: string
   planned_start: string | null

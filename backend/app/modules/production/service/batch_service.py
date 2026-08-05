@@ -299,11 +299,10 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
-    # 填充路线名称和版本
+    # 填充路线名称
     route = await repo.get_route(db, batch.route_id)
     if route:
-        detail.route_name = route.name
-        detail.route_version = route.version
+        detail.route_name = route.route_name
     return detail
 
 
@@ -321,13 +320,11 @@ async def list_batches_paged(
     batches, total = await repo.list_batches(
         db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
     )
-    # 批量填充路线名称和版本
+    # 批量填充路线名称
     route_ids = list({b.route_id for b in batches})
     if route_ids:
         routes = await repo.get_routes_by_ids(db, route_ids)
-        route_map = {r.id: (r.name, r.version) for r in routes}
+        route_map = {r.id: r.route_name for r in routes}
         for b in batches:
-            name, ver = route_map.get(b.route_id, ("", 0))
-            b.route_name = name  # type: ignore[attr-defined]
-            b.route_version = ver  # type: ignore[attr-defined]
+            b.route_name = route_map.get(b.route_id, "")  # type: ignore[attr-defined]
     return batches, total

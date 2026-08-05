@@ -1,13 +1,15 @@
 'use client'
 
-import { App, Button, Popconfirm, Space, Tag } from 'antd'
+import { useState } from 'react'
+import { App, Button, Input, Modal, Popconfirm, Space, Tag } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   archiveRoute,
+  copyRoute,
   createRoute,
   deleteRoute,
-  newRouteVersion,
   publishRoute,
+  renameRoute,
 } from '@/actions/production'
 import type { ProcessRoute } from '@/types/production'
 
@@ -28,6 +30,8 @@ interface Props {
   onEdit: () => void
 }
 
+type NameModalAction = 'create' | 'copy' | 'rename'
+
 export function RouteVersionBar({
   productId,
   routes,
@@ -40,6 +44,8 @@ export function RouteVersionBar({
 }: Props) {
   const { message } = App.useApp()
   const current = routes.find(r => r.id === currentRouteId) ?? null
+  const [nameModal, setNameModal] = useState<NameModalAction | null>(null)
+  const [nameValue, setNameValue] = useState('')
 
   const run = async (fn: () => Promise<{ success: boolean; error?: string }>, ok: string) => {
     const result = await fn()
@@ -50,6 +56,34 @@ export function RouteVersionBar({
       message.error(result.error ?? '操作失败')
     }
   }
+
+  const openNameModal = (action: NameModalAction) => {
+    setNameValue(action === 'create' ? '' : current?.route_name ?? '')
+    setNameModal(action)
+  }
+
+  const confirmNameModal = () => {
+    const name = nameValue.trim()
+    if (!name) {
+      message.warning('请输入路线名称')
+      return
+    }
+    if (nameModal === 'create') {
+      run(() => createRoute({ product_id: productId, route_name: name }), '已创建 draft 路线')
+    } else if (nameModal === 'copy') {
+      run(() => copyRoute(current!.id, name), '已复制新路线')
+    } else if (nameModal === 'rename') {
+      run(() => renameRoute(current!.id, name), '已重命名')
+    }
+    setNameModal(null)
+  }
+
+  const nameModalTitle =
+    nameModal === 'create'
+      ? '新建路线'
+      : nameModal === 'copy'
+        ? '复制为新路线'
+        : '重命名路线'
 
   return (
     <div
@@ -68,7 +102,7 @@ export function RouteVersionBar({
             checked={r.id === currentRouteId}
             onChange={() => onSelect(r.id)}
           >
-            V{r.version}
+            {r.route_name}
             <Tag
               color={STATUS_META[r.status]?.color}
               style={{ marginLeft: 4, marginRight: 0 }}
@@ -80,19 +114,14 @@ export function RouteVersionBar({
       </Space>
       {canManage && (
         <Space size={8}>
-          <Popconfirm
-            title="确认新建路线？将基于当前最新版本复制"
-            onConfirm={() =>
-              run(
-                () => createRoute({ product_id: productId, name: '工艺路线' }),
-                '已创建 draft 路线',
-              )
-            }
-          >
-            <Button size="small" icon={<PlusOutlined />}>
-              新建路线
+          <Button size="small" icon={<PlusOutlined />} onClick={() => openNameModal('create')}>
+            新建路线
+          </Button>
+          {current && (
+            <Button size="small" onClick={() => openNameModal('rename')}>
+              重命名
             </Button>
-          </Popconfirm>
+          )}
           {current?.status === 'draft' && !editing && (
             <>
               <Button size="small" type="primary" onClick={onEdit}>
@@ -122,24 +151,33 @@ export function RouteVersionBar({
               >
                 <Button size="small">归档</Button>
               </Popconfirm>
-              <Popconfirm
-                title="确认复制新版本？将生成新的 draft 路线"
-                onConfirm={() => run(() => newRouteVersion(current.id), '已复制新版本')}
-              >
-                <Button size="small">复制新版本</Button>
-              </Popconfirm>
+              <Button size="small" onClick={() => openNameModal('copy')}>
+                复制为
+              </Button>
             </>
           )}
           {current?.status === 'archived' && (
-            <Popconfirm
-              title="确认复制新版本？将生成新的 draft 路线"
-              onConfirm={() => run(() => newRouteVersion(current.id), '已复制新版本')}
-            >
-              <Button size="small">复制新版本</Button>
-            </Popconfirm>
+            <Button size="small" onClick={() => openNameModal('copy')}>
+              复制为
+            </Button>
           )}
         </Space>
       )}
+      <Modal
+        title={nameModalTitle}
+        open={nameModal !== null}
+        onOk={confirmNameModal}
+        onCancel={() => setNameModal(null)}
+        width={400}
+      >
+        <Input
+          placeholder="路线名称，产品内唯一"
+          value={nameValue}
+          onChange={e => setNameValue(e.target.value)}
+          onPressEnter={confirmNameModal}
+          autoFocus
+        />
+      </Modal>
     </div>
   )
 }

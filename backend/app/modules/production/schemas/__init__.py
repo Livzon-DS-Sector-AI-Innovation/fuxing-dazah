@@ -77,6 +77,7 @@ from app.modules.production.schemas.route import (
     RouteGraphIn,
     RouteGraphOut,
     RouteOut,
+    RouteRename,
 )
 from app.modules.production.schemas.trace import (
     TraceBatch,
@@ -125,6 +126,7 @@ __all__ = [
     "RouteGraphIn",
     "RouteGraphOut",
     "RouteOut",
+    "RouteRename",
     "TraceBatch",
     "TraceExecutionBrief",
     "TraceLink",

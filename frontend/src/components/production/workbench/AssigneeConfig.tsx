@@ -85,7 +85,6 @@ export function AssigneeConfig({ routes, onChanged }: Props) {
             )}
             <span style={{ fontSize: 13, color: '#787671' }}>
               {route.product_name ? route.route_name : ''}
-              {route.route_version ? ` v${route.route_version}` : ''}
             </span>
           </div>
 

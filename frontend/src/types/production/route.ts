@@ -45,8 +45,7 @@ export interface RouteEdge {
 export interface ProcessRoute {
   id: string
   product_id: string
-  version: number
-  name: string
+  route_name: string
   status: RouteStatus
   created_at: string
   updated_at: string
@@ -100,5 +99,5 @@ export interface RouteGraphIn {
 
 export interface CreateRouteInput {
   product_id: string
-  name: string
+  route_name: string
 }

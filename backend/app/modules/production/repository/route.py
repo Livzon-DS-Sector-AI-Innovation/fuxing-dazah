@@ -15,9 +15,9 @@ from app.modules.production.models import (
 
 __all__ = [
     "get_route",
+    "get_route_by_name",
     "get_routes_by_ids",
     "list_routes",
-    "next_route_version",
     "get_route_nodes",
     "get_route_edges",
     "get_edge",
@@ -29,6 +29,17 @@ __all__ = [
 async def get_route(db: AsyncSession, route_id: uuid.UUID) -> ProcessRoute | None:
     stmt = select(ProcessRoute).where(
         ProcessRoute.id == route_id, ProcessRoute.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_route_by_name(
+    db: AsyncSession, product_id: uuid.UUID, route_name: str
+) -> ProcessRoute | None:
+    stmt = select(ProcessRoute).where(
+        ProcessRoute.product_id == product_id,
+        ProcessRoute.route_name == route_name,
+        ProcessRoute.is_deleted == False,  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 
@@ -58,19 +69,11 @@ async def list_routes(
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()
     stmt = (
-        stmt.order_by(ProcessRoute.created_at.desc())
+        stmt.order_by(ProcessRoute.route_name)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
     return list((await db.execute(stmt)).scalars()), total
-
-
-async def next_route_version(db: AsyncSession, product_id: uuid.UUID) -> int:
-    stmt = select(func.coalesce(func.max(ProcessRoute.version), 0)).where(
-        ProcessRoute.product_id == product_id,
-        ProcessRoute.is_deleted == False,  # noqa: E712
-    )
-    return int((await db.execute(stmt)).scalar_one()) + 1
 
 
 async def get_route_nodes(db: AsyncSession, route_id: uuid.UUID) -> list[RouteNode]:

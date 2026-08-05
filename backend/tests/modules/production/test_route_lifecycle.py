@@ -24,7 +24,7 @@ async def _draft_route(db: AsyncSession) -> tuple[Product, ProcessRoute]:
         db, ProductCreate(product_name=rand_code("产品")), user=None,
     )
     route = await route_service.create_route(
-        db, RouteCreate(product_id=product.id, name="V1"), user=None,
+        db, RouteCreate(product_id=product.id, route_name="V1"), user=None,
     )
     return product, route
 
@@ -128,7 +128,7 @@ class TestRouteList:
             db_session, ProductCreate(product_name=rand_code("产品")), user=None,
         )
         await route_service.create_route(
-            db_session, RouteCreate(product_id=product.id, name="V1"), user=None,
+            db_session, RouteCreate(product_id=product.id, route_name="V1"), user=None,
         )
         _items, total = await route_service.list_routes_paged(
             db_session, product_id=product.id, page=1, page_size=10,

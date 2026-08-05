@@ -221,7 +221,7 @@ function PlanItemFormFields({
   setItemStages,
 }: {
   products: { id: string; product_name: string; unit: string | null }[]
-  routes: { id: string; name: string; version: number }[]
+  routes: { id: string; route_name: string }[]
   selectedProductId: string | undefined
   onProductSelect: (id: string) => void
   onProductSearch: (kw: string) => void
@@ -245,7 +245,7 @@ function PlanItemFormFields({
           allowClear
           placeholder="先选产品"
           disabled={!selectedProductId}
-          options={routes.map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
+          options={routes.map((r) => ({ value: r.id, label: `${r.route_name}` }))}
         />
       </Form.Item>
 

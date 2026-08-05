@@ -4,7 +4,8 @@ export {
   saveRouteGraph,
   publishRoute,
   archiveRoute,
-  newRouteVersion,
+  copyRoute,
+  renameRoute,
   deleteRoute,
 } from './route'
 export {

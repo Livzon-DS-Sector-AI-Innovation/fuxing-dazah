@@ -98,7 +98,7 @@ async def published_route(db_session: AsyncSession) -> dict[str, Any]:
         user=None,
     )
     route = await route_service.create_route(
-        db_session, RouteCreate(product_id=product.id, name="工艺V1"), user=None
+        db_session, RouteCreate(product_id=product.id, route_name="工艺V1"), user=None
     )
     await route_service.save_graph(db_session, route.id, build_graph_in(), user=None)
     route = await route_service.publish_route(db_session, route.id, user=None)

@@ -94,10 +94,11 @@ async def create_route(
 ) -> ProcessRoute:
     if not await repo.get_product(db, payload.product_id):
         raise NotFoundException("产品", str(payload.product_id))
+    if await repo.get_route_by_name(db, payload.product_id, payload.route_name):
+        raise DuplicateException("工艺路线", payload.route_name)
     route = ProcessRoute(
         product_id=payload.product_id,
-        version=await repo.next_route_version(db, payload.product_id),
-        name=payload.name,
+        route_name=payload.route_name,
         status="draft",
         created_by=user.id if user else None,
     )
@@ -321,15 +322,35 @@ async def archive_route(
     return refreshed
 
 
-async def new_version(
-    db: AsyncSession, route_id: uuid.UUID, user: User | None
+async def rename_route(
+    db: AsyncSession, route_id: uuid.UUID, route_name: str, user: User | None
 ) -> ProcessRoute:
-    """从任意版本复制出新 draft（节点/边/字段定义全量克隆，UUID 重新生成）。"""
+    """改名（任意状态可改）。只影响展示标识，批次/计划/负责人均按 route_id 引用，不受影响。"""
+    route = await _get_route_or_404(db, route_id)
+    if route.route_name != route_name:
+        if await repo.get_route_by_name(db, route.product_id, route_name):
+            raise DuplicateException("工艺路线", route_name)
+        route.route_name = route_name
+        route.updated_by = user.id if user else None
+        await db.flush()
+    refreshed = await repo.get_route(db, route_id)
+    assert refreshed is not None
+    return refreshed
+
+
+async def copy_route(
+    db: AsyncSession, route_id: uuid.UUID, route_name: str, user: User | None
+) -> ProcessRoute:
+    """复制为同名产品下的新路径（节点/边/字段定义全量克隆，UUID 重新生成）。
+
+    新路径 route_name 需手工输入并在产品内唯一；负责人配置不随复制带走。
+    """
     source = await _get_route_or_404(db, route_id)
+    if await repo.get_route_by_name(db, source.product_id, route_name):
+        raise DuplicateException("工艺路线", route_name)
     new_route = ProcessRoute(
         product_id=source.product_id,
-        version=await repo.next_route_version(db, source.product_id),
-        name=source.name,
+        route_name=route_name,
         status="draft",
         created_by=user.id if user else None,
     )

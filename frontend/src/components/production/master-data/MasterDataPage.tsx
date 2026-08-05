@@ -197,9 +197,8 @@ function ProductDetail({ product }: { product: Product }) {
     enabled: !!product.id,
   })
 
-  const routeColumns: ColumnsType<{ id: string; name: string; version: number; status: string }> = [
-    { title: '路线名称', dataIndex: 'name', key: 'name' },
-    { title: '版本', dataIndex: 'version', key: 'version', width: 60 },
+  const routeColumns: ColumnsType<{ id: string; route_name: string; status: string }> = [
+    { title: '路线名称', dataIndex: 'route_name', key: 'route_name' },
     {
       title: '状态',
       dataIndex: 'status',

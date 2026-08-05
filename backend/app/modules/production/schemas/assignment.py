@@ -60,7 +60,6 @@ class WorkbenchItem(BaseModel):
     product_name: str | None = None
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     node_id: uuid.UUID
     node_name: str
     stage_name: str | None = None
@@ -92,7 +91,6 @@ class AssignedStageInfo(BaseModel):
 class AssignedRouteInfo(BaseModel):
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     product_name: str | None = None
     stages: list[AssignedStageInfo] = []
 
@@ -136,7 +134,6 @@ class PlannedBatchItem(BaseModel):
     product_name: str | None = None
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     plan_item_id: uuid.UUID
     plan_order_no: str
     planned_start: str | None = None

@@ -9,14 +9,14 @@ from app.shared.base_model import BaseModel
 
 
 class ProcessRoute(BaseModel):
-    """工艺路线（一个产品多个版本，published 后图冻结）"""
+    """工艺路线（同一产品可有多条并行路径，published 后图冻结）"""
 
     __tablename__ = "process_routes"
     __table_args__ = (
         Index(
-            "uq_production_routes_product_version",
+            "uq_production_routes_product_name",
             "product_id",
-            "version",
+            "route_name",
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
@@ -31,8 +31,9 @@ class ProcessRoute(BaseModel):
     product_id: Mapped[uuid.UUID] = mapped_column(
         comment="产品ID，逻辑引用 production.products.id"
     )
-    version: Mapped[int] = mapped_column(comment="版本号，同产品内递增")
-    name: Mapped[str] = mapped_column(String(200), comment="路线名称")
+    route_name: Mapped[str] = mapped_column(
+        String(200), comment="路线名称，产品内唯一，兼作路径标识"
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="draft", comment="draft/published/archived"
     )

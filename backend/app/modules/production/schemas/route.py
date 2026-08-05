@@ -81,7 +81,11 @@ class EdgeOut(BaseModel):
 
 class RouteCreate(BaseModel):
     product_id: uuid.UUID
-    name: str = Field(max_length=200)
+    route_name: str = Field(max_length=200)
+
+
+class RouteRename(BaseModel):
+    route_name: str = Field(max_length=200)
 
 
 class RouteOut(BaseModel):
@@ -89,8 +93,7 @@ class RouteOut(BaseModel):
 
     id: uuid.UUID
     product_id: uuid.UUID
-    version: int
-    name: str
+    route_name: str
     status: str
     created_at: datetime
     updated_at: datetime

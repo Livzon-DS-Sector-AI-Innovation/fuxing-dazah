@@ -55,7 +55,7 @@ export function CreateBatchModal({ open, productId, onClose }: Props) {
           <Select
             options={publishedRoutes.map(r => ({
               value: r.id,
-              label: `V${r.version} · ${r.name}`,
+              label: `${r.route_name}`,
             }))}
             notFoundContent="该产品没有已发布的工艺路线"
           />

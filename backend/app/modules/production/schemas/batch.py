@@ -25,7 +25,6 @@ class BatchOut(BaseModel):
     product_id: uuid.UUID
     route_id: uuid.UUID
     route_name: str = ""
-    route_version: int = 0
     status: str
     quantity: float | None
     unit: str | None

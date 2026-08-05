@@ -128,8 +128,7 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
           {
             title: '工艺路线',
             width: 140,
-            render: (_, r) =>
-              r.route_name ? `${r.route_name} v${r.route_version}` : '—',
+            render: (_, r) => r.route_name || '—',
           },
           {
             title: '状态',

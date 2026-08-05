@@ -49,7 +49,7 @@ function InlineEditForm({ form, onSave, onCancel, products, routes, onProductCha
   onSave: () => Promise<void>
   onCancel: () => void
   products: { id: string; product_name: string }[]
-  routes: { id: string; name: string; version: number }[]
+  routes: { id: string; route_name: string }[]
   onProductChange: (productId: string) => void
 }) {
   const productId = Form.useWatch('product_id', form)
@@ -72,7 +72,7 @@ function InlineEditForm({ form, onSave, onCancel, products, routes, onProductCha
           <Select
             placeholder="先选产品"
             disabled={!productId}
-            options={routes.map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
+            options={routes.map((r) => ({ value: r.id, label: `${r.route_name}` }))}
           />
         </Form.Item>
       </div>
@@ -341,7 +341,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const routeName = useMemo(() => {
     if (!routeId || !routes) return null
     const r = routes.find((r) => r.id === routeId)
-    return r ? `${r.name} v${r.version}` : null
+    return r ? `${r.route_name}` : null
   }, [routeId, routes])
 
   const status = order ? (STATUS_CONFIG[order.status] ?? { label: order.status, color: 'default' }) : null

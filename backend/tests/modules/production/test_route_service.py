@@ -2,9 +2,9 @@
 
 覆盖业务场景：
 - 产品：名称唯一；软删除后同名可重建；有未完成批次时不可删除
-- 图编辑：版本号递增；保存并读取完整图（节点/边/字段）；未知边引用拒绝；
+- 图编辑：route_name 产品内唯一；保存并读取完整图（节点/边/字段）；未知边引用拒绝；
   发布后图冻结不可再编辑；环形流转无起点拒绝发布；不可达节点拒绝发布
-- 版本复制：新版本继承完整图结构
+- 路线复制：复制为新产品路线继承完整图结构
 - 边界边约束：批次边界边不允许开启流水线模式
 """
 
@@ -32,7 +32,7 @@ async def _draft_route(db: AsyncSession) -> tuple[Product, ProcessRoute]:
         db, ProductCreate(product_name="产品"), user=None,
     )
     route = await route_service.create_route(
-        db, RouteCreate(product_id=product.id, name="V1"), user=None,
+        db, RouteCreate(product_id=product.id, route_name="V1"), user=None,
     )
     return product, route
 
@@ -85,14 +85,21 @@ class TestProduct:
 
 
 class TestGraph:
-    async def test_version_increments(self, db_session: AsyncSession) -> None:
-        """同一产品下创建新路线版本号自动递增。"""
+    async def test_duplicate_route_name_rejected(self, db_session: AsyncSession) -> None:
+        """同一产品下 route_name 唯一；不同产品可同名。"""
         product, route = await _draft_route(db_session)
-        assert route.version == 1
-        route2 = await route_service.create_route(
-            db_session, RouteCreate(product_id=product.id, name="V2"), user=None,
+        assert route.route_name == "V1"
+        with pytest.raises(AppException):
+            await route_service.create_route(
+                db_session, RouteCreate(product_id=product.id, route_name="V1"), user=None,
+            )
+        other = await route_service.create_product(
+            db_session, ProductCreate(product_name=f"其他-{uuid.uuid4().hex[:8]}"), user=None,
         )
-        assert route2.version == 2
+        route2 = await route_service.create_route(
+            db_session, RouteCreate(product_id=other.id, route_name="V1"), user=None,
+        )
+        assert route2.route_name == "V1"
 
     async def test_save_and_get_graph(self, db_session: AsyncSession) -> None:
         """保存标准测试图后读取，3 节点、3 边、B 节点含 2 个字段定义。"""
@@ -164,17 +171,17 @@ class TestGraph:
         with pytest.raises(AppException):
             await route_service.publish_route(db_session, route.id, user=None)
 
-    async def test_new_version_copies_graph(self, db_session: AsyncSession) -> None:
-        """从已发布版本创建新版本，继承完整的 3 节点 3 边图结构。"""
+    async def test_copy_route_copies_graph(self, db_session: AsyncSession) -> None:
+        """从已发布路线复制为新路线，继承完整的 3 节点 3 边图结构。"""
         _, route = await _draft_route(db_session)
         await route_service.save_graph(
             db_session, route.id, build_graph_in(), user=None,
         )
         await route_service.publish_route(db_session, route.id, user=None)
-        v2 = await route_service.new_version(db_session, route.id, user=None)
-        assert v2.status == "draft"
-        assert v2.version == 2
-        graph = await route_service.get_graph(db_session, v2.id)
+        copy = await route_service.copy_route(db_session, route.id, "复制路线", user=None)
+        assert copy.status == "draft"
+        assert copy.route_name == "复制路线"
+        graph = await route_service.get_graph(db_session, copy.id)
         assert len(graph.nodes) == 3
         assert len(graph.edges) == 3
 
@@ -188,7 +195,7 @@ class TestGraph:
             user=None,
         )
         route = await route_service.create_route(
-            db_session, RouteCreate(product_id=product.id, name="V1"), user=None,
+            db_session, RouteCreate(product_id=product.id, route_name="V1"), user=None,
         )
         graph = build_graph_in()
         graph.edges[0].allow_overlap = True

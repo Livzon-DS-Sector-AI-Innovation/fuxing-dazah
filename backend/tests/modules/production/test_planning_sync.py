@@ -7,15 +7,13 @@
 - execution/batch 触发点端到端
 """
 
-import uuid
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch, BatchLink, NodeExecution
+from app.modules.production.models import Batch, NodeExecution
 from app.modules.production.models.planning import PlanItem
 from app.modules.production.schemas import (
     BatchCreate,
@@ -222,7 +220,7 @@ class TestRepoSyncQueries:
         ctx = published_route
         batch = await _make_batch(db_session, ctx)
         await _run_node(db_session, batch, ctx["node_a"])  # completed
-        ex = await execution_service.start_execution(
+        _ = await execution_service.start_execution(
             db_session,
             batch.id,
             ExecutionStartIn(
@@ -389,7 +387,7 @@ class TestBatchTriggers:
         item, batch = await _make_plan_batch(db_session, published_route, user)
         await _activate(db_session, batch, published_route, user)
         await _run_node(db_session, batch, published_route["node_a"])
-        child = await _derive(db_session, batch, published_route)
+        _child = await _derive(db_session, batch, published_route)
         # derive 触发点自动 sync
         assert (await repo.get_plan_item(db_session, item.id)).status == "in_progress"
 
@@ -424,7 +422,9 @@ class TestComputeProgress:
         await _run_node(db_session, batch, published_route["node_b"])
         child = await _derive(db_session, batch, published_route)
 
-        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        from app.modules.production.service.planning_service import (
+            _compute_item_batch_progress,
+        )
         progress = await _compute_item_batch_progress(db_session, batch)
         assert progress is not None
         # 批号取链末端（子批次），状态取链合并（有 in_progress → in_progress）
@@ -448,7 +448,9 @@ class TestComputeProgress:
         await _activate(db_session, batch, published_route, user)
         await _run_node(db_session, batch, published_route["node_a"])
 
-        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        from app.modules.production.service.planning_service import (
+            _compute_item_batch_progress,
+        )
         progress = await _compute_item_batch_progress(db_session, batch)
         assert progress is not None
         assert progress.batch_no == batch.batch_no
@@ -467,7 +469,9 @@ class TestComputeProgress:
         await _run_node(db_session, batch, published_route["node_b"])
         await _run_node(db_session, batch, published_route["node_c"])
 
-        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        from app.modules.production.service.planning_service import (
+            _compute_item_batch_progress,
+        )
         progress = await _compute_item_batch_progress(db_session, batch)
         assert progress is not None
         assert progress.batch_no == batch.batch_no
