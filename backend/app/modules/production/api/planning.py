@@ -29,8 +29,8 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
 router = APIRouter()
-_submit = require_permission("production:batch:submit")
-_read = require_permission("production:batch:read")
+_submit = require_permission("production:planning:submit")
+_read = require_permission("production:planning:read")
 
 
 # ══════════════════════════════
