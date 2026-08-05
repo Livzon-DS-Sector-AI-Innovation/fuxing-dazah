@@ -11,7 +11,7 @@ import { fetchWorkbench, completeBatch, fetchBatchOutputs, fetchBatchConsumption
 import { fetchBatchDetailClient } from '@/lib/api/production-client'
 import { stageColor } from '@/components/production/shared/stageColor'
 import type { WorkbenchItem, Execution, StageNodeInfo, IntermediateOutput, IntermediateConsumption } from '@/types/production'
-import { usePermission } from '@/hooks/usePermission'
+
 import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
 import { PlannedSection } from './PlannedSection'
@@ -156,10 +156,9 @@ function StageBreadcrumb({ nodes, stageColor: sc }: { nodes: StageNodeInfo[]; st
 // ── 批次卡片 ──
 
 function BatchCard({
-  item, canSubmit, index, role, onReceive, onStart, onComplete, onCompleteBatch,
+  item, index, role, onReceive, onStart, onComplete, onCompleteBatch,
 }: {
   item: WorkbenchItem
-  canSubmit: boolean
   index: number
   role: 'stage_owner' | 'node_owner'
   onReceive: () => void
@@ -285,7 +284,7 @@ function BatchCard({
 
       {/* 操作按钮 */}
       <div style={{ marginTop: 2 }}>
-        {item.type === 'pending_receive' && canSubmit && item.parent_batch_ids.length > 0 && (
+        {item.type === 'pending_receive' && item.parent_batch_ids.length > 0 && (
           <button
             onClick={onReceive}
             style={{
@@ -340,7 +339,7 @@ function BatchCard({
             结束 {item.node_name}
           </button>
         )}
-        {item.type === 'ready_to_complete' && canSubmit && (
+        {item.type === 'ready_to_complete' && (
           <button
             onClick={onCompleteBatch}
             style={{
@@ -367,8 +366,6 @@ function BatchCard({
 
 export function WorkbenchInner() {
   const { message } = App.useApp()
-  const { hasPermission } = usePermission()
-  const canSubmit = hasPermission('production:batch:submit')
   const queryClient = useQueryClient()
 
   const [receiveItem, setReceiveItem] = useState<WorkbenchItem | null>(null)
@@ -678,7 +675,6 @@ export function WorkbenchInner() {
                               <BatchCard
                                 key={`${item.node_id}-${item.batch_id ?? item.parent_batch_ids.join('-')}`}
                                 item={item}
-                                canSubmit={canSubmit}
                                 index={idx}
                                 role={data!.role}
                                 onReceive={() => setReceiveItem(item)}
@@ -720,7 +716,7 @@ export function WorkbenchInner() {
           )}
 
           {/* ── 计划批次 ── */}
-          <PlannedSection stageNames={data?.stage_names ?? []} canSubmit={canSubmit} />
+          <PlannedSection stageNames={data?.stage_names ?? []} />
 
           {/* ── 最近完成 ── */}
           {data?.recent_completed && data.recent_completed.length > 0 && (
