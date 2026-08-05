@@ -13,6 +13,7 @@ import type { IntermediateConsumption, IntermediateOutput, Execution } from '@/t
 import { BATCH_STATUS_META } from './BatchTable'
 import { TraceGraph } from './TraceGraph'
 import { ExecutionTimeline } from './ExecutionTimeline'
+import { BackfillFieldsModal } from './BackfillFieldsModal'
 
 // ── 设计令牌 ──────────────────────────────────────────────
 const T = {
@@ -85,6 +86,7 @@ export function BatchDetailDrawer({
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [currentId, setCurrentId] = useState(batchId)
+  const [backfillExec, setBackfillExec] = useState<Execution | null>(null)
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['production-batch-detail', currentId],
@@ -130,6 +132,10 @@ export function BatchDetailDrawer({
 
   const meta = detail ? BATCH_STATUS_META[detail.status] : null
   const hasMaterials = (outputsData?.length ?? 0) > 0 || (consumptionsData?.length ?? 0) > 0
+  const pendingBackfill = (detail?.executions ?? []).reduce(
+    (sum, e) => sum + (e.missing_required_fields?.length ?? 0),
+    0,
+  )
 
   return (
     <Drawer
@@ -177,21 +183,38 @@ export function BatchDetailDrawer({
             title="工序执行时间线"
             extra={
               canSubmit && detail?.status === 'in_progress' && (
-                <Popconfirm
-                  title="确认批次完成？"
-                  onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
-                >
-                  <Button type="primary">完成批次</Button>
-                </Popconfirm>
+                pendingBackfill > 0 ? (
+                  <Popconfirm
+                    title={`还有 ${pendingBackfill} 项必填字段待补录，批次完成后不可再补。确认完成？`}
+                    onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
+                  >
+                    <Button type="primary">完成批次（待补录 {pendingBackfill} 项）</Button>
+                  </Popconfirm>
+                ) : (
+                  <Popconfirm
+                    title="确认批次完成？"
+                    onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
+                  >
+                    <Button type="primary">完成批次</Button>
+                  </Popconfirm>
+                )
               )
             }
           >
             <ExecutionTimeline
               executions={detail?.executions ?? []}
-              canSubmit={canSubmit && detail?.status !== 'cancelled'}
+              canSubmit={canSubmit && detail?.status === 'in_progress'}
               onComplete={e => detail && onCompleteExecution?.(e, detail.route_id)}
               onAbort={e => runAction(() => abortExecution(e.id), '已中止')}
+              onBackfill={e => setBackfillExec(e)}
             />
+            {backfillExec && detail && (
+              <BackfillFieldsModal
+                executions={[backfillExec]}
+                routeId={detail.route_id}
+                onClose={() => setBackfillExec(null)}
+              />
+            )}
 
             {/* 时间线操作栏 */}
             {canSubmit && detail && (

@@ -16,6 +16,7 @@ from app.modules.production.schemas.assignment import (
     AssignedNodeInfo,
     AssignedRouteInfo,
     AssignedStageInfo,
+    MissingExecutionOut,
     NodeAssigneeInfo,
     PlannedBatchItem,
     PlannedBatchOut,
@@ -27,7 +28,10 @@ from app.modules.production.schemas.assignment import (
 )
 from app.modules.production.schemas.batch import DeriveIn, MergeIn, MergeParentIn
 from app.modules.production.service.batch_service import derive_batches, merge_batches
-from app.modules.production.service.execution_service import start_execution
+from app.modules.production.service.execution_service import (
+    compute_missing_required_fields,
+    start_execution,
+)
 from app.platform.identity.models import User
 
 
@@ -321,6 +325,38 @@ async def query_planned_batches(
 
     result.sort(key=lambda x: x.planned_start or "")
     return PlannedBatchOut(items=result)
+
+
+async def _missing_executions_by_batches(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[MissingExecutionOut]]:
+    """批量查询这些批次缺填必填字段的已完成执行（工作台补录入口用）。
+
+    复用 execution_service.compute_missing_required_fields（同一缺填判定规则）。
+    """
+    if not batch_ids:
+        return {}
+    executions = await repo.list_executions_by_batches(db, batch_ids)
+    if not executions:
+        return {}
+    missing_by_exec = await compute_missing_required_fields(db, executions)
+    if not missing_by_exec:
+        return {}
+    nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
+    node_names = {n.id: n.name for n in nodes}
+    ex_by_id = {e.id: e for e in executions}
+    result: dict[uuid.UUID, list[MissingExecutionOut]] = {}
+    for exec_id, m in missing_by_exec.items():
+        e = ex_by_id[exec_id]
+        result.setdefault(e.batch_id, []).append(
+            MissingExecutionOut(
+                execution_id=e.id,
+                node_id=e.node_id,
+                node_name=node_names.get(e.node_id, "工序"),
+                missing_required_fields=m,
+            )
+        )
+    return result
 
 
 async def query_workbench(
@@ -660,6 +696,10 @@ async def query_workbench(
             ))
 
         # ── ready_to_complete：工段内所有节点已完成且有批次边界出边 ──
+        # 一次性计算本路线批次缺填的必填字段（补录入口）
+        missing_exec_by_batch = await _missing_executions_by_batches(
+            db, [b.id for b in batches],
+        )
         # 按工段分组，每组独立判断
         stage_names_in_permitted = {
             node_map[nid].stage_name for nid in permitted_node_ids
@@ -701,10 +741,13 @@ async def query_workbench(
                     type="ready_to_complete",
                     batch_id=b.id, batch_no=b.batch_no,
                     product_name=product_name,
+                    route_id=route_id,
+                    route_name=route.route_name,
                     node_id=last_node.id, node_name=last_node.name,
                     stage_name=stage_name,
                     predecessor_batches=[],
                     node_assignees=[],
+                    missing_executions=missing_exec_by_batch.get(b.id, []),
                     stage_nodes=_build_stage_nodes(nodes_by_stage.get(stage_name or "未分组", []), comp, ip),
                 ))
 

@@ -40,10 +40,8 @@ __all__ = [
     "get_batches_for_allocations",
     "get_batch_by_no",
     "get_plan_item_by_batch_no",
-    "get_batch_single_branch_tip",
     "get_parent_batch_id",
     "get_child_batch_ids",
-    "get_node_execution_progress",
     "get_chain_node_execution_progress",
     "get_change_logs",
     "get_batches_by_plan_items",
@@ -367,18 +365,6 @@ async def get_plan_item_by_batch_no(
 # ── 批次追溯 / 执行进度 / 变更日志 ──
 
 
-async def get_batch_single_branch_tip(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
-    """沿单分支链追溯：子批次=1时继续，≠1时停止，返回停止节点的Batch。"""
-    current_id = batch_id
-    while True:
-        child_ids = await get_child_batch_ids(db, current_id)
-        if len(child_ids) != 1:
-            break
-        current_id = child_ids[0]
-    stmt = select(Batch).where(Batch.id == current_id, Batch.is_deleted == False)  # noqa: E712
-    return (await db.execute(stmt)).scalar_one_or_none()
-
-
 async def get_parent_batch_id(
     db: AsyncSession, child_id: uuid.UUID,
 ) -> uuid.UUID | None:
@@ -413,30 +399,6 @@ async def get_child_batch_ids(
     return list((await db.execute(stmt)).scalars())
 
 
-async def get_node_execution_progress(
-    db: AsyncSession, batch_id: uuid.UUID,
-) -> tuple[str | None, str | None]:
-    """返回 (latest_node_name, latest_node_status)，该批次最远执行到的工序名称和状态。"""
-    from app.modules.production.models.execution import NodeExecution
-    from app.modules.production.models.route import RouteNode
-
-    stmt = (
-        select(RouteNode.name, NodeExecution.status)
-        .join(NodeExecution, NodeExecution.node_id == RouteNode.id)
-        .where(
-            NodeExecution.batch_id == batch_id,
-            NodeExecution.is_deleted == False,  # noqa: E712
-            RouteNode.is_deleted == False,  # noqa: E712
-        )
-        .order_by(RouteNode.sort_order.desc())
-        .limit(1)
-    )
-    row = (await db.execute(stmt)).first()
-    if row is None:
-        return None, None
-    return row[0], row[1]
-
-
 async def get_chain_node_execution_progress(
     db: AsyncSession, batch_ids: list[uuid.UUID],
 ) -> tuple[str | None, str | None]:
@@ -457,7 +419,8 @@ async def get_chain_node_execution_progress(
             NodeExecution.is_deleted == False,  # noqa: E712
             RouteNode.is_deleted == False,  # noqa: E712
         )
-        .order_by(RouteNode.sort_order.desc())
+        # 同一节点多次执行（返工 seq+1）时取最新一次，避免状态随机
+        .order_by(RouteNode.sort_order.desc(), NodeExecution.execution_seq.desc())
         .limit(1)
     )
     row = (await db.execute(stmt)).first()

@@ -36,6 +36,12 @@ export interface Execution {
   remark: string | null
   equipments: EquipmentSnapshot[]
   field_values: FieldValue[]
+  missing_required_fields?: MissingField[]
+}
+
+export interface MissingField {
+  field_key: string
+  field_label: string
 }
 
 export interface FieldValueInput {

@@ -15,7 +15,7 @@ export {
   completeBatch,
   cancelBatch,
 } from './batch'
-export { startExecution, completeExecution, abortExecution } from './execution'
+export { startExecution, completeExecution, backfillExecutionFields, abortExecution } from './execution'
 export {
   createIntermediateType,
   updateIntermediateType,

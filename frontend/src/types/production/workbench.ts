@@ -1,3 +1,5 @@
+import type { MissingField } from './execution'
+
 export interface NodeAssigneeInfo {
   user_id: string
   name: string | null
@@ -30,6 +32,14 @@ export interface WorkbenchItem {
   started_at: string | null
   is_last_in_stage: boolean
   stage_nodes: StageNodeInfo[]
+  missing_executions?: MissingExecution[]
+}
+
+export interface MissingExecution {
+  execution_id: string
+  node_id: string
+  node_name: string
+  missing_required_fields: MissingField[]
 }
 
 export interface AssignedNodeInfo {

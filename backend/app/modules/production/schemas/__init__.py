@@ -21,11 +21,13 @@ from app.modules.production.schemas.batch import (
 )
 from app.modules.production.schemas.execution import (
     EquipmentSnapshotOut,
+    ExecutionBackfillIn,
     ExecutionCompleteIn,
     ExecutionOut,
     ExecutionStartIn,
     FieldValueIn,
     FieldValueOut,
+    MissingFieldOut,
     NodeExecutionListItem,
 )
 from app.modules.production.schemas.intermediate import (
@@ -95,6 +97,7 @@ __all__ = [
     "EdgeIn",
     "EdgeOut",
     "EquipmentSnapshotOut",
+    "ExecutionBackfillIn",
     "ExecutionCompleteIn",
     "ExecutionOut",
     "ExecutionStartIn",
@@ -114,6 +117,8 @@ __all__ = [
     "MaterialStockSummary",
     "MergeIn",
     "MergeParentIn",
+    "MissingExecutionOut",
+    "MissingFieldOut",
     "NodeExecutionListItem",
     "NodeIn",
     "NodeIntermediateIn",

@@ -13,6 +13,7 @@ __all__ = [
     "get_batches_by_ids",
     "list_batches",
     "count_unfinished_batches",
+    "count_unfinished_batches_by_route",
 ]
 
 
@@ -79,6 +80,19 @@ async def count_unfinished_batches(db: AsyncSession, product_id: uuid.UUID) -> i
         .select_from(Batch)
         .where(
             Batch.product_id == product_id,
+            Batch.status.in_(("pending", "in_progress")),
+            Batch.is_deleted == False,  # noqa: E712
+        )
+    )
+    return (await db.execute(stmt)).scalar_one()
+
+
+async def count_unfinished_batches_by_route(db: AsyncSession, route_id: uuid.UUID) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(Batch)
+        .where(
+            Batch.route_id == route_id,
             Batch.status.in_(("pending", "in_progress")),
             Batch.is_deleted == False,  # noqa: E712
         )

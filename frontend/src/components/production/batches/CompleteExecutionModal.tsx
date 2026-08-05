@@ -83,8 +83,8 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
       styles={{ body: { padding: '16px 24px', maxHeight: '70vh', overflowY: 'auto' } }}
     >
       <Form form={form} layout="vertical">
-        {/* ── 动态字段 ── */}
-        <DynamicFieldFormItems defs={endDefs} />
+        {/* ── 动态字段（必填不阻断，批次结束前可补录） ── */}
+        <DynamicFieldFormItems defs={endDefs} enforceRequired={false} />
 
         {/* ── 产出物料 ── */}
         {outputIntermediates.length > 0 && (

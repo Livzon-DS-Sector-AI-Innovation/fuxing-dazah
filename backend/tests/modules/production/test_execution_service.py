@@ -310,10 +310,10 @@ class TestStart:
 
 
 class TestCompleteAndRework:
-    async def test_complete_missing_required_end_field_rejected(
+    async def test_complete_without_required_end_field_allowed(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
-        """B 节点 end 阶段有 required 字段 yield_qty，缺失时完成被拒；补齐后完成成功。"""
+        """B 节点 end 阶段 required 字段 yield_qty 缺失时仍可结束工序（批次结束前可补录）。"""
         batch = await _make_batch(db_session, published_route)
         await _complete_node_a(db_session, published_route, batch)
         ex = await execution_service.start_execution(
@@ -325,11 +325,58 @@ class TestCompleteAndRework:
             ),
             user=None,
         )
-        with pytest.raises(AppException):
-            await execution_service.complete_execution(
-                db_session, ex.id, ExecutionCompleteIn(), user=None,
-            )
         done = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        assert done.status == "completed"
+        assert done.finished_at is not None
+
+    async def test_complete_batch_rejected_until_backfill(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次完成时必填字段未上报被拒；补录后批次可完成。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        with pytest.raises(AppException, match="yield_qty|产出量"):
+            await batch_service.complete_batch(db_session, batch.id, user=None)
+        # 补录后批次可完成
+        await execution_service.backfill_execution_fields(
+            db_session,
+            ex.id,
+            [FieldValueIn(field_key="yield_qty", value=80)],
+            user=None,
+        )
+        done = await batch_service.complete_batch(db_session, batch.id, user=None)
+        assert done.status == "completed"
+
+    async def test_backfill_rejected_after_batch_completed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次完成后禁止补录。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
             db_session,
             ex.id,
             ExecutionCompleteIn(
@@ -337,8 +384,42 @@ class TestCompleteAndRework:
             ),
             user=None,
         )
-        assert done.status == "completed"
-        assert done.finished_at is not None
+        await batch_service.complete_batch(db_session, batch.id, user=None)
+        with pytest.raises(AppException, match="批次已结束"):
+            await execution_service.backfill_execution_fields(
+                db_session,
+                ex.id,
+                [FieldValueIn(field_key="yield_qty", value=90)],
+                user=None,
+            )
+
+    async def test_backfill_records_filled_at(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """补录写入 filled_at/filled_by，覆盖更新已有行。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        values = await execution_service.backfill_execution_fields(
+            db_session,
+            ex.id,
+            [FieldValueIn(field_key="yield_qty", value=80)],
+            user=None,
+        )
+        row = next(v for v in values if v.field_key == "yield_qty")
+        assert row.filled_at is not None
+        assert row.value_numeric == 80
 
     async def test_rework_increments_seq(
         self, db_session: AsyncSession, published_route: dict[str, Any],

@@ -17,6 +17,7 @@ import { AssigneeConfig } from './AssigneeConfig'
 import { PlannedSection } from './PlannedSection'
 import { StartExecutionModal } from '../batches/StartExecutionModal'
 import { CompleteExecutionModal } from '../batches/CompleteExecutionModal'
+import { BackfillFieldsModal, type BackfillExecution } from '../batches/BackfillFieldsModal'
 
 // ── 常量 ──
 
@@ -354,6 +355,7 @@ function BatchCard({
             onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)' }}
           >
             完成批次
+            {(item.missing_executions?.length ?? 0) > 0 && '（需补录）'}
           </button>
         )}
       </div>
@@ -379,6 +381,7 @@ export function WorkbenchInner() {
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [startNodeId, setStartNodeId] = useState<string | undefined>(undefined)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string; onSuccess?: () => void } | null>(null)
+  const [backfillExec, setBackfillExec] = useState<{ executions: BackfillExecution[]; routeId: string } | null>(null)
 
   const [showConfig, setShowConfig] = useState(false)
   const [showRecent, setShowRecent] = useState(false)
@@ -683,6 +686,19 @@ export function WorkbenchInner() {
                                 onComplete={() => openCompleteModal(item)}
                                 onCompleteBatch={async () => {
                                   if (!item.batch_id) return
+                                  if (item.missing_executions?.length) {
+                                    setBackfillExec({
+                                      routeId: item.route_id,
+                                      executions: item.missing_executions.map(me => ({
+                                        id: me.execution_id,
+                                        batch_id: item.batch_id!,
+                                        node_id: me.node_id,
+                                        node_name: me.node_name,
+                                        missing_required_fields: me.missing_required_fields,
+                                      })),
+                                    })
+                                    return
+                                  }
                                   const r = await completeBatch(item.batch_id)
                                   if (r.success) {
                                     message.success('批次已完成')
@@ -828,6 +844,15 @@ export function WorkbenchInner() {
             setCompleteExec(null)
             queryClient.invalidateQueries({ queryKey: ['production-workbench'] })
           }}
+        />
+      )}
+
+      {backfillExec && (
+        <BackfillFieldsModal
+          executions={backfillExec.executions}
+          routeId={backfillExec.routeId}
+          autoCompleteBatch
+          onClose={() => setBackfillExec(null)}
         />
       )}
 

@@ -314,6 +314,11 @@ async def archive_route(
     route = await _get_route_or_404(db, route_id)
     if route.status != "published":
         raise AppException(status_code=400, message="仅 published 状态的路线可归档")
+    unfinished = await repo.count_unfinished_batches_by_route(db, route_id)
+    if unfinished:
+        raise AppException(
+            status_code=400, message=f"存在 {unfinished} 个进行中/待执行批次,无法归档"
+        )
     route.status = "archived"
     route.updated_by = user.id if user else None
     await db.flush()

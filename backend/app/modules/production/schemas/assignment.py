@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.modules.production.schemas.execution import MissingFieldOut
+
 # ── 工段负责人 ──
 
 class StageAssignmentCreate(BaseModel):
@@ -53,6 +55,15 @@ class StageNodeInfo(BaseModel):
     status: str  # "completed" | "in_progress" | "pending"
 
 
+class MissingExecutionOut(BaseModel):
+    """待完成批次中缺填必填字段的工序执行，供工作台直接补录。"""
+
+    execution_id: uuid.UUID
+    node_id: uuid.UUID
+    node_name: str
+    missing_required_fields: list[MissingFieldOut]
+
+
 class WorkbenchItem(BaseModel):
     type: str  # pending_receive | pending_start | pending_complete | ready_to_complete
     batch_no: str | None = None
@@ -72,6 +83,8 @@ class WorkbenchItem(BaseModel):
     execution_id: uuid.UUID | None = None
     execution_seq: int | None = None
     owner_name: str | None = None
+    # ready_to_complete 专用：该批次缺填必填字段的工序执行（工作台补录入口）
+    missing_executions: list[MissingExecutionOut] = []
     started_at: str | None = None
     is_last_in_stage: bool = False  # 是否是工段内最后一个节点，完成即可提交批次
     # 工序面包屑：当前工段内所有工序及其完成状态

@@ -55,6 +55,19 @@ class ExecutionCompleteIn(BaseModel):
     intermediate_outputs: list[IntermediateOutputIn] = []
 
 
+class ExecutionBackfillIn(BaseModel):
+    """工序结束后补录 end 阶段字段值。"""
+
+    field_values: list[FieldValueIn] = []
+
+
+class MissingFieldOut(BaseModel):
+    """已结束工序尚未补录的必填字段（批次结束前须补齐）。"""
+
+    field_key: str
+    field_label: str
+
+
 class ExecutionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -75,6 +88,7 @@ class ExecutionOut(BaseModel):
     remark: str | None
     equipments: list[EquipmentSnapshotOut] = []
     field_values: list[FieldValueOut] = []
+    missing_required_fields: list[MissingFieldOut] = []  # service 组装：已结束工序缺填的必填字段
 
 
 class NodeExecutionListItem(BaseModel):

@@ -1,7 +1,8 @@
 """工艺路线生命周期测试。
 
 覆盖业务场景：
-- 路线归档：published 路线可归档为 archived；draft/已归档路线不可归档
+- 路线归档：published 路线可归档为 archived；draft/已归档路线不可归档；
+  存在进行中/待执行批次时不可归档
 - 路线删除：draft 路线可软删除（含图数据级联软删）；published 路线不可删除
 - 发布边界场景：空图发布失败（至少需要一个节点）；节点编码重复拒绝；
   单节点图可正常发布
@@ -13,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
 from app.modules.production.models import ProcessRoute, Product
-from app.modules.production.schemas import ProductCreate, RouteCreate
-from app.modules.production.service import route_service
+from app.modules.production.schemas import BatchCreate, ProductCreate, RouteCreate
+from app.modules.production.service import batch_service, route_service
 from tests.modules.production.conftest import build_graph_in, rand_code
 
 
@@ -57,6 +58,27 @@ class TestArchive:
         await route_service.publish_route(db_session, route.id, user=None)
         await route_service.archive_route(db_session, route.id, user=None)
         with pytest.raises(AppException, match="仅 published"):
+            await route_service.archive_route(db_session, route.id, user=None)
+
+    async def test_archive_with_unfinished_batch_rejected(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """存在进行中/待执行批次时不可归档。"""
+        product, route = await _draft_route(db_session)
+        await route_service.save_graph(
+            db_session, route.id, build_graph_in(), user=None,
+        )
+        await route_service.publish_route(db_session, route.id, user=None)
+        await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("批"),
+                product_id=product.id,
+                route_id=route.id,
+            ),
+            user=None,
+        )
+        with pytest.raises(AppException, match="无法归档"):
             await route_service.archive_route(db_session, route.id, user=None)
 
 

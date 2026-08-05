@@ -22,6 +22,7 @@ from app.modules.production.schemas import (
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
+    MissingFieldOut,
     NodeExecutionListItem,
 )
 from app.modules.production.service.assignment_service import require_stage_permission
@@ -37,8 +38,13 @@ def _build_field_values(
     phase: str,
     execution_id: uuid.UUID,
     user: User | None,
+    enforce_required: bool = True,
 ) -> list[NodeFieldValue]:
-    """校验并构建某一 phase 的字段值行：必填校验、类型校验、is_abnormal 判定。"""
+    """校验并构建某一 phase 的字段值行：必填校验、类型校验、is_abnormal 判定。
+
+    enforce_required=False 时跳过必填校验（工序结束阶段允许事后补录，
+    必填完整性由 complete_batch 统一把关）。
+    """
     defs_by_key = {d.field_key: d for d in defs if d.phase == phase}
     input_map = {v.field_key: v.value for v in inputs}
 
@@ -47,19 +53,21 @@ def _build_field_values(
         raise AppException(
             status_code=400, message=f"未定义的字段: {', '.join(sorted(unknown))}"
         )
-    missing = [
-        d.field_key
-        for d in defs_by_key.values()
-        if d.required and input_map.get(d.field_key) is None
-    ]
-    if missing:
-        raise AppException(
-            status_code=400, message=f"缺少必填字段: {', '.join(sorted(missing))}"
-        )
+    if enforce_required:
+        missing = [
+            d.field_key
+            for d in defs_by_key.values()
+            if d.required and input_map.get(d.field_key) is None
+        ]
+        if missing:
+            raise AppException(
+                status_code=400, message=f"缺少必填字段: {', '.join(sorted(missing))}"
+            )
 
     rows: list[NodeFieldValue] = []
     for key, value in input_map.items():
-        if value is None:
+        # 空串视为未填：避免 value='' 生成"已填"行绕过批次完成时的必填门禁
+        if value is None or value == "":
             continue
         d = defs_by_key[key]
         row = NodeFieldValue(
@@ -70,6 +78,8 @@ def _build_field_values(
             unit=d.unit,
             phase=d.phase,
             created_by=user.id if user else None,
+            filled_at=datetime.now(UTC),
+            filled_by=user.id if user else None,
         )
         if d.data_type == "numeric":
             if isinstance(value, bool) or not isinstance(value, int | float | str):
@@ -102,6 +112,47 @@ def _build_field_values(
             row.value_text = str(value)
         rows.append(row)
     return rows
+
+
+async def compute_missing_required_fields(
+    db: AsyncSession, executions: list[NodeExecution],
+) -> dict[uuid.UUID, list[MissingFieldOut]]:
+    """已结束工序缺填的必填字段（end 阶段），按 execution_id 分组。
+
+    只统计 completed 执行；同一节点多次执行时以最新一次（execution_seq 最大）为准，
+    返工后被覆盖的旧执行缺字段不再永久卡住批次完成。
+    空值行（value_text='' 等）不算已填。
+    """
+    completed = [e for e in executions if e.status == "completed"]
+    if not completed:
+        return {}
+    latest_by_node: dict[uuid.UUID, NodeExecution] = {}
+    for e in completed:
+        cur = latest_by_node.get(e.node_id)
+        if cur is None or e.execution_seq > cur.execution_seq:
+            latest_by_node[e.node_id] = e
+    latest = list(latest_by_node.values())
+    defs = await repo.get_field_defs_by_nodes(db, list({e.node_id for e in latest}))
+    required_by_node: dict[uuid.UUID, list[NodeFieldDef]] = {}
+    for d in defs:
+        if d.phase == "end" and d.required:
+            required_by_node.setdefault(d.node_id, []).append(d)
+    values = await repo.get_field_values_by_executions(db, [e.id for e in latest])
+    filled: set[tuple[uuid.UUID, str]] = {
+        (v.execution_id, v.field_key)
+        for v in values
+        if v.value_text or v.value_numeric is not None or v.value_bool is not None
+    }
+    missing: dict[uuid.UUID, list[MissingFieldOut]] = {}
+    for e in latest:
+        m = [
+            MissingFieldOut(field_key=d.field_key, field_label=d.field_label)
+            for d in required_by_node.get(e.node_id, [])
+            if (e.id, d.field_key) not in filled
+        ]
+        if m:
+            missing[e.id] = m
+    return missing
 
 
 async def _check_source_legality(
@@ -259,7 +310,7 @@ async def complete_execution(
         raise AppException(status_code=400, message="仅进行中的执行可结束")
     defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
     for row in _build_field_values(
-        defs, payload.field_values, "end", execution.id, user
+        defs, payload.field_values, "end", execution.id, user, enforce_required=False
     ):
         db.add(row)
     # 中间体产出记录
@@ -310,6 +361,61 @@ async def complete_execution(
     assert refreshed is not None
     await sync_plan_item_status(db, execution.batch_id)
     return refreshed
+
+
+async def backfill_execution_fields(
+    db: AsyncSession,
+    execution_id: uuid.UUID,
+    field_values: list[FieldValueIn],
+    user: User | None,
+) -> list[NodeFieldValue]:
+    """工序结束后补录 end 阶段字段值（upsert）。批次完成后禁止补录。
+
+    filled_at/filled_by 刷新为补录时间与补录人，与首次填报的 created_at/created_by 区分。
+    """
+    execution = await repo.get_execution(db, execution_id)
+    if not execution:
+        raise NotFoundException("工序执行", str(execution_id))
+    if execution.status != "completed":
+        raise AppException(status_code=400, message="仅已结束的工序可补录字段")
+    batch = await repo.get_batch(db, execution.batch_id)
+    if not batch:
+        raise AppException(status_code=400, message="批次不存在或已删除，无法补录")
+    if batch.status in ("completed", "cancelled"):
+        raise AppException(status_code=400, message="批次已结束后禁止补录")
+    if not field_values:
+        raise AppException(status_code=400, message="没有要补录的字段值")
+
+    defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
+    end_defs = [d for d in defs if d.phase == "end"]
+    rows = _build_field_values(
+        end_defs, field_values, "end", execution.id, user, enforce_required=False
+    )
+    existing = await repo.get_field_values_by_executions(db, [execution.id])
+    by_def = {v.field_def_id: v for v in existing}
+    for row in rows:
+        cur = by_def.get(row.field_def_id)
+        if cur:
+            cur.value_text = row.value_text
+            cur.value_numeric = row.value_numeric
+            cur.value_bool = row.value_bool
+            cur.is_abnormal = row.is_abnormal
+            cur.filled_at = row.filled_at
+            cur.filled_by = row.filled_by
+            cur.updated_by = user.id if user else None
+        else:
+            db.add(row)
+    await db.flush()
+    await record_audit_log(
+        db,
+        action="production.execution.field_backfill",
+        user=user,
+        resource_type="node_execution",
+        resource_id=execution.id,
+        extra={"batch_no": batch.batch_no, "fields": [v.field_key for v in field_values]},
+    )
+    # 已加载的 existing 即返回结果：upsert 就地修改了命中行，新行在 rows 里
+    return existing + [r for r in rows if r.field_def_id not in by_def]
 
 
 async def abort_execution(

@@ -13,8 +13,12 @@ export function buildFieldValues(
     .map(d => ({ field_key: d.field_key, value: values[d.field_key] as never }))
 }
 
-/** 动态渲染一组字段定义。required 阻断；numeric 超限 warningOnly 警示不阻断（与后端 is_abnormal 对齐） */
-export function DynamicFieldFormItems({ defs }: { defs: FieldDef[] }) {
+/**
+ * 动态渲染一组字段定义。numeric 超限 warningOnly 警示不阻断（与后端 is_abnormal 对齐）。
+ * enforceRequired=false 时必填只显示「必填 · 可补录」标记不阻断（工序结束阶段，
+ * 完整性由批次完成时统一校验）。
+ */
+export function DynamicFieldFormItems({ defs, enforceRequired = true }: { defs: FieldDef[]; enforceRequired?: boolean }) {
   const sorted = [...defs].sort((a, b) => a.sort_order - b.sort_order)
   return (
     <>
@@ -23,7 +27,7 @@ export function DynamicFieldFormItems({ defs }: { defs: FieldDef[] }) {
           ? `${d.field_label}（${d.field_group}）${d.unit ? ` (${d.unit})` : ''}`
           : `${d.field_label}${d.unit ? ` (${d.unit})` : ''}`
         const rules: object[] = []
-        if (d.required) rules.push({ required: true, message: `请填写${d.field_label}` })
+        if (d.required && enforceRequired) rules.push({ required: true, message: `请填写${d.field_label}` })
         if (d.data_type === 'numeric' && (d.min_value !== null || d.max_value !== null)) {
           rules.push({
             warningOnly: true,
@@ -38,11 +42,14 @@ export function DynamicFieldFormItems({ defs }: { defs: FieldDef[] }) {
           })
         }
         const isBoolean = d.data_type === 'boolean'
+        const requiredMark = d.required && !enforceRequired
+          ? <span style={{ fontSize: 11, color: '#d48806', fontWeight: 400, marginLeft: 6 }}>必填 · 可补录</span>
+          : null
         return (
           <Form.Item
             key={d.field_key}
             name={d.field_key}
-            label={label}
+            label={requiredMark ? <span>{label}{requiredMark}</span> : label}
             rules={rules}
             {...(isBoolean ? { valuePropName: 'checked' } : {})}
           >

@@ -9,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
+    ExecutionBackfillIn,
     ExecutionCompleteIn,
     ExecutionOut,
     ExecutionStartIn,
+    FieldValueOut,
 )
 from app.modules.production.service import execution_service
 from app.platform.identity.models import User
@@ -47,6 +49,21 @@ async def complete_execution(
     )
     return success_response(
         ExecutionOut.model_validate(execution).model_dump(mode="json")
+    )
+
+
+@router.post("/executions/{execution_id}/field-values", summary="补录工序字段（批次结束前）")
+async def backfill_field_values(
+    execution_id: uuid.UUID,
+    payload: ExecutionBackfillIn,
+    user: User = Depends(_submit),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    values = await execution_service.backfill_execution_fields(
+        db, execution_id, payload.field_values, user
+    )
+    return success_response(
+        [FieldValueOut.model_validate(v).model_dump(mode="json") for v in values]
     )
 
 

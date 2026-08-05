@@ -58,7 +58,8 @@ export function RouteVersionBar({
   }
 
   const openNameModal = (action: NameModalAction) => {
-    setNameValue(action === 'create' ? '' : current?.route_name ?? '')
+    // create/copy 需输入新产品内唯一名称，预填源名称会在确认时必然撞重名
+    setNameValue(action === 'rename' ? current?.route_name ?? '' : '')
     setNameModal(action)
   }
 

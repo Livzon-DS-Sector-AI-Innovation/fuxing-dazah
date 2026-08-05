@@ -176,7 +176,11 @@ export function PlanOrderList() {
           <Input.Search
             placeholder="搜索计划单编号/标题"
             value={keyword}
-            onChange={e => setKeyword(e.target.value)}
+            // allowClear 的 X 只触发 onChange 不触发 onSearch，清空时必须同步重置筛选
+            onChange={e => {
+              setKeyword(e.target.value)
+              if (!e.target.value) setSearchKeyword('')
+            }}
             onSearch={setSearchKeyword}
             style={{ width: 260 }}
             allowClear

@@ -17,6 +17,7 @@ from app.modules.production.schemas import (
     MergeIn,
 )
 from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.execution_service import compute_missing_required_fields
 from app.modules.production.service.planning_service import sync_plan_item_status
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -232,6 +233,26 @@ async def merge_batches(
     return child
 
 
+async def _missing_required_fields(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> list[tuple[str, str]]:
+    """已结束工序缺填的必填字段（end 阶段），返回 (工序名, 字段名) 列表。"""
+    executions = await repo.list_executions(db, batch_id)
+    missing_by_exec = await compute_missing_required_fields(db, executions)
+    if not missing_by_exec:
+        return []
+    nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
+    node_names = {n.id: n.name for n in nodes}
+    ex_by_id = {e.id: e for e in executions}
+    missing: list[tuple[str, str]] = []
+    for exec_id, fields in missing_by_exec.items():
+        ex = ex_by_id.get(exec_id)
+        node_name = node_names.get(ex.node_id, ex.node_id.hex[:8]) if ex else ""
+        for f in fields:
+            missing.append((node_name, f.field_label))
+    return missing
+
+
 async def complete_batch(
     db: AsyncSession, batch_id: uuid.UUID, user: User | None
 ) -> Batch:
@@ -240,6 +261,12 @@ async def complete_batch(
         raise AppException(status_code=400, message="仅 in_progress 的批次可完成")
     if not await repo.completed_node_ids(db, batch_id):
         raise AppException(status_code=400, message="批次没有任何已完成的工序")
+    missing = await _missing_required_fields(db, batch_id)
+    if missing:
+        labels = ", ".join(f"{n}·{f}" for n, f in missing)
+        raise AppException(
+            status_code=400, message=f"以下工序的必填字段尚未上报，无法完成批次: {labels}"
+        )
     batch.status = "completed"
     batch.updated_by = user.id if user else None
     await db.flush()
@@ -290,12 +317,14 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         val_by_exec.setdefault(v.execution_id, []).append(
             FieldValueOut.model_validate(v)
         )
+    missing_by_exec = await compute_missing_required_fields(db, executions)
     exec_outs = []
     for e in executions:
         out = ExecutionOut.model_validate(e)
         out.node_name = node_names.get(e.node_id)
         out.equipments = eq_by_exec.get(e.id, [])
         out.field_values = val_by_exec.get(e.id, [])
+        out.missing_required_fields = missing_by_exec.get(e.id, [])
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
