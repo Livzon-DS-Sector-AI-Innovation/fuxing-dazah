@@ -21,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import { usePermission } from '@/hooks/usePermission'
 import { createPlanItem, updatePlanItem, deletePlanItem, schedulePlanItem } from '@/actions/production'
 import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/production'
 import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
@@ -317,6 +318,8 @@ interface Props {
 }
 
 export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId, planOrderProductName, planOrderRouteId, planOrderStageConfig, items, isLoading = false, onRefresh, onOpenStageConfig }: Props) {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const { message, modal } = App.useApp()
   const [addOpen, setAddOpen] = useState(false)
   const [addLoading, setAddLoading] = useState(false)
@@ -605,7 +608,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       width: 120,
       render: (_, r: PlanItem) => (
         <Space size={4}>
-          {canEdit && (
+          {canEdit && canSubmit && (
             <>
               <Button size="small" type="link" onClick={() => openEditModal(r)}>编辑</Button>
               <Button size="small" type="link" danger onClick={() => handleDelete(r)}>删除</Button>
@@ -630,15 +633,15 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     <div>
       {/* Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        {canEdit && onOpenStageConfig && (
+        {canEdit && canSubmit && onOpenStageConfig && (
           <Button size="small" onClick={onOpenStageConfig}>工段配置</Button>
         )}
-        {canEdit && (
+        {canEdit && canSubmit && (
           <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleOpenAddModal}>
             添加计划项
           </Button>
         )}
-        {canEdit && (
+        {canEdit && canSubmit && (
           <Tooltip title={items.length === 0 ? '请先添加至少一个计划项' : undefined}>
             <span>
               <Button size="small" disabled={items.length === 0} onClick={handleOpenBatchGen}>批量生成</Button>

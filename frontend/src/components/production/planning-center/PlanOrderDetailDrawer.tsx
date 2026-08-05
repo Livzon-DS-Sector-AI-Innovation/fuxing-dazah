@@ -22,6 +22,7 @@ import {
 } from 'antd'
 import type { FormInstance } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { usePermission } from '@/hooks/usePermission'
 import { fetchPlanOrderClient } from '@/lib/api/production-client'
 import {
   updatePlanOrder,
@@ -233,6 +234,8 @@ interface Props {
 }
 
 export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props) {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const { modal, message } = App.useApp()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -644,6 +647,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                 {formatDate(order.scheduled_start)} ~ {formatDate(order.scheduled_end)}
               </span>
             )}
+            {canSubmit && (
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               {order.status === 'draft' && (
                 <>
@@ -672,6 +676,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                 </>
               )}
             </div>
+            )}
           </div>
 
           {/* Body — left accent strip + sections */}
@@ -750,6 +755,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>往后顺延</span>
                     <InputNumber size="small" min={0} step={1} value={delayDays} onChange={v => setDelayDays(v ?? 0)} style={{ width: 70 }} />
                     <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天</span>
+                    {canSubmit && (
                     <Button
                       size="small"
                       onClick={() => {
@@ -766,6 +772,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       }}
                       disabled={!delayStartItemNo || delayDays <= 0}
                     >顺延</Button>
+                    )}
                   </Space>
                 )}
                 <Table
@@ -848,7 +855,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       title: '操作',
                       width: 60,
                       render: (_: unknown, record: PlanItem) => (
-                        <Button type="text" size="small" danger onClick={() => handleDeleteItem(record)}>删除</Button>
+                        canSubmit ? <Button type="text" size="small" danger onClick={() => handleDeleteItem(record)}>删除</Button> : null
                       ),
                     },
                   ]}
@@ -880,6 +887,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     </Button>
                   )}
                 </div>
+                {canSubmit && (
                 <Button
                   type="dashed" size="small" style={{ marginTop: 8 }}
                   onClick={() => {
@@ -897,6 +905,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     setLocalItems(prev => [...prev, newItem])
                   }}
                 >+ 新增计划项</Button>
+                )}
               </div>
             ) : (
               <PlanItemTable
