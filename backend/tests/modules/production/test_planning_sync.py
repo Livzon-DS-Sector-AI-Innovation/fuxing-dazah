@@ -408,3 +408,68 @@ class TestBatchTriggers:
         await _run_node(db_session, child2, published_route["node_b"])
         await _run_node(db_session, child2, published_route["node_c"])
         assert (await repo.get_plan_item(db_session, item.id)).status == "completed"
+
+
+class TestComputeProgress:
+    """_compute_item_batch_progress 谱系链合并：子批次继承父批次已完成的工序进度。"""
+
+    async def test_progress_merges_parent_completed_stages(
+        self, db_session: AsyncSession, published_route: dict,
+    ) -> None:
+        """根批次完成 A/B 后拆出 pending 子批次：进度显示链上最远 A/B 而非全灰。"""
+        user = await _get_or_create_user(db_session)
+        item, batch = await _make_plan_batch(db_session, published_route, user)
+        await _activate(db_session, batch, published_route, user)
+        await _run_node(db_session, batch, published_route["node_a"])
+        await _run_node(db_session, batch, published_route["node_b"])
+        child = await _derive(db_session, batch, published_route)
+
+        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        progress = await _compute_item_batch_progress(db_session, batch)
+        assert progress is not None
+        # 批号取链末端（子批次），状态取链合并（有 in_progress → in_progress）
+        assert progress.batch_no == child.batch_no
+        assert progress.batch_status == "in_progress"
+        # 最远执行工序 = 链上 sort_order 最远的（node_b），不因拆分而倒退
+        assert progress.latest_stage == published_route["node_b"].name
+        assert progress.latest_stage_status == "completed"
+        assert [n.name for n in (progress.route_nodes or [])] == [
+            published_route["node_a"].name,
+            published_route["node_b"].name,
+            published_route["node_c"].name,
+        ]
+
+    async def test_progress_without_split_uses_single_batch(
+        self, db_session: AsyncSession, published_route: dict,
+    ) -> None:
+        """未拆分：进度直接来自根批次自身。"""
+        user = await _get_or_create_user(db_session)
+        item, batch = await _make_plan_batch(db_session, published_route, user)
+        await _activate(db_session, batch, published_route, user)
+        await _run_node(db_session, batch, published_route["node_a"])
+
+        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        progress = await _compute_item_batch_progress(db_session, batch)
+        assert progress is not None
+        assert progress.batch_no == batch.batch_no
+        assert progress.latest_stage == published_route["node_a"].name
+        assert progress.latest_stage_status == "completed"
+
+
+    async def test_progress_full_route_single_batch(
+        self, db_session: AsyncSession, published_route: dict,
+    ) -> None:
+        """单批沿用走完全路线（工段交接不拆分）：进度推进到最后一个节点。"""
+        user = await _get_or_create_user(db_session)
+        item, batch = await _make_plan_batch(db_session, published_route, user)
+        await _activate(db_session, batch, published_route, user)
+        await _run_node(db_session, batch, published_route["node_a"])
+        await _run_node(db_session, batch, published_route["node_b"])
+        await _run_node(db_session, batch, published_route["node_c"])
+
+        from app.modules.production.service.planning_service import _compute_item_batch_progress
+        progress = await _compute_item_batch_progress(db_session, batch)
+        assert progress is not None
+        assert progress.batch_no == batch.batch_no
+        assert progress.latest_stage == published_route["node_c"].name
+        assert progress.latest_stage_status == "completed"

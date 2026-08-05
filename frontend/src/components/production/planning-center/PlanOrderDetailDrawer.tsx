@@ -4,6 +4,7 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   App,
   Button,
+  DatePicker,
   Drawer,
   Empty,
   Form,
@@ -36,7 +37,7 @@ import dayjs from 'dayjs'
 import { PlanItemTable, StageProgressBar } from './PlanItemTable'
 import { ReleaseConfirmModal } from './ReleaseConfirmModal'
 import { STATUS_CONFIG, STATUS_THEME, PRIORITY_CONFIG, STAGE_PRESET_COLORS } from './constants'
-import { incrementBatchNo } from '@/lib/utils'
+import { decrementBatchNo, incrementBatchNo } from '@/lib/utils'
 import { DownOutlined, RightOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -309,15 +310,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
       prevOrderRef.current = order.id
       setChangeMode(true)
       setLocalItems(order.items ? order.items.map(i => ({ ...i })) : [])
-      changeForm.setFieldsValue({
-        title: order.title,
-        scheduled_start: order.scheduled_start?.slice(0, 10) ?? undefined,
-        scheduled_end: order.scheduled_end?.slice(0, 10) ?? undefined,
-        priority: order.priority,
-        remark: order.remark ?? '',
-      })
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- changeMode guarded by !changeMode, changeForm is stable
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- changeMode guarded by !changeMode
   }, [order, changeReason])
 
   // drawer 关闭时重置状态，确保再次打开同一计划单可正常进入变更模式
@@ -387,7 +381,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     modal.confirm({
       title: `确认计划单「${order?.order_no}」?`,
       content: '确认后将锁定计划项，无法再增删或修改。',
-      okText: '确认',
+      okText: '确认并锁定',
       cancelText: '取消',
       onOk: async () => {
         const r = await confirmPlanOrder(orderId)
@@ -519,6 +513,53 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     setBatchGenOpen(true)
   }
 
+  const removeItem = (record: PlanItem, shift: boolean) => {
+    setLocalItems(prev => {
+      const idx = prev.findIndex(i => i.id === record.id && i.item_no === record.item_no)
+      let next = prev.filter(i => i.id !== record.id || i.item_no !== record.item_no)
+      if (shift && idx >= 0) {
+        // 被删行之后的每一行批号数字减 1（时间字段不动）
+        next = next.map((i, j) => j >= idx ? { ...i, batch_no: decrementBatchNo(i.batch_no ?? '') || null } : i)
+      }
+      return next
+    })
+    if (record.id && !String(record.id).startsWith('_new_')) setDeletedItemIds(prev => [...prev, record.id])
+  }
+
+  const handleDeleteItem = (record: PlanItem) => {
+    const idx = localItems.findIndex(i => i.id === record.id && i.item_no === record.item_no)
+    // 被删行之后、批号数字可减的后续行（用于预览与按钮显隐）
+    const following = idx >= 0
+      ? localItems.slice(idx + 1).filter(i => i.batch_no && decrementBatchNo(i.batch_no) !== i.batch_no)
+      : []
+    const label = record.batch_no || `#${record.item_no}`
+    const preview = following.slice(0, 5)
+      .map(i => `${i.batch_no} → ${decrementBatchNo(i.batch_no!)}`).join('、')
+
+    const ins = modal.confirm({
+      title: `删除计划项「${label}」?`,
+      content: following.length > 0 ? (
+        <div>
+          后续 {following.length} 个批号将前移补位：
+          <br />
+          {preview}{following.length > 5 ? ` …等 ${following.length} 个` : ''}
+        </div>
+      ) : (
+        <div>删除后不可恢复。</div>
+      ),
+      // footer 三按钮：取消 / 删除 / 删除并顺延
+      footer: (_originNode, { CancelBtn }) => (
+        <>
+          <CancelBtn />
+          <Button danger onClick={() => { ins.destroy(); removeItem(record, false) }}>删除</Button>
+          {following.length > 0 && (
+            <Button danger type="primary" onClick={() => { ins.destroy(); removeItem(record, true) }}>删除并补位</Button>
+          )}
+        </>
+      ),
+    })
+  }
+
   const handleSaveChange = async () => {
     if (!orderId) return
     const headerValues = await changeForm.validateFields().catch(() => null)
@@ -606,7 +647,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               {order.status === 'draft' && (
                 <>
-                  <Button type="primary" size="small" onClick={handleConfirm}>确认</Button>
+                  <Button type="primary" size="small" onClick={handleConfirm}>确认并锁定</Button>
                   <Button size="small" onClick={handleEdit}>编辑</Button>
                   <Button size="small" danger onClick={handleDelete}>删除</Button>
                 </>
@@ -640,7 +681,17 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
             {showBasicInfo && (
               <>
                 {changeMode ? (
-                  <Form form={changeForm} layout="vertical">
+                  <Form
+                    form={changeForm}
+                    layout="vertical"
+                    initialValues={{
+                      title: order.title,
+                      scheduled_start: order.scheduled_start?.slice(0, 10) ?? undefined,
+                      scheduled_end: order.scheduled_end?.slice(0, 10) ?? undefined,
+                      priority: order.priority,
+                      remark: order.remark ?? '',
+                    }}
+                  >
                     <div style={{ display: 'flex', gap: 12 }}>
                       <Form.Item name="title" label="标题" style={{ flex: 1 }} rules={[{ required: true }]}>
                         <Input />
@@ -730,15 +781,12 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'batch_no',
                       width: 145,
                       render: (v: string | null, record: PlanItem) => (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <Input
-                            size="small"
-                            value={v ?? ''}
-                            style={{ width: 120, fontWeight: 600 }}
-                            onChange={e => updateLocalItem(record.id, { batch_no: e.target.value || undefined })}
-                          />
-                          <span style={{ fontSize: 10, color: 'var(--color-steel)' }}>{record.product_name || '—'}</span>
-                        </div>
+                        <Input
+                          size="small"
+                          value={v ?? ''}
+                          style={{ width: 120, fontWeight: 600 }}
+                          onChange={e => updateLocalItem(record.id, { batch_no: e.target.value || undefined })}
+                        />
                       ),
                     },
                     {
@@ -760,11 +808,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'planned_start',
                       width: 160,
                       render: (v: string | null, record: PlanItem) => (
-                        <input
-                          type="datetime-local"
-                          value={v ? dayjs(v).format('YYYY-MM-DDTHH:mm') : ''}
-                          onChange={e => updateLocalItem(record.id, { planned_start: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
-                          style={{ fontSize: 12 }}
+                        <DatePicker
+                          showTime
+                          format="YYYY-MM-DD HH:mm"
+                          size="small"
+                          style={{ width: 140 }}
+                          value={v ? dayjs(v) : null}
+                          onChange={d => updateLocalItem(record.id, { planned_start: d ? d.toISOString() : undefined })}
                         />
                       ),
                     },
@@ -773,11 +823,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'planned_end',
                       width: 160,
                       render: (v: string | null, record: PlanItem) => (
-                        <input
-                          type="datetime-local"
-                          value={v ? dayjs(v).format('YYYY-MM-DDTHH:mm') : ''}
-                          onChange={e => updateLocalItem(record.id, { planned_end: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
-                          style={{ fontSize: 12 }}
+                        <DatePicker
+                          showTime
+                          format="YYYY-MM-DD HH:mm"
+                          size="small"
+                          style={{ width: 140 }}
+                          value={v ? dayjs(v) : null}
+                          onChange={d => updateLocalItem(record.id, { planned_end: d ? d.toISOString() : undefined })}
                         />
                       ),
                     },
@@ -796,13 +848,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       title: '操作',
                       width: 60,
                       render: (_: unknown, record: PlanItem) => (
-                        <Button
-                          type="text" size="small" danger
-                          onClick={() => {
-                            setLocalItems(prev => prev.filter(i => i.id !== record.id || i.item_no !== record.item_no))
-                            if (record.id && !String(record.id).startsWith('_new_')) setDeletedItemIds(prev => [...prev, record.id])
-                          }}
-                        >删除</Button>
+                        <Button type="text" size="small" danger onClick={() => handleDeleteItem(record)}>删除</Button>
                       ),
                     },
                   ]}

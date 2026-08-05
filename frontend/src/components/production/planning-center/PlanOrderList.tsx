@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import {
   App,
   Button,
@@ -18,7 +18,6 @@ import type { MenuProps } from 'antd'
 import {
   EllipsisOutlined,
   PlusOutlined,
-  SearchOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -44,21 +43,16 @@ const PRIORITY_COLORS: Record<string, string> = {
 export function PlanOrderList() {
   const { modal, message } = App.useApp()
   const [keyword, setKeyword] = useState('')
-  const [debouncedKeyword, setDebouncedKeyword] = useState('')
+  const [searchKeyword, setSearchKeyword] = useState('')
   const [productFilter, setProductFilter] = useState<string | undefined>()
   const [createOpen, setCreateOpen] = useState(false)
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null)
   const [changeTargetOrderId, setChangeTargetOrderId] = useState<string | null>(null)
   const [changeReason, setChangeReason] = useState('')
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedKeyword(keyword), 300)
-    return () => clearTimeout(t)
-  }, [keyword])
-
   const { data: orders = [], isLoading, refetch } = useQuery({
-    queryKey: ['plan-orders', debouncedKeyword],
-    queryFn: () => fetchPlanOrdersClient({ keyword: debouncedKeyword || undefined, page_size: 100 }),
+    queryKey: ['plan-orders', searchKeyword],
+    queryFn: () => fetchPlanOrdersClient({ keyword: searchKeyword || undefined, page_size: 100 }),
   })
 
   const { data: products } = useQuery({
@@ -101,7 +95,7 @@ export function PlanOrderList() {
     modal.confirm({
       title: `确认计划单「${order.order_no}」?`,
       content: '确认后将锁定计划项，无法再增删或修改。',
-      okText: '确认',
+      okText: '确认并锁定',
       cancelText: '取消',
       onOk: async () => {
         const r = await confirmPlanOrder(order.id)
@@ -151,7 +145,7 @@ export function PlanOrderList() {
     const items: MenuProps['items'] = []
     if (order.status === 'draft') {
       items.push(
-        { key: 'confirm', label: '确认', onClick: () => handleConfirm(order) },
+        { key: 'confirm', label: '确认并锁定', onClick: () => handleConfirm(order) },
         { key: 'edit', label: '编辑', onClick: () => setDetailOrderId(order.id) },
         { key: 'delete', label: '删除', danger: true, onClick: () => handleDelete(order) },
       )
@@ -179,13 +173,14 @@ export function PlanOrderList() {
       {/* ── 搜索栏 ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, gap: 12 }}>
         <div style={{ display: 'flex', gap: 12, flex: 1 }}>
-          <Input
+          <Input.Search
             placeholder="搜索计划单编号/标题"
-            prefix={<SearchOutlined />}
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            style={{ width: 240 }}
+            onSearch={setSearchKeyword}
+            style={{ width: 260 }}
             allowClear
+            enterButton="搜索"
           />
           <Select
             placeholder="按产品筛选"

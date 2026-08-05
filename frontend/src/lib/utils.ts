@@ -35,3 +35,11 @@ export function incrementBatchNo(current: string): string {
   const n = String(parseInt(m[2], 10) + 1).padStart(m[2].length, '0')
   return m[1] + n + m[3]
 }
+
+export function decrementBatchNo(current: string): string {
+  const m = current.match(BATCH_NO_RE)
+  if (!m) return current
+  const n = parseInt(m[2], 10)
+  if (n <= 1) return current
+  return m[1] + String(n - 1).padStart(m[2].length, '0') + m[3]
+}

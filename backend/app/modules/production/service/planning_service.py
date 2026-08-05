@@ -125,27 +125,44 @@ async def _require_route_not_draft(db: AsyncSession, route_id: uuid.UUID) -> Non
         raise AppException(status_code=400, message="不能选择草稿状态的工艺路线")
 
 
+def _merge_chain_batch_status(chain: list[Batch]) -> str:
+    """链上批次状态合并：有 in_progress 取 in_progress；全 completed 取 completed；否则取末端。"""
+    if any(b.status == "in_progress" for b in chain):
+        return "in_progress"
+    if all(b.status == "completed" for b in chain):
+        return "completed"
+    return chain[-1].status
+
+
 async def _compute_item_batch_progress(
     db: AsyncSession, batch: Batch, route_nodes: list[RouteNode] | None = None,
 ) -> PlanItemBatchProgress | None:
-    """计算批次的生产进度。ponytail: 独立函数便于复用，不从 schema 动态 import 避免循环。"""
+    """计算批次的生产进度（谱系链合并：子批次继承父批次已完成的工序进度）。
+
+    拆分后不只看末端子批次——父批次已完成的工序计入整条链，进度不因拆分而"倒退"。
+    ponytail: 独立函数便于复用，不从 schema 动态 import 避免循环。
+    """
     from app.modules.production.schemas.planning import (
         PlanItemBatchProgress,
         RouteNodeBrief,
     )
 
-    tip = await repo.get_batch_single_branch_tip(db, batch.id)
-    if tip is None:
+    item = await _find_plan_item_by_batch(db, batch.id)
+    chain = await _collect_chain_batches(db, item) if item else []
+    if not chain:
         return PlanItemBatchProgress(
             batch_no=batch.batch_no,
             batch_status=batch.status,
         )
-    stage, stage_status = await repo.get_node_execution_progress(db, tip.id)
+    tip = chain[-1]
+    stage, stage_status = await repo.get_chain_node_execution_progress(
+        db, [b.id for b in chain],
+    )
     if route_nodes is None:
         route_nodes = await repo.get_route_nodes(db, tip.route_id)
     return PlanItemBatchProgress(
         batch_no=tip.batch_no,
-        batch_status=tip.status,
+        batch_status=_merge_chain_batch_status(chain),
         latest_stage=stage,
         latest_stage_status=stage_status,
         route_nodes=[

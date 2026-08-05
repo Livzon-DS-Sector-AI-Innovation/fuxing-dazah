@@ -44,6 +44,7 @@ __all__ = [
     "get_parent_batch_id",
     "get_child_batch_ids",
     "get_node_execution_progress",
+    "get_chain_node_execution_progress",
     "get_change_logs",
     "get_batches_by_plan_items",
 ]
@@ -424,6 +425,35 @@ async def get_node_execution_progress(
         .join(NodeExecution, NodeExecution.node_id == RouteNode.id)
         .where(
             NodeExecution.batch_id == batch_id,
+            NodeExecution.is_deleted == False,  # noqa: E712
+            RouteNode.is_deleted == False,  # noqa: E712
+        )
+        .order_by(RouteNode.sort_order.desc())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        return None, None
+    return row[0], row[1]
+
+
+async def get_chain_node_execution_progress(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
+) -> tuple[str | None, str | None]:
+    """返回 (latest_node_name, latest_node_status)：谱系链上所有批次合并后最远执行到的工序。
+
+    拆分后子批次继承父批次已完成的工序进度，前端进度条按整条链计算。
+    """
+    if not batch_ids:
+        return None, None
+    from app.modules.production.models.execution import NodeExecution
+    from app.modules.production.models.route import RouteNode
+
+    stmt = (
+        select(RouteNode.name, NodeExecution.status)
+        .join(NodeExecution, NodeExecution.node_id == RouteNode.id)
+        .where(
+            NodeExecution.batch_id.in_(batch_ids),
             NodeExecution.is_deleted == False,  # noqa: E712
             RouteNode.is_deleted == False,  # noqa: E712
         )
