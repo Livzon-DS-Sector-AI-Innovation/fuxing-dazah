@@ -281,7 +281,11 @@ async def query_planned_batches(
         if not user_stages:
             continue
 
-        stage_times = _calc_stage_times(item.planned_start, item.stage_durations, stage_order)
+        stage_times = _calc_stage_times(
+            item.planned_start,
+            item.stage_durations or (order.stage_config if order else None),
+            stage_order,
+        )
         completed = batch_completed.get(batch.id, set())
         in_progress = batch_in_progress.get(batch.id, set())
         stage_node_ids = route_stage_node_ids[batch.route_id]

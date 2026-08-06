@@ -58,6 +58,14 @@ const ITEM_ACCENT: Record<string, string> = {
   cancelled: '#e03131',
 }
 
+// 工段配置是否与计划单一致（一致时不固化快照，保持继承）
+function isSameStages(
+  a: StageConfigItem[] | null | undefined,
+  b: StageConfigItem[] | null | undefined,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
 // ── Stage Progress Bar ──
 
 export function StageProgressBar({
@@ -371,7 +379,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         batch_no: values.batch_no,
         priority: values.priority,
         remark: values.remark,
-        stage_durations: itemStages.length > 0 ? itemStages : undefined,
+        // 与计划单配置一致时不固化快照，保持继承（改计划单配置自动生效）
+        stage_durations:
+          itemStages.length > 0 && !isSameStages(itemStages, planOrderStageConfig)
+            ? itemStages
+            : undefined,
       })
       if (!r.success) { message.error(r.error); return }
       if (values.planned_start || values.planned_end) {
@@ -436,7 +448,6 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
           route_id: planOrderRouteId ?? undefined,
           batch_no: currentNo,
           priority: 'medium',
-          stage_durations: planOrderStageConfig?.length ? planOrderStageConfig : undefined,
         })
         if (!r.success) { message.error(`批号 ${currentNo} 创建失败: ${r.error}`); break }
 
@@ -481,7 +492,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       batch_no: values.batch_no,
       priority: values.priority,
       remark: values.remark,
-      stage_durations: itemStages.length > 0 ? itemStages : undefined,
+      // 与计划单配置一致时不固化快照，保持继承（改计划单配置自动生效）
+      stage_durations:
+        itemStages.length > 0 && !isSameStages(itemStages, planOrderStageConfig)
+          ? itemStages
+          : undefined,
     })
     if (!r.success) { message.error(r.error); return }
     if (values.planned_start || values.planned_end) {
@@ -580,7 +595,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       width: 200,
       render: (_, r: PlanItem) => (
         <StageProgressBar
-          stageDurations={r.stage_durations}
+          stageDurations={r.stage_durations ?? planOrderStageConfig}
           batchProgress={r.batch_progress}
         />
       ),

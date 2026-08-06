@@ -89,7 +89,7 @@ function ProductFormModal({
         <Form.Item name="product_name" label="产品名称" rules={[{ required: true }]}>
           <Input maxLength={200} />
         </Form.Item>
-        <Form.Item name="unit" label="单位" initialValue="kg">
+        <Form.Item name="unit" label="单位">
           <Input maxLength={20} />
         </Form.Item>
         <Form.Item name="remark" label="备注">

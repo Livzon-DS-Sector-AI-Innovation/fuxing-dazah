@@ -139,3 +139,28 @@ class RoleDataScopeOverride(BaseModel):
         nullable=False,
         comment="覆盖后的数据范围",
     )
+
+
+class DepartmentRole(BaseModel):
+    """部门-角色关联表：将角色分配给整个部门的所有成员。
+
+    权限查询时通过祖先链路展开实现层级穿透：
+    分配给父部门 → 所有子部门成员自动继承。
+    """
+
+    __tablename__ = "department_roles"
+    __table_args__ = (
+        UniqueConstraint(
+            "feishu_department_id",
+            "role_id",
+            name="uq_department_roles_pair",
+        ),
+        {"schema": "permission"},
+    )
+
+    feishu_department_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="飞书部门 open_department_id"
+    )
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="角色 ID"
+    )

@@ -17,7 +17,9 @@ from app.modules.production.schemas import (
     MergeIn,
 )
 from app.modules.production.service.assignment_service import require_stage_permission
-from app.modules.production.service.execution_service import compute_missing_required_fields
+from app.modules.production.service.execution_service import (
+    compute_missing_required_fields,
+)
 from app.modules.production.service.planning_service import sync_plan_item_status
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -260,6 +262,22 @@ async def complete_batch(
     batch = await _get_batch_or_404(db, batch_id)
     if batch.status != "in_progress":
         raise AppException(status_code=400, message="仅 in_progress 的批次可完成")
+
+    # 权限校验必须在业务校验之前，避免信息泄露
+    if user:
+        perms = await get_user_permissions(str(user.id), db)
+        if "production:batch:submit" not in perms:
+            # DB 层直接查最后一个完成的执行，避免全量拉取后 Python 排序
+            last_ex = await repo.get_last_completed_execution(db, batch_id)
+            if last_ex:
+                route_nodes = await repo.get_nodes_by_ids(db, [last_ex.node_id])
+                node = route_nodes[0] if route_nodes else None
+                await require_stage_permission(
+                    db, user.id, last_ex.node_id, batch.route_id,
+                    node.stage_name if node else None,
+                )
+            # stage_name 为 None 时 require_stage_permission 自行处理
+
     if not await repo.completed_node_ids(db, batch_id):
         raise AppException(status_code=400, message="批次没有任何已完成的工序")
     missing = await _missing_required_fields(db, batch_id)
@@ -268,23 +286,6 @@ async def complete_batch(
         raise AppException(
             status_code=400, message=f"以下工序的必填字段尚未上报，无法完成批次: {labels}"
         )
-    if user:
-        # 校验：持有 submit 或 为批次最后一个完成工序所在工段的负责人
-        perms = await get_user_permissions(str(user.id), db)
-        if "production:batch:submit" not in perms:
-            executions = await repo.list_executions(db, batch_id)
-            completed = sorted(
-                [e for e in executions if e.status == "completed" and e.finished_at],
-                key=lambda e: e.finished_at, reverse=True,
-            )
-            if completed:
-                last_ex = completed[0]
-                route_nodes = await repo.get_nodes_by_ids(db, [last_ex.node_id])
-                node = route_nodes[0] if route_nodes else None
-                if node and node.stage_name:
-                    await require_stage_permission(
-                        db, user.id, last_ex.node_id, batch.route_id, node.stage_name,
-                    )
     batch.status = "completed"
     batch.updated_by = user.id if user else None
     await db.flush()

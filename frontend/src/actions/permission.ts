@@ -61,3 +61,30 @@ export async function removeRoleFromUser(userId: string, roleId: string) {
   revalidatePath('/permission/users')
   return res.json()
 }
+
+export async function assignRoleToDepartment(
+  roleId: string,
+  data: { feishu_department_ids: string[] },
+) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/v1/permission/roles/${roleId}/departments`, {
+    method: 'POST', headers, body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.detail || err.message || '分配部门角色失败')
+  }
+  revalidatePath('/permission/roles')
+  return res.json()
+}
+
+export async function removeRoleFromDepartment(roleId: string, feishuDepartmentId: string) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(
+    `${API_BASE}/api/v1/permission/roles/${roleId}/departments/${encodeURIComponent(feishuDepartmentId)}`,
+    { method: 'DELETE', headers },
+  )
+  if (!res.ok) throw new Error('移除部门角色失败')
+  revalidatePath('/permission/roles')
+  return res.json()
+}

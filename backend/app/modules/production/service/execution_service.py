@@ -38,8 +38,10 @@ async def _require_operator_permission(
     route_id: uuid.UUID, stage_name: str | None,
 ) -> None:
     """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。"""
+    from app.core.exceptions import ForbiddenException
+
     if user is None:
-        return
+        raise ForbiddenException("未登录，无法执行操作")
     perms = await get_user_permissions(str(user.id), db)
     if "production:batch:submit" in perms:
         return
@@ -221,10 +223,10 @@ async def start_execution(
     # 工段/工序权限校验
     if user:
         route_node = next((n for n in nodes if n.id == payload.node_id), None)
-        if route_node and route_node.stage_name:
-            await require_stage_permission(
-                db, user.id, payload.node_id, batch.route_id, route_node.stage_name,
-            )
+        await _require_operator_permission(
+            db, user, payload.node_id, batch.route_id,
+            route_node.stage_name if route_node else None,
+        )
 
     # 设备校验 + 快照
     briefs = await get_equipment_briefs(db, payload.equipment_ids)
@@ -335,10 +337,10 @@ async def complete_execution(
     if user:
         route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
         node = route_node[0] if route_node else None
-        if node and node.stage_name:
-            await _require_operator_permission(
-                db, user, execution.node_id, batch.route_id, node.stage_name,
-            )
+        await _require_operator_permission(
+            db, user, execution.node_id, batch.route_id,
+            node.stage_name if node else None,
+        )
     # 从产出物类型配置读取 is_product（批量查询，不走全表扫描）
     output_type_ids = [o.intermediate_type_id for o in payload.intermediate_outputs]
     is_product_map: dict[uuid.UUID, bool] = {}
@@ -408,10 +410,10 @@ async def backfill_execution_fields(
     if user:
         route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
         node = route_node[0] if route_node else None
-        if node and node.stage_name:
-            await _require_operator_permission(
-                db, user, execution.node_id, batch.route_id, node.stage_name,
-            )
+        await _require_operator_permission(
+            db, user, execution.node_id, batch.route_id,
+            node.stage_name if node else None,
+        )
     if not field_values:
         raise AppException(status_code=400, message="没有要补录的字段值")
 
@@ -460,10 +462,10 @@ async def abort_execution(
         if batch:
             route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
             node = route_node[0] if route_node else None
-            if node and node.stage_name:
-                await _require_operator_permission(
-                    db, user, execution.node_id, batch.route_id, node.stage_name,
-                )
+            await _require_operator_permission(
+                db, user, execution.node_id, batch.route_id,
+                node.stage_name if node else None,
+            )
         else:
             # 孤儿执行：批次已删除，回退到纯权限码校验
             perms = await get_user_permissions(str(user.id), db)

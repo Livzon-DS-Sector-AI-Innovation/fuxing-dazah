@@ -54,7 +54,6 @@ export function PermissionTree({ permissionGroups, checkedIds, onChange }: Props
         onChange(permIds)
       }}
       treeData={treeData}
-      defaultExpandAll
       blockNode
       style={{ fontSize: 14 }}
       className="permission-tree"

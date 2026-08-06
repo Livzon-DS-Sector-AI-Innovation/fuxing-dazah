@@ -557,9 +557,8 @@ async def change_plan_order(
                     await _check_batch_no_unique(db, batch_no_input)
                 max_no = await repo.get_max_item_no(db, order_id)
                 item_no = max_no + 1
+                # 未显式配置工段时长时不快照计划单 stage_config，展示时继承（改配置自动生效）
                 stage_durations = _stage_config_to_dict(ci.stage_durations)
-                if stage_durations is None:
-                    stage_durations = order.stage_config
                 new_item = PlanItem(
                     plan_order_id=order_id,
                     item_no=item_no,
@@ -745,10 +744,8 @@ async def create_plan_item(
     # 校验工艺路线非 draft
     if route_id:
         await _require_route_not_draft(db, route_id)
-    # 继承：若未传 stage_durations 则使用计划单的 stage_config
+    # 未显式配置工段时长时不快照计划单 stage_config，展示时继承（改配置自动生效）
     stage_durations = _stage_config_to_dict(payload.stage_durations)
-    if stage_durations is None:
-        stage_durations = order.stage_config
     item = PlanItem(
         plan_order_id=order_id,
         item_no=item_no,
@@ -1034,7 +1031,7 @@ async def get_schedule_view(
             unit=item.unit,
             batch_no=item.batch_no,
             route_id=item.route_id,
-            stage_durations=item.stage_durations,
+            stage_durations=item.stage_durations or order.stage_config,
             planned_start=item.planned_start,
             planned_end=item.planned_end,
             item_status=item.status,

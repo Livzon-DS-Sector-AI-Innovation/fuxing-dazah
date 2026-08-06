@@ -493,7 +493,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
         priority: 'medium',
         sort_order: 0,
         remark: null,
-        stage_durations: order!.stage_config,
+        stage_durations: null,
         allocations: [],
         demand_allocations: [],
         created_at: '',
@@ -846,7 +846,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       width: 180,
                       render: (bp: PlanItemBatchProgress | null, record: PlanItem) => (
                         <StageProgressBar
-                          stageDurations={record.stage_durations}
+                          stageDurations={record.stage_durations ?? order!.stage_config}
                           batchProgress={bp}
                         />
                       ),
@@ -898,7 +898,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       planned_quantity: null, unit: null, batch_no: '',
                       planned_start: null, planned_end: null,
                       status: 'allocated', priority: 'medium', sort_order: 0,
-                      remark: null, stage_durations: order!.stage_config,
+                      remark: null, stage_durations: null,
                       allocations: [], demand_allocations: [],
                       created_at: '', updated_at: '',
                     }
