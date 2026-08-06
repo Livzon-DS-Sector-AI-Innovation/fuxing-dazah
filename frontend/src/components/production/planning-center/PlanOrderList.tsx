@@ -367,7 +367,7 @@ export function PlanOrderList() {
         title="变更原因"
         open={!!changeTargetOrderId}
         onOk={handleChangeConfirm}
-        onCancel={() => setChangeTargetOrderId(null)}
+        onCancel={() => { setChangeTargetOrderId(null); setChangeReason('') }}
         okText="开始变更"
         okButtonProps={{ disabled: !changeReason.trim() }}
         destroyOnHidden

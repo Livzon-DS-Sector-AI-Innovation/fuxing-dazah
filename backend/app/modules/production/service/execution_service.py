@@ -30,6 +30,20 @@ from app.modules.production.service.planning_service import sync_plan_item_statu
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
+from app.platform.permission.deps import get_user_permissions
+
+
+async def _require_operator_permission(
+    db: AsyncSession, user: User | None, node_id: uuid.UUID,
+    route_id: uuid.UUID, stage_name: str | None,
+) -> None:
+    """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。"""
+    if user is None:
+        return
+    perms = await get_user_permissions(str(user.id), db)
+    if "production:batch:submit" in perms:
+        return
+    await require_stage_permission(db, user.id, node_id, route_id, stage_name)
 
 
 def _build_field_values(
@@ -317,6 +331,13 @@ async def complete_execution(
     batch = await repo.get_batch(db, execution.batch_id)
     if not batch:
         raise AppException(status_code=400, message="批次不存在或已删除，无法完成工序")
+    if user:
+        route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
+        node = route_node[0] if route_node else None
+        if node and node.stage_name:
+            await _require_operator_permission(
+                db, user, execution.node_id, batch.route_id, node.stage_name,
+            )
     # 从产出物类型配置读取 is_product（批量查询，不走全表扫描）
     output_type_ids = [o.intermediate_type_id for o in payload.intermediate_outputs]
     is_product_map: dict[uuid.UUID, bool] = {}
@@ -383,6 +404,13 @@ async def backfill_execution_fields(
         raise AppException(status_code=400, message="批次不存在或已删除，无法补录")
     if batch.status in ("completed", "cancelled"):
         raise AppException(status_code=400, message="批次已结束后禁止补录")
+    if user:
+        route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
+        node = route_node[0] if route_node else None
+        if node and node.stage_name:
+            await _require_operator_permission(
+                db, user, execution.node_id, batch.route_id, node.stage_name,
+            )
     if not field_values:
         raise AppException(status_code=400, message="没有要补录的字段值")
 
@@ -426,6 +454,14 @@ async def abort_execution(
         raise NotFoundException("工序执行", str(execution_id))
     if execution.status != "in_progress":
         raise AppException(status_code=400, message="仅进行中的执行可中止")
+    if user:
+        batch = await repo.get_batch(db, execution.batch_id)
+        route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
+        node = route_node[0] if route_node else None
+        if batch and node and node.stage_name:
+            await _require_operator_permission(
+                db, user, execution.node_id, batch.route_id, node.stage_name,
+            )
     execution.status = "aborted"
     execution.finished_at = datetime.now(UTC)
     execution.finished_by = user.id if user else None
