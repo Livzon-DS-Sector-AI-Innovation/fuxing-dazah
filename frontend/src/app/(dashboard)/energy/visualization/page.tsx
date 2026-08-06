@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DatePicker, Segmented, Spin, Empty, App, Button } from 'antd'
-import { Line, Bar } from '@ant-design/charts'
+import { Line, Bar, Pie } from '@ant-design/charts'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import * as XLSX from 'xlsx'
 import { getEnergyOverview } from '@/actions/energy'
-import type { EnergyOverview, EnergyTypeMeta } from '@/types/energy'
+import { fetchPriceCategoryDistribution } from '@/lib/api/energy'
+import { PricePeriodDrawer } from '@/components/energy/PricePeriodDrawer'
+import type { EnergyOverview, EnergyTypeMeta, PriceCategoryDistribution } from '@/types/energy'
 
 const { RangePicker } = DatePicker
 
@@ -27,6 +29,8 @@ export default function VisualizationPage() {
   const [overview, setOverview] = useState<EnergyOverview | null>(null)
   const [prevOverview, setPrevOverview] = useState<EnergyOverview | null>(null)
   const [loading, setLoading] = useState(false)
+  const [priceCategory, setPriceCategory] = useState<PriceCategoryDistribution | null>(null)
+  const [periodDrawerOpen, setPeriodDrawerOpen] = useState(false)
 
   const days = range[1].diff(range[0], 'day') + 1
 
@@ -50,12 +54,25 @@ export default function VisualizationPage() {
       ])
       setOverview(curr)
       setPrevOverview(prev)
+
+      // 峰谷分布（点部门时联动筛选）
+      try {
+        const pc = await fetchPriceCategoryDistribution({
+          start_time: range[0].toISOString(),
+          end_time: range[1].toISOString(),
+          energy_type: selectedType || undefined,
+          workshop: selectedWorkshop || undefined,
+        })
+        setPriceCategory(pc)
+      } catch {
+        setPriceCategory(null)
+      }
     } catch {
       message.error('加载数据失败')
     } finally {
       setLoading(false)
     }
-  }, [range, selectedType])
+  }, [range, selectedType, selectedWorkshop])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
@@ -465,6 +482,97 @@ export default function VisualizationPage() {
                 )}
               </div>
             </div>
+
+            {/* ── 峰谷用电分布 ── */}
+            {priceCategory && priceCategory.categories.length > 0 && (
+              <div style={{
+                background: '#fff', borderRadius: 12, padding: '20px 24px', marginBottom: 20,
+                border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
+                  峰谷用电分布
+                  <Button
+                    type="link" size="small"
+                    onClick={() => setPeriodDrawerOpen(true)}
+                    style={{ fontSize: 11, padding: 0, marginLeft: 8 }}
+                  >
+                    配置规则
+                  </Button>
+                  {selectedWorkshop && (
+                    <span style={{ fontSize: 13, fontWeight: 400, color: '#5645d4', marginLeft: 8 }}>
+                      › {selectedWorkshop}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097', marginLeft: 8 }}>
+                    总 {priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} {priceCategory.unit}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'center' }}>
+                  <Pie
+                    data={priceCategory.categories.map((c) => ({
+                      type: c.category,
+                      value: c.total_value,
+                    }))}
+                    angleField="value"
+                    colorField="type"
+                    radius={0.8}
+                    innerRadius={0.5}
+                    height={300}
+                    appendPadding={[10, 40, 40, 40]}
+                    color={{ '尖': '#e03131', '峰': '#dd5b00', '平': '#1677ff', '谷': '#1aae39' }}
+                    label={{
+                      text: (d: { type: string; value: number }) => {
+                        const item = priceCategory.categories.find((c2) => c2.category === d.type)
+                        return `${d.type}\n${item?.percentage ?? 0}%`
+                      },
+                      position: 'outside',
+                      style: { fontSize: 12, fontWeight: 500, fill: '#37352f' },
+                      connector: { style: { stroke: '#c8c4be', lineWidth: 1 } },
+                    }}
+                    legend={false}
+                    tooltip={{}}
+                    statistic={{
+                      title: { style: { fontSize: 13, color: '#a4a097' }, content: '总用电' },
+                      content: {
+                        style: { fontSize: 18, fontWeight: 600, color: '#37352f' },
+                        content: priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+                      },
+                    }}
+                    animate={{ appear: { animation: 'wave-in', duration: 600 } }}
+                  />
+                  {/* 分类明细 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {priceCategory.categories.map((c) => {
+                      const catColors: Record<string, string> = {
+                        '尖': '#e03131', '峰': '#dd5b00', '平': '#1677ff', '谷': '#1aae39',
+                      }
+                      const labels: Record<string, string> = { '尖': '尖峰', '峰': '高峰', '平': '平段', '谷': '低谷' }
+                      return (
+                        <div key={c.category} style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '8px 12px', borderRadius: 8, background: '#fafaf9',
+                        }}>
+                          <span style={{
+                            width: 12, height: 12, borderRadius: 3,
+                            background: catColors[c.category] || '#999', flexShrink: 0,
+                          }} />
+                          <span style={{ fontSize: 14, fontWeight: 500, color: '#37352f', minWidth: 36 }}>
+                            {labels[c.category] || c.category}
+                          </span>
+                          <span style={{ flex: 1, fontSize: 13, color: '#a4a097' }}>
+                            {c.percentage}%
+                          </span>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: '#37352f', fontVariantNumeric: 'tabular-nums' }}>
+                            {c.total_value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                            <span style={{ fontSize: 11, fontWeight: 400, color: '#a4a097', marginLeft: 2 }}>{c.unit}</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 120 }}>
@@ -472,6 +580,7 @@ export default function VisualizationPage() {
           </div>
         )}
       </Spin>
+      <PricePeriodDrawer open={periodDrawerOpen} onClose={() => { setPeriodDrawerOpen(false); load() }} />
     </div>
   )
 }

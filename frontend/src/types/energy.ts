@@ -16,11 +16,9 @@ export interface EnergyDeviceConfig {
   production_line?: string
   monitor_level: MonitorLevel
   unit: string
-  collection_interval: number
   is_enabled: boolean
   equipment_id?: string | null
   equipment_name?: string | null
-  daily_collect_time?: string | null
   is_region_level: boolean
   stat_role: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -39,11 +37,9 @@ export interface CreateDeviceInput {
   production_line?: string
   monitor_level: MonitorLevel
   unit: string
-  collection_interval: number
   is_enabled?: boolean
   equipment_id?: string | null
   equipment_name?: string | null
-  daily_collect_time?: string | null
   is_region_level?: boolean
   stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -58,11 +54,9 @@ export interface UpdateDeviceInput {
   production_line?: string
   monitor_level?: MonitorLevel
   unit?: string
-  collection_interval?: number
   is_enabled?: boolean
   equipment_id?: string | null
   equipment_name?: string | null
-  daily_collect_time?: string | null
   is_region_level?: boolean
   stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -217,6 +211,7 @@ export interface LogQueryParams {
 // 自动采集运行时设置
 export interface CollectSettings {
   auto_collect_enabled: boolean
+  daily_collect_time: string
 }
 
 // 分页响应
@@ -314,7 +309,7 @@ export interface RuleQueryParams {
 }
 
 // 预警记录状态
-export type AlertRecordStatus = 'pending' | 'processed' | 'ignored'
+export type AlertRecordStatus = 'pending' | 'processed' | 'ignored' | 'rejected'
 
 // 预警记录
 export interface AlertRecord {
@@ -332,13 +327,20 @@ export interface AlertRecord {
   processed_by?: string
   processed_at?: string
   process_note?: string
+  reason?: string | null
+  heads?: { name: string; feishu_open_id: string }[]
   created_at: string
 }
 
 // 处理预警记录输入
 export interface ProcessRecordInput {
-  status: 'processed' | 'ignored'
+  status: 'processed' | 'ignored' | 'rejected'
   process_note?: string
+}
+
+// 填写预警原因
+export interface FillReasonInput {
+  reason: string
 }
 
 // 预警记录查询参数
@@ -542,4 +544,36 @@ export interface UpdateNitrogenPushConfigInput {
 export interface NitrogenReportSendRequest {
   config_id: string
   target_date: string
+}
+
+// ── 峰谷时段规则 ──
+
+export interface PricePeriod {
+  id: string
+  category: string
+  start_hour: number
+  end_hour: number
+  months: number[]
+}
+
+export interface CreatePricePeriodInput {
+  category: string
+  start_hour: number
+  end_hour: number
+  months: number[]
+}
+
+// ── 峰谷电价分类 ──
+
+export interface PriceCategoryItem {
+  category: string   // 尖/峰/平/谷
+  total_value: number
+  unit: string
+  percentage: number
+}
+
+export interface PriceCategoryDistribution {
+  categories: PriceCategoryItem[]
+  total: number
+  unit: string
 }

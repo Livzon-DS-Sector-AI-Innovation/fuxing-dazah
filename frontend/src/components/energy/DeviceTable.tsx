@@ -248,29 +248,6 @@ export function DeviceTable({
       ),
     },
     {
-      title: '间隔',
-      dataIndex: 'collection_interval',
-      key: 'collection_interval',
-      width: 110,
-      render: (_v: number, record: EnergyDeviceConfig) => {
-        const hours = _v / 60
-        if (record.daily_collect_time) {
-          const days = Math.round(hours / 24)
-          return (
-            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54', fontSize: 13 }}>
-              {days} 天 · 每天 {record.daily_collect_time}
-            </span>
-          )
-        }
-        const display = hours % 1 === 0 ? `${hours}` : hours.toFixed(2)
-        return (
-          <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
-            {display} 小时
-          </span>
-        )
-      },
-    },
-    {
       title: '监控级别',
       dataIndex: 'monitor_level',
       key: 'monitor_level',

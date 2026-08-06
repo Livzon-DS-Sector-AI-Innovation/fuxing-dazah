@@ -20,6 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY as SA_ARRAY
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -55,10 +56,6 @@ class EnergyDeviceConfig(BaseModel):
             name="ck_energy_device_config_monitor_level",
         ),
         CheckConstraint(
-            "collection_interval > 0",
-            name="ck_energy_device_config_interval_positive",
-        ),
-        CheckConstraint(
             "stat_role IN ('normal', 'excluded', 'total')",
             name="ck_energy_device_config_stat_role",
         ),
@@ -91,12 +88,6 @@ class EnergyDeviceConfig(BaseModel):
     )
     unit: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="计量单位"
-    )
-    collection_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=60, comment="采集间隔(分钟)"
-    )
-    daily_collect_time: Mapped[str | None] = mapped_column(
-        String(5), nullable=True, comment="按天采集的触发时间 HH:MM，如 08:00；NULL 表示按小时采集"
     )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用采集"
@@ -224,6 +215,7 @@ class AlertRecordStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSED = "processed"
     IGNORED = "ignored"
+    REJECTED = "rejected"
 
 
 class EnergyAlertRule(BaseModel):
@@ -318,7 +310,7 @@ class EnergyAlertRecord(BaseModel):
             name="ck_energy_alert_record_alert_level",
         ),
         CheckConstraint(
-            "status IN ('pending', 'processed', 'ignored')",
+            "status IN ('pending', 'processed', 'ignored', 'rejected')",
             name="ck_energy_alert_record_status",
         ),
         {"schema": "energy"},
@@ -367,6 +359,9 @@ class EnergyAlertRecord(BaseModel):
     )
     process_note: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="处理备注"
+    )
+    reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="异常原因（车间负责人填写）"
     )
 
 
@@ -532,4 +527,37 @@ class EnergyNitrogenPushConfig(BaseModel):
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
+    )
+
+
+class PricePeriod(BaseModel):
+    """峰谷电价时段规则。
+
+    每条规则定义某分类（尖/峰/平/谷）在指定小时范围和月份的适用性。
+    同一时段若多条规则匹配，优先级：尖 > 峰 > 平 > 谷。
+    """
+
+    __tablename__ = "price_periods"
+    __table_args__ = {"schema": "energy"}
+
+    category: Mapped[str] = mapped_column(
+        String(10), nullable=False, comment="分类: 尖/峰/平/谷"
+    )
+    start_hour: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="开始小时 (0-23, 含)"
+    )
+    end_hour: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="结束小时 (1-24, 不含)"
+    )
+    months: Mapped[list[int]] = mapped_column(
+        SA_ARRAY(Integer), nullable=False, comment="适用月份, 如 [7,8,9]"
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="软删除标记"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), server_onupdate=func.now(),
     )

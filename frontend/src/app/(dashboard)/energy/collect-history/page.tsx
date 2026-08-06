@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Table, DatePicker, App, Menu, Empty, Spin, Input, Button, Segmented, InputNumber } from 'antd'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { Table, DatePicker, App, Menu, Empty, Spin, Input, Button, InputNumber } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { getEnergyDataHistory, getEnabledTypeConfigs, updateEnergyDataValue } from '@/actions/energy'
@@ -11,19 +11,20 @@ import { Line } from '@ant-design/charts'
 
 const { RangePicker } = DatePicker
 
-const getPresets = (g: 'daily' | 'hourly'): Record<string, [Dayjs, Dayjs]> => {
-  if (g === 'hourly') {
-    return {
-      '昨天': [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')],
-      '3天': [dayjs().subtract(2, 'day').startOf('day'), dayjs().endOf('day')],
-      '7天': [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')],
-    }
-  }
-  return {
-    '昨天': [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')],
-    '7天': [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')],
-    '30天': [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')],
-  }
+/** 预设时间范围：昨天→逐小时，7天/30天→日汇总 */
+const PRESETS: Record<string, { range: [Dayjs, Dayjs]; granularity: 'hourly' | 'daily' }> = {
+  '昨天': {
+    range: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')],
+    granularity: 'hourly',
+  },
+  '7天': {
+    range: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')],
+    granularity: 'daily',
+  },
+  '30天': {
+    range: [dayjs().subtract(29, 'day').startOf('day'), dayjs().endOf('day')],
+    granularity: 'daily',
+  },
 }
 
 interface DeptRow {
@@ -39,14 +40,13 @@ export default function CollectHistoryPage() {
 
   const [typeMetadata, setTypeMetadata] = useState<EnergyTypeMeta[]>([])
   const [activeType, setActiveType] = useState<string>('')
-  const [granularity, setGranularity] = useState<'daily' | 'hourly'>('daily')
-  const [range, setRange] = useState<[Dayjs, Dayjs]>(getPresets('daily')['7天'])
+  const [range, setRange] = useState<[Dayjs, Dayjs]>(PRESETS['7天'].range)
   const [activePreset, setActivePreset] = useState('7天')
   const [allRows, setAllRows] = useState<EnergyDataHistory[]>([])
   const [loading, setLoading] = useState(false)
   const [totalCount, setTotalCount] = useState(0)
 
-  // ---- 编辑模式 ----
+  // ---- 编辑模式（仅逐小时模式可用）----
   const [editing, setEditing] = useState(false)
   const [editingValues, setEditingValues] = useState<Record<string, number | undefined>>({})
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
@@ -54,18 +54,11 @@ export default function CollectHistoryPage() {
   // ---- 搜索 & 多行展开 ----
   const [search, setSearch] = useState('')
   const [expandedKeys, setExpandedKeys] = useState<string[]>([])
+  const fetchIdRef = useRef(0)
 
-  const presets = useMemo(() => getPresets(granularity), [granularity])
-
-  // 切换粒度时重置时间范围
-  const handleGranularityChange = useCallback((g: 'daily' | 'hourly') => {
-    setGranularity(g)
-    const p = getPresets(g)
-    const firstKey = Object.keys(p)[0]
-    setRange(p[firstKey])
-    setActivePreset(firstKey)
-    setExpandedKeys([])
-  }, [])
+  // 根据 activePreset 确定 granularity；自定义日期范围默认 daily
+  const granularity = activePreset ? PRESETS[activePreset]?.granularity ?? 'daily' : 'daily'
+  const presetLabels = Object.keys(PRESETS)
 
   // 加载能源类型列表
   useEffect(() => {
@@ -77,6 +70,7 @@ export default function CollectHistoryPage() {
 
   const fetchData = useCallback(async () => {
     if (!activeType) return
+    const fetchId = ++fetchIdRef.current
     setLoading(true)
     try {
       const baseParams: Record<string, unknown> = {
@@ -90,15 +84,20 @@ export default function CollectHistoryPage() {
       let page = 1
       let total = 0
       while (true) {
+        if (fetchId !== fetchIdRef.current) return
         const result = await getEnergyDataHistory({ ...baseParams, page } as any)
+        if (fetchId !== fetchIdRef.current) return
         allItems.push(...result.items)
         total = result.total
         if (allItems.length >= total) break
         page++
       }
+      if (fetchId !== fetchIdRef.current) return
       setAllRows(allItems)
       setTotalCount(total)
-    } catch {
+    } catch (e) {
+      if (fetchId !== fetchIdRef.current) return
+      console.error('获取采集历史失败:', e)
       message.error('获取数据失败')
     } finally {
       setLoading(false)
@@ -107,7 +106,7 @@ export default function CollectHistoryPage() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  // ---- 编辑保存 ----
+  // ---- 编辑保存（仅逐小时模式）----
   const handleSaveValue = useCallback(async (id: string) => {
     const v = editingValues[id]
     if (v === undefined) return
@@ -115,7 +114,6 @@ export default function CollectHistoryPage() {
     try {
       await updateEnergyDataValue(id, v)
       message.success('已保存')
-      // 更新本地数据
       setAllRows((prev) => prev.map((r) => (r.id === id ? { ...r, value: v } : r)))
       setEditingValues((prev) => { const n = { ...prev }; delete n[id]; return n })
     } catch {
@@ -166,6 +164,7 @@ export default function CollectHistoryPage() {
   const activeMeta = typeMetadata.find((m) => m.type_code === activeType)
   const totalDeviceCount = filteredDepts.reduce((s, d) => s + d.deviceCount, 0)
   const grandTotal = filteredDepts.reduce((s, d) => s + d.total, 0)
+  const isHourly = granularity === 'hourly'
 
   // ---- 主表格列 ----
   const mainColumns: TableColumnsType<DeptRow> = [
@@ -256,10 +255,15 @@ export default function CollectHistoryPage() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {Object.entries(presets).map(([label, preset]) => (
+            {presetLabels.map((label) => (
               <button
                 key={label}
-                onClick={() => { setRange(preset); setActivePreset(label) }}
+                onClick={() => {
+                  const p = PRESETS[label]
+                  setRange(p.range)
+                  setActivePreset(label)
+                  setExpandedKeys([])
+                }}
                 style={{
                   padding: '4px 12px', borderRadius: 6,
                   border: activePreset === label ? '1.5px solid #5645d4' : '1px solid #e8e3f0',
@@ -282,7 +286,7 @@ export default function CollectHistoryPage() {
           </div>
         </div>
 
-        {/* ---- 搜索栏 + 粒度切换 ---- */}
+        {/* ---- 搜索栏 + 编辑按钮 ---- */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Input
@@ -303,8 +307,16 @@ export default function CollectHistoryPage() {
                 收起全部
               </Button>
             )}
+            {/* 粒度指示标签 */}
+            <span style={{
+              fontSize: 11, color: '#a4a097', background: '#f5f2ed',
+              padding: '2px 8px', borderRadius: 4,
+            }}>
+              {isHourly ? '逐小时' : '日汇总'}
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* 编辑按钮仅逐小时模式可用 */}
+          {isHourly && (
             <Button
               type={editing ? 'primary' : 'default'}
               size="small"
@@ -318,16 +330,7 @@ export default function CollectHistoryPage() {
             >
               ✏️ {editing ? '退出编辑' : '编辑数据'}
             </Button>
-            <Segmented
-            value={granularity}
-            onChange={(v) => handleGranularityChange(v as 'daily' | 'hourly')}
-            options={[
-              { label: '每日', value: 'daily' },
-              { label: '每小时', value: 'hourly' },
-            ]}
-            style={{ background: '#f5f3f0' }}
-          />
-          </div>
+          )}
         </div>
 
         {/* ---- 加载状态 ---- */}
@@ -370,11 +373,16 @@ export default function CollectHistoryPage() {
                     </span>
                   ),
                   expandedRowRender: (dept) => {
-                    const isYesterday = activePreset === '昨天'
-                    const isHourly = granularity === 'hourly'
                     const chartColor = activeMeta?.color || '#5645d4'
 
-                    // 图表模式按时间升序，列表模式按时间降序
+                    // 近30天（不含今天）可编辑 — 仅逐小时模式
+                    const editMin = dayjs().subtract(30, 'day').startOf('day')
+                    const editMax = dayjs().subtract(1, 'day').endOf('day')
+                    const isWithinEditRange = (ts: string) => {
+                      const t = dayjs(ts)
+                      return t.isAfter(editMin) && t.isBefore(editMax)
+                    }
+
                     const deviceEntries = [...dept.deviceMap.entries()]
                       .map(([name, rows]) => ({
                         name,
@@ -382,7 +390,7 @@ export default function CollectHistoryPage() {
                         rows: [...rows].sort((a, b) => {
                           const da = new Date(a.timestamp).getTime()
                           const db = new Date(b.timestamp).getTime()
-                          return isYesterday ? db - da : da - db
+                          return da - db  // 时间升序（折线图从左到右）
                         }),
                       }))
                       .sort((a, b) => b.total - a.total)
@@ -395,17 +403,20 @@ export default function CollectHistoryPage() {
                         border: '1px solid #ede9e4',
                         animation: 'fadeIn 0.2s ease',
                       }}>
-                        {deviceEntries.map((dev, idx) => (
+                        {deviceEntries.map((dev, idx) => {
+                          // X 轴格式
+                          const xFormat = isHourly ? 'MM-DD HH:00' : 'MM-DD'
+                          const hasChartData = dev.rows.length >= 2
+
+                          return (
                           <div key={dev.name}>
                             {idx > 0 && (
-                              <div style={{ borderTop: '1px solid #e8e3f0', margin: isYesterday ? '10px 0' : '16px 0' }} />
+                              <div style={{ borderTop: '1px solid #e8e3f0', margin: '16px 0' }} />
                             )}
                             {/* 数据源标题 */}
                             <div style={{
                               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                              marginBottom: isYesterday ? 6 : 8,
-                              paddingBottom: isYesterday ? 6 : 0,
-                              borderBottom: isYesterday ? '1px dashed #ede9e4' : 'none',
+                              marginBottom: 8,
                             }}>
                               <span style={{ fontWeight: 600, fontSize: 13, color: '#37352f' }}>
                                 📊 {dev.name}
@@ -419,10 +430,61 @@ export default function CollectHistoryPage() {
                               </span>
                             </div>
 
-                            {/* 昨天 → 列表模式 */}
-                            {isYesterday ? (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                                {dev.rows.map((row) => (
+                            {/* 折线图：有 ≥2 个数据点时渲染 */}
+                            {hasChartData ? (
+                              <Line
+                                data={dev.rows.map((r) => ({
+                                  date: dayjs(r.timestamp).format(xFormat),
+                                  value: r.value,
+                                }))}
+                                xField="date"
+                                yField="value"
+                                smooth
+                                height={200}
+                                point={{ size: 3, shape: 'circle' }}
+                                xAxis={{
+                                  label: { autoRotate: true, style: { fontSize: 11, fill: '#a4a097' } },
+                                  grid: null,
+                                  tickLine: null,
+                                }}
+                                yAxis={{
+                                  grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
+                                  label: { style: { fontSize: 11, fill: '#a4a097' } },
+                                }}
+                                tooltip={{
+                                  crosshairs: { type: 'xy' as const },
+                                  items: [{
+                                    channel: 'y',
+                                    valueFormatter: (v: number) =>
+                                      `${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`,
+                                  }],
+                                }}
+                                color={chartColor}
+                                areaStyle={{ fill: chartColor, fillOpacity: 0.08 }}
+                                lineStyle={{ stroke: chartColor, lineWidth: 2 }}
+                                animate={{ appear: { animation: 'wave-in', duration: 600 } }}
+                              />
+                            ) : (
+                              <div style={{
+                                padding: '20px 0', textAlign: 'center', color: '#a4a097', fontSize: 13,
+                                background: '#fafaf9', borderRadius: 6, marginBottom: 8,
+                              }}>
+                                {dev.rows.length === 1
+                                  ? `${dayjs(dev.rows[0].timestamp).format(xFormat)} · ${dev.rows[0].value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`
+                                  : '暂无数据'}
+                              </div>
+                            )}
+
+                            {/* 数据明细列表 */}
+                            <div style={{
+                              display: 'flex', flexDirection: 'column', gap: 3,
+                              marginTop: 8,
+                              borderTop: '1px dashed #ede9e4',
+                              paddingTop: 8,
+                            }}>
+                              {dev.rows.map((row) => {
+                                const canEdit = editing && isHourly && isWithinEditRange(row.timestamp)
+                                return (
                                   <div
                                     key={row.id}
                                     style={{
@@ -433,13 +495,10 @@ export default function CollectHistoryPage() {
                                     onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = '' }}
                                   >
                                     <span style={{ fontSize: 13, color: '#787671' }}>
-                                      {isHourly
-                                        ? dayjs(row.timestamp).format('MM-DD HH:00')
-                                        : dayjs(row.timestamp).format('YYYY-MM-DD')
-                                      }
+                                      {dayjs(row.timestamp).format(xFormat)}
                                     </span>
                                     <span style={{ fontSize: 13, color: '#37352f', fontVariantNumeric: 'tabular-nums', fontWeight: 500 }}>
-                                      {editing ? (
+                                      {canEdit ? (
                                         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                           <InputNumber
                                             size="small"
@@ -467,56 +526,13 @@ export default function CollectHistoryPage() {
                                       <span style={{ fontSize: 11, color: '#a4a097', marginLeft: 4, fontWeight: 400 }}>{unit}</span>
                                     </span>
                                   </div>
-                                ))}
-                              </div>
-                            ) : (
-                              /* 多日 → 折线图 */
-                              dev.rows.length >= 2 ? (
-                                <Line
-                                  data={dev.rows.map((r) => ({
-                                    date: dayjs(r.timestamp).format(isHourly ? 'MM-DD HH:00' : 'MM-DD'),
-                                    value: r.value,
-                                  }))}
-                                  xField="date"
-                                  yField="value"
-                                  smooth
-                                  height={200}
-                                  point={{ size: 3, shape: 'circle' }}
-                                  xAxis={{
-                                    label: { autoRotate: true, style: { fontSize: 11, fill: '#a4a097' } },
-                                    grid: null,
-                                    tickLine: null,
-                                  }}
-                                  yAxis={{
-                                    grid: { line: { style: { stroke: '#f0f0f0', lineDash: [3, 3] } } },
-                                    label: { style: { fontSize: 11, fill: '#a4a097' } },
-                                  }}
-                                  tooltip={{
-                                    crosshairs: { type: 'xy' as const },
-                                    items: [{
-                                      channel: 'y',
-                                      valueFormatter: (v: number) =>
-                                        `${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`,
-                                    }],
-                                  }}
-                                  color={chartColor}
-                                  areaStyle={{ fill: chartColor, fillOpacity: 0.08 }}
-                                  lineStyle={{ stroke: chartColor, lineWidth: 2 }}
-                                  animate={{ appear: { animation: 'wave-in', duration: 600 } }}
-                                />
-                              ) : (
-                                <div style={{
-                                  padding: '20px 0', textAlign: 'center', color: '#a4a097', fontSize: 13,
-                                  background: '#fafaf9', borderRadius: 6,
-                                }}>
-                                  {dev.rows.length === 1
-                                    ? `${dayjs(dev.rows[0].timestamp).format(isHourly ? 'MM-DD HH:00' : 'YYYY-MM-DD')}  ·  ${dev.rows[0].value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} ${unit}`
-                                    : '暂无数据'}
-                                </div>
-                              )
-                            )}
+                                )
+                              })}
+                            </div>
                           </div>
-                        ))}
+                          )
+                        })}
+
                         {/* 底部收起按钮 */}
                         <div style={{
                           textAlign: 'center', marginTop: 12, paddingTop: 12,
