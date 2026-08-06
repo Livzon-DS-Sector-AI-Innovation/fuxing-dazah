@@ -1,11 +1,12 @@
 """工艺路线与图编辑业务规则测试。
 
 覆盖业务场景：
-- 产品：名称唯一；软删除后同名可重建；有未完成批次时不可删除
 - 图编辑：route_name 产品内唯一；保存并读取完整图（节点/边/字段）；未知边引用拒绝；
   发布后图冻结不可再编辑；环形流转无起点拒绝发布；不可达节点拒绝发布
 - 路线复制：复制为新产品路线继承完整图结构
 - 边界边约束：批次边界边不允许开启流水线模式
+
+产品主数据的 CRUD 规则见 test_product_service.py。
 """
 
 import uuid
@@ -14,7 +15,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
-from app.modules.production.models import Batch, ProcessRoute, Product
+from app.modules.production.models import ProcessRoute, Product
 from app.modules.production.schemas import (
     EdgeIn,
     NodeIn,
@@ -35,53 +36,6 @@ async def _draft_route(db: AsyncSession) -> tuple[Product, ProcessRoute]:
         db, RouteCreate(product_id=product.id, route_name="V1"), user=None,
     )
     return product, route
-
-
-class TestProduct:
-    async def test_duplicate_name_rejected(self, db_session: AsyncSession) -> None:
-        """同名产品重复创建抛出 AppException。"""
-        name = f"产品-{uuid.uuid4().hex[:8]}"
-        await route_service.create_product(
-            db_session, ProductCreate(product_name=name), user=None,
-        )
-        with pytest.raises(AppException):
-            await route_service.create_product(
-                db_session, ProductCreate(product_name=name), user=None,
-            )
-
-    async def test_soft_delete_then_recreate_same_name(
-        self, db_session: AsyncSession,
-    ) -> None:
-        """软删除后同名产品可重新创建，新 ID 与旧不同。"""
-        name = f"产品-{uuid.uuid4().hex[:8]}"
-        p1 = await route_service.create_product(
-            db_session, ProductCreate(product_name=name), user=None,
-        )
-        await route_service.delete_product(db_session, p1.id, user=None)
-        p2 = await route_service.create_product(
-            db_session, ProductCreate(product_name=name), user=None,
-        )
-        assert p2.id != p1.id
-
-    async def test_delete_with_unfinished_batch_rejected(
-        self, db_session: AsyncSession,
-    ) -> None:
-        """存在未完成批次的产品不可删除。"""
-        product = await route_service.create_product(
-            db_session,
-            ProductCreate(product_name=f"产品-{uuid.uuid4().hex[:8]}"),
-            user=None,
-        )
-        db_session.add(
-            Batch(
-                batch_no=f"B-{uuid.uuid4().hex[:8]}",
-                product_id=product.id,
-                route_id=uuid.uuid4(),
-            )
-        )
-        await db_session.flush()
-        with pytest.raises(AppException):
-            await route_service.delete_product(db_session, product.id, user=None)
 
 
 class TestGraph:

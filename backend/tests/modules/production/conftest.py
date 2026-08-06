@@ -16,6 +16,22 @@ from app.modules.production.schemas import (
     RouteGraphIn,
 )
 from app.modules.production.service import route_service
+from app.platform.identity.models import User
+
+
+@pytest.fixture
+async def test_user(db_session: AsyncSession) -> User:
+    """获取已有测试用户，若无则创建。"""
+    from sqlalchemy import select
+
+    stmt = select(User).where(User.is_deleted == False).limit(1)  # noqa: E712
+    existing = (await db_session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return existing
+    user = User(name="测试用户", employee_no="TEST001")
+    db_session.add(user)
+    await db_session.flush()
+    return user
 
 
 def rand_code(prefix: str) -> str:
