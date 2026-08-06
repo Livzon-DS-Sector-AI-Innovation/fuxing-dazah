@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, NotFoundException
+from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.modules.equipment.public_api import get_equipment_briefs
 from app.modules.production import repository as repo
 from app.modules.production.models import (
@@ -331,6 +331,7 @@ async def complete_execution(
     batch = await repo.get_batch(db, execution.batch_id)
     if not batch:
         raise AppException(status_code=400, message="批次不存在或已删除，无法完成工序")
+    # 权限校验必须保持在写操作之前，勿插入 flush
     if user:
         route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
         node = route_node[0] if route_node else None
@@ -456,12 +457,18 @@ async def abort_execution(
         raise AppException(status_code=400, message="仅进行中的执行可中止")
     if user:
         batch = await repo.get_batch(db, execution.batch_id)
-        route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
-        node = route_node[0] if route_node else None
-        if batch and node and node.stage_name:
-            await _require_operator_permission(
-                db, user, execution.node_id, batch.route_id, node.stage_name,
-            )
+        if batch:
+            route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
+            node = route_node[0] if route_node else None
+            if node and node.stage_name:
+                await _require_operator_permission(
+                    db, user, execution.node_id, batch.route_id, node.stage_name,
+                )
+        else:
+            # 孤儿执行：批次已删除，回退到纯权限码校验
+            perms = await get_user_permissions(str(user.id), db)
+            if "production:batch:submit" not in perms:
+                raise ForbiddenException("缺少 production:batch:submit 权限")
     execution.status = "aborted"
     execution.finished_at = datetime.now(UTC)
     execution.finished_by = user.id if user else None
