@@ -26,10 +26,6 @@ class EnergyDeviceConfigCreate(BaseModel):
         default=None, max_length=100, description="所属区域"
     )
     monitor_level: MonitorLevel = Field(default="normal", description="监控等级")
-    collection_interval: int = Field(default=60, ge=1, description="采集间隔(分钟)")
-    daily_collect_time: str | None = Field(
-        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="按天采集触发时间 HH:MM，如 08:00"
-    )
     is_enabled: bool = Field(default=True, description="是否启用采集")
     equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
@@ -47,10 +43,6 @@ class EnergyDeviceConfigUpdate(BaseModel):
     workshop: str | None = Field(default=None, min_length=1, max_length=100)
     production_line: str | None = Field(default=None, max_length=100)
     monitor_level: MonitorLevel | None = Field(default=None)
-    collection_interval: int | None = Field(default=None, ge=1)
-    daily_collect_time: str | None = Field(
-        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="按天采集触发时间 HH:MM"
-    )
     is_enabled: bool | None = Field(default=None)
     equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
     equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
@@ -70,8 +62,6 @@ class EnergyDeviceConfigResponse(BaseModel):
     production_line: str | None
     monitor_level: str
     unit: str
-    collection_interval: int
-    daily_collect_time: str | None
     is_enabled: bool
     equipment_id: str | None
     equipment_name: str | None
@@ -128,11 +118,13 @@ class CollectTriggerRequest(BaseModel):
 class CollectSettingsResponse(BaseModel):
     """自动采集运行时设置"""
     auto_collect_enabled: bool = Field(description="是否启用自动采集")
+    daily_collect_time: str = Field(description="每日统一采集触发时间 HH:MM")
 
 
 class CollectSettingsUpdate(BaseModel):
     """更新自动采集运行时设置"""
     auto_collect_enabled: bool | None = Field(default=None, description="是否启用自动采集")
+    daily_collect_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日统一采集触发时间 HH:MM")
 
 
 # ── 预警系统 ──
@@ -226,13 +218,20 @@ class EnergyAlertRecordResponse(BaseModel):
     processed_by: str | None
     processed_at: datetime | None
     process_note: str | None
+    reason: str | None
+    heads: list[dict[str, str]] = Field(default_factory=list, description="车间负责人列表")
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
+class FillAlertReasonRequest(BaseModel):
+    """填写预警原因"""
+    reason: str = Field(..., min_length=1, max_length=500, description="异常原因")
+
+
 class AlertRecordProcessRequest(BaseModel):
-    status: Literal["processed", "ignored"] = Field(..., description="处理结果")
+    status: Literal["processed", "ignored", "rejected"] = Field(..., description="处理结果")
     process_note: str | None = Field(
         default=None, max_length=500, description="处理备注"
     )

@@ -44,14 +44,11 @@ const DEFAULT_VALUES = {
   platform_code: 'zhiheng',
   energy_type: 'electricity',
   unit: 'kWh',
-  collection_interval: 1,  // 小时
   monitor_level: 'normal',
   is_enabled: true,
   is_region_level: false,
   stat_role: 'normal' as const,
 }
-
-const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7]
 
 /** 判断平台是否已接入（非 "待接入" 即视为已接入） */
 function isPlatformReady(name: string): boolean {
@@ -107,7 +104,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
 
   const isEdit = deviceDrawerMode === 'edit'
   const selectedPlatform = Form.useWatch('platform_code', form)
-  const watchInterval = Form.useWatch('collection_interval', form)
   const watchIsRegionLevel = Form.useWatch('is_region_level', form)
 
   // 获取平台列表
@@ -221,16 +217,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const loadDeviceData = async (id: string) => {
     try {
       const device = await getEnergyDeviceById(id)
-      // 采集间隔：后端存分钟，前端展示小时
-      const formData: Record<string, unknown> = { ...device }
-      if (device.collection_interval) {
-        formData.collection_interval = +(device.collection_interval / 60).toFixed(2)
-      }
-      // TimePicker 需要 dayjs 对象，后端返回 "HH:mm" 字符串
-      if (device.daily_collect_time && typeof device.daily_collect_time === 'string') {
-        formData.daily_collect_time = dayjs(device.daily_collect_time, 'HH:mm')
-      }
-      form.setFieldsValue(formData)
+      form.setFieldsValue({ ...device })
       // 编辑时，如果有已关联设备，预加载下拉选项
       if (device.equipment_id) {
         loadEquipmentOption(device.equipment_id)
@@ -243,18 +230,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
-      // 采集间隔：前端小时 → 后端分钟
-      if (values.collection_interval != null) {
-        values.collection_interval = Math.round(values.collection_interval * 60)
-      }
-      // TimePicker 返回值转为 HH:mm 字符串
-      if (values.daily_collect_time) {
-        if (typeof values.daily_collect_time === 'object' && values.daily_collect_time.format) {
-          values.daily_collect_time = values.daily_collect_time.format('HH:mm')
-        }
-      } else {
-        values.daily_collect_time = null
-      }
       setLoading(true)
 
       if (isEdit && deviceDrawerId) {
@@ -589,92 +564,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               />
             </Form.Item>
 
-            <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-              <Form.Item
-                name="collection_interval"
-                label={
-                  <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                    采集间隔
-                  </span>
-                }
-                rules={[{ required: true, message: '必填' }]}
-                style={{ flex: 1, marginBottom: 0 }}
-                extra={
-                  <span style={{ fontSize: 12, color: '#a4a097' }}>
-                    {watchInterval >= 24
-                      ? `每 ${Math.round(watchInterval / 24)} 天自动采集一次汇总数据`
-                      : '自动采集开启后，按此间隔检查并拉取数据'}
-                  </span>
-                }
-              >
-                {watchInterval >= 24 ? (
-                  <div>
-                    <Select
-                      placeholder="选择天数"
-                      options={DAY_OPTIONS.map(d => ({ label: `${d} 天`, value: d * 24 }))}
-                      style={{ height: 44 }}
-                    />
-                    <Button
-                      type="link"
-                      size="small"
-                      style={{ padding: 0, fontSize: 12, marginTop: 4 }}
-                      onClick={() => {
-                        form.setFieldValue('collection_interval', 1)
-                        form.setFieldValue('daily_collect_time', null)
-                      }}
-                    >
-                      切换为按小时采集
-                    </Button>
-                  </div>
-                ) : (
-                  <div>
-                    <InputNumber
-                      min={0.25}
-                      step={0.25}
-                      placeholder="1"
-                      suffix="小时"
-                      style={{ width: '100%', height: 44 }}
-                    />
-                    <Button
-                      type="link"
-                      size="small"
-                      style={{ padding: 0, fontSize: 12, marginTop: 4 }}
-                      onClick={() => {
-                        form.setFieldValue('collection_interval', 24)
-                        form.setFieldValue('daily_collect_time', null)
-                      }}
-                    >
-                      切换为按天采集
-                    </Button>
-                  </div>
-                )}
-              </Form.Item>
-
-              {watchInterval >= 24 && (
-                <Form.Item
-                  name="daily_collect_time"
-                  label={
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                      每日采集时间
-                    </span>
-                  }
-                  style={{ flex: 1, marginBottom: 0 }}
-                  extra={
-                    <span style={{ fontSize: 12, color: '#a4a097' }}>
-                      每天定时将过去 N 天的数据汇总输出
-                    </span>
-                  }
-                >
-                  <TimePicker
-                    format="HH:mm"
-                    minuteStep={30}
-                    placeholder="08:00"
-                    style={{ width: '100%', height: 44 }}
-                  />
-                </Form.Item>
-              )}
-
-              <Form.Item
+            <Form.Item
                 name="monitor_level"
                 label={
                   <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
@@ -692,7 +582,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                   style={{ height: 44 }}
                 />
               </Form.Item>
-            </div>
 
             {/* ── 备注 ── */}
             <div style={{ marginBottom: 16 }} />

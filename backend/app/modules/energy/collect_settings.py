@@ -19,6 +19,7 @@ CST = timezone(timedelta(hours=8))
 
 # ── Runtime state (module-level, survives until server restart) ──
 _auto_collect_enabled: bool = False
+_daily_collect_time: str = "08:00"
 _initialized: bool = False
 
 
@@ -45,3 +46,14 @@ def set_auto_collect_enabled(enabled: bool) -> None:
     global _auto_collect_enabled
     _init_from_config()
     _auto_collect_enabled = enabled
+
+
+def get_daily_collect_time() -> str:
+    _init_from_config()
+    return _daily_collect_time
+
+
+def set_daily_collect_time(value: str) -> None:
+    global _daily_collect_time
+    _init_from_config()
+    _daily_collect_time = value

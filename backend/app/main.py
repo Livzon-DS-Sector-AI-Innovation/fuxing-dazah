@@ -49,10 +49,6 @@ mcp_asgi = get_mcp_app(path="/", middleware=mcp_middleware)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
-    from app.modules.energy.scheduler import (
-        energy_collection_loop,
-        stop_energy_collection_flag,
-    )
     from app.modules.equipment.scheduler import (
         maintenance_plan_loop,
         stop_maintenance_plan_flag,
@@ -66,7 +62,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     member_task = asyncio.ensure_future(member_sync_loop())
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
-    energy_task = asyncio.ensure_future(energy_collection_loop())
     maintenance_plan_task = asyncio.ensure_future(maintenance_plan_loop())
 
     # ── 平台级飞书 WebSocket 长连接 ──
@@ -129,7 +124,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stop_member_sync_flag.set()
     stop_timeout_flag.set()
-    stop_energy_collection_flag.set()
     stop_maintenance_plan_flag.set()
 
     # 停止安全模块 WebSocket
@@ -149,7 +143,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     member_task.cancel()
     timeout_task.cancel()
-    energy_task.cancel()
     maintenance_plan_task.cancel()
 
     # 停止平台级飞书 WebSocket

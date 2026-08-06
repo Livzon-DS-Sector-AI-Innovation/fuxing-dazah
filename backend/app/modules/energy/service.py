@@ -136,123 +136,15 @@ async def delete_device_config(db: AsyncSession, config_id: UUID) -> None:
     await repo.delete_device_config(db, config_id)
 
 
-async def _collect_daily_summary(
-    db: AsyncSession,
-    device: EnergyDeviceConfig,
-    target_day: datetime,
-) -> float | None:
-    """采集日汇总数据。
-
-    优先使用适配器的 is_daily=True 模式（一次 API 调用拿全天总值）；
-    若适配器不支持则回退到逐小时采集（24 次调用累加）。
-    返回总和值；全部失败则返回 None。
-    """
-    adapter = ADAPTERS.get(device.platform_code)
-    if adapter is None:
-        logger.warning("未找到平台适配器: %s，跳过日汇总采集", device.platform_code)
-        return None
-
-    unit = await _get_unit_by_energy_type(db, device.energy_type)
-
-    # ── 优先：单次全天 API 调用 ──
-    try:
-        results = await adapter.fetch_energy_data(
-            [device.platform_device_code], target_day, device.api_endpoint, is_daily=True
-        )
-        for cr in results:
-            if cr.device_code == device.platform_device_code:
-                value = float(cr.value)
-                await repo.upsert_energy_data(
-                    db,
-                    device_config_id=device.id,
-                    timestamp=target_day,
-                    value=value,
-                    unit=unit,
-                    platform_raw_data={"daily_sum": True, "source": "single_api"},
-                )
-                logger.info(
-                    "日汇总采集完成(单次API): device=%s, day=%s, value=%.4f",
-                    device.device_name,
-                    target_day.strftime("%Y-%m-%d"),
-                    value,
-                )
-                return value
-        logger.warning(
-            "日汇总采集: 未找到匹配设备数据, device=%s, day=%s",
-            device.device_name, target_day.strftime("%Y-%m-%d"),
-        )
-        return None
-    except NotImplementedError:
-        logger.debug(
-            "平台 %s 不支持 is_daily=True，回退逐小时采集", device.platform_code
-        )
-
-    # ── 回退：逐小时采集并累加 ──
-    total = 0.0
-    hours_collected = 0
-
-    for hour in range(24):
-        target_hour = target_day.replace(hour=hour)
-        try:
-            results = await adapter.fetch_energy_data(
-                [device.platform_device_code], target_hour, device.api_endpoint
-            )
-        except NotImplementedError:
-            logger.debug(
-                "平台 %s 适配器尚未实现，跳过日汇总采集", device.platform_code
-            )
-            return None
-        except Exception:
-            logger.exception(
-                "日汇总逐小时采集异常: device=%s, hour=%s",
-                device.device_name,
-                target_hour.strftime("%Y-%m-%d %H:00"),
-            )
-            continue
-
-        for cr in results:
-            if cr.device_code == device.platform_device_code:
-                total += float(cr.value)
-                hours_collected += 1
-                break
-
-    if hours_collected == 0:
-        logger.warning(
-            "日汇总采集全部失败: device=%s, day=%s",
-            device.device_name,
-            target_day.strftime("%Y-%m-%d"),
-        )
-        return None
-
-    await repo.upsert_energy_data(
-        db,
-        device_config_id=device.id,
-        timestamp=target_day,
-        value=total,
-        unit=unit,
-        platform_raw_data={
-            "daily_sum": True,
-            "hours_collected": hours_collected,
-        },
-    )
-    logger.info(
-        "日汇总采集完成(逐小时): device=%s, day=%s, value=%.4f, hours=%d/24",
-        device.device_name,
-        target_day.strftime("%Y-%m-%d"),
-        total,
-        hours_collected,
-    )
-    return total
-
-
 async def trigger_collection(
     db: AsyncSession, request: CollectTriggerRequest
 ) -> dict[str, Any]:
-    """手动触发采集 — 采集昨天全天汇总数据。
+    """手动触发采集 — 拉取昨天所有设备 0-23 小时的每小时数据。
 
-    无论今天几点触发，始终采集昨天 00:00 ~ 23:59 的总数据，
-    每个设备写入一条日汇总记录。
+    与定时自动采集逻辑一致，每条小时数据存为独立记录。
     """
+    from app.modules.energy.scheduler import _collect_device_hours
+
     now = datetime.now(CST)
     yesterday = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
@@ -280,12 +172,22 @@ async def trigger_collection(
             }
             continue
 
-        success_count = 0
+        unit_map: dict[str, str] = {}
+        for et in {d.energy_type for d in devices}:
+            try:
+                unit_map[et] = await _get_unit_by_energy_type(db, et)
+            except Exception:
+                unit_map[et] = ""
+
+        platform_expected = len(devices) * 24
+        platform_success = 0
         for device in devices:
             try:
-                value = await _collect_daily_summary(db, device, yesterday)
-                if value is not None:
-                    success_count += 1
+                unit = unit_map.get(device.energy_type, "")
+                count = await _collect_device_hours(
+                    db, device, yesterday, unit, adapter
+                )
+                platform_success += count
             except Exception:
                 logger.exception(
                     "手动采集异常: device=%s, day=%s",
@@ -294,8 +196,8 @@ async def trigger_collection(
                 )
 
         status = (
-            "success" if success_count == len(devices)
-            else "partial" if success_count > 0
+            "success" if platform_success >= platform_expected
+            else "partial" if platform_success > 0
             else "failed"
         )
 
@@ -307,8 +209,8 @@ async def trigger_collection(
                     "collect_time": now,
                     "status": status,
                     "device_count": len(devices),
-                    "success_count": success_count,
-                    "error_message": f"手动触发: {yesterday.strftime('%Y-%m-%d')} 日汇总" if status != "success" else None,
+                    "success_count": platform_success,
+                    "error_message": f"手动触发: {yesterday.strftime('%Y-%m-%d')}" if status != "success" else None,
                 },
             )
         except Exception:
@@ -319,7 +221,7 @@ async def trigger_collection(
         results[platform_code] = {
             "status": status,
             "device_count": len(devices),
-            "success_count": success_count,
+            "success_count": platform_success,
             "target_day": yesterday.strftime("%Y-%m-%d"),
         }
 
@@ -476,13 +378,9 @@ async def get_collect_log_detail(
     unit_map: dict[str, str] = {c.type_code: c.unit for c in type_configs}
 
     for energy_data, device_config in rows:
-        # 日汇总记录的数据覆盖范围为全天，小时记录为 1 小时
-        is_daily = (
-            energy_data.platform_raw_data
-            and energy_data.platform_raw_data.get("daily_sum") is True
-        )
+        # 所有采集数据均为逐小时记录，覆盖范围为 1 小时
         data_start = energy_data.timestamp
-        data_end = energy_data.timestamp + (timedelta(days=1) if is_daily else timedelta(hours=1))
+        data_end = energy_data.timestamp + timedelta(hours=1)
         devices.append({
             "device_name": device_config.device_name,
             "platform_device_code": device_config.platform_device_code,
@@ -595,6 +493,47 @@ async def get_overview(
     }
 
 
+async def get_price_category_distribution(
+    db: AsyncSession,
+    start_time: datetime,
+    end_time: datetime,
+    energy_type: str | None = None,
+    workshop: str | None = None,
+) -> dict[str, Any]:
+    """获取峰谷电价分类能耗分布。"""
+    categories = await repo.get_price_category_distribution(
+        db, start_time, end_time, energy_type=energy_type, workshop=workshop,
+    )
+    grand_total = sum(c["total_value"] for c in categories)
+    unit = categories[0]["unit"] if categories else ""
+    return {
+        "categories": categories,
+        "total": grand_total,
+        "unit": unit,
+    }
+
+
+# ── 峰谷时段规则 ──
+
+
+async def list_price_periods(db: AsyncSession) -> list[dict[str, Any]]:
+    return await repo.list_price_periods(db)
+
+
+async def create_price_period(
+    db: AsyncSession, category: str, start_hour: int, end_hour: int, months: list[int],
+) -> dict[str, Any]:
+    return await repo.create_price_period(db, category, start_hour, end_hour, months)
+
+
+async def delete_price_period(db: AsyncSession, period_id: UUID) -> bool:
+    return await repo.delete_price_period(db, period_id)
+
+
+async def reset_price_periods(db: AsyncSession) -> list[dict[str, Any]]:
+    return await repo.reset_price_periods(db)
+
+
 # ── 预警规则 ──
 
 
@@ -665,6 +604,8 @@ async def list_alert_records(
     energy_type: str | None = None,
     alert_level: str | None = None,
     status: str | None = None,
+    workshop: str | None = None,
+    workshop_not_null: bool = False,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     page: int = 1,
@@ -675,6 +616,8 @@ async def list_alert_records(
         energy_type=energy_type,
         alert_level=alert_level,
         status=status,
+        workshop=workshop,
+        workshop_not_null=workshop_not_null,
         start_time=start_time,
         end_time=end_time,
         page=page,
@@ -698,6 +641,73 @@ async def process_alert_record(
         },
     )
     assert result is not None
+    return result
+
+
+async def fill_alert_reason(
+    db: AsyncSession, record_id: UUID, reason: str
+) -> EnergyAlertRecord:
+    """任意用户填写预警异常原因。"""
+    existing = await repo.get_alert_record_by_id(db, record_id)
+    if existing is None:
+        raise NotFoundException("预警记录", str(record_id))
+    result = await repo.update_alert_record(db, record_id, {"reason": reason})
+    assert result is not None
+    return result
+
+
+async def approve_alert_record(
+    db: AsyncSession, record_id: UUID,
+) -> None:
+    """管理员通过预警 → 软删除。"""
+    existing = await repo.get_alert_record_by_id(db, record_id)
+    if existing is None:
+        raise NotFoundException("预警记录", str(record_id))
+    await repo.update_alert_record(
+        db, record_id, {"is_deleted": True, "status": "processed"}
+    )
+
+
+async def reject_alert_record(
+    db: AsyncSession, record_id: UUID,
+) -> EnergyAlertRecord:
+    """管理员驳回预警 → status=rejected + 重新飞书推送。"""
+    from app.platform.integrations.feishu.notification import send_user_card
+
+    existing = await repo.get_alert_record_by_id(db, record_id)
+    if existing is None:
+        raise NotFoundException("预警记录", str(record_id))
+
+    # 更新状态为 rejected
+    result = await repo.update_alert_record(db, record_id, {"status": "rejected"})
+    assert result is not None
+
+    # 查询车间配置获取飞书推送对象
+    if existing.workshop:
+        ws_config = await repo.get_workshop_config_by_workshop(db, existing.workshop)
+        if ws_config:
+            heads = ws_config.heads or []
+            open_ids = [h.get("feishu_open_id", "") for h in heads if h.get("feishu_open_id")]
+            heads_mention = " ".join(
+                f'<at user_id="{h.get("feishu_open_id", "")}">{h.get("name", "")}</at>'
+                for h in heads if h.get("feishu_open_id")
+            )
+
+            notify_title = f"⚠️ 预警驳回 - {existing.workshop}"
+            notify_content = (
+                f"**{existing.workshop}**（负责人：{heads_mention}）\n"
+                f"能耗预警已被管理员驳回，请重新检查异常消耗原因并更新。\n"
+                f"能源类型：{existing.energy_type} | 触发值：{float(existing.trigger_value):,.2f} {existing.unit}"
+            )
+
+            for open_id in open_ids:
+                success = await send_user_card(open_id, notify_title, notify_content)
+                if not success:
+                    logger.warning(
+                        "预警驳回飞书通知失败: workshop=%s, open_id=%s",
+                        existing.workshop, open_id,
+                    )
+
     return result
 
 
@@ -1144,6 +1154,24 @@ async def get_daily_push_config(
     obj = await repo.get_daily_push_config_by_id(db, config_id)
     if obj is None:
         raise NotFoundException("能源总耗推送配置", str(config_id))
+    # 填充设备名称
+    device_ids: list[UUID] = []
+    for did_attr in (
+        "solar_device_id", "pressure_device_id",
+        "rto1_gas_device_id", "rto2_gas_device_id",
+        "rto1_elec_device_id", "rto2_elec_device_id",
+    ):
+        did = getattr(obj, did_attr)
+        if did:
+            device_ids.append(did)
+    device_name_map = await repo.get_device_names_by_ids(db, device_ids)
+    for attr in (
+        "solar_device_id", "pressure_device_id",
+        "rto1_gas_device_id", "rto2_gas_device_id",
+        "rto1_elec_device_id", "rto2_elec_device_id",
+    ):
+        did = getattr(obj, attr)
+        setattr(obj, f"{attr}_name", device_name_map.get(did) if did else None)
     return obj
 
 
@@ -1157,7 +1185,7 @@ async def list_daily_push_configs(
     items, total = await repo.list_daily_push_configs(
         db, is_enabled=is_enabled, page=page, page_size=page_size
     )
-    # 填充设备名称
+    # 填充设备名称（包括已删除设备，确保页面回显名称不丢失）
     device_ids: list[UUID] = []
     for c in items:
         for did_attr in (
@@ -1168,11 +1196,7 @@ async def list_daily_push_configs(
             did = getattr(c, did_attr)
             if did:
                 device_ids.append(did)
-    device_name_map: dict[UUID, str] = {}
-    for did in device_ids:
-        dev = await repo.get_device_config_by_id(db, did)
-        if dev:
-            device_name_map[did] = dev.device_name
+    device_name_map = await repo.get_device_names_by_ids(db, device_ids)
     for c in items:
         for attr in (
             "solar_device_id", "pressure_device_id",
@@ -1457,6 +1481,12 @@ async def get_nitrogen_push_config(
     obj = await repo.get_nitrogen_push_config_by_id(db, config_id)
     if obj is None:
         raise NotFoundException("氮气月度推送配置", str(config_id))
+    # 填充设备名称
+    device_ids = obj.nitrogen_device_ids or []
+    device_name_map = await repo.get_device_names_by_ids(db, device_ids)
+    obj.nitrogen_device_names = [  # type: ignore[attr-defined]
+        device_name_map[did] for did in device_ids if did in device_name_map
+    ]
     return obj
 
 
@@ -1470,17 +1500,13 @@ async def list_nitrogen_push_configs(
     items, total = await repo.list_nitrogen_push_configs(
         db, is_enabled=is_enabled, page=page, page_size=page_size
     )
-    # 填充设备名称
+    # 填充设备名称（包括已删除设备，确保页面回显名称不丢失）
     all_device_ids: list[UUID] = []
     for c in items:
         for did in c.nitrogen_device_ids or []:
             if did not in all_device_ids:
                 all_device_ids.append(did)
-    device_name_map: dict[UUID, str] = {}
-    for did in all_device_ids:
-        dev = await repo.get_device_config_by_id(db, did)
-        if dev:
-            device_name_map[did] = dev.device_name
+    device_name_map = await repo.get_device_names_by_ids(db, all_device_ids)
     for c in items:
         c.nitrogen_device_names = [  # type: ignore[attr-defined]
             device_name_map.get(did, str(did))

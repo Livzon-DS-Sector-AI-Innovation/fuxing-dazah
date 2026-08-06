@@ -48,6 +48,10 @@ import {
   deleteNitrogenPushConfig as apiDeleteNitrogenPushConfig,
   sendNitrogenReport as apiSendNitrogenReport,
   fetchNitrogenPushPersonnelCandidates,
+  fetchAlertProcessList,
+  fillAlertReason as apiFillAlertReason,
+  approveAlertRecord as apiApproveAlertRecord,
+  rejectAlertRecord as apiRejectAlertRecord,
 } from '@/lib/api/energy'
 import {
   CreateDeviceInput,
@@ -128,7 +132,7 @@ export async function getCollectSettings() {
   return apiFetchCollectSettings()
 }
 
-export async function updateCollectSettings(data: { auto_collect_enabled?: boolean }) {
+export async function updateCollectSettings(data: { auto_collect_enabled?: boolean; daily_collect_time?: string }) {
   const result = await apiUpdateCollectSettings(data)
   revalidatePath('/energy/collect-logs')
   return result
@@ -174,6 +178,29 @@ export async function getAlertRecords(params: RecordQueryParams = {}) {
 export async function processAlertRecord(id: string, data: ProcessRecordInput) {
   const result = await apiProcessAlertRecord(id, data)
   revalidatePath('/energy/alerts')
+  return result
+}
+
+// ── 预警处理 Server Actions ──
+
+export async function getAlertProcessList(params: { status?: string; page?: number; page_size?: number } = {}) {
+  return fetchAlertProcessList(params)
+}
+
+export async function fillAlertReason(id: string, data: { reason: string }) {
+  const result = await apiFillAlertReason(id, data)
+  revalidatePath('/energy/alert-process')
+  return result
+}
+
+export async function approveAlertRecord(id: string) {
+  await apiApproveAlertRecord(id)
+  revalidatePath('/energy/alert-process')
+}
+
+export async function rejectAlertRecord(id: string) {
+  const result = await apiRejectAlertRecord(id)
+  revalidatePath('/energy/alert-process')
   return result
 }
 
