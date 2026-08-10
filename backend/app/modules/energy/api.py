@@ -108,21 +108,6 @@ async def list_departments(
     return success_response(data)
 
 
-@router.get("/equipments", summary="获取设备台账列表（供数据源配置关联设备下拉使用）")
-async def list_equipments(
-    keyword: str | None = Query(default=None, description="设备名称/编号搜索"),
-    status: str | None = Query(default=None, description="设备状态筛选"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db),
-) -> JSONResponse:
-    """获取设备台账中在用的设备列表，供能源数据源配置关联设备使用。"""
-    items, total = await service.list_equipments_for_select(
-        db, keyword=keyword, status=status, page=page, page_size=page_size
-    )
-    return paginated_response(items, page, page_size, total)
-
-
 # ── 设备配置 ──
 
 

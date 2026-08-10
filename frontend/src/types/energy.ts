@@ -183,7 +183,8 @@ export interface CollectLogDeviceDetail {
   value: number
   unit: string
   data_timestamp: string
-  data_time_range_end?: string  // 数据覆盖时段终点（整点+1h）
+  data_time_range_end?: string  // 数据覆盖时段终点（整点+1h 或 +1d）
+  is_daily?: boolean            // 日汇总数据，前端按天显示
 }
 
 // 采集日志详情（含设备数据）

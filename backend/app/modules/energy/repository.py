@@ -446,10 +446,12 @@ def _total_preferred_filter(device_config: type[EnergyDeviceConfig]) -> Any:
     """总耗优先过滤器（用于总览卡片、趋势图、峰谷默认、车间预警）。
 
     1. 排除 stat_role='excluded'
-    2. 组内有 total 设备 → 只用 total
-    3. 无 total → 用 normal，按部门优先去重
+    2. 存在区域级 total（is_region_level=True）→ 只用 total，排除所有 normal
+    3. 同车间存在 total → 只用 total，排除同车间 normal
+    4. 无 total → 用 normal，按部门优先去重
     """
     inner_total = EnergyDeviceConfig.__table__.alias("d_total")
+    region_total = EnergyDeviceConfig.__table__.alias("d_region")
     return and_(
         device_config.stat_role != 'excluded',
         or_(
@@ -457,12 +459,23 @@ def _total_preferred_filter(device_config: type[EnergyDeviceConfig]) -> Any:
             and_(
                 device_config.stat_role == 'normal',
                 not_(
-                    exists().where(
-                        inner_total.c.workshop == device_config.workshop,
-                        inner_total.c.energy_type == device_config.energy_type,
-                        inner_total.c.stat_role == 'total',
-                        inner_total.c.is_enabled == True,       # noqa: E712
-                        inner_total.c.is_deleted == False,      # noqa: E712
+                    or_(
+                        # 同车间存在 total 设备 → 排除本车间 normal
+                        exists().where(
+                            inner_total.c.workshop == device_config.workshop,
+                            inner_total.c.energy_type == device_config.energy_type,
+                            inner_total.c.stat_role == 'total',
+                            inner_total.c.is_enabled == True,       # noqa: E712
+                            inner_total.c.is_deleted == False,      # noqa: E712
+                        ),
+                        # 存在区域级 total 设备 → 排除所有 normal
+                        exists().where(
+                            region_total.c.energy_type == device_config.energy_type,
+                            region_total.c.stat_role == 'total',
+                            region_total.c.is_region_level == True,  # noqa: E712
+                            region_total.c.is_enabled == True,       # noqa: E712
+                            region_total.c.is_deleted == False,      # noqa: E712
+                        ),
                     )
                 ),
                 _department_priority_subquery(device_config),
@@ -991,60 +1004,6 @@ async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
 
 
 # ── 关联设备列表（供数据源配置下拉使用） ──
-
-
-async def list_equipments_for_select(
-    db: AsyncSession,
-    *,
-    keyword: str | None = None,
-    status: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> tuple[list[dict[str, Any]], int]:
-    """查询设备台账中在用的设备列表（只读，跨 schema 查询）。"""
-    from sqlalchemy import text
-
-    where_clauses = ["e.is_deleted = false"]
-    params: dict[str, Any] = {}
-
-    if keyword:
-        where_clauses.append("(e.name ILIKE :keyword OR e.equipment_no ILIKE :keyword)")
-        params["keyword"] = f"%{keyword}%"
-    if status:
-        where_clauses.append("e.status = :status")
-        params["status"] = status
-
-    where_sql = " AND ".join(where_clauses)
-
-    count_sql = f"SELECT COUNT(*) FROM equipment.equipments e WHERE {where_sql}"
-    count_result = await db.execute(text(count_sql), params)
-    total = count_result.scalar() or 0
-
-    query_sql = (
-        f"SELECT e.id, e.equipment_no, e.name, e.status, e.model, e.specification, e.location_id "
-        f"FROM equipment.equipments e "
-        f"WHERE {where_sql} "
-        f"ORDER BY e.name "
-        f"LIMIT :limit OFFSET :offset"
-    )
-    params["limit"] = page_size
-    params["offset"] = (page - 1) * page_size
-
-    result = await db.execute(text(query_sql), params)
-    rows = result.all()
-    items = [
-        {
-            "id": str(row.id),
-            "equipment_no": row.equipment_no,
-            "name": row.name,
-            "status": row.status,
-            "model": row.model,
-            "specification": row.specification,
-            "location_id": str(row.location_id) if row.location_id else None,
-        }
-        for row in rows
-    ]
-    return items, total
 
 
 # ── 能源类型可视化配置 ──

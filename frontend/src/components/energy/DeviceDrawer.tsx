@@ -148,7 +148,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
       try {
         const params = new URLSearchParams({ keyword, page_size: '20' })
         const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/energy/equipments?${params}`
+          `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/equipment/equipments?${params}`
         )
         const json = await res.json()
         const items = json.data?.items ?? json.data ?? []
@@ -179,7 +179,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     try {
       const params = new URLSearchParams({ page_size: '1' })
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/energy/equipments?${params}`
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/equipment/equipments?${params}`
       )
       const json = await res.json()
       const items = json.data?.items ?? json.data ?? []

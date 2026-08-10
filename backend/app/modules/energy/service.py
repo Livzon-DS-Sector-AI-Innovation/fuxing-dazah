@@ -139,11 +139,10 @@ async def delete_device_config(db: AsyncSession, config_id: UUID) -> None:
 async def trigger_collection(
     db: AsyncSession, request: CollectTriggerRequest
 ) -> dict[str, Any]:
-    """手动触发采集 — 拉取昨天所有设备 0-23 小时的每小时数据。
+    """手动触发采集 — 复用并发采集逻辑，所有平台+设备并发执行。"""
+    import asyncio
 
-    与定时自动采集逻辑一致，每条小时数据存为独立记录。
-    """
-    from app.modules.energy.scheduler import _collect_device_hours
+    from app.modules.energy.scheduler import _collect_platform_devices
 
     now = datetime.now(CST)
     yesterday = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
@@ -153,76 +152,30 @@ async def trigger_collection(
     else:
         platform_codes = await repo.get_distinct_enabled_platforms(db)
 
+    # 平台并发执行
+    tasks = [
+        _collect_platform_devices(pc, yesterday, now) for pc in platform_codes
+    ]
+    gathered = await asyncio.gather(*tasks, return_exceptions=True)
+
     results: dict[str, Any] = {}
-    for platform_code in platform_codes:
-        adapter = ADAPTERS.get(platform_code)
-        if adapter is None:
-            results[platform_code] = {
+    for i, r in enumerate(gathered):
+        pc = platform_codes[i]
+        if isinstance(r, Exception):
+            logger.exception("手动采集异常: platform=%s", pc)
+            results[pc] = {"status": "failed", "error": str(r)}
+            continue
+        if r is None:
+            results[pc] = {
                 "status": "failed",
-                "error": f"未找到平台适配器: {platform_code}",
+                "error": f"未找到平台适配器: {pc}",
             }
             continue
-
-        devices = await repo.get_enabled_devices_by_platform(db, platform_code)
-        if not devices:
-            results[platform_code] = {
-                "status": "success",
-                "device_count": 0,
-                "success_count": 0,
-            }
-            continue
-
-        unit_map: dict[str, str] = {}
-        for et in {d.energy_type for d in devices}:
-            try:
-                unit_map[et] = await _get_unit_by_energy_type(db, et)
-            except Exception:
-                unit_map[et] = ""
-
-        platform_expected = len(devices) * 24
-        platform_success = 0
-        for device in devices:
-            try:
-                unit = unit_map.get(device.energy_type, "")
-                count = await _collect_device_hours(
-                    db, device, yesterday, unit, adapter
-                )
-                platform_success += count
-            except Exception:
-                logger.exception(
-                    "手动采集异常: device=%s, day=%s",
-                    device.device_name,
-                    yesterday.strftime("%Y-%m-%d"),
-                )
-
-        status = (
-            "success" if platform_success >= platform_expected
-            else "partial" if platform_success > 0
-            else "failed"
-        )
-
-        try:
-            await repo.create_collect_log(
-                db,
-                {
-                    "platform_code": platform_code,
-                    "collect_time": now,
-                    "status": status,
-                    "device_count": len(devices),
-                    "success_count": platform_success,
-                    "expected_count": platform_expected,
-                    "error_message": f"手动触发: {yesterday.strftime('%Y-%m-%d')}" if status != "success" else None,
-                },
-            )
-        except Exception:
-            logger.exception(
-                "采集日志写入失败（不影响能耗数据）: %s", platform_code
-            )
-
-        results[platform_code] = {
-            "status": status,
-            "device_count": len(devices),
-            "success_count": platform_success,
+        # _collect_platform_devices 已在内部写入采集日志，此处仅汇总结果
+        results[pc] = {
+            "status": r["status"],
+            "device_count": r["device_count"],
+            "success_count": r["success_count"],
             "target_day": yesterday.strftime("%Y-%m-%d"),
         }
 
@@ -231,20 +184,6 @@ async def trigger_collection(
 
 async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
     return await repo.list_departments(db)
-
-
-async def list_equipments_for_select(
-    db: AsyncSession,
-    *,
-    keyword: str | None = None,
-    status: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> tuple[list[dict[str, Any]], int]:
-    """查询设备台账中在用的设备列表（供数据源配置关联设备下拉使用）。"""
-    return await repo.list_equipments_for_select(
-        db, keyword=keyword, status=status, page=page, page_size=page_size
-    )
 
 
 async def list_energy_data(
@@ -379,9 +318,10 @@ async def get_collect_log_detail(
     unit_map: dict[str, str] = {c.type_code: c.unit for c in type_configs}
 
     for energy_data, device_config in rows:
-        # 所有采集数据均为逐小时记录，覆盖范围为 1 小时
+        # 判断是否为日汇总数据（daily_aggregated 标记）
+        is_daily = isinstance(energy_data.platform_raw_data, dict) and energy_data.platform_raw_data.get("daily_aggregated") is True
         data_start = energy_data.timestamp
-        data_end = energy_data.timestamp + timedelta(hours=1)
+        data_end = energy_data.timestamp + (timedelta(days=1) if is_daily else timedelta(hours=1))
         devices.append({
             "device_name": device_config.device_name,
             "platform_device_code": device_config.platform_device_code,
@@ -390,6 +330,7 @@ async def get_collect_log_detail(
             "unit": unit_map.get(device_config.energy_type, energy_data.unit),
             "data_timestamp": energy_data.timestamp,
             "data_time_range_end": data_end,
+            "is_daily": is_daily,
         })
         if time_range_start is None or data_start < time_range_start:
             time_range_start = data_start

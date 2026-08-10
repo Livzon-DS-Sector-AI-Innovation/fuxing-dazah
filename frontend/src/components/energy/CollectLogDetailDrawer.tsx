@@ -264,6 +264,14 @@ export function CollectLogDetailDrawer({
       render: (text: string, record: CollectLogDeviceDetail) => {
         if (!text) return '-'
         const start = new Date(text)
+        // 日汇总数据只显示日期
+        if (record.is_daily) {
+          return (
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
+              {start.toLocaleDateString('zh-CN')}
+            </span>
+          )
+        }
         const end = record.data_time_range_end
           ? new Date(record.data_time_range_end)
           : new Date(start.getTime() + 60 * 60 * 1000)
