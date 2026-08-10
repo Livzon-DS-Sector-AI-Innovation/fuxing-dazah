@@ -2,11 +2,11 @@
 
 import math
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, ForbiddenException, NotFoundException
+from app.core.time import now
 from app.modules.equipment.public_api import get_equipment_briefs
 from app.modules.production import repository as repo
 from app.modules.production.models import (
@@ -94,7 +94,7 @@ def _build_field_values(
             unit=d.unit,
             phase=d.phase,
             created_by=user.id if user else None,
-            filled_at=datetime.now(UTC),
+            filled_at=now(),
             filled_by=user.id if user else None,
         )
         if d.data_type == "numeric":
@@ -243,7 +243,7 @@ async def start_execution(
         status="in_progress",
         owner_id=payload.owner_id,
         owner_name=payload.owner_name,
-        started_at=datetime.now(UTC),
+        started_at=now(),
         started_by=user.id if user else None,
         started_by_name=user.name if user else None,
         is_deviation=not is_legal,
@@ -367,7 +367,7 @@ async def complete_execution(
             )
         )
     execution.status = "completed"
-    execution.finished_at = datetime.now(UTC)
+    execution.finished_at = now()
     execution.finished_by = user.id if user else None
     execution.finished_by_name = user.name if user else None
     if payload.remark:
@@ -472,7 +472,7 @@ async def abort_execution(
             if "production:batch:submit" not in perms:
                 raise ForbiddenException("缺少 production:batch:submit 权限")
     execution.status = "aborted"
-    execution.finished_at = datetime.now(UTC)
+    execution.finished_at = now()
     execution.finished_by = user.id if user else None
     execution.finished_by_name = user.name if user else None
     execution.updated_by = user.id if user else None

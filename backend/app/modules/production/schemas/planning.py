@@ -156,7 +156,7 @@ class PlanOrderChangeRequest(BaseModel):
 class RouteNodeBrief(BaseModel):
     """进度条用的轻量工序节点，不带 fields/intermediates 避免懒加载。"""
     name: str
-    stage_name: str | None = None
+    stage_name: str
 
 
 class PlanItemBatchProgress(BaseModel):

@@ -26,7 +26,7 @@ function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: E
   const nodes: NodeIn[] = sorted.map((n, i) => ({
     node_code: n.node_code,
     name: n.name,
-    stage_name: n.stage_name,
+    stage_name: n.stage_name ?? '',
     node_type: n.node_type,
     sort_order: i + 1,
     fields: n.fields.map(f => ({
@@ -136,7 +136,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       {
         node_code: `N${nodes.length + 1}`,
         name: '',
-        stage_name: null,
+        stage_name: '',
         node_type: 'process',
         sort_order: nodes.length + 1,
         fields: [],
@@ -164,8 +164,8 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       message.error('节点编码重复')
       return
     }
-    if (nodes.some(n => !n.node_code || !n.name)) {
-      message.error('节点编码和名称不能为空')
+    if (nodes.some(n => !n.node_code || !n.name || !n.stage_name)) {
+      message.error('节点编码、名称和工段不能为空')
       return
     }
     for (const e of extraEdges) {
@@ -236,8 +236,8 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
               <Input
                 size="small"
                 placeholder="如 发酵"
-                value={n.stage_name ?? ''}
-                onChange={e => updateNode(i, { stage_name: e.target.value || null })}
+                value={n.stage_name}
+                onChange={e => updateNode(i, { stage_name: e.target.value })}
               />
             ),
           },
@@ -432,7 +432,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
                 id: String(fieldsIdx),
                 node_code: nodes[fieldsIdx].node_code,
                 name: nodes[fieldsIdx].name,
-                stage_name: nodes[fieldsIdx].stage_name ?? null,
+                stage_name: nodes[fieldsIdx].stage_name,
                 node_type: 'process',
                 sort_order: fieldsIdx + 1,
                 fields: nodes[fieldsIdx].fields.map((f, fi) => ({

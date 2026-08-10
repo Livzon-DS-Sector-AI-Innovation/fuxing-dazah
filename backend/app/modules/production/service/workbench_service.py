@@ -2,12 +2,13 @@
 
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.time import now
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch, BatchLink, NodeExecution
 from app.modules.production.models.planning import PlanAllocation
@@ -106,7 +107,7 @@ def _calc_stage_times(
     durations: dict[str, float] = {}
     if stage_durations:
         for d in stage_durations:
-            durations[d.get("stage_name", "")] = d.get("duration_hours", 0)
+            durations[d.get("stage_name") or "未分组"] = d.get("duration_hours", 0)
     result: dict[str, str] = {}
     accumulated = timedelta(0)
     for sn in stage_order:
@@ -261,7 +262,7 @@ async def query_planned_batches(
             else:
                 batch_in_progress[row.batch_id].add(row.node_id)
 
-    now = datetime.now(UTC)
+    current = now()
 
     result: list[PlannedBatchItem] = []
     for batch in scheduled_batches:
@@ -296,9 +297,9 @@ async def query_planned_batches(
         # 时间过滤：±30天
         if item.planned_start:
             one_month = timedelta(days=30)
-            if item.planned_start > now + one_month:
+            if item.planned_start > current + one_month:
                 continue
-            if item.planned_end and item.planned_end < now - one_month:
+            if item.planned_end and item.planned_end < current - one_month:
                 continue
 
         # 标记该用户是否为第一工段负责人
@@ -794,7 +795,7 @@ async def query_workbench(
 
     # ── 最近30天完成的记录 ──
     recent: list[RecentCompletedItem] = []
-    since = datetime.now(UTC) - timedelta(days=30)
+    since = now() - timedelta(days=30)
     # 收集所有路线节点（使用已缓存的 route_nodes_cache）
     all_nodes: dict[uuid.UUID, tuple] = {}  # node_id -> (node, route)
     for rid in route_map:

@@ -34,6 +34,7 @@ setup_logging(
 logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
+import app.modules.production.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册

@@ -19,6 +19,7 @@ engine = create_async_engine(
     connect_args={
         "server_settings": {
             "search_path": _search_path,
+            "timezone": "Asia/Shanghai",
             # 防御性超时：idle in transaction 超过 10 分钟自动断开，防止连接泄漏
             "idle_in_transaction_session_timeout": "600000",
         }

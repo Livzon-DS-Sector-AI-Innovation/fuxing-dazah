@@ -125,6 +125,11 @@ async def save_graph(
     codes = [n.node_code for n in graph.nodes]
     if len(codes) != len(set(codes)):
         raise AppException(status_code=400, message="节点编码重复")
+
+    names = [n.name for n in graph.nodes]
+    if len(names) != len(set(names)):
+        raise AppException(status_code=400, message="工序名称重复")
+
     code_set = set(codes)
     for e in graph.edges:
         if e.from_node_code not in code_set or e.to_node_code not in code_set:
@@ -250,6 +255,9 @@ def compute_start_nodes(
 def _validate_graph(nodes: list[RouteNode], edges: list[RouteEdge]) -> None:
     if not nodes:
         raise AppException(status_code=400, message="路线至少需要一个节点")
+    names = [n.name for n in nodes]
+    if len(names) != len(set(names)):
+        raise AppException(status_code=400, message="工序名称重复")
     node_ids = {n.id for n in nodes}
     normal = [e for e in edges if e.edge_type == "normal"]
     starts = compute_start_nodes(nodes, edges)
