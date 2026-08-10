@@ -2,17 +2,18 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Button, Popconfirm, App, Empty, Input, Modal, Tag, Avatar, Spin } from 'antd'
+import { Button, Popconfirm, App, Empty, Input, Modal, Tag, Avatar, Spin, Select } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   SafetyCertificateOutlined, TeamOutlined, KeyOutlined,
   SearchOutlined, UserAddOutlined, CloseOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import { RoleForm } from './RoleForm'
-import { deleteRole, assignRoleToUser, removeRoleFromUser } from '@/actions/permission'
-import { fetchRoleUsers } from '@/lib/api/permission'
+import { deleteRole, assignRoleToUser, removeRoleFromUser, assignRoleToDepartment, removeRoleFromDepartment } from '@/actions/permission'
+import { fetchRoleUsers, fetchRoleDepartments, fetchDepartments } from '@/lib/api/permission'
 import { UserSelect } from '@/components/shared'
-import type { Role, PermissionModuleGroup, DataScope, RoleUser } from '@/types/permission'
+import type { Role, PermissionModuleGroup, DataScope, RoleUser, DepartmentRole, DepartmentItem } from '@/types/permission'
 
 const SCOPE_LABELS: Record<DataScope, string> = {
   all: '全部数据',
@@ -62,6 +63,14 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
   const [assignUsersLoading, setAssignUsersLoading] = useState(false)
   const [assignUserId, setAssignUserId] = useState<string | undefined>()
   const [assigning, setAssigning] = useState(false)
+
+  // ── Department assign state ──
+  const [deptAssignRole, setDeptAssignRole] = useState<Role | null>(null)
+  const [assignedDepts, setAssignedDepts] = useState<DepartmentRole[]>([])
+  const [assignedDeptsLoading, setAssignedDeptsLoading] = useState(false)
+  const [selectedDeptIds, setSelectedDeptIds] = useState<string[]>([])
+  const [deptAssigning, setDeptAssigning] = useState(false)
+  const [departments, setDepartments] = useState<DepartmentItem[]>([])
 
   const filteredRoles = roles.filter(
     (r) =>
@@ -142,6 +151,67 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
           setRoles((prev) =>
             prev.map((r) => (r.id === roleId ? { ...r, user_count: r.user_count - 1 } : r))
           )
+        } catch {
+          message.error('移除失败')
+        }
+      },
+    })
+  }
+
+  // ── Department assign handlers ──
+  const refreshAssignedDepts = async (roleId: string) => {
+    setAssignedDepts(await fetchRoleDepartments(apiToken, roleId))
+  }
+
+  const handleDeptAssignOpen = async (role: Role) => {
+    setDeptAssignRole(role)
+    setSelectedDeptIds([])
+    setAssignedDeptsLoading(true)
+    try {
+      const [depts, allDepts] = await Promise.all([
+        fetchRoleDepartments(apiToken, role.id),
+        fetchDepartments(),
+      ])
+      setAssignedDepts(depts)
+      setDepartments(allDepts)
+    } catch {
+      message.error('获取部门数据失败')
+    } finally {
+      setAssignedDeptsLoading(false)
+    }
+  }
+
+  const handleDeptAssignConfirm = async () => {
+    if (!deptAssignRole || selectedDeptIds.length === 0) return
+    const roleId = deptAssignRole.id
+    setDeptAssigning(true)
+    try {
+      await assignRoleToDepartment(roleId, { feishu_department_ids: selectedDeptIds })
+      message.success(`已为 ${selectedDeptIds.length} 个部门分配角色`)
+      setSelectedDeptIds([])
+      await refreshAssignedDepts(roleId)
+    } catch {
+      message.error('分配部门角色失败')
+    } finally {
+      setDeptAssigning(false)
+    }
+  }
+
+  const handleRemoveDeptAssign = (feishuDepartmentId: string) => {
+    if (!deptAssignRole) return
+    const roleId = deptAssignRole.id
+    const deptName = assignedDepts.find((d) => d.feishu_department_id === feishuDepartmentId)?.department_name ?? ''
+    modal.confirm({
+      title: '移除部门角色',
+      content: `确定移除「${deptName || feishuDepartmentId}」的「${deptAssignRole.name}」角色？移除后该部门成员将失去此角色的权限。`,
+      okText: '移除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await removeRoleFromDepartment(roleId, feishuDepartmentId)
+          message.success('已移除')
+          await refreshAssignedDepts(roleId)
         } catch {
           message.error('移除失败')
         }
@@ -372,6 +442,11 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
                       <span>用户</span>
                     </span>
                     <span className="flex items-center gap-1">
+                      <ApartmentOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
+                      <span className="font-medium text-[var(--color-charcoal)]">{role.department_count}</span>
+                      <span>部门</span>
+                    </span>
+                    <span className="flex items-center gap-1">
                       <KeyOutlined style={{ fontSize: 12, color: 'var(--color-stone)' }} />
                       <span className="font-medium text-[var(--color-charcoal)]">{role.permission_ids.length}</span>
                       <span>权限</span>
@@ -402,6 +477,15 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
                       onClick={() => handleAssignOpen(role)}
                     >
                       分配
+                    </Button>
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<ApartmentOutlined />}
+                      style={{ borderRadius: 6, color: 'var(--color-steel)', fontSize: 13 }}
+                      onClick={() => handleDeptAssignOpen(role)}
+                    >
+                      部门
                     </Button>
                     <div className="flex-1" />
                     {!role.is_system && (
@@ -502,6 +586,69 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
           onChange={(v) => setAssignUserId(v as string)}
           excludeIds={assignUsers.map((u) => u.id)}
           placeholder="搜索姓名或工号…"
+          style={{ width: '100%' }}
+        />
+      </Modal>
+
+      {/* Assign department to role modal */}
+      <Modal
+        title={`分配给部门 · ${deptAssignRole?.name ?? ''}`}
+        open={deptAssignRole !== null}
+        onCancel={() => setDeptAssignRole(null)}
+        onOk={handleDeptAssignConfirm}
+        confirmLoading={deptAssigning}
+        okText="确认分配"
+        cancelText="取消"
+        okButtonProps={{ disabled: selectedDeptIds.length === 0 }}
+      >
+        {/* 已分配部门 */}
+        <div className="mb-4">
+          <div className="text-[13px] font-medium text-[var(--color-charcoal)] mb-2">
+            已分配部门（{assignedDepts.length}）
+          </div>
+          {assignedDeptsLoading ? (
+            <Spin />
+          ) : assignedDepts.length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {assignedDepts.map((d) => (
+                <Tag
+                  key={d.feishu_department_id}
+                  closable
+                  closeIcon={<CloseOutlined style={{ fontSize: 10 }} />}
+                  onClose={(e) => {
+                    e.preventDefault()
+                    handleRemoveDeptAssign(d.feishu_department_id)
+                  }}
+                  style={{ borderRadius: 6, fontSize: 12, margin: 0, padding: '2px 6px' }}
+                >
+                  <ApartmentOutlined style={{ fontSize: 12, marginRight: 4, color: 'var(--color-primary)' }} />
+                  {d.department_name || d.feishu_department_id}
+                  <span className="text-[10px] text-[var(--color-stone)] ml-1">
+                    ({d.member_count}人)
+                  </span>
+                </Tag>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[13px] text-[var(--color-muted)]">暂未分配给部门</p>
+          )}
+        </div>
+
+        <p className="text-[13px] text-[var(--color-steel)] mb-3">
+          选择要分配「{deptAssignRole?.name}」角色的部门（可多选，父部门分配将对所有子部门成员生效）：
+        </p>
+        <Select
+          mode="multiple"
+          placeholder="搜索部门名称…"
+          value={selectedDeptIds}
+          onChange={(v) => setSelectedDeptIds(v)}
+          options={departments
+            .filter((d) => !assignedDepts.some((ad) => ad.feishu_department_id === d.feishu_department_id))
+            .map((d) => ({
+              label: `${d.name}（${d.member_count ?? 0}人）`,
+              value: d.feishu_department_id,
+            }))}
+          showSearch
           style={{ width: '100%' }}
         />
       </Modal>

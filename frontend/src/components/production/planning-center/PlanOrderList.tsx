@@ -20,6 +20,7 @@ import {
   PlusOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import { usePermission } from '@/hooks/usePermission'
 import {
   closePlanOrder,
   confirmPlanOrder,
@@ -41,6 +42,8 @@ const PRIORITY_COLORS: Record<string, string> = {
 }
 
 export function PlanOrderList() {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const { modal, message } = App.useApp()
   const [keyword, setKeyword] = useState('')
   const [searchKeyword, setSearchKeyword] = useState('')
@@ -142,6 +145,7 @@ export function PlanOrderList() {
   }
 
   const buildMenuItems = (order: PlanOrder): MenuProps['items'] => {
+    if (!canSubmit) return []
     const items: MenuProps['items'] = []
     if (order.status === 'draft') {
       items.push(
@@ -198,9 +202,11 @@ export function PlanOrderList() {
             }))}
           />
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建计划单
-        </Button>
+        {canSubmit && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+            新建计划单
+          </Button>
+        )}
       </div>
 
       {filteredOrders.length === 0 ? (
@@ -361,7 +367,7 @@ export function PlanOrderList() {
         title="变更原因"
         open={!!changeTargetOrderId}
         onOk={handleChangeConfirm}
-        onCancel={() => setChangeTargetOrderId(null)}
+        onCancel={() => { setChangeTargetOrderId(null); setChangeReason('') }}
         okText="开始变更"
         okButtonProps={{ disabled: !changeReason.trim() }}
         destroyOnHidden

@@ -27,6 +27,7 @@ export interface Role {
   permission_ids: string[]
   data_scope_overrides: Record<string, DataScope>
   user_count: number
+  department_count: number
 }
 
 export type DataScope = 'all' | 'department' | 'department_and_children' | 'self_only'
@@ -104,4 +105,16 @@ export interface DepartmentItem {
   feishu_department_id: string
   name: string
   member_count: number | null
+}
+
+export interface DepartmentRole {
+  id: string
+  feishu_department_id: string
+  role_id: string
+  department_name: string
+  member_count: number
+}
+
+export interface AssignDepartmentRoleInput {
+  feishu_department_ids: string[]
 }

@@ -76,7 +76,7 @@ export interface FieldDefIn {
 export interface NodeIn {
   node_code: string
   name: string
-  stage_name?: string | null
+  stage_name: string
   node_type?: string
   sort_order: number
   fields: FieldDefIn[]

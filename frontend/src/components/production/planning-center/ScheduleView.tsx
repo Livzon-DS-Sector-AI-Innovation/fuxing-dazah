@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PlanOrder, Product } from '@/types/production'
 import { fetchScheduleViewClient, fetchPlanOrdersClient, fetchProductsClient } from '@/lib/api/production-client'
 import { createPlanItem, schedulePlanItem } from '@/actions/production'
+import { usePermission } from '@/hooks/usePermission'
 import type { CreatePlanItemInput } from '@/types/production'
 
 import { ScheduleCardSwimlane } from './ScheduleCardSwimlane'
@@ -14,6 +15,8 @@ import dayjs from 'dayjs'
 import type { Dayjs } from 'dayjs'
 
 export function ScheduleView() {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const queryClient = useQueryClient()
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>(() => {
     const now = dayjs()
@@ -193,7 +196,7 @@ export function ScheduleView() {
           options={planOrderOptions}
         />
 
-        {selectedOrderEditable && (
+        {selectedOrderEditable && canSubmit && (
           <Button
             type="primary"
             size="small"

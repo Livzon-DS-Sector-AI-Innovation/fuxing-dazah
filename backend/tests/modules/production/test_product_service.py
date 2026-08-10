@@ -56,6 +56,20 @@ class TestProductUpdate:
 
 
 class TestProductDelete:
+    async def test_soft_delete_then_recreate_same_name(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """软删除后同名产品可重新创建，新 ID 与旧不同。"""
+        name = rand_code("产品")
+        p1 = await route_service.create_product(
+            db_session, ProductCreate(product_name=name), user=None,
+        )
+        await route_service.delete_product(db_session, p1.id, user=None)
+        p2 = await route_service.create_product(
+            db_session, ProductCreate(product_name=name), user=None,
+        )
+        assert p2.id != p1.id
+
     async def test_delete_without_batches_succeeds(
         self, db_session: AsyncSession,
     ) -> None:
@@ -113,7 +127,7 @@ class TestProductList:
         await route_service.create_product(
             db_session, ProductCreate(product_name=kw, product_code=kw), user=None,
         )
-        _items, total = await route_service.list_products_paged(
+        _, total = await route_service.list_products_paged(
             db_session, keyword=kw, page=1, page_size=10,
         )
         assert total == 1

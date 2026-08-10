@@ -38,7 +38,7 @@ class FieldDefOut(FieldDefIn):
 class NodeIn(BaseModel):
     node_code: str = Field(max_length=50)
     name: str = Field(max_length=200)
-    stage_name: str | None = Field(default=None, max_length=100)
+    stage_name: str = Field(min_length=1, max_length=100)
     node_type: str = "process"
     sort_order: int = 0
     fields: list[FieldDefIn] = []
@@ -51,7 +51,7 @@ class NodeOut(BaseModel):
     id: uuid.UUID
     node_code: str
     name: str
-    stage_name: str | None
+    stage_name: str
     node_type: str
     sort_order: int
     fields: list[FieldDefOut] = []

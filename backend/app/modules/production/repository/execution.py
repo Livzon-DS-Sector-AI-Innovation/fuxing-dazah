@@ -15,6 +15,7 @@ from app.modules.production.models import (
 
 __all__ = [
     "get_execution",
+    "get_last_completed_execution",
     "list_executions",
     "list_executions_by_batches",
     "count_executions",
@@ -52,6 +53,24 @@ async def list_executions(
         .order_by(NodeExecution.started_at)
     )
     return list((await db.execute(stmt)).scalars())
+
+
+async def get_last_completed_execution(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> NodeExecution | None:
+    """获取批次最后一个完成的执行（按 finished_at 降序）。"""
+    stmt = (
+        select(NodeExecution)
+        .where(
+            NodeExecution.batch_id == batch_id,
+            NodeExecution.status == "completed",
+            NodeExecution.finished_at.is_not(None),
+            NodeExecution.is_deleted == False,  # noqa: E712
+        )
+        .order_by(NodeExecution.finished_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 async def list_executions_by_batches(

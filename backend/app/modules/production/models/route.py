@@ -51,6 +51,13 @@ class RouteNode(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
+        Index(
+            "uq_route_nodes_name",
+            "route_id",
+            "name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         Index("ix_production_route_nodes_route", "route_id"),
         {"schema": "production"},
     )
@@ -58,8 +65,8 @@ class RouteNode(BaseModel):
     route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
     node_code: Mapped[str] = mapped_column(String(50), comment="节点编码，路线内唯一")
     name: Mapped[str] = mapped_column(String(200), comment="工序名称")
-    stage_name: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="工段分组标签（发酵/提炼/精制），纯展示"
+    stage_name: Mapped[str] = mapped_column(
+        String(100), comment="工序所属工段分组标签（如发酵/提炼/精制）"
     )
     node_type: Mapped[str] = mapped_column(
         String(20), default="process", comment="节点类型，现阶段恒为 process，预留扩展"

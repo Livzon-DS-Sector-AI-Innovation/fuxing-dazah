@@ -120,8 +120,8 @@ class TestPublishEdgeCases:
         _, route = await _draft_route(db_session)
         graph = RouteGraphIn(
             nodes=[
-                NodeIn(node_code="A", name="A1"),
-                NodeIn(node_code="A", name="A2"),
+                NodeIn(node_code="A", name="A1", stage_name="工段A"),
+                NodeIn(node_code="A", name="A2", stage_name="工段A"),
             ],
             edges=[],
         )
@@ -135,7 +135,7 @@ class TestPublishEdgeCases:
         from app.modules.production.schemas import NodeIn, RouteGraphIn
 
         _, route = await _draft_route(db_session)
-        graph = RouteGraphIn(nodes=[NodeIn(node_code="S", name="单工序")], edges=[])
+        graph = RouteGraphIn(nodes=[NodeIn(node_code="S", name="单工序", stage_name="工段S")], edges=[])
         await route_service.save_graph(db_session, route.id, graph, user=None)
         published = await route_service.publish_route(
             db_session, route.id, user=None,

@@ -21,6 +21,7 @@ import {
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
+import { usePermission } from '@/hooks/usePermission'
 import { createPlanItem, updatePlanItem, deletePlanItem, schedulePlanItem } from '@/actions/production'
 import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/production'
 import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
@@ -55,6 +56,14 @@ const ITEM_ACCENT: Record<string, string> = {
   in_progress: '#dd5b00',
   completed: '#1aae39',
   cancelled: '#e03131',
+}
+
+// 工段配置是否与计划单一致（一致时不固化快照，保持继承）
+function isSameStages(
+  a: StageConfigItem[] | null | undefined,
+  b: StageConfigItem[] | null | undefined,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
 }
 
 // ── Stage Progress Bar ──
@@ -317,6 +326,8 @@ interface Props {
 }
 
 export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId, planOrderProductName, planOrderRouteId, planOrderStageConfig, items, isLoading = false, onRefresh, onOpenStageConfig }: Props) {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const { message, modal } = App.useApp()
   const [addOpen, setAddOpen] = useState(false)
   const [addLoading, setAddLoading] = useState(false)
@@ -368,7 +379,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
         batch_no: values.batch_no,
         priority: values.priority,
         remark: values.remark,
-        stage_durations: itemStages.length > 0 ? itemStages : undefined,
+        // 与计划单配置一致时不固化快照，保持继承（改计划单配置自动生效）
+        stage_durations:
+          itemStages.length > 0 && !isSameStages(itemStages, planOrderStageConfig)
+            ? itemStages
+            : undefined,
       })
       if (!r.success) { message.error(r.error); return }
       if (values.planned_start || values.planned_end) {
@@ -433,7 +448,6 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
           route_id: planOrderRouteId ?? undefined,
           batch_no: currentNo,
           priority: 'medium',
-          stage_durations: planOrderStageConfig?.length ? planOrderStageConfig : undefined,
         })
         if (!r.success) { message.error(`批号 ${currentNo} 创建失败: ${r.error}`); break }
 
@@ -478,7 +492,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       batch_no: values.batch_no,
       priority: values.priority,
       remark: values.remark,
-      stage_durations: itemStages.length > 0 ? itemStages : undefined,
+      // 与计划单配置一致时不固化快照，保持继承（改计划单配置自动生效）
+      stage_durations:
+        itemStages.length > 0 && !isSameStages(itemStages, planOrderStageConfig)
+          ? itemStages
+          : undefined,
     })
     if (!r.success) { message.error(r.error); return }
     if (values.planned_start || values.planned_end) {
@@ -577,7 +595,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       width: 200,
       render: (_, r: PlanItem) => (
         <StageProgressBar
-          stageDurations={r.stage_durations}
+          stageDurations={r.stage_durations ?? planOrderStageConfig}
           batchProgress={r.batch_progress}
         />
       ),
@@ -605,7 +623,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       width: 120,
       render: (_, r: PlanItem) => (
         <Space size={4}>
-          {canEdit && (
+          {canEdit && canSubmit && (
             <>
               <Button size="small" type="link" onClick={() => openEditModal(r)}>编辑</Button>
               <Button size="small" type="link" danger onClick={() => handleDelete(r)}>删除</Button>
@@ -630,15 +648,15 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     <div>
       {/* Toolbar */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-        {canEdit && onOpenStageConfig && (
+        {canEdit && canSubmit && onOpenStageConfig && (
           <Button size="small" onClick={onOpenStageConfig}>工段配置</Button>
         )}
-        {canEdit && (
+        {canEdit && canSubmit && (
           <Button size="small" type="primary" icon={<PlusOutlined />} onClick={handleOpenAddModal}>
             添加计划项
           </Button>
         )}
-        {canEdit && (
+        {canEdit && canSubmit && (
           <Tooltip title={items.length === 0 ? '请先添加至少一个计划项' : undefined}>
             <span>
               <Button size="small" disabled={items.length === 0} onClick={handleOpenBatchGen}>批量生成</Button>
