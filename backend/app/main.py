@@ -40,10 +40,12 @@ from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
 )
 from app.platform.mcp.middleware import build_mcp_middleware  # noqa: E402
-from app.platform.mcp.server import get_mcp_app  # noqa: E402
+from app.platform.mcp.server import get_mcp_app, get_module_mcp  # noqa: E402
 
 mcp_middleware = build_mcp_middleware()
-mcp_asgi = get_mcp_app(path="/", middleware=mcp_middleware)
+production_mcp_asgi = get_mcp_app(get_module_mcp("production"), path="/", middleware=mcp_middleware)
+equipment_mcp_asgi = get_mcp_app(get_module_mcp("equipment"), path="/", middleware=mcp_middleware)
+platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware=mcp_middleware)
 
 
 @asynccontextmanager
@@ -160,7 +162,12 @@ app = FastAPI(
     title=settings.APP_NAME,
     description="原料药事业部工厂基座系统",
     version="0.1.0",
-    lifespan=combine_lifespans(lifespan, mcp_asgi.lifespan),
+    lifespan=combine_lifespans(
+        lifespan,
+        production_mcp_asgi.lifespan,
+        equipment_mcp_asgi.lifespan,
+        platform_mcp_asgi.lifespan,
+    ),
     docs_url="/docs" if not settings.is_production else None,
     redoc_url="/redoc" if not settings.is_production else None,
 )
@@ -181,9 +188,11 @@ uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
-# ── 挂载 MCP 服务（AI Agent 协议入口）──
-app.mount("/mcp", mcp_asgi, name="mcp")
-logger.info("MCP server mounted at /mcp")
+# ── 挂载 MCP 服务（按模块拆分端点，AI Agent 协议入口）──
+app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
+app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
+app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
+logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform")
 
 
 @app.exception_handler(AppException)
