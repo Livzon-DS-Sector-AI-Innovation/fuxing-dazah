@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import Date, func, select
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
@@ -15,7 +17,7 @@ from app.modules.energy.collect_settings import (
     get_auto_collect_enabled,
     get_daily_collect_time,
 )
-from app.modules.energy.models import EnergyDeviceConfig
+from app.modules.energy.models import EnergyData, EnergyDeviceConfig, EnergyTypeConfig
 from app.modules.energy.service import _get_unit_by_energy_type
 from app.platform.scheduler import (
     ScheduleConfig,
@@ -133,17 +135,77 @@ async def _daily_collect_all_platforms() -> None:
                     except Exception:
                         unit_map[et] = ""
 
+                # 预加载采集粒度映射（按能源类型）
+                granularity_map: dict[str, str] = {}
+                type_configs_result = await db.execute(
+                    select(EnergyTypeConfig.type_code, EnergyTypeConfig.collect_granularity).where(
+                        EnergyTypeConfig.is_deleted == False,  # noqa: E712
+                    )
+                )
+                for row in type_configs_result.all():
+                    granularity_map[row.type_code] = row.collect_granularity
+
                 platform_expected = 0
                 platform_success = 0
+                # 收集需要日聚合的设备（在采集完成后统一处理）
+                daily_devices: list[tuple[EnergyDeviceConfig, str]] = []
 
                 for device in devices:
+                    if device.stat_role == "excluded":
+                        continue
                     total_devices += 1
                     unit = unit_map.get(device.energy_type, "")
+                    coll_gran = granularity_map.get(device.energy_type, "hourly")
+
+                    if coll_gran == "daily":
+                        # 采集前清理已有数据，确保重启后重新采集不会重复累加
+                        # （旧日汇总记录若保留会被 SUM 一并计入，造成数据翻倍）
+                        await repo.delete_hourly_data_for_device_on_date(
+                            db, device.id, yesterday
+                        )
+
                     count = await _collect_device_hours(
                         db, device, yesterday, unit, adapter
                     )
-                    platform_success += count
-                    platform_expected += 24
+                    if coll_gran == "daily":
+                        # 日汇总：采集小时数据后聚合为一条日记录
+                        daily_devices.append((device, unit))
+                        platform_expected += 1
+                        # 不在此处累计 success_count，聚合完成后统一处理
+                    else:
+                        platform_success += count
+                        platform_expected += 24
+
+                # 日汇总聚合：SUM 小时数据 → 删除 → 写入一条日记录
+                for device, unit in daily_devices:
+                    try:
+                        cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+                        sum_result = await db.execute(
+                            select(func.coalesce(func.sum(EnergyData.value), 0.0)).where(
+                                EnergyData.device_config_id == device.id,
+                                EnergyData.is_deleted == False,  # noqa: E712
+                                cst_date == sa_cast(yesterday.date(), Date),
+                            )
+                        )
+                        total_val = float(sum_result.scalar() or 0.0)
+                        if total_val > 0:
+                            await repo.delete_hourly_data_for_device_on_date(
+                                db, device.id, yesterday
+                            )
+                            await repo.upsert_energy_data(
+                                db,
+                                device_config_id=device.id,
+                                timestamp=yesterday,
+                                value=total_val,
+                                unit=unit,
+                                platform_raw_data={"daily_aggregated": True},
+                            )
+                            platform_success += 1
+                    except Exception:
+                        logger.exception(
+                            "日汇总聚合失败: device=%s, date=%s",
+                            device.device_name, yesterday.strftime("%Y-%m-%d"),
+                        )
 
                 total_success += platform_success
                 total_expected += platform_expected
@@ -163,6 +225,7 @@ async def _daily_collect_all_platforms() -> None:
                                 "status": status,
                                 "device_count": len(devices),
                                 "success_count": platform_success,
+                                "expected_count": platform_expected,
                             },
                         )
                         await db.commit()

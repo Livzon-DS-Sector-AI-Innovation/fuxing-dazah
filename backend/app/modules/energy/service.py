@@ -210,6 +210,7 @@ async def trigger_collection(
                     "status": status,
                     "device_count": len(devices),
                     "success_count": platform_success,
+                    "expected_count": platform_expected,
                     "error_message": f"手动触发: {yesterday.strftime('%Y-%m-%d')}" if status != "success" else None,
                 },
             )
@@ -407,6 +408,7 @@ async def get_collect_log_detail(
         "status": log.status,
         "device_count": log.device_count,
         "success_count": log.success_count,
+        "expected_count": log.expected_count,
         "error_message": log.error_message,
         "created_at": log.created_at,
         "devices": devices,
@@ -950,6 +952,29 @@ async def evaluate_workshop_alerts(db: AsyncSession) -> dict[str, Any]:
                 else:
                     rule_energy_type = user_rule.energy_type
                     unit = user_rule.unit
+
+                    # 检查生效时间窗口
+                    if user_rule.effective_time == "custom":
+                        try:
+                            if user_rule.custom_time_start and user_rule.custom_time_end:
+                                sh, sm = user_rule.custom_time_start.split(":")
+                                eh, em = user_rule.custom_time_end.split(":")
+                                start_mins = int(sh) * 60 + int(sm)
+                                end_mins = int(eh) * 60 + int(em)
+                                current_mins = now.hour * 60 + now.minute
+
+                                if start_mins <= end_mins:
+                                    # 不跨天：start <= current < end
+                                    in_window = start_mins <= current_mins < end_mins
+                                else:
+                                    # 跨天（如 22:00-06:00）：current >= start 或 current < end
+                                    in_window = current_mins >= start_mins or current_mins < end_mins
+
+                                if not in_window:
+                                    checked += 1
+                                    continue
+                        except (ValueError, AttributeError):
+                            pass  # 时间格式异常时不阻塞，走全天逻辑
 
                     # 查重
                     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1590,10 +1615,15 @@ async def send_nitrogen_monthly_report(
             for cr in results:
                 if cr.device_code == device.platform_device_code:
                     value = float(cr.value)
+                    # 先物理删除当天已有的逐小时数据，避免日汇总与小时数据被 SUM 重复累加
+                    # （(device_config_id, timestamp) 有唯一约束，不能仅依赖 upsert 覆盖）
+                    await repo.delete_hourly_data_for_device_on_date(
+                        db, device.id, target_date
+                    )
                     await repo.upsert_energy_data(
                         db,
                         device_config_id=device.id,
-                        timestamp=target_date,
+                        timestamp=cr.timestamp,
                         value=value,
                         unit=unit,
                         platform_raw_data={"daily_sum": True, "source": "nitrogen_push"},

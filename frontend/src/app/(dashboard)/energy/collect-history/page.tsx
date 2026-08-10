@@ -46,7 +46,7 @@ export default function CollectHistoryPage() {
   const [loading, setLoading] = useState(false)
   const [totalCount, setTotalCount] = useState(0)
 
-  // ---- 编辑模式（仅逐小时模式可用）----
+  // ---- 编辑模式 ----
   const [editing, setEditing] = useState(false)
   const [editingValues, setEditingValues] = useState<Record<string, number | undefined>>({})
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
@@ -315,22 +315,20 @@ export default function CollectHistoryPage() {
               {isHourly ? '逐小时' : '日汇总'}
             </span>
           </div>
-          {/* 编辑按钮仅逐小时模式可用 */}
-          {isHourly && (
-            <Button
-              type={editing ? 'primary' : 'default'}
-              size="small"
-              onClick={() => { setEditing(!editing); setEditingValues({}) }}
-              style={{
-                background: editing ? '#5645d4' : undefined,
-                borderColor: editing ? '#5645d4' : '#c8c4be',
-                color: editing ? '#fff' : '#787671',
-                borderRadius: 8, fontSize: 12, fontWeight: 500, height: 28,
-              }}
-            >
-              ✏️ {editing ? '退出编辑' : '编辑数据'}
-            </Button>
-          )}
+          {/* 编辑按钮 — 所有粒度模式均可用 */}
+          <Button
+            type={editing ? 'primary' : 'default'}
+            size="small"
+            onClick={() => { setEditing(!editing); setEditingValues({}) }}
+            style={{
+              background: editing ? '#5645d4' : undefined,
+              borderColor: editing ? '#5645d4' : '#c8c4be',
+              color: editing ? '#fff' : '#787671',
+              borderRadius: 8, fontSize: 12, fontWeight: 500, height: 28,
+            }}
+          >
+            ✏️ {editing ? '退出编辑' : '编辑数据'}
+          </Button>
         </div>
 
         {/* ---- 加载状态 ---- */}
@@ -375,12 +373,9 @@ export default function CollectHistoryPage() {
                   expandedRowRender: (dept) => {
                     const chartColor = activeMeta?.color || '#5645d4'
 
-                    // 近30天（不含今天）可编辑 — 仅逐小时模式
-                    const editMin = dayjs().subtract(30, 'day').startOf('day')
-                    const editMax = dayjs().subtract(1, 'day').endOf('day')
+                    // 历史数据均可编辑（仅限制今天不可编辑，当天数据尚未采集完毕）
                     const isWithinEditRange = (ts: string) => {
-                      const t = dayjs(ts)
-                      return t.isAfter(editMin) && t.isBefore(editMax)
+                      return dayjs(ts).isBefore(dayjs().startOf('day'))
                     }
 
                     const deviceEntries = [...dept.deviceMap.entries()]
@@ -483,7 +478,7 @@ export default function CollectHistoryPage() {
                               paddingTop: 8,
                             }}>
                               {dev.rows.map((row) => {
-                                const canEdit = editing && isHourly && isWithinEditRange(row.timestamp)
+                                const canEdit = editing && isWithinEditRange(row.timestamp)
                                 return (
                                   <div
                                     key={row.id}

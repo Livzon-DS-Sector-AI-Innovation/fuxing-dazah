@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { App, Drawer, Form, Input, Select, InputNumber, Button, Space } from 'antd'
+import { App, Drawer, Form, Input, Select, InputNumber, Button, Space, Switch, TimePicker } from 'antd'
+import dayjs from 'dayjs'
 import { useEnergyStore } from '@/stores/energy'
 import { createAlertRule, updateAlertRule, getAlertRuleById } from '@/actions/energy'
 import { CreateRuleInput, UpdateRuleInput, MonitorMetric, ThresholdType, AlertLevel, NotifyFrequency, EffectiveTimeType, EnergyTypeMeta } from '@/types/energy'
@@ -82,6 +83,9 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
 
   const isEdit = alertConfigDrawerMode === 'edit'
 
+  // 监听生效时间，控制自定义时段字段显示
+  const effectiveTime = Form.useWatch('effective_time', form)
+
   useEffect(() => {
     if (!alertConfigDrawerOpen) return
     const timer = setTimeout(() => {
@@ -109,6 +113,8 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
                 notify_method: rule.notify_method,
                 notify_frequency: rule.notify_frequency,
                 effective_time: rule.effective_time,
+                custom_time_start: rule.custom_time_start ? dayjs(rule.custom_time_start, 'HH:mm') : undefined,
+                custom_time_end: rule.custom_time_end ? dayjs(rule.custom_time_end, 'HH:mm') : undefined,
                 is_enabled: rule.is_enabled,
               })
             })
@@ -133,6 +139,9 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
       const values = await form.validateFields()
       setSubmitting(true)
 
+      const customTimeStart = values.custom_time_start ? values.custom_time_start.format('HH:mm') : undefined
+      const customTimeEnd = values.custom_time_end ? values.custom_time_end.format('HH:mm') : undefined
+
       if (isEdit && alertConfigDrawerId) {
         const data: UpdateRuleInput = {
           rule_name: values.rule_name,
@@ -145,6 +154,8 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
           notify_method: values.notify_method,
           notify_frequency: values.notify_frequency,
           effective_time: values.effective_time,
+          custom_time_start: customTimeStart,
+          custom_time_end: customTimeEnd,
           is_enabled: values.is_enabled,
         }
         await updateAlertRule(alertConfigDrawerId, data)
@@ -162,6 +173,8 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
           notify_users: [],
           notify_frequency: values.notify_frequency,
           effective_time: values.effective_time,
+          custom_time_start: customTimeStart,
+          custom_time_end: customTimeEnd,
           is_enabled: values.is_enabled,
         }
         await createAlertRule(data)
@@ -250,8 +263,29 @@ export function AlertConfigDrawer({ onRefresh }: AlertConfigDrawerProps) {
           <Select options={effectiveTimeOptions} style={{ height: 44 }} />
         </Form.Item>
 
-        <Form.Item name="is_enabled" label="启用状态" valuePropName="checked" hidden>
-          <Input />
+        {effectiveTime === 'custom' && (
+          <div style={{ display: 'flex', gap: 16 }}>
+            <Form.Item
+              name="custom_time_start"
+              label="开始时间"
+              rules={[{ required: true, message: '请选择开始时间' }]}
+              style={{ flex: 1 }}
+            >
+              <TimePicker format="HH:mm" placeholder="开始时间" style={{ width: '100%', height: 44 }} minuteStep={5} />
+            </Form.Item>
+            <Form.Item
+              name="custom_time_end"
+              label="结束时间"
+              rules={[{ required: true, message: '请选择结束时间' }]}
+              style={{ flex: 1 }}
+            >
+              <TimePicker format="HH:mm" placeholder="结束时间" style={{ width: '100%', height: 44 }} minuteStep={5} />
+            </Form.Item>
+          </div>
+        )}
+
+        <Form.Item name="is_enabled" label="启用状态" valuePropName="checked">
+          <Switch />
         </Form.Item>
       </Form>
     </Drawer>

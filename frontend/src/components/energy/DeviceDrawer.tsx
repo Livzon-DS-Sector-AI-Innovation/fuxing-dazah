@@ -7,15 +7,12 @@ import {
   Form,
   Input,
   Select,
-  InputNumber,
   Switch,
-  Radio,
   Button,
   Space,
   Spin,
-  TimePicker,
+  Radio,
 } from 'antd'
-import dayjs from 'dayjs'
 import {
   ApiOutlined,
   EnvironmentOutlined,
@@ -47,7 +44,7 @@ const DEFAULT_VALUES = {
   monitor_level: 'normal',
   is_enabled: true,
   is_region_level: false,
-  stat_role: 'normal' as const,
+  stat_role: 'normal',
 }
 
 /** 判断平台是否已接入（非 "待接入" 即视为已接入） */
@@ -523,23 +520,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               </Form.Item>
             )}
 
-            {/* 统计角色 */}
-            <Form.Item
-              name="stat_role"
-              label={
-                <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                  统计角色
-                </span>
-              }
-              style={{ marginBottom: 16 }}
-            >
-              <Radio.Group optionType="button" buttonStyle="solid">
-                <Radio.Button value="normal">参与统计</Radio.Button>
-                <Radio.Button value="excluded">不参与</Radio.Button>
-                <Radio.Button value="total">作为总耗</Radio.Button>
-              </Radio.Group>
-            </Form.Item>
-
             {/* ── 采集设置 ── */}
             <SectionLabel icon={<SettingOutlined />} text="采集设置" />
 
@@ -582,6 +562,27 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                   style={{ height: 44 }}
                 />
               </Form.Item>
+
+            <Form.Item
+              name="stat_role"
+              label={
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
+                  统计角色
+                </span>
+              }
+              style={{ marginBottom: 16 }}
+            >
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                size="middle"
+                options={[
+                  { label: '参与统计', value: 'normal' },
+                  { label: '不参与', value: 'excluded' },
+                  { label: '作为总耗', value: 'total' },
+                ]}
+              />
+            </Form.Item>
 
             {/* ── 备注 ── */}
             <div style={{ marginBottom: 16 }} />
