@@ -176,6 +176,7 @@ async def trigger_collection(
             "status": r["status"],
             "device_count": r["device_count"],
             "success_count": r["success_count"],
+
             "target_day": yesterday.strftime("%Y-%m-%d"),
         }
 
