@@ -173,6 +173,9 @@ class EnergyCollectLog(BaseModel):
     success_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, comment="成功条数"
     )
+    expected_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="预期数据条数（daily设备为1/台，hourly为24/台）"
+    )
     error_message: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="错误信息"
     )
@@ -377,14 +380,15 @@ class EnergyTypeConfig(BaseModel):
             "type_code", "is_deleted",
             name="uq_energy_type_config_code",
         ),
+        CheckConstraint(
+            "collect_granularity IN ('hourly', 'daily')",
+            name="ck_energy_type_config_collect_granularity",
+        ),
         {"schema": "energy"},
     )
 
     type_code: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="唯一编码，如 electricity"
-    )
-    parent_code: Mapped[str | None] = mapped_column(
-        String(50), nullable=True, comment="父级编码，顶层分类为 NULL"
     )
     display_name: Mapped[str] = mapped_column(
         String(100), nullable=False, comment="展示名称，如 电力"
@@ -403,6 +407,10 @@ class EnergyTypeConfig(BaseModel):
     )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="启用状态"
+    )
+    collect_granularity: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="hourly",
+        comment="采集粒度: hourly=逐小时, daily=日汇总",
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"

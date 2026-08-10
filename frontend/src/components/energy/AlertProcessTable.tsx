@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Table, Tag, Space, Button, Popconfirm, Modal, Input, App } from 'antd'
 import { CheckOutlined, CloseOutlined, EditOutlined } from '@ant-design/icons'
+import dayjs from 'dayjs'
 import type { TableColumnsType } from 'antd'
 import { AlertRecord, EnergyTypeMeta } from '@/types/energy'
 import { usePermission } from '@/hooks/usePermission'
@@ -98,7 +99,7 @@ export function AlertProcessTable({
       dataIndex: 'alert_time',
       key: 'alert_time',
       width: 170,
-      render: (t: string) => t?.replace('T', ' ').substring(0, 19) || '—',
+      render: (t: string) => t ? dayjs(t).format('YYYY-MM-DD HH:mm:ss') : '—',
     },
     {
       title: '能源类型',

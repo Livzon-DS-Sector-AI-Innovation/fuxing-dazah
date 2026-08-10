@@ -386,23 +386,23 @@ export function CollectLogDetailDrawer({
                 return null
               })()}
 
-            <InfoRow label="应采 / 成功">
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                <span
-                  style={{
-                    color:
-                      detail.success_count === detail.device_count
-                        ? '#1aae39'
-                        : detail.success_count === 0
-                          ? '#e03131'
-                          : '#dd5b00',
-                  }}
-                >
-                  {detail.success_count}
-                </span>
-                {' / '}
-                {detail.device_count}
-              </span>
+            <InfoRow label="成功 / 应采">
+              {(() => {
+                const expected = detail.expected_count || detail.device_count * 24
+                const color =
+                  detail.success_count >= expected
+                    ? '#1aae39'
+                    : detail.success_count === 0
+                      ? '#e03131'
+                      : '#dd5b00'
+                return (
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color }}>{detail.success_count}</span>
+                    {' / '}
+                    {expected}
+                  </span>
+                )
+              })()}
             </InfoRow>
 
             <InfoRow label="数据时间范围">

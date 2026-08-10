@@ -31,6 +31,7 @@ export default function VisualizationPage() {
   const [loading, setLoading] = useState(false)
   const [priceCategory, setPriceCategory] = useState<PriceCategoryDistribution | null>(null)
   const [periodDrawerOpen, setPeriodDrawerOpen] = useState(false)
+  const [peakValleyMode, setPeakValleyMode] = useState<'total' | 'workshop'>('total')
 
   const days = range[1].diff(range[0], 'day') + 1
 
@@ -55,13 +56,13 @@ export default function VisualizationPage() {
       setOverview(curr)
       setPrevOverview(prev)
 
-      // 峰谷分布（点部门时联动筛选）
+      // 峰谷分布（点部门时联动筛选，支持总耗/部门切换）
       try {
         const pc = await fetchPriceCategoryDistribution({
           start_time: range[0].toISOString(),
           end_time: range[1].toISOString(),
           energy_type: selectedType || undefined,
-          workshop: selectedWorkshop || undefined,
+          workshop: peakValleyMode === 'workshop' ? (selectedWorkshop || undefined) : undefined,
         })
         setPriceCategory(pc)
       } catch {
@@ -72,7 +73,7 @@ export default function VisualizationPage() {
     } finally {
       setLoading(false)
     }
-  }, [range, selectedType, selectedWorkshop])
+  }, [range, selectedType, selectedWorkshop, peakValleyMode])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
@@ -424,7 +425,15 @@ export default function VisualizationPage() {
                       return (
                         <div
                           key={w.workshop}
-                          onClick={() => setSelectedWorkshop(active ? null : w.workshop)}
+                          onClick={() => {
+                            if (active) {
+                              setSelectedWorkshop(null)
+                              setPeakValleyMode('total')
+                            } else {
+                              setSelectedWorkshop(w.workshop)
+                              setPeakValleyMode('workshop')
+                            }
+                          }}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px',
                             borderRadius: 8, cursor: 'pointer',
@@ -489,21 +498,45 @@ export default function VisualizationPage() {
                 background: '#fff', borderRadius: 12, padding: '20px 24px', marginBottom: 20,
                 border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
               }}>
-                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12 }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   峰谷用电分布
                   <Button
                     type="link" size="small"
                     onClick={() => setPeriodDrawerOpen(true)}
-                    style={{ fontSize: 11, padding: 0, marginLeft: 8 }}
+                    style={{ fontSize: 11, padding: 0 }}
                   >
                     配置规则
                   </Button>
-                  {selectedWorkshop && (
-                    <span style={{ fontSize: 13, fontWeight: 400, color: '#5645d4', marginLeft: 8 }}>
-                      › {selectedWorkshop}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097', marginLeft: 8 }}>
+                  {/* 总耗 / 部门切换 */}
+                  <span style={{ display: 'inline-flex', gap: 2, background: '#f0eeec', borderRadius: 20, padding: 2 }}>
+                    <button
+                      onClick={() => setPeakValleyMode('total')}
+                      style={{
+                        padding: '2px 12px', borderRadius: 18, border: 'none', cursor: 'pointer',
+                        fontSize: 12, fontWeight: peakValleyMode === 'total' ? 600 : 400,
+                        background: peakValleyMode === 'total' ? '#5645d4' : 'transparent',
+                        color: peakValleyMode === 'total' ? '#fff' : '#787671',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      总耗
+                    </button>
+                    <button
+                      onClick={() => selectedWorkshop && setPeakValleyMode('workshop')}
+                      disabled={!selectedWorkshop}
+                      style={{
+                        padding: '2px 12px', borderRadius: 18, border: 'none',
+                        cursor: selectedWorkshop ? 'pointer' : 'not-allowed',
+                        fontSize: 12, fontWeight: peakValleyMode === 'workshop' ? 600 : 400,
+                        background: peakValleyMode === 'workshop' ? '#5645d4' : 'transparent',
+                        color: peakValleyMode === 'workshop' ? '#fff' : selectedWorkshop ? '#787671' : '#c8c4be',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {selectedWorkshop || '部门'}
+                    </button>
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097' }}>
                     总 {priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} {priceCategory.unit}
                   </span>
                 </div>

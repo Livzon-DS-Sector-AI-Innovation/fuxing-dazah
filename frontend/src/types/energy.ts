@@ -170,6 +170,7 @@ export interface CollectLog {
   status: CollectStatus
   device_count: number
   success_count: number
+  expected_count: number
   error_message: string | null
   created_at: string
 }
@@ -193,6 +194,7 @@ export interface CollectLogDetail {
   status: CollectStatus
   device_count: number
   success_count: number
+  expected_count: number
   error_message: string | null
   created_at: string
   devices: CollectLogDeviceDetail[]
@@ -364,7 +366,7 @@ export interface EnergyTypeConfig {
   color: string | null
   sort_order: number
   is_enabled: boolean
-  parent_code: string | null
+  collect_granularity: 'hourly' | 'daily'
   remark: string | null
   created_at: string
   updated_at: string
@@ -376,8 +378,8 @@ export interface CreateTypeConfigInput {
   unit: string
   sort_order?: number
   is_enabled?: boolean
+  collect_granularity?: 'hourly' | 'daily'
   color?: string | null
-  parent_code?: string | null
   remark?: string | null
 }
 
@@ -386,8 +388,8 @@ export interface UpdateTypeConfigInput {
   unit?: string
   sort_order?: number
   is_enabled?: boolean
+  collect_granularity?: 'hourly' | 'daily'
   color?: string | null
-  parent_code?: string | null
   remark?: string | null
 }
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Button, Modal, Form, Input, InputNumber, Switch, Popconfirm, App, Space } from 'antd'
+import { Table, Button, Modal, Form, Input, InputNumber, Switch, Popconfirm, App, Space, Segmented } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { EnergyTypeConfig, CreateTypeConfigInput, UpdateTypeConfigInput, PaginatedResponse } from '@/types/energy'
 import { getTypeConfigs, createTypeConfig, updateTypeConfig, deleteTypeConfig } from '@/actions/energy'
@@ -80,6 +80,13 @@ export default function TypeConfigPage() {
       key: 'is_enabled',
       width: 70,
       render: (v: boolean) => v ? <span style={{ color: '#16a34a' }}>启用</span> : <span style={{ color: '#a4a097' }}>禁用</span>,
+    },
+    {
+      title: '采集粒度',
+      dataIndex: 'collect_granularity',
+      key: 'collect_granularity',
+      width: 90,
+      render: (v: string) => v === 'daily' ? <span style={{ color: '#dd5b00' }}>日汇总</span> : <span style={{ color: '#5645d4' }}>逐小时</span>,
     },
     { title: '备注', dataIndex: 'remark', key: 'remark', ellipsis: true },
     {
@@ -218,6 +225,7 @@ function TypeConfigModal({
           unit: record.unit,
           sort_order: record.sort_order,
           is_enabled: record.is_enabled,
+          collect_granularity: record.collect_granularity || 'hourly',
           color: record.color || '',
           remark: record.remark || '',
         })
@@ -226,6 +234,7 @@ function TypeConfigModal({
         form.setFieldsValue({
           sort_order: 0,
           is_enabled: true,
+          collect_granularity: 'hourly',
           color: randomColor(existingColors),
         })
       }
@@ -242,6 +251,7 @@ function TypeConfigModal({
           unit: values.unit,
           sort_order: values.sort_order,
           is_enabled: values.is_enabled,
+          collect_granularity: values.collect_granularity,
           color: values.color || null,
           remark: values.remark || null,
         }
@@ -254,6 +264,7 @@ function TypeConfigModal({
           unit: values.unit,
           sort_order: values.sort_order ?? 0,
           is_enabled: values.is_enabled ?? true,
+          collect_granularity: values.collect_granularity || 'hourly',
           color: values.color || null,
           remark: values.remark || null,
         }
@@ -311,6 +322,18 @@ function TypeConfigModal({
         </div>
         <Form.Item name="is_enabled" label="启用" valuePropName="checked">
           <Switch />
+        </Form.Item>
+        <Form.Item
+          name="collect_granularity"
+          label="采集粒度"
+          rules={[{ required: true, message: '请选择采集粒度' }]}
+        >
+          <Segmented
+            options={[
+              { label: '逐小时', value: 'hourly' },
+              { label: '日汇总', value: 'daily' },
+            ]}
+          />
         </Form.Item>
         <Form.Item name="remark" label="备注" rules={[{ max: 500 }]}>
           <Input.TextArea rows={2} placeholder="备注信息..." style={{ background: '#f6f5f4', border: 'none', borderRadius: 8 }} />

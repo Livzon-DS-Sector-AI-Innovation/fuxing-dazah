@@ -33,6 +33,18 @@ const monitorConfig: Record<string, ReturnType<typeof luxuryPill>> = {
 const enabledPill = luxuryPill('#1aae39', '#d9f3e1')
 const disabledPill = luxuryPill('#787671', '#f0eeec')
 
+const statRoleConfig: Record<string, ReturnType<typeof luxuryPill>> = {
+  normal: luxuryPill('#5645d4', '#f6f3ff'),
+  excluded: luxuryPill('#787671', '#f0eeec'),
+  total: luxuryPill('#dd5b00', '#ffe8d4'),
+}
+
+const statRoleLabel: Record<string, string> = {
+  normal: '参与统计',
+  excluded: '不参与',
+  total: '作为总耗',
+}
+
 // ── 表格样式注入（仅影响本组件范围内的 .luxury-device-table） ──
 
 const tableStyles = `
@@ -222,6 +234,17 @@ export function DeviceTable({
       ),
     },
     {
+      title: '统计角色',
+      dataIndex: 'stat_role',
+      key: 'stat_role',
+      width: 90,
+      render: (role: string) => {
+        const s = statRoleConfig[role] || statRoleConfig.normal
+        const label = statRoleLabel[role] || role
+        return <span style={s}>{label}</span>
+      },
+    },
+    {
       title: '所属区域',
       dataIndex: 'production_line',
       key: 'production_line',
@@ -268,25 +291,6 @@ export function DeviceTable({
           {enabled ? '启用' : '禁用'}
         </span>
       ),
-    },
-    {
-      title: '统计',
-      dataIndex: 'stat_role',
-      key: 'stat_role',
-      width: 90,
-      render: (stat_role: string) => {
-        const map: Record<string, ReturnType<typeof luxuryPill>> = {
-          normal: luxuryPill('#1aae39', '#d9f3e1'),
-          excluded: luxuryPill('#dd5b00', '#ffe8d4'),
-          total: luxuryPill('#0075de', '#d9e8fa'),
-        }
-        const label: Record<string, string> = {
-          normal: '参与统计',
-          excluded: '不参与',
-          total: '作为总耗',
-        }
-        return <span style={map[stat_role] ?? map.normal}>{label[stat_role] ?? label.normal}</span>
-      },
     },
     {
       title: '',
