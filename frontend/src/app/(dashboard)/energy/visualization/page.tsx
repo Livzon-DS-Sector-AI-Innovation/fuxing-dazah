@@ -79,6 +79,8 @@ export default function VisualizationPage() {
   useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
 
   const metadata = overview?.type_metadata || []
+  const selectedMeta = metadata.find((m) => m.type_code === selectedType)
+  const isElectricity = selectedMeta?.type_code === 'electricity'
 
   // 首次加载时自动选中第一个能源类型
   useEffect(() => {
@@ -492,8 +494,8 @@ export default function VisualizationPage() {
               </div>
             </div>
 
-            {/* ── 峰谷用电分布 ── */}
-            {priceCategory && priceCategory.categories.length > 0 && (
+            {/* ── 峰谷用电分布（仅电耗）── */}
+            {isElectricity && priceCategory && priceCategory.categories.length > 0 && (
               <div style={{
                 background: '#fff', borderRadius: 12, padding: '20px 24px', marginBottom: 20,
                 border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Select, Button, Switch, message, Popconfirm, TimePicker } from 'antd'
+import { Select, Button, Switch, App, Popconfirm, TimePicker } from 'antd'
 import dayjs from 'dayjs'
 import { ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
@@ -10,6 +10,7 @@ import { getCollectLogs, triggerCollect, getCollectSettings, updateCollectSettin
 import type { CollectLog, PaginatedResponse, CollectSettings } from '@/types/energy'
 
 export default function CollectLogsPage() {
+  const { message } = App.useApp()
   const {
     logFilters,
     setLogFilters,

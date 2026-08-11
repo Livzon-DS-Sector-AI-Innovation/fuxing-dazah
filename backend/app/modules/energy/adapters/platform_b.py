@@ -44,10 +44,6 @@ class PlatformBAdapter(BasePlatformAdapter):
         api_endpoint: str,
         is_daily: bool = False,
     ) -> list[CollectResult]:
-        # platform_b API 只返回聚合值，不支持按小时拆分，日模式由调度器回退处理
-        if is_daily:
-            raise NotImplementedError("platform_b does not support is_daily mode")
-
         # 1. 收集所有独立的 formulaId
         all_formula_ids: set[str] = set()
         for code in device_codes:

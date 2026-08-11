@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -34,6 +35,19 @@ _last_daily_collect_date: str = ""
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
 
+# 各平台 API 并发上限（避免冲垮三方接口）
+_PLATFORM_SEMAPHORES: dict[str, asyncio.Semaphore] = {
+    "zhiheng": asyncio.Semaphore(2),     # 智恒分页 API 较重
+    "platform_b": asyncio.Semaphore(5),  # 智能电气 6 设备×24h 回退
+}
+
+
+def _get_platform_semaphore(platform_code: str) -> asyncio.Semaphore:
+    """获取平台并发信号量，未配置的平台默认上限 3。"""
+    if platform_code not in _PLATFORM_SEMAPHORES:
+        _PLATFORM_SEMAPHORES[platform_code] = asyncio.Semaphore(3)
+    return _PLATFORM_SEMAPHORES[platform_code]
+
 
 async def _collect_device_hours(
     db: AsyncSession,
@@ -41,41 +55,51 @@ async def _collect_device_hours(
     target_day: datetime,
     unit: str,
     adapter: object,
+    *,
+    use_daily_mode: bool = False,
 ) -> int:
     """对单台设备拉取指定天 0-23 小时的每小时数据。
 
-    优先使用 is_daily=True 模式（一次 API 调用拿全天数据）；
-    若适配器不支持则回退到逐小时并发调用。
-    返回成功写入的记录数。
-    """
-    try:
-        results = await adapter.fetch_energy_data(
-            [device.platform_device_code], target_day, device.api_endpoint, is_daily=True
-        )
-        success_count = 0
-        for cr in results:
-            if cr.device_code == device.platform_device_code:
-                await repo.upsert_energy_data(
-                    db, device_config_id=device.id, timestamp=cr.timestamp,
-                    value=cr.value, unit=unit, platform_raw_data=cr.raw_data,
-                )
-                success_count += 1
-        return success_count
-    except NotImplementedError:
-        pass  # 回退到逐小时调用
-    except Exception:
-        logger.exception("每日采集异常(日模式): device=%s", device.device_name)
-        return 0
+    日汇总设备（use_daily_mode=True）优先使用 is_daily=True 一次拿全天，
+    适配器不支持时回退到逐小时并发调用。
+    小时设备直接走逐小时并发调用。
 
-    # ── 回退：逐小时并发采集 ──
-    logger.debug("平台 %s 不支持 is_daily=True，回退逐小时并发采集", device.platform_code)
+    返回成功写入的记录数。
+    所有 adapter.fetch_energy_data 调用受平台级 Semaphore 管控。
+    """
+    sem = _get_platform_semaphore(device.platform_code)
+
+    if use_daily_mode:
+        try:
+            async with sem:
+                results = await adapter.fetch_energy_data(
+                    [device.platform_device_code], target_day, device.api_endpoint, is_daily=True
+                )
+            success_count = 0
+            for cr in results:
+                if cr.device_code == device.platform_device_code:
+                    await repo.upsert_energy_data(
+                        db, device_config_id=device.id, timestamp=cr.timestamp,
+                        value=cr.value, unit=unit, platform_raw_data=cr.raw_data,
+                    )
+                    success_count += 1
+            return success_count
+        except NotImplementedError:
+            pass  # 回退到逐小时调用
+        except Exception:
+            logger.exception("每日采集异常(日模式): device=%s", device.device_name)
+            return 0
+
+    # ── 逐小时并发采集 ──
+    logger.debug("平台 %s 逐小时并发采集: device=%s", device.platform_code, device.device_name)
 
     async def _fetch_one_hour(hour: int) -> list:
         target_hour = target_day.replace(hour=hour)
         try:
-            results = await adapter.fetch_energy_data(
-                [device.platform_device_code], target_hour, device.api_endpoint
-            )
+            async with sem:
+                results = await adapter.fetch_energy_data(
+                    [device.platform_device_code], target_hour, device.api_endpoint
+                )
             return [
                 r for r in results
                 if r.device_code == device.platform_device_code
@@ -87,7 +111,6 @@ async def _collect_device_hours(
             )
             return []
 
-    import asyncio
     tasks = [_fetch_one_hour(h) for h in range(24)]
     all_results = await asyncio.gather(*tasks)
 
@@ -103,137 +126,201 @@ async def _collect_device_hours(
     return success_count
 
 
+async def _collect_platform_devices(
+    platform_code: str,
+    yesterday: datetime,
+    collect_time: datetime,
+) -> dict | None:
+    """采集单个平台下所有设备（设备并发，各自独立 session）。
+
+    三阶段：① 预清理日汇总设备旧数据 → ② 并发采集所有设备 →
+    ③ 日汇总聚合 + 写采集日志。
+    """
+    adapter = ADAPTERS.get(platform_code)
+    if adapter is None:
+        logger.warning("未找到平台适配器: %s，跳过", platform_code)
+        return None
+
+    async with async_session_factory() as db:
+        devices = await repo.get_enabled_devices_by_platform(db, platform_code)
+        if not devices:
+            return {
+                "platform_code": platform_code,
+                "device_count": 0,
+                "success_count": 0,
+                "expected_count": 0,
+                "status": "success",
+            }
+
+        # 预加载元数据
+        unit_map: dict[str, str] = {}
+        for et in {d.energy_type for d in devices}:
+            try:
+                unit_map[et] = await _get_unit_by_energy_type(db, et)
+            except Exception:
+                unit_map[et] = ""
+
+        granularity_map: dict[str, str] = {}
+        type_configs_result = await db.execute(
+            select(EnergyTypeConfig.type_code, EnergyTypeConfig.collect_granularity).where(
+                EnergyTypeConfig.is_deleted == False,  # noqa: E712
+            )
+        )
+        for row in type_configs_result.all():
+            granularity_map[row.type_code] = row.collect_granularity
+
+    # ── 阶段 ①：预清理日汇总设备旧数据 ──
+    async with async_session_factory() as db:
+        for device in devices:
+            if device.stat_role == "excluded":
+                continue
+            if granularity_map.get(device.energy_type, "hourly") == "daily":
+                await repo.delete_hourly_data_for_device_on_date(
+                    db, device.id, yesterday
+                )
+        await db.commit()
+
+    # ── 阶段 ②：所有设备并发采集（各用独立 session）──
+    async def _collect_one(device: EnergyDeviceConfig, unit: str):
+        async with async_session_factory() as db:
+            try:
+                is_daily = granularity_map.get(device.energy_type, "hourly") == "daily"
+                count = await _collect_device_hours(
+                    db, device, yesterday, unit, adapter, use_daily_mode=is_daily
+                )
+                await db.commit()
+                return device, unit, count
+            except Exception:
+                logger.exception(
+                    "采集异常: device=%s, day=%s",
+                    device.device_name,
+                    yesterday.strftime("%Y-%m-%d"),
+                )
+                return device, unit, 0
+
+    active = [
+        (d, unit_map.get(d.energy_type, ""))
+        for d in devices
+        if d.stat_role != "excluded"
+    ]
+    device_results = await asyncio.gather(
+        *[_collect_one(d, u) for d, u in active]
+    )
+
+    # ── 阶段 ③：日汇总聚合 + 写采集日志 ──
+    async with async_session_factory() as db:
+        platform_expected = 0
+        platform_success = 0
+        daily_devices: list[tuple[EnergyDeviceConfig, str]] = []
+
+        for device, unit, count in device_results:
+            coll_gran = granularity_map.get(device.energy_type, "hourly")
+            if coll_gran == "daily":
+                daily_devices.append((device, unit))
+                platform_expected += 1
+            else:
+                platform_success += count
+                platform_expected += 24
+
+        for device, unit in daily_devices:
+            try:
+                cst_date = func.date(
+                    func.timezone("Asia/Shanghai", EnergyData.timestamp)
+                )
+                sum_result = await db.execute(
+                    select(
+                        func.coalesce(func.sum(EnergyData.value), 0.0)
+                    ).where(
+                        EnergyData.device_config_id == device.id,
+                        EnergyData.is_deleted == False,  # noqa: E712
+                        cst_date == sa_cast(yesterday.date(), Date),
+                    )
+                )
+                total_val = float(sum_result.scalar() or 0.0)
+                if total_val > 0:
+                    await repo.delete_hourly_data_for_device_on_date(
+                        db, device.id, yesterday
+                    )
+                    await repo.upsert_energy_data(
+                        db,
+                        device_config_id=device.id,
+                        timestamp=yesterday,
+                        value=total_val,
+                        unit=unit,
+                        platform_raw_data={"daily_aggregated": True},
+                    )
+                    platform_success += 1
+            except Exception:
+                logger.exception(
+                    "日汇总聚合失败: device=%s, date=%s",
+                    device.device_name,
+                    yesterday.strftime("%Y-%m-%d"),
+                )
+
+        status = (
+            "success"
+            if platform_success >= platform_expected
+            else "partial"
+            if platform_success > 0
+            else "failed"
+        )
+
+        if platform_expected > 0:
+            try:
+                await repo.create_collect_log(
+                    db,
+                    {
+                        "platform_code": platform_code,
+                        "collect_time": collect_time,
+                        "status": status,
+                        "device_count": len(devices),
+                        "success_count": platform_success,
+                        "expected_count": platform_expected,
+                    },
+                )
+                await db.commit()
+            except Exception:
+                logger.exception("采集日志写入失败: platform=%s", platform_code)
+
+    return {
+        "platform_code": platform_code,
+        "status": status,
+        "device_count": len(devices),
+        "success_count": platform_success,
+        "expected_count": platform_expected,
+    }
+
+
 async def _daily_collect_all_platforms() -> None:
-    """每日统一采集：遍历所有启用设备，拉取昨天 0-23 小时的数据。"""
+    """每日统一采集：所有平台并发 + 平台内所有设备并发。"""
     now = datetime.now(CST)
-    yesterday = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday = (now - timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
     async with async_session_factory() as db:
         platforms = await repo.get_distinct_enabled_platforms(db)
 
+    if not platforms:
+        return
+
+    tasks = [
+        _collect_platform_devices(pc, yesterday, now) for pc in platforms
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
     total_devices = 0
     total_success = 0
     total_expected = 0
-
-    for platform_code in platforms:
-        adapter = ADAPTERS.get(platform_code)
-        if adapter is None:
-            logger.warning("未找到平台适配器: %s，跳过", platform_code)
+    for r in results:
+        if isinstance(r, Exception):
+            logger.exception("平台采集异常: %s", r)
             continue
-
-        try:
-            async with async_session_factory() as db:
-                devices = await repo.get_enabled_devices_by_platform(db, platform_code)
-                if not devices:
-                    continue
-
-                # 预加载单位映射
-                unit_map: dict[str, str] = {}
-                for et in {d.energy_type for d in devices}:
-                    try:
-                        unit_map[et] = await _get_unit_by_energy_type(db, et)
-                    except Exception:
-                        unit_map[et] = ""
-
-                # 预加载采集粒度映射（按能源类型）
-                granularity_map: dict[str, str] = {}
-                type_configs_result = await db.execute(
-                    select(EnergyTypeConfig.type_code, EnergyTypeConfig.collect_granularity).where(
-                        EnergyTypeConfig.is_deleted == False,  # noqa: E712
-                    )
-                )
-                for row in type_configs_result.all():
-                    granularity_map[row.type_code] = row.collect_granularity
-
-                platform_expected = 0
-                platform_success = 0
-                # 收集需要日聚合的设备（在采集完成后统一处理）
-                daily_devices: list[tuple[EnergyDeviceConfig, str]] = []
-
-                for device in devices:
-                    if device.stat_role == "excluded":
-                        continue
-                    total_devices += 1
-                    unit = unit_map.get(device.energy_type, "")
-                    coll_gran = granularity_map.get(device.energy_type, "hourly")
-
-                    if coll_gran == "daily":
-                        # 采集前清理已有数据，确保重启后重新采集不会重复累加
-                        # （旧日汇总记录若保留会被 SUM 一并计入，造成数据翻倍）
-                        await repo.delete_hourly_data_for_device_on_date(
-                            db, device.id, yesterday
-                        )
-
-                    count = await _collect_device_hours(
-                        db, device, yesterday, unit, adapter
-                    )
-                    if coll_gran == "daily":
-                        # 日汇总：采集小时数据后聚合为一条日记录
-                        daily_devices.append((device, unit))
-                        platform_expected += 1
-                        # 不在此处累计 success_count，聚合完成后统一处理
-                    else:
-                        platform_success += count
-                        platform_expected += 24
-
-                # 日汇总聚合：SUM 小时数据 → 删除 → 写入一条日记录
-                for device, unit in daily_devices:
-                    try:
-                        cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
-                        sum_result = await db.execute(
-                            select(func.coalesce(func.sum(EnergyData.value), 0.0)).where(
-                                EnergyData.device_config_id == device.id,
-                                EnergyData.is_deleted == False,  # noqa: E712
-                                cst_date == sa_cast(yesterday.date(), Date),
-                            )
-                        )
-                        total_val = float(sum_result.scalar() or 0.0)
-                        if total_val > 0:
-                            await repo.delete_hourly_data_for_device_on_date(
-                                db, device.id, yesterday
-                            )
-                            await repo.upsert_energy_data(
-                                db,
-                                device_config_id=device.id,
-                                timestamp=yesterday,
-                                value=total_val,
-                                unit=unit,
-                                platform_raw_data={"daily_aggregated": True},
-                            )
-                            platform_success += 1
-                    except Exception:
-                        logger.exception(
-                            "日汇总聚合失败: device=%s, date=%s",
-                            device.device_name, yesterday.strftime("%Y-%m-%d"),
-                        )
-
-                total_success += platform_success
-                total_expected += platform_expected
-
-                if platform_expected > 0:
-                    status = (
-                        "success" if platform_success >= platform_expected
-                        else "partial" if platform_success > 0
-                        else "failed"
-                    )
-                    try:
-                        await repo.create_collect_log(
-                            db,
-                            {
-                                "platform_code": platform_code,
-                                "collect_time": now,
-                                "status": status,
-                                "device_count": len(devices),
-                                "success_count": platform_success,
-                                "expected_count": platform_expected,
-                            },
-                        )
-                        await db.commit()
-                    except Exception:
-                        logger.exception("采集日志写入失败: platform=%s", platform_code)
-
-        except Exception:
-            logger.exception("平台 %s 每日采集异常", platform_code)
+        if r is None:
+            continue
+        total_devices += r["device_count"]
+        total_success += r["success_count"]
+        total_expected += r["expected_count"]
 
     if total_devices > 0:
         logger.info(
