@@ -297,9 +297,11 @@ async def start_execution(
                 created_by=user.id if user else None,
             )
         )
-    # 首个执行推进批次状态
+    # 首个执行推进批次状态 / 记录首工序开始时间
     if batch.status == "pending":
         batch.status = "in_progress"
+    if batch.first_started_at is None:
+        batch.first_started_at = now()
     await db.flush()
     await record_audit_log(
         db,
@@ -324,6 +326,7 @@ async def complete_execution(
         raise NotFoundException("工序执行", str(execution_id))
     if execution.status != "in_progress":
         raise AppException(status_code=400, message="仅进行中的执行可结束")
+
     defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
     for row in _build_field_values(
         defs, payload.field_values, "end", execution.id, user, enforce_required=False
@@ -333,6 +336,29 @@ async def complete_execution(
     batch = await repo.get_batch(db, execution.batch_id)
     if not batch:
         raise AppException(status_code=400, message="批次不存在或已删除，无法完成工序")
+
+    # 结束顺序校验：前道未完成则拒绝（allow_overlap 放宽开始但不放宽结束）
+    # 跳过 is_batch_boundary 边（前序在父批次完成），与开始校验对齐
+    edges = await repo.get_route_edges(db, batch.route_id)
+    completed = await repo.completed_node_ids(db, batch.id)
+    # 收集未完成的前驱节点 ID，批量查询名称（避免 N+1）
+    missing_pred_ids = [
+        e.from_node_id
+        for e in edges
+        if e.to_node_id == execution.node_id
+        and e.edge_type == "normal"
+        and not e.is_batch_boundary
+        and e.from_node_id not in completed
+    ]
+    if missing_pred_ids:
+        pred_nodes = await repo.get_nodes_by_ids(db, list(set(missing_pred_ids)))
+        pred_name_map = {n.id: n.name for n in pred_nodes}
+        pred_name = pred_name_map.get(missing_pred_ids[0], "前道工序")
+        raise AppException(
+            status_code=400,
+            message=f"请先结束{pred_name}后再结束本工序",
+        )
+
     # 权限校验必须保持在写操作之前，勿插入 flush
     if user:
         route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
@@ -373,6 +399,8 @@ async def complete_execution(
     if payload.remark:
         execution.remark = payload.remark
     execution.updated_by = user.id if user else None
+    # 记录最近一次工序结束时间（末工序结束由 complete_batch 设置）
+    batch.last_finished_at = now()
     await db.flush()
     await record_audit_log(
         db,

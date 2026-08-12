@@ -31,6 +31,7 @@ export interface WorkbenchItem {
   owner_name: string | null
   started_at: string | null
   is_last_in_stage: boolean
+  start_type?: string | null  // pending_start 卡片: normal | parallel | rework
   stage_nodes: StageNodeInfo[]
   missing_executions?: MissingExecution[]
 }

@@ -6,18 +6,17 @@ import {
   Button,
   Col,
   Dropdown,
-  Empty,
   Input,
   Modal,
   Row,
   Select,
-  Spin,
   Tag,
 } from 'antd'
 import type { MenuProps } from 'antd'
 import {
   EllipsisOutlined,
   PlusOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { usePermission } from '@/hooks/usePermission'
@@ -41,6 +40,137 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'var(--color-stone)',
 }
 
+// ── 骨架卡片 (Loading Skeleton) ──
+function SkeletonCard() {
+  return (
+    <div
+      className="skeleton-card"
+      style={{
+        background: 'var(--color-canvas)',
+        borderRadius: 10,
+        border: '1px solid var(--color-hairline)',
+        overflow: 'hidden',
+        opacity: 0.55,
+      }}
+    >
+      <div style={{ height: 3, background: 'var(--color-hairline)' }} />
+      <div style={{ padding: '14px 16px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+          <div style={{ width: 96, height: 18, borderRadius: 4, background: 'var(--color-hairline)' }} />
+          <div style={{ width: 48, height: 18, borderRadius: 9, background: 'var(--color-hairline)' }} />
+        </div>
+        <div style={{ width: '70%', height: 14, borderRadius: 4, background: 'var(--color-hairline)', marginBottom: 12 }} />
+        <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--color-hairline)', flexShrink: 0 }} />
+          <div style={{ flex: 1, height: 12, borderRadius: 4, background: 'var(--color-hairline)' }} />
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--color-hairline)', flexShrink: 0 }} />
+          <div style={{ flex: 1, height: 12, borderRadius: 4, background: 'var(--color-hairline)' }} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <div style={{ width: 60, height: 12, borderRadius: 4, background: 'var(--color-hairline)' }} />
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: 'var(--color-hairline)' }} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 统计概览条 ──
+function StatsBar({ orders, onStatusClick, activeStatus }: {
+  orders: PlanOrder[]
+  onStatusClick: (status: string | undefined) => void
+  activeStatus: string | undefined
+}) {
+  const counts: Record<string, number> = {}
+  for (const s of PLAN_ORDER_STATUS_SEQUENCE) counts[s] = 0
+  for (const o of orders) {
+    counts[o.status] = (counts[o.status] ?? 0) + 1
+  }
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 4,
+      padding: '6px 8px', marginBottom: 20,
+      background: 'var(--color-surface-soft)',
+      borderRadius: 10,
+      overflow: 'auto',
+    }}>
+      {/* "全部" pill */}
+      <button
+        onClick={() => onStatusClick(undefined)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '4px 12px', borderRadius: 8,
+          border: 'none', cursor: 'pointer',
+          fontSize: 12, fontWeight: activeStatus === undefined ? 600 : 400,
+          color: activeStatus === undefined ? 'var(--color-ink)' : 'var(--color-steel)',
+          background: activeStatus === undefined ? 'var(--color-canvas)' : 'transparent',
+          boxShadow: activeStatus === undefined ? '0 1px 3px rgba(0,0,0,0.06)' : undefined,
+          transition: 'all 0.15s ease',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        全部
+        <span style={{
+          fontSize: 11, fontWeight: 600,
+          color: 'var(--color-slate)',
+          background: 'var(--color-hairline)',
+          borderRadius: 9, padding: '0 6px', lineHeight: '16px',
+          minWidth: 18, textAlign: 'center',
+        }}>
+          {orders.length}
+        </span>
+      </button>
+
+      {PLAN_ORDER_STATUS_SEQUENCE.map(statusKey => {
+        const isActive = activeStatus === statusKey
+        // 隐藏：当前有筛选，计数为 0，且非当前选中状态
+        if (counts[statusKey] === 0 && activeStatus !== undefined && !isActive) return null
+        const theme = STATUS_THEME[statusKey] ?? STATUS_THEME.draft
+        const label = (STATUS_CONFIG[statusKey] ?? { label: statusKey }).label
+
+        return (
+          <button
+            key={statusKey}
+            onClick={() => onStatusClick(isActive ? undefined : statusKey)}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '4px 12px', borderRadius: 8,
+              border: 'none', cursor: 'pointer',
+              fontSize: 12, fontWeight: isActive ? 600 : 400,
+              color: isActive ? 'var(--color-ink)' : 'var(--color-steel)',
+              background: isActive ? 'var(--color-canvas)' : 'transparent',
+              boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.06)' : undefined,
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap',
+              opacity: counts[statusKey] === 0 ? 0.4 : 1,
+            }}
+          >
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              backgroundColor: theme.bar,
+              flexShrink: 0,
+            }} />
+            {label}
+            <span style={{
+              fontSize: 11, fontWeight: 600,
+              color: isActive ? theme.text : 'var(--color-slate)',
+              background: isActive ? theme.tint : 'var(--color-hairline)',
+              borderRadius: 9, padding: '0 6px', lineHeight: '16px',
+              minWidth: 18, textAlign: 'center',
+              transition: 'all 0.15s ease',
+            }}>
+              {counts[statusKey]}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function PlanOrderList() {
   const { hasPermission } = usePermission()
   const canSubmit = hasPermission('production:planning:submit')
@@ -48,6 +178,7 @@ export function PlanOrderList() {
   const [keyword, setKeyword] = useState('')
   const [searchKeyword, setSearchKeyword] = useState('')
   const [productFilter, setProductFilter] = useState<string | undefined>()
+  const [activeStatus, setActiveStatus] = useState<string | undefined>()
   const [createOpen, setCreateOpen] = useState(false)
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null)
   const [changeTargetOrderId, setChangeTargetOrderId] = useState<string | null>(null)
@@ -71,9 +202,11 @@ export function PlanOrderList() {
   }, [products])
 
   const filteredOrders = useMemo(() => {
-    if (!productFilter) return orders
-    return orders.filter((o) => o.product_id === productFilter)
-  }, [orders, productFilter])
+    let result = orders
+    if (productFilter) result = orders.filter((o) => o.product_id === productFilter)
+    if (activeStatus) result = result.filter((o) => o.status === activeStatus)
+    return result
+  }, [orders, productFilter, activeStatus])
 
   const handleDelete = (order: PlanOrder) => {
     modal.confirm({
@@ -168,19 +301,14 @@ export function PlanOrderList() {
     return items
   }
 
-  if (isLoading) {
-    return <div style={{ textAlign: 'center', padding: 64 }}><Spin /></div>
-  }
-
   return (
     <div>
       {/* ── 搜索栏 ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12 }}>
         <div style={{ display: 'flex', gap: 12, flex: 1 }}>
           <Input.Search
             placeholder="搜索计划单编号/标题"
             value={keyword}
-            // allowClear 的 X 只触发 onChange 不触发 onSearch，清空时必须同步重置筛选
             onChange={e => {
               setKeyword(e.target.value)
               if (!e.target.value) setSearchKeyword('')
@@ -209,9 +337,55 @@ export function PlanOrderList() {
         )}
       </div>
 
-      {filteredOrders.length === 0 ? (
-        <Empty description="暂无计划单" />
-      ) : (
+      {/* ── 统计概览 ── */}
+      {orders.length > 0 && (
+        <StatsBar orders={orders} onStatusClick={setActiveStatus} activeStatus={activeStatus} />
+      )}
+
+      {/* ── 加载态：骨架卡片网格 ── */}
+      {isLoading && (
+        <Row gutter={[16, 16]}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Col key={i} xs={24} sm={12} lg={8} xl={6}>
+              <SkeletonCard />
+            </Col>
+          ))}
+        </Row>
+      )}
+
+      {/* ── 空状态 ── */}
+      {!isLoading && filteredOrders.length === 0 && (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          padding: '64px 24px', textAlign: 'center',
+        }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 14,
+            background: 'var(--color-surface)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            marginBottom: 16,
+          }}>
+            <FileTextOutlined style={{ fontSize: 24, color: 'var(--color-stone)' }} />
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--color-charcoal)', marginBottom: 6 }}>
+            {activeStatus ? '该状态下暂无计划单' : '暂无计划单'}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--color-steel)', marginBottom: 20, maxWidth: 320 }}>
+            {activeStatus
+              ? '切换筛选条件或清除状态筛选查看全部'
+              : canSubmit
+                ? '创建第一份计划单，将生产需求转化为可执行的计划'
+                : '当前没有计划单，联系管理员获取创建权限'}
+          </div>
+          {!activeStatus && canSubmit && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
+              新建计划单
+            </Button>
+          )}
+        </div>
+      )}
+
+      {!isLoading && filteredOrders.length > 0 && (
         <div className="plan-order-groups">
           {PLAN_ORDER_STATUS_SEQUENCE.map(statusKey => {
             const group = filteredOrders.filter(o => o.status === statusKey)

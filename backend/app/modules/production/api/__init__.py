@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.modules.production.api.analytics import router as analytics_router
 from app.modules.production.api.assignment import router as assignment_router
 from app.modules.production.api.batch import router as batch_router
 from app.modules.production.api.execution import router as execution_router
@@ -13,6 +14,7 @@ from app.modules.production.api.route import router as route_router
 from app.modules.production.api.workbench import router as workbench_router
 
 router = APIRouter()
+router.include_router(analytics_router)
 router.include_router(assignment_router)
 router.include_router(product_router)
 router.include_router(route_router)

@@ -54,7 +54,7 @@ function BatchesPageInner() {
           selectedId={selectedProductId}
           onSelect={p => setParams({ product: p.id })}
         />
-        <div style={{ ...CARD_STYLE, flex: 1, padding: 16, minHeight: 560 }}>
+        <div style={{ ...CARD_STYLE, flex: 1, minWidth: 0, padding: 16, minHeight: 560 }}>
           {!selectedProductId ? (
             <div style={{ textAlign: 'center', padding: '80px 0' }}>
               <Empty

@@ -4,6 +4,17 @@
   to { opacity: 1; }
 }
 
+/* pulse — 骨架屏呼吸动画 */
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.8; }
+}
+
+/* skeleton-card 内部所有占位块自动应用 pulse 动画 */
+.skeleton-card div {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
 /* cardEnter — 泳道卡片入场：从左向右擦入，呼应时间推进 */
 @keyframes cardEnter {
   from {
@@ -14,6 +25,14 @@
     opacity: 1;
     clip-path: inset(0 0 0 0);
   }
+}
+
+/* matchPulse — 搜索命中脉冲：首次匹配时 glow 呼吸 2 次后静止，
+   动画结束后 box-shadow 回到 inline 静态高亮（无 fill 模式）。
+   顶部分隔条颜色由内联 CSS 变量 --card-status-color 传入。 */
+@keyframes matchPulse {
+  0%   { box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.32), 0 4px 12px rgba(99, 102, 241, 0.18), inset 0 3px 0 0 var(--card-status-color); }
+  100% { box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.20), 0 4px 12px rgba(99, 102, 241, 0.15), inset 0 3px 0 0 var(--card-status-color); }
 }
 
 /* 计划中枢 Tabs — 全链路 flex 撑满，确保 TabPane 内容区无缝吃满剩余高度 */

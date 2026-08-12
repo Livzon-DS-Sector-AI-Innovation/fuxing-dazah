@@ -87,6 +87,8 @@ class WorkbenchItem(BaseModel):
     missing_executions: list[MissingExecutionOut] = []
     started_at: str | None = None
     is_last_in_stage: bool = False  # 是否是工段内最后一个节点，完成即可提交批次
+    # pending_start 工序的开始类型：normal / parallel / rework
+    start_type: str | None = None
     # 工序面包屑：当前工段内所有工序及其完成状态
     stage_nodes: list[StageNodeInfo] = []
 

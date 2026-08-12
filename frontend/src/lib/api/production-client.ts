@@ -9,6 +9,7 @@ import type {
   Product,
   ProductionBatch,
   RouteGraph,
+  StepCycleResponse,
   TraceData,
 } from '@/types/production'
 import { apiGet, apiFetchPaginated } from '@/lib/http-client'
@@ -165,6 +166,20 @@ export async function fetchPlanOrdersClient(params: {
 
 export async function fetchPlanOrderClient(id: string): Promise<import('@/types/production').PlanOrderDetail> {
   return apiGet(`${API_BASE}/api/v1/production/plan-orders/${id}`)
+}
+
+// ── 分析 ──
+export async function fetchStepCycleClient(params: {
+  route_id?: string
+  product_id?: string
+  days?: number
+} = {}): Promise<StepCycleResponse> {
+  const s = qs({
+    route_id: params.route_id ?? null,
+    product_id: params.product_id ?? null,
+    days: params.days ?? 30,
+  })
+  return apiGet<StepCycleResponse>(`${API_BASE}/api/v1/production/analytics/step-cycle?${s}`)
 }
 
 // ── 身份人员（全公司员工，供人员选择组件使用）──

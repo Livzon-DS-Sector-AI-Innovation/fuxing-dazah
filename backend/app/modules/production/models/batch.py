@@ -1,8 +1,9 @@
 """批次实例层 ORM：批次 / 谱系。"""
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Index, Integer, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -48,6 +49,12 @@ class Batch(BaseModel):
     )
     plan_version: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="由计划生成时记录所依据的计划版本"
+    )
+    first_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="首工序开始时间"
+    )
+    last_finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="末工序结束时间"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
 

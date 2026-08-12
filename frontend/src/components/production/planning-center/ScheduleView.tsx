@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { DatePicker, Select, Spin, Button, Modal, Input, App } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PlanOrder, Product } from '@/types/production'
 import { fetchScheduleViewClient, fetchPlanOrdersClient, fetchProductsClient } from '@/lib/api/production-client'
@@ -24,6 +24,7 @@ export function ScheduleView() {
   })
   const [productId, setProductId] = useState<string | undefined>()
   const [planOrderId, setPlanOrderId] = useState<string | undefined>()
+  const [matchedItemIds, setMatchedItemIds] = useState<string[]>([])
 
   const { data: items, isLoading, refetch } = useQuery({
     queryKey: ['scheduleView', dateRange[0].toISOString(), dateRange[1].toISOString()],
@@ -132,6 +133,26 @@ export function ScheduleView() {
     }))
   }, [planOrders, productId])
 
+  // ── 计划项搜索：选项来自当前已加载的计划项，选中后泳道卡片高亮 ──
+  const planItemMap = useMemo(
+    () => new Map((items ?? []).map((i) => [i.item_id, i])),
+    [items],
+  )
+
+  const planItemOptions = useMemo(
+    () => (items ?? []).map((i) => ({
+      value: i.item_id,
+      label: `${i.order_no} · ${i.product_name}${i.batch_no ? ` · ${i.batch_no}` : ''}`,
+    })),
+    [items],
+  )
+
+  // 只保留当前可见的计划项，避免日期切换后已选项 tag 退化为裸 uuid
+  const effectiveMatchedIds = useMemo(
+    () => matchedItemIds.filter((id) => planItemMap.has(id)),
+    [matchedItemIds, planItemMap],
+  )
+
   const onRefresh = useCallback(() => { refetch(); queryClient.invalidateQueries({ queryKey: ['plan-orders'] }); queryClient.invalidateQueries({ queryKey: ['plan-order-detail'] }) }, [refetch, queryClient])
 
   // ── 选中产品的可见区间统计 ──
@@ -160,7 +181,7 @@ export function ScheduleView() {
 
   return (
     <div className="flex flex-col gap-4 h-full">
-      {/* Filter bar + 工具栏 */}
+      {/* Filter bar + 工具栏 — 左筛选 / 右搜索+操作 */}
       <div className="flex items-center gap-3 flex-wrap">
         <DatePicker.RangePicker
           value={dateRange}
@@ -177,7 +198,7 @@ export function ScheduleView() {
             (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
           }}
           size="small"
-          style={{ width: 220 }}
+          style={{ width: 200 }}
           value={productId}
           onChange={setProductId}
           options={productOptions}
@@ -190,22 +211,40 @@ export function ScheduleView() {
             (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
           }}
           size="small"
-          style={{ width: 220 }}
+          style={{ width: 200 }}
           value={planOrderId}
           onChange={setPlanOrderId}
           options={planOrderOptions}
         />
 
-        {selectedOrderEditable && canSubmit && (
-          <Button
-            type="primary"
+        <div className="ml-auto flex items-center gap-3">
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch={{ filterOption: (input, option) =>
+              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+            }}
+            placeholder="搜索计划项"
             size="small"
-            icon={<PlusOutlined />}
-            onClick={() => setAddModalOpen(true)}
-          >
-            新增计划项
-          </Button>
-        )}
+            style={{ width: 320 }}
+            prefix={<SearchOutlined />}
+            value={effectiveMatchedIds}
+            onChange={setMatchedItemIds}
+            options={planItemOptions}
+            maxTagCount="responsive"
+          />
+
+          {selectedOrderEditable && canSubmit && (
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={() => setAddModalOpen(true)}
+            >
+              新增计划项
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* 当月统计 — 仅在选中产品时显示 */}
@@ -243,6 +282,7 @@ export function ScheduleView() {
           productId={productId}
           onRefresh={onRefresh}
           dateRange={dateRange}
+          matchedItemIds={effectiveMatchedIds}
         />
       )}
       </div>

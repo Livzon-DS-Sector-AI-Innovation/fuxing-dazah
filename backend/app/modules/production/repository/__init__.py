@@ -1,5 +1,6 @@
 """生产模块数据读写。只负责查询与持久化，不做业务判断。"""
 
+from app.modules.production.repository.analytics import *  # noqa: F403
 from app.modules.production.repository.assignment import (  # noqa: F401
     create_node_assignment,
     create_stage_assignment,

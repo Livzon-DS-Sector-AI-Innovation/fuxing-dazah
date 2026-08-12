@@ -29,10 +29,13 @@ async def create_intermediate_type(
     payload: IntermediateTypeCreate,
     user: User | None,
 ) -> IntermediateTypeOut:
-    """创建中间体字典条目，检查 code 唯一。"""
+    """创建中间体字典条目，检查 code 与 name 唯一。"""
     existing = await repo.get_intermediate_type_by_code(db, payload.code)
     if existing:
         raise DuplicateException("中间体编码", payload.code)
+    existing_name = await repo.get_intermediate_type_by_name(db, payload.name)
+    if existing_name:
+        raise DuplicateException("中间体名称", payload.name)
     if payload.product_id:
         product = await repo.get_product(db, payload.product_id)
         if not product:
@@ -63,6 +66,11 @@ async def update_intermediate_type(
     obj = await repo.get_intermediate_type(db, type_id)
     if not obj:
         raise NotFoundException("中间体", str(type_id))
+    # 名称唯一性校验（排除自身）
+    if payload.name is not None and payload.name != obj.name:
+        existing_name = await repo.get_intermediate_type_by_name(db, payload.name)
+        if existing_name:
+            raise DuplicateException("中间体名称", payload.name)
     non_nullable_fields = {"name"}
     for field_name, val in payload.model_dump(exclude_unset=True).items():
         if val is None and field_name in non_nullable_fields:
@@ -87,10 +95,18 @@ async def update_intermediate_type(
 async def delete_intermediate_type(
     db: AsyncSession, type_id: uuid.UUID, user: User | None
 ) -> None:
-    """软删除中间体字典条目。不级联删除引用。"""
+    """软删除中间体字典条目。被未归档路线引用时拒绝删除。"""
     obj = await repo.get_intermediate_type(db, type_id)
     if not obj:
         raise NotFoundException("中间体", str(type_id))
+    # 检查未归档路线引用
+    ref_routes = await repo.get_non_archived_routes_by_intermediate_type(db, type_id)
+    if ref_routes:
+        names = "、".join(name for _, name in ref_routes)
+        raise AppException(
+            status_code=409,
+            message=f"该产出物被 {len(ref_routes)} 条未归档工艺路线引用（{names}），请先归档或移除引用后再删除",
+        )
     obj.is_deleted = True
     if user:
         obj.updated_by = user.id
@@ -100,8 +116,8 @@ async def delete_intermediate_type(
 async def get_intermediate_type_detail(
     db: AsyncSession, type_id: uuid.UUID
 ) -> IntermediateTypeOut:
-    """查询中间体详情（含 product_name）。"""
-    obj = await repo.get_intermediate_type(db, type_id)
+    """查询中间体详情（含已删除，用于查看历史流水）。"""
+    obj = await repo.get_intermediate_type(db, type_id, include_deleted=True)
     if not obj:
         raise NotFoundException("中间体", str(type_id))
     return await _build_material_out(db, obj)
@@ -130,9 +146,13 @@ async def list_intermediate_types_paged(
     keyword: str | None,
     page: int,
     page_size: int,
+    *,
+    include_deleted: bool = False,
 ) -> tuple[list[IntermediateTypeOut], int]:
-    items, total = await repo.list_intermediate_types(db, keyword, page, page_size)
-    # 批量查询关联产品名，避免 N+1
+    """分页查询中间体类型，批量补全 product_name。"""
+    items, total = await repo.list_intermediate_types(
+        db, keyword, page, page_size, include_deleted=include_deleted,
+    )
     product_ids = [i.product_id for i in items if i.product_id]
     product_name_map: dict[uuid.UUID, str] = {}
     if product_ids:
@@ -158,7 +178,7 @@ async def _build_output_outs(
     nodes = await repo.get_nodes_by_ids(db, node_ids)
     node_name_map = {n.id: n.name for n in nodes}
     type_ids = list({o.intermediate_type_id for o in outputs})
-    types = await repo.get_intermediate_types_by_ids(db, type_ids)
+    types = await repo.get_intermediate_types_by_ids(db, type_ids, include_deleted=True)
     type_name_map = {t.id: t.name for t in types}
     batch_ids = list({o.batch_id for o in outputs})
     batches = await repo.get_batches_by_ids(db, batch_ids)
@@ -213,7 +233,7 @@ async def get_batch_consumptions(
     nodes = await repo.get_nodes_by_ids(db, node_ids)
     node_name_map = {n.id: n.name for n in nodes}
     type_ids = list({c.intermediate_type_id for c in consumptions})
-    types = await repo.get_intermediate_types_by_ids(db, type_ids)
+    types = await repo.get_intermediate_types_by_ids(db, type_ids, include_deleted=True)
     type_name_map = {t.id: t.name for t in types}
     output_ids = list({c.output_id for c in consumptions})
     outputs_map = {o.id: o for o in await repo.get_intermediate_outputs_by_ids(db, output_ids)}
@@ -261,7 +281,7 @@ async def trace_intermediate_output(
         nodes = await repo.get_nodes_by_ids(db, node_ids)
         node_name_map = {n.id: n.name for n in nodes}
         type_ids = list({c.intermediate_type_id for c in consumptions})
-        types = await repo.get_intermediate_types_by_ids(db, type_ids)
+        types = await repo.get_intermediate_types_by_ids(db, type_ids, include_deleted=True)
         type_name_map = {t.id: t.name for t in types}
         batch_ids = list({c.batch_id for c in consumptions})
         batches = await repo.get_batches_by_ids(db, batch_ids)
@@ -293,8 +313,8 @@ async def trace_intermediate_output(
 async def get_material_movements(
     db: AsyncSession, material_id: uuid.UUID, batch_no: str | None = None
 ) -> MaterialMovementsOut:
-    """产出物维度的全局出入库流水 + 汇总，支持按产出批号筛选。"""
-    obj = await repo.get_intermediate_type(db, material_id)
+    """产出物维度的全局出入库流水 + 汇总，支持按产出批号筛选（含已删除）。"""
+    obj = await repo.get_intermediate_type(db, material_id, include_deleted=True)
     if not obj:
         raise NotFoundException("产出物", str(material_id))
 

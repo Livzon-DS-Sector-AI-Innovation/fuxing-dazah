@@ -1,5 +1,9 @@
 """生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace / intermediate / assignment。"""
 
+from app.modules.production.schemas.analytics import (
+    StepCycleResponse,
+    StepCycleStat,
+)
 from app.modules.production.schemas.assignment import (
     NodeAssigneeInfo,
     NodeAssignmentCreate,
@@ -89,6 +93,8 @@ from app.modules.production.schemas.trace import (
 )
 
 __all__ = [
+    "StepCycleResponse",
+    "StepCycleStat",
     "BatchCreate",
     "BatchDetailOut",
     "BatchOut",

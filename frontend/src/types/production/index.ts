@@ -1,3 +1,4 @@
+export * from './analytics'
 export * from './product'
 export * from './route'
 export * from './batch'

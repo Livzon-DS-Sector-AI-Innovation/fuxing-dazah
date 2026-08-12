@@ -335,6 +335,14 @@ function MaterialListItem({
           >
             {item.name}
           </span>
+          {item.is_deleted && (
+            <Tag
+              color="default"
+              style={{ fontSize: 10, lineHeight: '18px', padding: '0 6px', margin: 0, borderRadius: 4, opacity: 0.6 }}
+            >
+              已删除
+            </Tag>
+          )}
           {item.is_product && (
             <Tag
               color="green"
@@ -409,6 +417,9 @@ function DetailPanel({ material }: { material: IntermediateType }) {
             <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: T.ink }}>
               {material.name}
             </h3>
+            {material.is_deleted && (
+              <Tag color="default" style={{ borderRadius: 4 }}>已删除</Tag>
+            )}
             {material.is_product && (
               <Tag color="green" style={{ borderRadius: 4 }}>成品</Tag>
             )}

@@ -28,6 +28,24 @@ export function BoltIcon({ className }: IconProps) {
   )
 }
 
+export function GaugeIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m12 14 4-4" />
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+    </svg>
+  )
+}
+
+export function LockIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  )
+}
+
 export function ShieldIcon({ className }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -146,6 +164,8 @@ const iconMap: Record<string, React.ComponentType<IconProps>> = {
   factory: FactoryIcon,
   cog: CogIcon,
   bolt: BoltIcon,
+  gauge: GaugeIcon,
+  lock: LockIcon,
   shield: ShieldIcon,
   beaker: BeakerIcon,
   document: DocumentIcon,
