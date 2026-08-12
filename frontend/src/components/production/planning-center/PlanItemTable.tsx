@@ -556,7 +556,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       title: '批次号',
       dataIndex: 'batch_no',
       key: 'batch_no',
-      width: 150,
+      width: 120,
       render: (v: string, r: PlanItem) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--color-charcoal)' }}>
@@ -572,7 +572,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     {
       title: '计划时间',
       key: 'dates',
-      width: 130,
+      width: 100,
       render: (_, r: PlanItem) => (
         <span style={{ fontSize: 13, color: 'var(--color-charcoal)', whiteSpace: 'nowrap' }}>
           {formatDate(r.planned_start)} ~ {formatDate(r.planned_end)}
@@ -582,7 +582,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     {
       title: '数量',
       key: 'qty',
-      width: 90,
+      width: 60,
       render: (_, r: PlanItem) => (
         <span style={{ fontSize: 13, color: 'var(--color-charcoal)' }}>
           {r.planned_quantity != null ? `${r.planned_quantity}${r.unit ? ` ${r.unit}` : ''}` : '—'}

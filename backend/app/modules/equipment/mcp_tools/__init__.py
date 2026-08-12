@@ -1,6 +1,6 @@
 """Equipment 模块暴露给 AI Agent 的 MCP Tools。
 
-工具函数通过 @mcp.tool() 装饰器注册到全局 FastMCP 实例。
+工具函数通过 @mcp.tool() 装饰器注册到对应模块的 FastMCP 实例。
 按业务域拆分为 work_order / inspection 两个子模块。
 """
 

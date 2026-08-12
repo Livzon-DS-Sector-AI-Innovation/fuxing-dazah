@@ -46,7 +46,9 @@ from app.modules.equipment.service.inspection import (
 )
 from app.platform.identity.mcp_tools import resolve_user
 from app.platform.mcp.deps import get_db
-from app.platform.mcp.server import mcp
+from app.platform.mcp.server import get_module_mcp
+
+mcp = get_module_mcp("equipment")
 
 # ─────────────────────────────────────────────────────────────
 # Tool 4: 提交巡检表单

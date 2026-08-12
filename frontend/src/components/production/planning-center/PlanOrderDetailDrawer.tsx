@@ -617,7 +617,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
       title="计划单详情"
       open={!!orderId}
       onClose={handleDrawerClose}
-      maskClosable={false}
+      mask={{closable: false}}
       size="large"
       destroyOnHidden
       styles={{ body: { padding: 0 } }}
@@ -799,7 +799,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     {
                       title: '数量',
                       dataIndex: 'planned_quantity',
-                      width: 90,
+                      width: 60,
                       render: (v: number | null, record: PlanItem) => (
                         <InputNumber
                           size="small"

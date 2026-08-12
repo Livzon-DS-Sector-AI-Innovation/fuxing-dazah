@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.platform.identity.models import User
 from app.platform.identity.repository import UserRepository
 from app.platform.mcp.deps import get_db
-from app.platform.mcp.server import mcp
+from app.platform.mcp.server import get_module_mcp
+
+mcp = get_module_mcp("platform")
 
 # ─────────────────────────────────────────────────────────────
 # Shared helpers（供其他模块的 MCP tools 使用）
