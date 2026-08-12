@@ -145,7 +145,7 @@ export function InstrumentTable() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, keyword, columnFilters, dateFilters, message])
+  }, [page, pageSize, keyword, columnFilters, dateFilters])
 
   useEffect(() => { fetchData() }, [fetchData])
 

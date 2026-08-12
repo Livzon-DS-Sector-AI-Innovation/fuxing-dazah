@@ -47,7 +47,7 @@ export function DepartmentManagement() {
     } finally {
       setLoading(false)
     }
-  }, [source, message])
+  }, [source])
 
   useEffect(() => { fetchData() }, [fetchData])
 

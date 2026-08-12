@@ -81,7 +81,7 @@ export function CalibrationAlertPanel({ source }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [daysBefore, deptFilter, message, source])
+  }, [daysBefore, deptFilter, source])
 
   useEffect(() => { fetchAlerts() }, [fetchAlerts])
 
