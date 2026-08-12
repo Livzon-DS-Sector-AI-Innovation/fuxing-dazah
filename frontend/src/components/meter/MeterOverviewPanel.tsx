@@ -30,7 +30,7 @@ export function MeterOverviewPanel() {
     } finally {
       setLoading(false)
     }
-  }, [source, message])
+  }, [source])
 
   useEffect(() => { fetchData() }, [fetchData])
 
