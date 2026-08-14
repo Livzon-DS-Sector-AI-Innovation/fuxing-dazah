@@ -27,8 +27,8 @@ class EnergyDeviceConfigCreate(BaseModel):
     )
     monitor_level: MonitorLevel = Field(default="normal", description="监控等级")
     is_enabled: bool = Field(default=True, description="是否启用采集")
-    equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
-    equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
+    equipment_ids: list[str] = Field(default_factory=list, description="关联设备管理中的设备ID列表")
+    equipment_names: list[str] = Field(default_factory=list, description="关联设备名称列表")
     remark: str | None = Field(default=None, max_length=500, description="备注")
     is_region_level: bool = Field(default=False, description="是否区域级别（False=部门级别）")
     stat_role: Literal["normal", "excluded", "total"] = Field(
@@ -46,8 +46,8 @@ class EnergyDeviceConfigUpdate(BaseModel):
     production_line: str | None = Field(default=None, max_length=100)
     monitor_level: MonitorLevel | None = Field(default=None)
     is_enabled: bool | None = Field(default=None)
-    equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
-    equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
+    equipment_ids: list[str] | None = Field(default=None, description="关联设备管理中的设备ID列表")
+    equipment_names: list[str] | None = Field(default=None, description="关联设备名称列表")
     remark: str | None = Field(default=None, max_length=500)
     is_region_level: bool | None = Field(default=None, description="是否区域级别")
     stat_role: Literal["normal", "excluded", "total"] | None = Field(
@@ -67,8 +67,8 @@ class EnergyDeviceConfigResponse(BaseModel):
     monitor_level: str
     unit: str
     is_enabled: bool
-    equipment_id: str | None
-    equipment_name: str | None
+    equipment_ids: list[str]
+    equipment_names: list[str]
     remark: str | None
     is_region_level: bool
     stat_role: str

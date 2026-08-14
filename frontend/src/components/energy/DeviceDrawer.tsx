@@ -24,7 +24,11 @@ import {
   updateEnergyDevice,
   getEnergyDeviceById,
 } from '@/actions/energy'
-import { fetchPlatformsClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
+import {
+  fetchPlatformsClient,
+  fetchEnabledTypeConfigsClient,
+  fetchEquipmentOptionsClient,
+} from '@/lib/api/energy'
 
 const { TextArea } = Input
 
@@ -146,13 +150,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     equipmentSearchTimer.current = setTimeout(async () => {
       setEquipmentLoading(true)
       try {
-        const params = new URLSearchParams({ keyword, page_size: '20' })
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/equipment/equipments?${params}`
-        )
-        const json = await res.json()
-        const items = json.data?.items ?? json.data ?? []
-        const opts = items.map((item: any) => {
+        const items = await fetchEquipmentOptionsClient({ keyword })
+        const opts = items.map((item) => {
           const label = `${item.name} (${item.equipment_no})`
           equipmentNameMap.current.set(item.id, item.name)
           return { label, value: item.id }
@@ -166,31 +165,64 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     }, 300)
   }
 
-  const handleEquipmentChange = (value: string | undefined) => {
-    if (value) {
-      form.setFieldsValue({ equipment_name: equipmentNameMap.current.get(value) || '' })
-    } else {
-      form.setFieldsValue({ equipment_id: null, equipment_name: null })
+  const handleEquipmentChange = (values: string[]) => {
+    const names = values.map((id) => equipmentNameMap.current.get(id) || '')
+    form.setFieldsValue({ equipment_names: names })
+  }
+
+  // 首次展开下拉时预加载首批设备，避免搜索式下拉初始为空
+  const loadInitialEquipmentOptions = async () => {
+    setEquipmentLoading(true)
+    try {
+      const items = await fetchEquipmentOptionsClient({})
+      const opts = items.map((item) => {
+        const label = `${item.name} (${item.equipment_no})`
+        equipmentNameMap.current.set(item.id, item.name)
+        return { label, value: item.id }
+      })
+      setEquipmentOptions(opts)
+    } catch {
+      setEquipmentOptions([])
+    } finally {
+      setEquipmentLoading(false)
     }
   }
 
-  // 打开抽屉时预加载设备列表（用于编辑时显示已选设备名称）
-  const loadEquipmentOption = async (equipmentId: string) => {
+  const handleEquipmentDropdownOpen = (open: boolean) => {
+    if (!open) return
+    loadInitialEquipmentOptions()
+  }
+
+  // 打开抽屉时预加载已选设备（编辑模式批量回显）
+  const loadEquipmentOptions = async (equipmentIds: string[], fallbackNames?: string[]) => {
+    if (!equipmentIds.length) return
     try {
-      const params = new URLSearchParams({ page_size: '1' })
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/equipment/equipments?${params}`
-      )
-      const json = await res.json()
-      const items = json.data?.items ?? json.data ?? []
-      // 如果已选的设备不在第一页，尝试直接通过 ID 构建选项（从已有 equipment_name 展示）
-      const found = items.find((item: any) => item.id === equipmentId)
-      if (found) {
-        equipmentNameMap.current.set(found.id, found.name)
-        setEquipmentOptions([{ label: `${found.name} (${found.equipment_no})`, value: found.id }])
-      }
+      const items = await fetchEquipmentOptionsClient({ ids: equipmentIds.join(',') })
+      const opts = items.map((item) => {
+        const label = `${item.name} (${item.equipment_no})`
+        equipmentNameMap.current.set(item.id, item.name)
+        return { label, value: item.id }
+      })
+      // 后端按 id 过滤，已删除/不存在的 id 不会返回，用快照名称兜底
+      const foundIds = new Set(items.map((i) => i.id))
+      equipmentIds.forEach((id, idx) => {
+        if (!foundIds.has(id)) {
+          equipmentNameMap.current.set(id, fallbackNames?.[idx] || '')
+          opts.push({ label: fallbackNames?.[idx] || id, value: id })
+        }
+      })
+      setEquipmentOptions(opts)
     } catch {
-      // 忽略加载失败
+      // 忽略加载失败，退回快照名称展示
+      equipmentIds.forEach((id, idx) => {
+        equipmentNameMap.current.set(id, fallbackNames?.[idx] || '')
+      })
+      setEquipmentOptions(
+        equipmentIds.map((id, idx) => ({
+          label: fallbackNames?.[idx] || id,
+          value: id,
+        }))
+      )
     }
   }
 
@@ -216,8 +248,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
       const device = await getEnergyDeviceById(id)
       form.setFieldsValue({ ...device })
       // 编辑时，如果有已关联设备，预加载下拉选项
-      if (device.equipment_id) {
-        loadEquipmentOption(device.equipment_id)
+      if (device.equipment_ids?.length) {
+        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
       }
     } catch {
       message.error('获取数据源信息失败')
@@ -391,7 +423,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
             <SectionLabel icon={<EnvironmentOutlined />} text="数据源信息" />
 
             <Form.Item
-              name="equipment_id"
+              name="equipment_ids"
               label={
                 <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
                   关联设备
@@ -400,20 +432,22 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               style={{ marginBottom: 16 }}
             >
               <Select
+                mode="multiple"
                 placeholder="搜索并选择设备台账中的设备"
                 showSearch
                 allowClear
                 filterOption={false}
                 onSearch={handleEquipmentSearch}
+                onOpenChange={handleEquipmentDropdownOpen}
                 options={equipmentOptions}
                 loading={equipmentLoading}
                 onChange={handleEquipmentChange}
-                style={{ height: 44 }}
+                style={{ minHeight: 44 }}
               />
             </Form.Item>
 
-            {/* 隐藏的 equipment_name 字段 */}
-            <Form.Item name="equipment_name" hidden>
+            {/* 隐藏的 equipment_names 字段 */}
+            <Form.Item name="equipment_names" hidden>
               <Input />
             </Form.Item>
 

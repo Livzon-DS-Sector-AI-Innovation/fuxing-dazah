@@ -40,6 +40,7 @@ from app.modules.energy.schemas import (
     EnergyWorkshopConfigCreate,
     EnergyWorkshopConfigUpdate,
 )
+from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,43 @@ async def trigger_collection(
 
 async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
     return await repo.list_departments(db)
+
+
+async def list_equipment_options(
+    db: AsyncSession,
+    user: User,
+    *,
+    keyword: str | None = None,
+    page_size: int = 20,
+) -> list[dict[str, str]]:
+    """查询设备台账候选列表，供数据源「关联设备」下拉搜索使用。
+
+    通过设备模块 public_api 按当前用户数据范围查询（超管看全部、普通用户按部门），
+    不跨模块直接查询设备表。
+    """
+    from app.modules.equipment.public_api import list_equipments_for_user
+
+    equipments, _ = await list_equipments_for_user(
+        db, user, keyword=keyword, page=1, page_size=page_size,
+    )
+    return [
+        {"id": str(e.id), "equipment_no": e.equipment_no, "name": e.name}
+        for e in equipments
+    ]
+
+
+async def get_equipment_options_by_ids(
+    db: AsyncSession,
+    ids: list[UUID],
+) -> list[dict[str, str]]:
+    """按 ID 批量获取设备台账摘要，供编辑数据源时回显已关联设备。"""
+    from app.modules.equipment.public_api import get_equipment_briefs
+
+    briefs = await get_equipment_briefs(db, ids)
+    return [
+        {"id": str(b.id), "equipment_no": b.equipment_no, "name": b.name}
+        for b in briefs
+    ]
 
 
 async def list_energy_data(

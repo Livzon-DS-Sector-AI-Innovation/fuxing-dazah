@@ -108,6 +108,26 @@ async def list_departments(
     return success_response(data)
 
 
+@router.get("/equipment-options", summary="获取关联设备候选列表（来自设备台账）")
+async def list_equipment_options(
+    keyword: str | None = Query(default=None, description="设备名称/编号关键词"),
+    ids: str | None = Query(default=None, description="设备ID列表（逗号分隔），用于编辑回显"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:device:read")),
+) -> JSONResponse:
+    """查询设备台账候选设备，供数据源「关联设备」下拉使用。
+
+    传入 ids 时按 ID 批量回显；否则按 keyword 搜索。
+    数据范围沿用设备台账（equipment:asset）权限配置。
+    """
+    if ids:
+        id_list = [UUID(i) for i in ids.split(",") if i.strip()]
+        options = await service.get_equipment_options_by_ids(db, id_list)
+    else:
+        options = await service.list_equipment_options(db, user, keyword=keyword)
+    return success_response(options)
+
+
 # ── 设备配置 ──
 
 

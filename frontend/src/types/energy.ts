@@ -17,8 +17,8 @@ export interface EnergyDeviceConfig {
   monitor_level: MonitorLevel
   unit: string
   is_enabled: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level: boolean
   stat_role: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -38,8 +38,8 @@ export interface CreateDeviceInput {
   monitor_level: MonitorLevel
   unit: string
   is_enabled?: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level?: boolean
   stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -55,8 +55,8 @@ export interface UpdateDeviceInput {
   monitor_level?: MonitorLevel
   unit?: string
   is_enabled?: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level?: boolean
   stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
@@ -71,6 +71,13 @@ export interface DeviceQueryParams {
   is_enabled?: boolean
   page?: number
   page_size?: number
+}
+
+// 关联设备下拉选项（来自设备台账）
+export interface EquipmentOption {
+  id: string
+  equipment_no: string
+  name: string
 }
 
 // 能耗数据

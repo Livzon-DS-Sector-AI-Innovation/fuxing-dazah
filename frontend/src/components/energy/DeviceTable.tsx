@@ -258,13 +258,13 @@ export function DeviceTable({
     },
     {
       title: '关联设备',
-      dataIndex: 'equipment_name',
-      key: 'equipment_name',
+      dataIndex: 'equipment_names',
+      key: 'equipment_names',
       width: 140,
       ellipsis: true,
-      render: (name: string | null | undefined) => (
-        name ? (
-          <span style={{ color: '#37352f' }}>{name}</span>
+      render: (names: string[] | null | undefined) => (
+        names && names.length ? (
+          <span style={{ color: '#37352f' }}>{names.join('、')}</span>
         ) : (
           <span style={{ color: '#c8c4be' }}>—</span>
         )
