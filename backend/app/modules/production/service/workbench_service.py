@@ -65,10 +65,11 @@ def _build_stage_nodes(
         return []
     result: list[StageNodeInfo] = []
     for n in stage_nodes:
-        if n.id in completed:
-            status = "completed"
-        elif n.id in in_progress:
+        # in_progress 优先：返工时节点同时存在 completed（旧执行）和 in_progress（新执行）
+        if n.id in in_progress:
             status = "in_progress"
+        elif n.id in completed:
+            status = "completed"
         else:
             status = "pending"
         result.append(StageNodeInfo(
@@ -364,6 +365,107 @@ async def _missing_executions_by_batches(
     return result
 
 
+def _classify_pending_starts(
+    batches: list,
+    permitted_node_ids: set[uuid.UUID],
+    node_map: dict[uuid.UUID, RouteNode],
+    edges_by_to: dict[uuid.UUID, list],
+    rework_sources: dict[uuid.UUID, set[uuid.UUID]],
+    normal_outgoing: dict[uuid.UUID, set[uuid.UUID]],
+    batch_completed: dict[uuid.UUID, set[uuid.UUID]],
+    batch_in_progress: dict[uuid.UUID, set[uuid.UUID]],
+    batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]],
+) -> list[tuple]:
+    """对每个批次的每个已授权节点分类 start_type，返回 [(batch, node, start_type), ...]。
+
+    未通过的节点不会被包含在结果中。
+    """
+    results: list[tuple] = []
+    for b in batches:
+        completed = batch_completed.get(b.id, set())
+        in_progress = batch_in_progress.get(b.id, set())
+        for node_id in permitted_node_ids:
+            node = node_map.get(node_id)
+            if not node:
+                continue
+            # 进行中的节点已有 pending_complete 卡片，跳过
+            if node_id in in_progress:
+                continue
+
+            start_type: str | None = None
+
+            if node_id in completed:
+                # 已完成节点：先检查是否前驱刚被返工→应向前流转
+                incoming = edges_by_to.get(node_id, [])
+                node_done_at = batch_node_done_at.get(b.id, {}).get(node_id)
+                forward_legal = False
+                for e in incoming:
+                    if (
+                        e.edge_type == "normal"
+                        and not e.is_batch_boundary
+                        and e.from_node_id in completed
+                        and e.from_node_id not in in_progress
+                    ):
+                        pred_done_at = batch_node_done_at.get(b.id, {}).get(e.from_node_id)
+                        if pred_done_at and node_done_at and pred_done_at > node_done_at:
+                            start_type = "normal"
+                            forward_legal = True
+                            break
+                if not forward_legal:
+                    # 检查返工路径
+                    rework_from = rework_sources.get(node_id, set())
+                    if not rework_from:
+                        continue
+                    if not (rework_from & completed):
+                        continue
+                    window_open = False
+                    for rf in rework_from & completed:
+                        rf_normals = normal_outgoing.get(rf, set())
+                        if rf_normals & in_progress:
+                            continue
+                        rf_done_at = batch_node_done_at.get(b.id, {}).get(rf)
+                        if rf_done_at and (not node_done_at or rf_done_at > node_done_at):
+                            window_open = True
+                            break
+                    if not window_open:
+                        continue
+                    start_type = "rework"
+            else:
+                # 未开始节点：检查入边
+                incoming = edges_by_to.get(node_id, [])
+                if b.entry_node_id and node_id == b.entry_node_id:
+                    start_type = "normal"
+                elif incoming:
+                    legal = False
+                    for e in incoming:
+                        if (
+                            e.edge_type == "normal"
+                            and e.from_node_id in completed
+                            and not e.is_batch_boundary
+                        ):
+                            legal = True
+                            start_type = "normal"
+                            break
+                        if (
+                            e.allow_overlap
+                            and e.edge_type == "normal"
+                            and not e.is_batch_boundary
+                            and e.from_node_id in in_progress
+                        ):
+                            legal = True
+                            start_type = "parallel"
+                            break
+                    if not legal:
+                        continue
+                else:
+                    if b.entry_node_id and node_id != b.entry_node_id:
+                        continue
+                    start_type = "normal"
+
+            results.append((b, node, start_type))
+    return results
+
+
 async def query_workbench(
     db: AsyncSession, user_id: uuid.UUID,
 ) -> WorkbenchOut:
@@ -456,10 +558,15 @@ async def query_workbench(
     ]
     batch_completed: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
     batch_in_progress: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    # 每个批次-节点的最新完成时间（返工判断关键：比较前后节点完成时间确定流转方向）
+    batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]] = defaultdict(dict)
     if all_batch_ids_for_status:
         for row in (
             await db.execute(
-                select(NodeExecution.batch_id, NodeExecution.node_id, NodeExecution.status).where(
+                select(
+                    NodeExecution.batch_id, NodeExecution.node_id,
+                    NodeExecution.status, NodeExecution.finished_at,
+                ).where(
                     NodeExecution.batch_id.in_(all_batch_ids_for_status),
                     NodeExecution.status.in_(["completed", "in_progress"]),
                     NodeExecution.is_deleted == False,  # noqa: E712
@@ -468,6 +575,10 @@ async def query_workbench(
         ).all():
             if row.status == "completed":
                 batch_completed[row.batch_id].add(row.node_id)
+                if row.finished_at:
+                    cur = batch_node_done_at[row.batch_id].get(row.node_id)
+                    if cur is None or row.finished_at > cur:
+                        batch_node_done_at[row.batch_id][row.node_id] = row.finished_at
             else:
                 batch_in_progress[row.batch_id].add(row.node_id)
 
@@ -537,58 +648,38 @@ async def query_workbench(
 
         # 边索引
         edges_by_to: dict[uuid.UUID, list] = defaultdict(list)
+        rework_sources: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)  # node -> rework from_node set
+        normal_outgoing: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
         for e in edges:
             edges_by_to[e.to_node_id].append(e)
+            if e.edge_type == "rework":
+                rework_sources[e.to_node_id].add(e.from_node_id)
+            elif e.edge_type == "normal":
+                normal_outgoing[e.from_node_id].add(e.to_node_id)
 
         # ── pending_start ──
-        for b in batches:
+        for b, node, start_type in _classify_pending_starts(
+            batches, permitted_node_ids, node_map,
+            edges_by_to, rework_sources, normal_outgoing,
+            batch_completed, batch_in_progress, batch_node_done_at,
+        ):
             completed = batch_completed.get(b.id, set())
             in_progress = batch_in_progress.get(b.id, set())
-            for node_id in permitted_node_ids:
-                node = node_map.get(node_id)
-                if not node:
-                    continue
-                if node_id in completed or node_id in in_progress:
-                    continue
-                # 衍生批次的 entry_node 无需前序条件 — 它从父批次继承了状态
-                if b.entry_node_id and node_id == b.entry_node_id:
-                    legal = True
-                else:
-                    incoming = edges_by_to.get(node_id, [])
-                    if incoming:
-                        legal = False
-                        for e in incoming:
-                            if e.from_node_id in completed and not e.is_batch_boundary:
-                                legal = True
-                                break
-                            if (
-                                e.allow_overlap
-                                and not e.is_batch_boundary
-                                and e.from_node_id in in_progress
-                            ):
-                                legal = True
-                                break
-                        if not legal:
-                            continue
-                    else:
-                        # 无入边 = 起点；非 entry 批次只允许 entry_node
-                        if b.entry_node_id and node_id != b.entry_node_id:
-                            continue
-
-                items.append(WorkbenchItem(
-                    type="pending_start",
-                    batch_id=b.id,
-                    batch_no=b.batch_no,
-                    product_name=product_name,
-                    route_id=route_id,
-                    route_name=route.route_name,
-                    node_id=node_id,
-                    node_name=node.name,
-                    stage_name=node.stage_name,
-                    predecessor_batches=[],
-                    node_assignees=[],
-                    stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
-                ))
+            items.append(WorkbenchItem(
+                type="pending_start",
+                batch_id=b.id,
+                batch_no=b.batch_no,
+                product_name=product_name,
+                route_id=route_id,
+                route_name=route.route_name,
+                node_id=node.id,
+                node_name=node.name,
+                stage_name=node.stage_name,
+                start_type=start_type,
+                predecessor_batches=[],
+                node_assignees=[],
+                stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
+            ))
 
         # ── pending_receive ──
         route_completed = completed_by_route.get(route_id, [])
@@ -716,9 +807,9 @@ async def query_workbench(
             comp = batch_completed.get(b.id, set())
             ip = batch_in_progress.get(b.id, set())
             for stage_name in stage_names_in_permitted:
+                # 使用路线全部节点（非仅授权节点），否则用户无权限的节点未完成时仍会误判工段完成
                 stage_node_ids = {
-                    nid for nid in permitted_node_ids
-                    if nid in node_map and node_map[nid].stage_name == stage_name
+                    n.id for n in nodes_by_stage.get(stage_name, [])
                 }
                 if not stage_node_ids:
                     continue
@@ -727,6 +818,19 @@ async def query_workbench(
                     continue
                 has_in_progress = any(nid in ip for nid in stage_node_ids)
                 if has_in_progress:
+                    continue
+                # 返工检测：工段末节点必须是最新完成的，否则说明有前驱被返工，工段未真正完成
+                stage_nodes_sorted = nodes_by_stage.get(stage_name, [])
+                if stage_nodes_sorted:
+                    last_in_stage = stage_nodes_sorted[-1]
+                    last_done_at = batch_node_done_at.get(b.id, {}).get(last_in_stage.id)
+                    if last_done_at:
+                        for nid in stage_node_ids:
+                            nid_done_at = batch_node_done_at.get(b.id, {}).get(nid)
+                            if nid_done_at and nid_done_at > last_done_at:
+                                all_stage_done = False
+                                break
+                if not all_stage_done:
                     continue
                 # 检查此工段是否有批次边界出边，或者是路线终点
                 has_boundary_out = any(

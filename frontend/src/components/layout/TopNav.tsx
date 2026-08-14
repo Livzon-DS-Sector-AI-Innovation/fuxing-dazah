@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useLayoutEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Dropdown, Avatar } from "antd"
@@ -21,6 +21,8 @@ export function TopNav() {
   const [user, setUser] = useState<User | null>(null)
   const { hasPermission, isLoaded } = usePermission()
   const { collapsed, toggle: toggleSidebar } = useSidebarStore()
+  const navRef = useRef<HTMLElement>(null)
+  const [indicator, setIndicator] = useState({ left: 0, width: 0 })
 
   const [impersonation, setImpersonation] = useState<ImpersonationStatus | null>(null)
 
@@ -36,6 +38,15 @@ export function TopNav() {
 
   const avatarSrc = user?.avatar_url || undefined
   const displayName = user?.name || "API"
+
+  // 指示条跟随激活 tab 滑动
+  useLayoutEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    const link = nav.querySelector<HTMLAnchorElement>(`[data-module="${activeModule}"]`)
+    if (!link) return
+    setIndicator({ left: link.offsetLeft + 12, width: link.offsetWidth - 24 })
+  }, [activeModule, isLoaded])
 
   const visibleMenus = isLoaded
     ? moduleMenus.filter((mod) => {
@@ -61,15 +72,16 @@ export function TopNav() {
       </div>
 
       {/* Module Tabs */}
-      <nav className="flex items-center gap-0.5 flex-1 overflow-x-auto scrollbar-hide h-full">
+      <nav ref={navRef} className="relative flex items-center gap-0.5 flex-1 overflow-x-auto scrollbar-hide h-full">
         {visibleMenus.map((mod) => {
           const isActive = activeModule === mod.key
           return (
             <Link
               key={mod.key}
               href={mod.path}
+              data-module={mod.key}
               className={`
-                flex items-center gap-1.5 px-3 h-full text-[14px] font-medium transition-colors whitespace-nowrap relative
+                flex items-center gap-1.5 px-3 h-full text-[14px] font-medium transition-colors whitespace-nowrap
                 ${isActive
                   ? "text-[var(--color-primary)]"
                   : "text-[var(--color-steel)] hover:text-[var(--color-primary)]"
@@ -78,12 +90,13 @@ export function TopNav() {
             >
               <ModuleIcon name={mod.icon} className="w-4 h-4" />
               {mod.label}
-              {isActive && (
-                <span className="absolute bottom-0 left-3 right-3 h-[2px] bg-[var(--color-primary)] rounded-full" />
-              )}
             </Link>
           )
         })}
+        <span
+          className="absolute bottom-0 left-0 h-[2px] bg-[var(--color-primary)] rounded-full pointer-events-none transition-[transform,width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+          style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
+        />
       </nav>
 
       {/* Right Section */}

@@ -32,6 +32,8 @@ class BatchOut(BaseModel):
     remark: str | None
     creation_type: str = "direct"
     plan_version: int | None = None
+    first_started_at: datetime | None = None
+    last_finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

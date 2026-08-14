@@ -12,6 +12,7 @@ import { fetchEquipmentsClient } from '@/lib/api/equipment-client'
 import { UserSelect } from '@/components/shared'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
 import { fetchAvailableOutputs } from '@/actions/production'
+import type { IdentityPersonnel } from '@/lib/api/identity'
 
 interface Props {
   batchId: string
@@ -141,10 +142,15 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     setSubmitting(true)
     try {
     const ownerId: string | undefined = values.owner_id
+    let ownerName: string | null = null
+    if (ownerId) {
+      const cache = queryClient.getQueryData<{ items: IdentityPersonnel[] }>(['identity-personnel'])
+      ownerName = cache?.items?.find((p) => p.id === ownerId)?.name ?? null
+    }
     const result = await startExecution(batchId, {
       node_id: values.node_id,
       owner_id: ownerId ?? null,
-      owner_name: null,
+      owner_name: ownerName,
       equipment_ids: (values.equipment_ids as string[]) ?? [],
       field_values: buildFieldValues(startDefs, values),
       deviation_reason: needsDeviation ? (values.deviation_reason as string) : null,

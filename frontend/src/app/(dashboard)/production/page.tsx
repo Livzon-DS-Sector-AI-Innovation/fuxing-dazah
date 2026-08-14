@@ -15,7 +15,10 @@ import {
 } from '@ant-design/icons'
 import { getBatches } from '@/actions/production'
 import { BatchStatus } from '@/types/production'
+import type { Product } from '@/types/production'
+import { fetchProductsClient } from '@/lib/api/production-client'
 import Counter from '@/components/Counter'
+import { StepCyclePanel } from '@/components/production'
 
 const { Title, Text } = Typography
 
@@ -157,15 +160,19 @@ export default function ProductionDashboard() {
     draftBatches: 0,
   })
   const [recentBatches, setRecentBatches] = useState<BatchRecord[]>([])
+  const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
 
   // 页面加载时获取数据
   useEffect(() => {
     const load = async () => {
       try {
-        const response = await getBatches({ page_size: 100 })
-        if (response.code === 200) {
-          const batches = response.data || []
+        const [batchRes, prods] = await Promise.all([
+          getBatches({ page_size: 100 }),
+          fetchProductsClient(),
+        ])
+        if (batchRes.code === 200) {
+          const batches = batchRes.data || []
           setStats({
             totalBatches: batches.length,
             inProgressBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.IN_PROGRESS).length,
@@ -174,6 +181,7 @@ export default function ProductionDashboard() {
           })
           setRecentBatches(batches.slice(0, 5))
         }
+        setProducts(prods)
       } catch (error) {
         console.error('Failed to load dashboard data:', error)
       } finally {
@@ -386,6 +394,9 @@ export default function ProductionDashboard() {
               </Card>
             </Col>
           </Row>
+
+          {/* ── 工序周期分析 ── */}
+          <StepCyclePanel products={products} />
         </>
       )}
     </div>

@@ -10,6 +10,7 @@ export interface IntermediateType {
   is_product: boolean
   product_id: string | null
   product_name: string | null
+  is_deleted: boolean
   created_at: string
   updated_at: string
 }

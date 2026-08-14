@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import type { CSSProperties } from 'react'
 import { DatePicker, Input, Button, App } from 'antd'
 import type { ScheduleViewItem, StageConfigItem } from '@/types/production'
 import { schedulePlanItem, updatePlanItem, deletePlanItem } from '@/actions/production'
@@ -12,6 +13,47 @@ interface Props {
   productId?: string
   onRefresh: () => void
   dateRange?: [dayjs.Dayjs, dayjs.Dayjs]
+  /** 搜索选中的计划项 id，对应卡片高亮、其余淡化 */
+  matchedItemIds?: string[]
+}
+
+// 搜索命中关键词高亮：把 text 中匹配 keywords 的子串包成黄底 mark
+function HighlightMatch({ text, keywords }: { text: string; keywords: string[] }) {
+  const parts = useMemo(() => {
+    if (!text || keywords.length === 0) return [{ t: text, hit: false }]
+    const escaped = keywords.filter(Boolean).map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    if (escaped.length === 0) return [{ t: text, hit: false }]
+    const regex = new RegExp(`(${escaped.join('|')})`, 'gi')
+    const out: { t: string; hit: boolean }[] = []
+    let last = 0
+    for (const m of text.matchAll(regex)) {
+      if (m.index > last) out.push({ t: text.slice(last, m.index), hit: false })
+      out.push({ t: m[0], hit: true })
+      last = m.index + m[0].length
+    }
+    if (last < text.length) out.push({ t: text.slice(last), hit: false })
+    return out
+  }, [text, keywords])
+
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.hit
+          ? (
+            <mark
+              key={i}
+              style={{
+                background: '#FEF08A', color: '#854D0E',
+                borderRadius: 3, padding: '0 2px',
+              }}
+            >
+              {p.t}
+            </mark>
+          )
+          : <span key={i}>{p.t}</span>
+      )}
+    </>
+  )
 }
 
 interface LaneItem extends ScheduleViewItem {
@@ -81,7 +123,7 @@ const LANE_GAP = 8
 const HEADER_HEIGHT = 72
 const DAY_WIDTH_PX = 36
 
-export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh, dateRange }: Props) {
+export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh, dateRange, matchedItemIds }: Props) {
   const { message, modal } = App.useApp()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [editingValues, setEditingValues] = useState<{
@@ -92,6 +134,24 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
   }>({})
   const [saving, setSaving] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // 搜索选中项集合（未选中时为空 Set，全部卡片正常显示）
+  const matchedSet = useMemo(() => new Set(matchedItemIds ?? []), [matchedItemIds])
+
+  // 计划项 id→对象 Map，避免 matchedKeywords 中 O(M*N) 的 .find()
+  const itemMap = useMemo(() => new Map(items.map((i) => [i.item_id, i])), [items])
+
+  // 命中的关键词（选中计划项的批号 + 产品名），供卡片内文本标黄使用
+  const matchedKeywords = useMemo(() => {
+    const kws = new Set<string>()
+    for (const id of matchedSet) {
+      const it = itemMap.get(id)
+      if (!it) continue
+      if (it.batch_no) kws.add(it.batch_no)
+      if (it.product_name) kws.add(it.product_name)
+    }
+    return [...kws]
+  }, [matchedSet, itemMap])
 
   // 时间轴范围：以选择的日期范围为基准，若排程项超出则自动扩展
   const { timelineStart, timelineEnd, totalDays } = useMemo(() => {
@@ -418,6 +478,16 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
               />
             ))}
 
+            {/* 搜索聚焦 — 背景网格极淡置灰，让未匹配内容自然退后（卡片层之上不受影响） */}
+            {matchedSet.size > 0 && (
+              <div style={{
+                position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
+                background: 'rgba(255, 255, 255, 0.45)',
+                pointerEvents: 'none',
+                transition: 'opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              }} />
+            )}
+
             {/* 卡片 */}
             {laneItems.map((item) => {
               const card = getCardStyle(item.planned_start, item.planned_end)
@@ -425,18 +495,30 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
               const isExpanded = expandedId === item.item_id
               const isReadonly = READONLY_ORDER_STATUSES.has(item.order_status)
               const statusColor = STATUS_COLORS[item.item_status] ?? '#a4a097'
+              const isMatched = matchedSet.has(item.item_id)
+              const isDimmed = matchedSet.size > 0 && !isMatched && !isExpanded
+              const insetBar = `inset 0 3px 0 0 ${statusColor}`
+              const hoverShadow = `0 4px 12px rgba(0,0,0,0.08), ${insetBar}`
+              const restShadow = `0 1px 3px rgba(0,0,0,0.04), ${insetBar}`
+              const expandedShadow = `0 8px 32px ${hexToRgba(statusColor, 0.18)}, ${insetBar}`
+              // 靛蓝聚焦：品牌色边框 + 柔和扩散光晕
+              const matchedShadow = `0 0 0 3px rgba(99, 102, 241, 0.2), 0 4px 12px rgba(99, 102, 241, 0.15), ${insetBar}`
+              // 供 matchPulse 动画读取顶部分隔条颜色
+              const cardVars = { '--card-status-color': statusColor } as CSSProperties
 
               return (
                 <div
                   key={item.item_id}
                   data-card-id={item.item_id}
                   style={{
+                    ...cardVars,
                     position: 'absolute',
                     top: item.laneIndex * (LANE_HEIGHT + LANE_GAP) + LANE_GAP,
                     left: card.left,
                     width: isExpanded ? 380 : card.width,
                     minWidth: isExpanded ? 380 : 36,
-                    backgroundColor: isExpanded ? '#fff'
+                    background: isExpanded ? '#fff'
+                      : isMatched ? 'linear-gradient(180deg, rgba(99, 102, 241, 0.08), rgba(99, 102, 241, 0.02))'
                       : isReadonly ? 'rgba(246, 245, 244, 0.6)'
                       : 'rgba(255, 255, 255, 0.92)',
                     backdropFilter: isExpanded ? 'none' : isReadonly ? 'none' : 'blur(8px)',
@@ -444,30 +526,40 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                     borderRadius: 8,
                     padding: isExpanded ? '10px 14px' : '5px 10px',
                     cursor: 'pointer',
-                    opacity: isReadonly ? 0.65 : 1,
-                    boxShadow: isExpanded
-                      ? `0 8px 32px ${hexToRgba(statusColor, 0.18)}, inset 0 3px 0 0 ${statusColor}`
-                      : `0 1px 3px rgba(0,0,0,0.04), inset 0 3px 0 0 ${statusColor}`,
-                    zIndex: isExpanded ? 20 : 1,
-                    transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1), left 0.35s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease, transform 0.2s ease, padding 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background-color 0.2s ease',
-                    animation: 'cardEnter 0.35s cubic-bezier(0.4, 0, 0.2, 1) both',
+                    opacity: isDimmed ? 0.4 : isReadonly ? 0.65 : 1,
+                    transform: isMatched ? 'translateY(-1px)' : undefined,
+                    boxShadow: isMatched && !isExpanded
+                      ? matchedShadow
+                      : isExpanded
+                        ? expandedShadow
+                        : restShadow,
+                    zIndex: isExpanded ? 20 : isMatched ? 10 : 1,
+                    transition: 'top 0.35s cubic-bezier(0.4, 0, 0.2, 1), left 0.35s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1), min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                    // 首次匹配时脉冲呼吸 2 次后静止（取消再选中会重新触发）
+                    animation: isMatched && !isExpanded
+                      ? 'matchPulse 1.2s ease-out 2'
+                      : 'cardEnter 0.35s cubic-bezier(0.4, 0, 0.2, 1) both',
                   }}
                   onClick={(e) => { e.stopPropagation(); handleCardClick(item) }}
                   onMouseEnter={(e) => {
-                    if (isExpanded) return
+                    if (isExpanded || isMatched) return
                     e.currentTarget.style.transform = 'translateY(-1px)'
-                    e.currentTarget.style.boxShadow = `0 4px 12px rgba(0,0,0,0.08), inset 0 3px 0 0 ${statusColor}`
+                    e.currentTarget.style.boxShadow = hoverShadow
+                    if (isDimmed) e.currentTarget.style.opacity = '0.8'
                   }}
                   onMouseLeave={(e) => {
-                    if (isExpanded) return
+                    if (isExpanded || isMatched) return
                     e.currentTarget.style.transform = ''
-                    e.currentTarget.style.boxShadow = `0 1px 3px rgba(0,0,0,0.04), inset 0 3px 0 0 ${statusColor}`
+                    e.currentTarget.style.boxShadow = restShadow
+                    if (isDimmed) e.currentTarget.style.opacity = '0.4'
                   }}
                 >
                   {/* 收起态 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {item.batch_no && (
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--color-charcoal)', flexShrink: 0 }}>#{item.batch_no}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: isMatched ? '#6366F1' : 'var(--color-charcoal)', flexShrink: 0 }}>
+                        #<HighlightMatch text={item.batch_no} keywords={matchedKeywords} />
+                      </span>
                     )}
                     {/* ≤5 天的卡片省略日期文本 */}
                     {(!item.planned_start || !item.planned_end || dayjs(item.planned_end).diff(dayjs(item.planned_start), 'day') > 5) && (
@@ -515,7 +607,7 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                         {/* 摘要信息 */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, fontSize: 12, color: '#5d5b54' }}>
                           <span style={{ fontWeight: 500, color: '#37352f', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {item.product_name}
+                            <HighlightMatch text={item.product_name} keywords={matchedKeywords} />
                           </span>
                           {item.planned_quantity != null && (
                             <span style={{ flexShrink: 0 }}>{item.planned_quantity}{item.unit ? ` ${item.unit}` : ''}</span>
@@ -608,11 +700,20 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
           ⚠ 待排程（{unscheduledItems.length}）：
         </span>
         <div className="flex flex-wrap gap-1.5 mt-1.5">
-          {unscheduledItems.map((item) => (
-            <span key={item.item_id} className="text-xs text-[var(--color-steel)] bg-white border border-[var(--color-hairline)] rounded px-2 py-0.5">
-              {item.batch_no ? `#${item.batch_no} ` : ''}{item.product_name}
-            </span>
-          ))}
+          {unscheduledItems.map((item) => {
+            const isMatched = matchedSet.has(item.item_id)
+            return (
+              <span
+                key={item.item_id}
+                className="text-xs text-[var(--color-steel)] bg-white border border-[var(--color-hairline)] rounded px-2 py-0.5"
+                style={isMatched
+                  ? { borderColor: '#6366F1', color: '#6366F1', fontWeight: 600 }
+                  : matchedSet.size > 0 ? { opacity: 0.4 } : undefined}
+              >
+                {item.batch_no ? `#${item.batch_no} ` : ''}<HighlightMatch text={item.product_name} keywords={matchedKeywords} />
+              </span>
+            )
+          })}
         </div>
       </div>
     )}

@@ -24,7 +24,7 @@ async def list_materials(
     _: User = Depends(require_permission("production:batch:read")),
 ) -> JSONResponse:
     items, total = await intermediate_service.list_intermediate_types_paged(
-        db, keyword, page, page_size
+        db, keyword, page, page_size, include_deleted=True
     )
     return paginated_response(
         [it.model_dump(mode="json") for it in items],

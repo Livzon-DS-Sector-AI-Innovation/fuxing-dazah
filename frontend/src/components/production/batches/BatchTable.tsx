@@ -6,6 +6,7 @@ import type { TableProps } from 'antd'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { fetchBatchesClient } from '@/lib/api/production-client'
+import { formatDateTime } from '@/lib/utils'
 import type { ProductionBatch } from '@/types/production'
 
 export const BATCH_STATUS_META: Record<string, { color: string; label: string }> = {
@@ -111,6 +112,7 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
         rowKey="id"
         loading={isLoading}
         dataSource={data?.items}
+        scroll={{ x: 'max-content' }}
         pagination={{
           current: page,
           pageSize: 20,
@@ -164,6 +166,18 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
             width: 170,
             sorter: true,
             render: (v: string) => new Date(v).toLocaleString('zh-CN'),
+          },
+          {
+            title: '首工序开始',
+            dataIndex: 'first_started_at',
+            width: 170,
+            render: (v: string | null) => formatDateTime(v),
+          },
+          {
+            title: '末工序结束',
+            dataIndex: 'last_finished_at',
+            width: 170,
+            render: (v: string | null) => formatDateTime(v),
           },
           { title: '备注', dataIndex: 'remark', ellipsis: true },
         ]}

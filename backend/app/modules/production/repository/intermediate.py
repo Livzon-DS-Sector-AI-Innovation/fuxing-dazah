@@ -9,6 +9,8 @@ from app.modules.production.models import (
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     IntermediateType,
+    ProcessRoute,
+    RouteNode,
     RouteNodeIntermediate,
 )
 
@@ -30,15 +32,17 @@ __all__ = [
     "get_intermediate_types_by_ids",
     "get_intermediate_outputs_by_ids",
     "get_available_outputs",
+    "get_non_archived_routes_by_intermediate_type",
+    "get_intermediate_type_by_name",
 ]
 
 
 async def get_intermediate_type(
-    db: AsyncSession, type_id: uuid.UUID
+    db: AsyncSession, type_id: uuid.UUID, *, include_deleted: bool = False,
 ) -> IntermediateType | None:
-    stmt = select(IntermediateType).where(
-        IntermediateType.id == type_id, IntermediateType.is_deleted == False  # noqa: E712
-    )
+    stmt = select(IntermediateType).where(IntermediateType.id == type_id)
+    if not include_deleted:
+        stmt = stmt.where(IntermediateType.is_deleted == False)  # noqa: E712
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
@@ -52,11 +56,12 @@ async def get_intermediate_type_by_code(
 
 
 async def list_intermediate_types(
-    db: AsyncSession, keyword: str | None, page: int, page_size: int
+    db: AsyncSession, keyword: str | None, page: int, page_size: int,
+    *, include_deleted: bool = False,
 ) -> tuple[list[IntermediateType], int]:
-    stmt = select(IntermediateType).where(
-        IntermediateType.is_deleted == False  # noqa: E712
-    )
+    stmt = select(IntermediateType)
+    if not include_deleted:
+        stmt = stmt.where(IntermediateType.is_deleted == False)  # noqa: E712
     if keyword:
         pattern = f"%{keyword}%"
         stmt = stmt.where(
@@ -228,15 +233,14 @@ async def get_intermediate_consumptions_by_type(
 
 
 async def get_intermediate_types_by_ids(
-    db: AsyncSession, ids: list[uuid.UUID]
+    db: AsyncSession, ids: list[uuid.UUID], *, include_deleted: bool = False,
 ) -> list[IntermediateType]:
     """按 ID 批量查询中间体类型。"""
     if not ids:
         return []
-    stmt = select(IntermediateType).where(
-        IntermediateType.id.in_(ids),
-        IntermediateType.is_deleted == False,  # noqa: E712
-    )
+    stmt = select(IntermediateType).where(IntermediateType.id.in_(ids))
+    if not include_deleted:
+        stmt = stmt.where(IntermediateType.is_deleted == False)  # noqa: E712
     return list((await db.execute(stmt)).scalars())
 
 
@@ -251,3 +255,38 @@ async def get_intermediate_outputs_by_ids(
         BatchIntermediateOutput.is_deleted == False,  # noqa: E712
     )
     return list((await db.execute(stmt)).scalars())
+
+
+async def get_non_archived_routes_by_intermediate_type(
+    db: AsyncSession, intermediate_type_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str]]:
+    """查询引用该产出物的未归档路线（去重），返回 [(route_id, route_name), ...]。"""
+    stmt = (
+        select(ProcessRoute.id, ProcessRoute.route_name)
+        .distinct()
+        .select_from(RouteNodeIntermediate)
+        .join(RouteNode, RouteNode.id == RouteNodeIntermediate.node_id)
+        .join(ProcessRoute, ProcessRoute.id == RouteNode.route_id)
+        .where(
+            RouteNodeIntermediate.intermediate_type_id == intermediate_type_id,
+            RouteNodeIntermediate.is_deleted == False,  # noqa: E712
+            RouteNode.is_deleted == False,  # noqa: E712
+            ProcessRoute.is_deleted == False,  # noqa: E712
+            ProcessRoute.status != "archived",
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    return [(row.id, row.route_name) for row in rows]
+
+
+async def get_intermediate_type_by_name(
+    db: AsyncSession, name: str
+) -> IntermediateType | None:
+    """按名称查询中间体类型（仅未删除），用于名称唯一性校验。"""
+    stmt = select(IntermediateType).where(
+        IntermediateType.name == name,
+        IntermediateType.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+

@@ -53,6 +53,7 @@ class IntermediateTypeOut(BaseModel):
     is_product: bool
     product_id: uuid.UUID | None
     product_name: str | None = None
+    is_deleted: bool = False
     created_at: datetime
     updated_at: datetime
 

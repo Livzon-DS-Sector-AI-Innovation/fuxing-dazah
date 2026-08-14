@@ -14,6 +14,7 @@ from app.modules.production.mcp_tools._helpers import (
     _get_latest_execution,
     _resolve_batch_and_node,
 )
+from app.core.exceptions import AppException
 from app.modules.production.schemas import ExecutionCompleteIn, ExecutionStartIn
 from app.modules.production.service.execution_service import (
     backfill_execution_fields,
@@ -110,7 +111,7 @@ async def change_batch_step_status(
     end_payload = ExecutionCompleteIn(field_values=fvs)
     try:
         completed_ex = await complete_execution(db, in_progress_ex.id, end_payload, user)
-    except ValueError as e:
+    except (ValueError, AppException) as e:
         return ToolResult(content=f"结束工序失败：{e}")
     except Exception:
         logger.exception("Unexpected error in complete_execution for batch %s", batch_no)

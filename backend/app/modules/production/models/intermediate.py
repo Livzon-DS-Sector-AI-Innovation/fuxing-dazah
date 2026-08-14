@@ -19,6 +19,12 @@ class IntermediateType(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
+        Index(
+            "uq_production_intermediate_types_name",
+            "name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": "production"},
     )
 

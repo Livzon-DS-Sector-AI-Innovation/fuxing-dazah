@@ -12,6 +12,8 @@ export interface ProductionBatch {
   quantity: number | null
   unit: string | null
   entry_node_id: string | null
+  first_started_at: string | null
+  last_finished_at: string | null
   remark: string | null
   created_at: string
   updated_at: string

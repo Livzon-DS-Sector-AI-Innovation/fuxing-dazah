@@ -48,7 +48,19 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
         : [],
     })
     if (result.success) {
-      message.success('工序已结束')
+      const startedMs = new Date(execution.started_at).getTime()
+      const isValid = !Number.isNaN(startedMs) && startedMs > 0
+      const stepName = execution.node_name ?? '工序'
+      if (isValid) {
+        const durationMs = Date.now() - startedMs
+        const durationMin = Math.round(durationMs / 60000)
+        const durationStr = durationMin < 60
+          ? `${durationMin} 分钟`
+          : `${(durationMin / 60).toFixed(1)} 小时`
+        message.success(`${stepName}已完成，耗时 ${durationStr}`)
+      } else {
+        message.success(`${stepName}已完成`)
+      }
       queryClient.invalidateQueries({
         queryKey: ['production-batch-detail', execution.batch_id],
       })
