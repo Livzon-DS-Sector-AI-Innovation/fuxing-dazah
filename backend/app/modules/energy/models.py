@@ -92,11 +92,13 @@ class EnergyDeviceConfig(BaseModel):
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用采集"
     )
-    equipment_id: Mapped[UUID | None] = mapped_column(
-        SA_UUID(as_uuid=True), nullable=True, comment="关联设备管理中的设备ID"
+    equipment_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="关联设备ID列表（设备台账，JSON 字符串数组）",
     )
-    equipment_name: Mapped[str | None] = mapped_column(
-        String(200), nullable=True, comment="关联设备名称（冗余存储，便于展示）"
+    equipment_names: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="关联设备名称列表（冗余存储，便于展示）",
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"

@@ -3,6 +3,7 @@ import {
   CreateDeviceInput,
   UpdateDeviceInput,
   DeviceQueryParams,
+  EquipmentOption,
   EnergyData,
   EnergyDataHistory,
   DataQueryParams,
@@ -56,6 +57,18 @@ export async function fetchPlatforms(): Promise<PlatformInfo[]> {
 
 export async function fetchPlatformsClient(): Promise<PlatformInfo[]> {
   return apiGet<PlatformInfo[]>(`${CLIENT_API_BASE}/api/v1/energy/platforms`)
+}
+
+export async function fetchEquipmentOptionsClient(
+  params: { keyword?: string; ids?: string } = {}
+): Promise<EquipmentOption[]> {
+  const searchParams = new URLSearchParams()
+  if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.ids) searchParams.set('ids', params.ids)
+  const qs = searchParams.toString()
+  return apiGet<EquipmentOption[]>(
+    `${CLIENT_API_BASE}/api/v1/energy/equipment-options${qs ? `?${qs}` : ''}`
+  )
 }
 
 // ── 数据源配置（Server Actions）──
