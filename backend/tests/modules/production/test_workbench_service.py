@@ -11,6 +11,7 @@
 import uuid
 from typing import Any
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.schemas import (
@@ -296,3 +297,205 @@ class TestReceiveAndStart:
         )
         assert result["execution"] is not None
         assert result["execution"]["status"] == "in_progress"
+
+
+async def _get_or_create_user_named(db: AsyncSession, employee_no: str) -> User:
+    """按工号获取或创建用户（同一测试内需要多个不同用户时使用）。"""
+    from sqlalchemy import select
+
+    stmt = select(User).where(
+        User.employee_no == employee_no, User.is_deleted == False  # noqa: E712
+    )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return existing
+    user = User(name=f"测试-{employee_no}", employee_no=employee_no)
+    db.add(user)
+    await db.flush()
+    return user
+
+
+class TestBatchOwnerIsolation:
+    """多负责人批次归属隔离：操作即归属 + 软隔离（all 仅读）+ 共享认领池。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_perms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """mock 权限码查询：避免 Redis 连接跨测试事件循环报 Event loop is closed。"""
+        from app.modules.production.service import execution_service as es
+
+        async def fake(user_id: str, db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(es, "get_user_permissions", fake)
+
+    async def _make_owner(
+        self, db: AsyncSession, employee_no: str, route_id: uuid.UUID, stage_name: str,
+    ) -> User:
+        user = await _get_or_create_user_named(db, employee_no)
+        await assignment_service.create_stage_assignment(
+            db,
+            user_id=user.id,
+            stage_name=stage_name,
+            route_id=route_id,
+            created_by=user.id,
+        )
+        return user
+
+    async def _make_batch(
+        self, db: AsyncSession, published_route: dict[str, Any],
+    ) -> Any:
+        return await batch_service.create_batch(
+            db,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            ),
+            user=None,
+        )
+
+    async def test_start_claims_unowned_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """无主批次：谁先开始归谁。"""
+        from sqlalchemy import select
+
+        from app.modules.production.models import Batch
+
+        user_a = await self._make_owner(db_session, "OWN-A", published_route["route"].id, "发酵")
+        batch = await self._make_batch(db_session, published_route)
+        await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_a,
+        )
+        refreshed = (
+            await db_session.execute(select(Batch).where(Batch.id == batch.id))
+        ).scalar_one()
+        assert refreshed.owner_user_id == user_a.id
+        assert refreshed.owner_name == user_a.name
+
+    async def test_mine_hides_other_owner_and_all_readonly(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """A 认领批次后：B 的 mine 视图不可见；all 视图可见但仅读。"""
+        route_id = published_route["route"].id
+        user_a = await self._make_owner(db_session, "OWN-A", route_id, "发酵")
+        user_b = await self._make_owner(db_session, "OWN-B", route_id, "发酵")
+        batch = await self._make_batch(db_session, published_route)
+        await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_a,
+        )
+        mine_b = await workbench_service.query_workbench(db_session, user_b.id)
+        assert all(it.batch_id != batch.id for it in mine_b.items)
+
+        all_b = await workbench_service.query_workbench(
+            db_session, user_b.id, view_mode="all",
+        )
+        others = [it for it in all_b.items if it.batch_id == batch.id]
+        assert len(others) >= 1
+        assert all(not it.can_operate for it in others)
+        assert all(it.batch_owner_name == user_a.name for it in others)
+
+    async def test_unowned_batch_visible_to_both(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """无主批次对同工段所有负责人可见可操作（共享认领）。"""
+        route_id = published_route["route"].id
+        user_a = await self._make_owner(db_session, "OWN-A", route_id, "发酵")
+        user_b = await self._make_owner(db_session, "OWN-B", route_id, "发酵")
+        batch = await self._make_batch(db_session, published_route)
+        for user in (user_a, user_b):
+            result = await workbench_service.query_workbench(db_session, user.id)
+            starts = [it for it in result.items if it.batch_id == batch.id]
+            assert len(starts) >= 1
+            assert all(it.can_operate for it in starts)
+
+    async def test_other_owner_cannot_start(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """归属他人的批次：开始工序被拒绝。"""
+        from app.core.exceptions import ForbiddenException
+
+        route_id = published_route["route"].id
+        user_a = await self._make_owner(db_session, "OWN-A", route_id, "发酵")
+        user_b = await self._make_owner(db_session, "OWN-B", route_id, "发酵")
+        batch = await self._make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_a,
+        )
+        # A 完成后释放节点，B 再开始时才会走到归属校验（而非「已有进行中执行」）
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=user_a,
+        )
+        with pytest.raises(ForbiddenException):
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_a"].id,
+                    deviation_reason="测试偏离",
+                ),
+                user=user_b,
+            )
+
+    async def test_pending_receive_not_filtered_by_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """待接收是共享认领池：上游批次即使归属他人，下游工段负责人仍可见可接收。"""
+        route_id = published_route["route"].id
+        user_up = await self._make_owner(db_session, "OWN-UP", route_id, "发酵")
+        user_down = await self._make_owner(db_session, "OWN-DOWN", route_id, "提炼")
+        parent = await self._make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, parent.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_up,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=user_up,
+        )
+        mine_down = await workbench_service.query_workbench(db_session, user_down.id)
+        receives = [
+            it for it in mine_down.items
+            if it.type == "pending_receive" and it.batch_id == parent.id
+        ]
+        assert len(receives) >= 1
+        assert all(it.can_operate for it in receives)
+
+    async def test_derive_child_owned_by_receiver(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """接收（derive）创建的子批次归属接收人。"""
+        from sqlalchemy import select
+
+        from app.modules.production.models import Batch
+        from app.modules.production.schemas import DeriveIn
+
+        route_id = published_route["route"].id
+        user_up = await self._make_owner(db_session, "OWN-UP", route_id, "发酵")
+        parent = await self._make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, parent.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_up,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=user_up,
+        )
+        children = await batch_service.derive_batches(
+            db_session, parent.id,
+            DeriveIn(
+                edge_id=published_route["edge_ab"].id,
+                children=[ChildBatchIn(batch_no=rand_code("C"), quantity=1.0)],
+            ),
+            user=user_up,
+        )
+        child = (
+            await db_session.execute(select(Batch).where(Batch.id == children[0].id))
+        ).scalar_one()
+        assert child.owner_user_id == user_up.id
+        assert child.owner_name == user_up.name

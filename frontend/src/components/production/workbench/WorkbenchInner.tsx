@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Select, Modal, Descriptions, Empty, Spin, App } from 'antd'
+import { Button, Select, Segmented, Modal, Descriptions, Empty, Spin, App } from 'antd'
 import {
   ClockCircleOutlined, PlayCircleOutlined, CheckCircleOutlined,
   InboxOutlined, MergeCellsOutlined, SettingOutlined, ReloadOutlined,
@@ -43,9 +43,17 @@ const ANIM_STYLES = `
   from { opacity: 1; transform: scale(1); }
   to { opacity: 0; transform: scale(0.92); }
 }
+@keyframes wb-batch-flow {
+  from { background-position: 0% 50%; }
+  to { background-position: -200% 50%; }
+}
 .wb-card { animation: wb-card-in 0.45s ease-out both; }
 .wb-card-out { animation: wb-card-out 0.3s ease-in forwards; pointer-events: none; }
 .wb-stage-dot { animation: wb-dot-pulse 2.2s ease-in-out infinite; }
+.wb-batch-gradient { animation: wb-batch-flow 3s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .wb-batch-gradient { animation: none; }
+}
 `
 
 // ── 可折叠区块 ──
@@ -90,6 +98,16 @@ function CollapsiblePanel({
 const MAX_BREADCRUMB_NODES = 6
 
 const PURPLE = '#7b3ff2'
+// 批次号渐变流动文字：按卡片状态色取渐变基色，亮色变体循环流动（动画见 ANIM_STYLES 的 wb-batch-flow）
+function batchNoGradientStyle(color: string): React.CSSProperties {
+  return {
+    backgroundImage: `linear-gradient(90deg, ${color}, color-mix(in srgb, ${color} 45%, #ffffff), ${color})`,
+    backgroundSize: '200% 100%',
+    WebkitBackgroundClip: 'text',
+    backgroundClip: 'text',
+    color: 'transparent',
+  }
+}
 // 工段内按位置分配的颜色（并行卡片区分用）
 const NODE_COLORS = ['#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899']
 
@@ -216,6 +234,8 @@ function BatchCard({
 }) {
   const cfg = STATUS_CFG[item.type] ?? STATUS_CFG.pending_start
   const assignee = item.node_assignees?.[0]
+  // 他人批次仅读（查看全部模式）：执行状态完整可见，操作按钮禁用
+  const readOnly = !item.can_operate
   const startLabel = item.start_type ? START_TYPE_LABELS[item.start_type] : null
   const startBadge = startLabel ? (
     <span style={{
@@ -238,8 +258,8 @@ function BatchCard({
         padding: '18px 18px 18px 16px',
         borderRadius: 12,
         background: '#ffffff',
-        border: '1px solid #ede9e4',
-        borderLeft: `3px solid ${cfg.borderColor}`,
+        border: readOnly ? '1px solid #d9d5cf' : '1px solid #ede9e4',
+        borderLeft: `3px solid ${readOnly ? '#c8c4be' : cfg.borderColor}`,
         display: 'flex', flexDirection: 'column', gap: 10,
         cursor: 'default',
         transition: stacked
@@ -267,7 +287,7 @@ function BatchCard({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a', lineHeight: 1.3 }}>
-                <span>{item.batch_no ?? '待创建批次'}</span>
+                <span className="wb-batch-gradient" style={batchNoGradientStyle(cfg.color)}>{item.batch_no ?? '待创建批次'}</span>
                 {(item.product_name || item.route_name) && (
                   <span style={{ color: '#37352f' }}>
                     {' '}·{' '}
@@ -292,6 +312,17 @@ function BatchCard({
               {cfg.label}
             </span>
             {startBadge}
+            {readOnly && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '3px 10px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, lineHeight: '18px',
+                background: '#f0eeec', color: '#8a857c',
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+                他人批次
+              </span>
+            )}
           </div>
 
           {/* 工序面包屑 */}
@@ -300,10 +331,14 @@ function BatchCard({
       ) : (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <span style={{
-              fontSize: 17, fontWeight: 600, color: '#1a1a1a',
-              lineHeight: 1.3, wordBreak: 'break-all',
-            }}>
+            <span
+              className="wb-batch-gradient"
+              style={{
+                fontSize: 17, fontWeight: 600,
+                lineHeight: 1.3, wordBreak: 'break-all',
+                ...batchNoGradientStyle(cfg.color),
+              }}
+            >
               {item.batch_no ?? '待创建批次'}
             </span>
             <span style={{
@@ -317,6 +352,17 @@ function BatchCard({
               {cfg.label}
             </span>
             {startBadge}
+            {readOnly && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '3px 10px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, lineHeight: '18px',
+                background: '#f0eeec', color: '#8a857c',
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+                他人批次
+              </span>
+            )}
           </div>
 
           {/* 产品 + 路线 */}
@@ -352,9 +398,30 @@ function BatchCard({
         </div>
       )}
 
+      {/* 批次归属人（查看全部模式下他人批次展示） */}
+      {readOnly && item.batch_owner_name && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 11, color: '#5645d4',
+            background: '#f4f0ff', padding: '2px 8px', borderRadius: 4,
+          }}>
+            归属：{item.batch_owner_name}
+          </span>
+        </div>
+      )}
+
       {/* 操作按钮 */}
       <div style={{ marginTop: 2 }}>
-        {item.type === 'pending_receive' && item.parent_batch_ids.length > 0 && (
+        {readOnly && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '7px 18px', fontSize: 13, fontWeight: 500,
+            borderRadius: 8, background: '#f6f5f4', color: '#a4a097',
+          }}>
+            他人批次 · 仅读
+          </span>
+        )}
+        {!readOnly && item.type === 'pending_receive' && item.parent_batch_ids.length > 0 && (
           <button
             onClick={onReceive}
             style={{
@@ -371,7 +438,7 @@ function BatchCard({
             接收
           </button>
         )}
-        {item.type === 'pending_start' && item.batch_id && (
+        {!readOnly && item.type === 'pending_start' && item.batch_id && (
           <button
             onClick={onStart}
             style={{
@@ -390,7 +457,7 @@ function BatchCard({
             开始 {item.node_name}
           </button>
         )}
-        {item.type === 'pending_complete' && (
+        {!readOnly && item.type === 'pending_complete' && (
           <button
             onClick={onComplete}
             style={{
@@ -409,7 +476,7 @@ function BatchCard({
             结束 {item.node_name}
           </button>
         )}
-        {item.type === 'ready_to_complete' && (
+        {!readOnly && item.type === 'ready_to_complete' && (
           <button
             onClick={onCompleteBatch}
             style={{
@@ -461,10 +528,13 @@ export function WorkbenchInner() {
   const [filterRoute, setFilterRoute] = useState<string | undefined>(undefined)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
 
+  // 视图模式：mine=只看自己的批次；all=查看全部（他人批次仅读）
+  const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine')
+
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['production-workbench'],
+    queryKey: ['production-workbench', viewMode],
     queryFn: async () => {
-      const r = await fetchWorkbench()
+      const r = await fetchWorkbench(viewMode)
       if (!r.success) throw new Error(r.error ?? '获取失败')
       return r.data!
     },
@@ -611,35 +681,64 @@ export function WorkbenchInner() {
     <>
       <style>{ANIM_STYLES}</style>
 
-      {/* ── 页面头部 ── */}
+      {/* ── 页面头部：标题 + 角色工牌 + 视图切换 ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24,
+        display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+        paddingBottom: 18, marginBottom: 24,
+        borderBottom: '1px solid #ede9e4',
       }}>
         <h2 style={{
           margin: 0, fontSize: 22, fontWeight: 600, color: '#1a1a1a',
-          lineHeight: 1.3,
+          lineHeight: 1.3, letterSpacing: '0.01em',
         }}>
           工作台
         </h2>
-        <span style={{
-          display: 'inline-block', padding: '3px 10px', borderRadius: 20,
-          fontSize: 11, fontWeight: 600, color: '#5645d4',
-          background: '#f4f0ff',
+
+        {/* 角色工牌：页面唯一的深色块，身份焦点 */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'stretch',
+          borderRadius: 8, overflow: 'hidden',
+          background: '#0a1530', flexShrink: 0,
         }}>
-          {stageOwner ? '工段负责人' : '工序负责人'}
-        </span>
-        <span style={{ fontSize: 14, color: '#787671' }}>
-          {stageOwner ? '管理工段任务与工序负责人分配' : '我的工序待办'}
-        </span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', padding: '0 12px',
+          }}>
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: stageOwner ? '#7b3ff2' : '#0075de',
+              boxShadow: `0 0 0 3px ${stageOwner ? '#7b3ff2' : '#0075de'}26`,
+            }} />
+          </span>
+          <span style={{
+            display: 'flex', flexDirection: 'column', justifyContent: 'center',
+            padding: '5px 12px 5px 10px',
+            borderLeft: '1px solid rgba(255,255,255,0.14)',
+          }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#ffffff', lineHeight: 1.3 }}>
+              {stageOwner ? '工段负责人' : '工序负责人'}
+            </span>
+            <span style={{ fontSize: 10, color: '#a4a097', lineHeight: 1.5 }}>
+              {stageOwner ? '管理工段任务与负责人分配' : '我的工序待办'}
+            </span>
+          </span>
+        </div>
+
         <div style={{ flex: 1, minWidth: 0 }} />
+        <Segmented
+          value={viewMode}
+          onChange={v => setViewMode(v as 'mine' | 'all')}
+          options={[
+            { label: '我的批次', value: 'mine' },
+            { label: '查看全部', value: 'all' },
+          ]}
+        />
         <Button
+          type="text"
           icon={<ReloadOutlined spin={isFetching} />}
-          size="small"
           onClick={() => refetch()}
-          style={{ borderRadius: 6 }}
-        >
-          刷新
-        </Button>
+          aria-label="刷新"
+          style={{ color: '#787671' }}
+        />
       </div>
 
       {isLoading ? (
@@ -723,8 +822,8 @@ export function WorkbenchInner() {
               ) : (
                 <>
                   {/* ── 卡片区域 ── */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 36 }}>
-                {stageGroups.map(group => {
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {stageGroups.map((group, idx) => {
                   const allItems = group.typeGroups.flatMap(tg => tg.items)
                   const receiveItems = allItems.filter(it => it.type === 'pending_receive' && it.batch_id)
                   const byNode: Record<string, WorkbenchItem[]> = {}
@@ -840,6 +939,10 @@ export function WorkbenchInner() {
                           </div>
                         </div>
                       ))}
+                      {/* 工段间分隔线 */}
+                      {idx < stageGroups.length - 1 && (
+                        <div style={{ height: 1, background: '#ede9e4', margin: '16px 0 36px' }} />
+                      )}
                     </div>
                   )
                 })}

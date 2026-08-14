@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   App,
   Button,
@@ -24,7 +24,7 @@ import { useQuery } from '@tanstack/react-query'
 import { usePermission } from '@/hooks/usePermission'
 import { createPlanItem, updatePlanItem, deletePlanItem, schedulePlanItem } from '@/actions/production'
 import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/production'
-import { fetchProductsClient, fetchRoutesClient } from '@/lib/api/production-client'
+import { fetchProductsClient, fetchRoutesClient, fetchEquipmentOptionsClient, fetchEquipmentBriefsClient } from '@/lib/api/production-client'
 import { ITEM_STATUS_CONFIG, PRIORITY_CONFIG } from './constants'
 import { batchGenDayOffset, batchRhythmWarning } from './utils'
 import { incrementBatchNo } from '@/lib/utils'
@@ -228,6 +228,9 @@ function PlanItemFormFields({
   onProductSearch,
   itemStages,
   setItemStages,
+  equipmentOptions,
+  equipmentSearchLoading,
+  onEquipmentSearch,
 }: {
   products: { id: string; product_name: string; unit: string | null }[]
   routes: { id: string; route_name: string }[]
@@ -236,6 +239,9 @@ function PlanItemFormFields({
   onProductSearch: (kw: string) => void
   itemStages: StageConfigItem[]
   setItemStages: React.Dispatch<React.SetStateAction<StageConfigItem[]>>
+  equipmentOptions: { value: string; label: string }[]
+  equipmentSearchLoading: boolean
+  onEquipmentSearch: (kw: string) => void
 }) {
   return (
     <>
@@ -287,8 +293,14 @@ function PlanItemFormFields({
         </Form.Item>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
-        <Form.Item name="equipment_id" label="设备ID" style={{ marginBottom: 12 }}>
-          <Input />
+        <Form.Item name="equipment_id" label="设备" style={{ marginBottom: 12 }}>
+          <Select
+            showSearch={{ onSearch: onEquipmentSearch, filterOption: false }}
+            allowClear
+            placeholder="搜索并选择设备"
+            loading={equipmentSearchLoading}
+            options={equipmentOptions}
+          />
         </Form.Item>
         <Form.Item name="priority" label="优先级" style={{ marginBottom: 0 }}>
           <Select
@@ -363,6 +375,40 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     staleTime: 30_000,
   })
   const routes = routesData ?? []
+
+  // ── 设备选项（当前用户可见范围，React Query 按 key 防竞态）──
+  const [equipmentKeyword, setEquipmentKeyword] = useState('')
+
+  const { data: equipmentData, isFetching: equipmentSearchLoading } = useQuery({
+    queryKey: ['plan-equipment-options', equipmentKeyword],
+    queryFn: () => fetchEquipmentOptionsClient({ keyword: equipmentKeyword || undefined, page: 1, page_size: 20 }),
+  })
+
+  // 编辑回显：列表接口搜不到 UUID，按 ID 取摘要并合并进选项
+  const { data: editEquipment } = useQuery({
+    queryKey: ['plan-equipment-brief', editItem?.equipment_id],
+    queryFn: () => fetchEquipmentBriefsClient([editItem!.equipment_id!]),
+    enabled: !!editItem?.equipment_id,
+  })
+
+  const equipmentOptions = useMemo(() => {
+    const list = (equipmentData?.items ?? []).map(e => ({
+      value: e.id,
+      label: `${e.name}（${e.equipment_no}）`,
+    }))
+    const brief = editEquipment?.[0]
+    if (brief && !list.some(o => o.value === brief.id)) {
+      list.push({ value: brief.id, label: `${brief.name}（${brief.equipment_no}）` })
+    }
+    return list
+  }, [equipmentData, editEquipment])
+
+  // 详情返回后重设字段值，让 Select 用设备名渲染已选的 UUID（WorkOrderDrawer 同款模式）
+  useEffect(() => {
+    if (editItem?.equipment_id && editEquipment?.[0]) {
+      editForm.setFieldsValue({ equipment_id: editItem.equipment_id })
+    }
+  }, [editItem, editEquipment, editForm])
 
   const handleAdd = async () => {
     const values = await addForm.validateFields().catch(() => null)
@@ -709,6 +755,9 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
             onProductSearch={setProductKeyword}
             itemStages={itemStages}
             setItemStages={setItemStages}
+            equipmentOptions={equipmentOptions}
+            equipmentSearchLoading={equipmentSearchLoading}
+            onEquipmentSearch={setEquipmentKeyword}
           />
         </Form>
       </Modal>
@@ -816,6 +865,9 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
             onProductSearch={setProductKeyword}
             itemStages={itemStages}
             setItemStages={setItemStages}
+            equipmentOptions={equipmentOptions}
+            equipmentSearchLoading={equipmentSearchLoading}
+            onEquipmentSearch={setEquipmentKeyword}
           />
         </Form>
       </Modal>

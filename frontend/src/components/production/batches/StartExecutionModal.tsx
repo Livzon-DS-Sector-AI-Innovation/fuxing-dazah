@@ -7,8 +7,8 @@ import { startExecution, fetchNodeAssignments } from '@/actions/production'
 import {
   fetchBatchDetailClient,
   fetchRouteGraphClient,
+  fetchEquipmentOptionsClient,
 } from '@/lib/api/production-client'
-import { fetchEquipmentsClient } from '@/lib/api/equipment-client'
 import { UserSelect } from '@/components/shared'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
 import { fetchAvailableOutputs } from '@/actions/production'
@@ -37,9 +37,15 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     queryFn: () => fetchRouteGraphClient(detail!.route_id),
     enabled: !!detail?.route_id,
   })
-  const { data: equipmentData } = useQuery({
-    queryKey: ['production-equipments'],
-    queryFn: () => fetchEquipmentsClient({ page: 1, page_size: 100 }),
+
+  // ── 设备远程搜索（数据范围为当前用户在设备台账的可见设备）──
+  const [equipmentKeyword, setEquipmentKeyword] = useState('')
+  // 已选设备不在当前搜索结果中时 antd 会显示原始 UUID，记录选中时的 label 用于合并回显
+  const [equipmentSelectedLabels, setEquipmentSelectedLabels] = useState<Record<string, string>>({})
+
+  const { data: equipmentData, isFetching: equipmentSearchLoading } = useQuery({
+    queryKey: ['production-equipment-options', equipmentKeyword],
+    queryFn: () => fetchEquipmentOptionsClient({ keyword: equipmentKeyword || undefined, page: 1, page_size: 20 }),
   })
 
   const { legalNodeIds } = useMemo(() => {
@@ -185,12 +191,19 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     }
   }
 
-  const equipmentOptions = useMemo(() => (equipmentData?.items ?? []).map(
-    (e: { id: string; name: string; equipment_no: string }) => ({
+  const mergedEquipmentOptions = useMemo(() => {
+    const searchOptions = (equipmentData?.items ?? []).map(e => ({
       value: e.id,
       label: `${e.name}（${e.equipment_no}）`,
-    }),
-  ), [equipmentData])
+    }))
+    const inList = new Set(searchOptions.map(o => o.value))
+    return [
+      ...searchOptions,
+      ...Object.entries(equipmentSelectedLabels)
+        .filter(([id]) => !inList.has(id))
+        .map(([value, label]) => ({ value, label })),
+    ]
+  }, [equipmentData, equipmentSelectedLabels])
 
   return (
     <Modal
@@ -250,9 +263,17 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
             <Select
               mode="multiple"
               allowClear
-              showSearch
-              placeholder="选择设备"
-              options={equipmentOptions}
+              placeholder="搜索并选择设备"
+              showSearch={{ filterOption: false, onSearch: setEquipmentKeyword }}
+              loading={equipmentSearchLoading}
+              notFoundContent={equipmentSearchLoading ? '搜索中...' : '无匹配设备'}
+              onChange={(ids: string[]) => {
+                const labelOf = new Map(mergedEquipmentOptions.map(o => [o.value, o.label]))
+                setEquipmentSelectedLabels(
+                  Object.fromEntries(ids.map(id => [id, labelOf.get(id) ?? equipmentSelectedLabels[id] ?? id])),
+                )
+              }}
+              options={mergedEquipmentOptions}
               style={{ borderRadius: 8 }}
             />
           </Form.Item>

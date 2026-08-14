@@ -11,10 +11,13 @@ import type {
   PlannedBatchData,
 } from '@/types/production'
 
-export async function fetchWorkbench(): Promise<ActionResult<WorkbenchData>> {
-  const result = await actionFetch<WorkbenchData>(`${API_BASE}/production/workbench`, {
-    method: 'GET',
-  })
+export async function fetchWorkbench(
+  viewMode: 'mine' | 'all' = 'mine',
+): Promise<ActionResult<WorkbenchData>> {
+  const result = await actionFetch<WorkbenchData>(
+    `${API_BASE}/production/workbench?view_mode=${viewMode}`,
+    { method: 'GET' },
+  )
   if (result.success) revalidatePath('/production/workbench')
   return result
 }

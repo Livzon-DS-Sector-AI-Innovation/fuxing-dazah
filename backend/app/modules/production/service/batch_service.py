@@ -16,7 +16,10 @@ from app.modules.production.schemas import (
     FieldValueOut,
     MergeIn,
 )
-from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.assignment_service import (
+    require_batch_owner_access,
+    require_stage_permission,
+)
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
 )
@@ -143,6 +146,8 @@ async def derive_batches(
             quantity=child_in.quantity,
             unit=child_in.unit or parent.unit,
             entry_node_id=entry_node_id,
+            owner_user_id=user.id if user else None,
+            owner_name=user.name if user else None,
             created_by=user.id if user else None,
         )
         db.add(child)
@@ -208,6 +213,8 @@ async def merge_batches(
         quantity=payload.quantity,
         unit=payload.unit or parents[0].unit,
         entry_node_id=entry_node_id,
+        owner_user_id=user.id if user else None,
+        owner_name=user.name if user else None,
         remark=payload.remark,
         created_by=user.id if user else None,
     )
@@ -276,6 +283,7 @@ async def complete_batch(
                     db, user.id, last_ex.node_id, batch.route_id,
                     node.stage_name if node else None,
                 )
+            await require_batch_owner_access(user.id, batch)
             # stage_name 为 None 时 require_stage_permission 自行处理
 
     if not await repo.completed_node_ids(db, batch_id):

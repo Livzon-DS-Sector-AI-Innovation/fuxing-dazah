@@ -83,6 +83,10 @@ class WorkbenchItem(BaseModel):
     execution_id: uuid.UUID | None = None
     execution_seq: int | None = None
     owner_name: str | None = None
+    # 批次归属（多负责人产线隔离）：归属人姓名快照，无主批次为空
+    batch_owner_name: str | None = None
+    # 当前用户是否可操作该批次（归属自己/无主=True；归属他人=False，仅读）
+    can_operate: bool = True
     # ready_to_complete 专用：该批次缺填必填字段的工序执行（工作台补录入口）
     missing_executions: list[MissingExecutionOut] = []
     started_at: str | None = None

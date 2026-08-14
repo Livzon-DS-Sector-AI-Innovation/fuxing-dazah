@@ -131,6 +131,7 @@ async def save_graph(
         raise AppException(status_code=400, message="工序名称重复")
 
     code_set = set(codes)
+    stage_by_code = {n.node_code: (n.stage_name or "未分组") for n in graph.nodes}
     for e in graph.edges:
         if e.from_node_code not in code_set or e.to_node_code not in code_set:
             raise AppException(
@@ -141,6 +142,8 @@ async def save_graph(
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
         if e.is_batch_boundary and e.allow_overlap:
             raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
+        if e.is_batch_boundary and stage_by_code[e.from_node_code] == stage_by_code[e.to_node_code]:
+            raise AppException(status_code=400, message="批次边界必须位于工段之间，同工段内不允许设置批次边界")
 
     await repo.soft_delete_route_graph(db, route_id)
 
@@ -285,11 +288,14 @@ def _validate_graph(nodes: list[RouteNode], edges: list[RouteEdge]) -> None:
         orphans = starts & ends
         if orphans:
             raise AppException(status_code=400, message="存在从起点不可达的节点")
+    stage_by_id = {n.id: (n.stage_name or "未分组") for n in nodes}
     for e in edges:
         if e.edge_type == "rework" and e.is_batch_boundary:
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
         if e.is_batch_boundary and e.allow_overlap:
             raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
+        if e.is_batch_boundary and stage_by_id[e.from_node_id] == stage_by_id[e.to_node_id]:
+            raise AppException(status_code=400, message="批次边界必须位于工段之间，同工段内不允许设置批次边界")
 
 
 async def publish_route(

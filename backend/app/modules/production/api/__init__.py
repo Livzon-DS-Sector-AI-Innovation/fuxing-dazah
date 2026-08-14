@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.modules.production.api.analytics import router as analytics_router
 from app.modules.production.api.assignment import router as assignment_router
 from app.modules.production.api.batch import router as batch_router
+from app.modules.production.api.equipment import router as equipment_router
 from app.modules.production.api.execution import router as execution_router
 from app.modules.production.api.intermediate import router as intermediate_router
 from app.modules.production.api.material import router as material_router
@@ -19,6 +20,7 @@ router.include_router(assignment_router)
 router.include_router(product_router)
 router.include_router(route_router)
 router.include_router(batch_router)
+router.include_router(equipment_router)
 router.include_router(execution_router)
 router.include_router(intermediate_router)
 router.include_router(material_router)

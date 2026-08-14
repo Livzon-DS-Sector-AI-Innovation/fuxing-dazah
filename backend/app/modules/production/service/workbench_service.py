@@ -467,11 +467,18 @@ def _classify_pending_starts(
 
 
 async def query_workbench(
-    db: AsyncSession, user_id: uuid.UUID,
+    db: AsyncSession, user_id: uuid.UUID, view_mode: str = "mine",
 ) -> WorkbenchOut:
-    """工作台待办查询：pending_start + pending_receive。"""
+    """工作台待办查询：pending_start + pending_receive。
+
+    view_mode=mine：只显示归属自己/无主的批次；all：显示全部，他人批次 can_operate=False。
+    """
     stages = await repo.get_user_stages(db, user_id)
     node_assignments = await repo.get_user_node_assignments(db, user_id)
+
+    def _can_operate_batch(b: Batch) -> bool:
+        """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人=仅读。"""
+        return b.owner_user_id is None or b.owner_user_id == user_id
 
     role = "stage_owner" if stages else "node_owner"
     stage_names = list({s.stage_name for s in stages})
@@ -663,6 +670,9 @@ async def query_workbench(
             edges_by_to, rework_sources, normal_outgoing,
             batch_completed, batch_in_progress, batch_node_done_at,
         ):
+            can_operate = _can_operate_batch(b)
+            if view_mode == "mine" and not can_operate:
+                continue
             completed = batch_completed.get(b.id, set())
             in_progress = batch_in_progress.get(b.id, set())
             items.append(WorkbenchItem(
@@ -676,6 +686,8 @@ async def query_workbench(
                 node_name=node.name,
                 stage_name=node.stage_name,
                 start_type=start_type,
+                batch_owner_name=b.owner_name,
+                can_operate=can_operate,
                 predecessor_batches=[],
                 node_assignees=[],
                 stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
@@ -714,6 +726,7 @@ async def query_workbench(
                 parent_ids = list({b.id for _, b in pairs})
                 parent_nos = [b.batch_no for _, b in pairs]
                 # 合并接收无单一 batch_id，面包屑全显示 pending
+                # 待接收是共享认领池：不按归属过滤，所有接收工段负责人均可操作
                 items.append(WorkbenchItem(
                     type="pending_receive",
                     route_id=route_id,
@@ -725,12 +738,14 @@ async def query_workbench(
                     parent_batch_ids=parent_ids,
                     predecessor_batches=parent_nos,
                     node_assignees=[],
+                    can_operate=True,
                     stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), set(), set()),
                 ))
             else:
                 for edge, b in pairs:
                     batch_comp = batch_completed.get(b.id, set())
                     batch_ip = batch_in_progress.get(b.id, set())
+                    # 待接收是共享认领池：不按归属过滤，所有接收工段负责人均可操作
                     items.append(WorkbenchItem(
                         type="pending_receive",
                         batch_id=b.id,
@@ -745,6 +760,7 @@ async def query_workbench(
                         parent_batch_ids=[b.id],
                         predecessor_batches=[],
                         node_assignees=[],
+                        can_operate=True,
                         stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), batch_comp, batch_ip),
                     ))
 
@@ -761,6 +777,9 @@ async def query_workbench(
                 continue
             b = next((b for b in batches if b.id == ex.batch_id), None)
             if not b:
+                continue
+            can_operate = _can_operate_batch(b)
+            if view_mode == "mine" and not can_operate:
                 continue
             # 检查是否是工段内最后一个节点
             is_last = True
@@ -784,6 +803,8 @@ async def query_workbench(
                 execution_id=ex.id,
                 execution_seq=ex.execution_seq,
                 owner_name=ex.owner_name,
+                batch_owner_name=b.owner_name,
+                can_operate=can_operate,
                 started_at=ex.started_at.isoformat() if ex.started_at else None,
                 is_last_in_stage=is_last,
                 predecessor_batches=[],
@@ -846,6 +867,9 @@ async def query_workbench(
                 last_node = next((node_map[nid] for nid in stage_node_ids if nid in node_map), None)
                 if not last_node:
                     continue
+                can_operate = _can_operate_batch(b)
+                if view_mode == "mine" and not can_operate:
+                    continue
                 items.append(WorkbenchItem(
                     type="ready_to_complete",
                     batch_id=b.id, batch_no=b.batch_no,
@@ -854,6 +878,8 @@ async def query_workbench(
                     route_name=route.route_name,
                     node_id=last_node.id, node_name=last_node.name,
                     stage_name=stage_name,
+                    batch_owner_name=b.owner_name,
+                    can_operate=can_operate,
                     predecessor_batches=[],
                     node_assignees=[],
                     missing_executions=missing_exec_by_batch.get(b.id, []),
@@ -935,6 +961,9 @@ async def query_workbench(
             continue
         b = recent_batches_map.get(ex.batch_id)
         if not b:
+            continue
+        # mine 模式按归属过滤：只显示自己/无主的完成记录
+        if view_mode == "mine" and not _can_operate_batch(b):
             continue
         p = product_map.get(route.product_id)
         recent.append(RecentCompletedItem(

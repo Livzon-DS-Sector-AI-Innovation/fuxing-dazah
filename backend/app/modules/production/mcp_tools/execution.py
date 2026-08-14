@@ -7,6 +7,7 @@ from typing import Any
 
 from fastmcp.tools.base import ToolResult
 
+from app.core.exceptions import AppException
 from app.modules.production.mcp_tools._helpers import (
     _BATCH_STATUS_CN,
     _SHANGHAI_TZ,
@@ -14,7 +15,6 @@ from app.modules.production.mcp_tools._helpers import (
     _get_latest_execution,
     _resolve_batch_and_node,
 )
-from app.core.exceptions import AppException
 from app.modules.production.schemas import ExecutionCompleteIn, ExecutionStartIn
 from app.modules.production.service.execution_service import (
     backfill_execution_fields,
@@ -80,7 +80,8 @@ async def change_batch_step_status(
         )
         try:
             execution = await start_execution(db, batch.id, payload, user)
-        except ValueError as e:
+        except (ValueError, AppException) as e:
+            # AppException 覆盖权限拒绝（含批次归属校验）与业务校验，直接透出文案
             return ToolResult(content=f"开始工序失败：{e}")
         except Exception:
             logger.exception("Unexpected error in start_execution for batch %s", batch_no)
@@ -187,7 +188,8 @@ async def backfill_step_fields(
     fvs = [_field_dict_to_in(f) for f in field_values]
     try:
         await backfill_execution_fields(db, execution.id, fvs, user)
-    except ValueError as e:
+    except (ValueError, AppException) as e:
+        # AppException 覆盖权限拒绝（含批次归属校验）与业务校验，直接透出文案
         return ToolResult(content=f"补录失败：{e}")
     except Exception:
         logger.exception("Unexpected error in backfill_execution_fields for batch %s", batch_no)

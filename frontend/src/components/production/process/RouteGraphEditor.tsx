@@ -19,11 +19,19 @@ import type {
 import { NodeFieldsDrawer } from './NodeFieldsDrawer'
 import { NodeIntermediatesEditor } from './NodeIntermediatesEditor'
 
+/** 编辑器内部行：附加稳定 _key（rowKey 若用可编辑字段，编辑时行重挂载导致输入框丢焦点） */
+type EditorNode = NodeIn & { _key: string }
+type EditorEdge = EdgeIn & { _key: string }
+
+let keySeq = 0
+const newKey = () => `new-${++keySeq}`
+
 /** 后端 RouteGraph → 编辑器内部状态（节点带字段；特殊边=非"相邻 normal"边） */
-function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: EdgeIn[] } {
+function graphToEditorState(graph: RouteGraph): { nodes: EditorNode[]; extraEdges: EditorEdge[] } {
   const sorted = [...graph.nodes].sort((a, b) => a.sort_order - b.sort_order)
   const codeById = new Map(graph.nodes.map(n => [n.id, n.node_code]))
-  const nodes: NodeIn[] = sorted.map((n, i) => ({
+  const nodes: EditorNode[] = sorted.map((n, i) => ({
+    _key: n.id,
     node_code: n.node_code,
     name: n.name,
     stage_name: n.stage_name ?? '',
@@ -56,8 +64,9 @@ function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: E
   const adjacentPairs = new Set(
     sorted.slice(0, -1).map((n, i) => `${n.node_code}->${sorted[i + 1].node_code}`),
   )
-  const extraEdges: EdgeIn[] = graph.edges
+  const extraEdges: EditorEdge[] = graph.edges
     .map(e => ({
+      _key: e.id,
       from_node_code: codeById.get(e.from_node_id) ?? '',
       to_node_code: codeById.get(e.to_node_id) ?? '',
       edge_type: e.edge_type,
@@ -76,8 +85,12 @@ function graphToEditorState(graph: RouteGraph): { nodes: NodeIn[]; extraEdges: E
   return { nodes, extraEdges }
 }
 
+/** 剥离编辑器内部 _key，避免随 payload 发给后端 */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- 解构用于剔除 _key
+const stripKey = <T extends { _key?: string }>({ _key, ...rest }: T): Omit<T, '_key'> => rest
+
 /** 编辑器状态 → 后端 RouteGraphIn：相邻自动 normal 边 + 特殊边合并去重 */
-function editorStateToGraphIn(nodes: NodeIn[], extraEdges: EdgeIn[]): {
+function editorStateToGraphIn(nodes: EditorNode[], extraEdges: EditorEdge[]): {
   nodes: NodeIn[]
   edges: EdgeIn[]
 } {
@@ -89,7 +102,7 @@ function editorStateToGraphIn(nodes: NodeIn[], extraEdges: EdgeIn[]): {
     allow_overlap: false,
   }))
   const seen = new Set<string>()
-  const merged: EdgeIn[] = []
+  const merged: (EdgeIn & { _key?: string })[] = []
   // 特殊边优先（可覆盖同 from/to 的自动边，如相邻但标了批次边界）
   for (const e of [...extraEdges, ...autoEdges]) {
     const key = `${e.from_node_code}->${e.to_node_code}:${e.edge_type}`
@@ -100,7 +113,10 @@ function editorStateToGraphIn(nodes: NodeIn[], extraEdges: EdgeIn[]): {
     if (e.edge_type === 'normal') seen.add(`pair:${pairKey}`)
     merged.push(e)
   }
-  return { nodes: nodes.map((n, i) => ({ ...n, sort_order: i + 1 })), edges: merged }
+  return {
+    nodes: nodes.map((n, i) => ({ ...stripKey(n), sort_order: i + 1 })),
+    edges: merged.map(stripKey),
+  }
 }
 
 interface Props {
@@ -113,8 +129,8 @@ interface Props {
 export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
   const { message } = App.useApp()
   const [initial] = useState(() => graphToEditorState(graph))
-  const [nodes, setNodes] = useState<NodeIn[]>(initial.nodes)
-  const [extraEdges, setExtraEdges] = useState<EdgeIn[]>(initial.extraEdges)
+  const [nodes, setNodes] = useState<EditorNode[]>(initial.nodes)
+  const [extraEdges, setExtraEdges] = useState<EditorEdge[]>(initial.extraEdges)
   const [fieldsIdx, setFieldsIdx] = useState<number | null>(null)
   const [intermediatesIdx, setIntermediatesIdx] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
@@ -134,6 +150,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
     setNodes([
       ...nodes,
       {
+        _key: newKey(),
         node_code: `N${nodes.length + 1}`,
         name: '',
         stage_name: '',
@@ -197,9 +214,9 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
   return (
     <div>
       <div style={{ marginBottom: 8, fontWeight: 600 }}>工序节点（按顺序自动串联）</div>
-      <Table<NodeIn>
+      <Table<EditorNode>
         size="small"
-        rowKey="node_code"
+        rowKey="_key"
         dataSource={nodes}
         pagination={false}
         columns={[
@@ -308,9 +325,9 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       <div style={{ margin: '16px 0 8px', fontWeight: 600 }}>
         特殊流转（分叉 / 回流 / 批次边界）
       </div>
-      <Table<EdgeIn>
+      <Table<EditorEdge>
         size="small"
-        rowKey={(e) => `${e.from_node_code}-${e.to_node_code}-${e.edge_type}-${e.is_batch_boundary}-${e.allow_overlap}`}
+        rowKey="_key"
         dataSource={extraEdges}
         pagination={false}
         columns={[
@@ -409,7 +426,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
         onClick={() =>
           setExtraEdges([
             ...extraEdges,
-            { from_node_code: '', to_node_code: '', edge_type: 'normal', is_batch_boundary: false, allow_overlap: false },
+            { _key: newKey(), from_node_code: '', to_node_code: '', edge_type: 'normal', is_batch_boundary: false, allow_overlap: false },
           ])
         }
       >

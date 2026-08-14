@@ -25,7 +25,10 @@ from app.modules.production.schemas import (
     MissingFieldOut,
     NodeExecutionListItem,
 )
-from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.assignment_service import (
+    require_batch_owner_access,
+    require_stage_permission,
+)
 from app.modules.production.service.planning_service import sync_plan_item_status
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
@@ -36,8 +39,13 @@ from app.platform.permission.deps import get_user_permissions
 async def _require_operator_permission(
     db: AsyncSession, user: User | None, node_id: uuid.UUID,
     route_id: uuid.UUID, stage_name: str | None,
+    batch: "Batch | None" = None,
 ) -> None:
-    """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。"""
+    """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。
+
+    batch 非空时追加归属校验（无主共享/归属自己可操作，归属他人 Forbidden）；
+    管理员权限豁免归属限制。
+    """
     from app.core.exceptions import ForbiddenException
 
     if user is None:
@@ -46,6 +54,8 @@ async def _require_operator_permission(
     if "production:batch:submit" in perms:
         return
     await require_stage_permission(db, user.id, node_id, route_id, stage_name)
+    if batch is not None:
+        await require_batch_owner_access(user.id, batch)
 
 
 def _build_field_values(
@@ -226,6 +236,7 @@ async def start_execution(
         await _require_operator_permission(
             db, user, payload.node_id, batch.route_id,
             route_node.stage_name if route_node else None,
+            batch=batch,
         )
 
     # 设备校验 + 快照
@@ -302,6 +313,10 @@ async def start_execution(
         batch.status = "in_progress"
     if batch.first_started_at is None:
         batch.first_started_at = now()
+    # 无主批次认领：谁先开始归谁
+    if batch.owner_user_id is None and user:
+        batch.owner_user_id = user.id
+        batch.owner_name = user.name
     await db.flush()
     await record_audit_log(
         db,
@@ -366,6 +381,7 @@ async def complete_execution(
         await _require_operator_permission(
             db, user, execution.node_id, batch.route_id,
             node.stage_name if node else None,
+            batch=batch,
         )
     # 从产出物类型配置读取 is_product（批量查询，不走全表扫描）
     output_type_ids = [o.intermediate_type_id for o in payload.intermediate_outputs]
@@ -441,6 +457,7 @@ async def backfill_execution_fields(
         await _require_operator_permission(
             db, user, execution.node_id, batch.route_id,
             node.stage_name if node else None,
+            batch=batch,
         )
     if not field_values:
         raise AppException(status_code=400, message="没有要补录的字段值")
@@ -493,6 +510,7 @@ async def abort_execution(
             await _require_operator_permission(
                 db, user, execution.node_id, batch.route_id,
                 node.stage_name if node else None,
+                batch=batch,
             )
         else:
             # 孤儿执行：批次已删除，回退到纯权限码校验

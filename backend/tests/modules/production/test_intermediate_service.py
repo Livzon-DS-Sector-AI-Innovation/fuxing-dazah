@@ -135,8 +135,8 @@ class TestUpdateIntermediateType:
 
 
 class TestDeleteIntermediateType:
-    async def test_soft_delete(self, db_session: AsyncSession) -> None:
-        """软删除后通过 get_detail 查询抛出 NotFoundException。"""
+    async def test_soft_delete_detail_still_visible(self, db_session: AsyncSession) -> None:
+        """软删除后 get_detail 仍可查询（含已删除，用于查看历史流水），且 is_deleted=True。"""
         obj = await intermediate_service.create_intermediate_type(
             db_session,
             IntermediateTypeCreate(code=rand_code("IM"), name="X"),
@@ -145,10 +145,10 @@ class TestDeleteIntermediateType:
         await intermediate_service.delete_intermediate_type(
             db_session, obj.id, user=None,
         )
-        with pytest.raises(NotFoundException):
-            await intermediate_service.get_intermediate_type_detail(
-                db_session, obj.id,
-            )
+        detail = await intermediate_service.get_intermediate_type_detail(
+            db_session, obj.id,
+        )
+        assert detail.is_deleted is True
 
     async def test_delete_nonexistent_rejected(
         self, db_session: AsyncSession,

@@ -1,6 +1,7 @@
 """工段工序负责人分配服务。"""
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,9 @@ from app.modules.production.schemas.assignment import (
     NodeAssignmentOut,
     StageAssignmentOut,
 )
+
+if TYPE_CHECKING:
+    from app.modules.production.models.batch import Batch
 
 # ── 工段负责人 ──
 
@@ -113,3 +117,13 @@ async def require_stage_permission(
     """检查工段权限，无权限时抛出 ForbiddenException。"""
     if not await check_stage_permission(db, user_id, node_id, route_id, stage_name):
         raise ForbiddenException("您没有该工段的操作权限")
+
+
+async def require_batch_owner_access(user_id: uuid.UUID, batch: "Batch") -> None:
+    """批次归属校验：无主=共享可操作；归属自己=可操作；归属他人=Forbidden。
+
+    管理员（production:batch:submit）在调用方先行放行。
+    """
+    if batch.owner_user_id is None or batch.owner_user_id == user_id:
+        return
+    raise ForbiddenException("该批次归属其他负责人，仅读")

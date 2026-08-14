@@ -85,14 +85,17 @@ async def query_user_processes(operator_id: str) -> ToolResult:
 
 
 @mcp.tool()
-async def query_user_active_batches(operator_id: str) -> ToolResult:
+async def query_user_active_batches(operator_id: str, view_all: bool = False) -> ToolResult:
     """查询指定用户负责的工序中，哪些批次正在进行中。
 
     返回用户负责的工序所在的活跃批次（pending / in_progress），
     以及每个批次当前在哪个工序上。仅返回包含用户负责工序的批次。
+    默认按批次归属过滤（无主共享 + 归属自己的可见）；view_all=True 时
+    返回全部并标注归属人。
 
     Args:
         operator_id: 用户的飞书 user_id 或姓名
+        view_all: 是否查看全部批次（默认 False，只看归属自己/无主的）
     """
     db = get_db()
     user = await resolve_user(db, operator_id)
@@ -141,6 +144,9 @@ async def query_user_active_batches(operator_id: str) -> ToolResult:
     count = 0
 
     for batch in batches:
+        # 归属过滤：默认只看无主共享或归属自己的批次；view_all 时全量返回并标注
+        if not view_all and batch.owner_user_id is not None and batch.owner_user_id != user.id:
+            continue
         if batch.route_id not in nodes_cache:
             nodes_cache[batch.route_id] = await repo.get_route_nodes(db, batch.route_id)
         if batch.id not in exec_cache:
@@ -187,7 +193,8 @@ async def query_user_active_batches(operator_id: str) -> ToolResult:
 
         lines.append(f"### {batch.batch_no}")
         quantity = batch.quantity if batch.quantity is not None else "—"
-        lines.append(f"- 产品：{product.product_name if product else '—'} | 路线：{route.route_name if route else '—'} | 状态：{_BATCH_STATUS_CN.get(batch.status, batch.status)} | 数量：{quantity} {batch.unit or ''}")
+        owner_hint = f" | 归属：{batch.owner_name}" if batch.owner_name else ""
+        lines.append(f"- 产品：{product.product_name if product else '—'} | 路线：{route.route_name if route else '—'} | 状态：{_BATCH_STATUS_CN.get(batch.status, batch.status)} | 数量：{quantity} {batch.unit or ''}{owner_hint}")
 
         # 进度概览（仅统计用户负责的工序，与表格一致）
         total_count = len(my_nodes)

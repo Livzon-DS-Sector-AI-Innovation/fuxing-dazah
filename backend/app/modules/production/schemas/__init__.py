@@ -23,6 +23,7 @@ from app.modules.production.schemas.batch import (
     MergeIn,
     MergeParentIn,
 )
+from app.modules.production.schemas.equipment import EquipmentOptionOut
 from app.modules.production.schemas.execution import (
     EquipmentSnapshotOut,
     ExecutionBackfillIn,
@@ -95,6 +96,7 @@ from app.modules.production.schemas.trace import (
 __all__ = [
     "StepCycleResponse",
     "StepCycleStat",
+    "EquipmentOptionOut",
     "BatchCreate",
     "BatchDetailOut",
     "BatchOut",

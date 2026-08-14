@@ -29,6 +29,10 @@ export interface WorkbenchItem {
   execution_id: string | null
   execution_seq: number | null
   owner_name: string | null
+  /** 批次归属人姓名快照（多负责人隔离）；无主批次为空 */
+  batch_owner_name: string | null
+  /** 当前用户是否可操作该批次（归属他人=仅读） */
+  can_operate: boolean
   started_at: string | null
   is_last_in_stage: boolean
   start_type?: string | null  // pending_start 卡片: normal | parallel | rework

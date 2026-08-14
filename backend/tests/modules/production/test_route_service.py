@@ -5,7 +5,7 @@
   发布后图冻结不可再编辑；环形流转无起点拒绝发布；不可达节点拒绝发布；
   工序名称路线内唯一约束
 - 路线复制：复制为新产品路线继承完整图结构
-- 边界边约束：批次边界边不允许开启流水线模式
+- 边界边约束：批次边界边不允许开启流水线模式、必须位于工段之间
 
 产品主数据的 CRUD 规则见 test_product_service.py。
 """
@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
-from app.modules.production.models import ProcessRoute, Product
+from app.modules.production.models import ProcessRoute, Product, RouteNode
 from app.modules.production.schemas import (
     EdgeIn,
     NodeIn,
@@ -156,6 +156,36 @@ class TestGraph:
         graph.edges[0].allow_overlap = True
         with pytest.raises(AppException, match="批次边界边不允许"):
             await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_batch_boundary_within_same_stage_rejected(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """批次边界必须位于工段之间：同工段内的边界边保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = RouteGraphIn(
+            nodes=[
+                NodeIn(node_code="A", name="发酵", stage_name="发酵", sort_order=1),
+                NodeIn(node_code="B", name="提炼一", stage_name="发酵", sort_order=2),
+            ],
+            edges=[EdgeIn(from_node_code="A", to_node_code="B", is_batch_boundary=True)],
+        )
+        with pytest.raises(AppException, match="同工段内不允许设置批次边界"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_publish_rejects_same_stage_boundary(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """发布兜底：草稿图中存在同工段边界边时发布被拒（绕过 save_graph 的脏数据）。"""
+        from sqlalchemy import update
+
+        _, route = await _draft_route(db_session)
+        await route_service.save_graph(db_session, route.id, build_graph_in(), user=None)
+        # 绕过 save_graph 校验，直接把 B 改为与 A 同工段，模拟脏数据
+        await db_session.execute(
+            update(RouteNode).where(RouteNode.name == "提炼一").values(stage_name="发酵")
+        )
+        with pytest.raises(AppException, match="同工段内不允许设置批次边界"):
+            await route_service.publish_route(db_session, route.id, user=None)
 
     async def test_duplicate_node_name_rejected(
         self, db_session: AsyncSession,

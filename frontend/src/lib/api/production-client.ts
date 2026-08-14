@@ -44,6 +44,37 @@ export async function fetchIntermediateTypesClient(params: {
   )
 }
 
+// ── 设备选项（当前用户可见范围，后端经 equipment.public_api 过滤）──
+export interface EquipmentOption {
+  id: string
+  equipment_no: string
+  name: string
+}
+
+export async function fetchEquipmentOptionsClient(params: {
+  keyword?: string
+  page?: number
+  page_size?: number
+} = {}): Promise<{ items: EquipmentOption[]; total: number }> {
+  const s = qs({
+    page: params.page ?? 1,
+    page_size: params.page_size ?? 20,
+    keyword: params.keyword ?? null,
+  })
+  return apiFetchPaginated<EquipmentOption>(
+    `${API_BASE}/api/v1/production/equipment-options?${s}`,
+  )
+}
+
+export async function fetchEquipmentBriefsClient(ids: string[]): Promise<EquipmentOption[]> {
+  const sp = new URLSearchParams()
+  ids.forEach(id => sp.append('ids', id))
+  const s = sp.toString()
+  return apiGet<EquipmentOption[]>(
+    `${API_BASE}/api/v1/production/equipment-briefs${s ? `?${s}` : ''}`,
+  )
+}
+
 export async function fetchRoutesClient(productId: string, status?: string): Promise<ProcessRoute[]> {
   const params: Record<string, string | number | undefined> = { product_id: productId, page: 1, page_size: 50 }
   if (status) { params.status = status }
