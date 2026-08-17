@@ -1,18 +1,19 @@
 from fastapi import APIRouter
 
 from app.modules.administration import router as administration_router
-from app.modules.hr import ai_exam_router
 from app.modules.energy import router as energy_router
 from app.modules.environment import router as environment_router
 from app.modules.equipment import router as equipment_router
+from app.modules.hr import ai_exam_router
 from app.modules.hr import router as hr_router
+from app.modules.meter import router as meter_router
 from app.modules.procurement import router as procurement_router
 from app.modules.production import router as production_router
 from app.modules.quality import router as quality_router
 from app.modules.registration import router as registration_router
 from app.modules.research import router as research_router
 from app.modules.safety import router as safety_router
-from app.modules.meter import router as meter_router
+from app.modules.toolbox import router as toolbox_router
 from app.modules.warehouse import router as warehouse_router
 from app.platform.identity.api import (
     dept_router,
@@ -42,6 +43,7 @@ api_router.include_router(safety_router, prefix="/safety", tags=["安全管理"]
 api_router.include_router(environment_router, prefix="/environment", tags=["环保管理"])
 api_router.include_router(energy_router, prefix="/energy", tags=["能源管理"])
 api_router.include_router(warehouse_router, prefix="/warehouse", tags=["仓储管理"])
+api_router.include_router(toolbox_router, prefix="/toolbox", tags=["工具箱"])
 api_router.include_router(procurement_router, prefix="/procurement", tags=["采购管理"])
 api_router.include_router(
     administration_router,

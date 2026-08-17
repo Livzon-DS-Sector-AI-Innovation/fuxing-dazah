@@ -13,6 +13,8 @@ import_module("app.platform.audit.models")
 import_module("app.platform.identity.models")
 import_module("app.platform.permission.models")
 for module in BUSINESS_MODULES:
+    if module.db_schema is None:
+        continue  # 无数据库表的模块（如 toolbox）
     import_module(f"app.modules.{module.code}.models")
 
 config = context.config
