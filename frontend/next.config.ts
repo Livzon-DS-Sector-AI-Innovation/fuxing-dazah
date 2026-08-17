@@ -19,10 +19,11 @@ const nextConfig: NextConfig = {
   },
 
   experimental: {
-    // Server Action 请求体大小限制（与后端 MAX_UPLOAD_SIZE_MB=10 保持一致）
+    // Server Action 请求体大小限制：与后端工具箱上传上限（api.py MAX_UPLOAD_BYTES=100MB）保持一致，
+    // 否则 10-100MB 的文档上传会被 Next.js 在到达后端前以 413 拒绝。
     // 默认仅 1MB，不足以传输手机拍照图片（通常 3-8MB）
     serverActions: {
-      bodySizeLimit: '10mb',
+      bodySizeLimit: '100mb',
     },
   },
 

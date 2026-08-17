@@ -32,7 +32,7 @@ export interface ToolInfo {
 export interface StepRunData {
   execution_id: string
   data: Record<string, unknown>
-  file_ids: Record<string, string>
+  file_ids: Record<string, string[]> // 恒为列表（单文件也是单元素列表）
 }
 
 export interface ExecutionInfo {
