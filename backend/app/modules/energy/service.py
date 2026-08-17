@@ -9,7 +9,6 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import async_session_factory
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
@@ -21,7 +20,6 @@ from app.modules.energy.models import (
     EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
-    EnergyErrorLog,
     EnergyNitrogenPushConfig,
     EnergyTypeConfig,
     EnergyWorkshopConfig,
@@ -397,73 +395,6 @@ async def get_collect_log_detail(
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
     }
-
-
-# ── 接口错误日志 ──
-
-
-async def record_unhandled_error(
-    *,
-    method: str,
-    path: str,
-    path_params: dict[str, Any],
-    query_params: dict[str, Any],
-    exception_type: str,
-    message: str,
-    traceback_text: str,
-    request_id: str | None,
-) -> None:
-    """带外写入接口错误日志（独立 session，避免受请求 session 失败影响）。"""
-    session = async_session_factory()
-    try:
-        await repo.create_error_log(
-            session,
-            method=method,
-            path=path,
-            path_params=path_params,
-            query_params=query_params,
-            exception_type=exception_type,
-            message=message,
-            traceback=traceback_text,
-            request_id=request_id,
-        )
-        await session.commit()
-    except Exception:
-        await session.rollback()
-        logger.exception("写入 energy 接口错误日志失败: path=%s", path)
-    finally:
-        await session.close()
-
-
-async def list_error_logs(
-    db: AsyncSession,
-    *,
-    path_keyword: str | None = None,
-    exception_type: str | None = None,
-    page: int = 1,
-    page_size: int = 20,
-) -> tuple[list[EnergyErrorLog], int]:
-    """查询接口错误日志列表。"""
-    return await repo.list_error_logs(
-        db,
-        path_keyword=path_keyword,
-        exception_type=exception_type,
-        page=page,
-        page_size=page_size,
-    )
-
-
-async def get_error_log(db: AsyncSession, error_id: UUID) -> EnergyErrorLog:
-    """查询单条接口错误日志。"""
-    obj = await repo.get_error_log(db, error_id)
-    if obj is None:
-        raise NotFoundException("接口错误日志", str(error_id))
-    return obj
-
-
-async def clear_error_logs(db: AsyncSession) -> int:
-    """清空所有接口错误日志（软删除）。"""
-    return await repo.clear_error_logs(db)
 
 
 # ── 总览 ──

@@ -183,38 +183,6 @@ class EnergyCollectLog(BaseModel):
     )
 
 
-class EnergyErrorLog(BaseModel):
-    """接口错误日志表 — 记录 energy 模块接口未处理异常，便于问题排查。"""
-
-    __tablename__ = "energy_error_logs"
-    __table_args__ = ({"schema": "energy"},)
-
-    method: Mapped[str] = mapped_column(
-        String(10), nullable=False, comment="HTTP 方法"
-    )
-    path: Mapped[str] = mapped_column(
-        String(500), nullable=False, comment="请求路径"
-    )
-    path_params: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, comment="路径参数（如 log_id）"
-    )
-    query_params: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, comment="查询参数"
-    )
-    exception_type: Mapped[str] = mapped_column(
-        String(200), nullable=False, comment="异常类型名"
-    )
-    message: Mapped[str] = mapped_column(
-        Text, nullable=False, comment="异常消息"
-    )
-    traceback: Mapped[str] = mapped_column(
-        Text, nullable=False, comment="完整堆栈"
-    )
-    request_id: Mapped[str | None] = mapped_column(
-        String(50), nullable=True, comment="请求ID，用于关联审计日志"
-    )
-
-
 # ── 预警系统 ──
 
 

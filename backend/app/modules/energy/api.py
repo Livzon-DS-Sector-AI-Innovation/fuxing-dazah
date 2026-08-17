@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from collections.abc import AsyncGenerator
 from datetime import datetime
 from uuid import UUID
@@ -42,7 +41,6 @@ from app.modules.energy.schemas import (
     EnergyDeviceConfigCreate,
     EnergyDeviceConfigResponse,
     EnergyDeviceConfigUpdate,
-    EnergyErrorLogResponse,
     EnergyNitrogenPushConfigCreate,
     EnergyNitrogenPushConfigResponse,
     EnergyNitrogenPushConfigUpdate,
@@ -74,21 +72,17 @@ async def _log_energy_request(request: Request) -> None:
 
 
 async def _capture_unhandled_error(request: Request) -> AsyncGenerator[None, None]:
-    """捕获 energy 接口未处理异常并落库（仅 500 类，业务/校验异常跳过）。"""
+    """捕获 energy 接口未处理异常并记录日志（仅 500 类，业务/校验异常跳过）。"""
     try:
         yield
     except Exception as exc:
         if isinstance(exc, (HTTPException, RequestValidationError)):
             raise
-        await service.record_unhandled_error(
-            method=request.method,
-            path=request.url.path,
-            path_params=dict(request.path_params),
-            query_params=dict(request.query_params),
-            exception_type=type(exc).__name__,
-            message=str(exc),
-            traceback_text=traceback.format_exc(),
-            request_id=getattr(request.state, "request_id", None),
+        logger.exception(
+            "energy 接口未处理异常: %s %s | path_params=%s query_params=%s | %s: %s",
+            request.method, request.url.path,
+            dict(request.path_params), dict(request.query_params),
+            type(exc).__name__, exc,
         )
         raise
 
@@ -426,48 +420,6 @@ async def get_collect_log_detail(
 ) -> JSONResponse:
     result = await service.get_collect_log_detail(db, log_id)
     return success_response(result)
-
-
-# ── 接口错误日志 ──
-
-
-@router.get("/error-logs", summary="查询接口错误日志")
-async def list_error_logs(
-    path_keyword: str | None = Query(default=None, description="路径关键词"),
-    exception_type: str | None = Query(default=None, description="异常类型"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("energy:error_log:read")),
-) -> JSONResponse:
-    items, total = await service.list_error_logs(
-        db,
-        path_keyword=path_keyword,
-        exception_type=exception_type,
-        page=page,
-        page_size=page_size,
-    )
-    data = [EnergyErrorLogResponse.model_validate(i).model_dump() for i in items]
-    return paginated_response(data, page, page_size, total)
-
-
-@router.get("/error-logs/{error_id}", summary="查询单条接口错误日志")
-async def get_error_log(
-    error_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("energy:error_log:read")),
-) -> JSONResponse:
-    obj = await service.get_error_log(db, error_id)
-    return success_response(EnergyErrorLogResponse.model_validate(obj).model_dump())
-
-
-@router.delete("/error-logs", summary="清空接口错误日志")
-async def clear_error_logs(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_permission("energy:error_log:delete")),
-) -> JSONResponse:
-    count = await service.clear_error_logs(db)
-    return success_response({"deleted_count": count}, message=f"已清除 {count} 条接口错误日志")
 
 
 # ── 能源总览 ──

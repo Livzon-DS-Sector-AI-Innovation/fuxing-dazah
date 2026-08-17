@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field
 
@@ -108,22 +108,6 @@ class CollectLogResponse(BaseModel):
     success_count: int
     expected_count: int
     error_message: str | None
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class EnergyErrorLogResponse(BaseModel):
-    """接口错误日志响应。"""
-    id: StrUUID
-    method: str
-    path: str
-    path_params: dict[str, Any]
-    query_params: dict[str, Any]
-    exception_type: str
-    message: str
-    traceback: str
-    request_id: str | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
