@@ -125,6 +125,24 @@ PERMISSIONS: list[PermissionDef] = [
         description="清空采集日志历史记录",
     ),
 
+    # ── 接口错误日志 ──
+    PermissionDef(
+        code="energy:error_log:read",
+        name="查看接口错误日志",
+        module="energy",
+        resource="error_log",
+        action="read",
+        description="查看 energy 模块接口错误日志列表和详情",
+    ),
+    PermissionDef(
+        code="energy:error_log:delete",
+        name="清空接口错误日志",
+        module="energy",
+        resource="error_log",
+        action="delete",
+        description="清空 energy 模块接口错误日志历史记录",
+    ),
+
     # ── 预警管理 ──
     PermissionDef(
         code="energy:alert:read",

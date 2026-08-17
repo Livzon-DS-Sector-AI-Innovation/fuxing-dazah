@@ -19,6 +19,7 @@ from app.modules.energy.models import (
     EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
+    EnergyErrorLog,
     EnergyNitrogenPushConfig,
     EnergyTypeConfig,
     EnergyWorkshopConfig,
@@ -812,6 +813,88 @@ async def get_collect_log_detail(
     rows = list(result.all())
 
     return log, rows
+
+
+# ── 接口错误日志 ──
+
+
+async def create_error_log(
+    db: AsyncSession,
+    *,
+    method: str,
+    path: str,
+    path_params: dict[str, Any],
+    query_params: dict[str, Any],
+    exception_type: str,
+    message: str,
+    traceback: str,
+    request_id: str | None,
+) -> EnergyErrorLog:
+    """写入一条接口错误日志。"""
+    obj = EnergyErrorLog(
+        method=method,
+        path=path,
+        path_params=path_params,
+        query_params=query_params,
+        exception_type=exception_type,
+        message=message,
+        traceback=traceback,
+        request_id=request_id,
+    )
+    db.add(obj)
+    await db.flush()
+    return obj
+
+
+async def list_error_logs(
+    db: AsyncSession,
+    *,
+    path_keyword: str | None = None,
+    exception_type: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[EnergyErrorLog], int]:
+    """分页查询接口错误日志（按创建时间倒序）。"""
+    conditions = [EnergyErrorLog.is_deleted == False]  # noqa: E712
+    if path_keyword:
+        conditions.append(EnergyErrorLog.path.ilike(f"%{path_keyword}%"))
+    if exception_type:
+        conditions.append(EnergyErrorLog.exception_type == exception_type)
+
+    total = await db.scalar(
+        select(func.count()).select_from(EnergyErrorLog).where(*conditions)
+    )
+    result = await db.execute(
+        select(EnergyErrorLog)
+        .where(*conditions)
+        .order_by(EnergyErrorLog.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return list(result.scalars()), int(total or 0)
+
+
+async def get_error_log(
+    db: AsyncSession, error_id: UUID
+) -> EnergyErrorLog | None:
+    """查询单条接口错误日志。"""
+    result = await db.execute(
+        select(EnergyErrorLog).where(
+            EnergyErrorLog.id == error_id,
+            EnergyErrorLog.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def clear_error_logs(db: AsyncSession) -> int:
+    """清空所有接口错误日志（软删除）。返回清除的记录数。"""
+    result = await db.execute(
+        sa_update(EnergyErrorLog)
+        .where(EnergyErrorLog.is_deleted == False)  # noqa: E712
+        .values(is_deleted=True)
+    )
+    return result.rowcount  # type: ignore[attr-defined,no-any-return]
 
 
 # ── 预警规则 ──
