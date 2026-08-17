@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,21 +71,39 @@ async def _log_energy_request(request: Request) -> None:
     )
 
 
+async def _capture_unhandled_error(request: Request) -> AsyncGenerator[None, None]:
+    """捕获 energy 接口未处理异常并记录日志（仅 500 类，业务/校验异常跳过）。"""
+    try:
+        yield
+    except Exception as exc:
+        if isinstance(exc, (HTTPException, RequestValidationError)):
+            raise
+        logger.exception(
+            "energy 接口未处理异常: %s %s | path_params=%s query_params=%s | %s: %s",
+            request.method, request.url.path,
+            dict(request.path_params), dict(request.query_params),
+            type(exc).__name__, exc,
+        )
+        raise
+
+
 _log_dep = Depends(_log_energy_request)
+_error_dep = Depends(_capture_unhandled_error)
 
 router = create_module_router(MODULES_BY_CODE["energy"])
 router.dependencies.append(_log_dep)
+router.dependencies.append(_error_dep)
 
-device_router = APIRouter(dependencies=[_log_dep])
-data_router = APIRouter(dependencies=[_log_dep])
-collect_router = APIRouter(dependencies=[_log_dep])
-alert_router = APIRouter(dependencies=[_log_dep])
-alert_record_router = APIRouter(dependencies=[_log_dep])
-alert_process_router = APIRouter(dependencies=[_log_dep])
-type_config_router = APIRouter(dependencies=[_log_dep])
-workshop_config_router = APIRouter(dependencies=[_log_dep])
-daily_report_router = APIRouter(dependencies=[_log_dep])
-nitrogen_report_router = APIRouter(dependencies=[_log_dep])
+device_router = APIRouter(dependencies=[_log_dep, _error_dep])
+data_router = APIRouter(dependencies=[_log_dep, _error_dep])
+collect_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_record_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_process_router = APIRouter(dependencies=[_log_dep, _error_dep])
+type_config_router = APIRouter(dependencies=[_log_dep, _error_dep])
+workshop_config_router = APIRouter(dependencies=[_log_dep, _error_dep])
+daily_report_router = APIRouter(dependencies=[_log_dep, _error_dep])
+nitrogen_report_router = APIRouter(dependencies=[_log_dep, _error_dep])
 
 
 # ── 平台信息 ──
