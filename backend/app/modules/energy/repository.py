@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +12,7 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.energy.collect_settings import CST
 from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
@@ -769,16 +770,32 @@ async def clear_collect_logs(db: AsyncSession) -> int:
     return result.rowcount  # type: ignore[attr-defined,no-any-return]
 
 
+async def has_collect_log_for_date(db: AsyncSession, day: date) -> bool:
+    """判断指定日期（Asia/Shanghai）是否已产生采集日志。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyCollectLog.collect_time)
+    )
+    result = await db.execute(
+        select(func.count())
+        .select_from(EnergyCollectLog)
+        .where(
+            EnergyCollectLog.is_deleted == False,  # noqa: E712
+            cst_date == day,
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
 async def get_collect_log_detail(
     db: AsyncSession,
     log_id: UUID,
-    time_window_seconds: int = 120,
 ) -> tuple[EnergyCollectLog | None, list[tuple[EnergyData, EnergyDeviceConfig]]]:
     """获取采集日志详情及关联的能耗数据。
 
-    通过 platform_code + 时间窗口匹配 EnergyData 和 EnergyCollectLog。
-    窗口从 collect_time（采集开始）前 120s 到 created_at（日志写入 = 采集结束）后 120s，
-    确保覆盖逐小时回退等多设备长时间采集场景。
+    按「数据归属日」匹配：采集日志采的是前一天的数据，
+    故查出该平台 timestamp 落在目标日（collect_time 前一天，CST）的数据。
+    不再依赖 collected_at，避免多次采集 on conflict 更新 collected_at 后，
+    较早日志的 ±120s 窗口匹配不到数据（详情显示「未找到关联的设备采集数据」）。
     """
     log = await db.scalar(
         select(EnergyCollectLog).where(
@@ -789,11 +806,10 @@ async def get_collect_log_detail(
     if log is None:
         return None, []
 
-    # 下界：采集开始前 buffer；上界：日志写入后 buffer
-    # created_at 在整批采集结束后才写入，保证覆盖所有设备的 collected_at
-    window_start = log.collect_time - timedelta(seconds=time_window_seconds)
-    window_end = log.created_at + timedelta(seconds=time_window_seconds)
+    # 目标采集日 = collect_time（CST）的前一天
+    target_day = (log.collect_time.astimezone(CST) - timedelta(days=1)).date()
 
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
     query = (
         select(EnergyData, EnergyDeviceConfig)
         .join(
@@ -802,8 +818,7 @@ async def get_collect_log_detail(
         )
         .where(
             EnergyDeviceConfig.platform_code == log.platform_code,
-            EnergyData.collected_at >= window_start,
-            EnergyData.collected_at <= window_end,
+            cst_date == target_day,
             EnergyData.is_deleted == False,  # noqa: E712
         )
         .order_by(EnergyData.timestamp.desc())

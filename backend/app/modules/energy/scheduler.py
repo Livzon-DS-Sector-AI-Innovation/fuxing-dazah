@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import Date, func, select
 from sqlalchemy import cast as sa_cast
@@ -29,8 +29,8 @@ from app.platform.scheduler import (
 
 logger = logging.getLogger(__name__)
 
-# 上次每日采集日期（防同一天重复执行）
-_last_daily_collect_date: str = ""
+# 上次每日采集日期（本进程内防长采集期间重复触发）
+_last_daily_collect_date: date | None = None
 
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
@@ -340,7 +340,7 @@ async def energy_daily_collect_coro() -> None:
     由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
     当当前时间 >= 全局 daily_collect_time 时（精确到分钟），
     拉取所有启用设备昨天 0-23 小时的数据。
-    同一天不重复执行。
+    当天已采过（存在采集日志）则不重复执行，重启 / 多 worker 下也可靠。
     """
     global _last_daily_collect_date
 
@@ -349,19 +349,25 @@ async def energy_daily_collect_coro() -> None:
 
     now = datetime.now(CST)
     current_time = now.strftime("%H:%M")
-    today_str = now.strftime("%Y-%m-%d")
+    today = now.date()
 
     trigger_time = get_daily_collect_time()
     # 当前时间未到触发时间，跳过
     if current_time < trigger_time:
         return
 
-    # 今天已执行过，跳过
-    if _last_daily_collect_date == today_str:
+    # 本进程内已触发过（防长采集期间本进程重复触发）
+    if _last_daily_collect_date == today:
         return
 
-    _last_daily_collect_date = today_str
-    logger.info("触发每日统一采集: time=%s, date=%s", trigger_time, today_str)
+    # 跨进程 / 重启去重：当天已产生采集日志则跳过
+    async with async_session_factory() as db:
+        if await repo.has_collect_log_for_date(db, today):
+            _last_daily_collect_date = today
+            return
+
+    _last_daily_collect_date = today  # 先置位，防长采集期间重复
+    logger.info("触发每日统一采集: time=%s, date=%s", trigger_time, today)
 
     try:
         await _daily_collect_all_platforms()
