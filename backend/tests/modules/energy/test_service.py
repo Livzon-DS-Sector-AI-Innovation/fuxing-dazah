@@ -14,14 +14,14 @@ from app.modules.energy.schemas import (
 
 
 @pytest.mark.asyncio
-async def test_create_device_config_service(db_session, sample_device_config_data):
+async def test_create_device_config_service(db_session, sample_device_config_data, water_energy_type_config):
     data = EnergyDeviceConfigCreate(**sample_device_config_data)
     obj = await service.create_device_config(db_session, data)
     assert obj.platform_code == "zhiheng"
 
 
 @pytest.mark.asyncio
-async def test_create_duplicate_raises(db_session, sample_device_config_data):
+async def test_create_duplicate_raises(db_session, sample_device_config_data, water_energy_type_config):
     data = EnergyDeviceConfigCreate(**sample_device_config_data)
     await service.create_device_config(db_session, data)
 
@@ -36,7 +36,7 @@ async def test_get_device_config_not_found(db_session):
 
 
 @pytest.mark.asyncio
-async def test_update_device_config_service(db_session, sample_device_config_data):
+async def test_update_device_config_service(db_session, sample_device_config_data, water_energy_type_config):
     data = EnergyDeviceConfigCreate(**sample_device_config_data)
     created = await service.create_device_config(db_session, data)
 
@@ -46,7 +46,7 @@ async def test_update_device_config_service(db_session, sample_device_config_dat
 
 
 @pytest.mark.asyncio
-async def test_delete_device_config_service(db_session, sample_device_config_data):
+async def test_delete_device_config_service(db_session, sample_device_config_data, water_energy_type_config):
     data = EnergyDeviceConfigCreate(**sample_device_config_data)
     created = await service.create_device_config(db_session, data)
     await service.delete_device_config(db_session, created.id)

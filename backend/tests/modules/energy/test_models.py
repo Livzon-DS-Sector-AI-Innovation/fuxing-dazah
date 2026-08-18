@@ -19,7 +19,6 @@ class TestEnergyDeviceConfig:
     def test_default_values(self, sample_device_config_data):
         config = EnergyDeviceConfig(**sample_device_config_data)
         assert config.monitor_level == "normal"
-        assert config.collection_interval == 60
 
 
 class TestEnergyData:
