@@ -23,6 +23,7 @@ from app.modules.energy.collect_settings import (
 from app.modules.energy.schemas import (
     AlertRecordProcessRequest,
     AlertRuleCandidate,
+    ClientErrorLogRequest,
     CollectLogResponse,
     CollectSettingsResponse,
     CollectSettingsUpdate,
@@ -1060,6 +1061,25 @@ async def get_nitrogen_push_personnel_candidates(
     return success_response(
         [PersonnelCandidate(**c).model_dump(mode="json") for c in candidates]
     )
+
+
+@router.post("/client-error-logs", summary="上报前端错误日志")
+async def report_client_error(data: ClientErrorLogRequest) -> JSONResponse:
+    """接收 energy 前端上报的错误，记录到日志文件（不落库）。
+
+    无需登录校验：错误上报本身应在鉴权异常时也能正常工作。
+    请求来源 IP 由 _log_energy_request 统一记录。
+    """
+    logger.error(
+        "energy 前端报错: page=%s | api=%s status=%s | component=%s | %s%s",
+        data.page_url or "-",
+        data.api_url or "-",
+        data.status if data.status is not None else "-",
+        data.component or "-",
+        data.message,
+        f"\n{data.stack}" if data.stack else "",
+    )
+    return success_response(None, message="已记录")
 
 
 router.include_router(device_router, prefix="/devices")

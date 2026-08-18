@@ -5,7 +5,7 @@ import { Select, Button, Switch, App, Popconfirm, TimePicker } from 'antd'
 import dayjs from 'dayjs'
 import { ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
-import { CollectLogTable, CollectLogDetailDrawer } from '@/components/energy'
+import { CollectLogTable, CollectLogDetailDrawer, EnergyErrorReporter } from '@/components/energy'
 import { getCollectLogs, triggerCollect, getCollectSettings, updateCollectSettings, clearCollectLogs } from '@/actions/energy'
 import type { CollectLog, PaginatedResponse, CollectSettings } from '@/types/energy'
 
@@ -129,6 +129,9 @@ export default function CollectLogsPage() {
         background: '#fafaf9',
       }}
     >
+      {/* ════ 前端错误上报 ════ */}
+      <EnergyErrorReporter />
+
       {/* ════ 标题区 ════ */}
       <h1
         style={{

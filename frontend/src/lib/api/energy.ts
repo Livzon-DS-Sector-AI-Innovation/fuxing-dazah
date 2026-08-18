@@ -43,7 +43,9 @@ import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/htt
 
 // Server Actions 调用后端用绝对 URL，客户端调用用相对 URL（经 Next.js rewrites 代理）
 const SERVER_API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
-const CLIENT_API_BASE = ''
+// 客户端调用优先使用 NEXT_PUBLIC_API_BASE_URL（Docker 构建时注入），
+// 未配置时回退为空字符串走 Next.js rewrites 代理（本地开发）。
+const CLIENT_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
 // ── 平台信息 ──
 export interface PlatformInfo {
