@@ -132,6 +132,17 @@ class CollectSettingsUpdate(BaseModel):
     daily_collect_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日统一采集触发时间 HH:MM")
 
 
+class ClientErrorLogRequest(BaseModel):
+    """前端错误上报请求（记录到日志文件，不落库）"""
+    message: str = Field(..., max_length=2000, description="错误信息")
+    stack: str | None = Field(default=None, max_length=10000, description="堆栈信息")
+    page_url: str | None = Field(default=None, max_length=500, description="页面地址")
+    api_url: str | None = Field(default=None, max_length=500, description="失败接口地址")
+    status: int | None = Field(default=None, description="HTTP 状态码")
+    component: str | None = Field(default=None, max_length=200, description="组件名")
+    occurred_at: datetime | None = Field(default=None, description="客户端发生时间")
+
+
 # ── 预警系统 ──
 
 AlertLevel = Literal["info", "warning", "critical", "emergency"]
