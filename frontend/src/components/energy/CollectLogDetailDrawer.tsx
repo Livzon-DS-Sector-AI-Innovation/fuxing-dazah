@@ -14,6 +14,7 @@ import {
   EnergyTypeMeta,
 } from '@/types/energy'
 import { fetchCollectLogDetailClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
+import { reportEnergyError } from '@/lib/energy/error-report'
 
 // ── 轻奢 Pill ──
 
@@ -188,6 +189,12 @@ export function CollectLogDetailDrawer({
       .catch((err) => {
         if (!cancelled) {
           console.error('获取采集日志详情失败:', err)
+          reportEnergyError({
+            message: err instanceof Error ? err.message : String(err),
+            api_url: `/api/v1/energy/collect/logs/${logId}/detail`,
+            page_url: window.location.href,
+            component: 'CollectLogDetailDrawer',
+          })
           message.error('获取采集日志详情失败')
         }
       })
