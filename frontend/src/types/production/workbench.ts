@@ -26,6 +26,8 @@ export interface WorkbenchItem {
   node_assignees: NodeAssigneeInfo[]
   boundary_edge_id: string | null
   parent_batch_ids: string[]
+  /** 接收建议子批次号：根批号 + 目标工段尾缀；未配置尾缀或合并场景为空 */
+  suggested_batch_no?: string | null
   execution_id: string | null
   execution_seq: number | null
   owner_name: string | null
@@ -92,6 +94,14 @@ export interface StageAssignment {
   stage_name: string
   route_id: string
   created_at: string
+}
+
+export interface StageSuffixItem {
+  id: string | null
+  route_id: string
+  stage_name: string
+  suffix: string
+  updated_at: string | null
 }
 
 export interface NodeAssignment {

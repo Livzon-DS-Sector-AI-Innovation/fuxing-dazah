@@ -2,6 +2,7 @@
 
 import math
 import uuid
+from collections import defaultdict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,10 +26,11 @@ from app.modules.production.schemas import (
     MissingFieldOut,
     NodeExecutionListItem,
 )
-from app.modules.production.service.assignment_service import (
-    require_batch_owner_access,
-    require_stage_permission,
+from app.modules.production.service.assignment_service import require_operator_access
+from app.modules.production.service.intermediate_service import (
+    get_consumed_quantity_map,
 )
+from app.modules.production.service.line_service import resolve_user_line_ids
 from app.modules.production.service.planning_service import sync_plan_item_status
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
@@ -43,7 +45,9 @@ async def _require_operator_permission(
 ) -> None:
     """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。
 
-    batch 非空时追加归属校验（无主共享/归属自己可操作，归属他人 Forbidden）；
+    batch 归属他人时（归属人通常是工段负责人）：
+    - 工序级负责人（NodeAssignment）豁免归属限制，可操作自己负责的工序；
+    - 工段级负责人（StageAssignment）保持归属隔离（同工段多负责人各自认领批次）。
     管理员权限豁免归属限制。
     """
     from app.core.exceptions import ForbiddenException
@@ -53,9 +57,9 @@ async def _require_operator_permission(
     perms = await get_user_permissions(str(user.id), db)
     if "production:batch:submit" in perms:
         return
-    await require_stage_permission(db, user.id, node_id, route_id, stage_name)
-    if batch is not None:
-        await require_batch_owner_access(user.id, batch)
+    await require_operator_access(
+        db, user.id, node_id, route_id, stage_name, batch,
+    )
 
 
 def _build_field_values(
@@ -281,11 +285,30 @@ async def start_execution(
                 created_by=user.id if user else None,
             )
         )
-    # 中间体消耗记录（批量查询产出源，避免 N+1）
+    # 中间体消耗记录（批量查询产出源，避免 N+1；行锁串行化并发余量校验）
     output_ids = [c.output_id for c in payload.intermediate_consumptions]
     output_map: dict[uuid.UUID, BatchIntermediateOutput] = {}
     if output_ids:
-        output_map = {o.id: o for o in await repo.get_intermediate_outputs_by_ids(db, output_ids)}
+        output_map = {
+            o.id: o
+            for o in await repo.get_intermediate_outputs_by_ids(
+                db, output_ids, for_update=True,
+            )
+        }
+
+    # 消耗可见产线集合：操作人绑定 → 批次负责人绑定兜底 → 皆无则拒绝产线产出
+    visible_line_ids: set[uuid.UUID] | None = None
+    if user and output_ids:
+        visible_line_ids = set(
+            await resolve_user_line_ids(db, user.id, batch.owner_user_id)
+        )
+
+    # 余量校验：历史已消耗 + 本次消耗 ≤ 产出数量（硬拦截，防超耗）
+    consumed_map = await get_consumed_quantity_map(db, output_ids)
+    request_map: defaultdict[uuid.UUID, float] = defaultdict(float)
+    for c in payload.intermediate_consumptions:
+        request_map[c.output_id] += c.quantity
+
     for c in payload.intermediate_consumptions:
         output = output_map.get(c.output_id)
         if not output:
@@ -294,6 +317,23 @@ async def start_execution(
             raise AppException(
                 status_code=400,
                 message="消耗的中间体类型与产出源类型不匹配",
+            )
+        # 产线可见性校验：无产线产出（line_id=None）过渡期放行；其余必须 ∈ 可见产线集合
+        if visible_line_ids is not None and output.line_id and output.line_id not in visible_line_ids:
+            raise AppException(
+                status_code=400,
+                message="该中间体不在您负责的产线内",
+            )
+        # 余量校验：按产出汇总（同一产出本次多行合并计算）
+        requested = request_map.get(c.output_id, 0.0)
+        available = output.quantity - consumed_map.get(c.output_id, 0.0)
+        if requested > available + 1e-9:
+            raise AppException(
+                status_code=400,
+                message=(
+                    f"消耗数量超出该中间体批次的可用余量"
+                    f"（余量 {available:g}{output.unit}）"
+                ),
             )
         db.add(
             BatchIntermediateConsumption(
@@ -393,6 +433,22 @@ async def complete_execution(
         missing = set(output_type_ids) - set(is_product_map.keys())
         if missing:
             raise NotFoundException("中间体类型", ", ".join(str(m) for m in missing))
+
+    # 产线三级 fallback 校验：操作人绑定 → 批次负责人绑定兜底 → 拒绝。
+    # 仅在有产出且 user 存在时校验——MCP 路径结束工序不传产出，必须豁免；
+    # user=None 仅出现在内部调用/测试，跳过校验保持兼容。
+    if payload.intermediate_outputs and user:
+        if not payload.line_id:
+            raise AppException(status_code=400, message="请选择产线")
+        allowed_line_ids = set(
+            await resolve_user_line_ids(db, user.id, batch.owner_user_id)
+        )
+        if payload.line_id not in allowed_line_ids:
+            raise AppException(
+                status_code=400,
+                message="操作人未绑定该产线，请联系管理员配置",
+            )
+
     for o in payload.intermediate_outputs:
         db.add(
             BatchIntermediateOutput(
@@ -406,6 +462,7 @@ async def complete_execution(
                 is_product=is_product_map.get(o.intermediate_type_id, False),
                 remark=o.remark,
                 created_by=user.id if user else None,
+                line_id=payload.line_id,
             )
         )
     execution.status = "completed"

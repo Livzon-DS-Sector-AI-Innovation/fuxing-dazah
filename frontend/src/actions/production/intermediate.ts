@@ -51,12 +51,14 @@ export async function deleteIntermediateType(id: string): Promise<ActionResult> 
 
 export async function fetchAvailableOutputs(
   intermediateTypeId?: string,
+  batchId?: string,
 ): Promise<ActionResult<IntermediateOutput[]>> {
-  const params = intermediateTypeId
-    ? `?intermediate_type_id=${encodeURIComponent(intermediateTypeId)}`
-    : ''
+  const query = new URLSearchParams()
+  if (intermediateTypeId) query.set('intermediate_type_id', intermediateTypeId)
+  if (batchId) query.set('batch_id', batchId)
+  const qs = query.toString()
   return actionFetch<IntermediateOutput[]>(
-    `${BASE}/intermediates/available-outputs${params}`,
+    `${BASE}/intermediates/available-outputs${qs ? `?${qs}` : ''}`,
   )
 }
 

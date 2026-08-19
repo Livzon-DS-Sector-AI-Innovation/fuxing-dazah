@@ -74,6 +74,9 @@ export interface IntermediateOutput {
   is_product: boolean
   remark: string | null
   created_at: string
+  line_id?: string | null
+  line_name?: string | null
+  available_quantity?: number | null
 }
 
 export interface IntermediateOutputIn {
@@ -100,6 +103,7 @@ export interface IntermediateConsumption {
   unit: string
   remark: string | null
   created_at: string
+  line_name?: string | null
 }
 
 export interface IntermediateConsumptionIn {
@@ -127,6 +131,7 @@ export interface MaterialMovement {
   source_batch_no: string | null
   source_output_id: string | null
   created_at: string
+  line_name?: string | null
 }
 
 export interface MaterialStockSummary {

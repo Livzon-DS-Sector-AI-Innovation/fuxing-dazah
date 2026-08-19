@@ -6,6 +6,7 @@ export * from './execution'
 export * from './trace'
 export * from './intermediate'
 export * from './legacy'
+export * from './line'
 export * from './planning'
 export type {
   AssignedNodeInfo,
@@ -17,6 +18,7 @@ export type {
   WorkbenchData,
   StageAssignment,
   NodeAssignment,
+  StageSuffixItem,
   ChildInput,
   ExecutionInput,
   IntermediateConsumptionInput,

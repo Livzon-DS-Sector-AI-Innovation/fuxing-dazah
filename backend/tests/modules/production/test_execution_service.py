@@ -19,7 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch
+from app.modules.production.models import (
+    Batch,
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
+)
 from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
@@ -27,9 +31,17 @@ from app.modules.production.schemas import (
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
+    IntermediateConsumptionIn,
+    IntermediateOutputIn,
+    LineCreate,
 )
-from app.modules.production.service import batch_service, execution_service
-from tests.modules.production.conftest import rand_code
+from app.modules.production.service import (
+    batch_service,
+    execution_service,
+    line_service,
+)
+from app.platform.identity.models import User
+from tests.modules.production.conftest import make_raw_output, rand_code
 
 
 async def _make_batch(db: AsyncSession, ctx: dict[str, Any]) -> Batch:
@@ -485,3 +497,390 @@ class TestCompleteAndRework:
             db_session, ex.id, user=None,
         )
         assert aborted.status == "aborted"
+
+
+async def _make_line(db: AsyncSession) -> Any:
+    """辅助：创建一条测试产线。"""
+    return await line_service.create_line(
+        db, LineCreate(name=rand_code("产线")), None,
+    )
+
+
+async def _make_im_type(db: AsyncSession) -> Any:
+    """辅助：创建真实中间体类型（complete 的类型存在性校验需要）。"""
+    from app.modules.production.schemas import IntermediateTypeCreate
+    from app.modules.production.service import intermediate_service
+
+    return await intermediate_service.create_intermediate_type(
+        db,
+        IntermediateTypeCreate(code=rand_code("IM"), name=rand_code("中间体")),
+        None,
+    )
+
+
+async def _make_raw_output(
+    db: AsyncSession, ctx: dict[str, Any], batch: Batch,
+    *, line_id: Any = None, creator: Any = None, quantity: float = 100,
+) -> BatchIntermediateOutput:
+    """辅助：手造一条产出记录，精确控制 line_id、归属人与数量。
+
+    薄封装 conftest.make_raw_output，保持本文件调用点不变。
+    """
+    return await make_raw_output(
+        db,
+        batch_id=batch.id,
+        node_id=ctx["node_a"].id,
+        line_id=line_id,
+        created_by=creator,
+        quantity=quantity,
+    )
+
+
+class TestLineVisibility:
+    """产线标记与消耗可见性校验。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock 权限查询为管理员，绕开 Redis 依赖，聚焦产线校验逻辑。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:submit"}
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", fake_perms)
+
+    async def test_complete_with_outputs_requires_line_id(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """有产出但未传产线 → 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex.id,
+                ExecutionCompleteIn(intermediate_outputs=[
+                    IntermediateOutputIn(
+                        intermediate_type_id=im_type.id, quantity=10, unit="L",
+                    ),
+                ]),
+                user=test_user,
+            )
+        assert "请选择产线" in str(ei.value.message)
+
+    async def test_complete_line_not_bound_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """产线存在但操作人未绑定（批次负责人也无绑定）→ 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex.id,
+                ExecutionCompleteIn(
+                    intermediate_outputs=[
+                        IntermediateOutputIn(
+                            intermediate_type_id=im_type.id,
+                            quantity=10, unit="L",
+                        ),
+                    ],
+                    line_id=line.id,
+                ),
+                user=test_user,
+            )
+        assert "未绑定该产线" in str(ei.value.message)
+
+    async def test_complete_batch_owner_fallback_allows(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """执行人未绑定产线，批次负责人绑定 → 兜底通过，产出行落产线。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        executor = User(name="执行人", employee_no=rand_code("E"))
+        db_session.add(executor)
+        await db_session.flush()
+
+        batch = await _make_batch(db_session, published_route)
+        # 批次负责人 = test_user（首次开始认领）
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id,
+            ExecutionCompleteIn(
+                intermediate_outputs=[
+                    IntermediateOutputIn(
+                        intermediate_type_id=im_type.id, quantity=10, unit="L",
+                    ),
+                ],
+                line_id=line.id,
+            ),
+            user=executor,
+        )
+        outputs = await repo.get_intermediate_outputs_by_batch(db_session, batch.id)
+        assert outputs[0].line_id == line.id
+
+    async def test_complete_no_outputs_skips_line_check(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """无产出结束不校验产线（MCP 路径回归守护）。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=test_user,
+        )
+
+    async def test_start_consumption_same_line_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗产出属于操作人绑定产线 → 通过。"""
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=line.id, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def test_start_consumption_other_line_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗产出属其他产线 → 拒绝。"""
+        line1 = await _make_line(db_session)
+        line2 = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line2.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=line1.id, creator=uuid.uuid4(),
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=5, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "不在您负责的产线" in str(ei.value.message)
+
+    async def test_start_consumption_null_line_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史产出无产线标记 → 放行（过渡期）。"""
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def test_start_consumption_no_binding_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """操作人与批次负责人均未绑定产线 → 放行（过渡期全量）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def _make_history_consumption(
+        self, db_session: AsyncSession, out: BatchIntermediateOutput,
+        quantity: float,
+    ) -> None:
+        """辅助：手造一条历史消耗记录，模拟该产出已被部分消耗。"""
+        db_session.add(
+            BatchIntermediateConsumption(
+                batch_id=uuid.uuid4(),
+                execution_id=uuid.uuid4(),
+                node_id=out.node_id,
+                intermediate_type_id=out.intermediate_type_id,
+                output_id=out.id,
+                quantity=quantity,
+                unit=out.unit,
+                remark=None,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await db_session.flush()
+
+    async def test_start_consumption_exceeds_available_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗数量超出产出余量 → 硬拦截。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=150, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "超出" in str(ei.value.message)
+
+    async def test_start_consumption_with_history_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史已消耗 80 后再耗 30（余量 20）→ 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        await self._make_history_consumption(db_session, out, 80)
+
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=30, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "余量" in str(ei.value.message)
+
+    async def test_start_consumption_edge_quantity_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史已消耗 80 后刚好耗完余量 20 → 通过（边界）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        await self._make_history_consumption(db_session, out, 80)
+
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=20, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"

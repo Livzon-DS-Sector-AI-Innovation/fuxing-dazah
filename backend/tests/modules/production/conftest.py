@@ -39,6 +39,40 @@ def rand_code(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
+async def make_raw_output(
+    db: AsyncSession,
+    *,
+    batch_id: Any = None,
+    node_id: Any = None,
+    intermediate_type_id: Any = None,
+    line_id: Any = None,
+    created_by: Any = None,
+    quantity: float = 100,
+):
+    """辅助：手造一条产出记录，精确控制 line_id、创建人与数量。
+
+    未指定 batch_id / node_id / intermediate_type_id 时随机生成。
+    """
+    from app.modules.production.models import BatchIntermediateOutput
+
+    out = BatchIntermediateOutput(
+        batch_id=batch_id or uuid.uuid4(),
+        execution_id=uuid.uuid4(),
+        node_id=node_id or uuid.uuid4(),
+        intermediate_type_id=intermediate_type_id or uuid.uuid4(),
+        intermediate_batch_no=rand_code("S"),
+        quantity=quantity,
+        unit="L",
+        is_product=False,
+        remark=None,
+        created_by=created_by,
+        line_id=line_id,
+    )
+    db.add(out)
+    await db.flush()
+    return out
+
+
 @pytest.fixture(autouse=True)
 def _mock_equipment(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mock 设备校验：任何请求的设备 ID 都视为存在。

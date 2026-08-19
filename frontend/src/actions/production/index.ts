@@ -25,6 +25,17 @@ export {
   fetchBatchConsumptions,
   fetchIntermediateTrace,
 } from './intermediate'
+export {
+  fetchLines,
+  createLine,
+  updateLine,
+  deleteLine,
+  fetchMyLineAssignments,
+  fetchLineAssignments,
+  fetchLineAssignmentsByUser,
+  bindLineAssignment,
+  unbindLineAssignment,
+} from './line'
 export { getBatches } from './legacy'
 export {
   fetchWorkbench,
@@ -37,6 +48,8 @@ export {
   receiveAndStart,
   fetchPlannedBatches,
   activatePlannedBatch,
+  fetchMyStageSuffixes,
+  setStageSuffix,
 } from './workbench'
 export {
   createDemand,

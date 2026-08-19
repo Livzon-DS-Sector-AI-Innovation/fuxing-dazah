@@ -100,6 +100,9 @@ class BatchIntermediateOutput(BaseModel):
     unit: Mapped[str] = mapped_column(String(20), comment="单位")
     is_product: Mapped[bool] = mapped_column(default=False, comment="是否成品产出")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    line_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="产出落地的产线（历史数据为空）"
+    )
 
 
 class BatchIntermediateConsumption(BaseModel):

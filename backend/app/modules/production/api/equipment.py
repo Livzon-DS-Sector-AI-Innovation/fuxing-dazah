@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.equipment.public_api import (
-    get_equipment_briefs,
+    get_equipment_briefs_for_user,
     list_equipments_for_user,
 )
 from app.modules.production.schemas import EquipmentOptionOut
@@ -49,11 +49,12 @@ async def get_equipment_options(
 
 @router.get("/equipment-briefs", summary="按 ID 批量取设备摘要（表单回显用）")
 async def get_equipment_briefs_by_ids(
-    _current_user: RequireUser,  # 仅鉴权，无数据范围过滤
+    current_user: RequireUser,
     ids: list[uuid.UUID] = Query(...),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    briefs = await get_equipment_briefs(db, ids)
+    # 按用户数据范围过滤：与 equipment-options 同口径，越权 ID 缺失于结果
+    briefs = await get_equipment_briefs_for_user(db, current_user, ids)
     return success_response(
         [
             EquipmentOptionOut(

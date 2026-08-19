@@ -21,6 +21,7 @@ from app.modules.production.schemas.intermediate import (
     MaterialMovementsOut,
     MaterialStockSummary,
 )
+from app.modules.production.service.line_service import resolve_user_line_ids
 from app.platform.identity.models import User
 
 
@@ -167,11 +168,19 @@ async def list_intermediate_types_paged(
     return outs, total
 
 
+async def _line_name_map(
+    db: AsyncSession, line_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, str]:
+    """批量查产线名（含已删除产线，历史产出名展示用）。"""
+    lines = await repo.get_lines_by_ids(db, line_ids, include_deleted=True)
+    return {ln.id: ln.name for ln in lines}
+
+
 async def _build_output_outs(
     db: AsyncSession,
     outputs: list[BatchIntermediateOutput],
 ) -> list[IntermediateOutputOut]:
-    """将 ORM 产出记录组装为对外 schema，补全节点名、中间体名、批号。"""
+    """将 ORM 产出记录组装为对外 schema，补全节点名、中间体名、批号、产线名。"""
     if not outputs:
         return []
     node_ids = list({o.node_id for o in outputs})
@@ -183,6 +192,10 @@ async def _build_output_outs(
     batch_ids = list({o.batch_id for o in outputs})
     batches = await repo.get_batches_by_ids(db, batch_ids)
     batch_no_map = {b.id: b.batch_no for b in batches}
+    # 产线名 join 必须含已软删产线，保证历史流水仍显示名称
+    line_name_map = await _line_name_map(
+        db, [o.line_id for o in outputs if o.line_id],
+    )
     result = []
     for o in outputs:
         result.append(
@@ -201,6 +214,8 @@ async def _build_output_outs(
                 is_product=o.is_product,
                 remark=o.remark,
                 created_at=o.created_at,
+                line_id=o.line_id,
+                line_name=line_name_map.get(o.line_id) if o.line_id else None,
             )
         )
     return result
@@ -213,13 +228,53 @@ async def get_batch_outputs(
     return await _build_output_outs(db, outputs)
 
 
+async def get_consumed_quantity_map(
+    db: AsyncSession, output_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, float]:
+    """产出余量消耗汇总：按 output_id 累加历史消耗量。
+
+    供余量校验（start_execution 硬拦截）与展示（get_available_outputs 限值）共用，
+    保证两处口径一致。
+    """
+    consumed_map: dict[uuid.UUID, float] = {}
+    for c in await repo.get_consumptions_by_outputs(db, output_ids):
+        consumed_map[c.output_id] = consumed_map.get(c.output_id, 0.0) + c.quantity
+    return consumed_map
+
+
 async def get_available_outputs(
     db: AsyncSession,
     intermediate_type_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> list[IntermediateOutputOut]:
-    """所有批次的中间体产出（可选按类型过滤），用于消耗时选择上游产出。"""
-    outputs = await repo.get_available_outputs(db, intermediate_type_id)
-    return await _build_output_outs(db, outputs)
+    """所有批次的中间体产出（按类型/产线可见性过滤），用于消耗时选择上游产出。
+
+    可见性规则：操作人绑定产线 → 该产线集合的产出；操作人未绑定 → 用批次负责人的
+    绑定兜底；两者皆无 → 仅无产线产出（过渡期存量在制品）。
+    None 产线的历史产出对已绑定用户始终可见（过渡期兼容）。
+    余量过滤已在 SQL 层完成（排除已中止执行），limit 窗口内全部有可用余量。
+    """
+    line_ids: list[uuid.UUID] | None = None
+    if user_id:
+        owner_user_id: uuid.UUID | None = None
+        if batch_id:
+            batch = await repo.get_batch(db, batch_id)
+            owner_user_id = batch.owner_user_id if batch else None
+        line_ids = await resolve_user_line_ids(db, user_id, owner_user_id)
+    outputs = await repo.get_available_outputs(
+        db, intermediate_type_id, line_ids,
+        include_null_line=True,
+    )
+    outs = await _build_output_outs(db, outputs)
+    # 余量：产出数量 - 历史已消耗（供消耗下拉展示与前端限值）
+    consumed_map = await get_consumed_quantity_map(db, [o.id for o in outputs])
+    for out in outs:
+        out.available_quantity = round(
+            out.quantity - consumed_map.get(out.id, 0.0), 6,
+        )
+    # 余量为 0 的批次不再出现在消耗下拉（用户要求）
+    return [out for out in outs if (out.available_quantity or 0) > 0]
 
 
 async def get_batch_consumptions(
@@ -240,11 +295,16 @@ async def get_batch_consumptions(
     output_batch_map: dict[uuid.UUID, str | None] = {
         oid: o.intermediate_batch_no for oid, o in outputs_map.items()
     }
+    # 消耗行的产线 = 所消耗产出的产线（join 来源产出）
+    line_name_map = await _line_name_map(
+        db, [o.line_id for o in outputs_map.values() if o.line_id],
+    )
     batch_ids = list({c.batch_id for c in consumptions})
     batches = await repo.get_batches_by_ids(db, batch_ids)
     batch_no_map = {b.id: b.batch_no for b in batches}
     result = []
     for c in consumptions:
+        src = outputs_map.get(c.output_id)
         result.append(
             IntermediateConsumptionOut(
                 id=c.id,
@@ -261,6 +321,10 @@ async def get_batch_consumptions(
                 unit=c.unit,
                 remark=c.remark,
                 created_at=c.created_at,
+                line_name=(
+                    line_name_map.get(src.line_id)
+                    if src and src.line_id else None
+                ),
             )
         )
     return result
@@ -303,6 +367,7 @@ async def trace_intermediate_output(
                     unit=c.unit,
                     remark=c.remark,
                     created_at=c.created_at,
+                    line_name=output_out.line_name,
                 )
             )
     return {"output": output_out, "consumptions": cons_outs}
@@ -346,6 +411,13 @@ async def get_material_movements(
     batches = await repo.get_batches_by_ids(db, batch_ids)
     batch_no_map = {b.id: b.batch_no for b in batches}
 
+    # 产线名 join：产出行自身 line_id + 消耗行经来源产出 line_id
+    line_name_map = await _line_name_map(
+        db,
+        [o.line_id for o in outputs if o.line_id]
+        + [src.line_id for src in source_outputs_map.values() if src.line_id],
+    )
+
     movements: list[MaterialMovement] = []
 
     total_output = 0.0
@@ -361,6 +433,7 @@ async def get_material_movements(
                 unit=o.unit,
                 intermediate_batch_no=o.intermediate_batch_no,
                 created_at=o.created_at,
+                line_name=line_name_map.get(o.line_id) if o.line_id else None,
             )
         )
 
@@ -379,6 +452,10 @@ async def get_material_movements(
                 source_batch_no=src.intermediate_batch_no if src else None,
                 source_output_id=c.output_id,
                 created_at=c.created_at,
+                line_name=(
+                    line_name_map.get(src.line_id)
+                    if src and src.line_id else None
+                ),
             )
         )
 

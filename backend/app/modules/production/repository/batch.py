@@ -11,10 +11,26 @@ __all__ = [
     "get_batch",
     "get_batch_by_no",
     "get_batches_by_ids",
+    "get_parent_links",
     "list_batches",
     "count_unfinished_batches",
     "count_unfinished_batches_by_route",
 ]
+
+
+async def get_parent_links(
+    db: AsyncSession, child_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, uuid.UUID]:
+    """批量查 child→parent 链接（谱系上溯，单线假设父唯一）。"""
+    from app.modules.production.models.batch import BatchLink
+
+    if not child_ids:
+        return {}
+    stmt = select(BatchLink.child_batch_id, BatchLink.parent_batch_id).where(
+        BatchLink.child_batch_id.in_(child_ids),
+        BatchLink.is_deleted == False,  # noqa: E712
+    )
+    return {child_id: parent_id for child_id, parent_id in (await db.execute(stmt)).all()}
 
 
 async def get_batch(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:

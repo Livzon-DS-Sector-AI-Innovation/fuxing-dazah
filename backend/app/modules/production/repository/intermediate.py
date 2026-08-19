@@ -2,13 +2,14 @@
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import (
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     IntermediateType,
+    NodeExecution,
     ProcessRoute,
     RouteNode,
     RouteNodeIntermediate,
@@ -27,6 +28,7 @@ __all__ = [
     "get_intermediate_consumptions_by_batch",
     "get_intermediate_consumptions_by_executions",
     "get_consumptions_by_output",
+    "get_consumptions_by_outputs",
     "get_intermediate_outputs_by_type",
     "get_intermediate_consumptions_by_type",
     "get_intermediate_types_by_ids",
@@ -183,6 +185,31 @@ async def get_consumptions_by_output(
     return list((await db.execute(stmt)).scalars())
 
 
+async def get_consumptions_by_outputs(
+    db: AsyncSession, output_ids: list[uuid.UUID],
+) -> list[BatchIntermediateConsumption]:
+    """批量查多个产出的全部消耗记录（余量计算用，排除已中止执行）。"""
+    if not output_ids:
+        return []
+    stmt = (
+        select(BatchIntermediateConsumption)
+        .outerjoin(
+            NodeExecution,
+            NodeExecution.id == BatchIntermediateConsumption.execution_id,
+        )
+        .where(
+            BatchIntermediateConsumption.output_id.in_(output_ids),
+            BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+            # 只排除已中止执行；执行缺失的孤儿行保守计入（防超耗）
+            or_(
+                NodeExecution.status.is_(None),
+                NodeExecution.status != "aborted",
+            ),
+        )
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
 async def get_intermediate_outputs_by_type(
     db: AsyncSession, intermediate_type_id: uuid.UUID, limit: int = 1000
 ) -> list[BatchIntermediateOutput]:
@@ -202,17 +229,72 @@ async def get_intermediate_outputs_by_type(
 async def get_available_outputs(
     db: AsyncSession,
     intermediate_type_id: uuid.UUID | None = None,
+    line_ids: list[uuid.UUID] | None = None,
+    include_null_line: bool = False,
     limit: int = 500,
 ) -> list[BatchIntermediateOutput]:
-    """所有批次的中间体产出（可选按类型过滤），用于消耗时选择上游产出。"""
-    stmt = select(BatchIntermediateOutput).where(
-        BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+    """所有批次的中间体产出（可选按类型/产线过滤），用于消耗时选择上游产出。
+
+    余量过滤（quantity - 已消耗 > 0，排除已中止执行）在 SQL 层完成，
+    保证 limit 窗口内全部有可用余量，不会因 limit 截断漏掉老库存。
+    line_ids 语义：None=不过滤（内部/MCP）；[]=仅无产线产出（未绑定，过渡期存量）；
+    非空=该产线集合的产出，include_null_line=True 时叠加无产线产出。
+    """
+    consumed_subq = (
+        select(
+            BatchIntermediateConsumption.output_id,
+            func.coalesce(
+                func.sum(BatchIntermediateConsumption.quantity), 0.0,
+            ).label("consumed"),
+        )
+        .outerjoin(
+            NodeExecution,
+            NodeExecution.id == BatchIntermediateConsumption.execution_id,
+        )
+        .where(
+            BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+            # 只排除已中止执行；执行缺失的孤儿行保守计入（防超耗）
+            or_(
+                NodeExecution.status.is_(None),
+                NodeExecution.status != "aborted",
+            ),
+        )
+        .group_by(BatchIntermediateConsumption.output_id)
+        .subquery()
+    )
+    stmt = (
+        select(BatchIntermediateOutput)
+        .outerjoin(
+            consumed_subq,
+            consumed_subq.c.output_id == BatchIntermediateOutput.id,
+        )
+        .where(BatchIntermediateOutput.is_deleted == False)  # noqa: E712
     )
     if intermediate_type_id is not None:
         stmt = stmt.where(
             BatchIntermediateOutput.intermediate_type_id == intermediate_type_id,
         )
-    stmt = stmt.order_by(BatchIntermediateOutput.created_at.desc()).limit(limit)
+    if line_ids is not None:
+        if line_ids:
+            if include_null_line:
+                stmt = stmt.where(
+                    or_(
+                        BatchIntermediateOutput.line_id.in_(line_ids),
+                        BatchIntermediateOutput.line_id.is_(None),
+                    )
+                )
+            else:
+                stmt = stmt.where(BatchIntermediateOutput.line_id.in_(line_ids))
+        else:
+            stmt = stmt.where(BatchIntermediateOutput.line_id.is_(None))
+    stmt = (
+        stmt.where(
+            BatchIntermediateOutput.quantity
+            - func.coalesce(consumed_subq.c.consumed, 0.0) > 0
+        )
+        .order_by(BatchIntermediateOutput.created_at.desc())
+        .limit(limit)
+    )
     return list((await db.execute(stmt)).scalars())
 
 
@@ -245,15 +327,17 @@ async def get_intermediate_types_by_ids(
 
 
 async def get_intermediate_outputs_by_ids(
-    db: AsyncSession, ids: list[uuid.UUID]
+    db: AsyncSession, ids: list[uuid.UUID], *, for_update: bool = False,
 ) -> list[BatchIntermediateOutput]:
-    """按 ID 批量查询中间体产出记录。"""
+    """按 ID 批量查询中间体产出记录。for_update=True 时加行锁（余量校验并发防护）。"""
     if not ids:
         return []
     stmt = select(BatchIntermediateOutput).where(
         BatchIntermediateOutput.id.in_(ids),
         BatchIntermediateOutput.is_deleted == False,  # noqa: E712
     )
+    if for_update:
+        stmt = stmt.with_for_update()
     return list((await db.execute(stmt)).scalars())
 
 

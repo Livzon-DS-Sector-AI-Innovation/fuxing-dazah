@@ -404,8 +404,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   }, [equipmentData, editEquipment])
 
   // 详情返回后重设字段值，让 Select 用设备名渲染已选的 UUID（WorkOrderDrawer 同款模式）
+  // 用户已改选（当前值≠初始值）时不覆盖，防止回显请求竞态吞掉新选择
   useEffect(() => {
     if (editItem?.equipment_id && editEquipment?.[0]) {
+      const current = editForm.getFieldValue('equipment_id')
+      if (current && current !== editItem.equipment_id) return
       editForm.setFieldsValue({ equipment_id: editItem.equipment_id })
     }
   }, [editItem, editEquipment, editForm])

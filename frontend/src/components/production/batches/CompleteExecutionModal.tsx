@@ -1,10 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { App, Form, Input, InputNumber, Modal } from 'antd'
+import { useEffect, useState } from 'react'
+import { App, Alert, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { completeExecution } from '@/actions/production'
-import { fetchRouteGraphClient } from '@/lib/api/production-client'
+import {
+  completeExecution,
+  fetchMyLineAssignments,
+  fetchLineAssignmentsByUser,
+} from '@/actions/production'
+import { fetchBatchDetailClient, fetchRouteGraphClient } from '@/lib/api/production-client'
 import type { Execution } from '@/types/production'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
 
@@ -29,6 +33,46 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
   const endDefs = node?.fields.filter(f => f.phase === 'end') ?? []
   const outputIntermediates = (node?.intermediates ?? []).filter(im => im.direction === 'output')
 
+  // ── 产线候选：操作人绑定 ∪ 批次负责人绑定（操作人绑定排前）──
+  const { data: batchDetail } = useQuery({
+    queryKey: ['production-batch-detail', execution.batch_id],
+    queryFn: () => fetchBatchDetailClient(execution.batch_id),
+    enabled: outputIntermediates.length > 0,
+  })
+  const { data: myLines } = useQuery({
+    queryKey: ['production-my-lines'],
+    queryFn: async () => {
+      const r = await fetchMyLineAssignments()
+      return r.success ? (r.data ?? []) : []
+    },
+    enabled: outputIntermediates.length > 0,
+  })
+  const { data: ownerLines } = useQuery({
+    queryKey: ['production-owner-lines', batchDetail?.owner_user_id],
+    queryFn: async () => {
+      if (!batchDetail?.owner_user_id) return []
+      const r = await fetchLineAssignmentsByUser(batchDetail.owner_user_id)
+      return r.success ? (r.data ?? []) : []
+    },
+    enabled: outputIntermediates.length > 0 && !!(batchDetail?.owner_user_id),
+  })
+  // 与后端 resolve_user_line_ids 同口径：操作人绑定优先，仅当操作人无绑定时用批次负责人绑定兜底
+  const myLineIds = new Set((myLines ?? []).map(la => la.line_id))
+  const lineOptions = (myLineIds.size > 0 ? (myLines ?? []) : (ownerLines ?? []))
+    .map(la => ({
+      value: la.line_id,
+      label: la.line_name ?? la.line_id,
+    }))
+  // 候选仅一条时自动带出；依赖派生原始值，避免每次渲染重跑 effect
+  const autoLineValue = lineOptions.length === 1 ? lineOptions[0].value : null
+
+  useEffect(() => {
+    // 字段为空才填充，避免覆盖用户选择
+    if (autoLineValue && !form.getFieldValue('line_id')) {
+      form.setFieldsValue({ line_id: autoLineValue })
+    }
+  }, [autoLineValue, form])
+
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -46,6 +90,9 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
             remark: ((values as Record<string, string>)[`output_remark_${im.intermediate_type_id}`]) || undefined,
           })).filter(o => o.quantity > 0)
         : [],
+      line_id: outputIntermediates.length > 0
+        ? ((values.line_id as string) ?? null)
+        : null,
     })
     if (result.success) {
       const startedMs = new Date(execution.started_at).getTime()
@@ -101,6 +148,39 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
         {/* ── 产出物料 ── */}
         {outputIntermediates.length > 0 && (
           <div style={{ marginTop: endDefs.length > 0 ? 8 : 0, marginBottom: 16 }}>
+            <Form.Item
+              name="line_id"
+              label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>产线</span>}
+              rules={[
+                {
+                  // 与后端对齐：仅当本次实际提交产出（数量>0）时 line_id 必填
+                  validator: (_: unknown, value: string | undefined) => {
+                    const hasOutput = outputIntermediates.some(im => {
+                      const v = form.getFieldValue(`output_qty_${im.intermediate_type_id}`)
+                      return Number(v) > 0
+                    })
+                    if (!value && hasOutput) {
+                      return Promise.reject(new Error('请选择本次产出落地的产线'))
+                    }
+                    return Promise.resolve()
+                  },
+                },
+              ]}
+            >
+              <Select
+                placeholder="选择产线"
+                options={lineOptions}
+                style={{ borderRadius: 6 }}
+              />
+            </Form.Item>
+            {lineOptions.length === 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                title="您尚未绑定产线，请联系管理员在「主数据管理-产线」中配置"
+                style={{ marginBottom: 12 }}
+              />
+            )}
             {outputIntermediates.map(im => (
               <div key={im.intermediate_type_id} style={{
                 padding: '14px 16px', marginBottom: 10,

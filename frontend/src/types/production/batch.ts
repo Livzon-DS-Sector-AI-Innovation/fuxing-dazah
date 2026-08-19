@@ -17,6 +17,8 @@ export interface ProductionBatch {
   remark: string | null
   created_at: string
   updated_at: string
+  owner_user_id?: string | null
+  owner_name?: string | null
 }
 
 export interface BatchDetail extends ProductionBatch {

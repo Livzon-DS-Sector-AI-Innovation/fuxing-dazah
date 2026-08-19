@@ -224,6 +224,7 @@ function MovementTable({ materialId }: { materialId: string }) {
       ),
     },
     { title: '工序', dataIndex: 'node_name', width: 90, render: (v: string | null) => v || '-' },
+    { title: '产线', dataIndex: 'line_name', width: 90, render: (v: string | null) => v || '-' },
     {
       title: '数量', width: 100,
       render: (_, r) => (

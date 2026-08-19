@@ -18,6 +18,7 @@ from app.modules.production.schemas import (
 )
 from app.modules.production.service.assignment_service import (
     require_batch_owner_access,
+    require_operator_access,
     require_stage_permission,
 )
 from app.modules.production.service.execution_service import (
@@ -279,12 +280,14 @@ async def complete_batch(
             if last_ex:
                 route_nodes = await repo.get_nodes_by_ids(db, [last_ex.node_id])
                 node = route_nodes[0] if route_nodes else None
-                await require_stage_permission(
+                # 与 start/complete_execution 同口径：工序负责人豁免归属限制
+                await require_operator_access(
                     db, user.id, last_ex.node_id, batch.route_id,
                     node.stage_name if node else None,
+                    batch=batch,
                 )
-            await require_batch_owner_access(user.id, batch)
-            # stage_name 为 None 时 require_stage_permission 自行处理
+            else:
+                await require_batch_owner_access(user.id, batch)
 
     if not await repo.completed_node_ids(db, batch_id):
         raise AppException(status_code=400, message="批次没有任何已完成的工序")

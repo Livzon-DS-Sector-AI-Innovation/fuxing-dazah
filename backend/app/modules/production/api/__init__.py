@@ -8,6 +8,7 @@ from app.modules.production.api.batch import router as batch_router
 from app.modules.production.api.equipment import router as equipment_router
 from app.modules.production.api.execution import router as execution_router
 from app.modules.production.api.intermediate import router as intermediate_router
+from app.modules.production.api.line import router as line_router
 from app.modules.production.api.material import router as material_router
 from app.modules.production.api.planning import router as planning_router
 from app.modules.production.api.product import router as product_router
@@ -23,6 +24,7 @@ router.include_router(batch_router)
 router.include_router(equipment_router)
 router.include_router(execution_router)
 router.include_router(intermediate_router)
+router.include_router(line_router)
 router.include_router(material_router)
 router.include_router(planning_router)
 router.include_router(workbench_router)

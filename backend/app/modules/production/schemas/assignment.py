@@ -22,6 +22,21 @@ class StageAssignmentOut(BaseModel):
     created_at: datetime
 
 
+class StageSuffixSetIn(BaseModel):
+    route_id: uuid.UUID
+    stage_name: str = Field(max_length=100)
+    suffix: str = Field(default="", max_length=50)
+
+
+class StageSuffixOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: uuid.UUID | None = None
+    route_id: uuid.UUID
+    stage_name: str
+    suffix: str
+    updated_at: datetime | None = None
+
+
 # ── 工序负责人 ──
 
 class NodeAssignmentCreate(BaseModel):
@@ -79,6 +94,8 @@ class WorkbenchItem(BaseModel):
     # pending_receive 专用
     boundary_edge_id: uuid.UUID | None = None
     parent_batch_ids: list[uuid.UUID] = []
+    # 接收建议子批次号：根批号 + 目标工段尾缀；未配置尾缀或合并场景为空
+    suggested_batch_no: str | None = None
     # pending_complete 专用
     execution_id: uuid.UUID | None = None
     execution_seq: int | None = None

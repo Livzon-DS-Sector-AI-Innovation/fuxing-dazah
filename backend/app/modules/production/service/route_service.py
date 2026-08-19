@@ -142,7 +142,12 @@ async def save_graph(
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
         if e.is_batch_boundary and e.allow_overlap:
             raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
-        if e.is_batch_boundary and stage_by_code[e.from_node_code] == stage_by_code[e.to_node_code]:
+        # 未分组节点（stage_name 为空）豁免：历史图可能有无工段节点间的批次边界
+        if (
+            e.is_batch_boundary
+            and stage_by_code[e.from_node_code] == stage_by_code[e.to_node_code]
+            and stage_by_code[e.from_node_code] != "未分组"
+        ):
             raise AppException(status_code=400, message="批次边界必须位于工段之间，同工段内不允许设置批次边界")
 
     await repo.soft_delete_route_graph(db, route_id)
@@ -294,7 +299,12 @@ def _validate_graph(nodes: list[RouteNode], edges: list[RouteEdge]) -> None:
             raise AppException(status_code=400, message="回流边不允许标记批次边界")
         if e.is_batch_boundary and e.allow_overlap:
             raise AppException(status_code=400, message="批次边界边不允许开启流水线模式")
-        if e.is_batch_boundary and stage_by_id[e.from_node_id] == stage_by_id[e.to_node_id]:
+        # 未分组节点（stage_name 为空）豁免：历史图可能有无工段节点间的批次边界
+        if (
+            e.is_batch_boundary
+            and stage_by_id[e.from_node_id] == stage_by_id[e.to_node_id]
+            and stage_by_id[e.from_node_id] != "未分组"
+        ):
             raise AppException(status_code=400, message="批次边界必须位于工段之间，同工段内不允许设置批次边界")
 
 

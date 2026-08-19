@@ -53,6 +53,7 @@ class ExecutionCompleteIn(BaseModel):
     field_values: list[FieldValueIn] = []
     remark: str | None = None
     intermediate_outputs: list[IntermediateOutputIn] = []
+    line_id: uuid.UUID | None = None
 
 
 class ExecutionBackfillIn(BaseModel):

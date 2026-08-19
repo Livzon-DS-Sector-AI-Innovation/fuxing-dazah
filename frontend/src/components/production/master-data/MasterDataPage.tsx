@@ -37,6 +37,7 @@ import {
 } from '@/lib/api/production-client'
 import type { Product, IntermediateType } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { LinesTab } from './LinesTab'
 
 const { Text } = Typography
 
@@ -523,6 +524,11 @@ function MasterDataContent() {
           )}
         </div>
       ),
+    },
+    {
+      key: 'lines',
+      label: '产线',
+      children: <LinesTab canManage={canManage} />,
     },
   ]
 

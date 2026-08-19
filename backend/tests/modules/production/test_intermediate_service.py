@@ -10,18 +10,28 @@
 """
 
 import uuid
+from typing import Any
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DuplicateException, NotFoundException
+from app.modules.production.models import (
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
+)
 from app.modules.production.schemas import (
     IntermediateTypeCreate,
     IntermediateTypeUpdate,
+    LineCreate,
     ProductCreate,
 )
-from app.modules.production.service import intermediate_service, route_service
-from tests.modules.production.conftest import rand_code
+from app.modules.production.service import (
+    intermediate_service,
+    line_service,
+    route_service,
+)
+from tests.modules.production.conftest import make_raw_output, rand_code
 
 
 class TestCreateIntermediateType:
@@ -203,3 +213,154 @@ class TestListIntermediateTypes:
             db_session, keyword="唯一名称", page=1, page_size=10,
         )
         assert total == 1
+
+
+class TestAvailableOutputsLineFilter:
+    """消耗来源按产线可见性过滤 + 流水产线名组装。"""
+
+    async def _make_im_type(self, db_session: AsyncSession) -> Any:
+        return await intermediate_service.create_intermediate_type(
+            db_session,
+            IntermediateTypeCreate(code=rand_code("IM"), name=rand_code("中间体")),
+            user=None,
+        )
+
+    async def _make_raw_output(
+        self, db_session: AsyncSession, im_type_id: Any, line_id: Any,
+    ) -> BatchIntermediateOutput:
+        return await make_raw_output(
+            db_session,
+            intermediate_type_id=im_type_id,
+            line_id=line_id,
+            created_by=uuid.uuid4(),
+        )
+
+    async def test_filter_by_user_line(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """操作人绑定产线后，可用产出只含该产线 + NULL 产出；未绑定则全量。"""
+        im_type = await self._make_im_type(db_session)
+        line1 = await line_service.create_line(
+            db_session, LineCreate(name=rand_code("产线1")), None,
+        )
+        line2 = await line_service.create_line(
+            db_session, LineCreate(name=rand_code("产线2")), None,
+        )
+        user_id = uuid.uuid4()
+        await line_service.bind_user_line(
+            db_session, user_id=user_id, line_id=line1.id, created_by=user_id,
+        )
+        out1 = await self._make_raw_output(db_session, im_type.id, line1.id)
+        out2 = await self._make_raw_output(db_session, im_type.id, line2.id)
+        out_null = await self._make_raw_output(db_session, im_type.id, None)
+
+        visible = await intermediate_service.get_available_outputs(
+            db_session, intermediate_type_id=im_type.id, user_id=user_id,
+        )
+        visible_ids = {o.id for o in visible}
+        assert out1.id in visible_ids
+        assert out_null.id in visible_ids
+        assert out2.id not in visible_ids
+
+        all_outputs = await intermediate_service.get_available_outputs(
+            db_session, intermediate_type_id=im_type.id, user_id=None,
+        )
+        assert {o.id for o in all_outputs} == {out1.id, out2.id, out_null.id}
+
+    async def test_batch_owner_fallback(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """操作人未绑定产线时，用批次负责人的绑定兜底过滤。"""
+        im_type = await self._make_im_type(db_session)
+        line1 = await line_service.create_line(
+            db_session, LineCreate(name=rand_code("产线1")), None,
+        )
+        line2 = await line_service.create_line(
+            db_session, LineCreate(name=rand_code("产线2")), None,
+        )
+        owner_id = uuid.uuid4()
+        await line_service.bind_user_line(
+            db_session, user_id=owner_id, line_id=line1.id, created_by=owner_id,
+        )
+        # 手造批次并设 owner（不建完整批次，get_batch 查不到则不过滤）
+        from app.modules.production.models import Batch
+
+        batch = Batch(
+            batch_no=rand_code("B"), product_id=uuid.uuid4(), route_id=uuid.uuid4(),
+            status="in_progress", owner_user_id=owner_id,
+        )
+        db_session.add(batch)
+        await db_session.flush()
+        out1 = await self._make_raw_output(db_session, im_type.id, line1.id)
+        out2 = await self._make_raw_output(db_session, im_type.id, line2.id)
+
+        executor_id = uuid.uuid4()
+        visible = await intermediate_service.get_available_outputs(
+            db_session, intermediate_type_id=im_type.id,
+            user_id=executor_id, batch_id=batch.id,
+        )
+        visible_ids = {o.id for o in visible}
+        assert out1.id in visible_ids
+        assert out2.id not in visible_ids
+
+    async def test_movements_line_names(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """流水产出/消耗行的产线名正确（消耗行取来源产出的产线）。"""
+        im_type = await self._make_im_type(db_session)
+        line = await line_service.create_line(
+            db_session, LineCreate(name=rand_code("产线A")), None,
+        )
+        out = await self._make_raw_output(db_session, im_type.id, line.id)
+        db_session.add(
+            BatchIntermediateConsumption(
+                batch_id=uuid.uuid4(),
+                execution_id=uuid.uuid4(),
+                node_id=uuid.uuid4(),
+                intermediate_type_id=im_type.id,
+                output_id=out.id,
+                quantity=30,
+                unit="L",
+                remark=None,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await db_session.flush()
+
+        result = await intermediate_service.get_material_movements(
+            db_session, im_type.id,
+        )
+        by_type = {m.type: m for m in result.movements}
+        assert by_type["output"].line_name == line.name
+        assert by_type["consumption"].line_name == line.name
+
+    async def test_zero_available_filtered_out(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """余量为 0 的批次不再出现在消耗下拉；部分消耗时余量正确。"""
+        im_type = await self._make_im_type(db_session)
+        drained = await self._make_raw_output(db_session, im_type.id, None)
+        partial = await self._make_raw_output(db_session, im_type.id, None)
+        # 手造消耗：drained 耗尽、partial 耗 40
+        for out, qty in [(drained, 100), (partial, 40)]:
+            db_session.add(
+                BatchIntermediateConsumption(
+                    batch_id=uuid.uuid4(),
+                    execution_id=uuid.uuid4(),
+                    node_id=uuid.uuid4(),
+                    intermediate_type_id=im_type.id,
+                    output_id=out.id,
+                    quantity=qty,
+                    unit="L",
+                    remark=None,
+                    created_by=uuid.uuid4(),
+                )
+            )
+        await db_session.flush()
+
+        outs = await intermediate_service.get_available_outputs(
+            db_session, intermediate_type_id=im_type.id, user_id=None,
+        )
+        by_id = {o.id: o for o in outs}
+        assert drained.id not in by_id
+        assert by_id[partial.id].available_quantity == 60

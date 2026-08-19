@@ -125,9 +125,9 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
   const inputIntermediates = (selectedNode?.intermediates ?? []).filter(im => im.direction === 'input')
 
   const { data: batchOutputs, isError: outputsError } = useQuery({
-    queryKey: ['production-available-outputs'],
+    queryKey: ['production-available-outputs', batchId],
     queryFn: async () => {
-      const r = await fetchAvailableOutputs()
+      const r = await fetchAvailableOutputs(undefined, batchId)
       if (!r.success) throw new Error(r.error ?? '获取可用产出失败')
       return r.data ?? []
     },
@@ -139,7 +139,7 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
       .filter(o => o.intermediate_type_id === intermediateTypeId)
       .map(o => ({
         value: o.id,
-        label: `${o.intermediate_type_name ?? '?'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / ${o.quantity}${o.unit}`,
+        label: `${o.intermediate_type_name ?? '?'} / ${o.line_name ?? '未标产线'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / 余量 ${o.available_quantity ?? o.quantity}${o.unit}`,
       }))
 
   const handleOk = async () => {
@@ -358,6 +358,7 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                             >
                               <InputNumber
                                 min={1}
+                                max={output?.available_quantity ?? undefined}
                                 placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
                                 style={{ width: '100%' }}
                               />

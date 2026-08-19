@@ -282,6 +282,7 @@ export function BatchDetailDrawer({
                       { title: '批号', dataIndex: 'intermediate_batch_no', width: 120, render: v => v || '-' },
                       { title: '数量', width: 100, render: (_, r) => `${r.quantity} ${r.unit}` },
                       { title: '产出工序', dataIndex: 'node_name', width: 120, render: v => v || '-' },
+                      { title: '产线', dataIndex: 'line_name', width: 100, render: v => v || '-' },
                       { title: '备注', dataIndex: 'remark', ellipsis: true, render: v => v || '-' },
                     ]}
                   />
@@ -309,6 +310,7 @@ export function BatchDetailDrawer({
                       { title: '来源批号', dataIndex: 'output_batch_no', width: 120, render: v => v || '-' },
                       { title: '数量', width: 100, render: (_, r) => `${r.quantity} ${r.unit}` },
                       { title: '消耗工序', dataIndex: 'node_name', width: 120, render: v => v || '-' },
+                      { title: '产线', dataIndex: 'line_name', width: 100, render: v => v || '-' },
                       { title: '备注', dataIndex: 'remark', ellipsis: true, render: v => v || '-' },
                     ]}
                   />

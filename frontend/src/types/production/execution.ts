@@ -76,6 +76,7 @@ export interface CompleteExecutionInput {
     intermediate_batch_no?: string
     remark?: string
   }>
+  line_id?: string | null
 }
 
 export interface NodeExecutionListItem {

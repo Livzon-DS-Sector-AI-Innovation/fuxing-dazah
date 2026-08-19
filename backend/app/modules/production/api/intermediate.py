@@ -86,13 +86,16 @@ async def delete_intermediate_type(
 # ── 批次中间体台账 ──
 
 
-@router.get("/intermediates/available-outputs", summary="可用中间体产出列表（跨批次消耗选择）")
+@router.get("/intermediates/available-outputs", summary="可用中间体产出列表（跨批次消耗选择，按产线可见性过滤）")
 async def list_available_outputs(
     intermediate_type_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    outputs = await intermediate_service.get_available_outputs(db, intermediate_type_id)
+    outputs = await intermediate_service.get_available_outputs(
+        db, intermediate_type_id, user_id=user.id, batch_id=batch_id,
+    )
     return success_response([o.model_dump(mode="json") for o in outputs])
 
 

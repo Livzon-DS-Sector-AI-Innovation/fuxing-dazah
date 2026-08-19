@@ -36,6 +36,8 @@ class BatchOut(BaseModel):
     last_finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    owner_user_id: uuid.UUID | None = None
+    owner_name: str | None = None
 
 
 class ChildBatchIn(BaseModel):

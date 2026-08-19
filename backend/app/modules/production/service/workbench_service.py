@@ -50,6 +50,39 @@ async def _get_user_names(
     return {u.id: u.name for u in rows}
 
 
+async def _batch_root_batch_nos(
+    db: AsyncSession,
+    batch_ids: set[uuid.UUID],
+    cache: dict[uuid.UUID, str | None],
+) -> None:
+    """批量求谱系根批号（写入 cache）。
+
+    逐层共享前沿批量取 parent 链接（每层一次 IN 查询），内存走链到根后
+    一次性查根批次批号。替代旧 get_root_batch_no 的逐卡逐跳查询。
+    """
+    missing = batch_ids - cache.keys()
+    if not missing:
+        return
+    child_to_parent: dict[uuid.UUID, uuid.UUID] = {}
+    frontier = missing
+    for _ in range(50):  # 防环上限，与旧逐跳实现一致
+        if not frontier:
+            break
+        links = await repo.get_parent_links(db, frontier)
+        child_to_parent.update(links)
+        frontier = {pid for pid in links.values() if pid not in child_to_parent}
+    roots: dict[uuid.UUID, uuid.UUID] = {}
+    for bid in missing:
+        cur, seen = bid, set()
+        while cur in child_to_parent and cur not in seen:
+            seen.add(cur)
+            cur = child_to_parent[cur]
+        roots[bid] = cur
+    batches = await repo.get_batches_by_ids(db, list(set(roots.values())))
+    no_by_id = {b.id: b.batch_no for b in batches}
+    cache.update({bid: no_by_id.get(root_id) for bid, root_id in roots.items()})
+
+
 def _build_assignee_info(assignments) -> list[NodeAssigneeInfo]:
     """将 NodeAssignment 列表转为 NodeAssigneeInfo。"""
     return [NodeAssigneeInfo(user_id=a.user_id) for a in assignments]
@@ -476,9 +509,15 @@ async def query_workbench(
     stages = await repo.get_user_stages(db, user_id)
     node_assignments = await repo.get_user_node_assignments(db, user_id)
 
-    def _can_operate_batch(b: Batch) -> bool:
-        """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人=仅读。"""
-        return b.owner_user_id is None or b.owner_user_id == user_id
+    def _can_operate_batch(b: Batch, node_id: uuid.UUID | None = None) -> bool:
+        """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人时，
+        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。"""
+        if b.owner_user_id is None or b.owner_user_id == user_id:
+            return True
+        return (
+            node_id is not None
+            and node_id in route_nodes.get(b.route_id, set())
+        )
 
     role = "stage_owner" if stages else "node_owner"
     stage_names = list({s.stage_name for s in stages})
@@ -502,6 +541,12 @@ async def query_workbench(
     product_ids = {r.product_id for r in routes}
     products = await repo.get_products_by_ids(db, list(product_ids))
     product_map = {p.id: p for p in products}
+
+    # 工段尾缀配置：(route_id, stage_name) -> suffix，用于接收建议批号
+    suffix_map = {
+        (s.route_id, s.stage_name): s.suffix
+        for s in await repo.list_stage_suffixes(db, list(route_map))
+    }
 
     # 缓存所有路线的节点和边（避免每路线重复查询）
     route_nodes_cache: dict[uuid.UUID, list] = {}
@@ -617,6 +662,7 @@ async def query_workbench(
             in_progress_execs_by_batch[ex.batch_id].append(ex)
 
     items: list[WorkbenchItem] = []
+    root_no_cache: dict[uuid.UUID, str | None] = {}
 
     for route_id in sorted(all_route_ids):
         route = route_map.get(route_id)
@@ -670,7 +716,7 @@ async def query_workbench(
             edges_by_to, rework_sources, normal_outgoing,
             batch_completed, batch_in_progress, batch_node_done_at,
         ):
-            can_operate = _can_operate_batch(b)
+            can_operate = _can_operate_batch(b, node.id)
             if view_mode == "mine" and not can_operate:
                 continue
             completed = batch_completed.get(b.id, set())
@@ -742,9 +788,24 @@ async def query_workbench(
                     stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), set(), set()),
                 ))
             else:
+                # 接收建议批号：根批号 + 目标工段尾缀（覆盖式，不解析批号字符串）
+                stage_suffix = (
+                    suffix_map.get((route_id, node.stage_name), "")
+                    if node.stage_name
+                    else ""
+                )
+                if stage_suffix:
+                    await _batch_root_batch_nos(
+                        db, {b.id for _, b in pairs}, root_no_cache
+                    )
                 for edge, b in pairs:
                     batch_comp = batch_completed.get(b.id, set())
                     batch_ip = batch_in_progress.get(b.id, set())
+                    suggested_batch_no: str | None = None
+                    if stage_suffix:
+                        root_no = root_no_cache.get(b.id)
+                        if root_no:
+                            suggested_batch_no = f"{root_no}{stage_suffix}"
                     # 待接收是共享认领池：不按归属过滤，所有接收工段负责人均可操作
                     items.append(WorkbenchItem(
                         type="pending_receive",
@@ -761,6 +822,7 @@ async def query_workbench(
                         predecessor_batches=[],
                         node_assignees=[],
                         can_operate=True,
+                        suggested_batch_no=suggested_batch_no,
                         stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), batch_comp, batch_ip),
                     ))
 
@@ -778,7 +840,7 @@ async def query_workbench(
             b = next((b for b in batches if b.id == ex.batch_id), None)
             if not b:
                 continue
-            can_operate = _can_operate_batch(b)
+            can_operate = _can_operate_batch(b, ex.node_id)
             if view_mode == "mine" and not can_operate:
                 continue
             # 检查是否是工段内最后一个节点
@@ -867,7 +929,7 @@ async def query_workbench(
                 last_node = next((node_map[nid] for nid in stage_node_ids if nid in node_map), None)
                 if not last_node:
                     continue
-                can_operate = _can_operate_batch(b)
+                can_operate = _can_operate_batch(b, last_node.id)
                 if view_mode == "mine" and not can_operate:
                     continue
                 items.append(WorkbenchItem(
@@ -963,7 +1025,7 @@ async def query_workbench(
         if not b:
             continue
         # mine 模式按归属过滤：只显示自己/无主的完成记录
-        if view_mode == "mine" and not _can_operate_batch(b):
+        if view_mode == "mine" and not _can_operate_batch(b, ex.node_id):
             continue
         p = product_map.get(route.product_id)
         recent.append(RecentCompletedItem(

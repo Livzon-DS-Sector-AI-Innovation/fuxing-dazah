@@ -11,6 +11,8 @@ from app.modules.production.schemas.assignment import (
     ReceiveAndStartIn,
     StageAssignmentCreate,
     StageAssignmentOut,
+    StageSuffixOut,
+    StageSuffixSetIn,
     WorkbenchItem,
     WorkbenchOut,
 )
@@ -48,6 +50,13 @@ from app.modules.production.schemas.intermediate import (
     MaterialStockSummary,
     NodeIntermediateIn,
     NodeIntermediateOut,
+)
+from app.modules.production.schemas.line import (
+    LineAssignmentCreate,
+    LineAssignmentOut,
+    LineCreate,
+    LineOut,
+    LineUpdate,
 )
 from app.modules.production.schemas.planning import (
     DemandAllocationCreate,
@@ -120,6 +129,11 @@ __all__ = [
     "IntermediateTypeCreate",
     "IntermediateTypeOut",
     "IntermediateTypeUpdate",
+    "LineAssignmentCreate",
+    "LineAssignmentOut",
+    "LineCreate",
+    "LineOut",
+    "LineUpdate",
     "MaterialMovement",
     "MaterialMovementsOut",
     "MaterialStockSummary",
@@ -150,6 +164,8 @@ __all__ = [
     "ReceiveAndStartIn",
     "StageAssignmentCreate",
     "StageAssignmentOut",
+    "StageSuffixOut",
+    "StageSuffixSetIn",
     "WorkbenchItem",
     "WorkbenchOut",
     # Planning

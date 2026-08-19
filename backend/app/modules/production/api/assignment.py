@@ -10,6 +10,7 @@ from app.core.response import success_response
 from app.modules.production.schemas.assignment import (
     NodeAssignmentCreate,
     StageAssignmentCreate,
+    StageSuffixSetIn,
 )
 from app.modules.production.service import assignment_service
 from app.platform.permission.deps import RequireUser
@@ -48,6 +49,28 @@ async def delete_stage_assignment(
 ):
     await assignment_service.delete_stage_assignment(db, assignment_id)
     return success_response()
+
+
+@router.get("/stage-suffixes", summary="当前用户负责工段的批次尾缀")
+async def list_my_stage_suffixes(
+    current_user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+):
+    items = await assignment_service.list_my_stage_suffixes(db, current_user.id)
+    return success_response(data=items)
+
+
+@router.put("/stage-suffixes", summary="设置工段批次尾缀")
+async def set_stage_suffix(
+    body: StageSuffixSetIn,
+    current_user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+):
+    item = await assignment_service.set_stage_suffix(
+        db, user_id=current_user.id, route_id=body.route_id,
+        stage_name=body.stage_name, suffix=body.suffix,
+    )
+    return success_response(data=item)
 
 
 @router.get("/node-assignments", summary="工序负责人列表（默认按当前用户过滤）")

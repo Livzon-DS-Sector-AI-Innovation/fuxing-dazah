@@ -14,6 +14,7 @@ import type { WorkbenchItem, Execution, StageNodeInfo, IntermediateOutput, Inter
 
 import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
+import { StageSuffixConfig } from './StageSuffixConfig'
 import { PlannedSection } from './PlannedSection'
 import { StartExecutionModal } from '../batches/StartExecutionModal'
 import { CompleteExecutionModal } from '../batches/CompleteExecutionModal'
@@ -521,6 +522,7 @@ export function WorkbenchInner() {
   const [completingIds, setCompletingIds] = useState<Set<string>>(new Set())
 
   const [showConfig, setShowConfig] = useState(false)
+  const [showSuffix, setShowSuffix] = useState(false)
   const [showRecent, setShowRecent] = useState(false)
 
   // 筛选状态
@@ -754,6 +756,21 @@ export function WorkbenchInner() {
               icon={<SettingOutlined style={{ fontSize: 14 }} />}
             >
               <AssigneeConfig
+                routes={data!.assigned_routes}
+                onChanged={() => queryClient.invalidateQueries({ queryKey: ['production-workbench'] })}
+              />
+            </CollapsiblePanel>
+          )}
+
+          {/* ── 工段尾缀设置 ── */}
+          {stageOwner && hasAssignedRoutes && (
+            <CollapsiblePanel
+              open={showSuffix}
+              onToggle={() => setShowSuffix(v => !v)}
+              label="工段尾缀设置"
+              icon={<SettingOutlined style={{ fontSize: 14 }} />}
+            >
+              <StageSuffixConfig
                 routes={data!.assigned_routes}
                 onChanged={() => queryClient.invalidateQueries({ queryKey: ['production-workbench'] })}
               />

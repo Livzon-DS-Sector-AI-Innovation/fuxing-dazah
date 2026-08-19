@@ -26,6 +26,7 @@ from app.modules.production.service import (
     assignment_service,
     batch_service,
     execution_service,
+    route_service,
     workbench_service,
 )
 from app.platform.identity.models import User
@@ -442,6 +443,44 @@ class TestBatchOwnerIsolation:
                 user=user_b,
             )
 
+    async def test_node_owner_can_start_other_owner_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """归属他人的批次：工序级负责人（NodeAssignment）可开始自己负责的工序。"""
+        route_id = published_route["route"].id
+        user_a = await self._make_owner(db_session, "OWN-A", route_id, "发酵")
+        node_owner = await _get_or_create_user_named(db_session, "NODE-OWN")
+        await assignment_service.create_node_assignment(
+            db_session,
+            user_id=node_owner.id,
+            node_id=published_route["node_b"].id,
+            route_id=route_id,
+            assigned_by=node_owner.id,
+        )
+        batch = await self._make_batch(db_session, published_route)
+        # A 开始 node_a 认领批次并完成，释放来路
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=user_a,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=user_a,
+        )
+        # 工序级负责人跨归属开始自己负责的工序 → 成功
+        ex2 = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                owner_id=node_owner.id,
+                owner_name=node_owner.name,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=node_owner,
+        )
+        assert ex2.status == "in_progress"
+        assert ex2.owner_id == node_owner.id
+
     async def test_pending_receive_not_filtered_by_owner(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
@@ -499,3 +538,215 @@ class TestBatchOwnerIsolation:
         ).scalar_one()
         assert child.owner_user_id == user_up.id
         assert child.owner_name == user_up.name
+
+
+class TestReceiveSuggestion:
+    """接收建议子批次号：根批号 + 目标工段尾缀（覆盖式）。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_perms(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """mock 权限码查询：避免 Redis 连接跨测试事件循环报 Event loop is closed。"""
+        from app.modules.production.service import execution_service as es
+
+        async def fake(user_id: str, db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(es, "get_user_permissions", fake)
+
+    async def _make_downstream_owner(
+        self, db: AsyncSession, route_id: uuid.UUID,
+    ) -> uuid.UUID:
+        """分配提炼工段负责人，返回 user_id。"""
+        user_id = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db, user_id=user_id, stage_name="提炼",
+            route_id=route_id, created_by=user_id,
+        )
+        return user_id
+
+    async def _complete_node_a(
+        self, db: AsyncSession, batch: Any, published_route: dict[str, Any],
+    ) -> None:
+        ex = await execution_service.start_execution(
+            db, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db, ex.id, ExecutionCompleteIn(), user=None,
+        )
+
+    async def test_suggested_batch_no_with_suffix(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """单父接收卡片：建议批号 = 根批号 + 目标工段尾缀。"""
+        route_id = published_route["route"].id
+        user_id = await self._make_downstream_owner(db_session, route_id)
+        await assignment_service.set_stage_suffix(
+            db_session, user_id=user_id, route_id=route_id,
+            stage_name="提炼", suffix="-T1",
+        )
+        batch_no = rand_code("ROOT")
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=batch_no,
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        await self._complete_node_a(db_session, batch, published_route)
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        receives = [
+            it for it in result.items
+            if it.type == "pending_receive" and it.batch_id == batch.id
+        ]
+        assert len(receives) == 1
+        assert receives[0].suggested_batch_no == f"{batch_no}-T1"
+
+    async def test_no_suffix_returns_none(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """未配置尾缀时，建议批号为空。"""
+        route_id = published_route["route"].id
+        user_id = await self._make_downstream_owner(db_session, route_id)
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        await self._complete_node_a(db_session, batch, published_route)
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        receives = [
+            it for it in result.items
+            if it.type == "pending_receive" and it.batch_id == batch.id
+        ]
+        assert len(receives) == 1
+        assert receives[0].suggested_batch_no is None
+
+    async def test_suggested_uses_root_batch_no_across_chain(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """多级链条：建议批号取谱系根批号（覆盖式，不带父层尾缀）。"""
+        from app.modules.production.models import BatchLink
+
+        route_id = published_route["route"].id
+        user_id = await self._make_downstream_owner(db_session, route_id)
+        await assignment_service.set_stage_suffix(
+            db_session, user_id=user_id, route_id=route_id,
+            stage_name="提炼", suffix="-T2",
+        )
+        root = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("ROOT"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        mid = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=f"{root.batch_no}-T1",
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        db_session.add(BatchLink(
+            parent_batch_id=root.id, child_batch_id=mid.id,
+            edge_id=None, is_deviation=True,
+        ))
+        await db_session.flush()
+        await self._complete_node_a(db_session, mid, published_route)
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        receives = [
+            it for it in result.items
+            if it.type == "pending_receive" and it.batch_id == mid.id
+        ]
+        assert len(receives) == 1
+        # 覆盖式：根批号 + 当前工段尾缀，而非 父批号 + 尾缀
+        assert receives[0].suggested_batch_no == f"{root.batch_no}-T2"
+
+    async def test_merge_card_has_no_suggestion(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """合并接收卡片不生成建议批号（合并仍手填）。"""
+        from app.modules.production.schemas import (
+            EdgeIn,
+            NodeIn,
+            ProductCreate,
+            RouteCreate,
+            RouteGraphIn,
+        )
+
+        product = await route_service.create_product(
+            db_session,
+            ProductCreate(
+                product_name=rand_code("合并产品"), product_code=rand_code("MP"),
+            ),
+            user=None,
+        )
+        route = await route_service.create_route(
+            db_session,
+            RouteCreate(product_id=product.id, route_name="合并V1"),
+            user=None,
+        )
+        await route_service.save_graph(
+            db_session, route.id,
+            RouteGraphIn(
+                nodes=[
+                    NodeIn(node_code="A1", name="发酵一", stage_name="发酵", sort_order=1),
+                    NodeIn(node_code="A2", name="发酵二", stage_name="发酵", sort_order=2),
+                    NodeIn(node_code="B", name="提炼", stage_name="提炼", sort_order=3),
+                ],
+                edges=[
+                    EdgeIn(from_node_code="A1", to_node_code="B", is_batch_boundary=True),
+                    EdgeIn(from_node_code="A2", to_node_code="B", is_batch_boundary=True),
+                ],
+            ),
+            user=None,
+        )
+        await route_service.publish_route(db_session, route.id, user=None)
+        graph = await route_service.get_graph(db_session, route.id)
+        nodes = {n.node_code: n for n in graph.nodes}
+
+        user_id = await self._make_downstream_owner(db_session, route.id)
+        await assignment_service.set_stage_suffix(
+            db_session, user_id=user_id, route_id=route.id,
+            stage_name="提炼", suffix="-M1",
+        )
+        batches = []
+        for code, no in (("A1", rand_code("P1")), ("A2", rand_code("P2"))):
+            b = await batch_service.create_batch(
+                db_session,
+                BatchCreate(batch_no=no, product_id=product.id, route_id=route.id),
+                user=None,
+            )
+            ex = await execution_service.start_execution(
+                db_session, b.id,
+                ExecutionStartIn(node_id=nodes[code].id),
+                user=None,
+            )
+            await execution_service.complete_execution(
+                db_session, ex.id, ExecutionCompleteIn(), user=None,
+            )
+            batches.append(b)
+
+        result = await workbench_service.query_workbench(db_session, user_id)
+        receives = [
+            it for it in result.items
+            if it.type == "pending_receive"
+            and set(it.parent_batch_ids) == {b.id for b in batches}
+        ]
+        assert len(receives) == 1
+        assert receives[0].suggested_batch_no is None

@@ -118,6 +118,9 @@ class IntermediateOutputOut(BaseModel):
     is_product: bool
     remark: str | None
     created_at: datetime
+    line_id: uuid.UUID | None = None
+    line_name: str | None = None
+    available_quantity: float | None = None
 
 
 class IntermediateConsumptionOut(BaseModel):
@@ -137,6 +140,7 @@ class IntermediateConsumptionOut(BaseModel):
     unit: str
     remark: str | None
     created_at: datetime
+    line_name: str | None = None
 
 
 # ── 产出物出入库流水 ──
@@ -152,6 +156,7 @@ class MaterialMovement(BaseModel):
     source_batch_no: str | None = None
     source_output_id: uuid.UUID | None = None
     created_at: datetime
+    line_name: str | None = None
 
 
 class MaterialStockSummary(BaseModel):
