@@ -145,10 +145,10 @@ async def delete_device_config(db: AsyncSession, config_id: UUID) -> None:
 async def trigger_collection(
     db: AsyncSession, request: CollectTriggerRequest
 ) -> dict[str, Any]:
-    """手动触发采集 — 复用并发采集逻辑，所有平台+设备并发执行。"""
+    """手动触发采集 — 复用并发采集逻辑，所有平台+设备并发执行，并补齐缺失历史日。"""
     import asyncio
 
-    from app.modules.energy.scheduler import _collect_platform_devices
+    from app.modules.energy.scheduler import collect_platform_days
 
     now = datetime.now(CST)
     yesterday = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
@@ -159,9 +159,7 @@ async def trigger_collection(
         platform_codes = await repo.get_distinct_enabled_platforms(db)
 
     # 平台并发执行
-    tasks = [
-        _collect_platform_devices(pc, yesterday, now) for pc in platform_codes
-    ]
+    tasks = [collect_platform_days(pc, now) for pc in platform_codes]
     gathered = await asyncio.gather(*tasks, return_exceptions=True)
 
     results: dict[str, Any] = {}
@@ -177,13 +175,14 @@ async def trigger_collection(
                 "error": f"未找到平台适配器: {pc}",
             }
             continue
-        # _collect_platform_devices 已在内部写入采集日志，此处仅汇总结果
+        # collect_platform_days 已在内部写入各日采集日志，此处仅汇总结果
         results[pc] = {
             "status": r["status"],
             "device_count": r["device_count"],
             "success_count": r["success_count"],
-
-            "target_day": yesterday.strftime("%Y-%m-%d"),
+            "expected_count": r["expected_count"],
+            "days": r["days"],
+            "target_day": r["days"][-1] if r["days"] else yesterday.strftime("%Y-%m-%d"),
         }
 
     return results

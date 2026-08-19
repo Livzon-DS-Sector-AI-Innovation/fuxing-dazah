@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Date, func, select
 from sqlalchemy import cast as sa_cast
@@ -293,12 +294,74 @@ async def _collect_platform_devices(
     }
 
 
+def _day_at_midnight(day: date) -> datetime:
+    """构造某天 00:00 的 CST datetime，用于数据采集与采集日志。"""
+    return datetime(day.year, day.month, day.day, tzinfo=CST)
+
+
+async def collect_platform_days(
+    platform_code: str, now: datetime
+) -> dict[str, Any] | None:
+    """采集某平台从回溯起始日到昨天的所有缺失日，返回汇总结果。
+
+    每个目标日写一条采集日志，collect_time 记为「目标日 + 1 天」，
+    与既有 get_collect_log_detail 的「collect_time 前一天 = 数据日」约定一致。
+    无缺失日（已补齐）时仍采集昨天，保证每日都产生采集日志；
+    平台无适配器时返回 None。
+    """
+    if ADAPTERS.get(platform_code) is None:
+        logger.warning("未找到平台适配器: %s，跳过", platform_code)
+        return None
+
+    yesterday = (now - timedelta(days=1)).date()
+
+    async with async_session_factory() as db:
+        start_day = await repo.get_platform_backfill_start_day(
+            db, platform_code, yesterday
+        )
+
+    if start_day > yesterday:
+        return None
+
+    device_count = 0
+    total_success = 0
+    total_expected = 0
+    days: list[str] = []
+
+    day = start_day
+    while day <= yesterday:
+        target = _day_at_midnight(day)
+        collect_at = _day_at_midnight(day + timedelta(days=1))
+        r = await _collect_platform_devices(platform_code, target, collect_at)
+        if r is not None:
+            device_count = r["device_count"]
+            total_success += r["success_count"]
+            total_expected += r["expected_count"]
+            days.append(day.strftime("%Y-%m-%d"))
+        day += timedelta(days=1)
+
+    if total_expected == 0:
+        status = "success"
+    elif total_success >= total_expected:
+        status = "success"
+    elif total_success > 0:
+        status = "partial"
+    else:
+        status = "failed"
+
+    return {
+        "platform_code": platform_code,
+        "status": status,
+        "device_count": device_count,
+        "success_count": total_success,
+        "expected_count": total_expected,
+        "days": days,
+    }
+
+
 async def _daily_collect_all_platforms() -> None:
-    """每日统一采集：所有平台并发 + 平台内所有设备并发。"""
+    """每日统一采集：所有平台并发 + 平台内所有设备并发，并补齐缺失历史日。"""
     now = datetime.now(CST)
-    yesterday = (now - timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     async with async_session_factory() as db:
         platforms = await repo.get_distinct_enabled_platforms(db)
@@ -306,9 +369,7 @@ async def _daily_collect_all_platforms() -> None:
     if not platforms:
         return
 
-    tasks = [
-        _collect_platform_devices(pc, yesterday, now) for pc in platforms
-    ]
+    tasks = [collect_platform_days(pc, now) for pc in platforms]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     total_devices = 0
@@ -326,9 +387,7 @@ async def _daily_collect_all_platforms() -> None:
 
     if total_devices > 0:
         logger.info(
-            "每日采集完成: date=%s, platforms=%d, devices=%d, "
-            "success=%d/%d",
-            yesterday.strftime("%Y-%m-%d"),
+            "每日采集完成: platforms=%d, devices=%d, success=%d/%d",
             len(platforms),
             total_devices,
             total_success,

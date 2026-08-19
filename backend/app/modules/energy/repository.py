@@ -224,6 +224,70 @@ async def get_distinct_enabled_platforms(db: AsyncSession) -> list[str]:
     return list(result.scalars().all())
 
 
+async def get_platform_latest_data_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最近一条能耗数据的数据日期（CST）。无数据时返回 None。"""
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
+    result = await db.execute(
+        select(cst_date)
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyData.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyData.timestamp.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_earliest_device_created_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最早启用设备的创建日期（CST），作为无数据时的回溯下限。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyDeviceConfig.created_at)
+    )
+    result = await db.execute(
+        select(cst_date)
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyDeviceConfig.created_at.asc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_backfill_start_day(
+    db: AsyncSession, platform_code: str, yesterday: date
+) -> date:
+    """计算某平台本次采集的起始数据日（含），用于补齐缺失的历史日。
+
+    - 有历史数据且最近数据日早于昨天：从「最近数据日 + 1」开始回溯；
+    - 有历史数据但已补齐：仍返回昨天（幂等采集，保证每日都写采集日志）；
+    - 无历史数据（新平台/新设备）：从最早启用设备的创建日开始，不早于设备创建日。
+    返回值不晚于 yesterday。
+    """
+    latest = await get_platform_latest_data_day(db, platform_code)
+    if latest is None:
+        earliest = await get_platform_earliest_device_created_day(db, platform_code)
+        start = earliest or yesterday
+    elif latest < yesterday:
+        start = latest + timedelta(days=1)
+    else:
+        start = yesterday
+    return min(start, yesterday)
+
+
 # ── 能耗数据 ──
 
 

@@ -4,7 +4,8 @@ These module-level variables allow the frontend to toggle auto-collect
 at runtime without restarting the server.
 The scheduler reads this on every tick; API endpoints read/write it.
 
-Defaults are loaded from app config (env vars) on first import.
+`auto_collect_enabled` 默认来自 app config（ENERGY_AUTO_COLLECT_ENABLED）；
+`daily_collect_time` 由前端配置并持久化到 DB，此处仅提供未配置时的默认值。
 """
 
 from __future__ import annotations
@@ -51,15 +52,5 @@ def set_auto_collect_enabled(enabled: bool) -> None:
 
 
 def get_default_daily_collect_time() -> str:
-    """每日采集时间的默认值：优先读环境配置，回退 08:00（不再写死）。
-
-    用户经前端配置的实际时间持久化在 DB（EnergyCollectSetting 表），
-    此处仅提供未配置时的兜底值。
-    """
-    try:
-        from app.core.config import get_settings
-
-        value = get_settings().ENERGY_DAILY_COLLECT_TIME
-        return value or DEFAULT_DAILY_COLLECT_TIME
-    except Exception:
-        return DEFAULT_DAILY_COLLECT_TIME
+    """每日采集时间的默认值（用户经前端配置后持久化到 DB，覆盖此默认）。"""
+    return DEFAULT_DAILY_COLLECT_TIME
