@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
-from app.modules.energy.collect_settings import CST
+from app.modules.energy.collect_settings import (
+    CST,
+    get_auto_collect_enabled,
+    get_default_daily_collect_time,
+    set_auto_collect_enabled,
+)
 from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
@@ -140,10 +145,10 @@ async def delete_device_config(db: AsyncSession, config_id: UUID) -> None:
 async def trigger_collection(
     db: AsyncSession, request: CollectTriggerRequest
 ) -> dict[str, Any]:
-    """手动触发采集 — 复用并发采集逻辑，所有平台+设备并发执行。"""
+    """手动触发采集 — 复用并发采集逻辑，所有平台+设备并发执行，并补齐缺失历史日。"""
     import asyncio
 
-    from app.modules.energy.scheduler import _collect_platform_devices
+    from app.modules.energy.scheduler import collect_platform_days
 
     now = datetime.now(CST)
     yesterday = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
@@ -154,9 +159,7 @@ async def trigger_collection(
         platform_codes = await repo.get_distinct_enabled_platforms(db)
 
     # 平台并发执行
-    tasks = [
-        _collect_platform_devices(pc, yesterday, now) for pc in platform_codes
-    ]
+    tasks = [collect_platform_days(pc, now) for pc in platform_codes]
     gathered = await asyncio.gather(*tasks, return_exceptions=True)
 
     results: dict[str, Any] = {}
@@ -172,13 +175,14 @@ async def trigger_collection(
                 "error": f"未找到平台适配器: {pc}",
             }
             continue
-        # _collect_platform_devices 已在内部写入采集日志，此处仅汇总结果
+        # collect_platform_days 已在内部写入各日采集日志，此处仅汇总结果
         results[pc] = {
             "status": r["status"],
             "device_count": r["device_count"],
             "success_count": r["success_count"],
-
-            "target_day": yesterday.strftime("%Y-%m-%d"),
+            "expected_count": r["expected_count"],
+            "days": r["days"],
+            "target_day": r["days"][-1] if r["days"] else yesterday.strftime("%Y-%m-%d"),
         }
 
     return results
@@ -395,6 +399,33 @@ async def get_collect_log_detail(
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
     }
+
+
+async def get_collect_settings(db: AsyncSession) -> dict[str, Any]:
+    """获取自动采集运行时设置（启用状态来自内存，采集时间来自 DB）。"""
+    daily_time = await repo.get_collect_setting_value(
+        db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
+    ) or get_default_daily_collect_time()
+    return {
+        "auto_collect_enabled": get_auto_collect_enabled(),
+        "daily_collect_time": daily_time,
+    }
+
+
+async def update_collect_settings(
+    db: AsyncSession,
+    *,
+    auto_collect_enabled: bool | None = None,
+    daily_collect_time: str | None = None,
+) -> dict[str, Any]:
+    """更新自动采集运行时设置；启用状态写内存，采集时间持久化 DB（重启保留）。"""
+    if auto_collect_enabled is not None:
+        set_auto_collect_enabled(auto_collect_enabled)
+    if daily_collect_time is not None:
+        await repo.upsert_collect_setting_value(
+            db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME, daily_collect_time
+        )
+    return await get_collect_settings(db)
 
 
 # ── 总览 ──

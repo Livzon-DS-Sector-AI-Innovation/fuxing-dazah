@@ -158,8 +158,8 @@ export function CollectLogTable({
     },
     {
       title: '采集时间',
-      dataIndex: 'collect_time',
-      key: 'collect_time',
+      dataIndex: 'created_at',
+      key: 'created_at',
       width: 180,
       render: (text: string) => (
         <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>

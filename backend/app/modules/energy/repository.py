@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -12,10 +12,12 @@ from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.energy.collect_settings import CST
 from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
     EnergyCollectLog,
+    EnergyCollectSetting,
     EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
@@ -220,6 +222,70 @@ async def get_distinct_enabled_platforms(db: AsyncSession) -> list[str]:
         .distinct()
     )
     return list(result.scalars().all())
+
+
+async def get_platform_latest_data_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最近一条能耗数据的数据日期（CST）。无数据时返回 None。"""
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
+    result = await db.execute(
+        select(cst_date)
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyData.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyData.timestamp.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_earliest_device_created_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最早启用设备的创建日期（CST），作为无数据时的回溯下限。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyDeviceConfig.created_at)
+    )
+    result = await db.execute(
+        select(cst_date)
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyDeviceConfig.created_at.asc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_backfill_start_day(
+    db: AsyncSession, platform_code: str, yesterday: date
+) -> date:
+    """计算某平台本次采集的起始数据日（含），用于补齐缺失的历史日。
+
+    - 有历史数据且最近数据日早于昨天：从「最近数据日 + 1」开始回溯；
+    - 有历史数据但已补齐：仍返回昨天（幂等采集，保证每日都写采集日志）；
+    - 无历史数据（新平台/新设备）：从最早启用设备的创建日开始，不早于设备创建日。
+    返回值不晚于 yesterday。
+    """
+    latest = await get_platform_latest_data_day(db, platform_code)
+    if latest is None:
+        earliest = await get_platform_earliest_device_created_day(db, platform_code)
+        start = earliest or yesterday
+    elif latest < yesterday:
+        start = latest + timedelta(days=1)
+    else:
+        start = yesterday
+    return min(start, yesterday)
 
 
 # ── 能耗数据 ──
@@ -769,16 +835,32 @@ async def clear_collect_logs(db: AsyncSession) -> int:
     return result.rowcount  # type: ignore[attr-defined,no-any-return]
 
 
+async def has_collect_log_for_date(db: AsyncSession, day: date) -> bool:
+    """判断指定日期（Asia/Shanghai）是否已产生采集日志。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyCollectLog.collect_time)
+    )
+    result = await db.execute(
+        select(func.count())
+        .select_from(EnergyCollectLog)
+        .where(
+            EnergyCollectLog.is_deleted == False,  # noqa: E712
+            cst_date == day,
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
 async def get_collect_log_detail(
     db: AsyncSession,
     log_id: UUID,
-    time_window_seconds: int = 120,
 ) -> tuple[EnergyCollectLog | None, list[tuple[EnergyData, EnergyDeviceConfig]]]:
     """获取采集日志详情及关联的能耗数据。
 
-    通过 platform_code + 时间窗口匹配 EnergyData 和 EnergyCollectLog。
-    窗口从 collect_time（采集开始）前 120s 到 created_at（日志写入 = 采集结束）后 120s，
-    确保覆盖逐小时回退等多设备长时间采集场景。
+    按「数据归属日」匹配：采集日志采的是前一天的数据，
+    故查出该平台 timestamp 落在目标日（collect_time 前一天，CST）的数据。
+    不再依赖 collected_at，避免多次采集 on conflict 更新 collected_at 后，
+    较早日志的 ±120s 窗口匹配不到数据（详情显示「未找到关联的设备采集数据」）。
     """
     log = await db.scalar(
         select(EnergyCollectLog).where(
@@ -789,11 +871,10 @@ async def get_collect_log_detail(
     if log is None:
         return None, []
 
-    # 下界：采集开始前 buffer；上界：日志写入后 buffer
-    # created_at 在整批采集结束后才写入，保证覆盖所有设备的 collected_at
-    window_start = log.collect_time - timedelta(seconds=time_window_seconds)
-    window_end = log.created_at + timedelta(seconds=time_window_seconds)
+    # 目标采集日 = collect_time（CST）的前一天
+    target_day = (log.collect_time.astimezone(CST) - timedelta(days=1)).date()
 
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
     query = (
         select(EnergyData, EnergyDeviceConfig)
         .join(
@@ -802,8 +883,7 @@ async def get_collect_log_detail(
         )
         .where(
             EnergyDeviceConfig.platform_code == log.platform_code,
-            EnergyData.collected_at >= window_start,
-            EnergyData.collected_at <= window_end,
+            cst_date == target_day,
             EnergyData.is_deleted == False,  # noqa: E712
         )
         .order_by(EnergyData.timestamp.desc())
@@ -812,6 +892,40 @@ async def get_collect_log_detail(
     rows = list(result.all())
 
     return log, rows
+
+
+# ── 自动采集运行时设置 ──
+
+# 每日采集触发时间配置键
+COLLECT_SETTING_DAILY_COLLECT_TIME = "daily_collect_time"
+
+
+async def get_collect_setting_value(
+    db: AsyncSession, key: str
+) -> str | None:
+    """读取自动采集运行时设置值；未配置返回 None。"""
+    result = await db.execute(
+        select(EnergyCollectSetting.setting_value).where(
+            EnergyCollectSetting.setting_key == key,
+            EnergyCollectSetting.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_collect_setting_value(
+    db: AsyncSession, key: str, value: str
+) -> None:
+    """写入自动采集运行时设置（存在则更新，不存在则新增）。"""
+    stmt = pg_insert(EnergyCollectSetting).values(
+        setting_key=key,
+        setting_value=value,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_energy_collect_setting_key",
+        set_={"setting_value": value},
+    )
+    await db.execute(stmt)
 
 
 # ── 预警规则 ──
@@ -1911,14 +2025,37 @@ async def get_price_category_distribution(
         # 按部门查看 → 只用普通设备（子表），排除总耗设备
         where_clauses.append("c.stat_role = 'normal'")
     else:
-        # 默认总览 → 总耗设备优先，无总耗时用普通设备
+        # 默认总览 → 总耗设备优先，无总耗时用普通设备（对齐 _total_preferred_filter：
+        # 区域级 total 存在时排除所有 normal，避免「总耗 + 子表相加」重复累加）
         where_clauses.append("c.stat_role != 'excluded'")
         where_clauses.append(
-            "(c.stat_role = 'total' OR (c.stat_role = 'normal' AND NOT EXISTS ("
-            "SELECT 1 FROM energy.energy_device_configs t "
-            "WHERE t.workshop = c.workshop AND t.energy_type = c.energy_type "
-            "AND t.stat_role = 'total' AND t.is_enabled = true AND t.is_deleted = false"
-            ")))"
+            "("
+            "c.stat_role = 'total'"
+            " OR ("
+            "c.stat_role = 'normal'"
+            " AND NOT ("
+            "  EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs t "
+            "   WHERE t.workshop = c.workshop AND t.energy_type = c.energy_type "
+            "   AND t.stat_role = 'total' AND t.is_enabled = true AND t.is_deleted = false"
+            "  )"
+            "  OR EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs r "
+            "   WHERE r.energy_type = c.energy_type "
+            "   AND r.stat_role = 'total' AND r.is_region_level = true "
+            "   AND r.is_enabled = true AND r.is_deleted = false"
+            "  )"
+            " )"
+            " AND ("
+            "  c.is_region_level = false"
+            "  OR NOT EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs d2 "
+            "   WHERE d2.workshop = c.workshop AND d2.energy_type = c.energy_type "
+            "   AND d2.is_region_level = false AND d2.is_enabled = true AND d2.is_deleted = false"
+            "  )"
+            " )"
+            ")"
+            ")"
         )
 
     where_sql = " AND ".join(where_clauses)

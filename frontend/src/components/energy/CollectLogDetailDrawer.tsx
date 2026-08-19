@@ -364,13 +364,13 @@ export function CollectLogDetailDrawer({
             </InfoRow>
 
             <InfoRow label="采集时间">
-              {new Date(detail.collect_time).toLocaleString('zh-CN')}
+              {new Date(detail.created_at).toLocaleString('zh-CN')}
             </InfoRow>
 
             {/* 水务时间间隔告警：采集时间与数据时间 > 60 分钟时显示 */}
             {detail.time_range_start &&
               (() => {
-                const collectTime = new Date(detail.collect_time).getTime()
+                const collectTime = new Date(detail.created_at).getTime()
                 const dataTime = new Date(detail.time_range_start).getTime()
                 const gapMinutes = Math.abs(collectTime - dataTime) / 1000 / 60
                 if (gapMinutes > 60) {

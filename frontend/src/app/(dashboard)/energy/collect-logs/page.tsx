@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Select, Button, Switch, App, Popconfirm, TimePicker } from 'antd'
-import dayjs from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import { ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
 import { CollectLogTable, CollectLogDetailDrawer, EnergyErrorReporter } from '@/components/energy'
@@ -33,6 +33,7 @@ export default function CollectLogsPage() {
   const [autoCollectEnabled, setAutoCollectEnabled] = useState(false)
   const [dailyCollectTime, setDailyCollectTime] = useState<string>('08:00')
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [timeSaving, setTimeSaving] = useState(false)
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -58,6 +59,20 @@ export default function CollectLogsPage() {
       message.error('设置更新失败')
     } finally {
       setSettingsLoading(false)
+    }
+  }
+
+  const handleChangeDailyTime = async (t: Dayjs | null, timeString: string | null) => {
+    if (!t || !timeString) return
+    setDailyCollectTime(timeString)
+    setTimeSaving(true)
+    try {
+      await updateCollectSettings({ daily_collect_time: timeString })
+      message.success(`每日采集时间已设为 ${timeString}`)
+    } catch {
+      message.error('采集时间更新失败')
+    } finally {
+      setTimeSaving(false)
     }
   }
 
@@ -253,15 +268,9 @@ export default function CollectLogsPage() {
             format="HH:mm"
             minuteStep={30}
             size="small"
+            disabled={timeSaving}
             style={{ width: 80 }}
-            onChange={async (t) => {
-              if (!t) return
-              const val = t.format('HH:mm')
-              setDailyCollectTime(val)
-              try {
-                await updateCollectSettings({ daily_collect_time: val })
-              } catch { /* ignore */ }
-            }}
+            onChange={handleChangeDailyTime}
             changeOnScroll
           />
           <span style={{ fontSize: 13, fontWeight: 500, color: '#5645d4', whiteSpace: 'nowrap' }}>

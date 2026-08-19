@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
 from app.modules.energy import repository as repo
+from app.modules.energy.collect_settings import CST
 
 
 @pytest.mark.asyncio
@@ -108,3 +109,78 @@ async def test_get_enabled_devices_by_platform(db_session, sample_device_config_
     devices = await repo.get_enabled_devices_by_platform(db_session, "zhiheng")
     assert len(devices) == 1
     assert devices[0].is_enabled is True
+
+
+@pytest.mark.asyncio
+async def test_get_platform_backfill_start_day_with_gap(
+    db_session, sample_device_config_data
+):
+    config = await repo.create_device_config(db_session, sample_device_config_data)
+    # 最近一条数据落在 8 月 15 日，昨天为 8 月 18 日 → 应从 16 日开始回溯
+    await repo.upsert_energy_data(
+        db_session,
+        device_config_id=config.id,
+        timestamp=datetime(2026, 8, 15, 8, 0, tzinfo=CST),
+        value=1.0,
+        unit="m3",
+    )
+    start = await repo.get_platform_backfill_start_day(
+        db_session, "zhiheng", date(2026, 8, 18)
+    )
+    assert start == date(2026, 8, 16)
+
+
+@pytest.mark.asyncio
+async def test_get_platform_backfill_start_day_no_data_uses_device_created(
+    db_session, sample_device_config_data
+):
+    # 无任何数据：回溯下限为最早启用设备的创建日
+    await repo.create_device_config(
+        db_session,
+        {
+            **sample_device_config_data,
+            "created_at": datetime(2026, 8, 1, 0, 0, tzinfo=CST),
+        },
+    )
+    start = await repo.get_platform_backfill_start_day(
+        db_session, "zhiheng", date(2026, 8, 18)
+    )
+    assert start == date(2026, 8, 1)
+
+
+@pytest.mark.asyncio
+async def test_get_platform_backfill_start_day_up_to_date(
+    db_session, sample_device_config_data
+):
+    config = await repo.create_device_config(db_session, sample_device_config_data)
+    await repo.upsert_energy_data(
+        db_session,
+        device_config_id=config.id,
+        timestamp=datetime(2026, 8, 18, 8, 0, tzinfo=CST),
+        value=1.0,
+        unit="m3",
+    )
+    # 已补齐到昨天：仍返回昨天（幂等采集，保证每日都写采集日志）
+    start = await repo.get_platform_backfill_start_day(
+        db_session, "zhiheng", date(2026, 8, 18)
+    )
+    assert start == date(2026, 8, 18)
+
+
+@pytest.mark.asyncio
+async def test_get_platform_backfill_start_day_future_data_clamped(
+    db_session, sample_device_config_data
+):
+    config = await repo.create_device_config(db_session, sample_device_config_data)
+    await repo.upsert_energy_data(
+        db_session,
+        device_config_id=config.id,
+        timestamp=datetime(2026, 8, 19, 8, 0, tzinfo=CST),
+        value=1.0,
+        unit="m3",
+    )
+    # 数据日期晚于昨天（异常/时钟偏差）：回溯起点不回退，仍返回昨天
+    start = await repo.get_platform_backfill_start_day(
+        db_session, "zhiheng", date(2026, 8, 18)
+    )
+    assert start == date(2026, 8, 18)
