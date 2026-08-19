@@ -36,6 +36,10 @@ _last_daily_collect_date: date | None = None
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
 
+# 触发时间宽限：后端重启后落在 [触发时间, 触发时间+宽限) 内仍自动采集，
+# 超过则跳过当天，等次日触发时由补采一并补回（或手动触发）。
+COLLECT_GRACE_MINUTES = 5
+
 # 各平台 API 并发上限（避免冲垮三方接口）
 _PLATFORM_SEMAPHORES: dict[str, asyncio.Semaphore] = {
     "zhiheng": asyncio.Semaphore(2),     # 智恒分页 API 较重
@@ -299,6 +303,20 @@ def _day_at_midnight(day: date) -> datetime:
     return datetime(day.year, day.month, day.day, tzinfo=CST)
 
 
+def _within_collect_window(now: datetime, trigger_time: str) -> bool:
+    """判断 now 是否落在 [触发时间, 触发时间+宽限) 的自动采集窗口内。
+
+    trigger_time 形如 "HH:MM"。返回 False 表示未到时间或已过窗口。
+    """
+    try:
+        hh, mm = trigger_time.split(":")
+        trigger_dt = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    except (ValueError, AttributeError):
+        return False
+    window_end = trigger_dt + timedelta(minutes=COLLECT_GRACE_MINUTES)
+    return trigger_dt <= now < window_end
+
+
 async def collect_platform_days(
     platform_code: str, now: datetime
 ) -> dict[str, Any] | None:
@@ -399,9 +417,9 @@ async def energy_daily_collect_coro() -> None:
     """每日统一采集协程。
 
     由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
-    当当前时间 >= 全局 daily_collect_time 时（精确到分钟），
-    拉取所有启用设备昨天 0-23 小时的数据。
-    当天已采过（存在采集日志）则不重复执行，重启 / 多 worker 下也可靠。
+    仅在触发时间（含 COLLECT_GRACE_MINUTES 宽限）到达时采集；
+    后端重启后若已过触发窗口则跳过当天，等次日触发由补采一并补回，
+    或由手动触发补齐。当天已采过则不再重复。
     """
     global _last_daily_collect_date
 
@@ -409,7 +427,6 @@ async def energy_daily_collect_coro() -> None:
         return
 
     now = datetime.now(CST)
-    current_time = now.strftime("%H:%M")
     today = now.date()
 
     async with async_session_factory() as db:
@@ -418,8 +435,8 @@ async def energy_daily_collect_coro() -> None:
             db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
         ) or get_default_daily_collect_time()
 
-        # 当前时间未到触发时间，跳过
-        if current_time < trigger_time:
+        # 未到触发时间、或已过触发窗口：跳过（不自动补采）
+        if not _within_collect_window(now, trigger_time):
             return
 
         # 本进程内已触发过（防长采集期间本进程重复触发）
