@@ -183,6 +183,25 @@ class EnergyCollectLog(BaseModel):
     )
 
 
+class EnergyCollectSetting(BaseModel):
+    """自动采集运行时设置（键值对，持久化用户配置，重启保留）。"""
+
+    __tablename__ = "energy_collect_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "setting_key", "is_deleted", name="uq_energy_collect_setting_key"
+        ),
+        {"schema": "energy"},
+    )
+
+    setting_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="配置键"
+    )
+    setting_value: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", comment="配置值"
+    )
+
+
 # ── 预警系统 ──
 
 

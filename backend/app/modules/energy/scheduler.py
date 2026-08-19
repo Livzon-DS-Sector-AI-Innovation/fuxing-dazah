@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import Date, func, select
 from sqlalchemy import cast as sa_cast
@@ -16,7 +17,7 @@ from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.collect_settings import (
     CST,
     get_auto_collect_enabled,
-    get_daily_collect_time,
+    get_default_daily_collect_time,
 )
 from app.modules.energy.models import EnergyData, EnergyDeviceConfig, EnergyTypeConfig
 from app.modules.energy.service import _get_unit_by_energy_type
@@ -29,8 +30,8 @@ from app.platform.scheduler import (
 
 logger = logging.getLogger(__name__)
 
-# 上次每日采集日期（防同一天重复执行）
-_last_daily_collect_date: str = ""
+# 上次每日采集日期（本进程内防长采集期间重复触发）
+_last_daily_collect_date: date | None = None
 
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
@@ -211,18 +212,18 @@ async def _collect_platform_devices(
     async with async_session_factory() as db:
         platform_expected = 0
         platform_success = 0
-        daily_devices: list[tuple[EnergyDeviceConfig, str]] = []
+        daily_devices: list[tuple[EnergyDeviceConfig, str, int]] = []
 
         for device, unit, count in device_results:
             coll_gran = granularity_map.get(device.energy_type, "hourly")
             if coll_gran == "daily":
-                daily_devices.append((device, unit))
+                daily_devices.append((device, unit, count))
                 platform_expected += 1
             else:
                 platform_success += count
                 platform_expected += 24
 
-        for device, unit in daily_devices:
+        for device, unit, count in daily_devices:
             try:
                 cst_date = func.date(
                     func.timezone("Asia/Shanghai", EnergyData.timestamp)
@@ -237,7 +238,9 @@ async def _collect_platform_devices(
                     )
                 )
                 total_val = float(sum_result.scalar() or 0.0)
-                if total_val > 0:
+                # 采集到数据即写日汇总并计成功（真实值可能为 0）；
+                # 未采集到数据（count=0）时 SUM 也会是 0，不能用 >=0 误判成功。
+                if count > 0:
                     await repo.delete_hourly_data_for_device_on_date(
                         db, device.id, yesterday
                     )
@@ -291,12 +294,74 @@ async def _collect_platform_devices(
     }
 
 
+def _day_at_midnight(day: date) -> datetime:
+    """构造某天 00:00 的 CST datetime，用于数据采集与采集日志。"""
+    return datetime(day.year, day.month, day.day, tzinfo=CST)
+
+
+async def collect_platform_days(
+    platform_code: str, now: datetime
+) -> dict[str, Any] | None:
+    """采集某平台从回溯起始日到昨天的所有缺失日，返回汇总结果。
+
+    每个目标日写一条采集日志，collect_time 记为「目标日 + 1 天」，
+    与既有 get_collect_log_detail 的「collect_time 前一天 = 数据日」约定一致。
+    无缺失日（已补齐）时仍采集昨天，保证每日都产生采集日志；
+    平台无适配器时返回 None。
+    """
+    if ADAPTERS.get(platform_code) is None:
+        logger.warning("未找到平台适配器: %s，跳过", platform_code)
+        return None
+
+    yesterday = (now - timedelta(days=1)).date()
+
+    async with async_session_factory() as db:
+        start_day = await repo.get_platform_backfill_start_day(
+            db, platform_code, yesterday
+        )
+
+    if start_day > yesterday:
+        return None
+
+    device_count = 0
+    total_success = 0
+    total_expected = 0
+    days: list[str] = []
+
+    day = start_day
+    while day <= yesterday:
+        target = _day_at_midnight(day)
+        collect_at = _day_at_midnight(day + timedelta(days=1))
+        r = await _collect_platform_devices(platform_code, target, collect_at)
+        if r is not None:
+            device_count = r["device_count"]
+            total_success += r["success_count"]
+            total_expected += r["expected_count"]
+            days.append(day.strftime("%Y-%m-%d"))
+        day += timedelta(days=1)
+
+    if total_expected == 0:
+        status = "success"
+    elif total_success >= total_expected:
+        status = "success"
+    elif total_success > 0:
+        status = "partial"
+    else:
+        status = "failed"
+
+    return {
+        "platform_code": platform_code,
+        "status": status,
+        "device_count": device_count,
+        "success_count": total_success,
+        "expected_count": total_expected,
+        "days": days,
+    }
+
+
 async def _daily_collect_all_platforms() -> None:
-    """每日统一采集：所有平台并发 + 平台内所有设备并发。"""
+    """每日统一采集：所有平台并发 + 平台内所有设备并发，并补齐缺失历史日。"""
     now = datetime.now(CST)
-    yesterday = (now - timedelta(days=1)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
 
     async with async_session_factory() as db:
         platforms = await repo.get_distinct_enabled_platforms(db)
@@ -304,9 +369,7 @@ async def _daily_collect_all_platforms() -> None:
     if not platforms:
         return
 
-    tasks = [
-        _collect_platform_devices(pc, yesterday, now) for pc in platforms
-    ]
+    tasks = [collect_platform_days(pc, now) for pc in platforms]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     total_devices = 0
@@ -324,9 +387,7 @@ async def _daily_collect_all_platforms() -> None:
 
     if total_devices > 0:
         logger.info(
-            "每日采集完成: date=%s, platforms=%d, devices=%d, "
-            "success=%d/%d",
-            yesterday.strftime("%Y-%m-%d"),
+            "每日采集完成: platforms=%d, devices=%d, success=%d/%d",
             len(platforms),
             total_devices,
             total_success,
@@ -338,9 +399,9 @@ async def energy_daily_collect_coro() -> None:
     """每日统一采集协程。
 
     由 SchedulerEngine 以 INTERVAL(60s) 策略驱动。
-    当当前时间 >= 全局 daily_collect_time 时（精确到分钟），
-    拉取所有启用设备昨天 0-23 小时的数据。
-    同一天不重复执行。
+    仅在预设触发时间（精确到分钟）到达时采集；
+    后端重启后若已过触发时间则跳过当天，等次日触发由补采一并补回，
+    或由手动触发补齐。当天已采过则不再重复。
     """
     global _last_daily_collect_date
 
@@ -349,19 +410,29 @@ async def energy_daily_collect_coro() -> None:
 
     now = datetime.now(CST)
     current_time = now.strftime("%H:%M")
-    today_str = now.strftime("%Y-%m-%d")
+    today = now.date()
 
-    trigger_time = get_daily_collect_time()
-    # 当前时间未到触发时间，跳过
-    if current_time < trigger_time:
-        return
+    async with async_session_factory() as db:
+        # 用户配置的触发时间持久化在 DB，未配置时回退默认值
+        trigger_time = await repo.get_collect_setting_value(
+            db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
+        ) or get_default_daily_collect_time()
 
-    # 今天已执行过，跳过
-    if _last_daily_collect_date == today_str:
-        return
+        # 仅在预设触发时间（同一分钟）采集；未到或已过均跳过
+        if current_time != trigger_time:
+            return
 
-    _last_daily_collect_date = today_str
-    logger.info("触发每日统一采集: time=%s, date=%s", trigger_time, today_str)
+        # 本进程内已触发过（防长采集期间本进程重复触发）
+        if _last_daily_collect_date == today:
+            return
+
+        # 跨进程 / 重启去重：当天已产生采集日志则跳过
+        if await repo.has_collect_log_for_date(db, today):
+            _last_daily_collect_date = today
+            return
+
+    _last_daily_collect_date = today  # 先置位，防长采集期间重复
+    logger.info("触发每日统一采集: time=%s, date=%s", trigger_time, today)
 
     try:
         await _daily_collect_all_platforms()

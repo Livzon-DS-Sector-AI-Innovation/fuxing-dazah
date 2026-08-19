@@ -14,12 +14,6 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.energy import service
 from app.modules.energy.adapters import ADAPTERS
-from app.modules.energy.collect_settings import (
-    get_auto_collect_enabled,
-    get_daily_collect_time,
-    set_auto_collect_enabled,
-    set_daily_collect_time,
-)
 from app.modules.energy.schemas import (
     AlertRecordProcessRequest,
     AlertRuleCandidate,
@@ -354,33 +348,28 @@ async def trigger_collection(
 
 @collect_router.get("/settings", summary="获取自动采集运行时设置")
 async def get_collect_settings(
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:collect:trigger")),
 ) -> JSONResponse:
     """获取当前自动采集的启用状态和每日统一采集时间。"""
-    return success_response(
-        CollectSettingsResponse(
-            auto_collect_enabled=get_auto_collect_enabled(),
-            daily_collect_time=get_daily_collect_time(),
-        ).model_dump()
-    )
+    result = await service.get_collect_settings(db)
+    return success_response(CollectSettingsResponse(**result).model_dump())
 
 
 @collect_router.put("/settings", summary="更新自动采集运行时设置")
 async def update_collect_settings(
     data: CollectSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:collect:trigger")),
 ) -> JSONResponse:
-    """运行时更新自动采集的启用状态和每日统一采集时间（无需重启）。"""
-    if data.auto_collect_enabled is not None:
-        set_auto_collect_enabled(data.auto_collect_enabled)
-    if data.daily_collect_time is not None:
-        set_daily_collect_time(data.daily_collect_time)
+    """更新自动采集的启用状态（内存）和每日统一采集时间（持久化 DB，重启保留）。"""
+    result = await service.update_collect_settings(
+        db,
+        auto_collect_enabled=data.auto_collect_enabled,
+        daily_collect_time=data.daily_collect_time,
+    )
     return success_response(
-        CollectSettingsResponse(
-            auto_collect_enabled=get_auto_collect_enabled(),
-            daily_collect_time=get_daily_collect_time(),
-        ).model_dump(),
-        message="设置已更新",
+        CollectSettingsResponse(**result).model_dump(), message="设置已更新"
     )
 
 
