@@ -16,7 +16,7 @@ from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.collect_settings import (
     CST,
     get_auto_collect_enabled,
-    get_daily_collect_time,
+    get_default_daily_collect_time,
 )
 from app.modules.energy.models import EnergyData, EnergyDeviceConfig, EnergyTypeConfig
 from app.modules.energy.service import _get_unit_by_energy_type
@@ -211,18 +211,18 @@ async def _collect_platform_devices(
     async with async_session_factory() as db:
         platform_expected = 0
         platform_success = 0
-        daily_devices: list[tuple[EnergyDeviceConfig, str]] = []
+        daily_devices: list[tuple[EnergyDeviceConfig, str, int]] = []
 
         for device, unit, count in device_results:
             coll_gran = granularity_map.get(device.energy_type, "hourly")
             if coll_gran == "daily":
-                daily_devices.append((device, unit))
+                daily_devices.append((device, unit, count))
                 platform_expected += 1
             else:
                 platform_success += count
                 platform_expected += 24
 
-        for device, unit in daily_devices:
+        for device, unit, count in daily_devices:
             try:
                 cst_date = func.date(
                     func.timezone("Asia/Shanghai", EnergyData.timestamp)
@@ -237,7 +237,9 @@ async def _collect_platform_devices(
                     )
                 )
                 total_val = float(sum_result.scalar() or 0.0)
-                if total_val > 0:
+                # 采集到数据即写日汇总并计成功（真实值可能为 0）；
+                # 未采集到数据（count=0）时 SUM 也会是 0，不能用 >=0 误判成功。
+                if count > 0:
                     await repo.delete_hourly_data_for_device_on_date(
                         db, device.id, yesterday
                     )
@@ -351,17 +353,21 @@ async def energy_daily_collect_coro() -> None:
     current_time = now.strftime("%H:%M")
     today = now.date()
 
-    trigger_time = get_daily_collect_time()
-    # 当前时间未到触发时间，跳过
-    if current_time < trigger_time:
-        return
-
-    # 本进程内已触发过（防长采集期间本进程重复触发）
-    if _last_daily_collect_date == today:
-        return
-
-    # 跨进程 / 重启去重：当天已产生采集日志则跳过
     async with async_session_factory() as db:
+        # 用户配置的触发时间持久化在 DB，未配置时回退默认值
+        trigger_time = await repo.get_collect_setting_value(
+            db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
+        ) or get_default_daily_collect_time()
+
+        # 当前时间未到触发时间，跳过
+        if current_time < trigger_time:
+            return
+
+        # 本进程内已触发过（防长采集期间本进程重复触发）
+        if _last_daily_collect_date == today:
+            return
+
+        # 跨进程 / 重启去重：当天已产生采集日志则跳过
         if await repo.has_collect_log_for_date(db, today):
             _last_daily_collect_date = today
             return

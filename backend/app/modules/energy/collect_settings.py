@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 # 中国标准时间 UTC+8（scheduler / service 共用）
 CST = timezone(timedelta(hours=8))
 
+# 每日采集时间的兜底默认值（用户可经前端配置持久化到 DB，覆盖此默认）
+DEFAULT_DAILY_COLLECT_TIME = "08:00"
+
 # ── Runtime state (module-level, survives until server restart) ──
 _auto_collect_enabled: bool = False
-_daily_collect_time: str = "08:00"
 _initialized: bool = False
 
 
@@ -48,12 +50,16 @@ def set_auto_collect_enabled(enabled: bool) -> None:
     _auto_collect_enabled = enabled
 
 
-def get_daily_collect_time() -> str:
-    _init_from_config()
-    return _daily_collect_time
+def get_default_daily_collect_time() -> str:
+    """每日采集时间的默认值：优先读环境配置，回退 08:00（不再写死）。
 
+    用户经前端配置的实际时间持久化在 DB（EnergyCollectSetting 表），
+    此处仅提供未配置时的兜底值。
+    """
+    try:
+        from app.core.config import get_settings
 
-def set_daily_collect_time(value: str) -> None:
-    global _daily_collect_time
-    _init_from_config()
-    _daily_collect_time = value
+        value = get_settings().ENERGY_DAILY_COLLECT_TIME
+        return value or DEFAULT_DAILY_COLLECT_TIME
+    except Exception:
+        return DEFAULT_DAILY_COLLECT_TIME

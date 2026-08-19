@@ -17,6 +17,7 @@ from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
     EnergyCollectLog,
+    EnergyCollectSetting,
     EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
@@ -827,6 +828,40 @@ async def get_collect_log_detail(
     rows = list(result.all())
 
     return log, rows
+
+
+# ── 自动采集运行时设置 ──
+
+# 每日采集触发时间配置键
+COLLECT_SETTING_DAILY_COLLECT_TIME = "daily_collect_time"
+
+
+async def get_collect_setting_value(
+    db: AsyncSession, key: str
+) -> str | None:
+    """读取自动采集运行时设置值；未配置返回 None。"""
+    result = await db.execute(
+        select(EnergyCollectSetting.setting_value).where(
+            EnergyCollectSetting.setting_key == key,
+            EnergyCollectSetting.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_collect_setting_value(
+    db: AsyncSession, key: str, value: str
+) -> None:
+    """写入自动采集运行时设置（存在则更新，不存在则新增）。"""
+    stmt = pg_insert(EnergyCollectSetting).values(
+        setting_key=key,
+        setting_value=value,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_energy_collect_setting_key",
+        set_={"setting_value": value},
+    )
+    await db.execute(stmt)
 
 
 # ── 预警规则 ──
@@ -1926,14 +1961,37 @@ async def get_price_category_distribution(
         # 按部门查看 → 只用普通设备（子表），排除总耗设备
         where_clauses.append("c.stat_role = 'normal'")
     else:
-        # 默认总览 → 总耗设备优先，无总耗时用普通设备
+        # 默认总览 → 总耗设备优先，无总耗时用普通设备（对齐 _total_preferred_filter：
+        # 区域级 total 存在时排除所有 normal，避免「总耗 + 子表相加」重复累加）
         where_clauses.append("c.stat_role != 'excluded'")
         where_clauses.append(
-            "(c.stat_role = 'total' OR (c.stat_role = 'normal' AND NOT EXISTS ("
-            "SELECT 1 FROM energy.energy_device_configs t "
-            "WHERE t.workshop = c.workshop AND t.energy_type = c.energy_type "
-            "AND t.stat_role = 'total' AND t.is_enabled = true AND t.is_deleted = false"
-            ")))"
+            "("
+            "c.stat_role = 'total'"
+            " OR ("
+            "c.stat_role = 'normal'"
+            " AND NOT ("
+            "  EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs t "
+            "   WHERE t.workshop = c.workshop AND t.energy_type = c.energy_type "
+            "   AND t.stat_role = 'total' AND t.is_enabled = true AND t.is_deleted = false"
+            "  )"
+            "  OR EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs r "
+            "   WHERE r.energy_type = c.energy_type "
+            "   AND r.stat_role = 'total' AND r.is_region_level = true "
+            "   AND r.is_enabled = true AND r.is_deleted = false"
+            "  )"
+            " )"
+            " AND ("
+            "  c.is_region_level = false"
+            "  OR NOT EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs d2 "
+            "   WHERE d2.workshop = c.workshop AND d2.energy_type = c.energy_type "
+            "   AND d2.is_region_level = false AND d2.is_enabled = true AND d2.is_deleted = false"
+            "  )"
+            " )"
+            ")"
+            ")"
         )
 
     where_sql = " AND ".join(where_clauses)

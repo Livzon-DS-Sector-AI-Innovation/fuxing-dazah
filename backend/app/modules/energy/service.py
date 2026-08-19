@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
-from app.modules.energy.collect_settings import CST
+from app.modules.energy.collect_settings import (
+    CST,
+    get_auto_collect_enabled,
+    get_default_daily_collect_time,
+    set_auto_collect_enabled,
+)
 from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
@@ -395,6 +400,33 @@ async def get_collect_log_detail(
         "time_range_start": time_range_start,
         "time_range_end": time_range_end,
     }
+
+
+async def get_collect_settings(db: AsyncSession) -> dict[str, Any]:
+    """获取自动采集运行时设置（启用状态来自内存，采集时间来自 DB）。"""
+    daily_time = await repo.get_collect_setting_value(
+        db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME
+    ) or get_default_daily_collect_time()
+    return {
+        "auto_collect_enabled": get_auto_collect_enabled(),
+        "daily_collect_time": daily_time,
+    }
+
+
+async def update_collect_settings(
+    db: AsyncSession,
+    *,
+    auto_collect_enabled: bool | None = None,
+    daily_collect_time: str | None = None,
+) -> dict[str, Any]:
+    """更新自动采集运行时设置；启用状态写内存，采集时间持久化 DB（重启保留）。"""
+    if auto_collect_enabled is not None:
+        set_auto_collect_enabled(auto_collect_enabled)
+    if daily_collect_time is not None:
+        await repo.upsert_collect_setting_value(
+            db, repo.COLLECT_SETTING_DAILY_COLLECT_TIME, daily_collect_time
+        )
+    return await get_collect_settings(db)
 
 
 # ── 总览 ──

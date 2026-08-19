@@ -73,6 +73,7 @@ class Settings(BaseSettings):
 
     # Energy
     ENERGY_AUTO_COLLECT_ENABLED: bool = False
+    ENERGY_DAILY_COLLECT_TIME: str = "08:00"
     ENERGY_WORKSHOP_ALERT_ENABLED: bool = False
     ENERGY_DAILY_PUSH_ENABLED: bool = False
     ENERGY_NITROGEN_PUSH_ENABLED: bool = False
