@@ -36,6 +36,10 @@ _last_daily_collect_date: date | None = None
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
 
+# 预警/推送任务轮询间隔：60 秒
+# 保证用户配置的 notify_time 到点后 1 分钟内触发（见 evaluate_* 的 current>=target 判断）
+NOTIFY_TICK_SECONDS = 60
+
 # 各平台 API 并发上限（避免冲垮三方接口）
 _PLATFORM_SEMAPHORES: dict[str, asyncio.Semaphore] = {
     "zhiheng": asyncio.Semaphore(2),     # 智恒分页 API 较重
@@ -477,7 +481,7 @@ async def energy_workshop_alert_coro() -> None:
 ENERGY_WORKSHOP_ALERT_TASK = TaskDefinition(
     name="energy.workshop_alert",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=300,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=NOTIFY_TICK_SECONDS,
     ),
     coro=energy_workshop_alert_coro,
     settings_toggle_key="ENERGY_WORKSHOP_ALERT_ENABLED",
@@ -511,7 +515,7 @@ async def energy_daily_push_coro() -> None:
 ENERGY_DAILY_PUSH_TASK = TaskDefinition(
     name="energy.daily_push",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=NOTIFY_TICK_SECONDS,
     ),
     coro=energy_daily_push_coro,
     settings_toggle_key="ENERGY_DAILY_PUSH_ENABLED",
@@ -545,7 +549,7 @@ async def energy_nitrogen_push_coro() -> None:
 ENERGY_NITROGEN_PUSH_TASK = TaskDefinition(
     name="energy.nitrogen_push",
     schedule=ScheduleConfig(
-        strategy=ScheduleStrategy.INTERVAL, interval_seconds=3600,
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=NOTIFY_TICK_SECONDS,
     ),
     coro=energy_nitrogen_push_coro,
     settings_toggle_key="ENERGY_NITROGEN_PUSH_ENABLED",
