@@ -49,7 +49,7 @@ function StockOverview({
   summary,
   unit,
 }: {
-  summary: { total_output: number; total_consumed: number; current_stock: number }
+  summary: { total_output: number; total_consumed: number; current_stock: number; container_stocks: Array<{ container_id: string; container_name: string; available_quantity: number }> }
   unit: string
 }) {
   const { total_output, total_consumed, current_stock } = summary
@@ -172,6 +172,20 @@ function StockOverview({
             在库 {current_stock.toLocaleString('zh-CN')} {unit}
           </span>
         </div>
+
+        {/* 容器余量 */}
+        {(summary.container_stocks ?? []).length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+            {(summary.container_stocks ?? []).map(ct => (
+              <Tag
+                key={ct.container_id}
+                style={{ fontSize: 11.5, margin: 0, borderRadius: 6, background: T.purpleLight, borderColor: 'transparent', color: T.purple }}
+              >
+                {ct.container_name} · 余量 {ct.available_quantity.toLocaleString('zh-CN')} {unit}
+              </Tag>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -181,10 +195,15 @@ function StockOverview({
 
 function MovementTable({ materialId }: { materialId: string }) {
   const [batchSearch, setBatchSearch] = useState('')
+  const [containerSearch, setContainerSearch] = useState('')
 
   const { data, isLoading } = useQuery({
-    queryKey: ['material-movements', materialId, batchSearch],
-    queryFn: () => fetchMaterialMovementsClient(materialId, batchSearch || undefined),
+    queryKey: ['material-movements', materialId, batchSearch, containerSearch],
+    queryFn: () => fetchMaterialMovementsClient(
+      materialId,
+      batchSearch || undefined,
+      containerSearch || undefined,
+    ),
     enabled: !!materialId,
   })
 
@@ -234,12 +253,22 @@ function MovementTable({ materialId }: { materialId: string }) {
       ),
     },
     {
-      title: '产出批号', width: 120,
-      render: (_, r) => (
-        <span style={{ fontFamily: "'SF Mono', 'Fira Code', monospace", fontSize: 12 }}>
-          {r.type === 'output' ? (r.intermediate_batch_no || '-') : (r.source_batch_no || '-')}
-        </span>
-      ),
+      title: '产出批号', width: 150,
+      render: (_, r) => {
+        // 混装行如实展示容器，不显示批次（物理上已混批，避免误导溯源）
+        if (r.container_name) {
+          return (
+            <Tag style={{ fontSize: 11, margin: 0, borderRadius: 6, background: T.purpleLight, borderColor: 'transparent', color: T.purple }}>
+              {r.type === 'output' ? `${r.container_name}（混装）` : `混装容器：${r.container_name}`}
+            </Tag>
+          )
+        }
+        return (
+          <span style={{ fontFamily: "'SF Mono', 'Fira Code', monospace", fontSize: 12 }}>
+            {r.type === 'output' ? (r.intermediate_batch_no || '-') : (r.source_batch_no || '-')}
+          </span>
+        )
+      },
     },
     {
       title: '时间', width: 150,
@@ -266,6 +295,14 @@ function MovementTable({ materialId }: { materialId: string }) {
             value={batchSearch}
             onChange={(e) => setBatchSearch(e.target.value)}
           />
+          <Input
+            placeholder="搜索容器名..."
+            allowClear
+            size="small"
+            style={{ width: 140 }}
+            value={containerSearch}
+            onChange={(e) => setContainerSearch(e.target.value)}
+          />
           {data?.movements && (
             <span style={{ fontSize: 12, color: T.steel, whiteSpace: 'nowrap' }}>
               共 {data.movements.length} 条记录
@@ -274,7 +311,7 @@ function MovementTable({ materialId }: { materialId: string }) {
         </div>
       </div>
       <Table
-        rowKey={(r) => `${r.type}-${r.batch_id}-${r.source_output_id ?? ''}-${r.created_at}`}
+        rowKey={(r) => `${r.type}-${r.id}`}
         columns={columns}
         dataSource={data?.movements ?? []}
         loading={isLoading}

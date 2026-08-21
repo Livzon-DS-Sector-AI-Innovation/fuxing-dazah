@@ -18,7 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException
 from app.modules.production.models import ProcessRoute, Product, RouteNode
 from app.modules.production.schemas import (
+    ComputedFieldIn,
     EdgeIn,
+    FieldDefIn,
     NodeIn,
     ProductCreate,
     RouteCreate,
@@ -218,3 +220,144 @@ class TestGraph:
         g1 = await route_service.get_graph(db_session, route1.id)
         g2 = await route_service.get_graph(db_session, route2.id)
         assert g1.nodes[0].name == g2.nodes[0].name == "发酵"
+
+
+class TestComputedFieldsInGraph:
+    async def test_save_and_get_graph_with_computed_fields(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """保存含计算字段的图，读取时返回计算字段（含展示节点编码）。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B",
+                field_key="C1",
+                field_label="收率",
+                formula="{B.temp} / {B.yield_qty}",
+            )
+        ]
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        got = await route_service.get_graph(db_session, route.id)
+        assert len(got.computed_fields) == 1
+        assert got.computed_fields[0].field_key == "C1"
+        assert got.computed_fields[0].node_code == "B"
+
+    async def test_save_rejects_computed_key_conflicting_with_node_field(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """计算字段 field_key 与同展示节点的节点字段同名时保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(node_code="B", field_key="temp", field_label="温度", formula="1 + 1")
+        ]
+        with pytest.raises(AppException, match="字段键冲突"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_save_rejects_unknown_ref(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """公式引用了不存在的字段时保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B", field_key="C1", field_label="收率", formula="{B.NOPE} + 1",
+            )
+        ]
+        with pytest.raises(AppException, match="不存在"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_save_rejects_non_numeric_ref(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """公式引用文本字段时保存被拒（仅 numeric 可参与计算）。"""
+        _, route = await _draft_route(db_session)
+        graph = RouteGraphIn(
+            nodes=[
+                NodeIn(
+                    node_code="A",
+                    name="发酵",
+                    stage_name="工段A",
+                    fields=[
+                        FieldDefIn(
+                            field_key="note",
+                            field_label="备注",
+                            phase="end",
+                            data_type="text",
+                        )
+                    ],
+                )
+            ],
+            computed_fields=[
+                ComputedFieldIn(
+                    node_code="A", field_key="C1", field_label="收率", formula="{A.note} + 1",
+                )
+            ],
+        )
+        with pytest.raises(AppException, match="不存在"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_save_rejects_cycle(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """计算字段互相引用形成环时保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(node_code="A", field_key="C1", field_label="一", formula="{B.C2} + 1"),
+            ComputedFieldIn(node_code="B", field_key="C2", field_label="二", formula="{A.C1} * 2"),
+        ]
+        with pytest.raises(AppException, match="循环依赖"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_save_rejects_bad_syntax(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """公式语法非法时保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(node_code="B", field_key="C1", field_label="收率", formula="1 +"),
+        ]
+        with pytest.raises(AppException, match="语法错误"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_save_rejects_duplicate_field_key(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """两个计算字段同 field_key 时保存被拒。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(node_code="A", field_key="C1", field_label="一", formula="1 + 1"),
+            ComputedFieldIn(node_code="B", field_key="C1", field_label="二", formula="2 + 2"),
+        ]
+        with pytest.raises(AppException, match="计算字段键重复"):
+            await route_service.save_graph(db_session, route.id, graph, user=None)
+
+    async def test_resave_replaces_computed_fields(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """重复保存（软删重建）不残留旧计算字段，且同名 field_key 不撞唯一索引。"""
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B", field_key="C1", field_label="收率", formula="{B.temp} * 0.5",
+            )
+        ]
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B", field_key="C1", field_label="收率V2", formula="{B.temp} * 0.6",
+            ),
+            ComputedFieldIn(
+                node_code="B", field_key="C2", field_label="总量", formula="{B.temp} + 1",
+            ),
+        ]
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        got = await route_service.get_graph(db_session, route.id)
+        assert [c.field_key for c in got.computed_fields] == ["C1", "C2"]
+        assert got.computed_fields[0].field_label == "收率V2"

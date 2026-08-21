@@ -51,10 +51,22 @@ export interface ProcessRoute {
   updated_at: string
 }
 
+export interface ComputedField {
+  id: string
+  route_id: string
+  node_code: string
+  field_key: string
+  field_label: string
+  unit: string | null
+  formula: string
+  sort_order: number
+}
+
 export interface RouteGraph {
   route: ProcessRoute
   nodes: RouteNode[]
   edges: RouteEdge[]
+  computed_fields: ComputedField[]
 }
 
 // ── 编辑入参（对齐后端 RouteGraphIn，边用 node_code 引用） ──
@@ -92,9 +104,19 @@ export interface EdgeIn {
   remark?: string | null
 }
 
+export interface ComputedFieldIn {
+  node_code: string
+  field_key: string
+  field_label: string
+  unit?: string | null
+  formula: string
+  sort_order?: number
+}
+
 export interface RouteGraphIn {
   nodes: NodeIn[]
   edges: EdgeIn[]
+  computed_fields?: ComputedFieldIn[]
 }
 
 export interface CreateRouteInput {

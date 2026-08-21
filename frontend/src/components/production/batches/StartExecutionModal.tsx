@@ -1,13 +1,15 @@
 'use client'
 
 import { useMemo, useEffect, useState } from 'react'
-import { App, Form, Input, InputNumber, Modal, Select } from 'antd'
+import { App, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Dayjs } from 'dayjs'
 import { startExecution, fetchNodeAssignments } from '@/actions/production'
 import {
   fetchBatchDetailClient,
   fetchRouteGraphClient,
   fetchEquipmentOptionsClient,
+  fetchAvailableContainersClient,
 } from '@/lib/api/production-client'
 import { UserSelect } from '@/components/shared'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
@@ -142,6 +144,20 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
         label: `${o.intermediate_type_name ?? '?'} / ${o.line_name ?? '未标产线'} / ${o.intermediate_batch_no ?? o.batch_no ?? '-'} / 余量 ${o.available_quantity ?? o.quantity}${o.unit}`,
       }))
 
+  // ── 混装容器（消耗可选：从容器取用，不溯源批次）──
+  const { data: availableContainers } = useQuery({
+    queryKey: ['production-available-containers', batchId],
+    queryFn: () => fetchAvailableContainersClient(undefined, batchId),
+    enabled: inputIntermediates.length > 0,
+  })
+  const getContainerOptions = (intermediateTypeId: string) =>
+    (availableContainers ?? [])
+      .filter(ct => ct.intermediate_type_id === intermediateTypeId)
+      .map(ct => ({
+        value: ct.id,
+        label: `${ct.name}（${ct.line_name ?? '未标产线'}） / 余量 ${ct.available_quantity ?? 0}`,
+      }))
+
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -161,18 +177,30 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
       field_values: buildFieldValues(startDefs, values),
       deviation_reason: needsDeviation ? (values.deviation_reason as string) : null,
       remark: (values.remark as string) ?? null,
+      started_at: (values.started_at as Dayjs | undefined)?.toISOString() ?? null,
       intermediate_consumptions: inputIntermediates.length > 0
         ? inputIntermediates.flatMap(im => {
             const outputIds = (values as Record<string, string[]>)[`consume_output_${im.intermediate_type_id}`] ?? []
+            const containerIds = (values as Record<string, string[]>)[`consume_container_${im.intermediate_type_id}`] ?? []
             const remark = ((values as Record<string, string>)[`consume_remark_${im.intermediate_type_id}`]) || undefined
-            return outputIds
-              .map(outputId => ({
-                intermediate_type_id: im.intermediate_type_id,
-                output_id: outputId,
-                quantity: Number((values as Record<string, number>)[`consume_qty_${im.intermediate_type_id}_${outputId}`]) || 0,
-                remark,
-              }))
-              .filter(c => c.quantity > 0)
+            return [
+              ...outputIds
+                .map(outputId => ({
+                  intermediate_type_id: im.intermediate_type_id,
+                  output_id: outputId,
+                  quantity: Number((values as Record<string, number>)[`consume_qty_${im.intermediate_type_id}_${outputId}`]) || 0,
+                  remark,
+                }))
+                .filter(c => c.quantity > 0),
+              ...containerIds
+                .map(containerId => ({
+                  intermediate_type_id: im.intermediate_type_id,
+                  container_id: containerId,
+                  quantity: Number((values as Record<string, number>)[`consume_cqty_${im.intermediate_type_id}_${containerId}`]) || 0,
+                  remark,
+                }))
+                .filter(c => c.quantity > 0),
+            ]
           })
         : [],
     })
@@ -253,6 +281,18 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
             label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>工序负责人</span>}
           >
             <UserSelect placeholder="选择工序负责人" style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="started_at"
+            label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>开始时间（可选）</span>}
+          >
+            <DatePicker
+              showTime={{ format: 'HH:mm' }}
+              format="YYYY-MM-DD HH:mm"
+              placeholder="留空默认为当前时间"
+              style={{ width: '100%', borderRadius: 8 }}
+            />
           </Form.Item>
 
           <Form.Item
@@ -369,6 +409,62 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                     </div>
                   )
                 })()}
+
+                {/* 选择混装容器（可选：从容器取用，不溯源具体批次） */}
+                {getContainerOptions(im.intermediate_type_id).length > 0 && (
+                  <>
+                    <Form.Item
+                      name={`consume_container_${im.intermediate_type_id}`}
+                      style={{ marginBottom: 10, marginTop: 10 }}
+                    >
+                      <Select
+                        mode="multiple"
+                        options={getContainerOptions(im.intermediate_type_id)}
+                        placeholder="或从混装容器取用（可选）"
+                        allowClear
+                        showSearch
+                        style={{ borderRadius: 8 }}
+                      />
+                    </Form.Item>
+                    {(() => {
+                      const selectedContainers = (watchedValues?.[`consume_container_${im.intermediate_type_id}`] as string[]) ?? []
+                      if (!selectedContainers.length) return null
+                      return (
+                        <div style={{
+                          display: 'flex', flexDirection: 'column', gap: 8,
+                          padding: '10px 12px', borderRadius: 8,
+                          background: '#fafaf8',
+                        }}>
+                          {selectedContainers.map(containerId => {
+                            const ct = (availableContainers ?? []).find(c => c.id === containerId)
+                            const label = ct ? `${ct.name}（混装）` : containerId.slice(0, 8)
+                            return (
+                              <div key={containerId} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <span style={{
+                                  fontSize: 13, fontWeight: 500, color: '#37352f', flex: 1,
+                                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                }}>
+                                  {label}
+                                </span>
+                                <Form.Item
+                                  name={`consume_cqty_${im.intermediate_type_id}_${containerId}`}
+                                  style={{ margin: 0, width: 140 }}
+                                >
+                                  <InputNumber
+                                    min={1}
+                                    max={ct?.available_quantity ?? undefined}
+                                    placeholder="消耗数量"
+                                    style={{ width: '100%' }}
+                                  />
+                                </Form.Item>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })()}
+                  </>
+                )}
 
                 {/* 备注 */}
                 <Form.Item

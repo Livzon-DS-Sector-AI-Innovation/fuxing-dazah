@@ -2,6 +2,7 @@
 
 import app.modules.production.service.assignment_service as assignment_service
 import app.modules.production.service.batch_service as batch_service
+import app.modules.production.service.container_service as container_service
 import app.modules.production.service.execution_service as execution_service
 import app.modules.production.service.intermediate_service as intermediate_service
 import app.modules.production.service.line_service as line_service
@@ -13,6 +14,7 @@ import app.modules.production.service.workbench_service as workbench_service
 __all__ = [
     "assignment_service",
     "batch_service",
+    "container_service",
     "execution_service",
     "intermediate_service",
     "line_service",

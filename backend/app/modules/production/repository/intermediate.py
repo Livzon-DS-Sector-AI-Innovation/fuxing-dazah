@@ -9,6 +9,7 @@ from app.modules.production.models import (
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     IntermediateType,
+    MixingContainer,
     NodeExecution,
     ProcessRoute,
     RouteNode,
@@ -36,6 +37,14 @@ __all__ = [
     "get_available_outputs",
     "get_non_archived_routes_by_intermediate_type",
     "get_intermediate_type_by_name",
+    "get_mixing_container",
+    "list_mixing_containers",
+    "get_mixing_containers_by_ids",
+    "get_mixing_containers_by_line",
+    "get_outputs_by_container",
+    "get_outputs_by_container_ids",
+    "get_consumptions_by_container",
+    "get_consumptions_by_container_ids",
 ]
 
 
@@ -268,7 +277,11 @@ async def get_available_outputs(
             consumed_subq,
             consumed_subq.c.output_id == BatchIntermediateOutput.id,
         )
-        .where(BatchIntermediateOutput.is_deleted == False)  # noqa: E712
+        .where(
+            BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+            # 混装入库的产出通过容器取用，不进入精确批次选择（防双重记账）
+            BatchIntermediateOutput.container_id.is_(None),
+        )
     )
     if intermediate_type_id is not None:
         stmt = stmt.where(
@@ -372,5 +385,122 @@ async def get_intermediate_type_by_name(
         IntermediateType.is_deleted == False,  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+# ── 混装容器 ──
+
+
+async def get_mixing_container(
+    db: AsyncSession, container_id: uuid.UUID, *, include_deleted: bool = False,
+) -> MixingContainer | None:
+    stmt = select(MixingContainer).where(MixingContainer.id == container_id)
+    if not include_deleted:
+        stmt = stmt.where(MixingContainer.is_deleted == False)  # noqa: E712
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_mixing_containers(
+    db: AsyncSession, intermediate_type_id: uuid.UUID | None = None,
+) -> list[MixingContainer]:
+    """容器列表（未删除），可按中间体类型过滤。"""
+    stmt = select(MixingContainer).where(
+        MixingContainer.is_deleted == False,  # noqa: E712
+    )
+    if intermediate_type_id:
+        stmt = stmt.where(
+            MixingContainer.intermediate_type_id == intermediate_type_id,
+        )
+    stmt = stmt.order_by(MixingContainer.created_at)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_mixing_containers_by_ids(
+    db: AsyncSession, container_ids: list[uuid.UUID],
+    *, include_deleted: bool = False,
+) -> list[MixingContainer]:
+    if not container_ids:
+        return []
+    stmt = select(MixingContainer).where(MixingContainer.id.in_(container_ids))
+    if not include_deleted:
+        stmt = stmt.where(MixingContainer.is_deleted == False)  # noqa: E712
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_mixing_containers_by_line(
+    db: AsyncSession, line_id: uuid.UUID,
+) -> list[MixingContainer]:
+    """某产线下未删除容器，用于删除产线前校验。"""
+    stmt = select(MixingContainer).where(
+        MixingContainer.line_id == line_id,
+        MixingContainer.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_outputs_by_container(
+    db: AsyncSession, container_id: uuid.UUID, *, for_update: bool = False,
+) -> list[BatchIntermediateOutput]:
+    """落入某容器的未删除产出，for_update=True 时行锁（消耗校验防并发）。"""
+    return await get_outputs_by_container_ids(
+        db, [container_id], for_update=for_update,
+    )
+
+
+async def get_outputs_by_container_ids(
+    db: AsyncSession, container_ids: list[uuid.UUID], *, for_update: bool = False,
+) -> list[BatchIntermediateOutput]:
+    """落入若干容器的未删除产出（批量），for_update=True 时行锁。"""
+    if not container_ids:
+        return []
+    stmt = select(BatchIntermediateOutput).where(
+        BatchIntermediateOutput.container_id.in_(container_ids),
+        BatchIntermediateOutput.is_deleted == False,  # noqa: E712
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_consumptions_by_container(
+    db: AsyncSession, container_id: uuid.UUID, *,
+    for_update: bool = False, exclude_aborted: bool = False,
+) -> list[BatchIntermediateConsumption]:
+    """从某容器消耗的未删除记录，for_update=True 时行锁。
+
+    exclude_aborted=True 时排除已中止执行的消耗（与精确模式余量口径一致）。
+    """
+    return await get_consumptions_by_container_ids(
+        db, [container_id], for_update=for_update, exclude_aborted=exclude_aborted,
+    )
+
+
+async def get_consumptions_by_container_ids(
+    db: AsyncSession, container_ids: list[uuid.UUID], *,
+    for_update: bool = False, exclude_aborted: bool = False,
+) -> list[BatchIntermediateConsumption]:
+    """从若干容器消耗的未删除记录（批量）。
+
+    exclude_aborted=True 时排除已中止执行的消耗（与精确模式余量口径一致）。
+    """
+    if not container_ids:
+        return []
+    stmt = select(BatchIntermediateConsumption).where(
+        BatchIntermediateConsumption.container_id.in_(container_ids),
+        BatchIntermediateConsumption.is_deleted == False,  # noqa: E712
+    )
+    if exclude_aborted:
+        stmt = stmt.outerjoin(
+            NodeExecution,
+            NodeExecution.id == BatchIntermediateConsumption.execution_id,
+        ).where(
+            # 只排除已中止执行；执行缺失的孤儿行保守计入（防超耗）
+            or_(
+                NodeExecution.status.is_(None),
+                NodeExecution.status != "aborted",
+            ),
+        )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list((await db.execute(stmt)).scalars())
 
 

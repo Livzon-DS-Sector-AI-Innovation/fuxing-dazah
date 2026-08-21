@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import JSON, CheckConstraint, Index, String, text
+from sqlalchemy import JSON, CheckConstraint, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -164,4 +164,34 @@ class NodeFieldDef(BaseModel):
     max_value: Mapped[float | None] = mapped_column(
         nullable=True, comment="numeric 上限，超出判 is_abnormal"
     )
+    sort_order: Mapped[int] = mapped_column(default=0, comment="排序")
+
+
+class RouteComputedField(BaseModel):
+    """路线级计算字段定义（模板层，查询时动态求值，不物化）。
+
+    node_id 为展示归属节点：计算字段展示在该工序下，引用语法统一为 {node_code.field_key}。
+    """
+
+    __tablename__ = "route_computed_fields"
+    __table_args__ = (
+        # 唯一索引前导列 route_id 已覆盖按路线查询，无需另建单列索引
+        Index(
+            "uq_production_route_computed_fields",
+            "route_id",
+            "field_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "production"},
+    )
+
+    route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="展示归属节点")
+    field_key: Mapped[str] = mapped_column(
+        String(50), comment="字段键，路线内唯一，可被其他计算字段引用"
+    )
+    field_label: Mapped[str] = mapped_column(String(100), comment="显示名")
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="单位，纯展示")
+    formula: Mapped[str] = mapped_column(Text, comment="公式，如 {G1.A1} * 0.9 + {G2.B2}")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序")

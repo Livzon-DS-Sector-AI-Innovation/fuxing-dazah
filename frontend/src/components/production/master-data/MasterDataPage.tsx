@@ -29,13 +29,17 @@ import {
   createIntermediateType,
   updateIntermediateType,
   deleteIntermediateType,
+  fetchLines,
 } from '@/actions/production'
 import {
   fetchProductsClient,
   fetchIntermediateTypesClient,
   fetchRoutesClient,
+  fetchMixingContainersClient,
+  createMixingContainerClient,
+  deleteMixingContainerClient,
 } from '@/lib/api/production-client'
-import type { Product, IntermediateType } from '@/types/production'
+import type { Product, IntermediateType, MixingContainer } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { LinesTab } from './LinesTab'
 
@@ -247,13 +251,19 @@ function ProductDetail({ product }: { product: Product }) {
 function IntermediateTypeCard({
   item,
   canManage,
+  containers,
   onEdit,
   onDelete,
+  onAddContainer,
+  onDeleteContainer,
 }: {
   item: IntermediateType
   canManage: boolean
+  containers: MixingContainer[]
   onEdit: () => void
   onDelete: () => void
+  onAddContainer: () => void
+  onDeleteContainer: (ct: MixingContainer) => void
 }) {
   const props: [string, string | null][] = [
     ['分类', item.category],
@@ -313,6 +323,36 @@ function IntermediateTypeCard({
           {item.description}
         </div>
       )}
+      {/* 混装容器区 */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 11, color: '#a4a097' }}>混装容器</span>
+          {canManage && (
+            <Button size="small" type="text" icon={<PlusOutlined style={{ fontSize: 11 }} />} onClick={onAddContainer} style={{ fontSize: 11, padding: '0 4px' }}>
+              新增容器
+            </Button>
+          )}
+        </div>
+        {containers.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#c8c4bd' }}>无（按精确批次出入库）</div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {containers.map((ct) => (
+              <Tag
+                key={ct.id}
+                closable={canManage}
+                onClose={(e) => { e.preventDefault(); onDeleteContainer(ct) }}
+                style={{ fontSize: 11.5, margin: 0, borderRadius: 6 }}
+              >
+                {ct.name}
+                {ct.available_quantity !== null && (
+                  <span style={{ color: '#a4a097' }}> · 余量 {ct.available_quantity}</span>
+                )}
+              </Tag>
+            ))}
+          </div>
+        )}
+      </div>
       {/* 底部操作区 */}
       {canManage && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, borderTop: '1px solid #ede9e4', padding: '8px 0 12px', marginTop: 'auto' }}>
@@ -353,6 +393,75 @@ function MasterDataContent() {
     queryFn: () => fetchIntermediateTypesClient({ keyword: itKeyword || undefined }),
   })
   const intermediateTypes = itData?.items ?? []
+
+  // ── 混装容器状态 ──
+  const [ctModalOpen, setCtModalOpen] = useState(false)
+  const [ctTargetType, setCtTargetType] = useState<IntermediateType | null>(null)
+  const [ctForm] = Form.useForm()
+  const [ctSaving, setCtSaving] = useState(false)
+  const [lineOptions, setLineOptions] = useState<{ value: string; label: string }[]>([])
+
+  const { data: containers } = useQuery({
+    queryKey: ['production-mixing-containers'],
+    queryFn: () => fetchMixingContainersClient(),
+  })
+  const containersByType = new Map<string, MixingContainer[]>()
+  for (const ct of containers ?? []) {
+    const list = containersByType.get(ct.intermediate_type_id) ?? []
+    list.push(ct)
+    containersByType.set(ct.intermediate_type_id, list)
+  }
+
+  const openContainerModal = async (it: IntermediateType) => {
+    setCtTargetType(it)
+    setCtModalOpen(true)
+    if (lineOptions.length === 0) {
+      const r = await fetchLines()
+      if (r.success && r.data) {
+        setLineOptions(r.data.map((l) => ({ value: l.id, label: l.name })))
+      }
+    }
+  }
+
+  const handleContainerSaved = async () => {
+    const values = await ctForm.validateFields().catch(() => null)
+    if (!values || !ctTargetType) return
+    setCtSaving(true)
+    try {
+      await createMixingContainerClient({
+        name: values.name,
+        intermediate_type_id: ctTargetType.id,
+        line_id: values.line_id,
+      })
+      message.success('容器已创建')
+      setCtModalOpen(false)
+      ctForm.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['production-mixing-containers'] })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '创建失败')
+    } finally {
+      setCtSaving(false)
+    }
+  }
+
+  const handleDeleteContainer = (ct: MixingContainer) => {
+    modal.confirm({
+      title: `删除容器「${ct.name}」?`,
+      content: '仅无出入库记录的空容器可删除',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteMixingContainerClient(ct.id)
+          message.success('已删除')
+          queryClient.invalidateQueries({ queryKey: ['production-mixing-containers'] })
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : '删除失败')
+        }
+      },
+    })
+  }
 
   // ── 产品 CRUD ──
   const handleDeleteProduct = (p: Product) => {
@@ -516,8 +625,11 @@ function MasterDataContent() {
                   key={it.id}
                   item={it}
                   canManage={canManage}
+                  containers={containersByType.get(it.id) ?? []}
                   onEdit={() => { setEditIT(it); setItModalOpen(true) }}
                   onDelete={() => handleDeleteIT(it)}
+                  onAddContainer={() => openContainerModal(it)}
+                  onDeleteContainer={handleDeleteContainer}
                 />
               ))}
             </div>
@@ -557,6 +669,33 @@ function MasterDataContent() {
         onClose={() => { setItModalOpen(false); setEditIT(null) }}
         onSaved={handleITSaved}
       />
+      <Modal
+        open={ctModalOpen}
+        title={`新增混装容器 · ${ctTargetType?.name ?? ''}`}
+        onOk={handleContainerSaved}
+        onCancel={() => { setCtModalOpen(false); ctForm.resetFields() }}
+        confirmLoading={ctSaving}
+        okText="创建"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Form form={ctForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="name"
+            label="容器名称"
+            rules={[{ required: true, message: '请输入容器名称' }]}
+          >
+            <Input placeholder="如 1号储罐" maxLength={100} />
+          </Form.Item>
+          <Form.Item
+            name="line_id"
+            label="所属产线"
+            rules={[{ required: true, message: '请选择产线' }]}
+          >
+            <Select placeholder="选择产线" options={lineOptions} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

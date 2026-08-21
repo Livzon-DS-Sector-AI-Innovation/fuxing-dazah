@@ -69,5 +69,13 @@ class MergeIn(BaseModel):
     remark: str | None = None
 
 
+class ComputedFieldValueOut(BaseModel):
+    field_key: str
+    field_label: str
+    unit: str | None
+    value: float | None
+
+
 class BatchDetailOut(BatchOut):
     executions: list[ExecutionOut] = []
+    computed_fields: list[ComputedFieldValueOut] = []

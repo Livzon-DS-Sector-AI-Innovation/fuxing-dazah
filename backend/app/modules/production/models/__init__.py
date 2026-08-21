@@ -15,6 +15,7 @@ from app.modules.production.models.intermediate import (
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     IntermediateType,
+    MixingContainer,
     RouteNodeIntermediate,
 )
 from app.modules.production.models.line import Line, LineAssignment
@@ -29,6 +30,7 @@ from app.modules.production.models.product import Product
 from app.modules.production.models.route import (
     NodeFieldDef,
     ProcessRoute,
+    RouteComputedField,
     RouteEdge,
     RouteNode,
 )
@@ -43,6 +45,7 @@ __all__ = [
     "IntermediateType",
     "Line",
     "LineAssignment",
+    "MixingContainer",
     "NodeAssignment",
     "NodeExecution",
     "NodeExecutionEquipment",
@@ -53,6 +56,7 @@ __all__ = [
     "PlanOrder",
     "ProcessRoute",
     "Product",
+    "RouteComputedField",
     "RouteEdge",
     "RouteNode",
     "RouteNodeIntermediate",

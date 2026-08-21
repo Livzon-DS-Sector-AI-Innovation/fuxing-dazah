@@ -39,6 +39,7 @@ export const moduleMenus: ModuleMenu[] = [
         ],
       },
       { key: "materials", label: "产出物流水", path: "/production/materials" },
+      { key: "analytics", label: "数据汇总", path: "/production/analytics" },
     ],
   },
   {

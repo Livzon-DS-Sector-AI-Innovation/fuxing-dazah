@@ -2,21 +2,25 @@
 
 import type {
   BatchDetail,
+  ChildrenAggregateResult,
+  FieldTrendPoint,
   IntermediateType,
   MaterialMovements,
+  MixingContainer,
   NodeExecutionListItem,
   ProcessRoute,
   Product,
   ProductionBatch,
   RouteGraph,
+  StageSummary,
   StepCycleResponse,
   TraceData,
 } from '@/types/production'
-import { apiGet, apiFetchPaginated } from '@/lib/http-client'
+import { apiDelete, apiGet, apiFetchPaginated, apiPost, apiPut } from '@/lib/http-client'
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
-function qs(params: Record<string, string | number | undefined | null>): string {
+function qs(params: Record<string, string | number | boolean | undefined | null>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') sp.append(k, String(v))
@@ -75,8 +79,8 @@ export async function fetchEquipmentBriefsClient(ids: string[]): Promise<Equipme
   )
 }
 
-export async function fetchRoutesClient(productId: string, status?: string): Promise<ProcessRoute[]> {
-  const params: Record<string, string | number | undefined> = { product_id: productId, page: 1, page_size: 50 }
+export async function fetchRoutesClient(productId?: string, status?: string): Promise<ProcessRoute[]> {
+  const params: Record<string, string | number | undefined> = { product_id: productId, page: 1, page_size: 100 }
   if (status) { params.status = status }
   const s = qs(params)
   return apiGet<ProcessRoute[]>(`${API_BASE}/api/v1/production/routes?${s}`)
@@ -159,11 +163,50 @@ export async function fetchMaterialDetailClient(id: string): Promise<Intermediat
 export async function fetchMaterialMovementsClient(
   id: string,
   batchNo?: string,
+  containerName?: string,
 ): Promise<MaterialMovements> {
   const params = new URLSearchParams()
   if (batchNo) params.set('batch_no', batchNo)
+  if (containerName) params.set('container_name', containerName)
   const queryString = params.toString()
   return apiGet<MaterialMovements>(`${API_BASE}/api/v1/production/materials/${id}/movements${queryString ? `?${queryString}` : ''}`)
+}
+
+// ── 混装容器 ──
+
+export async function fetchMixingContainersClient(
+  intermediateTypeId?: string,
+): Promise<MixingContainer[]> {
+  const s = qs({ intermediate_type_id: intermediateTypeId })
+  return apiGet<MixingContainer[]>(`${API_BASE}/api/v1/production/mixing-containers${s ? `?${s}` : ''}`)
+}
+
+export async function createMixingContainerClient(input: {
+  name: string
+  intermediate_type_id: string
+  line_id: string
+  remark?: string | null
+}): Promise<MixingContainer> {
+  return apiPost<MixingContainer>(`${API_BASE}/api/v1/production/mixing-containers`, input)
+}
+
+export async function updateMixingContainerClient(
+  id: string,
+  input: { name?: string; line_id?: string; remark?: string | null },
+): Promise<MixingContainer> {
+  return apiPut<MixingContainer>(`${API_BASE}/api/v1/production/mixing-containers/${id}`, input)
+}
+
+export async function deleteMixingContainerClient(id: string): Promise<unknown> {
+  return apiDelete(`${API_BASE}/api/v1/production/mixing-containers/${id}`)
+}
+
+export async function fetchAvailableContainersClient(
+  intermediateTypeId?: string,
+  batchId?: string,
+): Promise<MixingContainer[]> {
+  const s = qs({ intermediate_type_id: intermediateTypeId, batch_id: batchId })
+  return apiGet<MixingContainer[]>(`${API_BASE}/api/v1/production/intermediates/available-containers${s ? `?${s}` : ''}`)
 }
 
 // ── 计划排程视图 ──
@@ -211,6 +254,40 @@ export async function fetchStepCycleClient(params: {
     days: params.days ?? 30,
   })
   return apiGet<StepCycleResponse>(`${API_BASE}/api/v1/production/analytics/step-cycle?${s}`)
+}
+
+// ── 计算字段与工段分析 ──
+export async function fetchChildrenAggregateClient(
+  batchId: string,
+  fieldKey: string,
+  nodeCode?: string,
+): Promise<ChildrenAggregateResult> {
+  const s = qs({ field_key: fieldKey, node_code: nodeCode ?? null })
+  return apiGet<ChildrenAggregateResult>(
+    `${API_BASE}/api/v1/production/batches/${batchId}/children-aggregate?${s}`,
+  )
+}
+
+export async function fetchFieldTrendClient(
+  routeId: string,
+  nodeCode: string,
+  fieldKey: string,
+): Promise<FieldTrendPoint[]> {
+  const s = qs({ route_id: routeId, node_code: nodeCode, field_key: fieldKey })
+  return apiGet<FieldTrendPoint[]>(`${API_BASE}/api/v1/production/analytics/field-trend?${s}`)
+}
+
+export async function fetchStageSummaryClient(params: {
+  stage_name?: string
+  route_id?: string
+  view_all?: boolean
+}): Promise<StageSummary> {
+  const s = qs({
+    stage_name: params.stage_name ?? null,
+    route_id: params.route_id ?? null,
+    view_all: params.view_all ?? false,
+  })
+  return apiGet<StageSummary>(`${API_BASE}/api/v1/production/analytics/stage-summary?${s}`)
 }
 
 // ── 身份人员（全公司员工，供人员选择组件使用）──

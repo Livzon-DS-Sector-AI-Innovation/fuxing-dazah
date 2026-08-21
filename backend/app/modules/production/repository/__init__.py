@@ -8,6 +8,7 @@ from app.modules.production.repository.assignment import (  # noqa: F401
     delete_stage_assignment,
     get_node_assignments_by_nodes,
     get_user_node_assignments,
+    get_user_node_ids,
     get_user_stages,
     list_node_assignments,
     list_stage_assignments,

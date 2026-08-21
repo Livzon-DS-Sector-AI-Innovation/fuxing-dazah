@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Checkbox, Input, Popconfirm, Select, Space, Table } from 'antd'
+import { App, Button, Checkbox, Collapse, Input, Popconfirm, Select, Space, Table } from 'antd'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import { saveRouteGraph } from '@/actions/production'
 import type {
+  ComputedFieldIn,
   EdgeIn,
   NodeIn,
   RouteGraph,
@@ -18,6 +19,7 @@ import type {
 } from '@/types/production'
 import { NodeFieldsDrawer } from './NodeFieldsDrawer'
 import { NodeIntermediatesEditor } from './NodeIntermediatesEditor'
+import { ComputedFieldsEditor } from './ComputedFieldsEditor'
 
 /** 编辑器内部行：附加稳定 _key（rowKey 若用可编辑字段，编辑时行重挂载导致输入框丢焦点） */
 type EditorNode = NodeIn & { _key: string }
@@ -27,7 +29,11 @@ let keySeq = 0
 const newKey = () => `new-${++keySeq}`
 
 /** 后端 RouteGraph → 编辑器内部状态（节点带字段；特殊边=非"相邻 normal"边） */
-function graphToEditorState(graph: RouteGraph): { nodes: EditorNode[]; extraEdges: EditorEdge[] } {
+function graphToEditorState(graph: RouteGraph): {
+  nodes: EditorNode[]
+  extraEdges: EditorEdge[]
+  computedFields: ComputedFieldIn[]
+} {
   const sorted = [...graph.nodes].sort((a, b) => a.sort_order - b.sort_order)
   const codeById = new Map(graph.nodes.map(n => [n.id, n.node_code]))
   const nodes: EditorNode[] = sorted.map((n, i) => ({
@@ -82,7 +88,15 @@ function graphToEditorState(graph: RouteGraph): { nodes: EditorNode[]; extraEdge
           adjacentPairs.has(`${e.from_node_code}->${e.to_node_code}`)
         ),
     )
-  return { nodes, extraEdges }
+  const computedFields: ComputedFieldIn[] = (graph.computed_fields ?? []).map(f => ({
+    node_code: f.node_code,
+    field_key: f.field_key,
+    field_label: f.field_label,
+    unit: f.unit ?? null,
+    formula: f.formula,
+    sort_order: f.sort_order,
+  }))
+  return { nodes, extraEdges, computedFields }
 }
 
 /** 剥离编辑器内部 _key，避免随 payload 发给后端 */
@@ -90,9 +104,14 @@ function graphToEditorState(graph: RouteGraph): { nodes: EditorNode[]; extraEdge
 const stripKey = <T extends { _key?: string }>({ _key, ...rest }: T): Omit<T, '_key'> => rest
 
 /** 编辑器状态 → 后端 RouteGraphIn：相邻自动 normal 边 + 特殊边合并去重 */
-function editorStateToGraphIn(nodes: EditorNode[], extraEdges: EditorEdge[]): {
+function editorStateToGraphIn(
+  nodes: EditorNode[],
+  extraEdges: EditorEdge[],
+  computedFields: ComputedFieldIn[],
+): {
   nodes: NodeIn[]
   edges: EdgeIn[]
+  computed_fields: ComputedFieldIn[]
 } {
   const autoEdges: EdgeIn[] = nodes.slice(0, -1).map((n, i) => ({
     from_node_code: n.node_code,
@@ -116,6 +135,7 @@ function editorStateToGraphIn(nodes: EditorNode[], extraEdges: EditorEdge[]): {
   return {
     nodes: nodes.map((n, i) => ({ ...stripKey(n), sort_order: i + 1 })),
     edges: merged.map(stripKey),
+    computed_fields: computedFields.map((f, i) => ({ ...f, sort_order: i + 1 })),
   }
 }
 
@@ -131,6 +151,7 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
   const [initial] = useState(() => graphToEditorState(graph))
   const [nodes, setNodes] = useState<EditorNode[]>(initial.nodes)
   const [extraEdges, setExtraEdges] = useState<EditorEdge[]>(initial.extraEdges)
+  const [computedFields, setComputedFields] = useState<ComputedFieldIn[]>(initial.computedFields)
   const [fieldsIdx, setFieldsIdx] = useState<number | null>(null)
   const [intermediatesIdx, setIntermediatesIdx] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
@@ -199,8 +220,12 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
         return
       }
     }
+    if (computedFields.some(f => !f.node_code || !f.field_key || !f.field_label || !f.formula)) {
+      message.error('计算字段的节点、字段键、显示名与公式不能为空')
+      return
+    }
     setSaving(true)
-    const payload = editorStateToGraphIn(nodes, extraEdges)
+    const payload = editorStateToGraphIn(nodes, extraEdges, computedFields)
     const result = await saveRouteGraph(routeId, payload)
     setSaving(false)
     if (result.success) {
@@ -432,6 +457,32 @@ export function RouteGraphEditor({ routeId, graph, onCancel, onSaved }: Props) {
       >
         添加流转
       </Button>
+
+      <Collapse
+        style={{ marginTop: 16 }}
+        items={[
+          {
+            key: 'computed-fields',
+            label: `计算字段（${computedFields.length}）`,
+            children: (
+              <ComputedFieldsEditor
+                nodes={nodes.map(n => ({ node_code: n.node_code, node_name: n.name }))}
+                field_options={nodes.flatMap(n =>
+                  n.fields
+                    .filter(f => f.data_type === 'numeric')
+                    .map(f => ({
+                      node_code: n.node_code,
+                      field_key: f.field_key,
+                      field_label: f.field_label,
+                    })),
+                )}
+                value={computedFields}
+                onChange={setComputedFields}
+              />
+            ),
+          },
+        ]}
+      />
 
       <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <Button onClick={onCancel}>取消</Button>

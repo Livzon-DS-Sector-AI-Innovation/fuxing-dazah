@@ -2,10 +2,11 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.production.models import RouteNode
 from app.modules.production.models.assignment import (
     NodeAssignment,
     StageAssignment,
@@ -129,6 +130,23 @@ async def get_user_node_assignments(
         NodeAssignment.is_deleted == False,  # noqa: E712
     )
     return list((await db.execute(stmt)).scalars())
+
+
+async def get_user_node_ids(db: AsyncSession, user_id: uuid.UUID) -> set[uuid.UUID]:
+    """用户负责的全部节点 id：工段负责人（工段下全部节点）+ 工序负责人（节点直取）。"""
+    node_ids: set[uuid.UUID] = set()
+    stages = await get_user_stages(db, user_id)
+    if stages:
+        stmt = select(RouteNode.id).where(
+            tuple_(RouteNode.route_id, RouteNode.stage_name).in_(
+                [(sa.route_id, sa.stage_name) for sa in stages]
+            ),
+            RouteNode.is_deleted == False,  # noqa: E712
+        )
+        node_ids.update((await db.execute(stmt)).scalars())
+    for na in await get_user_node_assignments(db, user_id):
+        node_ids.add(na.node_id)
+    return node_ids
 
 
 # ── 工段批次尾缀 ──

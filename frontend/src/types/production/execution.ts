@@ -59,11 +59,13 @@ export interface StartExecutionInput {
   remark?: string | null
   intermediate_consumptions?: Array<{
     intermediate_type_id: string
-    output_id: string
+    output_id?: string | null  // 精确消耗：选产出批次（与 container_id 二选一）
+    container_id?: string | null  // 混装消耗：选容器
     quantity: number
     unit?: string
     remark?: string
   }>
+  started_at?: string | null
 }
 
 export interface CompleteExecutionInput {
@@ -74,9 +76,11 @@ export interface CompleteExecutionInput {
     quantity: number
     unit?: string
     intermediate_batch_no?: string
+    container_id?: string | null  // 选容器则混装入库
     remark?: string
   }>
   line_id?: string | null
+  finished_at?: string | null
 }
 
 export interface NodeExecutionListItem {

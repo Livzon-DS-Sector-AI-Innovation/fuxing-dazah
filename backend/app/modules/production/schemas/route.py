@@ -35,6 +35,22 @@ class FieldDefOut(FieldDefIn):
     data_type: str  # type: ignore[assignment]
 
 
+class ComputedFieldIn(BaseModel):
+    node_code: str = Field(max_length=50)
+    field_key: str = Field(max_length=50)
+    field_label: str = Field(max_length=100)
+    unit: str | None = Field(default=None, max_length=20)
+    formula: str
+    sort_order: int = 0
+
+
+class ComputedFieldOut(ComputedFieldIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    route_id: uuid.UUID
+
+
 class NodeIn(BaseModel):
     node_code: str = Field(max_length=50)
     name: str = Field(max_length=200)
@@ -102,9 +118,11 @@ class RouteOut(BaseModel):
 class RouteGraphIn(BaseModel):
     nodes: list[NodeIn]
     edges: list[EdgeIn] = []
+    computed_fields: list[ComputedFieldIn] = []
 
 
 class RouteGraphOut(BaseModel):
     route: RouteOut
     nodes: list[NodeOut]
     edges: list[EdgeOut]
+    computed_fields: list[ComputedFieldOut] = []

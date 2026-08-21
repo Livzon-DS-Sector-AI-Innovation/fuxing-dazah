@@ -21,8 +21,22 @@ export interface ProductionBatch {
   owner_name?: string | null
 }
 
+export interface ComputedFieldValue {
+  field_key: string
+  field_label: string
+  unit: string | null
+  value: number | null
+}
+
+export interface ChildrenAggregateResult {
+  field_key: string
+  node_code: string | null
+  sum: number | null
+}
+
 export interface BatchDetail extends ProductionBatch {
   executions: Execution[]
+  computed_fields: ComputedFieldValue[]
 }
 
 export interface CreateBatchInput {

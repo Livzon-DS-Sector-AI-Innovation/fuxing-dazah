@@ -21,6 +21,7 @@ from app.modules.production.service.assignment_service import (
     require_operator_access,
     require_stage_permission,
 )
+from app.modules.production.service.computed_service import expand_computed_fields
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
 )
@@ -362,6 +363,8 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
     route = await repo.get_route(db, batch.route_id)
     if route:
         detail.route_name = route.route_name
+    # 计算字段汇总区
+    detail.computed_fields = await expand_computed_fields(db, batch)
     return detail
 
 

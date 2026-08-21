@@ -45,6 +45,29 @@ class IntermediateType(BaseModel):
     )
 
 
+class MixingContainer(BaseModel):
+    """混装容器：一种中间体的混装池，产出物倒入容器、消耗时按容器取用（混批，不溯源具体批次）。"""
+
+    __tablename__ = "mixing_containers"
+    __table_args__ = (
+        Index(
+            "uq_production_mixing_containers_type_name",
+            "intermediate_type_id",
+            "name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_production_mixing_containers_type", "intermediate_type_id"),
+        Index("ix_production_mixing_containers_line", "line_id"),
+        {"schema": "production"},
+    )
+
+    name: Mapped[str] = mapped_column(String(100), comment="容器名称")
+    intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="装存的中间体类型")
+    line_id: Mapped[uuid.UUID] = mapped_column(comment="所属产线")
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
 class RouteNodeIntermediate(BaseModel):
     """节点-中间体绑定（模板层，属于路线图定义）"""
 
@@ -86,6 +109,12 @@ class BatchIntermediateOutput(BaseModel):
     __table_args__ = (
         Index("ix_production_outputs_batch", "batch_id"),
         Index("ix_production_outputs_execution", "execution_id"),
+        Index(
+            "uq_production_outputs_batch_no",
+            "intermediate_batch_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": "production"},
     )
 
@@ -102,6 +131,9 @@ class BatchIntermediateOutput(BaseModel):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
     line_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True, comment="产出落地的产线（历史数据为空）"
+    )
+    container_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="混装入库容器（选容器则混装，line_id 自动取容器所属产线）"
     )
 
 
@@ -120,7 +152,12 @@ class BatchIntermediateConsumption(BaseModel):
     execution_id: Mapped[uuid.UUID] = mapped_column(comment="消耗所属执行")
     node_id: Mapped[uuid.UUID] = mapped_column(comment="消耗节点")
     intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="中间体类型")
-    output_id: Mapped[uuid.UUID] = mapped_column(comment="引用的产出记录，溯源关键字段")
+    output_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="引用的产出记录，溯源关键字段（混装消耗为空）"
+    )
+    container_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="混装消耗来源容器（混装消耗时 output_id 为空）"
+    )
     quantity: Mapped[float] = mapped_column(comment="消耗数量")
     unit: Mapped[str] = mapped_column(String(20), comment="单位")
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")

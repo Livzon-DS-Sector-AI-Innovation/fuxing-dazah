@@ -4,7 +4,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.modules.production.repository import intermediate as im_repo
 from app.modules.production.repository import line as repo
 from app.modules.production.schemas.line import (
     LineAssignmentOut,
@@ -65,6 +66,11 @@ async def delete_line(db: AsyncSession, line_id: uuid.UUID, user: User | None) -
     line = await repo.get_line(db, line_id)
     if not line:
         raise NotFoundException("产线", str(line_id))
+    # 名下仍有混装容器时禁止删除（容器库存/流水归属不可孤儿化）
+    if await im_repo.get_mixing_containers_by_line(db, line_id):
+        raise AppException(
+            status_code=400, message="该产线下存在混装容器，请先删除容器",
+        )
     await repo.delete_line_assignments_by_line(db, line_id)
     line.is_deleted = True
     if user:

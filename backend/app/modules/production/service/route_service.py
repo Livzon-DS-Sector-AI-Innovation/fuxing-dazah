@@ -10,11 +10,13 @@ from app.modules.production.models import (
     NodeFieldDef,
     ProcessRoute,
     Product,
+    RouteComputedField,
     RouteEdge,
     RouteNode,
     RouteNodeIntermediate,
 )
 from app.modules.production.schemas import (
+    ComputedFieldOut,
     EdgeOut,
     FieldDefOut,
     NodeIntermediateOut,
@@ -25,6 +27,11 @@ from app.modules.production.schemas import (
     RouteGraphIn,
     RouteGraphOut,
     RouteOut,
+)
+from app.modules.production.service.formula import (
+    FormulaError,
+    extract_refs,
+    parse_formula,
 )
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -150,6 +157,28 @@ async def save_graph(
         ):
             raise AppException(status_code=400, message="批次边界必须位于工段之间，同工段内不允许设置批次边界")
 
+    numeric_refs = {
+        (n.node_code, f.field_key)
+        for n in graph.nodes
+        for f in n.fields
+        if f.data_type == "numeric"
+    } | {(c.node_code, c.field_key) for c in graph.computed_fields}
+    node_field_keys = {(n.node_code, f.field_key) for n in graph.nodes for f in n.fields}
+    if len({c.field_key for c in graph.computed_fields}) != len(graph.computed_fields):
+        raise AppException(status_code=400, message="计算字段键重复")
+    for c in graph.computed_fields:
+        if c.node_code not in code_set:
+            raise AppException(
+                status_code=400,
+                message=f"计算字段 {c.field_key} 的展示节点不存在: {c.node_code}",
+            )
+        if (c.node_code, c.field_key) in node_field_keys:
+            raise AppException(
+                status_code=400,
+                message=f"计算字段 {c.field_key} 与节点 {c.node_code} 的字段键冲突",
+            )
+    _validate_computed_fields(graph, numeric_refs)
+
     await repo.soft_delete_route_graph(db, route_id)
 
     node_by_code: dict[str, RouteNode] = {}
@@ -218,7 +247,67 @@ async def save_graph(
                     created_by=user.id if user else None,
                 )
             )
+    for c in graph.computed_fields:
+        db.add(
+            RouteComputedField(
+                route_id=route_id,
+                node_id=node_by_code[c.node_code].id,
+                field_key=c.field_key,
+                field_label=c.field_label,
+                unit=c.unit,
+                formula=c.formula,
+                sort_order=c.sort_order,
+                created_by=user.id if user else None,
+            )
+        )
     await db.flush()
+
+
+def _validate_computed_fields(
+    graph: RouteGraphIn, numeric_refs: set[tuple[str, str]]
+) -> None:
+    """校验计算字段：语法、引用存在（numeric）、循环依赖。
+
+    numeric_refs: 全部可引用的数值键 {(node_code, field_key)}（节点数值字段 + 计算字段）。
+    """
+    resolved: dict[str, list[tuple[str, str]]] = {}
+    for c in graph.computed_fields:
+        try:
+            parse_formula(c.formula)
+            refs = extract_refs(c.formula)
+        except FormulaError as e:
+            raise AppException(
+                status_code=400, message=f"计算字段 {c.field_key} 公式语法错误: {e}"
+            )
+        for code, key in refs:
+            if (code, key) not in numeric_refs:
+                raise AppException(
+                    status_code=400,
+                    message=f"计算字段 {c.field_key} 引用了不存在的字段或非数值字段: {{{code}.{key}}}",
+                )
+        resolved[c.field_key] = refs
+
+    computed_keys = {c.field_key for c in graph.computed_fields}
+
+    state: dict[str, int] = {}
+
+    def dfs(key: str) -> None:
+        state[key] = 1
+        for _code, ref_key in resolved.get(key, []):
+            if ref_key not in computed_keys:
+                continue  # 引用的是节点字段，无环
+            s = state.get(ref_key, 0)
+            if s == 1:
+                raise AppException(
+                    status_code=400, message=f"计算字段存在循环依赖: {key} <-> {ref_key}"
+                )
+            if s == 0:
+                dfs(ref_key)
+        state[key] = 2
+
+    for k in resolved:
+        if state.get(k, 0) == 0:
+            dfs(k)
 
 
 async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
@@ -229,6 +318,8 @@ async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
     defs_by_node: dict[uuid.UUID, list[FieldDefOut]] = {}
     for d in defs:
         defs_by_node.setdefault(d.node_id, []).append(FieldDefOut.model_validate(d))
+    computed = await repo.get_computed_fields_by_route(db, route_id)
+    node_id_to_code = {n.id: n.node_code for n in nodes}
     intermediates = await repo.get_node_intermediates(db, [n.id for n in nodes])
     # 批量查出中间体类型名称
     type_ids = list({im.intermediate_type_id for im in intermediates})
@@ -248,6 +339,19 @@ async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
         route=RouteOut.model_validate(route),
         nodes=node_outs,
         edges=[EdgeOut.model_validate(e) for e in edges],
+        computed_fields=[
+            ComputedFieldOut(
+                id=c.id,
+                route_id=c.route_id,
+                node_code=node_id_to_code.get(c.node_id, ""),
+                field_key=c.field_key,
+                field_label=c.field_label,
+                unit=c.unit,
+                formula=c.formula,
+                sort_order=c.sort_order,
+            )
+            for c in computed
+        ],
     )
 
 

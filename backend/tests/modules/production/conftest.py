@@ -1,11 +1,16 @@
 """生产模块测试夹具。"""
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
+from app.main import app
 from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production.schemas import (
     EdgeIn,
@@ -16,7 +21,32 @@ from app.modules.production.schemas import (
     RouteGraphIn,
 )
 from app.modules.production.service import route_service
+from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
+
+
+@pytest.fixture
+async def client(db_session: AsyncSession, test_user: User) -> AsyncIterator[AsyncClient]:
+    """HTTP 客户端：共享会话 + 固定用户 + 放行 production:batch:read。"""
+
+    async def _override_get_db() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    async def _override_get_current_user() -> User:
+        return test_user
+
+    async def _grant_read_perms(user_id: str, db: object) -> set[str]:
+        return {"production:batch:read"}
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    with patch(
+        "app.platform.permission.deps.get_user_permissions", new=_grant_read_perms
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture

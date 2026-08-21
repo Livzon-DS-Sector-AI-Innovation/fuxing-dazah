@@ -1,15 +1,21 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { App, Button, Drawer, Popconfirm, Skeleton, Space, Table, Tag } from 'antd'
+import { App, Button, Drawer, Popconfirm, Skeleton, Space, Table, Tabs, Tag } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cancelBatch, completeBatch, abortExecution } from '@/actions/production'
 import {
   fetchBatchDetailClient,
+  fetchChildrenAggregateClient,
   fetchTraceClient,
 } from '@/lib/api/production-client'
 import { fetchBatchOutputs, fetchBatchConsumptions } from '@/actions/production'
-import type { IntermediateConsumption, IntermediateOutput, Execution } from '@/types/production'
+import type {
+  ComputedFieldValue,
+  IntermediateConsumption,
+  IntermediateOutput,
+  Execution,
+} from '@/types/production'
 import { BATCH_STATUS_META } from './BatchTable'
 import { TraceGraph } from './TraceGraph'
 import { ExecutionTimeline } from './ExecutionTimeline'
@@ -166,7 +172,14 @@ export function BatchDetailDrawer({
       {isLoading ? (
         <Skeleton active paragraph={{ rows: 10 }} />
       ) : (
-        <>
+        <Tabs
+          defaultActiveKey="detail"
+          items={[
+            {
+              key: 'detail',
+              label: '详情',
+              children: (
+                <>
           {/* ── 批次溯源 ──────────────────────────── */}
           {trace && trace.batches.length > 1 && (
             <Section title="批次溯源">
@@ -318,8 +331,89 @@ export function BatchDetailDrawer({
               )}
             </Section>
           )}
-        </>
+                </>
+              ),
+            },
+            {
+              key: 'summary',
+              label: '汇总',
+              children: (
+                <ComputedSummary
+                  key={currentId}
+                  batchId={currentId}
+                  fields={detail?.computed_fields ?? []}
+                />
+              ),
+            },
+          ]}
+        />
       )}
     </Drawer>
+  )
+}
+
+// ── 汇总 Tab：计算字段列表 + 子批次合计 ──────────────────────
+function ComputedSummary({
+  batchId,
+  fields,
+}: {
+  batchId: string
+  fields: ComputedFieldValue[]
+}) {
+  const { message } = App.useApp()
+  const [sums, setSums] = useState<Record<string, number | null>>({})
+  const [loadingKey, setLoadingKey] = useState<string | null>(null)
+
+  const loadSum = async (fieldKey: string) => {
+    setLoadingKey(fieldKey)
+    try {
+      const r = await fetchChildrenAggregateClient(batchId, fieldKey)
+      setSums(s => ({ ...s, [fieldKey]: r.sum }))
+    } catch {
+      message.error('子批次合计查询失败')
+    } finally {
+      setLoadingKey(null)
+    }
+  }
+
+  return (
+    <Table<ComputedFieldValue>
+      size="small"
+      rowKey="field_key"
+      dataSource={fields}
+      pagination={false}
+      columns={[
+        { title: '字段键', dataIndex: 'field_key', width: 140 },
+        { title: '显示名', dataIndex: 'field_label', width: 140, render: v => v || '—' },
+        { title: '单位', dataIndex: 'unit', width: 80, render: v => v || '—' },
+        { title: '值', dataIndex: 'value', width: 100, render: v => (v == null ? '—' : v) },
+        {
+          title: '子批次合计',
+          width: 200,
+          render: (_, r) => {
+            const sum = sums[r.field_key]
+            if (sum === undefined) {
+              return (
+                <Button
+                  size="small"
+                  loading={loadingKey === r.field_key}
+                  onClick={() => loadSum(r.field_key)}
+                >
+                  子批次合计
+                </Button>
+              )
+            }
+            return sum == null ? (
+              <span style={{ color: T.textSecondary }}>无子批次或无数据</span>
+            ) : (
+              <span style={{ fontWeight: 500 }}>
+                {sum}
+                {r.unit ? ` ${r.unit}` : ''}
+              </span>
+            )
+          },
+        },
+      ]}
+    />
   )
 }

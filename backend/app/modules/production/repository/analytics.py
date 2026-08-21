@@ -6,11 +6,17 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.production.models import Batch, NodeExecution, RouteNode
+from app.modules.production.models import (
+    Batch,
+    NodeExecution,
+    NodeFieldValue,
+    RouteNode,
+)
 
 __all__ = [
     "get_step_cycle_stats",
     "count_active_batches",
+    "get_field_trend_values",
 ]
 
 
@@ -103,3 +109,27 @@ async def count_active_batches(
     if since:
         stmt = stmt.where(Batch.created_at >= since)
     return int((await db.execute(stmt)).scalar_one())
+
+
+async def get_field_trend_values(
+    db: AsyncSession, node_id: uuid.UUID, field_key: str
+) -> list[tuple[str, datetime, float]]:
+    """节点下所有完成执行的该字段值，按填写时间升序；返回 (batch_no, filled_at, value)。"""
+    stmt = (
+        select(Batch.batch_no, NodeFieldValue.filled_at, NodeFieldValue.value_numeric)
+        .select_from(NodeFieldValue)
+        .join(NodeExecution, NodeExecution.id == NodeFieldValue.execution_id)
+        .join(Batch, Batch.id == NodeExecution.batch_id)
+        .where(
+            NodeExecution.node_id == node_id,
+            NodeExecution.status == "completed",
+            NodeFieldValue.field_key == field_key,
+            NodeFieldValue.value_numeric.is_not(None),
+            NodeFieldValue.filled_at.is_not(None),
+            NodeExecution.is_deleted == False,  # noqa: E712
+            NodeFieldValue.is_deleted == False,  # noqa: E712
+            Batch.is_deleted == False,  # noqa: E712
+        )
+        .order_by(NodeFieldValue.filled_at)
+    )
+    return [(r.batch_no, r.filled_at, r.value_numeric) for r in (await db.execute(stmt)).all()]

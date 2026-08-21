@@ -4,6 +4,7 @@ import math
 import uuid
 from collections import defaultdict
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, ForbiddenException, NotFoundException
@@ -14,6 +15,7 @@ from app.modules.production.models import (
     Batch,
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
+    MixingContainer,
     NodeExecution,
     NodeExecutionEquipment,
     NodeFieldDef,
@@ -227,6 +229,12 @@ async def start_execution(
         raise AppException(
             status_code=400, message="该工序已有进行中的执行，不能重复开始"
         )
+    if (
+        payload.started_at
+        and batch.first_started_at
+        and payload.started_at < batch.first_started_at
+    ):
+        raise AppException(status_code=400, message="开始时间不能早于批次首工序开始时间")
 
     is_legal = await _check_source_legality(db, batch, payload.node_id)
     if not is_legal and not payload.deviation_reason:
@@ -258,7 +266,7 @@ async def start_execution(
         status="in_progress",
         owner_id=payload.owner_id,
         owner_name=payload.owner_name,
-        started_at=now(),
+        started_at=payload.started_at or now(),
         started_by=user.id if user else None,
         started_by_name=user.name if user else None,
         is_deviation=not is_legal,
@@ -285,8 +293,19 @@ async def start_execution(
                 created_by=user.id if user else None,
             )
         )
-    # 中间体消耗记录（批量查询产出源，避免 N+1；行锁串行化并发余量校验）
-    output_ids = [c.output_id for c in payload.intermediate_consumptions]
+    # 中间体消耗记录：精确模式（选产出批次）与混装模式（选容器）二选一
+    for c in payload.intermediate_consumptions:
+        if (c.output_id is None) == (c.container_id is None):
+            raise AppException(
+                status_code=400,
+                message="每条消耗必须且只能指定产出批次或混装容器之一",
+            )
+
+    # 批量查询产出源与容器，避免 N+1；行锁串行化并发余量校验
+    output_ids = [
+        c.output_id for c in payload.intermediate_consumptions
+        if c.output_id is not None
+    ]
     output_map: dict[uuid.UUID, BatchIntermediateOutput] = {}
     if output_ids:
         output_map = {
@@ -296,63 +315,151 @@ async def start_execution(
             )
         }
 
+    container_ids = list({
+        c.container_id for c in payload.intermediate_consumptions
+        if c.container_id is not None
+    })
+    container_map: dict[uuid.UUID, MixingContainer] = {}
+    container_stock_map: dict[uuid.UUID, float] = {}
+    if container_ids:
+        container_map = {
+            ct.id: ct
+            for ct in await repo.get_mixing_containers_by_ids(db, container_ids)
+        }
+        missing = set(container_ids) - set(container_map.keys())
+        if missing:
+            raise NotFoundException("混装容器", ", ".join(str(m) for m in missing))
+        # 容器库存 = Σ落入产出 − Σ未中止容器消耗；行锁产出行串行化并发消耗，防超耗
+        # （中止执行不计消耗，与精确模式余量口径一致）
+        locked_outputs = await repo.get_outputs_by_container_ids(
+            db, container_ids, for_update=True,
+        )
+        consumptions = await repo.get_consumptions_by_container_ids(
+            db, container_ids, exclude_aborted=True,
+        )
+        for ct_id in container_ids:
+            container_stock_map[ct_id] = (
+                sum(o.quantity for o in locked_outputs if o.container_id == ct_id)
+                - sum(c.quantity for c in consumptions if c.container_id == ct_id)
+            )
+
     # 消耗可见产线集合：操作人绑定 → 批次负责人绑定兜底 → 皆无则拒绝产线产出
     visible_line_ids: set[uuid.UUID] | None = None
-    if user and output_ids:
+    if user and (output_ids or container_ids):
         visible_line_ids = set(
             await resolve_user_line_ids(db, user.id, batch.owner_user_id)
         )
 
-    # 余量校验：历史已消耗 + 本次消耗 ≤ 产出数量（硬拦截，防超耗）
+    # 混装消耗的单位兜底：容器/消耗行未填单位时用中间体类型默认单位
+    container_type_ids = [
+        c.intermediate_type_id for c in payload.intermediate_consumptions
+        if c.container_id is not None and not c.unit
+    ]
+    default_unit_map: dict[uuid.UUID, str | None] = {}
+    if container_type_ids:
+        default_unit_map = {
+            t.id: t.default_unit
+            for t in await repo.get_intermediate_types_by_ids(db, container_type_ids)
+        }
+
+    # 精确模式余量：历史已消耗 + 本次消耗 ≤ 产出数量（硬拦截，防超耗）
     consumed_map = await get_consumed_quantity_map(db, output_ids)
     request_map: defaultdict[uuid.UUID, float] = defaultdict(float)
+    container_request_map: defaultdict[uuid.UUID, float] = defaultdict(float)
     for c in payload.intermediate_consumptions:
-        request_map[c.output_id] += c.quantity
+        if c.output_id is not None:
+            request_map[c.output_id] += c.quantity
+        else:
+            assert c.container_id is not None  # 前面已校验二选一
+            container_request_map[c.container_id] += c.quantity
 
     for c in payload.intermediate_consumptions:
-        output = output_map.get(c.output_id)
-        if not output:
-            raise NotFoundException("中间体产出记录", str(c.output_id))
-        if c.intermediate_type_id != output.intermediate_type_id:
-            raise AppException(
-                status_code=400,
-                message="消耗的中间体类型与产出源类型不匹配",
+        if c.output_id is not None:
+            output = output_map.get(c.output_id)
+            if not output:
+                raise NotFoundException("中间体产出记录", str(c.output_id))
+            if output.container_id is not None:
+                raise AppException(
+                    status_code=400,
+                    message="该产出已混装入容器，请从容器取用",
+                )
+            if c.intermediate_type_id != output.intermediate_type_id:
+                raise AppException(
+                    status_code=400,
+                    message="消耗的中间体类型与产出源类型不匹配",
+                )
+            # 产线可见性校验：无产线产出（line_id=None）过渡期放行；其余必须 ∈ 可见产线集合
+            if visible_line_ids is not None and output.line_id and output.line_id not in visible_line_ids:
+                raise AppException(
+                    status_code=400,
+                    message="该中间体不在您负责的产线内",
+                )
+            # 余量校验：按产出汇总（同一产出本次多行合并计算）
+            requested = request_map.get(c.output_id, 0.0)
+            available = output.quantity - consumed_map.get(c.output_id, 0.0)
+            if requested > available + 1e-9:
+                raise AppException(
+                    status_code=400,
+                    message=(
+                        f"消耗数量超出该中间体批次的可用余量"
+                        f"（余量 {available:g}{output.unit}）"
+                    ),
+                )
+            db.add(
+                BatchIntermediateConsumption(
+                    batch_id=batch_id,
+                    execution_id=execution.id,
+                    node_id=payload.node_id,
+                    intermediate_type_id=c.intermediate_type_id,
+                    output_id=c.output_id,
+                    quantity=c.quantity,
+                    unit=c.unit or output.unit,
+                    remark=c.remark,
+                    created_by=user.id if user else None,
+                )
             )
-        # 产线可见性校验：无产线产出（line_id=None）过渡期放行；其余必须 ∈ 可见产线集合
-        if visible_line_ids is not None and output.line_id and output.line_id not in visible_line_ids:
-            raise AppException(
-                status_code=400,
-                message="该中间体不在您负责的产线内",
+        else:
+            assert c.container_id is not None  # 前面已校验二选一
+            ct = container_map[c.container_id]
+            if c.intermediate_type_id != ct.intermediate_type_id:
+                raise AppException(
+                    status_code=400,
+                    message="消耗的中间体类型与容器装存类型不匹配",
+                )
+            if visible_line_ids is not None and ct.line_id not in visible_line_ids:
+                raise AppException(
+                    status_code=400,
+                    message="该混装容器不在您负责的产线内",
+                )
+            requested = container_request_map.get(ct.id, 0.0)
+            available = container_stock_map.get(ct.id, 0.0)
+            unit = c.unit or default_unit_map.get(c.intermediate_type_id) or ""
+            if requested > available + 1e-9:
+                raise AppException(
+                    status_code=400,
+                    message=(
+                        f"消耗数量超出混装容器 {ct.name} 的可用余量"
+                        f"（余量 {available:g}{unit}）"
+                    ),
+                )
+            db.add(
+                BatchIntermediateConsumption(
+                    batch_id=batch_id,
+                    execution_id=execution.id,
+                    node_id=payload.node_id,
+                    intermediate_type_id=c.intermediate_type_id,
+                    container_id=c.container_id,
+                    quantity=c.quantity,
+                    unit=unit,
+                    remark=c.remark,
+                    created_by=user.id if user else None,
+                )
             )
-        # 余量校验：按产出汇总（同一产出本次多行合并计算）
-        requested = request_map.get(c.output_id, 0.0)
-        available = output.quantity - consumed_map.get(c.output_id, 0.0)
-        if requested > available + 1e-9:
-            raise AppException(
-                status_code=400,
-                message=(
-                    f"消耗数量超出该中间体批次的可用余量"
-                    f"（余量 {available:g}{output.unit}）"
-                ),
-            )
-        db.add(
-            BatchIntermediateConsumption(
-                batch_id=batch_id,
-                execution_id=execution.id,
-                node_id=payload.node_id,
-                intermediate_type_id=c.intermediate_type_id,
-                output_id=c.output_id,
-                quantity=c.quantity,
-                unit=c.unit or output.unit,
-                remark=c.remark,
-                created_by=user.id if user else None,
-            )
-        )
     # 首个执行推进批次状态 / 记录首工序开始时间
     if batch.status == "pending":
         batch.status = "in_progress"
     if batch.first_started_at is None:
-        batch.first_started_at = now()
+        batch.first_started_at = payload.started_at or now()
     # 无主批次认领：谁先开始归谁
     if batch.owner_user_id is None and user:
         batch.owner_user_id = user.id
@@ -381,6 +488,8 @@ async def complete_execution(
         raise NotFoundException("工序执行", str(execution_id))
     if execution.status != "in_progress":
         raise AppException(status_code=400, message="仅进行中的执行可结束")
+    if payload.finished_at and payload.finished_at < execution.started_at:
+        raise AppException(status_code=400, message="结束时间不能早于开始时间")
 
     defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
     for row in _build_field_values(
@@ -391,6 +500,12 @@ async def complete_execution(
     batch = await repo.get_batch(db, execution.batch_id)
     if not batch:
         raise AppException(status_code=400, message="批次不存在或已删除，无法完成工序")
+    if (
+        payload.finished_at
+        and batch.first_started_at
+        and payload.finished_at < batch.first_started_at
+    ):
+        raise AppException(status_code=400, message="结束时间不能早于批次首工序开始时间")
 
     # 结束顺序校验：前道未完成则拒绝（allow_overlap 放宽开始但不放宽结束）
     # 跳过 is_batch_boundary 边（前序在父批次完成），与开始校验对齐
@@ -434,22 +549,72 @@ async def complete_execution(
         if missing:
             raise NotFoundException("中间体类型", ", ".join(str(m) for m in missing))
 
+    # 混装容器校验：容器存在且装存的类型与产出类型一致
+    container_ids = [o.container_id for o in payload.intermediate_outputs if o.container_id]
+    container_map: dict[uuid.UUID, MixingContainer] = {}
+    if container_ids:
+        container_map = {
+            ct.id: ct
+            for ct in await repo.get_mixing_containers_by_ids(db, container_ids)
+        }
+        missing = set(container_ids) - set(container_map.keys())
+        if missing:
+            raise NotFoundException("混装容器", ", ".join(str(m) for m in missing))
+        for o in payload.intermediate_outputs:
+            if o.container_id is None:
+                continue
+            ct = container_map[o.container_id]
+            if ct.intermediate_type_id != o.intermediate_type_id:
+                raise AppException(
+                    status_code=400,
+                    message=f"容器 {ct.name} 装存类型与产出物类型不匹配",
+                )
+
     # 产线三级 fallback 校验：操作人绑定 → 批次负责人绑定兜底 → 拒绝。
+    # 行级产线 = 混装行取容器所属产线，精确行取 payload.line_id。
     # 仅在有产出且 user 存在时校验——MCP 路径结束工序不传产出，必须豁免；
     # user=None 仅出现在内部调用/测试，跳过校验保持兼容。
     if payload.intermediate_outputs and user:
-        if not payload.line_id:
+        has_precise = any(o.container_id is None for o in payload.intermediate_outputs)
+        if has_precise and not payload.line_id:
             raise AppException(status_code=400, message="请选择产线")
         allowed_line_ids = set(
             await resolve_user_line_ids(db, user.id, batch.owner_user_id)
         )
-        if payload.line_id not in allowed_line_ids:
+        for o in payload.intermediate_outputs:
+            if o.container_id is None:
+                row_line_id = payload.line_id
+            else:
+                row_line_id = container_map[o.container_id].line_id
+            if row_line_id not in allowed_line_ids:
+                raise AppException(
+                    status_code=400,
+                    message="操作人未绑定该产线，请联系管理员配置",
+                )
+
+    # 中间体批号查重：同一提交内互不相同，且不与历史未删除产出重复
+    # （留空默认取批次号；DB partial unique index 兜底并发写入）
+    batch_nos: set[str] = set()
+    for o in payload.intermediate_outputs:
+        bno = o.intermediate_batch_no or batch.batch_no
+        if bno in batch_nos:
             raise AppException(
                 status_code=400,
-                message="操作人未绑定该产线，请联系管理员配置",
+                message=f"中间体批号 {bno} 重复，请为每个产出填写不重复的批号",
             )
-
+        batch_nos.add(bno)
+    if batch_nos:
+        dups = await repo.find_duplicate_output_batch_nos(db, list(batch_nos))
+        if dups:
+            raise AppException(
+                status_code=400,
+                message=f"中间体批号已存在: {', '.join(sorted(dups))}",
+            )
     for o in payload.intermediate_outputs:
+        if o.container_id is None:
+            row_line_id = payload.line_id
+        else:
+            row_line_id = container_map[o.container_id].line_id
         db.add(
             BatchIntermediateOutput(
                 batch_id=execution.batch_id,
@@ -462,19 +627,31 @@ async def complete_execution(
                 is_product=is_product_map.get(o.intermediate_type_id, False),
                 remark=o.remark,
                 created_by=user.id if user else None,
-                line_id=payload.line_id,
+                line_id=row_line_id,
+                container_id=o.container_id,
             )
         )
     execution.status = "completed"
-    execution.finished_at = now()
+    execution.finished_at = payload.finished_at or now()
     execution.finished_by = user.id if user else None
     execution.finished_by_name = user.name if user else None
     if payload.remark:
         execution.remark = payload.remark
     execution.updated_by = user.id if user else None
-    # 记录最近一次工序结束时间（末工序结束由 complete_batch 设置）
-    batch.last_finished_at = now()
-    await db.flush()
+    # 记录最近一次工序结束时间（末工序结束由 complete_batch 设置）；
+    # 手填结束时间可能回退，取单调最大防批次时间线倒挂
+    finished_ts = payload.finished_at or now()
+    if batch.last_finished_at is None or finished_ts > batch.last_finished_at:
+        batch.last_finished_at = finished_ts
+    try:
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        # 并发写入同批号触发 DB 唯一索引，转 400 而非 500
+        raise AppException(
+            status_code=400,
+            message="中间体批号已存在（并发写入），请为每个产出填写不重复的批号",
+        ) from None
     await record_audit_log(
         db,
         action="production.execution.complete",

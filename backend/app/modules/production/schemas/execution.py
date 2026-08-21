@@ -1,14 +1,29 @@
 """节点执行 API 契约。"""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.time import APP_TZ, now
 from app.modules.production.schemas.intermediate import (
     IntermediateConsumptionIn,
     IntermediateOutputIn,
 )
+
+# 分钟级时间选择器与服务器时钟之间允许的容差，避免"选当前分钟"被误判为未来
+_FUTURE_TOLERANCE = timedelta(minutes=5)
+
+
+def _normalize_manual_time(v: datetime | None) -> datetime | None:
+    """归一化用户手填的工序时间：naive 按厂区时区解释，拒绝未来时间。"""
+    if v is None:
+        return v
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=APP_TZ)
+    if v > now() + _FUTURE_TOLERANCE:
+        raise ValueError("时间不能晚于当前时间")
+    return v
 
 
 class FieldValueIn(BaseModel):
@@ -47,6 +62,12 @@ class ExecutionStartIn(BaseModel):
     deviation_reason: str | None = None
     remark: str | None = None
     intermediate_consumptions: list[IntermediateConsumptionIn] = []
+    started_at: datetime | None = None  # 手填开始时间，留空用服务器当前时间
+
+    @field_validator("started_at")
+    @classmethod
+    def _check_started_at(cls, v: datetime | None) -> datetime | None:
+        return _normalize_manual_time(v)
 
 
 class ExecutionCompleteIn(BaseModel):
@@ -54,6 +75,12 @@ class ExecutionCompleteIn(BaseModel):
     remark: str | None = None
     intermediate_outputs: list[IntermediateOutputIn] = []
     line_id: uuid.UUID | None = None
+    finished_at: datetime | None = None  # 手填结束时间，留空用服务器当前时间
+
+    @field_validator("finished_at")
+    @classmethod
+    def _check_finished_at(cls, v: datetime | None) -> datetime | None:
+        return _normalize_manual_time(v)
 
 
 class ExecutionBackfillIn(BaseModel):

@@ -14,7 +14,11 @@ from app.modules.production.schemas import (
     DeriveIn,
     MergeIn,
 )
-from app.modules.production.service import batch_service, trace_service
+from app.modules.production.service import (
+    batch_service,
+    computed_service,
+    trace_service,
+)
 from app.platform.identity.models import User
 from app.platform.permission.deps import RequireUser, require_permission
 
@@ -118,3 +122,15 @@ async def get_trace(
 ) -> JSONResponse:
     trace = await trace_service.get_trace(db, batch_id)
     return success_response(trace.model_dump(mode="json"))
+
+
+@router.get("/batches/{batch_id}/children-aggregate", summary="子批次字段求和（沿谱系）")
+async def children_aggregate(
+    batch_id: uuid.UUID,
+    field_key: str = Query(..., max_length=50),
+    node_code: str | None = Query(default=None, max_length=50),
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    total = await computed_service.aggregate_children_field(db, batch_id, field_key, node_code)
+    return success_response({"field_key": field_key, "node_code": node_code, "sum": total})

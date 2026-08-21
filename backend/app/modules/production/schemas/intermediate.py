@@ -8,6 +8,35 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# ── 混装容器 ──
+
+
+class MixingContainerCreate(BaseModel):
+    name: str = Field(max_length=100)
+    intermediate_type_id: uuid.UUID
+    line_id: uuid.UUID
+    remark: str | None = None
+
+
+class MixingContainerUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    line_id: uuid.UUID | None = None
+    remark: str | None = None
+
+
+class MixingContainerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    intermediate_type_id: uuid.UUID
+    intermediate_type_name: str | None = None  # service 组装
+    line_id: uuid.UUID
+    line_name: str | None = None  # service 组装
+    remark: str | None
+    available_quantity: float | None = None  # service 组装：容器当前余量
+
+
 # ── 中间体字典 ──
 
 class IntermediateTypeCreate(BaseModel):
@@ -90,12 +119,14 @@ class IntermediateOutputIn(BaseModel):
     quantity: float
     unit: str | None = Field(default=None, max_length=20)
     intermediate_batch_no: str | None = Field(default=None, max_length=100)
+    container_id: uuid.UUID | None = None  # 选容器则混装入库，line_id 自动取容器所属产线
     remark: str | None = None
 
 
 class IntermediateConsumptionIn(BaseModel):
     intermediate_type_id: uuid.UUID
-    output_id: uuid.UUID
+    output_id: uuid.UUID | None = None  # 精确消耗：选产出批次
+    container_id: uuid.UUID | None = None  # 混装消耗：选容器（与 output_id 二选一）
     quantity: float
     unit: str | None = Field(default=None, max_length=20)
     remark: str | None = None
@@ -120,6 +151,8 @@ class IntermediateOutputOut(BaseModel):
     created_at: datetime
     line_id: uuid.UUID | None = None
     line_name: str | None = None
+    container_id: uuid.UUID | None = None  # 混装入库容器
+    container_name: str | None = None
     available_quantity: float | None = None
 
 
@@ -134,8 +167,10 @@ class IntermediateConsumptionOut(BaseModel):
     node_name: str | None = None
     intermediate_type_id: uuid.UUID
     intermediate_type_name: str | None = None
-    output_id: uuid.UUID
+    output_id: uuid.UUID | None = None  # 混装消耗为空
     output_batch_no: str | None = None
+    container_id: uuid.UUID | None = None  # 混装消耗来源容器
+    container_name: str | None = None
     quantity: float
     unit: str
     remark: str | None
@@ -146,6 +181,7 @@ class IntermediateConsumptionOut(BaseModel):
 # ── 产出物出入库流水 ──
 
 class MaterialMovement(BaseModel):
+    id: uuid.UUID  # 产出/消耗记录主键，前端列表 rowKey 用
     type: Literal["output", "consumption"]
     batch_id: uuid.UUID
     batch_no: str | None
@@ -155,14 +191,24 @@ class MaterialMovement(BaseModel):
     intermediate_batch_no: str | None = None
     source_batch_no: str | None = None
     source_output_id: uuid.UUID | None = None
+    container_name: str | None = None  # 混装入库容器（产出）/ 混装来源容器（消耗）
     created_at: datetime
     line_name: str | None = None
+
+
+class ContainerStockOut(BaseModel):
+    """混装容器当前余量。"""
+
+    container_id: uuid.UUID
+    container_name: str
+    available_quantity: float
 
 
 class MaterialStockSummary(BaseModel):
     total_output: float
     total_consumed: float
     current_stock: float
+    container_stocks: list[ContainerStockOut] = []
 
 
 class MaterialMovementsOut(BaseModel):

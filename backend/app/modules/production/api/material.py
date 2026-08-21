@@ -48,8 +48,11 @@ async def get_material(
 async def get_material_movements(
     material_id: uuid.UUID,
     batch_no: str | None = Query(default=None, description="按产出批号筛选"),
+    container_name: str | None = Query(default=None, description="按混装容器名筛选"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_permission("production:batch:read")),
 ) -> JSONResponse:
-    result = await intermediate_service.get_material_movements(db, material_id, batch_no=batch_no)
+    result = await intermediate_service.get_material_movements(
+        db, material_id, batch_no=batch_no, container_name=container_name,
+    )
     return success_response(data=result.model_dump(mode="json"))
