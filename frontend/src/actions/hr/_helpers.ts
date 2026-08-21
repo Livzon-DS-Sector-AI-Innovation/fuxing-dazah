@@ -41,9 +41,10 @@ export async function fetchHrApi<T = any>(
       delete headers['Content-Type']
     }
     response = await fetch(`${API_BASE}${endpoint}`, {
-      cache: 'no-store',
       ...restOptions,
       headers,
+      cache: 'no-store',
+      next: { revalidate: 0 },
     })
   } catch {
     throw new Error('网络请求失败，无法连接到后端服务')
@@ -74,9 +75,10 @@ export async function fetchHrText(
       delete headers['Content-Type']
     }
     response = await fetch(`${API_BASE}${endpoint}`, {
-      cache: 'no-store',
       ...restOptions,
       headers,
+      cache: 'no-store',
+      next: { revalidate: 0 },
     })
   } catch {
     throw new Error('网络请求失败，无法连接到后端服务')

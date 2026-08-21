@@ -1,5 +1,6 @@
-"""QA 考核测试：成绩同步台账 UPSERT 逻辑"""
+"""QA 考核测试：成绩保存与台账同步逻辑"""
 
+from datetime import date
 from uuid import uuid4
 
 import pytest
@@ -7,41 +8,36 @@ import pytest
 
 class TestQaScoreSync:
     @pytest.mark.asyncio
-    async def test_save_scores_creates_ledger_if_not_exists(self, db_session, async_client):
-        """保存 QA 成绩 → 不存在台账记录 → INSERT 新记录"""
-        from app.modules.hr.models import QaAssessment, QaAssessmentScore
+    async def test_save_scores_creates_score_row(self, db_session, client):
+        """保存 QA 成绩 → 生成成绩行并计算等级"""
+        from app.modules.hr.models import QaAssessment
 
         aid = uuid4()
-        # 创建考核场次
-        qa = QaAssessment(
+        db_session.add(QaAssessment(
             id=aid, subject="安全生产培训", department="生产部",
-            full_score=100, question_count=4,
+            full_score=100, excellent_line=90, pass_line=80, question_count=4,
             questions=[{"question": "题目1", "answer": "答案1", "score": 25} for _ in range(4)],
             trainee_names=["员工A"],
-        )
-        db_session.add(qa)
+        ))
         await db_session.flush()
-        await db_session.commit()
 
-        # 保存成绩
+        res = await client.put(
+            f"/api/v1/hr/qa-assessments/{aid}/scores",
+            json={"assessed_date": "2026-07-29", "scores": [
+                {"employee_name": "员工A", "employee_number": "0001", "wrong_questions": [1]},
+            ]},
+        )
+        assert res.status_code == 200, res.text
+
         from sqlalchemy import text
-
-        payload = type("obj", (object,), {"assessed_date": None, "scores": [
-            {"employee_name": "员工A", "employee_number": "0001", "wrong_questions": []},
-        ]})
-
-        await db_session.execute(
-            text("UPDATE hr.qa_assessments SET created_at = now() WHERE id = :id"),
-            {"id": aid},
-        )
-        await db_session.commit()
-
-        # 查成绩
-        score = await db_session.execute(
-            text("SELECT * FROM hr.qa_assessment_scores WHERE assessment_id = :aid"),
+        row = (await db_session.execute(
+            text("SELECT total_score, grade, assessed_date FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND is_deleted = false"),
             {"aid": aid},
-        )
-        assert score is not None
+        )).fetchone()
+        assert row is not None, "应生成成绩行"
+        assert row[0] == 75, "错一题扣25分，总分应为75"
+        assert row[1] == "不合格", "75分低于合格线80应为不合格"
+        assert row[2] == date(2026, 7, 29)
 
     @pytest.mark.asyncio
     async def test_sync_ledger_upsert(self, db_session):
@@ -50,7 +46,7 @@ class TestQaScoreSync:
 
         emp_no = f"TEST{uuid4().hex[:6].upper()}"
         subject = f"测试培训_{uuid4().hex[:6]}"
-        train_date = "2026-07-29"
+        train_date = date(2026, 7, 29)
 
         # 先 INSERT 一条台账
         ledger_id = uuid4()

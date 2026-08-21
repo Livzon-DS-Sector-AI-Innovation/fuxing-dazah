@@ -7,6 +7,7 @@ import type { MenuProps } from "antd"
 import { getModuleByKey } from "@/lib/menu-config"
 import type { SubMenuItem } from "@/lib/menu-config"
 import { useSidebarStore } from "@/stores/sidebar"
+import { usePermission } from "@/hooks/usePermission"
 
 type MenuItem = Required<MenuProps>['items'][number]
 
@@ -96,27 +97,46 @@ function containsPath(items: SubMenuItem[], pathname: string): boolean {
   return false
 }
 
+// ── 按权限递归过滤菜单项（无 permissions 的项不受影响）──
+function filterByPermission(
+  items: SubMenuItem[],
+  hasPermission: (...codes: string[]) => boolean
+): SubMenuItem[] {
+  const result: SubMenuItem[] = []
+  for (const item of items) {
+    const children = item.children ? filterByPermission(item.children, hasPermission) : undefined
+    const allowed = !item.permissions || item.permissions.length === 0 || hasPermission(...item.permissions)
+    if (!allowed && (!children || children.length === 0)) continue
+    result.push({ ...item, children })
+  }
+  return result
+}
+
 // ═══════════════════════════════════════════════════════════════
 
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const collapsed = useSidebarStore((s) => s.collapsed)
+  const { hasPermission } = usePermission()
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
+  const visibleItems = currentModule
+    ? filterByPermission(currentModule.children, hasPermission)
+    : []
 
-  const menuItems = currentModule ? buildMenuItems(currentModule.children) : []
-  const keyPathMap = currentModule ? buildKeyPathMap(currentModule.children) : new Map<string, string>()
+  const menuItems = currentModule ? buildMenuItems(visibleItems) : []
+  const keyPathMap = currentModule ? buildKeyPathMap(visibleItems) : new Map<string, string>()
   const selectedKey = currentModule
-    ? findSelectedKey(currentModule.children, pathname)
+    ? findSelectedKey(visibleItems, pathname)
     : undefined
 
   // 生产管理模块默认全展开所有子菜单
   const [openKeys, setOpenKeys] = useState<string[]>(() => {
     if (!currentModule) return []
-    const ancestors = collectAncestorKeys(currentModule.children, pathname)
+    const ancestors = collectAncestorKeys(visibleItems, pathname)
     return moduleKey === "production"
-      ? [...new Set([...collectAllSubMenuKeys(currentModule.children), ...ancestors])]
+      ? [...new Set([...collectAllSubMenuKeys(visibleItems), ...ancestors])]
       : ancestors
   })
 

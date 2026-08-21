@@ -3,7 +3,6 @@
 import { Card, Row, Col } from 'antd'
 import {
   FileTextOutlined,
-  FormOutlined,
   BellOutlined,
   BookOutlined,
   RobotOutlined,
@@ -29,16 +28,9 @@ const modules = [
   {
     key: 'notification',
     title: '培训通知',
-    desc: '填写培训信息，自动生成培训通知、签到表和效果评估表',
+    desc: '填写培训信息，自动生成全套培训材料（培训通知、签到表、效果评估表）',
     icon: <BellOutlined className="text-2xl text-[var(--color-primary)]" />,
     path: '/hr/training/notification',
-  },
-  {
-    key: 'sign-in',
-    title: '培训签到表',
-    desc: '填写培训信息，选择受训部门和人员，生成培训签到表',
-    icon: <FormOutlined className="text-2xl text-[var(--color-primary)]" />,
-    path: '/hr/training/sign-in',
   },
   {
     key: 'ledger',

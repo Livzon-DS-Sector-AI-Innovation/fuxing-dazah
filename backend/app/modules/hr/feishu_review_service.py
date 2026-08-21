@@ -2,58 +2,42 @@
 
 import json
 import logging
-from typing import Any
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-async def _get_client():
-    import lark_oapi as lark
+async def _get_feishu_token() -> str:
+    """通过 HTTP 直接获取 tenant_access_token（不依赖 lark_oapi 版本）"""
+    import httpx
     settings = get_settings()
-    return (
-        lark.Client.builder()
-        .app_id(settings.FEISHU_APP_ID)
-        .app_secret(settings.FEISHU_APP_SECRET)
-        .domain(lark.FEISHU_DOMAIN)
-        .app_type(lark.AppType.SELF)
-        .build()
+    resp = httpx.post(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        json={"app_id": settings.FEISHU_APP_ID, "app_secret": settings.FEISHU_APP_SECRET},
     )
-
-
-async def _get_token(client: Any) -> str:
-    from lark_oapi.api.auth.v3 import (
-        InternalTenantAccessTokenRequest,
-        InternalTenantAccessTokenRequestBody,
-    )
-    settings = get_settings()
-    req = InternalTenantAccessTokenRequest.builder().request_body(
-        InternalTenantAccessTokenRequestBody.builder()
-        .app_id(settings.FEISHU_APP_ID)
-        .app_secret(settings.FEISHU_APP_SECRET)
-        .build()
-    ).build()
-    resp = await client.auth.v3.tenant_access_token.ainternal(req)
-    if not resp.success():
-        raise RuntimeError(f"获取token失败: {resp.code} {resp.msg}")
-    if resp.raw and resp.raw.content:
-        return json.loads(resp.raw.content.decode("utf-8")).get("tenant_access_token", "")
-    raise RuntimeError("空token响应")
+    resp.raise_for_status()
+    data = resp.json()
+    token = data.get("tenant_access_token", "")
+    if not token:
+        raise RuntimeError("获取飞书token失败: " + json.dumps(data))
+    return token
 
 
 async def _lookup_open_id(name: str) -> str | None:
-    """通过姓名查找飞书open_id"""
+    """通过姓名查找飞书open_id（仅查 identity.users，系统登录过的用户）"""
     try:
-        import lark_oapi as lark
-        from lark_oapi.api.contact.v3 import SearchUserRequest
-        client = await _get_client()
-        token = await _get_token(client)
-        search_req = SearchUserRequest.builder().query(name).page_size(1).build()
-        resp = await client.contact.v3.user.asearch(search_req, lark.AccessTokenType.TENANT, token)
-        if resp.success() and resp.data and resp.data.items:
-            return resp.data.items[0].open_id
-        logger.warning(f"未找到飞书用户: {name}")
+        from sqlalchemy import text
+        from app.core.database import async_session_factory
+        async with async_session_factory() as db:
+            r = await db.execute(
+                text("SELECT feishu_open_id FROM identity.users WHERE name = :name AND is_deleted = false LIMIT 1"),
+                {"name": name},
+            )
+            row = r.fetchone()
+            if row and row[0]:
+                return row[0]
+        logger.warning(f"未找到系统用户: {name}（未登录过系统，无法推送）")
         return None
     except Exception as e:
         logger.warning(f"查找open_id失败({name}): {e}")
@@ -61,23 +45,21 @@ async def _lookup_open_id(name: str) -> str | None:
 
 
 async def _send_card(open_id: str, card: dict) -> bool:
-    """发送飞书卡片消息给指定用户"""
+    """发送飞书卡片消息给指定用户（纯 HTTP，不依赖 lark_oapi 版本）"""
     try:
-        import lark_oapi as lark
-        from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
-        client = await _get_client()
-        token = await _get_token(client)
-        req = CreateMessageRequest.builder().request_body(
-            CreateMessageRequestBody.builder()
-            .receive_id(open_id)
-            .msg_type("interactive")
-            .content(json.dumps(card))
-            .build()
-        ).build()
-        resp = await client.im.v1.message.acreate(req, lark.AccessTokenType.TENANT, token)
-        if not resp.success():
-            logger.warning(f"发送飞书消息失败: {resp.code} {resp.msg}")
-            return False
+        import httpx
+        token = await _get_feishu_token()
+        resp = httpx.post(
+            "https://open.feishu.cn/open-apis/im/v1/messages",
+            params={"receive_id_type": "open_id"},
+            json={
+                "receive_id": open_id,
+                "msg_type": "interactive",
+                "content": json.dumps(card),
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
         return True
     except Exception as e:
         logger.warning(f"发送飞书消息异常: {e}")

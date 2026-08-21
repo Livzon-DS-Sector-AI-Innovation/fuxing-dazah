@@ -77,6 +77,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         set_main_loop(asyncio.get_running_loop())
         start_ws_client()
 
+    # ── 职称评审专属多维表格事件长连接（独立应用凭证，事件共享同一处理器） ──
+    if settings.TITLE_REVIEW_FEISHU_WS_ENABLED and settings.TITLE_REVIEW_FEISHU_APP_ID:
+        from app.platform.integrations.feishu.event_handler import (
+            build_event_handler,
+        )
+        from app.platform.integrations.feishu.event_handler import (
+            set_main_loop as set_loop_tr,
+        )
+        from app.platform.integrations.feishu.ws_client import start_ws_client
+
+        set_loop_tr(asyncio.get_running_loop())
+        start_ws_client(
+            settings.TITLE_REVIEW_FEISHU_APP_ID,
+            settings.TITLE_REVIEW_FEISHU_APP_SECRET,
+            build_event_handler(),
+            name="title-review-ws",
+        )
+
     # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
     from app.modules.safety.feishu.event_client import start_ws, stop_ws
 
@@ -113,6 +131,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
+
+    from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
+    scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 

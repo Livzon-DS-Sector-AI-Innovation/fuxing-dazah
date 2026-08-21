@@ -27,6 +27,7 @@ def _build_vals(**kwargs) -> dict[str, str]:
             vals[key] = send_date
         else:
             vals[key] = str(kwargs.get(key, "") or "")
+    vals["additional_terms"] = str(kwargs.get("additional_terms", "") or "")
     return vals
 
 
@@ -100,6 +101,9 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
         f"说明：1、公司将为你保留职位至{vals['offer_expire_date']}，如您不能在此前在贵校的线上就业协议上应约，公司将视您为自动放弃本工作机会，本录用通知失效",
         "2、公司对薪酬福利要求保密，请勿同其它任何第三方讨论薪酬福利事宜，谢谢！",
     ]
+    if vals.get("additional_terms"):
+        items.append("六、补充条款：")
+        items.append(vals["additional_terms"])
     for item in items:
         bold = item.startswith("一、") or item.startswith("二、") or item.startswith("三、") or item.startswith("四、") or item.startswith("五、")
         pdf.set_font(fn, "B" if bold else "", 9)
@@ -188,6 +192,7 @@ def generate_offer_html(**kwargs) -> str:
 <p>竭诚欢迎您的加入，相信以您的能力，必能在公司一展所长！</p>
 <p>说明：1、公司将为你保留职位至{vals["offer_expire_date"]}，如您不能在此前在贵校的线上就业协议上应约，公司将视您为自动放弃本工作机会，本录用通知失效</p>
 <p>2、公司对薪酬福利要求保密，请勿同其它任何第三方讨论薪酬福利事宜，谢谢！</p>
+{"<p><b>六、补充条款：</b></p><p class='indent'>" + vals["additional_terms"] + "</p>" if vals["additional_terms"] else ""}
 <div class="signature">
   <img class="signature-stamp" src="data:image/png;base64,{stamp_b64}" alt="公章">
   <p class="signature-text">丽珠集团福州福兴医药有限公司</p>

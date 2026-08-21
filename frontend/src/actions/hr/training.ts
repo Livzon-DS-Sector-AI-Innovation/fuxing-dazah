@@ -14,6 +14,11 @@ import {
   AnnualTrainingPlanItemBatchUpdateInput,
   TrainingSignInSheetData,
   TrainingNotificationData,
+  SopTrainingRecord,
+  SopTrainingEntry,
+  SopTrainingPersonnel,
+  SopClassificationOption,
+  SopPersonnelOption,
 } from '@/types/hr'
 import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
@@ -134,6 +139,11 @@ export async function fetchLedgerSubjects(department?: string): Promise<{ code: 
 }
 
 // ─── 培训文档生成（下载类） ───
+
+/** 获取部门品种列表（去重） */
+export async function fetchEmployeeVarieties(department: string): Promise<{ code: number; message: string; data: string[] }> {
+  return fetchHrApi(`/hr/employee-varieties?department=${encodeURIComponent(department)}`, { errorMessage: '获取品种列表失败' })
+}
 
 /** 生成培训签到表（docx） */
 export async function generateTrainingSignInSheet(
@@ -414,6 +424,162 @@ export async function deleteSopItem(id: string) {
   })
 }
 
+// ─── SOP 培训文件登记表 ───
+
+export async function fetchSopRecordYears(): Promise<{ code: number; message: string; data: string[] }> {
+  return fetchHrApi('/hr/sop-training-records/years', { errorMessage: '获取年份失败' })
+}
+
+export async function fetchSopTrainingRecords(params?: {
+  year?: string
+  color?: string
+  keyword?: string
+}): Promise<{ code: number; message: string; data: SopTrainingRecord[] }> {
+  const qs = buildQueryString(params || {})
+  return fetchHrApi(`/hr/sop-training-records${qs}`, { errorMessage: '获取登记表失败' })
+}
+
+/** 按涉及部门查一级培训师（被培训人员），部门多选自动关联用 */
+export async function fetchSopDeptTrainers(departments: string[]): Promise<{
+  code: number; message: string; data: { department: string; trainer: string | null }[]
+}> {
+  const params = new URLSearchParams()
+  departments.forEach((d) => params.append('departments', d))
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  return fetchHrApi(`/hr/sop-training-records/dept-trainers${qs}`, { errorMessage: '获取部门培训师失败' })
+}
+
+export async function createSopTrainingRecord(data: Partial<SopTrainingRecord>): Promise<{ code: number; message: string; data: { id: string } }> {
+  const res = await fetchHrApi('/hr/sop-training-records', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    errorMessage: '登记失败',
+  })
+  revalidatePath('/hr/training/sop-master')
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+export async function updateSopTrainingRecord(id: string, data: Partial<SopTrainingRecord>) {
+  const res = await fetchHrApi(`/hr/sop-training-records/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    errorMessage: '更新失败',
+  })
+  revalidatePath('/hr/training/sop-master')
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+/** 提交并通知：自动生成二级表并飞书通知各部门培训管理员 */
+export async function submitSopTrainingRecord(id: string): Promise<{ code: number; message: string }> {
+  const res = await fetchHrApi(`/hr/sop-training-records/${id}/submit`, {
+    method: 'POST',
+    errorMessage: '提交失败',
+  })
+  revalidatePath('/hr/training/sop-master')
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+export async function deleteSopTrainingRecord(id: string) {
+  const res = await fetchHrApi(`/hr/sop-training-records/${id}`, {
+    method: 'DELETE',
+    errorMessage: '删除失败',
+  })
+  revalidatePath('/hr/training/sop-master')
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+/** 导出培训文件登记表（对齐模板版式 xlsx） */
+export async function exportSopTrainingRecords(year?: string): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString({ year })
+  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/export${qs}`, {
+    errorMessage: '导出登记表失败',
+  })
+  return { base64, filename: filename || `培训文件登记表_${year}年.xlsx` }
+}
+
+// ─── SOP 培训二级表 ───
+
+export async function fetchSopTrainingEntries(params?: {
+  record_id?: string
+  department?: string
+  status?: string
+}): Promise<{ code: number; message: string; data: SopTrainingEntry[] }> {
+  const qs = buildQueryString(params || {})
+  return fetchHrApi(`/hr/sop-training-entries${qs}`, { errorMessage: '获取二级表失败' })
+}
+
+export async function updateSopTrainingEntry(id: string, data: {
+  classification?: string
+  trainer?: string
+  personnel?: SopTrainingPersonnel[]
+  complete_time?: string
+}) {
+  const res = await fetchHrApi(`/hr/sop-training-entries/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    errorMessage: '保存失败',
+  })
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+export async function transferSopTrainingEntry(id: string): Promise<{ code: number; message: string; data: { trainer: string | null } }> {
+  const res = await fetchHrApi(`/hr/sop-training-entries/${id}/transfer`, {
+    method: 'POST',
+    errorMessage: '转培训失败',
+  })
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+/** 多条SOP一起转训（批量） */
+export async function batchTransferSopEntries(ids: string[]): Promise<{ code: number; message: string; data: { transferred: number } }> {
+  const res = await fetchHrApi('/hr/sop-training-entries/batch-transfer', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    errorMessage: '批量转培训失败',
+  })
+  revalidatePath('/hr/training/sop-secondary')
+  return res
+}
+
+/** 多条SOP生成一套培训材料（zip：每部门一份通知+签到表） */
+export async function generateSopTrainingMaterials(ids: string[]): Promise<{ base64: string; filename: string }> {
+  const { base64, filename } = await fetchHrDownload('/hr/sop-training-entries/batch-materials', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+    errorMessage: '生成材料失败',
+  })
+  return { base64, filename: filename || 'SOP培训材料.zip' }
+}
+
+export async function fetchSopClassifications(department: string): Promise<{ code: number; message: string; data: SopClassificationOption[] }> {
+  const qs = buildQueryString({ department })
+  return fetchHrApi(`/hr/sop-training-entries/classifications${qs}`, { errorMessage: '获取分类失败' })
+}
+
+export async function fetchSopPersonnel(department: string, classification: string): Promise<{ code: number; message: string; data: SopPersonnelOption[] }> {
+  const qs = buildQueryString({ department, classification })
+  return fetchHrApi(`/hr/sop-training-entries/personnel${qs}`, { errorMessage: '获取分类人员失败' })
+}
+
+/** 导出二级表培训清单（xlsx） */
+export async function exportSopTrainingEntries(params?: {
+  record_id?: string
+  department?: string
+  status?: string
+}): Promise<{ base64: string; filename: string }> {
+  const qs = buildQueryString(params || {})
+  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-entries/export${qs}`, {
+    errorMessage: '导出培训清单失败',
+  })
+  return { base64, filename: filename || 'SOP培训清单.xlsx' }
+}
+
 export async function fetchPositionTrainings(params: {
   position_name: string
   department?: string
@@ -522,4 +688,67 @@ export async function uploadDeptTrainingPersonnel(formData: FormData): Promise<{
     body: formData,
     errorMessage: '上传失败',
   })
+}
+
+// ─── Employee Tags ───
+
+export async function fetchEmployeeTags(): Promise<{ code: number; message: string; data: { tag_name: string; count: number }[] }> {
+  return fetchHrApi('/hr/employee-tags', { errorMessage: '获取标签列表失败' })
+}
+
+export async function saveEmployeeTag(data: { employee_number: string; tag_name: string; action: 'add' | 'remove' }): Promise<{ code: number; message: string }> {
+  return fetchHrApi('/hr/employee-tags', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    errorMessage: '操作失败',
+  })
+}
+
+export async function fetchEmployeeTagsByEmployee(employeeNumber: string): Promise<{ code: number; message: string; data: { tag_name: string; created_by: string }[] }> {
+  return fetchHrApi(`/hr/employee-tags/by-employee?employee_number=${encodeURIComponent(employeeNumber)}`, { errorMessage: '获取标签失败' })
+}
+
+// ─── 员工分类清单（下拉选项模式） ───
+
+export async function fetchEmployeeClassifications(): Promise<{ code: number; message: string; data: { id: string; name: string; count: number }[] }> {
+  return fetchHrApi('/hr/employee-classifications', { errorMessage: '获取分类清单失败' })
+}
+
+export async function createEmployeeClassification(name: string): Promise<{ code: number; message: string; data: { id: string; name: string } }> {
+  return fetchHrApi('/hr/employee-classifications', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+    errorMessage: '新增分类失败',
+  })
+}
+
+export async function deleteEmployeeClassification(id: string): Promise<{ code: number; message: string }> {
+  return fetchHrApi(`/hr/employee-classifications/${id}`, {
+    method: 'DELETE',
+    errorMessage: '删除分类失败',
+  })
+}
+
+export async function fetchClassificationMembers(id: string): Promise<{
+  code: number; message: string
+  data: { name: string; employee_number: string; department: string; position: string }[]
+}> {
+  return fetchHrApi(`/hr/employee-classifications/${id}/members`, { errorMessage: '获取分类人员失败' })
+}
+
+export async function removeClassificationMembers(id: string, employee_numbers: string[]): Promise<{
+  code: number; message: string; data: { removed: number }
+}> {
+  return fetchHrApi(`/hr/employee-classifications/${id}/remove-members`, {
+    method: 'POST',
+    body: JSON.stringify({ employee_numbers }),
+    errorMessage: '移除人员失败',
+  })
+}
+
+
+/** 统筹总表一键生成全套培训材料（通知+签到表+试卷+登记表 zip） */
+export async function downloadSopMasterMaterials(recordId: string): Promise<{ base64: string; filename: string | null }> {
+  const { base64, filename } = await fetchHrDownload(`/hr/sop-training-records/${recordId}/materials`, { method: 'POST' })
+  return { base64, filename: filename || 'SOP全套培训材料.zip' }
 }

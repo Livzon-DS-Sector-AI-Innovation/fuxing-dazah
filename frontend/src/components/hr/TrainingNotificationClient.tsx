@@ -27,11 +27,14 @@ import {
   FormOutlined,
   DatabaseOutlined,
   SearchOutlined,
+  PlusOutlined,
+  MinusCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   fetchDepartmentsAction,
   fetchEmployeesAction,
+  fetchEmployeeVarieties,
   fetchTrainingLedgerPages,
   generateTrainingNotification,
   generateTrainingSignInSheet,
@@ -100,8 +103,11 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
 
 export default function TrainingNotificationClient() {
   const [form] = Form.useForm()
+  const watchedNames = Form.useWatch('employee_names', form) as string[] | undefined
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])
+  const [allDeptEmployees, setAllDeptEmployees] = useState<any[]>([]) // 完整员工列表（含品种），用于品种筛选
+  const [varieties, setVarieties] = useState<string[]>([])
   const [nameToNumberMap, setNameToNumberMap] = useState<Record<string, string>>({})
   const [nameToDeptMap, setNameToDeptMap] = useState<Record<string, string>>({})
   const [submittingWord, setSubmittingWord] = useState(false)
@@ -113,7 +119,6 @@ export default function TrainingNotificationClient() {
   const [scoreModalOpen, setScoreModalOpen] = useState(false)
   const [scoreMap, setScoreMap] = useState<Record<string, number>>({})
   const [exportingScore, setExportingScore] = useState(false)
-  const [dualMode, setDualMode] = useState(false)
   const [generatingAssessment, setGeneratingAssessment] = useState(false)
   const [assessmentFile, setAssessmentFile] = useState<File | null>(null)
   const [assessmentQuestions, setAssessmentQuestions] = useState<any>(null)
@@ -154,17 +159,10 @@ export default function TrainingNotificationClient() {
 
     const confirmDate = get('confirm_date')
     const method = get('method')
-    const isDual = !!(method?.includes('面授') && method?.includes('自学'))
-    setDualMode(isDual)
     const dateFields: Record<string, any> = {}
     if (confirmDate) {
       const d = dayjs(confirmDate)
-      if (isDual) {
-        dateFields.face_date = d
-        dateFields.self_study_date = d
-      } else {
-        dateFields.training_date = d
-      }
+      dateFields.time_slots = [{ date: d, time: [dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')] }]
       dateFields.issue_date = d
     }
 
@@ -218,89 +216,76 @@ export default function TrainingNotificationClient() {
   const loadEmployees = async (depts: string[]) => {
     if (!depts || depts.length === 0) {
       setEmployees([])
+      setAllDeptEmployees([])
+      setVarieties([])
       setNameToNumberMap({})
       setNameToDeptMap({})
-      form.setFieldsValue({ employee_names: [] })
+      form.setFieldsValue({ employee_names: [], variety_filter: [] })
       return
     }
-    const all: { value: string; label: string }[] = []
+    const allFull: any[] = []
     const numberMap: Record<string, string> = {}
     const deptMap: Record<string, string> = {}
     for (const dept of depts) {
       try {
-        const res = await fetchEmployeesAction({ department: dept, page_size: 100 })
-        const list = (res.data || []).map((e: any) => ({
-          value: e.name,
-          label: `${e.name} - ${e.department || dept} (${e.employee_number || ''})`,
-        }))
-        all.push(...list)
-        for (const e of res.data || []) {
-          if (e.name && e.employee_number) {
-            numberMap[e.name] = e.employee_number
-          }
-          if (e.name && e.department) {
-            deptMap[e.name] = e.department
-          }
+        const res = await fetchEmployeesAction({ department: dept, page_size: 200 })
+        // 病假/产假员工自动过滤，不进入出席名单
+        const activeList = (res.data || []).filter((e: any) => e.status !== '病假' && e.status !== '产假')
+        allFull.push(...activeList)
+        for (const e of activeList) {
+          if (e.name && e.employee_number) numberMap[e.name] = e.employee_number
+          if (e.name && e.department) deptMap[e.name] = e.department
         }
-      } catch {
-        // ignore
-      }
+      } catch { /* ignore */ }
     }
-    const map = new Map(all.map((e) => [e.value, e]))
-    const uniqueList = Array.from(map.values())
+    // 按「姓名+工号」去重：兼任部门重叠时同一人只保留一条，同名不同工号视为两人
+    const dedupeKey = (e: any) => `${e.name}::${e.employee_number || ''}`
+    const uniqueFull = Array.from(new Map(allFull.map((e) => [dedupeKey(e), e])).values())
+    const uniqueList = uniqueFull.map((e) => ({
+      value: e.name,
+      label: `${e.name} - ${e.department || ''} (${e.employee_number || ''})`,
+    }))
     setEmployees(uniqueList)
+    setAllDeptEmployees(uniqueFull)
     setNameToNumberMap(numberMap)
     setNameToDeptMap(deptMap)
     const names = uniqueList.map((e) => e.value)
-    form.setFieldsValue({ employee_names: names })
+    form.setFieldsValue({ employee_names: names, variety_filter: [] })
+    // 加载品种列表：汇总全部受训部门（含兼任部门）的品种
+    const varietySet = new Set<string>()
+    for (const dept of depts) {
+      try {
+        const vRes = await fetchEmployeeVarieties(dept)
+        ;(vRes.data || []).forEach((v: string) => varietySet.add(v))
+      } catch { /* ignore */ }
+    }
+    setVarieties(Array.from(varietySet))
   }
 
   const handleExportWord = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
-    const dateRange = values.training_date_range
-    const singleDate = values.training_date
-    const isDual = values.training_method?.includes('面授') && values.training_method?.includes('自学')
+    const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
+
+    const firstSlot = timeSlots[0]
+    const firstDate = firstSlot?.date
 
     setSubmittingWord(true)
     try {
-      const trainingTime = values.training_time
-      const faceDate = values.face_date
-      const faceTime = values.face_time
-      const selfStudyDate = values.self_study_date
-      const selfStudyTime = values.self_study_time
-
-      // 面授+自学：从两个日期推算整体区间
-      let dateStart, dateEnd
-      if (isDual) {
-        const dates = [faceDate, selfStudyDate].filter(Boolean)
-        if (dates.length >= 2) {
-          const sorted = [...dates].sort((a: any, b: any) => (a?.unix() || 0) - (b?.unix() || 0))
-          dateStart = sorted[0]!.format('YYYY-MM-DD')
-          dateEnd = sorted[1]!.format('YYYY-MM-DD')
-        } else if (dates.length === 1) {
-          dateStart = dateEnd = dates[0]!.format('YYYY-MM-DD')
-        }
-      } else {
-        dateStart = singleDate ? singleDate.format('YYYY-MM-DD') : undefined
-        dateEnd = undefined
-      }
+      // 构建 time_slots 数组发送到后端
+      const timeSlotsPayload = timeSlots
+        .filter((s: any) => s?.date)
+        .map((s: any) => ({
+          date: s.date.format('YYYY-MM-DD'),
+          start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
+          end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
+        }))
 
       const payload = {
         department: values.department,
-        training_date: singleDate ? singleDate.format('YYYY-MM-DD') : dateStart,
-        training_date_start: dateStart,
-        training_date_end: isDual ? dateEnd : undefined,
+        training_date: firstDate ? firstDate.format('YYYY-MM-DD') : new Date().toISOString().slice(0, 10),
         subject: values.subject,
-        // 课时：双模式时取面授时间，单模式时取 training_time
-        training_time_start: faceTime ? dayjs(faceTime[0]).format('HH:mm') : (trainingTime ? dayjs(trainingTime[0]).format('HH:mm') : undefined),
-        training_time_end: faceTime ? dayjs(faceTime[1]).format('HH:mm') : (trainingTime ? dayjs(trainingTime[1]).format('HH:mm') : undefined),
-        face_to_face_time_start: faceTime ? dayjs(faceTime[0]).format('HH:mm') : undefined,
-        face_to_face_time_end: faceTime ? dayjs(faceTime[1]).format('HH:mm') : undefined,
-        self_study_time_start: selfStudyTime ? dayjs(selfStudyTime[0]).format('HH:mm') : undefined,
-        self_study_time_end: selfStudyTime ? dayjs(selfStudyTime[1]).format('HH:mm') : undefined,
-        face_date: faceDate ? faceDate.format('YYYY-MM-DD') : undefined,
-        self_study_date: selfStudyDate ? selfStudyDate.format('YYYY-MM-DD') : undefined,
+        time_slots: timeSlotsPayload,
         location: values.location,
         trainer: values.trainer,
         training_method: values.training_method,
@@ -310,7 +295,7 @@ export default function TrainingNotificationClient() {
         issuer_department: values.issuer_department || values.department,
         issue_date: values.issue_date
           ? values.issue_date.format('YYYY-MM-DD')
-          : (singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : undefined)),
+          : (firstDate ? firstDate.format('YYYY-MM-DD') : undefined),
       }
       const r = await generateTrainingNotification(payload)
       downloadBase64File(r.base64, r.filename || '培训通知.docx')
@@ -325,33 +310,26 @@ export default function TrainingNotificationClient() {
   const handleExportExcel = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
-    const singleDate = values.training_date
-    const faceDate = values.face_date
-    const selfStudyDate = values.self_study_date
+    const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
+    const firstSlot = timeSlots[0]
+    const firstDate = firstSlot?.date
 
     setSubmittingExcel(true)
     try {
-      // 培训日期：单模式取 training_date，双模式取 face_date
-      const trainDate = singleDate ? singleDate.format('YYYY-MM-DD') : (faceDate ? faceDate.format('YYYY-MM-DD') : '')
+      const trainDate = firstDate ? firstDate.format('YYYY-MM-DD') : ''
       if (!trainDate) throw new Error('请选择培训日期')
       const topic = [values.subject, values.content].filter(Boolean).join(' ')
-      const faceTimeForSignIn = values.face_time
-      const selfStudyTime = values.self_study_time
-      const faceDateVal = values.face_date
+      // 构建 time_slots payload
+      const timeSlotsPayload = timeSlots
+        .filter((s: any) => s?.date)
+        .map((s: any) => ({
+          date: s.date.format('YYYY-MM-DD'),
+          start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
+          end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
+        }))
       const payload = {
         training_date: trainDate,
-        training_time_start: faceTimeForSignIn
-          ? dayjs(faceTimeForSignIn[0]).format('HH:mm')
-          : (values.training_time ? dayjs(values.training_time[0]).format('HH:mm') : undefined),
-        training_time_end: faceTimeForSignIn
-          ? dayjs(faceTimeForSignIn[1]).format('HH:mm')
-          : (values.training_time ? dayjs(values.training_time[1]).format('HH:mm') : undefined),
-        face_to_face_time_start: faceTimeForSignIn ? dayjs(faceTimeForSignIn[0]).format('HH:mm') : undefined,
-        face_to_face_time_end: faceTimeForSignIn ? dayjs(faceTimeForSignIn[1]).format('HH:mm') : undefined,
-        self_study_time_start: selfStudyTime ? dayjs(selfStudyTime[0]).format('HH:mm') : undefined,
-        self_study_time_end: selfStudyTime ? dayjs(selfStudyTime[1]).format('HH:mm') : undefined,
-        face_date: faceDateVal ? faceDateVal.format('YYYY-MM-DD') : undefined,
-        self_study_date: values.self_study_date ? values.self_study_date.format('YYYY-MM-DD') : undefined,
+        time_slots: timeSlotsPayload,
         department: traineeDepts[0] || values.department,
         topic,
         instructor: values.trainer,
@@ -372,11 +350,10 @@ export default function TrainingNotificationClient() {
   }
 
   const handleAddToLedger = async () => {
-    const isDualLedger = form.getFieldValue('training_method')?.includes('面授') && form.getFieldValue('training_method')?.includes('自学')
     try {
     await form.validateFields([
         'department',
-        isDualLedger ? 'training_date_range' : 'training_date',
+        ['time_slots', 0, 'date'],
         'subject',
         'employee_names',
       ])
@@ -424,9 +401,9 @@ export default function TrainingNotificationClient() {
       onOk: async () => {
         setAddingToLedger(true)
         try {
-          const dateRange = values.training_date_range
-          const singleDate = values.training_date
-          const trainingDate = singleDate ? singleDate.format('YYYY-MM-DD') : (dateRange ? dateRange[0].format('YYYY-MM-DD') : '')
+          const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
+          const firstDate = timeSlots[0]?.date
+          const trainingDate = firstDate ? firstDate.format('YYYY-MM-DD') : ''
           const subject = values.subject
           const method = values.training_method || ''
           const department = values.department || ''
@@ -436,17 +413,16 @@ export default function TrainingNotificationClient() {
             : department
 
           let durationHours: number | undefined = undefined
-          if (isDualLedger) {
-            const faceTime = values.face_time
-            if (faceTime && faceTime.length === 2) {
-              const diff = dayjs(faceTime[1]).diff(dayjs(faceTime[0]), 'minute')
-              durationHours = Math.round(diff / 30) / 2
-            }
-          } else if (values.training_time && values.training_time.length === 2) {
-            const start = dayjs(values.training_time[0])
-            const end = dayjs(values.training_time[1])
-            const diffMinutes = end.diff(start, 'minute')
-            durationHours = Math.round(diffMinutes / 30) / 2
+          if (timeSlots.length > 0) {
+            let totalMin = 0
+            timeSlots.forEach((s: any) => {
+              const t = s?.time
+              if (t && t.length === 2) {
+                const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
+                if (diff > 0) totalMin += diff
+              }
+            })
+            if (totalMin > 0) durationHours = Math.round(totalMin / 30) / 2
           }
 
           for (const target of targets) {
@@ -546,7 +522,8 @@ export default function TrainingNotificationClient() {
 
   const handleExportQaRecord = async () => {
     const values = form.getFieldsValue()
-    const dateRange = values.training_date_range
+    const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
+    const firstDate = timeSlots[0]?.date
     // 表头信息取自培训通知表单；已用 AI 出题则带上题目，否则考题区留空手写
     const qs = (assessmentQuestions?.questions || []).map((q: any) => ({
       file_no: q.file_no || '',
@@ -557,7 +534,7 @@ export default function TrainingNotificationClient() {
     try {
       await exportQaRecord({
         training_content: [values.subject, values.content].filter(Boolean).join(' - '),
-        training_date: dateRange ? dateRange[0].format('YYYY-MM-DD') : '',
+        training_date: firstDate ? firstDate.format('YYYY-MM-DD') : '',
         training_method: values.training_method || '问答',
         training_department: values.department || '',
         questions: qs,
@@ -575,7 +552,6 @@ export default function TrainingNotificationClient() {
   const deptWatch = Form.useWatch('department', form) as string | undefined
   const trainerWatch = Form.useWatch('trainer', form) as string | undefined
   const employeeNamesWatch = Form.useWatch('employee_names', form) as string[] | undefined
-  const isDualMethod = trainingMethodWatch?.includes('面授') && trainingMethodWatch?.includes('自学')
 
   const previewNames: string[] = employeeNamesWatch || []
   const subjectValue = subjectWatch || ''
@@ -585,63 +561,29 @@ export default function TrainingNotificationClient() {
 
   const traineeDepts: string[] = Form.useWatch('trainee_departments', form) || []
   const formValues = form.getFieldsValue()
-  const dateRangeValue = formValues?.training_date_range
-  const singleDateValue = formValues?.training_date
-  const timeValue = formValues?.training_time
-  const faceDateValue = formValues?.face_date
-  const faceTimeValue = formValues?.face_time
-  const selfStudyDateValue = formValues?.self_study_date
-  const selfStudyTimeValue = formValues?.self_study_time
+  const timeSlotsValue: Array<{ date: any; time: any }> = Form.useWatch('time_slots', form) || []
   const locationValue = formValues?.location || ''
   const contentValue = formValues?.content || ''
   const issuerValue = formValues?.issuer_department || deptValue
-  const issueDateValue = formValues?.issue_date || singleDateValue || faceDateValue
+  const firstSlotDate = timeSlotsValue?.[0]?.date || null
+  const issueDateValue = formValues?.issue_date || firstSlotDate
 
-  // 日期字符串（含时间）
-  const timeStr =
-    timeValue
-      ? `${dayjs(timeValue[0]).format('HH:mm')} ~ ${dayjs(timeValue[1]).format('HH:mm')}`
-      : ''
-  const faceTimeStr =
-    faceTimeValue
-      ? `${dayjs(faceTimeValue[0]).format('HH:mm')} ~ ${dayjs(faceTimeValue[1]).format('HH:mm')}`
-      : ''
-  const selfStudyTimeStr =
-    selfStudyTimeValue
-      ? `${dayjs(selfStudyTimeValue[0]).format('HH:mm')} ~ ${dayjs(selfStudyTimeValue[1]).format('HH:mm')}`
-      : ''
-
-  const faceDateStr = faceDateValue ? faceDateValue.format('MM月DD日') : ''
-  const selfStudyDateStr = selfStudyDateValue ? selfStudyDateValue.format('MM月DD日') : ''
-
-  let dateStr: string
-  let singleDateStr: string
-  if (isDualMethod || dualMode) {
-    // 面授+自学：从两个日期取区间 + 各自时间段
-    const dates = [faceDateValue, selfStudyDateValue].filter(Boolean)
-    if (dates.length >= 2) {
-      const sorted = [...dates].sort((a: any, b: any) => (a?.unix() || 0) - (b?.unix() || 0))
-      dateStr = `${sorted[0]!.format('YYYY年MM月DD日')} ~ ${sorted[1]!.format('YYYY年MM月DD日')}`
-    } else if (dates.length === 1) {
-      dateStr = dates[0]!.format('YYYY年MM月DD日')
-    } else {
-      dateStr = '____年__月__日'
-    }
-    const times = [
-      faceDateStr && faceTimeStr ? `面授 ${faceDateStr} ${faceTimeStr}` : (faceTimeStr ? `面授 ${faceTimeStr}` : ''),
-      selfStudyDateStr && selfStudyTimeStr ? `自学 ${selfStudyDateStr} ${selfStudyTimeStr}` : (selfStudyTimeStr ? `自学 ${selfStudyTimeStr}` : ''),
-    ].filter(Boolean).join('；')
-    dateStr += times ? `（${times}）` : ''
-    singleDateStr = faceDateValue ? faceDateValue.format('YYYY年MM月DD日') : '____年__月__日'
-  } else if (singleDateValue) {
-    // 单日：日期 + 时间段
-    const d = singleDateValue.format('YYYY年MM月DD日')
-    dateStr = d + (timeStr ? ` ${timeStr}` : '')
-    singleDateStr = d
-  } else {
-    dateStr = '____年__月__日'
-    singleDateStr = '____年__月__日'
-  }
+  // 从 time_slots 计算日期字符串
+  const dateStr = (() => {
+    if (!timeSlotsValue || timeSlotsValue.length === 0) return '____年__月__日'
+    const parts = timeSlotsValue.map((s: any) => {
+      const d = s?.date
+      const t = s?.time
+      if (!d) return ''
+      const datePart = d.format('YYYY年MM月DD日')
+      if (t && t.length === 2) {
+        return `${datePart} ${dayjs(t[0]).format('HH:mm')} ~ ${dayjs(t[1]).format('HH:mm')}`
+      }
+      return datePart
+    }).filter(Boolean)
+    return parts.join('；') || '____年__月__日'
+  })()
+  const singleDateStr = firstSlotDate ? firstSlotDate.format('YYYY年MM月DD日') : '____年__月__日'
   const issueDateStr = issueDateValue
     ? issueDateValue.format('YYYY年MM月DD日')
     : dateStr
@@ -655,31 +597,33 @@ export default function TrainingNotificationClient() {
       )
     : []
 
-  const hasBasicInfo = !!deptValue && !!(singleDateValue || faceDateValue || selfStudyDateValue) && !!subjectValue
-  // Compute duration hours for preview
+  const hasBasicInfo = !!deptValue && !!firstSlotDate && !!subjectValue
+  // Compute duration hours from time_slots (sum of all slots)
   const evalHours = (() => {
-    if (isDualMethod || dualMode) {
-      const faceTime = formValues?.face_time
-      if (faceTime?.length === 2) {
-        const diff = dayjs(faceTime[1]).diff(dayjs(faceTime[0]), 'minute')
-        const h = Math.round(diff / 30) / 2
-        return `${h}小时`
+    if (!timeSlotsValue || timeSlotsValue.length === 0) return ''
+    let totalMin = 0
+    timeSlotsValue.forEach((s: any) => {
+      const t = s?.time
+      if (t && t.length === 2) {
+        const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
+        if (diff > 0) totalMin += diff
       }
-      return ''
-    }
-    if (timeValue && timeValue.length === 2) {
-      const diff = dayjs(timeValue[1]).diff(dayjs(timeValue[0]), 'minute')
-      const h = Math.round(diff / 30) / 2
-      return h === Math.floor(h) ? `${h}小时` : `${h}小时`
-    }
-    return ''
+    })
+    if (totalMin === 0) return ''
+    const h = Math.round(totalMin / 30) / 2
+    return h === Math.floor(h) ? `${h}小时` : `${h}小时`
   })()
   const evalDurationHours = (() => {
-    if (timeValue && timeValue.length === 2) {
-      const diff = dayjs(timeValue[1]).diff(dayjs(timeValue[0]), 'minute')
-      return Math.round(diff / 30) / 2
-    }
-    return ''
+    if (!timeSlotsValue || timeSlotsValue.length === 0) return 0
+    let totalMin = 0
+    timeSlotsValue.forEach((s: any) => {
+      const t = s?.time
+      if (t && t.length === 2) {
+        const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
+        if (diff > 0) totalMin += diff
+      }
+    })
+    return Math.round(totalMin / 30) / 2
   })()
 
   return (
@@ -721,16 +665,6 @@ export default function TrainingNotificationClient() {
               />
             </Form.Item>
 
-            {!(isDualMethod || dualMode) && (
-              <Form.Item
-                name="training_date"
-                label="培训日期"
-                rules={[{ required: true, message: '请选择培训日期' }]}
-              >
-                <DatePicker className="w-full" placeholder="选择日期" />
-              </Form.Item>
-            )}
-
             <Form.Item
               name="subject"
               label="培训主题"
@@ -740,38 +674,50 @@ export default function TrainingNotificationClient() {
               <Input placeholder="请输入培训主题，如：安全生产规范培训" />
             </Form.Item>
 
-            {(isDualMethod || dualMode) ? (
-              <>
-                <Form.Item label="面授时间" required>
-                  <Space.Compact className="w-full">
-                    <Form.Item name="face_date" noStyle rules={[{ required: true, message: '请选择面授日期' }]}>
-                      <DatePicker placeholder="面授日期" style={{ width: '50%' }} />
-                    </Form.Item>
-                    <Form.Item name="face_time" noStyle initialValue={[dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')]}>
-                      <TimePicker.RangePicker format="HH:mm" style={{ width: '50%' }} />
-                    </Form.Item>
-                  </Space.Compact>
-                </Form.Item>
-                <Form.Item label="自学时间" required>
-                  <Space.Compact className="w-full">
-                    <Form.Item name="self_study_date" noStyle rules={[{ required: true, message: '请选择自学日期' }]}>
-                      <DatePicker placeholder="自学日期" style={{ width: '50%' }} />
-                    </Form.Item>
-                    <Form.Item name="self_study_time" noStyle initialValue={[dayjs('14:00', 'HH:mm'), dayjs('16:00', 'HH:mm')]}>
-                      <TimePicker.RangePicker format="HH:mm" style={{ width: '50%' }} />
-                    </Form.Item>
-                  </Space.Compact>
-                </Form.Item>
-              </>
-            ) : (
-              <Form.Item
-                name="training_time"
-                label="培训时间"
-                initialValue={[dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')]}
-              >
-                <TimePicker.RangePicker className="w-full" format="HH:mm" />
-              </Form.Item>
-            )}
+            {/* 多时段选择 */}
+            <Form.List name="time_slots" initialValue={[{ date: null, time: [dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')] }]}>
+              {(fields, { add, remove }) => (
+                <div className="md:col-span-2 space-y-2">
+                  {fields.map(({ key, name, ...rest }, index) => (
+                    <Space key={key} className="w-full" align="start" wrap>
+                      <Form.Item
+                        name={[name, 'date']}
+                        label={fields.length > 1 ? `时段${index + 1}日期` : '培训日期'}
+                        rules={[{ required: true, message: '请选择日期' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <DatePicker placeholder="选择日期" style={{ width: 160 }} />
+                      </Form.Item>
+                      <Form.Item
+                        name={[name, 'time']}
+                        label={fields.length > 1 ? `时段${index + 1}时间` : '培训时间'}
+                        rules={[{ required: true, message: '请选择时间' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
+                      </Form.Item>
+                      {fields.length > 1 && (
+                        <Button
+                          type="text"
+                          icon={<MinusCircleOutlined />}
+                          onClick={() => remove(name)}
+                          style={{ marginTop: 30 }}
+                          danger
+                        />
+                      )}
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    onClick={() => add({ date: null, time: [dayjs('09:00', 'HH:mm'), dayjs('10:00', 'HH:mm')] })}
+                    icon={<PlusOutlined />}
+                    block
+                  >
+                    添加时段
+                  </Button>
+                </div>
+              )}
+            </Form.List>
 
             <Form.Item name="location" label="培训地点">
               <Input placeholder="请输入培训地点" />
@@ -810,7 +756,7 @@ export default function TrainingNotificationClient() {
                 placeholder="选择培训方式"
                 options={TRAINING_METHODS}
                 className="w-full"
-                onChange={(v) => setDualMode(v?.includes('面授') && v?.includes('自学'))}
+                onChange={() => {}}
               />
             </Form.Item>
 
@@ -826,12 +772,15 @@ export default function TrainingNotificationClient() {
             {assessmentMethodWatch && (
               <Form.Item label="生成考核材料">
                 <Space>
-                  <Button
-                    icon={assessmentMethodWatch === '笔试' ? <RobotOutlined /> : <FormOutlined />}
-                    onClick={handleGenerateAssessment}
-                  >
-                    {assessmentMethodWatch === '笔试' ? '生成笔试试卷' : '生成问答实操'}
-                  </Button>
+                  {assessmentMethodWatch === '笔试' ? (
+                    <Button icon={<RobotOutlined />} onClick={handleGenerateAssessment}>
+                      生成笔试试卷
+                    </Button>
+                  ) : (
+                    <span className="text-[13px] text-[var(--color-steel)]">
+                      <FormOutlined /> 问答考核请使用下方「考核矩阵」选题并录入成绩
+                    </span>
+                  )}
                 </Space>
               </Form.Item>
             )}
@@ -869,8 +818,38 @@ export default function TrainingNotificationClient() {
           </Form.Item>
 
           <Form.Item
+            name="variety_filter"
+            label="品种关键词筛选（可选，多选）"
+          >
+            <Select
+              mode="multiple"
+              showSearch
+              placeholder="选择品种关键词，未命中的员工自动屏蔽"
+              options={(varieties || []).map(v => ({ label: v, value: v }))}
+              className="w-full"
+              allowClear
+              filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+              onChange={(vals: string[]) => {
+                // 品种关键词筛选：体现品种/兼任品种命中关键词即保留，未命中自动屏蔽
+                const filtered = allDeptEmployees.filter((e: any) =>
+                  vals.length === 0 || vals.some((v: string) =>
+                    (e.variety || '').includes(v) || (e.concurrent_variety || '').includes(v)
+                  )
+                )
+                // 按「姓名+工号」去重后取姓名列表
+                const dedupeKey = (e: any) => `${e.name}::${e.employee_number || ''}`
+                const names = Array.from(new Set(
+                  Array.from(new Map(filtered.map((e: any) => [dedupeKey(e), e])).values())
+                    .map((e: any) => e.name)
+                ))
+                form.setFieldsValue({ employee_names: names, variety_filter: vals })
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item
             name="employee_names"
-            label="应出席受训人员"
+            label={`应出席受训人员（${(watchedNames || []).length}人）`}
           >
             <Select
               mode="multiple"
@@ -935,8 +914,7 @@ export default function TrainingNotificationClient() {
             subject={subjectValue}
             department={deptValue}
             trainingDate={
-              singleDateValue ? singleDateValue.format('YYYY-MM-DD')
-                : (dateRangeValue ? dateRangeValue[0].format('YYYY-MM-DD') : '')
+              firstSlotDate ? firstSlotDate.format('YYYY-MM-DD') : ''
             }
             trainingMethod={trainingMethodWatch || ''}
             trainer={trainerWatch}
@@ -1005,7 +983,9 @@ export default function TrainingNotificationClient() {
                       培训对象<br /><span className="text-xs font-normal">Trainees</span>
                     </td>
                     <td className="border border-gray-700 p-2" colSpan={3}>
-                      {traineeDepts.join('、') || deptValue || '___'}
+                      {traineeDepts.length
+                        ? traineeDepts.map((d) => `「${d}」全体成员`).join('、')
+                        : `「${deptValue}」全体成员`}
                     </td>
                   </tr>
                   {/* 培训地点 */}
@@ -1103,7 +1083,9 @@ export default function TrainingNotificationClient() {
                           培训对象<br /><span className="text-xs font-normal">Trainees</span>
                         </td>
                         <td className="border border-gray-700 p-2">
-                          {traineeDepts.join('、') || deptValue || '___'}
+                          {traineeDepts.length
+                            ? traineeDepts.map((d) => `「${d}」全体成员`).join('、')
+                            : `「${deptValue}」全体成员`}
                         </td>
                         <td className="border border-gray-700 p-2 font-bold bg-gray-50">
                           培训方式<br /><span className="text-xs font-normal">Training method</span>
@@ -1220,11 +1202,17 @@ export default function TrainingNotificationClient() {
           {/* 未生成考题时：上传区 / 题库选题 */}
           {!assessmentQuestions && (
             <>
-              <p className="text-gray-500">上传培训材料文件（支持 .docx / .txt），AI 自动生成考题；或从题库直接选题。</p>
+              <p className="text-gray-500">
+                {assessmentMethodWatch === '笔试'
+                  ? '上传培训材料文件（支持 .docx / .txt），AI 自动生成考题；或从题库直接选题。'
+                  : '请从题库直接选题。'}
+              </p>
               <Space wrap>
-                <Upload accept=".docx,.txt" maxCount={1} beforeUpload={(file) => { setAssessmentFile(file); return false }} onRemove={() => setAssessmentFile(null)}>
-                  <Button icon={<UploadOutlined />}>选择文件</Button>
-                </Upload>
+                {assessmentMethodWatch === '笔试' && (
+                  <Upload accept=".docx,.txt" maxCount={1} beforeUpload={(file) => { setAssessmentFile(file); return false }} onRemove={() => setAssessmentFile(null)}>
+                    <Button icon={<UploadOutlined />}>选择文件</Button>
+                  </Upload>
+                )}
                 <Button icon={<SearchOutlined />} loading={loadingBank} onClick={async () => {
                   setLoadingBank(true)
                   try {
@@ -1234,10 +1222,14 @@ export default function TrainingNotificationClient() {
                   finally { setLoadingBank(false) }
                 }}>从题库选题</Button>
               </Space>
-              {assessmentFile && <p className="text-sm text-green-600">已选择：{assessmentFile.name}</p>}
-              <Button type="primary" loading={generatingAssessment} onClick={handleAssessmentFileUpload} disabled={!assessmentFile}>
-                AI 开始生成
-              </Button>
+              {assessmentMethodWatch === '笔试' && assessmentFile && (
+                <p className="text-sm text-green-600">已选择：{assessmentFile.name}</p>
+              )}
+              {assessmentMethodWatch === '笔试' && (
+                <Button type="primary" loading={generatingAssessment} onClick={handleAssessmentFileUpload} disabled={!assessmentFile}>
+                  AI 开始生成
+                </Button>
+              )}
 
               {/* 题库列表 */}
               {bankQuestions.length > 0 && (
@@ -1416,7 +1408,7 @@ export default function TrainingNotificationClient() {
                       const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ type: q.type || 'choice', question: q.question || q.content || '', options: q.options || [], answer: q.answer || '', score: q.score || 5 }))
                       const counts: Record<string, number> = {}
                       questions.forEach((q: any) => { counts[q.type] = (counts[q.type] || 0) + 1 })
-                      await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD'), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
+                      await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : ''), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
                       message.success('考卷已保存，可在资料下载中查看')
                     } catch (err: any) { message.error(err.message || '保存考卷失败') }
                   }}>保存考卷</Button>
@@ -1433,7 +1425,7 @@ export default function TrainingNotificationClient() {
                   try {
                     const r = await exportScoreReport({
                       training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                      training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                      training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : '') || '',
                       training_department: v.department || '',
                       scores_json: JSON.stringify(scores),
                     })
@@ -1454,7 +1446,7 @@ export default function TrainingNotificationClient() {
                   try {
                     const r = await exportQaRecordWithScores({
                       training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                      training_date: v.training_date_range?.[0]?.format('YYYY-MM-DD') || '',
+                      training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : '') || '',
                       training_method: v.training_method || '问答',
                       training_department: v.department || '',
                       questions_json: JSON.stringify(questions),
@@ -1492,7 +1484,7 @@ export default function TrainingNotificationClient() {
             try {
               const r = await exportTrainingAssessmentScores({
                 training_content: subjectValue,
-                training_date: (singleDateValue || faceDateValue)?.format('YYYY-MM-DD') || '',
+                training_date: firstSlotDate ? firstSlotDate.format('YYYY-MM-DD') : '',
                 department: traineeDepts.join('、') || deptValue || '',
                 scores,
               })

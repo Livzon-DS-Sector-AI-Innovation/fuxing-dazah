@@ -48,4 +48,14 @@ PERMISSIONS: list[PermissionDef] = [
     # ── 内训师管理 ──
     PermissionDef("hr:trainer:read", "查看内训师", "hr", "trainer", "read"),
     PermissionDef("hr:trainer:manage", "管理内训师", "hr", "trainer", "manage"),
+    # ── 绩效考核 ──
+    PermissionDef("hr:performance:read", "查看绩效考核", "hr", "performance", "read"),
+    PermissionDef("hr:performance:manage", "管理绩效考核", "hr", "performance", "manage"),
+    # ── 敏感信息 ──
+    PermissionDef("hr:profile:sensitive", "查看员工敏感信息（身份证等）", "hr", "profile", "sensitive"),
+    # ── 职称评审 ──
+    PermissionDef("hr:title:read", "查看职称评审", "hr", "title", "read"),
+    PermissionDef("hr:title:manage", "管理职称评审（批次配置/评委指定）", "hr", "title", "manage"),
+    PermissionDef("hr:title:scores:read", "查看职称评审分数（保密：各评委原始分）", "hr", "title", "scores:read"),
+    PermissionDef("hr:title:judge", "职称评审评委投票", "hr", "title", "judge"),
 ]

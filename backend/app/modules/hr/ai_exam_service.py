@@ -2,13 +2,25 @@
 
 import logging
 from io import BytesIO
+from typing import Any
 
 from docx import Document as DocxDocument
 
+from app.modules.hr import config as hr_config
+
 logger = logging.getLogger(__name__)
 
+EXAM_QUESTION_KEYS = (
+    "choice_questions",
+    "true_false_questions",
+    "multi_choice_questions",
+    "fill_blank_questions",
+)
 
-def _extract_docx_content(file_bytes: bytes) -> dict:
+ExamQuestions = dict[str, list[dict[str, Any]]]
+
+
+def _extract_docx_content(file_bytes: bytes) -> dict[str, Any]:
     doc = DocxDocument(BytesIO(file_bytes))
     all_paragraphs: list[str] = []
     bold_texts: list[str] = []
@@ -34,19 +46,19 @@ def _extract_docx_content(file_bytes: bytes) -> dict:
     return {"full_text": "\n".join(all_paragraphs), "bold_texts": bold_texts}
 
 
-def _extract_text_content(file_bytes: bytes) -> dict:
+def _extract_text_content(file_bytes: bytes) -> dict[str, Any]:
     text = file_bytes.decode("utf-8", errors="ignore")
     return {"full_text": text, "bold_texts": []}
 
 
-def _parse_file(file_bytes: bytes, filename: str) -> dict:
+def _parse_file(file_bytes: bytes, filename: str) -> dict[str, Any]:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext in ("docx", "doc"):
         return _extract_docx_content(file_bytes)
     return _extract_text_content(file_bytes)
 
 
-def _generate_local(content: dict, config: dict | None = None) -> dict:
+def _generate_local(content: dict[str, Any], config: dict[str, Any] | None = None) -> ExamQuestions:
     """离线模式：基于规则从文本生成多题型试卷。加粗文字优先挖空出题。"""
     choice_count = config.get("choice_count", 5) if config else 5
     tf_count = config.get("true_false_count", 5) if config else 5
@@ -56,10 +68,10 @@ def _generate_local(content: dict, config: dict | None = None) -> dict:
     sentences = [s.strip() for s in content["full_text"].replace("\n", "。").split("。") if len(s.strip()) > 8]
     bold_texts = content.get("bold_texts", [])
 
-    choice_qs = []
-    tf_qs = []
-    multi_qs = []
-    fill_qs = []
+    choice_qs: list[dict[str, Any]] = []
+    tf_qs: list[dict[str, Any]] = []
+    multi_qs: list[dict[str, Any]] = []
+    fill_qs: list[dict[str, Any]] = []
 
     # ── 先对句子打分 ──
     keywords = ["必须", "应当", "禁止", "要求", "包括", "负责", "管理", "检查", "培训", "安全", "操作", "设备"]
@@ -155,7 +167,7 @@ def _generate_local(content: dict, config: dict | None = None) -> dict:
     return result
 
 
-def _build_prompt(full_text: str, bold_texts: list[str], config: dict | None = None) -> str:
+def _build_prompt(full_text: str, bold_texts: list[str], config: dict[str, Any] | None = None) -> str:
     if config:
         choice_count = config.get("choice_count", 5)
         tf_count = config.get("true_false_count", 5)
@@ -172,13 +184,15 @@ def _build_prompt(full_text: str, bold_texts: list[str], config: dict | None = N
     if choice_count > 0:
         reqs.append(f"出 {choice_count} 道单选题（4 选项 A/B/C/D，只有一个正确答案）")
     if tf_count > 0:
-        reqs.append(f"出 {tf_count} 道判断题（正确/错误）")
+        reqs.append(f"出 {tf_count} 道判断题（answer 只能是\"正确\"或\"错误\"，正确与错误大致各半）")
     if multi_count > 0:
         reqs.append(f"出 {multi_count} 道多选题（4 选项，有 2-3 个正确答案）")
     if fill_count > 0:
-        reqs.append(f"出 {fill_count} 道填空题（将关键知识点挖空）")
-    reqs.append("题目应覆盖材料关键知识点，加粗内容优先")
-    reqs.append("严格按 JSON 格式输出")
+        reqs.append(f"出 {fill_count} 道填空题（将关键知识点挖空，question 中用______表示空位，question 里不能出现答案）")
+    reqs.append("题目必须严格基于材料内容，禁止编造材料中不存在的知识点")
+    reqs.append("题目应覆盖材料关键知识点，加粗内容优先作为考点")
+    reqs.append("干扰选项要合理、有区分度，正确答案在各选项间均匀分布，不要固定为 A")
+    reqs.append("严格按 JSON 格式输出，不要输出 JSON 以外的内容")
 
     json_parts = []
     if choice_count > 0:
@@ -200,15 +214,105 @@ def _build_prompt(full_text: str, bold_texts: list[str], config: dict | None = N
 {full_text[:8000]}{bold_hint}"""
 
 
-async def generate_exam(file_bytes: bytes, filename: str, config: dict | None = None) -> dict:
-    """Generate exam questions using local offline mode (no external API dependency)."""
+def _expected_counts(config: dict[str, Any] | None) -> dict[str, int]:
+    return {
+        "choice_questions": config.get("choice_count", 5) if config else 5,
+        "true_false_questions": config.get("true_false_count", 5) if config else 5,
+        "multi_choice_questions": config.get("multi_choice_count", 0) if config else 0,
+        "fill_blank_questions": config.get("fill_blank_count", 0) if config else 0,
+    }
+
+
+def _validate_exam(result: dict[str, Any], config: dict[str, Any] | None) -> ExamQuestions:
+    """校验 LLM 返回的试卷结构，不合格直接抛错由上层降级。"""
+    if not isinstance(result, dict):
+        raise ValueError("AI 返回结果不是合法的试卷结构")
+
+    expected = _expected_counts(config)
+    validated: ExamQuestions = {}
+    for key in EXAM_QUESTION_KEYS:
+        qs = result.get(key, [])
+        want = expected[key]
+        if want <= 0:
+            validated[key] = []
+            continue
+        if not isinstance(qs, list) or not qs:
+            raise ValueError(f"AI 未生成任何{key}")
+        clean = []
+        for q in qs[:want]:
+            if not isinstance(q, dict) or not str(q.get("question", "")).strip():
+                raise ValueError(f"AI 生成的{key}缺少题干")
+            item: dict[str, Any] = {"question": str(q["question"]).strip()}
+            answer = str(q.get("answer", "")).strip()
+            if not answer:
+                raise ValueError(f"AI 生成的{key}缺少答案")
+            if key in ("choice_questions", "multi_choice_questions"):
+                options = q.get("options")
+                if not isinstance(options, list) or len(options) < 2:
+                    raise ValueError(f"AI 生成的{key}选项不足")
+                labels: list[str] = []
+                clean_opts: list[dict[str, str]] = []
+                for opt in options:
+                    if not isinstance(opt, dict) or not str(opt.get("text", "")).strip():
+                        raise ValueError(f"AI 生成的{key}选项不合法")
+                    label = str(opt.get("label", "")).strip().upper() or chr(65 + len(labels))
+                    labels.append(label)
+                    clean_opts.append({"label": label, "text": str(opt["text"]).strip()})
+                item["options"] = clean_opts
+                answers = [a.strip().upper() for a in answer.replace("，", ",").split(",") if a.strip()]
+                if not answers or any(a not in labels for a in answers):
+                    raise ValueError(f"AI 生成的{key}答案与选项不匹配: {answer}")
+                item["answer"] = ",".join(answers)
+            elif key == "true_false_questions":
+                if answer in ("对", "是", "√", "T", "true", "True"):
+                    answer = "正确"
+                elif answer in ("错", "否", "×", "F", "false", "False"):
+                    answer = "错误"
+                if answer not in ("正确", "错误"):
+                    raise ValueError(f"AI 生成的判断题答案不合法: {answer}")
+                item["answer"] = answer
+            else:
+                item["answer"] = answer
+            clean.append(item)
+        validated[key] = clean
+    return validated
+
+
+async def _generate_via_ai(content: dict[str, Any], config: dict[str, Any] | None = None) -> ExamQuestions:
+    """在线模式：调用大模型基于培训材料生成试卷。"""
+    from app.modules.hr.ai_service import AiChatService
+
+    prompt = _build_prompt(content["full_text"], content["bold_texts"], config)
+    result = await AiChatService.call_json(
+        prompt,
+        system_prompt="你是培训考核出题老师。严格基于给定材料出题，只输出合法 JSON。",
+        api_key=hr_config.HR_AI_API_KEY,
+    )
+    validated = _validate_exam(result, config)
+    logger.info(
+        "_generate_via_ai: choice=%d tf=%d multi=%d fill=%d",
+        len(validated["choice_questions"]), len(validated["true_false_questions"]),
+        len(validated["multi_choice_questions"]), len(validated["fill_blank_questions"]),
+    )
+    return validated
+
+
+async def generate_exam(file_bytes: bytes, filename: str, config: dict[str, Any] | None = None) -> ExamQuestions:
+    """Generate exam questions. 配置了 HR_AI_API_KEY 时优先走大模型出题，失败自动降级到本地规则模式。"""
     content = _parse_file(file_bytes, filename)
     if not content["full_text"].strip():
         raise ValueError("文件中未检测到文本内容")
 
-    result = _generate_local(content, config)
+    result: ExamQuestions | None = None
+    if hr_config.HR_AI_API_KEY:
+        try:
+            result = await _generate_via_ai(content, config)
+        except Exception:
+            logger.exception("AI 出题失败，降级为本地规则出题")
+    if result is None:
+        result = _generate_local(content, config)
 
-    for key in ("choice_questions", "true_false_questions", "multi_choice_questions", "fill_blank_questions"):
+    for key in EXAM_QUESTION_KEYS:
         for i, q in enumerate(result.get(key, [])):
             q["number"] = i + 1
 
@@ -224,7 +328,7 @@ def _find_exam_template() -> str:
         return ""
 
 
-def export_exam(data: dict) -> BytesIO:
+def export_exam(data: dict[str, Any]) -> BytesIO:
     """导出考试试卷为 Word 文档，优先使用试卷模板。"""
     from docx import Document
     from docx.shared import Pt

@@ -59,13 +59,19 @@ class AiChatService:
                 yield {"type": "content", "text": content}
 
     @staticmethod
-    async def call_json(prompt: str, system_prompt: str | None = None, model: str | None = None) -> dict:
+    async def call_json(
+        prompt: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
         """Non-streaming call that returns parsed JSON. Used for structured evaluation."""
         import json
         import re
 
-        settings = get_settings()
-        api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
+        if not api_key:
+            settings = get_settings()
+            api_key = getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "DEEPSEEK_API_KEY", "") or ""
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"
@@ -85,9 +91,8 @@ class AiChatService:
         content = content.strip()
         # 提取 JSON
         m = re.search(r"\{[\s\S]*\}", content)
-        if m:
-            return json.loads(m.group())
-        return json.loads(content)
+        parsed: dict[str, Any] = json.loads(m.group()) if m else json.loads(content)
+        return parsed
 
     @staticmethod
     def build_system_prompt(page: str | None = None) -> str:

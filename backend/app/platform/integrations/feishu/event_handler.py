@@ -11,6 +11,7 @@ import logging
 from typing import Any
 
 import lark_oapi as lark
+from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
 
@@ -31,6 +32,7 @@ def build_event_handler() -> lark.EventDispatcherHandler:
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(_on_message_receive)
         .register_p2_card_action_trigger(_on_card_action)  # pyright: ignore[reportArgumentType]
+        .register_p2_drive_file_bitable_record_changed_v1(_on_bitable_record_changed)
         .build()
     )
 
@@ -250,3 +252,64 @@ async def _handle_card_action_async(
                 f"已{label}"
             ),
         )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 多维表格记录变更（职称评审：申报表落库 / 打分表回传）
+# ═══════════════════════════════════════════════════════════════
+
+
+def _on_bitable_record_changed(data: P2DriveFileBitableRecordChangedV1) -> None:
+    """多维表格记录变更事件（同步入口，在 WS 线程中调用）。"""
+    event = data.event
+    if not event:
+        return
+
+    action_list = [
+        {
+            "action": a.action,
+            "record_id": a.record_id,
+            "after_value": {f.field_id: f.field_value for f in a.after_value or []},
+            "before_value": {f.field_id: f.field_value for f in a.before_value or []},
+        }
+        for a in (event.action_list or [])
+    ]
+    if not action_list:
+        return
+
+    logger.info(
+        "多维表格事件: file_token=%s table_id=%s actions=%d",
+        event.file_token, event.table_id, len(action_list),
+    )
+
+    if _main_loop is None:
+        logger.error("主 event loop 未设置，无法处理多维表格事件")
+        return
+
+    future = asyncio.run_coroutine_threadsafe(
+        _handle_bitable_record_changed_async(
+            file_token=event.file_token or "",
+            table_id=event.table_id or "",
+            action_list=action_list,
+        ),
+        _main_loop,
+    )
+    try:
+        future.result(timeout=120)
+    except Exception:
+        logger.exception("异步处理多维表格事件超时或异常")
+
+
+async def _handle_bitable_record_changed_async(
+    *,
+    file_token: str,
+    table_id: str,
+    action_list: list[dict[str, Any]],
+) -> None:
+    """多维表格事件异步处理（在主 event loop 中运行，转发给职称评审模块）。"""
+    if _main_loop is None:
+        set_main_loop(asyncio.get_running_loop())
+
+    from app.modules.hr.title_review.bitable_handler import handle_record_changed
+
+    await handle_record_changed(file_token, table_id, action_list)

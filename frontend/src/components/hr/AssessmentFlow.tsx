@@ -26,6 +26,7 @@ import {
   downloadQaAssessmentRecord,
   downloadQaAssessmentEvaluation,
   downloadQaAssessmentScores,
+  randomizeQaScores,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import { QaAssessment, QuestionBankItem } from '@/types/hr'
@@ -304,6 +305,23 @@ export default function AssessmentFlow({
                 <Button size="small" icon={<DownloadOutlined />}
                   loading={exporting === `scores-${assessmentId}`}
                   onClick={() => handleExport('scores')}>导出成绩单</Button>
+                <Button size="small"
+                  onClick={async () => {
+                    const ratio = parseFloat(prompt('输入优秀比例（0-1，默认0.3）', '0.3') || '0.3')
+                    if (isNaN(ratio) || ratio < 0 || ratio > 1) return
+                    try {
+                      const res = await randomizeQaScores(assessmentId, { excellent_ratio: ratio })
+                      const generated = res.data?.scores || []
+                      // 直接回填矩阵，可继续点击格子调整随机结果
+                      setScoreRows((rows) => rows.map((r) => {
+                        const g = generated.find((s) => s.employee_name === r.employee_name)
+                        return g ? { ...r, employee_number: g.employee_number || r.employee_number, wrong: new Set(g.wrong_questions || []) } : r
+                      }))
+                      if (!assessedDate) setAssessedDate(dayjs())
+                      message.success(res.message || `已随机生成 ${generated.length} 人成绩`)
+                    } catch (e: any) { message.error(e.message || '随机赋分失败') }
+                  }}
+                >随机赋分</Button>
                 <Button size="small" icon={<DatabaseOutlined />} type="primary"
                   loading={saving}
                   onClick={handleSyncLedger}>同步到台账</Button>

@@ -44,6 +44,7 @@ _ALL_HR_PERMS: set[str] = {
     "hr:training:exam", "hr:training:document", "hr:training:manage",
     "hr:training:export", "hr:profile:export", "hr:profile:transfer",
     "hr:recruitment:manage",
+    "hr:title:read", "hr:title:manage", "hr:title:scores:read", "hr:title:judge",
 }
 
 

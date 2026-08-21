@@ -5,11 +5,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.hr.schemas import (
+    CandidateAnalysisReportOut,
     CandidateCreate,
     CandidateResponse,
     CandidateStatusTransition,
@@ -17,7 +19,7 @@ from app.modules.hr.schemas import (
     DecideReviewRequest,
     PushReviewRequest,
 )
-from app.modules.hr.service import CandidateService
+from app.modules.hr.service import CandidateAnalysisService, CandidateService
 from app.shared.schemas import PageParams
 
 router = APIRouter(tags=["HR-候选人"])
@@ -25,6 +27,10 @@ router = APIRouter(tags=["HR-候选人"])
 
 def get_service(session: AsyncSession = Depends(get_db)) -> CandidateService:
     return CandidateService(session)
+
+
+def get_candidate_analysis_service(session: AsyncSession = Depends(get_db)) -> CandidateAnalysisService:
+    return CandidateAnalysisService(session)
 
 
 # ─── 简历解析 ───
@@ -67,6 +73,46 @@ async def list_candidates(
     return success_response(
         data=[CandidateResponse.model_validate(r).model_dump(mode="json") for r in rows],
         meta={"page": page_params.page, "page_size": page_params.page_size, "total": total},
+    )
+
+
+@router.post("/candidates/upload", summary="批量导入候选人")
+async def upload_candidates(
+    file: UploadFile,
+    service: CandidateService = Depends(get_service),
+):
+    """上传 Excel 文件批量导入候选人，按姓名+手机/邮箱自动去重新增或更新。"""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
+    try:
+        content = await file.read()
+        result = await service.upload_candidates(content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(
+        data=result,
+        message=f"新增 {result['created']}，更新 {result['updated']}"
+    )
+
+
+@router.get("/candidates/template", summary="下载候选人导入模板")
+async def download_candidate_template():
+    """下载候选人批量导入 Excel 模板"""
+    from io import BytesIO
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    headers = list(CandidateService._CANDIDATE_UPLOAD_COLUMN_MAP.keys())
+    ws.append(headers)
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=candidate_import_template.xlsx"},
     )
 
 
@@ -130,7 +176,7 @@ async def push_review(
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.push(cid, payload.pushed_by or "HR", payload.push_note)
+        r = await rv_service.push(cid, payload.pushed_by or "HR", payload.push_note, payload.reviewer)
         return success_response(data={"id": str(r.id), "status": r.status}, message="已推送至用人部门审核")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -138,6 +184,7 @@ async def push_review(
 
 @router.get("/recruitment/stats", summary="招聘统计概览")
 async def recruitment_stats(session: AsyncSession = Depends(get_db)):
+    from app.modules.hr.models import Candidate
     from app.modules.hr.repository import CandidateRepository, JobRequirementRepository
 
     candidate_repo = CandidateRepository(session)
@@ -148,13 +195,57 @@ async def recruitment_stats(session: AsyncSession = Depends(get_db)):
 
     # 一次 GROUP BY 查询代替 8 次顺序 count_by_status
     status_counts = await candidate_repo.count_group_by_status()
-    statuses = ["待筛选", "已筛选", "待部门审核", "面试中", "已面试", "录用中", "已录用", "已拒绝"]
+    statuses = ["待筛选", "已筛选", "待部门审核", "面试中", "已面试", "录用中", "已录用", "待入职审批", "已入职", "已拒绝"]
     funnel = [{"status": s, "count": status_counts.get(s, 0)} for s in statuses]
+
+    # 转化率：相邻阶段之间
+    rates = []
+    for i in range(len(statuses) - 1):
+        this_count = status_counts.get(statuses[i], 0)
+        next_count = status_counts.get(statuses[i + 1], 0)
+        rate = round(next_count / this_count * 100, 1) if this_count > 0 else 0
+        rates.append({"from": statuses[i], "to": statuses[i + 1], "rate": rate})
+
+    # 平均招聘周期（从创建到入职的天数，仅统计已入职）
+    cycle_days = None
+    from sqlalchemy import func as sa_func
+    cycle_result = (await session.execute(
+        select(sa_func.avg(
+            sa_func.extract('epoch', Candidate.updated_at - Candidate.created_at) / 86400
+        )).where(Candidate.status == "已入职", Candidate.is_deleted == False)  # noqa: E712
+    )).scalar()
+    if cycle_result:
+        cycle_days = round(float(cycle_result), 1)
+
+    # 各岗位招聘进度
+    jd_list = await jd_repo.list_all(status=None)
+    job_progress = [{
+        "id": str(j.id),
+        "position_name": j.position_name,
+        "department": j.department,
+        "headcount": j.headcount,
+        "hired_count": j.hired_count or 0,
+    } for j in jd_list]
+
+    # 月度入职趋势（近12个月）
+    monthly_hires_raw = await candidate_repo.count_monthly_hires(months=12)
+    monthly_hires = [
+        {"month": f"{h['year']}-{h['month']:02d}", "count": h['count']}
+        for h in monthly_hires_raw
+    ]
+
+    # 来源渠道分析
+    source_stats = await candidate_repo.count_by_source()
 
     return success_response(data={
         "total_candidates": total_candidates,
         "active_jobs": active_jobs,
         "funnel": funnel,
+        "conversion_rates": rates,
+        "avg_cycle_days": cycle_days,
+        "job_progress": job_progress,
+        "monthly_hires": monthly_hires,
+        "source_stats": source_stats,
     })
 
 
@@ -184,10 +275,55 @@ async def decide_review(
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.decide(UUID(payload.review_id), payload.decision, payload.review_comment)
+        # 支持通过 review_id 或自动按 candidate_id 查找待审核记录
+        if payload.review_id:
+            review_id = UUID(payload.review_id)
+        else:
+            review_id = await rv_service.find_pending_review_id(cid)
+        r = await rv_service.decide(review_id, payload.decision, payload.review_comment)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/candidates/{cid}/push-onboarding-review", summary="发起入职审批")
+async def push_onboarding_review(
+    cid: UUID,
+    payload: PushReviewRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.schemas import CandidateReviewResponse
+    from app.modules.hr.service import CandidateReviewService
+    rv_service = CandidateReviewService(session)
+    try:
+        r = await rv_service.push_onboarding(cid, payload.pushed_by or "HR", payload.push_note)
+        return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="入职审批已发起")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/candidates/{cid}/onboarding-tasks", summary="获取入职子任务列表")
+async def get_onboarding_tasks(
+    cid: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.schemas import OnboardingTaskResponse
+    from app.modules.hr.service import OnboardingTaskService
+    tasks = await OnboardingTaskService(session).list_by_candidate(cid)
+    return success_response(data=[OnboardingTaskResponse.model_validate(t).model_dump(mode="json") for t in tasks])
+
+
+@router.put("/candidates/{cid}/onboarding-tasks/{task_id}", summary="更新入职子任务")
+async def update_onboarding_task(
+    cid: UUID,
+    task_id: UUID,
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+):
+    from app.modules.hr.schemas import OnboardingTaskResponse
+    from app.modules.hr.service import OnboardingTaskService
+    task = await OnboardingTaskService(session).update(task_id, payload)
+    return success_response(data=OnboardingTaskResponse.model_validate(task).model_dump(mode="json"), message="任务已更新")
 
 
 @router.put("/candidates/{cid}/status", summary="候选人状态流转")
@@ -238,6 +374,7 @@ async def send_offer(
     medical_date: str = Form(""),
     report_date: str = Form(""),
     offer_expire_date: str = Form(""),
+    additional_terms: str = Form(""),
     service: CandidateService = Depends(get_service),
     session: AsyncSession = Depends(get_db),
 ):
@@ -253,6 +390,7 @@ async def send_offer(
         base_salary=base_salary, salary_range=salary_range,
         medical_date=medical_date, report_date=report_date,
         offer_expire_date=offer_expire_date,
+        additional_terms=additional_terms,
     )
     filename = f"入职Offer_{n}.pdf"
     html = (
@@ -288,6 +426,7 @@ async def preview_offer(
     medical_date: str = Form(""),
     report_date: str = Form(""),
     offer_expire_date: str = Form(""),
+    additional_terms: str = Form(""),
 ):
     from app.modules.hr.offer_generator import generate_offer_html
     html = generate_offer_html(
@@ -295,5 +434,40 @@ async def preview_offer(
         base_salary=base_salary, salary_range=salary_range,
         medical_date=medical_date, report_date=report_date,
         offer_expire_date=offer_expire_date,
+        additional_terms=additional_terms,
     )
     return HTMLResponse(content=html)
+
+
+# ─── 候选人胜任度多维分析报告 ───
+
+
+@router.get("/candidates/{candidate_id}/analysis-reports", summary="候选人胜任度分析报告列表")
+async def list_analysis_reports(
+    candidate_id: UUID,
+    service: CandidateAnalysisService = Depends(get_candidate_analysis_service),
+):
+    reports = await service.list_by_candidate(candidate_id)
+    return success_response(data=[
+        CandidateAnalysisReportOut.model_validate(r).model_dump(mode="json") for r in reports
+    ])
+
+
+@router.post("/candidates/{candidate_id}/analysis-reports", summary="生成胜任度分析报告")
+async def generate_analysis_report(
+    candidate_id: UUID,
+    payload: dict,
+    service: CandidateAnalysisService = Depends(get_candidate_analysis_service),
+):
+    """基于面试记录自动生成多维度胜任度报告（面试建议自动联动写入面试备注）。"""
+    interview_id = payload.get("interview_id")
+    if not interview_id:
+        raise HTTPException(400, "请提供面试记录ID")
+    try:
+        report = await service.generate(candidate_id, UUID(str(interview_id)))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return success_response(
+        data=CandidateAnalysisReportOut.model_validate(report).model_dump(mode="json"),
+        message="报告已生成",
+    )

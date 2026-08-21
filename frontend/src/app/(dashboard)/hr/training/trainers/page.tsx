@@ -146,6 +146,7 @@ function TrainersTab() {
               render: (v: string) => v ? v.split(',').map((d: string) => <Tag key={d}>{d.trim()}</Tag>) : '-' },
             { title: '姓名', dataIndex: 'name', width: 80, fixed: 'left' as const },
             { title: '部门', dataIndex: 'department', width: 140 },
+            { title: '任期', dataIndex: 'period', width: 130, render: (v: string | null) => v || '-' },
             { title: '资格范围', dataIndex: 'qualification_scope', width: 240, ellipsis: true },
             { title: '认证日期', dataIndex: 'certification_date', width: 110 },
             { title: '确认日期', dataIndex: 'confirmation_date', width: 110 },
@@ -172,6 +173,7 @@ function TrainersTab() {
           <Form.Item name="name" label="姓名" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="department" label="部门" rules={[{ required: true }]}>
             <Select options={depts} showSearch /></Form.Item>
+          <Form.Item name="period" label="任期"><Input placeholder="如 2023.03.01起" /></Form.Item>
           <Form.Item name="trainable_departments" label="可培训部门">
             <Select mode="multiple" placeholder="选择可培训部门" options={depts} showSearch
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
