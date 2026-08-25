@@ -281,11 +281,15 @@ export async function fetchStageSummaryClient(params: {
   stage_name?: string
   route_id?: string
   view_all?: boolean
+  start_date?: string
+  end_date?: string
 }): Promise<StageSummary> {
   const s = qs({
     stage_name: params.stage_name ?? null,
     route_id: params.route_id ?? null,
     view_all: params.view_all ?? false,
+    start_date: params.start_date ?? null,
+    end_date: params.end_date ?? null,
   })
   return apiGet<StageSummary>(`${API_BASE}/api/v1/production/analytics/stage-summary?${s}`)
 }

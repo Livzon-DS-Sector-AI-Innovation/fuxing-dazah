@@ -40,6 +40,8 @@ __all__ = [
     "get_batches_for_allocations",
     "get_batch_by_no",
     "get_plan_item_by_batch_no",
+    "list_plan_item_nos",
+    "list_batch_nos",
     "get_parent_batch_id",
     "get_child_batch_ids",
     "get_chain_node_execution_progress",
@@ -360,6 +362,29 @@ async def get_plan_item_by_batch_no(
     if exclude_item_id:
         stmt = stmt.where(PlanItem.id != exclude_item_id)
     return (await db.execute(stmt)).scalars().first()
+
+
+async def list_plan_item_nos(db: AsyncSession, batch_nos: list[str]) -> set[str]:
+    """批量查计划项占用的批号（软删除项不计）。"""
+    if not batch_nos:
+        return set()
+    stmt = select(PlanItem.batch_no).where(
+        PlanItem.batch_no.in_(batch_nos),
+        PlanItem.is_deleted == False,  # noqa: E712
+    )
+    # batch_no 列为可空，IN 匹配到的均为非空值；过滤 None 满足 mypy 类型收窄
+    return {no for no in (await db.execute(stmt)).scalars() if no is not None}
+
+
+async def list_batch_nos(db: AsyncSession, batch_nos: list[str]) -> set[str]:
+    """批量查真实批次占用的批号（软删除批次不计）。"""
+    if not batch_nos:
+        return set()
+    stmt = select(Batch.batch_no).where(
+        Batch.batch_no.in_(batch_nos),
+        Batch.is_deleted == False,  # noqa: E712
+    )
+    return set((await db.execute(stmt)).scalars())
 
 
 # ── 批次追溯 / 执行进度 / 变更日志 ──

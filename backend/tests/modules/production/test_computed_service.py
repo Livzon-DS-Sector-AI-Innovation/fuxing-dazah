@@ -36,8 +36,12 @@ from tests.modules.production.conftest import rand_code
 async def _make_route_ctx(
     db: AsyncSession,
     computed_fields: list[ComputedFieldIn] | None = None,
+    publish: bool = False,
 ) -> dict[str, Any]:
-    """构建路线 G1→G2：G1 有数值字段 A1/B1，G2 有数值字段 A2，可挂计算字段。"""
+    """构建路线 G1→G2：G1 有数值字段 A1/B1，G2 有数值字段 A2，可挂计算字段。
+
+    publish=True 时发布路线（数据汇总只覆盖非草稿路线）。
+    """
     product = await route_service.create_product(
         db,
         ProductCreate(product_name=rand_code("测试产品"), product_code=rand_code("P")),
@@ -72,6 +76,8 @@ async def _make_route_ctx(
         computed_fields=computed_fields or [],
     )
     await route_service.save_graph(db, route.id, graph, user=None)
+    if publish:
+        await route_service.publish_route(db, route.id, user=None)
     graph_out = await route_service.get_graph(db, route.id)
     nodes = {n.node_code: n for n in graph_out.nodes}
     return {"product": product, "route": route, "node_g1": nodes["G1"], "node_g2": nodes["G2"]}

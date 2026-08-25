@@ -151,8 +151,16 @@ async def list_nodes(
     db: AsyncSession,
     route_id: uuid.UUID | None = None,
     stage_name: str | None = None,
+    *,
+    exclude_draft_route: bool = False,
 ) -> list[RouteNode]:
     stmt = select(RouteNode).where(RouteNode.is_deleted == False)  # noqa: E712
+    if exclude_draft_route:
+        # 汇总场景只取有效路线的节点：排除草稿路线与已删除路线的孤儿节点
+        stmt = stmt.join(ProcessRoute, ProcessRoute.id == RouteNode.route_id).where(
+            ProcessRoute.is_deleted == False,  # noqa: E712
+            ProcessRoute.status != "draft",
+        )
     if route_id is not None:
         stmt = stmt.where(RouteNode.route_id == route_id)
     if stage_name is not None:

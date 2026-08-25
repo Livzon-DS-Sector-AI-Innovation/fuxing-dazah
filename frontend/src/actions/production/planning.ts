@@ -117,8 +117,20 @@ export async function updatePlanItem(id: string, input: UpdatePlanItemInput): Pr
   return result
 }
 
-export async function deletePlanItem(id: string): Promise<ActionResult<{ id: string }>> {
-  const result = await actionFetch<{ id: string }>(`${BASE}/plan-items/${id}`, { method: 'DELETE' })
+export interface DeletePlanItemResult {
+  id: string
+  shifted: { item_id: string; batch_no: string }[]
+  skipped: { item_id: string; batch_no: string }[]
+}
+
+export async function deletePlanItem(
+  id: string,
+  shift = false,
+): Promise<ActionResult<DeletePlanItemResult>> {
+  const result = await actionFetch<DeletePlanItemResult>(
+    `${BASE}/plan-items/${id}${shift ? '?shift=true' : ''}`,
+    { method: 'DELETE' },
+  )
   if (result.success) revalidate()
   return result
 }

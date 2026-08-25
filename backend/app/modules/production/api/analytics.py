@@ -1,6 +1,7 @@
 """生产分析 API 路由。"""
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
@@ -58,8 +59,13 @@ async def stage_summary(
     stage_name: str | None = Query(default=None, max_length=100),
     route_id: uuid.UUID | None = None,
     view_all: bool = Query(default=False),
+    start_date: date | None = Query(default=None, description="批次首工序开始日期（含）"),
+    end_date: date | None = Query(default=None, description="批次首工序开始日期（含）"),
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    out = await get_stage_summary(db, stage_name, route_id, user.id, view_all)
+    out = await get_stage_summary(
+        db, stage_name, route_id, user.id, view_all,
+        start_date=start_date, end_date=end_date,
+    )
     return success_response(out.model_dump(mode="json"))

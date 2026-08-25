@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, type ReactElement } from 'react'
 import {
   App,
   Button,
@@ -27,7 +27,7 @@ import type { PlanItem, StageConfigItem, PlanItemBatchProgress } from '@/types/p
 import { fetchProductsClient, fetchRoutesClient, fetchEquipmentOptionsClient, fetchEquipmentBriefsClient } from '@/lib/api/production-client'
 import { ITEM_STATUS_CONFIG, PRIORITY_CONFIG } from './constants'
 import { batchGenDayOffset, batchRhythmWarning } from './utils'
-import { incrementBatchNo } from '@/lib/utils'
+import { incrementBatchNo, decrementBatchNo } from '@/lib/utils'
 import dayjs from 'dayjs'
 
 // ── Form divider ──
@@ -322,6 +322,63 @@ function PlanItemFormFields({
   )
 }
 
+// ── 删除确认弹窗 Footer ──
+// 弹窗 focus trap 会把初始焦点放到第一个可聚焦元素（取消）上，
+// 「删除」按钮 autoFocus 原生夺焦，并显式把回车绑定到「删除」，而不是「取消」。
+
+function DeleteConfirmFooter({
+  cancelBtn,
+  shiftAvailable,
+  onDelete,
+  onShiftDelete,
+}: {
+  cancelBtn: ReactElement
+  shiftAvailable: boolean
+  onDelete: () => void
+  onShiftDelete: () => void
+}) {
+  const triggeredRef = useRef(false)
+
+  // 回车固定触发「删除」；焦点在「删除并补位」上时保留原生行为
+  // 「删除」按钮用 autoFocus 原生聚焦（rc-dialog 焦点陷阱支持），无需定时器夺焦
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return
+      const target = e.target as HTMLElement | null
+      if (target?.closest('[data-shift-delete]')) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (!triggeredRef.current) {
+        triggeredRef.current = true
+        onDelete()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onDelete])
+
+  // 双触发保护：Enter 与点击只触发一次
+  const once = (fn: () => void) => () => {
+    if (triggeredRef.current) return
+    triggeredRef.current = true
+    fn()
+  }
+  const handleDelete = once(onDelete)
+  const handleShiftDelete = once(onShiftDelete)
+
+  return (
+    <>
+      {cancelBtn}
+      <Button autoFocus danger onClick={handleDelete}>删除</Button>
+      {shiftAvailable && (
+        <Button danger type="primary" data-shift-delete onClick={handleShiftDelete}>
+          删除并补位
+        </Button>
+      )}
+    </>
+  )
+}
+
 // ── Main Component ──
 
 interface Props {
@@ -563,17 +620,46 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   }
 
   const handleDelete = (item: PlanItem) => {
-    modal.confirm({
+    const idx = items.findIndex(i => i.id === item.id)
+    // 被删行之后、批号数字可减且未下达（与后端补位仅处理 draft/scheduled 对齐）的后续行
+    const following = idx >= 0
+      ? items.slice(idx + 1).filter(
+          i =>
+            i.batch_no &&
+            (i.status === 'draft' || i.status === 'scheduled') &&
+            decrementBatchNo(i.batch_no) !== i.batch_no,
+        )
+      : []
+
+    const doDelete = async (shift: boolean) => {
+      const r = await deletePlanItem(item.id, shift)
+      if (!r.success) { message.error(r.error); return }
+      if (shift && r.data) {
+        const shiftedCount = r.data.shifted?.length ?? 0
+        const skippedCount = r.data.skipped?.length ?? 0
+        if (skippedCount > 0) {
+          message.warning(`已删除，${shiftedCount} 个批号已补位，${skippedCount} 个因目标批号被占用未补位`)
+        } else {
+          message.success(`已删除并补位 ${shiftedCount} 个批号`)
+        }
+      } else {
+        message.success('已删除')
+      }
+      onRefresh()
+    }
+
+    const ins = modal.confirm({
       title: `删除计划项「${item.product_name}」?`,
-      content: '删除后不可恢复。',
-      okText: '确认删除',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: async () => {
-        const r = await deletePlanItem(item.id)
-        if (r.success) { message.success('已删除'); onRefresh() }
-        else { message.error(r.error) }
-      },
+      content: <div>删除后不可恢复。</div>,
+      // footer 三按钮：取消 / 删除 / 删除并补位；回车固定绑定「删除」
+      footer: (_originNode, { CancelBtn }) => (
+        <DeleteConfirmFooter
+          cancelBtn={<CancelBtn />}
+          shiftAvailable={following.length > 0}
+          onDelete={() => { ins.destroy(); doDelete(false) }}
+          onShiftDelete={() => { ins.destroy(); doDelete(true) }}
+        />
+      ),
     })
   }
 

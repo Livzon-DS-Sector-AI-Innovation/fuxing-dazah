@@ -235,11 +235,11 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
     return cols
   }, [timelineStart, totalDays])
 
-  // 今日线位置（px）
+  // 今日线位置（px）—— 置于今天所在格子的中心（区间），而非起始边界
   const todayPx = useMemo(() => {
     const today = dayjs()
     if (today.isBefore(timelineStart) || today.isAfter(timelineEnd)) return -1
-    return today.diff(timelineStart, 'day') * DAY_WIDTH_PX
+    return today.diff(timelineStart, 'day') * DAY_WIDTH_PX + DAY_WIDTH_PX / 2
   }, [timelineStart, timelineEnd])
 
   // 计算卡片位置（返回 px 值）
@@ -395,8 +395,8 @@ export function ScheduleCardSwimlane({ items, planOrderId, productId, onRefresh,
                       stroke={isFirst ? '#c8c4be' : '#ede9e4'}
                       strokeWidth={isFirst ? 1 : 0.5}
                     />
-                    {showLabel && !isFirst && (
-                      <text x={x} y={44} textAnchor="middle" fill="#a4a097" fontSize={10}>
+                    {showLabel && i < totalDays && (
+                      <text x={x + DAY_WIDTH_PX / 2} y={44} textAnchor="middle" fill="#a4a097" fontSize={10}>
                         {dayOfMonth}
                       </text>
                     )}

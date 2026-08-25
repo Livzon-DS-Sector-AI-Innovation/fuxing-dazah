@@ -1,11 +1,12 @@
 """生产分析服务。"""
 
 import uuid
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.time import now
+from app.core.exceptions import AppException
+from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
 from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.repository import batch as batch_repo
@@ -84,15 +85,24 @@ async def get_stage_summary(
     route_id: uuid.UUID | None,
     user_id: uuid.UUID,
     view_all: bool,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> StageSummaryOut:
-    """工段汇总平铺矩阵：每批次一行，列为工序×字段（含计算字段）。"""
+    """工段汇总平铺矩阵：每批次一行，列为工序×字段（含计算字段）。
+
+    ``start_date`` / ``end_date`` 为可选的日期范围筛选：取"首工序开始时间"
+    落在范围内的批次，并连同它们的全部后序批次一并纳入汇总。
+    """
     allowed: set[uuid.UUID] | None = None
     if not view_all:
         allowed = await assignment_repo.get_user_node_ids(db, user_id)
         if not allowed:
             return StageSummaryOut(columns=[], rows=[])
 
-    nodes = await route_repo.list_nodes(db, route_id=route_id, stage_name=stage_name)
+    # 仅取有效路线的节点：排除草稿路线（无生产数据）与已删除路线的孤儿节点
+    nodes = await route_repo.list_nodes(
+        db, route_id=route_id, stage_name=stage_name, exclude_draft_route=True,
+    )
     nodes = [n for n in nodes if allowed is None or n.id in allowed]
     if not nodes:
         return StageSummaryOut(columns=[], rows=[])
@@ -109,6 +119,7 @@ async def get_stage_summary(
     defs.sort(key=lambda d: (order_by_id[d.node_id], d.sort_order))
     columns: list[StageSummaryColumn] = [
         StageSummaryColumn(
+            node_id=d.node_id,
             node_code=code_by_id[d.node_id],
             node_name=name_by_id[d.node_id],
             field_key=d.field_key,
@@ -127,6 +138,7 @@ async def get_stage_summary(
     allowed_computed_keys = {c.field_key for c in computed_defs}
     columns += [
         StageSummaryColumn(
+            node_id=c.node_id,
             node_code=code_by_id[c.node_id],
             node_name=name_by_id[c.node_id],
             field_key=c.field_key,
@@ -139,10 +151,34 @@ async def get_stage_summary(
     ]
 
     # 行（跨批次）
-    # ponytail: 以最近 500 个批次为汇总窗口，防全量历史扫描；批次量超窗口后改服务端分页
-    candidate_batches, _ = await batch_repo.list_batches(
-        db, None, None, None, page=1, page_size=500, order_by="created_at",
-    )
+    if start_date is not None or end_date is not None:
+        if start_date is not None and end_date is not None and start_date > end_date:
+            raise AppException(status_code=400, message="开始日期不能晚于结束日期")
+        # 日期范围筛选：日期范围内"开始"的批次 + 其全部后序批次（限制在当前路线作用域）
+        start_dt = (
+            datetime.combine(start_date, time.min, tzinfo=APP_TZ)
+            if start_date is not None else None
+        )
+        end_dt = (
+            datetime.combine(end_date, time.min, tzinfo=APP_TZ) + timedelta(days=1)
+            if end_date is not None else None
+        )
+        source_ids = await batch_repo.list_batches_started_within(
+            db, start_dt, end_dt, route_ids,
+        )
+        descendant_ids = await batch_repo.list_descendant_batch_ids(
+            db, set(source_ids),
+        )
+        candidate_ids = set(source_ids) | descendant_ids
+        candidate_batches = [
+            b for b in await batch_repo.get_batches_by_ids(db, list(candidate_ids))
+            if b.route_id in route_ids
+        ]
+    else:
+        # ponytail: 以最近 500 个批次为汇总窗口，防全量历史扫描；批次量超窗口后改服务端分页
+        candidate_batches, _ = await batch_repo.list_batches(
+            db, None, None, None, page=1, page_size=500, order_by="created_at",
+        )
     executions = await exec_repo.list_completed_executions_by_nodes(
         db, node_ids, batch_ids=[b.id for b in candidate_batches],
     )

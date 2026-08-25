@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
@@ -84,6 +85,21 @@ async def _ensure_unique_batch_no(db: AsyncSession, base_no: str) -> str:
         n += 1
         candidate = f"{base_no}-{n}"
     return candidate
+
+
+def _decrement_batch_no(batch_no: str) -> str:
+    """批号末段数字减 1（补位）；无数字段或数字 ≤1 时返回原值。与前端 decrementBatchNo 对齐。
+
+    贪婪首组匹配最后一个数字段（如 ``PO-20260824-001`` 减的是 ``001`` 而不是日期），
+    与前端 BATCH_NO_RE（frontend/src/lib/utils.ts）保持同语义。
+    """
+    m = re.match(r"^(.*)(\d+)(.*)$", batch_no)
+    if not m:
+        return batch_no
+    n = int(m.group(2))
+    if n <= 1:
+        return batch_no
+    return f"{m.group(1)}{n - 1:0{len(m.group(2))}d}{m.group(3)}"
 
 
 async def _check_batch_no_unique(
@@ -789,14 +805,86 @@ async def update_plan_item(
     return refreshed
 
 
-async def delete_plan_item(db: AsyncSession, item_id: uuid.UUID, user: User | None) -> None:
-    """软删除计划项，不做状态限制。"""
+async def delete_plan_item(
+    db: AsyncSession, item_id: uuid.UUID, user: User | None, shift: bool = False,
+) -> dict[str, list[dict[str, str]]]:
+    """软删除计划项，不做状态限制。shift=True 时后续批次号前移补位。
+
+    补位范围 = 同计划单列表中删除项之后的各项（与前端预览一致），
+    仅处理 draft/scheduled 状态（已生成批次的项改名会导致批号脱钩，跳过）。
+    目标批号被占用时跳过该项，删除本身不受影响。
+    """
     item = await repo.get_plan_item(db, item_id)
     if not item:
         raise NotFoundException("计划项", str(item_id))
+
+    shifted: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
+
+    # 补位定位必须在删除前（软删除后该项不再出现在同单列表）：
+    # 取同单列表找到删除位置，后续项 = 删除项之后的各项。
+    following: list[PlanItem] = []
+    if shift:
+        siblings = await repo.list_plan_items(db, item.plan_order_id)
+        deleted_idx = next((i for i, s in enumerate(siblings) if s.id == item_id), None)
+        if deleted_idx is not None:
+            following = siblings[deleted_idx + 1:]
+
     item.is_deleted = True
     item.updated_by = user.id if user else None
     await db.flush()
+
+    if not following:
+        return {"shifted": shifted, "skipped": skipped}
+
+    movable: list[tuple[PlanItem, str]] = []
+    for sib in following:
+        if not sib.batch_no or sib.status not in ("draft", "scheduled"):
+            continue
+        new_no = _decrement_batch_no(sib.batch_no)
+        if new_no != sib.batch_no:
+            movable.append((sib, new_no))
+
+    # 一次性预取占用号，内存中逐步让出/占用（3 次查询替代原先 2N+1 次）：
+    # 计划项占用 = 后续项当前批号 + 全表计划项对候选新号的占用（list_plan_item_nos，
+    # 与创建/编辑的全局唯一校验 get_plan_item_by_batch_no 同口径；被删项已软删除
+    # 并 flush，其批号自动让出）；真实批次占用 = 候选新号。候选新号自身不预置
+    # 占用——是否被占由「其他行让出 + 计划项/真实批次」决定，保持逐项顺序语义。
+    original_nos = [sib.batch_no for sib in following if sib.batch_no]
+    candidate_nos = [n for _, n in movable]
+    occupied = (
+        set(original_nos)
+        | await repo.list_plan_item_nos(db, candidate_nos)
+        | await repo.list_batch_nos(db, candidate_nos)
+    )
+    # 多轮补位：后续项按列表序（排程时间序）处理，目标被尚未让位的兄弟项占住时
+    # 先跳过，等该兄弟项在后续轮次让出后再补；只有真正被外部占用（其他计划单的
+    # 计划项/真实批次）的目标才会进 skipped。每轮至少推进一项，否则终止。
+    pending = list(movable)
+    while pending:
+        progressed = False
+        still_blocked: list[tuple[PlanItem, str]] = []
+        for sib, new_no in pending:
+            old_no = sib.batch_no
+            assert old_no is not None  # movable 构造时已过滤空批号
+            if new_no in occupied:
+                still_blocked.append((sib, new_no))
+                continue
+            sib.batch_no = new_no
+            sib.updated_by = user.id if user else None
+            occupied.discard(old_no)
+            occupied.add(new_no)
+            shifted.append({"item_id": str(sib.id), "batch_no": new_no})
+            progressed = True
+        if not progressed:
+            skipped.extend(
+                {"item_id": str(sib.id), "batch_no": sib.batch_no or ""}
+                for sib, _ in still_blocked
+            )
+            break
+        pending = still_blocked
+    await db.flush()
+    return {"shifted": shifted, "skipped": skipped}
 
 
 async def schedule_plan_item(

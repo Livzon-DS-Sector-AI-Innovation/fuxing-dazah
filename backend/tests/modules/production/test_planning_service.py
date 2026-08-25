@@ -96,6 +96,27 @@ async def _make_item(
     )
 
 
+async def _make_items(
+    db: AsyncSession, order: Any, ctx: dict[str, Any], batch_nos: list[str],
+    user: User | None = None,
+) -> list[Any]:
+    """连续添加批号依次为 ``batch_nos`` 的计划项（删除/补位类测试共用）。"""
+    items = []
+    for no in batch_nos:
+        items.append(await planning_service.create_plan_item(
+            db,
+            order.id,
+            PlanItemCreate(
+                product_id=ctx["product"].id,
+                product_name="中间体A",
+                route_id=ctx["route"].id,
+                batch_no=no,
+            ),
+            user=user,
+        ))
+    return items
+
+
 async def _schedule_item(
     db: AsyncSession, item: Any, user: User | None = None,
 ) -> None:
@@ -554,6 +575,110 @@ class TestPlanItem:
         item = await _make_item(db_session, order, published_route, test_user)
         await planning_service.delete_plan_item(db_session, item.id, test_user)
         assert await repo.get_plan_item(db_session, item.id) is None
+
+    async def test_delete_with_shift_backfills_following_batch_nos(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """删除并补位：后续计划项批号数字前移，删除项之前的批号不动。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["TS-1", "TS-2", "TS-3", "TS-4"], test_user,
+        )
+        result = await planning_service.delete_plan_item(
+            db_session, items[1].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["TS-1", "TS-2", "TS-3"]
+        assert result["shifted"] == [
+            {"item_id": str(items[2].id), "batch_no": "TS-2"},
+            {"item_id": str(items[3].id), "batch_no": "TS-3"},
+        ]
+        assert result["skipped"] == []
+
+    async def test_delete_with_shift_skips_occupied_target(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """补位目标批号被真实批次占用时跳过该项，删除仍生效。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["CF-1", "CF-2", "CF-3"], test_user,
+        )
+        db_session.add(
+            Batch(
+                batch_no="CF-2",
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+                status="pending",
+            )
+        )
+        await db_session.flush()
+        result = await planning_service.delete_plan_item(
+            db_session, items[1].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["CF-1", "CF-3"]
+        assert result["shifted"] == []
+        assert result["skipped"] == [{"item_id": str(items[2].id), "batch_no": "CF-3"}]
+
+    async def test_delete_with_shift_leaves_non_numeric_batch_nos(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """批号无数字段时补位不改变任何批号。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["NF-A", "NF-B", "NF-C"], test_user,
+        )
+        result = await planning_service.delete_plan_item(
+            db_session, items[0].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["NF-B", "NF-C"]
+        assert result["shifted"] == []
+        assert result["skipped"] == []
+
+    async def test_delete_with_shift_skips_batch_no_held_by_other_order(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """补位目标批号被其他计划单的计划项占用时跳过，不产生跨单重复批号。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["XO-1", "XO-3"], test_user,
+        )
+        other_order = await _make_order(db_session, published_route, test_user)
+        await _make_items(
+            db_session, other_order, published_route, ["XO-2"], test_user,
+        )
+        result = await planning_service.delete_plan_item(
+            db_session, items[0].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["XO-3"]
+        assert result["shifted"] == []
+        assert result["skipped"] == [{"item_id": str(items[1].id), "batch_no": "XO-3"}]
+
+    async def test_delete_with_shift_reorders_out_of_order_items(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """后续项批号顺序与列表顺序相反时，多轮补位仍全部前移（不误报占用）。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["TS-3", "TS-5", "TS-4"], test_user,
+        )
+        result = await planning_service.delete_plan_item(
+            db_session, items[0].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["TS-4", "TS-3"]
+        assert {r["item_id"]: r["batch_no"] for r in result["shifted"]} == {
+            str(items[1].id): "TS-4",
+            str(items[2].id): "TS-3",
+        }
+        assert result["skipped"] == []
 
 
 # ═══════════════════════════════════════════

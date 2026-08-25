@@ -1,11 +1,13 @@
 """批次数据查询。"""
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import Batch
+from app.modules.production.repository.trace import trace_links_multi
 
 __all__ = [
     "get_batch",
@@ -13,6 +15,8 @@ __all__ = [
     "get_batches_by_ids",
     "get_parent_links",
     "list_batches",
+    "list_batches_started_within",
+    "list_descendant_batch_ids",
     "count_unfinished_batches",
     "count_unfinished_batches_by_route",
 ]
@@ -114,3 +118,41 @@ async def count_unfinished_batches_by_route(db: AsyncSession, route_id: uuid.UUI
         )
     )
     return (await db.execute(stmt)).scalar_one()
+
+
+async def list_batches_started_within(
+    db: AsyncSession,
+    start_dt: datetime | None,
+    end_dt: datetime | None,
+    route_ids: set[uuid.UUID],
+) -> list[uuid.UUID]:
+    """返回首工序开始时间落在 ``[start_dt, end_dt)`` 内的批次 id（限定路线）。
+
+    日期范围按批次"开始"的语义取 ``first_started_at``；两个边界均可选，
+    ``end_dt`` 为排他上界（调用方换算成次日零点）。
+    """
+    if not route_ids:
+        return []
+    stmt = select(Batch.id).where(
+        Batch.route_id.in_(route_ids),
+        Batch.is_deleted == False,  # noqa: E712
+    )
+    if start_dt is not None:
+        stmt = stmt.where(Batch.first_started_at >= start_dt)
+    if end_dt is not None:
+        stmt = stmt.where(Batch.first_started_at < end_dt)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_descendant_batch_ids(
+    db: AsyncSession, root_ids: set[uuid.UUID],
+) -> set[uuid.UUID]:
+    """沿 ``batch_links`` 递归下溯，返回 ``root_ids`` 的全部后代批 id（不含自身）。
+
+    只收集批 id，批次对象与路线的过滤由调用方处理；复用谱系回溯的
+    递归 CTE（防环、深度上限 20），一次查询完成。
+    """
+    if not root_ids:
+        return set()
+    rows = await trace_links_multi(db, root_ids, "down")
+    return {r.child_batch_id for r in rows} - root_ids

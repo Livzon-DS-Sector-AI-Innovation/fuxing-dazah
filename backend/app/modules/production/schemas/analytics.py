@@ -39,6 +39,7 @@ class FieldTrendPoint(BaseModel):
 class StageSummaryColumn(BaseModel):
     """工段汇总平铺矩阵列定义（工序字段或计算字段）。"""
 
+    node_id: uuid.UUID  # 工序节点 id，前端按节点分组表头
     node_code: str
     node_name: str
     field_key: str

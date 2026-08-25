@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import APP_TZ
 from app.modules.production.models import NodeFieldValue, StageAssignment
 from app.modules.production.schemas import (
     ComputedFieldIn,
@@ -27,6 +28,7 @@ from app.platform.identity.models import User
 from tests.modules.production.conftest import rand_code
 from tests.modules.production.test_computed_service import (
     _add_execution,
+    _link,
     _make_batch,
     _make_route_ctx,
 )
@@ -129,7 +131,7 @@ class TestStageSummary:
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
         """两节点两批次完成 → rows 两条，columns 覆盖两节点全部字段（G1 列在前）。"""
-        ctx = await _make_route_ctx(db_session)
+        ctx = await _make_route_ctx(db_session, publish=True)
         b1 = await _make_batch(db_session, ctx)
         b2 = await _make_batch(db_session, ctx)
         for batch in (b1, b2):
@@ -158,7 +160,7 @@ class TestStageSummary:
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
         """stage_name=工段一 → 只含该工段节点列。"""
-        ctx = await _make_route_ctx(db_session)
+        ctx = await _make_route_ctx(db_session, publish=True)
         b1 = await _make_batch(db_session, ctx)
         await _add_execution(
             db_session, b1.id, ctx["node_g1"].id, field_values={"A1": 5},
@@ -186,6 +188,7 @@ class TestStageSummary:
         """计算字段 C1 出现在 columns（kind=computed）与 rows[].computed。"""
         ctx = await _make_route_ctx(
             db_session,
+            publish=True,
             computed_fields=[
                 ComputedFieldIn(
                     node_code="G1", field_key="C1", field_label="总投料",
@@ -214,6 +217,7 @@ class TestStageSummary:
         """回流：同批同节点两条 completed 执行 → 矩阵与计算字段均取 finished_at 最新值。"""
         ctx = await _make_route_ctx(
             db_session,
+            publish=True,
             computed_fields=[
                 ComputedFieldIn(
                     node_code="G1", field_key="C1", field_label="投料",
@@ -250,6 +254,7 @@ class TestStageSummary:
         """默认只返回用户负责工段的数据（含计算字段不泄漏）；view_all=true 返回全部。"""
         ctx = await _make_route_ctx(
             db_session,
+            publish=True,
             computed_fields=[
                 ComputedFieldIn(
                     node_code="G2", field_key="C2", field_label="合计",
@@ -330,6 +335,9 @@ class TestStageSummary:
             computed_fields=[],
         )
         await route_service.save_graph(db_session, route.id, graph, user=None)
+        # 汇总只覆盖非草稿路线，直接置 published（空边图走 publish 校验会失败）
+        route.status = "published"
+        await db_session.flush()
 
         resp = await client.get(
             "/api/v1/production/analytics/stage-summary",
@@ -339,3 +347,70 @@ class TestStageSummary:
         data = resp.json()["data"]
         assert [c["node_code"] for c in data["columns"]] == ["G2", "G1"]
         assert data["rows"] == []
+
+    async def test_stage_summary_excludes_draft_route(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """草稿路线不在汇总范围（无生产数据），即使 view_all=true 也返回空矩阵。"""
+        ctx = await _make_route_ctx(db_session)
+        b1 = await _make_batch(db_session, ctx)
+        await _add_execution(
+            db_session, b1.id, ctx["node_g1"].id, field_values={"A1": 5},
+        )
+        resp = await client.get(
+            "/api/v1/production/analytics/stage-summary",
+            params={"route_id": str(ctx["route"].id), "view_all": "true"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["columns"] == []
+        assert data["rows"] == []
+
+    async def test_stage_summary_date_range_includes_descendants(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """日期范围取"首工序开始时间"落在范围内的批次 + 其全部后序批次。
+
+        b1 在范围内；b2 是 b1 的后序（开始日期超出范围）；b3 超出范围且无谱系。
+        → 只返回 b1、b2，不含 b3。
+        """
+        ctx = await _make_route_ctx(db_session, publish=True)
+        b1 = await _make_batch(db_session, ctx)
+        b2 = await _make_batch(db_session, ctx)
+        b3 = await _make_batch(db_session, ctx)
+        b1.first_started_at = datetime(2026, 8, 1, 9, 0, tzinfo=APP_TZ)
+        b2.first_started_at = datetime(2026, 8, 10, 9, 0, tzinfo=APP_TZ)
+        b3.first_started_at = datetime(2026, 8, 20, 9, 0, tzinfo=APP_TZ)
+        await _link(db_session, b1.id, b2.id)
+        for batch in (b1, b2, b3):
+            await _add_execution(
+                db_session, batch.id, ctx["node_g1"].id, field_values={"A1": 5},
+            )
+        resp = await client.get(
+            "/api/v1/production/analytics/stage-summary",
+            params={
+                "route_id": str(ctx["route"].id),
+                "view_all": "true",
+                "start_date": "2026-08-01",
+                "end_date": "2026-08-05",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert {r["batch_no"] for r in data["rows"]} == {b1.batch_no, b2.batch_no}
+
+    async def test_stage_summary_rejects_inverted_date_range(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """start_date 晚于 end_date → 400，而不是静默返回空矩阵。"""
+        ctx = await _make_route_ctx(db_session, publish=True)
+        resp = await client.get(
+            "/api/v1/production/analytics/stage-summary",
+            params={
+                "route_id": str(ctx["route"].id),
+                "view_all": "true",
+                "start_date": "2026-08-20",
+                "end_date": "2026-08-01",
+            },
+        )
+        assert resp.status_code == 400, resp.text

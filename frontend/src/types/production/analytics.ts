@@ -30,6 +30,8 @@ export interface FieldTrendPoint {
 
 /** 工段汇总平铺矩阵列定义（工序字段或计算字段） */
 export interface StageSummaryColumn {
+  /** 工序节点 id，前端按节点分组表头 */
+  node_id: string
   node_code: string
   node_name: string
   field_key: string
