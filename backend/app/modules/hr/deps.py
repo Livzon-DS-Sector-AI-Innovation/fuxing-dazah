@@ -119,8 +119,8 @@ async def check_sensitive_permission(
     db: AsyncSession = Depends(get_db),
 ) -> bool:
     """检查当前用户是否有敏感信息查看权限"""
-    from app.platform.identity.deps import get_current_user
     from app.core.config import get_settings as _gs
+    from app.platform.identity.deps import get_current_user
     user = await get_current_user(request, db=db, settings=_gs())
     if user is None:
         return False
@@ -293,12 +293,29 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                               "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     (r"/trainers", {"GET": "hr:trainer:read", "POST": "hr:trainer:manage",
                     "PUT": "hr:trainer:manage", "DELETE": "hr:trainer:manage"}),
+    # 绩效考核
+    (r"/performance-categories", {"GET": "hr:performance:read",
+                                  "POST": "hr:performance:manage",
+                                  "PUT": "hr:performance:manage",
+                                  "DELETE": "hr:performance:manage"}),
+    (r"/performance-evaluations", {"GET": "hr:performance:read",
+                                   "POST": "hr:performance:manage",
+                                   "PUT": "hr:performance:manage",
+                                   "DELETE": "hr:performance:manage"}),
+    # 员工标签 / 员工自定义分类（写操作需档案管理权限）
+    (r"/employee-tags", {"GET": "hr:profile:read",
+                         "POST": "hr:profile:update",
+                         "DELETE": "hr:profile:update"}),
+    (r"/employee-classifications", {"GET": "hr:profile:read",
+                                    "POST": "hr:profile:update",
+                                    "DELETE": "hr:profile:update"}),
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # SOP培训文件登记表（查看/编辑对所有人开放）
     # SOP培训二级表（查看开放；编辑/转培训需培训管理权限；批量生成材料需培训文档权限）
     (r"/sop-training-entries/batch-transfer", {"POST": "hr:training:manage"}),
     (r"/sop-training-entries/batch-materials", {"POST": "hr:training:document"}),
+    (r"/sop-training-records/.*/materials", {"POST": "hr:training:document"}),
     (r"/sop-training-entries", {"PUT": "hr:training:manage", "POST": "hr:training:manage"}),
     (r"/dept-training-personnel", {"GET": "hr:training:read", "POST": "hr:training:manage",
                                     "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
@@ -332,6 +349,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     # 问答考核
     (r"/qa-assessments/.*/sync-ledger", "hr:training:manage"),
     (r"/qa-assessments/.*/export-", "hr:training:export"),
+    (r"/qa-assessments/.*/random-scores", "hr:training:manage"),
     (r"/qa-assessments/.*/scores", "hr:training:manage"),
     (r"/qa-assessments", {"GET": "hr:training:assessment",
                            "POST": "hr:training:manage",

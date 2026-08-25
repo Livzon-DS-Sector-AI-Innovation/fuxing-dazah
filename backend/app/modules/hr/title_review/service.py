@@ -17,6 +17,7 @@ from uuid import UUID
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.hr.models import Employee
@@ -257,11 +258,14 @@ def compute_comprehensive_grade(dimension_grades: list[str | None]) -> str | Non
 
 
 def decide_by_votes(agree: int, oppose: int, pass_ratio: float) -> bool:
-    """票数判定：同意÷(同意+不同意) ≥ pass_ratio（弃权不计分母；有同意且无反对即通过）。"""
+    """票数判定：同意÷(同意+不同意) ≥ pass_ratio（弃权不计分母；有同意且无反对即通过）。
+
+    带 1e-9 容差：pass_ratio 允许 0.6667 这类四舍五入值，恰好 2/3 时判定通过。
+    """
     voted = agree + oppose
     if voted == 0:
         return False
-    return agree / voted >= pass_ratio
+    return agree / voted >= pass_ratio - 1e-9
 
 
 async def _audit(
@@ -826,7 +830,16 @@ class TitleReviewService:
             approval_instance_code=parsed["approval_instance_code"],
             status=m.APPLICATION_SUBMITTED if employee else m.APPLICATION_INVALID,
         )
-        await self.application_repo.create(application)
+        try:
+            await self.application_repo.create(application)
+        except IntegrityError:
+            # WS 事件与 5 分钟对账并发时唯一约束竞态：对方已建，按已存在处理
+            await self.session.rollback()
+            existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
+            if not existing:
+                raise
+            logger.warning("申报并发创建冲突，按已存在处理: record_id=%s", record_id)
+            return existing
         # 活动已进入评审期 → 自动流转到投票并按部门分配评委
         if application.status == m.APPLICATION_SUBMITTED and activity.status == m.ACTIVITY_REVIEWING:
             application.status = m.APPLICATION_VOTING
@@ -859,8 +872,9 @@ class TitleReviewService:
         application.sequence = parsed["sequence"] or application.sequence
         application.apply_level = parsed["apply_level"] or application.apply_level
         application.current_level = parsed["current_level"] or application.current_level
-        application.is_exception = parsed["is_exception"]
-        application.exception_reason = parsed["exception_reason"]
+        if "是否破格申报" in fields:
+            application.is_exception = parsed["is_exception"]
+            application.exception_reason = parsed["exception_reason"]
         application.tenure_start = parsed["tenure_start"] or application.tenure_start
         application.tenure_end = parsed["tenure_end"] or application.tenure_end
         application.self_evaluations = parsed["self_evaluations"] or application.self_evaluations
@@ -873,6 +887,9 @@ class TitleReviewService:
             application.approval_instance_code = parsed["approval_instance_code"]
         employee = await self._match_employee(parsed["employee_no"], parsed["name"])
         application.employee_id = employee.id if employee else application.employee_id
+        if employee and not application.department:
+            # INVALID 期间部门为空，员工匹配成功后补上，否则自动分配匹配不到评审组
+            application.department = employee.actual_department or employee.department
         if application.status == m.APPLICATION_INVALID and employee:
             application.status = m.APPLICATION_SUBMITTED
             await self.application_repo.update(application)
@@ -1144,6 +1161,8 @@ class TitleReviewService:
             if judge_code:
                 from sqlalchemy import select as sa_select
 
+                # 评审人编号仅在单个申报内唯一（每个申报都有 P1），跨申报会出现重号：
+                # 命中多个时不做猜测，跳过本次同步（避免投错申报）
                 result = await self.session.execute(
                     sa_select(m.TitleReviewJudge).where(
                         m.TitleReviewJudge.activity_id == activity_id,
@@ -1151,7 +1170,15 @@ class TitleReviewService:
                         m.TitleReviewJudge.is_deleted == False,  # noqa: E712
                     )
                 )
-                judge = result.scalar_one_or_none()
+                matches = list(result.scalars().all())
+                if len(matches) == 1:
+                    judge = matches[0]
+                elif len(matches) > 1:
+                    logger.warning(
+                        "评审人编号 %s 在活动内命中 %d 个评委，无法唯一定位，跳过: record_id=%s",
+                        judge_code, len(matches), record_id,
+                    )
+                    return
         if not judge:
             logger.warning("无法匹配投票表行: record_id=%s", record_id)
             return

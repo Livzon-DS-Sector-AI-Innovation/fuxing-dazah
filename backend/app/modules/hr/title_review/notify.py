@@ -84,6 +84,13 @@ async def _send_card(open_id: str, card: dict[str, Any]) -> bool:
                 headers={"Authorization": f"Bearer {token}"},
             )
             resp.raise_for_status()
+            body = resp.json()
+            if body.get("code") != 0:
+                logger.warning(
+                    "飞书拒绝消息: open_id=%s code=%s msg=%s",
+                    open_id, body.get("code"), body.get("msg"),
+                )
+                return False
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("发送飞书消息异常: %s", exc)

@@ -21,6 +21,8 @@ async def run_reconcile_all() -> None:
                     logger.info("活动对账完成: activity=%s stats=%s", activity.id, stats)
             except Exception:
                 logger.exception("活动对账失败: activity_id=%s", activity.id)
+                # 回滚本活动产生的脏状态，避免后续活动触发 PendingRollbackError
+                await db.rollback()
         await db.commit()
 
 

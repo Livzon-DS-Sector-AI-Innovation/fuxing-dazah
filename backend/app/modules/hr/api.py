@@ -1,6 +1,6 @@
+import json
 from datetime import date
 from io import BytesIO
-import json
 from urllib.parse import quote
 from uuid import UUID
 
@@ -18,7 +18,12 @@ from app.core.exceptions import ForbiddenException
 from app.core.response import paginated_response, success_response
 from app.modules.hr.analysis_api import router as analysis_router
 from app.modules.hr.candidate_routes import router as candidate_router
-from app.modules.hr.deps import HrAccessContext, check_sensitive_permission, get_hr_scope, require_hr_basic
+from app.modules.hr.deps import (
+    HrAccessContext,
+    check_sensitive_permission,
+    get_hr_scope,
+    require_hr_basic,
+)
 from app.modules.hr.document_generator import generate_onboarding_training_record
 from app.modules.hr.evaluation_document_generator import generate_training_evaluation
 from app.modules.hr.interview_routes import router as interview_router
@@ -30,12 +35,14 @@ from app.modules.hr.onboarding_evaluation_document_generator import (
     generate_onboarding_evaluation,
 )
 from app.modules.hr.prejob_document_generator import generate_prejob_training_plan
+from app.modules.hr.repository import PerformanceEvaluationRepository
 from app.modules.hr.schemas import (
     AnnualTrainingPlanCreate,
     AnnualTrainingPlanItemBatchUpdate,
     AnnualTrainingPlanItemResponse,
     AnnualTrainingPlanResponse,
     AnnualTrainingPlanUpdate,
+    CategoryScoreBatchInput,
     DepartmentCreate,
     DepartmentResponse,
     DepartmentUpdate,
@@ -51,6 +58,11 @@ from app.modules.hr.schemas import (
     OffboardingRecordUpdate,
     OnboardingEvaluationInput,
     OnboardingRecordResponse,
+    PerformanceCategoryCreate,
+    PerformanceCategoryUpdate,
+    PerformanceEvaluationCreate,
+    PerformanceEvaluationUpdate,
+    PerformanceListParams,
     SopCatalogListResponse,
     SopCatalogResponse,
     TeamCreate,
@@ -64,25 +76,12 @@ from app.modules.hr.schemas import (
     TrainingLedgerPageResponse,
     TrainingLedgerResponse,
     TrainingLedgerUpdate,
-    PerformanceEvaluationCreate,
-    PerformanceEvaluationResponse,
-    PerformanceEvaluationUpdate,
-    PerformanceListParams,
-    PerformanceSelfSubmit,
-    CategoryScoreBatchInput,
-    CategoryScoreInput,
-    CategoryScoreResponse,
-    PerformanceCategoryCreate,
-    PerformanceCategoryResponse,
-    PerformanceCategoryUpdate,
-    PerformanceLeaderSubmit,
     TrainingNotificationInput,
     TrainingSignInSheetInput,
     TransferCreate,
     _mask_id_card,
     mask_sensitive_fields,
 )
-from app.modules.hr.repository import PerformanceEvaluationRepository
 from app.modules.hr.service import (
     AnnualTrainingPlanItemService,
     AnnualTrainingPlanService,
@@ -503,17 +502,20 @@ def _fmt_list(val) -> str:
 @router.get("/employees/export", summary="导出员工档案（Excel）")
 async def export_employees(
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """导出全部在职员工档案为 Excel 文件，列头与导入模板一致（身份证已脱敏）。"""
-    from app.modules.hr.models import Employee as EmpModel
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment
+    """导出员工档案为 Excel 文件（按数据范围限制），列头与导入模板一致（身份证已脱敏）。"""
     from io import BytesIO
-    from fastapi.responses import StreamingResponse
 
-    employees = (await session.execute(
-        select(EmpModel).where(EmpModel.is_deleted == False)  # noqa: E712
-    )).scalars().all()
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+
+    from app.modules.hr.models import Employee as EmpModel
+
+    stmt = select(EmpModel).where(EmpModel.is_deleted == False)  # noqa: E712
+    stmt = hr_scope.apply_list_scope(stmt, EmpModel)
+    employees = (await session.execute(stmt)).scalars().all()
 
     export_cols = _build_export_columns()
 
@@ -579,7 +581,19 @@ async def get_dashboard_stats(
     """返回仪表盘所有统计数据：KPI汇总、学历分布、部门人数、入职统计、离职统计。"""
     from calendar import month_abbr
 
+    from sqlalchemy import and_ as sa_and
+    from sqlalchemy import or_
+
     from app.modules.hr.models import Employee as EmpModel
+
+    def _scoped():
+        """数据范围过滤（未分类按实际部门归属），unrestricted 返回 []。"""
+        if hr_scope.is_unrestricted or not hr_scope.scoped_departments:
+            return []
+        return [or_(
+            EmpModel.department.in_(hr_scope.scoped_departments),
+            sa_and(EmpModel.department == "未分类", EmpModel.actual_department.in_(hr_scope.scoped_departments)),
+        )]
 
     current_year = date.today().year
     current_month = date.today().month
@@ -594,6 +608,7 @@ async def get_dashboard_stats(
     # ── KPI 汇总 ──
     total_employees = (await session.execute(
         select(func.count(EmpModel.id)).where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "在职",
         )
@@ -601,6 +616,7 @@ async def get_dashboard_stats(
 
     new_hires_this_month = (await session.execute(
         select(func.count(EmpModel.id)).where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.hire_date >= month_start,
             EmpModel.hire_date < month_end,
@@ -609,6 +625,7 @@ async def get_dashboard_stats(
 
     departures_this_month = (await session.execute(
         select(func.count(EmpModel.id)).where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "离职",
             EmpModel.departure_date >= month_start,
@@ -619,7 +636,7 @@ async def get_dashboard_stats(
     # ── 学历分布 ──
     edu_rows = (await session.execute(
         select(EmpModel.education, func.count(EmpModel.id))
-        .where(EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
         .group_by(EmpModel.education)
     )).all()
     education_distribution = [
@@ -630,7 +647,7 @@ async def get_dashboard_stats(
     # ── 部门人数分布 ──
     dept_rows = (await session.execute(
         select(EmpModel.department, func.count(EmpModel.id))
-        .where(EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+        .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
         .group_by(EmpModel.department)
         .order_by(func.count(EmpModel.id).desc())
     )).all()
@@ -648,6 +665,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.hire_date >= year_start,
             EmpModel.hire_date < next_year_start,
@@ -667,6 +685,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "离职",
             EmpModel.departure_date >= year_start,
@@ -686,6 +705,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "离职",
             EmpModel.departure_date >= year_start,
@@ -703,6 +723,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "离职",
             EmpModel.departure_date >= last_year_start,
@@ -3113,15 +3134,17 @@ async def random_qa_scores(
     excellent_line: int | None = Query(None, description="优秀线，缺省取场次配置"),
     pass_line: int | None = Query(None, description="合格线，缺省取场次配置"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按优秀/合格比例随机赋分。"""
     import random as _random
     asmt = (await session.execute(
-        text("SELECT id, full_score, excellent_line, pass_line, trainee_names, questions FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
+        text("SELECT id, full_score, excellent_line, pass_line, trainee_names, questions, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
     if not asmt:
         raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, asmt[6])
     full_score_val = asmt[1] or 100
     el = excellent_line if excellent_line is not None else (asmt[2] or 90)
     pl = pass_line if pass_line is not None else (asmt[3] or 80)
@@ -3135,7 +3158,7 @@ async def random_qa_scores(
     total = len(unique_names)
     if total == 0:
         raise HTTPException(400, "没有受训人员")
-    excellent_count = max(1, int(total * excellent_ratio))
+    excellent_count = int(total * excellent_ratio)
     indices = list(range(total))
     _random.shuffle(indices)
     excellent_set = set(indices[:excellent_count])
@@ -4249,7 +4272,11 @@ async def create_trainer(
     if not hr_scope.is_unrestricted:
         if not payload.department and len(hr_scope.scoped_departments) == 1:
             payload.department = next(iter(hr_scope.scoped_departments))
+        if not payload.department:
+            raise HTTPException(400, "部门不能为空（数据范围限制下无法自动归属）")
         hr_scope.ensure_dept_writable([payload.department])
+    elif not payload.department:
+        raise HTTPException(400, "部门不能为空")
     t = HrTrainer(**payload.model_dump())
     session.add(t)
     await session.flush()

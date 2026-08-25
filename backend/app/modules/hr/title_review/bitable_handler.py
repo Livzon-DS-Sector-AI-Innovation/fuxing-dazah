@@ -85,9 +85,16 @@ async def _find_activity(file_token: str) -> _ActivityRef | None:
                 ),
             )
         )
-        activity = result.scalar_one_or_none()
-        if not activity:
+        activities = list(result.scalars().all())
+        if not activities:
             return None
+        if len(activities) > 1:
+            logger.warning(
+                "同一 Base(%s) 绑定了 %d 个进行中的活动，无法唯一定位，跳过事件",
+                file_token, len(activities),
+            )
+            return None
+        activity = activities[0]
         return _ActivityRef(
             id=activity.id,
             apply_table_id=activity.apply_table_id,
