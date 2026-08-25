@@ -4,7 +4,7 @@
 
 import { getAuthHeaders } from '@/lib/auth'
 
-import type { StepRunData } from '@/types/toolbox'
+import type { StepRunData, ToolConfig } from '@/types/toolbox'
 
 export async function runToolStep(formData: FormData): Promise<StepRunData> {
   const base = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -26,4 +26,20 @@ export async function runToolStep(formData: FormData): Promise<StepRunData> {
     throw new Error(json?.message || `执行失败: ${res.status}`)
   }
   return json.data as StepRunData
+}
+
+/** 更新工具配置（整体覆盖后端 {tool_id}_config.json）。 */
+export async function updateToolConfig(toolId: string, config: ToolConfig): Promise<ToolConfig> {
+  const base = process.env.API_BASE_URL || 'http://localhost:8000'
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${base}/api/v1/toolbox/tools/${toolId}/config`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+  const json = await res.json().catch(() => null)
+  if (!res.ok || !json) {
+    throw new Error(json?.message || `保存失败: ${res.status}`)
+  }
+  return json.data as ToolConfig
 }

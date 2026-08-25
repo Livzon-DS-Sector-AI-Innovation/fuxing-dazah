@@ -30,6 +30,16 @@ class ToolStepOut(BaseModel):
     inputs: list[ToolInputOut]
 
 
+class ConfigFieldOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    label: str
+    type: str
+    section: str = ""
+    required: bool = False
+
+
 class ToolOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,6 +48,7 @@ class ToolOut(BaseModel):
     description: str
     image: str | None = None
     steps: list[ToolStepOut]
+    config_schema: list[ConfigFieldOut] = []
 
 
 class StepRunResponse(BaseModel):

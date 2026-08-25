@@ -27,6 +27,16 @@ export interface ToolInfo {
   description: string
   image?: string | null
   steps: ToolStepInfo[]
+  config_schema: ConfigFieldInfo[]
+}
+
+// 工具配置表单字段声明（与后端 registry.ConfigField 对齐），驱动配置页动态渲染
+export interface ConfigFieldInfo {
+  key: string // 点路径，如 feishu.app_id
+  label: string // 中文标签
+  type: 'text' | 'password' | 'number'
+  section: string // 分组标题，空则不分组的默认分组
+  required: boolean
 }
 
 export interface StepRunData {
@@ -40,4 +50,24 @@ export interface ExecutionInfo {
   tool_id: string
   outputs: Record<string, Record<string, unknown>>
   files: Record<string, { input_key: string; filename: string }>
+}
+
+// 工具配置（与后端 tools/{tool_id}_config.json 结构一致）
+export interface ToolConfig {
+  feishu: {
+    app_id: string
+    app_secret: string
+  }
+  bitable: {
+    app_token: string
+    shift_table_id: string
+    schedule_table_id: string
+    whitelist_table_id: string
+    attendance_result_table_id: string
+    duty_app_token: string
+    duty_table_id: string
+    actual_clock_table_id: string
+  }
+  offset_minutes: number
+  overtime_gap_minutes: number
 }

@@ -58,6 +58,11 @@ def _tool_to_out(t: Tool) -> dict[str, Any]:
     return d
 
 
+def _config_path(tool_id: str) -> Path:
+    """工具配置 JSON 文件路径：tools/{包名}/config.json，包名 = tool_id 下划线化。"""
+    return Path(__file__).parent / "tools" / tool_id.replace("-", "_") / "config.json"
+
+
 @router.get("/tools", summary="工具列表")
 async def list_tool_endpoints(
     user: User | None = Depends(get_current_user),
@@ -218,6 +223,49 @@ async def run_step(
     await sessions.save_execution(redis, exec_data)
     response = StepRunResponse(execution_id=execution_id, data=result, file_ids=file_ids)
     return success_response(data=response.model_dump(mode="json"))
+
+
+@router.get("/tools/{tool_id}/config", summary="工具配置")
+async def get_tool_config(
+    tool_id: str,
+    user: User | None = Depends(get_current_user),
+) -> JSONResponse:
+    """读取工具配置 JSON 内容（存在 {tool_id}_config.json 时）。"""
+    if user is None:
+        return error_response("未登录", status_code=401)
+    path = _config_path(tool_id)
+    if not path.exists():
+        return error_response("该工具没有配置", status_code=404)
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.exception("工具配置文件损坏 tool=%s", tool_id)
+        return error_response("工具配置文件损坏", status_code=500)
+    return success_response(data=config)
+
+
+@router.put("/tools/{tool_id}/config", summary="更新工具配置")
+async def put_tool_config(
+    tool_id: str,
+    request: Request,
+    user: User | None = Depends(get_current_user),
+) -> JSONResponse:
+    """整体覆盖工具配置 JSON 文件（校验为 JSON 对象后写回）。"""
+    if user is None:
+        return error_response("未登录", status_code=401)
+    path = _config_path(tool_id)
+    if not path.exists():
+        return error_response("该工具没有配置", status_code=404)
+    try:
+        config = json.loads(await request.body())
+    except json.JSONDecodeError:
+        return error_response("配置不是合法 JSON", status_code=400)
+    if not isinstance(config, dict):
+        return error_response("配置需为 JSON 对象", status_code=400)
+    await asyncio.to_thread(
+        path.write_text, json.dumps(config, ensure_ascii=False, indent=2) + "\n", "utf-8"
+    )
+    return success_response(data=config)
 
 
 @router.get("/executions/{execution_id}", summary="执行会话状态")

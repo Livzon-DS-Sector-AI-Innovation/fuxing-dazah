@@ -60,6 +60,38 @@ def test_get_step_missing_returns_none() -> None:
 
 
 def test_discover_tools_finds_real_tool() -> None:
-    # Task 5 才会添加真实工具，这里先断言 discover 不报错
     discover_tools()
-    assert isinstance(list_tools(), list)
+    ids = {t.id for t in list_tools()}
+    assert "attendance-check" in ids
+    t = get_tool("attendance-check")
+    assert t is not None
+    assert t.name == "打卡核对"
+    assert [s.id for s in t.steps] == ["check", "dedupe", "write"]
+
+
+def test_tool_config_schema_declared() -> None:
+    """工具以声明式 config_schema 描述配置表单：点路径 key + 中文标签 + 类型 + 分组。"""
+    discover_tools()
+    t = get_tool("attendance-check")
+    assert t is not None
+    schema = t.config_schema
+    assert [f.key for f in schema] == [
+        "feishu.app_id",
+        "feishu.app_secret",
+        "bitable.app_token",
+        "bitable.shift_table_id",
+        "bitable.schedule_table_id",
+        "bitable.whitelist_table_id",
+        "bitable.attendance_result_table_id",
+        "bitable.duty_app_token",
+        "bitable.duty_table_id",
+        "bitable.actual_clock_table_id",
+        "offset_minutes",
+        "overtime_gap_minutes",
+    ]
+    secret = schema[1]
+    assert secret.label == "飞书应用密钥"
+    assert secret.type == "password"
+    assert secret.section == "飞书应用"
+    assert schema[10].type == "number"
+    assert schema[10].section == "核对参数"
