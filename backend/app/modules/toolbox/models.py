@@ -8,8 +8,10 @@
 """
 
 import uuid
+from typing import Any
 
 from sqlalchemy import Boolean, Index, String, UniqueConstraint, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -48,4 +50,28 @@ class ToolGrant(BaseModel):
         default=False,
         server_default="false",
         comment="是否可修改该工具配置",
+    )
+
+
+class ToolConfig(BaseModel):
+    """工具配置：每工具一行，整体 JSON 存储（配置页整体读写）。"""
+
+    __tablename__ = "tool_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tool_id", "is_deleted", name="uq_toolbox_tool_configs_tool_id"
+        ),
+        {"schema": "toolbox"},
+    )
+
+    tool_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="工具 ID（如 attendance-check）",
+    )
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        comment="工具配置 JSON（整体读写）",
     )

@@ -46,6 +46,7 @@ export interface StepRunData {
   execution_id: string
   data: Record<string, unknown>
   file_ids: Record<string, string[]> // 恒为列表（单文件也是单元素列表）
+  warning?: string | null // 执行成功但记录落库失败时的提示；正常为 null
 }
 
 export interface ExecutionInfo {

@@ -302,12 +302,14 @@ export function ToolRunner({
   initialOutputs = {},
   initialFileIds = {},
   initialFileNames = {},
+  initialWarning = null,
 }: {
   tool: ToolInfo
   initialExecutionId?: string | null
   initialOutputs?: Record<string, Record<string, unknown>>
   initialFileIds?: Record<string, string[]>
   initialFileNames?: Record<string, string>
+  initialWarning?: string | null
 }) {
   const [stepIndex, setStepIndex] = useState(0)
   const [executionId, setExecutionId] = useState<string | null>(initialExecutionId ?? null)
@@ -330,6 +332,8 @@ export function ToolRunner({
   const [uploadedNames, setUploadedNames] = useState<Record<string, string>>(initialFileNames)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 非致命提示：恢复失败（initialWarning）与执行成功但记录落库失败（result.warning）
+  const [warning, setWarning] = useState<string | null>(initialWarning ?? null)
   const [form] = Form.useForm()
 
   const step = tool.steps[stepIndex]
@@ -382,12 +386,14 @@ export function ToolRunner({
     })
     form.resetFields()
     setError(null)
+    setWarning(null)
   }
 
   const onFinish = async (values: Record<string, unknown>) => {
     if (running) return
     setRunning(true)
     setError(null)
+    setWarning(null)
     try {
       const fd = new FormData()
       fd.set('tool_id', tool.id)
@@ -419,6 +425,7 @@ export function ToolRunner({
       fd.set('params', JSON.stringify(params))
       const result = await runToolStep(fd)
       setExecutionId(result.execution_id)
+      setWarning(result.warning ?? null)
       // 直接改写 URL 持久化 execution，不触发 Next.js 导航与服务端重渲染
       window.history.replaceState(null, '', `/toolbox/${tool.id}?execution=${result.execution_id}`)
       setStepResults((prev) => ({ ...prev, [step.id]: result }))
@@ -582,6 +589,7 @@ export function ToolRunner({
         </h2>
         <p className="mt-1 text-[13px] text-[var(--color-slate)]">{step.description}</p>
         {error && <Alert className="mt-4" type="error" title={error} showIcon />}
+        {warning && <Alert className="mt-4" type="warning" title={warning} showIcon />}
         <Form form={form} className="mt-4" layout="vertical" initialValues={initialValues} onFinish={onFinish}>
           {fileInputs.length > 0 && (
             <section>
@@ -650,6 +658,7 @@ export function ToolRunner({
                   setStepIndex((i) => i + 1)
                   form.resetFields()
                   setError(null)
+                  setWarning(null)
                 }}
               >
                 下一步

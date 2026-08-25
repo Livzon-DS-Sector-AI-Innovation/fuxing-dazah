@@ -1,4 +1,4 @@
-"""工具箱授权数据访问：tool_grants 表查询与替换。"""
+"""工具箱数据访问：tool_grants 表查询与替换、tool_configs 工具配置读写。"""
 
 import functools
 import uuid
@@ -6,10 +6,11 @@ from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.toolbox.models import ToolGrant
+from app.modules.toolbox.models import ToolConfig, ToolGrant
 from app.platform.identity.models import User
 
 
@@ -117,3 +118,31 @@ class ToolboxGrantRepository:
                 )
             )
         await db.flush()
+
+
+async def get_tool_config(
+    db: AsyncSession, tool_id: str
+) -> ToolConfig | None:
+    """读取工具配置行；未配置返回 None。"""
+    result = await db.execute(
+        select(ToolConfig).where(
+            ToolConfig.tool_id == tool_id,
+            ToolConfig.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_tool_config(
+    db: AsyncSession, tool_id: str, config: dict[str, Any]
+) -> None:
+    """写入工具配置（存在则更新，不存在则新增）。"""
+    stmt = pg_insert(ToolConfig).values(
+        tool_id=tool_id,
+        config=config,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_toolbox_tool_configs_tool_id",
+        set_={"config": config},
+    )
+    await db.execute(stmt)

@@ -46,7 +46,6 @@ from ._feishu import (
     create_feishu_client,
     fetch_actual_clock_records,
     fetch_duty_records,
-    load_attendance_config,
     load_check_context,
 )
 from ._files import (
@@ -275,7 +274,9 @@ def _save_result_json(execution_id: str, result: list[dict[str, Any]], filename:
     ],
 )
 async def attendance_check(step_id: str, params: dict[str, Any], context: StepContext) -> dict[str, Any]:
-    config = load_attendance_config()
+    if not context.config:
+        raise ToolError("工具尚未配置，请联系管理员在工具箱配置页填写打卡核对配置")
+    config = context.config
 
     if step_id == "check":
         mode = params.get("mode")

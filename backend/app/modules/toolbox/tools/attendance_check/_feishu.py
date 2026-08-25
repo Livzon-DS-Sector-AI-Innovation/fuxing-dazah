@@ -2,12 +2,10 @@
 
 迁移自 attendance-checking 项目 scripts/utils.py 的飞书数据获取段与
 scripts/remove_duty_missing_clock.py 的值班/实际打卡记录获取，
-获取与解析逻辑不可做任何变更。工具配置从 attendance_config.json 读取。
+获取与解析逻辑不可做任何变更。工具配置由 api 层从数据库加载后经 context.config 传入。
 """
 
-import json
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import lark_oapi as lark
@@ -24,16 +22,6 @@ from ._files import (
     load_leave_records,
     load_overtime_records,
 )
-
-CONFIG_PATH = Path(__file__).parent / "config.json"
-
-
-def load_attendance_config() -> dict[str, Any]:
-    """加载打卡核对工具配置（feishu 凭据、多维表 ID、核对参数）"""
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        config: dict[str, Any] = json.load(f)
-        return config
-
 
 # ── 飞书数据获取 ──────────────────────────────────────────────
 

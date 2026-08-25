@@ -59,6 +59,7 @@ class StepRunResponse(BaseModel):
     execution_id: str
     data: dict[str, Any]
     file_ids: dict[str, list[str]]
+    warning: str | None = None  # 执行成功但记录落库失败时的提示；正常为 None
 
 
 class ExecutionOut(BaseModel):

@@ -175,23 +175,11 @@ async def test_use_only_user_cannot_read_config(
     grants_client: GrantsClient,
     make_user: MakeUser,
     add_grant: AddGrant,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,
 ) -> None:
     """仅使用名单成员不能读写工具配置（403）。"""
     client, state = grants_client
     u1 = await make_user("u1")
     await add_grant(u1, "attendance-check", can_use=True, can_config=False)
-
-    # 配置路径重定向到临时目录，避免依赖真实配置文件
-    def _config_path(tool_id: str) -> Any:
-        return tmp_path / tool_id.replace("-", "_") / "config.json"
-
-    (tmp_path / "attendance_check").mkdir()
-    (tmp_path / "attendance_check" / "config.json").write_text(
-        json.dumps({"offset_minutes": 1}), encoding="utf-8"
-    )
-    monkeypatch.setattr(api, "_config_path", _config_path)
 
     state["user"] = SimpleNamespace(id=str(u1.id))
     resp = await client.get("/tools/attendance-check/config")
@@ -303,20 +291,14 @@ async def test_config_check_before_existence(
     grants_client: GrantsClient,
     make_user: MakeUser,
     add_grant: AddGrant,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Any,
 ) -> None:
-    """授权校验先于文件存在性：名单外用户探测无配置文件工具也得到 403 而非 404。"""
+    """授权校验先于配置存在性：名单外用户探测未配置工具也得到 403 而非 404。"""
     client, state = grants_client
     u1 = await make_user("u1")
     u2 = await make_user("u2")
     await add_grant(u1, "attendance-check", can_use=True, can_config=False)
 
-    def _config_path(tool_id: str) -> Any:
-        return tmp_path / tool_id.replace("-", "_") / "config.json"
-
-    monkeypatch.setattr(api, "_config_path", _config_path)
-    # 不创建 config.json：工具受限且配置文件不存在时，名单外用户仍应 403
+    # 不写入任何配置：工具受限且未配置时，名单外用户仍应 403
 
     state["user"] = SimpleNamespace(id=str(u2.id))
     resp = await client.get("/tools/attendance-check/config")

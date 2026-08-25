@@ -33,6 +33,7 @@ from app.modules.toolbox.registry import (
     get_tool,
     list_tools,
 )
+from app.modules.toolbox.repository import get_tool_config, upsert_tool_config
 from app.modules.toolbox.schemas import (
     ExecutionOut,
     StepRunResponse,
@@ -58,9 +59,17 @@ _cleanup_tasks: set[asyncio.Task[None]] = set()
 
 def _spawn_cleanup() -> None:
     """后台触发临时目录清理（节流在 storage 内部），不阻塞当前请求。"""
-    task = asyncio.create_task(storage.maybe_cleanup())
+    task = asyncio.create_task(_cleanup_safe())
     _cleanup_tasks.add(task)
     task.add_done_callback(_cleanup_tasks.discard)
+
+
+async def _cleanup_safe() -> None:
+    """清理失败只记日志：后台任务异常不进请求链路，静默吞掉后无迹可查。"""
+    try:
+        await storage.maybe_cleanup()
+    except Exception:
+        logger.exception("toolbox 临时目录后台清理失败")
 
 
 def _tool_to_out(t: Tool, can_use: bool = False, can_config: bool = False) -> dict[str, Any]:
@@ -70,11 +79,6 @@ def _tool_to_out(t: Tool, can_use: bool = False, can_config: bool = False) -> di
     d["can_use"] = can_use
     d["can_config"] = can_config
     return d
-
-
-def _config_path(tool_id: str) -> Path:
-    """工具配置 JSON 文件路径：tools/{包名}/config.json，包名 = tool_id 下划线化。"""
-    return Path(__file__).parent / "tools" / tool_id.replace("-", "_") / "config.json"
 
 
 @router.get("/tools", summary="工具列表")
@@ -224,6 +228,11 @@ async def run_step(
         await sessions.save_execution(redis, exec_data)
 
     # ── 执行 ──
+    # 工具声明 config_schema 时从数据库加载配置（每次步骤执行现读，无缓存）
+    tool_config: dict[str, Any] | None = None
+    if tool.config_schema:
+        config_row = await get_tool_config(db, tool_id)
+        tool_config = config_row.config if config_row else None
     # prev_outputs 传 JSON 深拷贝：工具可能把引用存进返回结果，若直接引用
     # exec_data["outputs"] 会在会话落库序列化时形成循环引用
     context = StepContext(
@@ -232,6 +241,7 @@ async def run_step(
         prev_outputs=json.loads(json.dumps(exec_data["outputs"])),
         file_paths=file_paths,
         output_dir=storage.exec_dir(execution_id),
+        config=tool_config,
     )
     try:
         result = await tool.func(step_id, params_dict, context)
@@ -244,39 +254,50 @@ async def run_step(
 
     sessions.add_files(exec_data, registered)
     sessions.add_step_output(exec_data, step_id, result)
-    # 合并保存：重新拉取最新 payload 再合并写入，避免并发步骤盲写互相覆盖
-    latest = await sessions.get_execution(redis, execution_id)
-    if latest is not None:
-        latest["files"].update(exec_data["files"])
-        latest["outputs"].update(exec_data["outputs"])
-        exec_data = latest
-    await sessions.save_execution(redis, exec_data)
-    response = StepRunResponse(execution_id=execution_id, data=result, file_ids=file_ids)
+    warning: str | None = None
+    try:
+        # 合并保存：重新拉取最新 payload 再合并写入，避免并发步骤盲写互相覆盖
+        latest = await sessions.get_execution(redis, execution_id)
+        if latest is not None:
+            latest["files"].update(exec_data["files"])
+            latest["outputs"].update(exec_data["outputs"])
+            exec_data = latest
+        await sessions.save_execution(redis, exec_data)
+    except Exception:
+        # 工具已执行成功，仅记录失败：不再抛 500 误导用户，降级为成功响应附带警告
+        logger.exception(
+            "toolbox 执行记录保存失败 tool=%s step=%s execution=%s", tool_id, step_id, execution_id
+        )
+        warning = "执行成功，但执行记录保存失败，刷新页面可能丢失本次结果"
+    response = StepRunResponse(
+        execution_id=execution_id, data=result, file_ids=file_ids, warning=warning
+    )
     return success_response(data=response.model_dump(mode="json"))
 
 
 @router.get("/tools/{tool_id}/config", summary="工具配置")
-async def get_tool_config(
+async def get_tool_config_endpoint(
     tool_id: str,
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """读取工具配置 JSON 内容（存在 {tool_id}_config.json 时）。仅配置人员/超管可读。"""
+    """读取工具配置 JSON 内容（存储于数据库）。仅配置人员/超管可读。"""
     if user is None:
         return error_response("未登录", status_code=401)
-    # 权限先于文件存在性：避免用 404/403 差异探测哪些工具有配置文件
+    # 权限先于配置存在性：避免用 404/403 差异探测哪些工具有配置
     _, can_config = await _grant_service.resolve_access(db, user, tool_id)
     if not can_config:
         return error_response("没有查看该工具配置的权限", status_code=403)
-    path = _config_path(tool_id)
-    if not path.exists():
+    discover_tools()
+    tool = get_tool(tool_id)
+    if tool is None:
+        return error_response(f"工具不存在: {tool_id}", status_code=404)
+    if not tool.config_schema:
         return error_response("该工具没有配置", status_code=404)
-    try:
-        config = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.exception("工具配置文件损坏 tool=%s", tool_id)
-        return error_response("工具配置文件损坏", status_code=500)
-    return success_response(data=config)
+    row = await get_tool_config(db, tool_id)
+    if row is None:
+        return error_response("该工具尚未配置", status_code=404)
+    return success_response(data=row.config)
 
 
 @router.put("/tools/{tool_id}/config", summary="更新工具配置")
@@ -286,14 +307,17 @@ async def put_tool_config(
     user: User | None = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """整体覆盖工具配置 JSON 文件（校验为 JSON 对象后写回）。仅配置人员/超管可改。"""
+    """整体覆盖工具配置（校验为 JSON 对象后写入数据库）。仅配置人员/超管可改。"""
     if user is None:
         return error_response("未登录", status_code=401)
     _, can_config = await _grant_service.resolve_access(db, user, tool_id)
     if not can_config:
         return error_response("没有修改该工具配置的权限", status_code=403)
-    path = _config_path(tool_id)
-    if not path.exists():
+    discover_tools()
+    tool = get_tool(tool_id)
+    if tool is None:
+        return error_response(f"工具不存在: {tool_id}", status_code=404)
+    if not tool.config_schema:
         return error_response("该工具没有配置", status_code=404)
     try:
         config = json.loads(await request.body())
@@ -301,9 +325,7 @@ async def put_tool_config(
         return error_response("配置不是合法 JSON", status_code=400)
     if not isinstance(config, dict):
         return error_response("配置需为 JSON 对象", status_code=400)
-    await asyncio.to_thread(
-        path.write_text, json.dumps(config, ensure_ascii=False, indent=2) + "\n", "utf-8"
-    )
+    await upsert_tool_config(db, tool_id, config)
     return success_response(data=config)
 
 

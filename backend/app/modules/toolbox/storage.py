@@ -7,11 +7,14 @@
 """
 
 import asyncio
+import logging
 import os
 import shutil
 import time
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 EXEC_DIR_ROOT = Path("uploads") / "toolbox"
 # 文件保留两倍会话 TTL，覆盖会话续期期间目录不被误删
@@ -71,7 +74,8 @@ def cleanup_stale(max_age_seconds: int = MAX_AGE_SECONDS) -> int:
             if now - d.stat().st_mtime > max_age_seconds:
                 shutil.rmtree(d)
                 removed += 1
-        except OSError:
+        except OSError as e:
+            logger.warning("toolbox 清理执行目录失败 path=%s err=%s", d, e)
             continue
     return removed
 

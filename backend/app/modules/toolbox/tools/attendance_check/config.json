@@ -1,9 +1,0 @@
-{
-    "feishu": {
-        "app_id": "",
-        "app_secret": ""
-    },
-    "bitable": {},
-    "offset_minutes": 180,
-    "overtime_gap_minutes": 60
-}

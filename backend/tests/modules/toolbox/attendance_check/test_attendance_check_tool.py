@@ -1,4 +1,4 @@
-"""打卡核对工具：日期推导、结果扁平化、多维表删除旧记录、配置加载测试。"""
+"""打卡核对工具：日期推导、结果扁平化、多维表删除旧记录测试。"""
 
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -9,7 +9,6 @@ from app.modules.toolbox.tools.attendance_check._bitable import (
     flatten_check_result,
 )
 from app.modules.toolbox.tools.attendance_check._core import months_in_range
-from app.modules.toolbox.tools.attendance_check._feishu import load_attendance_config
 
 CHINA_TZ = timezone(timedelta(hours=8))
 
@@ -137,23 +136,6 @@ def test_delete_all_records_paginates_and_batches() -> None:
     api = client.bitable.v1.app_table_record
     assert len(api.delete_calls) == 3
     assert [len(b) for b in api.delete_calls] == [500, 500, 10]
-
-
-def test_load_attendance_config_structure() -> None:
-    """配置文件必须包含工具运行所需全部键（文件缺失/键缺失时给出清晰报错）。"""
-    config = load_attendance_config()
-    assert config["feishu"]["app_id"]
-    assert config["feishu"]["app_secret"]
-    assert config["bitable"]["app_token"]
-    assert config["bitable"]["shift_table_id"]
-    assert config["bitable"]["schedule_table_id"]
-    assert config["bitable"]["whitelist_table_id"]
-    assert config["bitable"]["attendance_result_table_id"]
-    assert config["bitable"]["duty_app_token"]
-    assert config["bitable"]["duty_table_id"]
-    assert config["bitable"]["actual_clock_table_id"]
-    assert config["offset_minutes"] > 0
-    assert config["overtime_gap_minutes"] > 0
 
 
 def test_delete_all_records_empty_table() -> None:

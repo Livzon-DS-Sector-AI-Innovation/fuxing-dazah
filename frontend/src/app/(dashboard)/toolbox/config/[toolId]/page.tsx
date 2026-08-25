@@ -16,9 +16,22 @@ export default async function ToolConfigPage({
 }) {
   const { toolId } = await params
 
-  const tools: ToolInfo[] = await apiGet<ToolInfo[]>(`${API_BASE}/api/v1/toolbox/tools`, {
-    cache: 'no-store',
-  }).catch(() => [])
+  let tools: ToolInfo[] = []
+  let loadError: string | null = null
+  try {
+    tools = await apiGet<ToolInfo[]>(`${API_BASE}/api/v1/toolbox/tools`, {
+      cache: 'no-store',
+    })
+  } catch (e) {
+    loadError = e instanceof Error ? e.message : '页面数据加载失败'
+  }
+  if (loadError) {
+    return (
+      <p className="p-6 text-[15px] text-[var(--color-stone)]">
+        页面数据加载失败：{loadError}，请稍后重试或联系管理员
+      </p>
+    )
+  }
   const tool = tools.find((t) => t.id === toolId)
   if (!tool) {
     return <p className="p-6 text-[var(--color-stone)]">工具不存在</p>
@@ -30,10 +43,21 @@ export default async function ToolConfigPage({
     return <p className="p-6 text-[var(--color-stone)]">没有修改该工具配置的权限</p>
   }
 
-  const config: ToolConfig | null = await apiGet<ToolConfig>(
-    `${API_BASE}/api/v1/toolbox/tools/${toolId}/config`,
-    { cache: 'no-store' },
-  ).catch(() => null)
+  let config: ToolConfig | null = null
+  try {
+    config = await apiGet<ToolConfig>(`${API_BASE}/api/v1/toolbox/tools/${toolId}/config`, {
+      cache: 'no-store',
+    })
+  } catch (e) {
+    loadError = e instanceof Error ? e.message : '页面数据加载失败'
+  }
+  if (loadError) {
+    return (
+      <p className="p-6 text-[15px] text-[var(--color-stone)]">
+        页面数据加载失败：{loadError}，请稍后重试或联系管理员
+      </p>
+    )
+  }
   if (!config) {
     return <p className="p-6 text-[var(--color-stone)]">该工具配置不可用，请检查服务端配置</p>
   }

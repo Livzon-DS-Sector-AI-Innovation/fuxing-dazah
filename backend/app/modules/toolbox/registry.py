@@ -77,6 +77,7 @@ class StepContext:
     prev_outputs: dict[str, Any]
     file_paths: dict[str, list[str]]  # input_key -> 本地绝对路径列表（单文件也是单元素列表）
     output_dir: Path  # 工具产出文件目录（已创建）
+    config: dict[str, Any] | None = None  # 工具配置 JSON（声明 config_schema 时由 api 层从数据库加载）
 
 
 class ToolError(Exception):
@@ -108,7 +109,7 @@ def tool(
     async def run(step_id: str, params: dict, context: StepContext) -> dict
 
     config_schema 声明工具配置表单字段（点路径 + 中文标签 + 类型 + 分组），
-    前端配置页据此动态渲染；工具包内有 config.json 时启用配置读写。
+    前端配置页据此动态渲染；声明 config_schema 即启用配置读写（存储于数据库）。
     """
 
     def deco(func: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
