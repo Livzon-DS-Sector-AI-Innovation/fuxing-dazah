@@ -1,7 +1,7 @@
 'use client'
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Select, Modal, Descriptions, Empty, Spin, App } from 'antd'
+import { Button, Select, Segmented, Modal, Descriptions, Empty, Spin, App } from 'antd'
 import {
   ClockCircleOutlined, PlayCircleOutlined, CheckCircleOutlined,
   InboxOutlined, MergeCellsOutlined, SettingOutlined, ReloadOutlined,
@@ -11,12 +11,14 @@ import { fetchWorkbench, completeBatch, fetchBatchOutputs, fetchBatchConsumption
 import { fetchBatchDetailClient } from '@/lib/api/production-client'
 import { stageColor } from '@/components/production/shared/stageColor'
 import type { WorkbenchItem, Execution, StageNodeInfo, IntermediateOutput, IntermediateConsumption } from '@/types/production'
-import { usePermission } from '@/hooks/usePermission'
+
 import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
+import { StageSuffixConfig } from './StageSuffixConfig'
 import { PlannedSection } from './PlannedSection'
 import { StartExecutionModal } from '../batches/StartExecutionModal'
 import { CompleteExecutionModal } from '../batches/CompleteExecutionModal'
+import { BackfillFieldsModal, type BackfillExecution } from '../batches/BackfillFieldsModal'
 
 // ── 常量 ──
 
@@ -38,8 +40,21 @@ const ANIM_STYLES = `
   0%, 100% { box-shadow: 0 0 0 0 rgba(86, 69, 212, 0.45); }
   50% { box-shadow: 0 0 0 8px rgba(86, 69, 212, 0); }
 }
+@keyframes wb-card-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.92); }
+}
+@keyframes wb-batch-flow {
+  from { background-position: 0% 50%; }
+  to { background-position: -200% 50%; }
+}
 .wb-card { animation: wb-card-in 0.45s ease-out both; }
+.wb-card-out { animation: wb-card-out 0.3s ease-in forwards; pointer-events: none; }
 .wb-stage-dot { animation: wb-dot-pulse 2.2s ease-in-out infinite; }
+.wb-batch-gradient { animation: wb-batch-flow 3s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .wb-batch-gradient { animation: none; }
+}
 `
 
 // ── 可折叠区块 ──
@@ -83,8 +98,35 @@ function CollapsiblePanel({
 
 const MAX_BREADCRUMB_NODES = 6
 
-function StageBreadcrumb({ nodes, stageColor: sc }: { nodes: StageNodeInfo[]; stageColor: string }) {
+const PURPLE = '#7b3ff2'
+// 批次号渐变流动文字：按卡片状态色取渐变基色，亮色变体循环流动（动画见 ANIM_STYLES 的 wb-batch-flow）
+function batchNoGradientStyle(color: string): React.CSSProperties {
+  return {
+    backgroundImage: `linear-gradient(90deg, ${color}, color-mix(in srgb, ${color} 45%, #ffffff), ${color})`,
+    backgroundSize: '200% 100%',
+    WebkitBackgroundClip: 'text',
+    backgroundClip: 'text',
+    color: 'transparent',
+  }
+}
+// 工段内按位置分配的颜色（并行卡片区分用）
+const NODE_COLORS = ['#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899']
+
+function nodePosColor(nodes: StageNodeInfo[], nodeId: string): string {
+  const idx = nodes.findIndex(n => n.node_id === nodeId)
+  return NODE_COLORS[idx >= 0 ? idx % NODE_COLORS.length : 0]
+}
+
+function StageBreadcrumb({
+  nodes, currentNodeId, cardType,
+}: {
+  nodes: StageNodeInfo[]
+  currentNodeId?: string
+  cardType?: string
+}) {
   if (!nodes || nodes.length === 0) return null
+
+  const isReadyToComplete = cardType === 'ready_to_complete'
 
   const needsFold = nodes.length > MAX_BREADCRUMB_NODES
   const displayNodes: (StageNodeInfo | null)[] = needsFold
@@ -93,8 +135,10 @@ function StageBreadcrumb({ nodes, stageColor: sc }: { nodes: StageNodeInfo[]; st
 
   // 两节点间连线颜色
   const lineBetween = (a: StageNodeInfo, b: StageNodeInfo) => {
-    if (a.status === 'completed' && b.status === 'completed') return '#1aae39'
-    if (a.status === 'in_progress' || b.status === 'in_progress') return sc
+    if (isReadyToComplete) return PURPLE
+    if (a.status === 'completed' && b.status === 'completed') return '#c8c4be'
+    if (a.status === 'in_progress' || b.status === 'in_progress')
+      return nodePosColor(nodes, b.status === 'in_progress' ? b.node_id : a.node_id)
     return '#e0dcd6'
   }
 
@@ -107,21 +151,38 @@ function StageBreadcrumb({ nodes, stageColor: sc }: { nodes: StageNodeInfo[]; st
     const isCompleted = node.status === 'completed'
     const isInProgress = node.status === 'in_progress'
     const isPending = node.status === 'pending'
+    const isCurrent = node.node_id === currentNodeId
+
+    // 每个节点有固定身份色（按工段内位置），跨卡片一致
+    const fill = isReadyToComplete ? PURPLE : nodePosColor(nodes, node.node_id)
+    const dotSize = isCurrent && !isReadyToComplete ? 12 : 9
+    const isActive = isCurrent || isInProgress
+
+    // 空心=pending，实心=其他状态
+    const dotBg = isPending ? 'transparent' : fill
+    const dotBorder = isPending ? `2px solid ${fill}66`
+      : isCurrent && !isReadyToComplete ? `2px solid ${fill}`
+      : 'none'
+    const dotShadow = isCurrent && !isReadyToComplete
+      ? `0 0 0 4px ${fill}33` : 'none'
+    const dotPulse = isActive && !isReadyToComplete
+      ? { animation: 'wb-dot-pulse 2.2s ease-in-out infinite' } : {}
 
     const el = (
       <div key={node.node_id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
         <div style={{
-          width: 9, height: 9, borderRadius: '50%',
-          background: isPending ? 'transparent' : (isCompleted ? '#1aae39' : sc),
-          border: isPending ? '2px solid #c8c4be' : 'none',
-          ...(isInProgress ? { animation: 'wb-dot-pulse 2.2s ease-in-out infinite' } : {}),
+          width: dotSize, height: dotSize, borderRadius: '50%',
+          background: dotBg,
+          border: dotBorder,
+          boxShadow: dotShadow,
+          ...dotPulse,
         }} />
         <span style={{
-          fontSize: 10, lineHeight: '14px', maxWidth: 48, textAlign: 'center',
-          color: isInProgress ? '#37352f' : isCompleted ? '#787671' : '#b5b1a8',
-          fontWeight: isInProgress ? 600 : 400,
+          fontSize: isCurrent ? 11 : 10, lineHeight: '14px', maxWidth: 52, textAlign: 'center',
+          color: isCurrent ? '#1a1a1a' : isInProgress ? '#37352f' : isCompleted ? '#787671' : '#b5b1a8',
+          fontWeight: isCurrent ? 700 : isInProgress ? 600 : 400,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          marginTop: 2,
+          marginTop: 3,
         }}>
           {node.node_name}
         </span>
@@ -154,41 +215,69 @@ function StageBreadcrumb({ nodes, stageColor: sc }: { nodes: StageNodeInfo[]; st
 
 // ── 批次卡片 ──
 
+const START_TYPE_LABELS: Record<string, { label: string; color: string; bg: string }> = {
+  parallel: { label: '可并行', color: '#0075de', bg: '#e8f4fd' },
+  rework: { label: '返工', color: '#dd5b00', bg: '#fff7e6' },
+}
+
 function BatchCard({
-  item, canSubmit, index, role, onReceive, onStart, onComplete, onCompleteBatch,
+  item, index, role, onReceive, onStart, onComplete, onCompleteBatch, isCompleting, stacked,
 }: {
   item: WorkbenchItem
-  canSubmit: boolean
   index: number
   role: 'stage_owner' | 'node_owner'
   onReceive: () => void
   onStart: () => void
   onComplete: () => void
   onCompleteBatch: () => void
+  isCompleting?: boolean
+  stacked?: boolean
 }) {
   const cfg = STATUS_CFG[item.type] ?? STATUS_CFG.pending_start
   const assignee = item.node_assignees?.[0]
+  // 他人批次仅读（查看全部模式）：执行状态完整可见，操作按钮禁用
+  const readOnly = !item.can_operate
+  const startLabel = item.start_type ? START_TYPE_LABELS[item.start_type] : null
+  const startBadge = startLabel ? (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center',
+      padding: '3px 8px', borderRadius: 6,
+      fontSize: 11, fontWeight: 600, lineHeight: '18px',
+      background: startLabel.bg, color: startLabel.color,
+      whiteSpace: 'nowrap', flexShrink: 0,
+    }}>
+      {startLabel.label}
+    </span>
+  ) : null
 
   return (
     <div
-      className="wb-card"
+      className={`wb-card${isCompleting ? ' wb-card-out' : ''}`}
       style={{
-        position: 'relative', overflow: 'hidden',
+        position: stacked ? 'absolute' : 'relative',
+        overflow: 'hidden',
         padding: '18px 18px 18px 16px',
         borderRadius: 12,
         background: '#ffffff',
-        border: '1px solid #ede9e4',
-        borderLeft: `3px solid ${cfg.borderColor}`,
+        border: readOnly ? '1px solid #d9d5cf' : '1px solid #ede9e4',
+        borderLeft: `3px solid ${readOnly ? '#c8c4be' : cfg.borderColor}`,
         display: 'flex', flexDirection: 'column', gap: 10,
         cursor: 'default',
-        transition: 'transform 0.2s ease, box-shadow 0.2s ease',
-        animationDelay: `${index * 60}ms`,
+        transition: stacked
+          ? 'transform 0.25s ease, opacity 0.3s ease, box-shadow 0.2s ease'
+          : 'transform 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease',
+        animationDelay: stacked ? '0ms' : `${index * 60}ms`,
+        width: stacked ? '100%' : undefined,
+        opacity: isCompleting ? 0 : 1,
+        transform: isCompleting ? 'scale(0.95)' : undefined,
       }}
       onMouseEnter={e => {
+        if (stacked) return
         e.currentTarget.style.transform = 'translateY(-2px)'
         e.currentTarget.style.boxShadow = '0 6px 20px rgba(0,0,0,0.07)'
       }}
       onMouseLeave={e => {
+        if (stacked) return
         e.currentTarget.style.transform = 'translateY(0)'
         e.currentTarget.style.boxShadow = 'none'
       }}
@@ -199,7 +288,7 @@ function BatchCard({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 16, fontWeight: 600, color: '#1a1a1a', lineHeight: 1.3 }}>
-                <span>{item.batch_no ?? '待创建批次'}</span>
+                <span className="wb-batch-gradient" style={batchNoGradientStyle(cfg.color)}>{item.batch_no ?? '待创建批次'}</span>
                 {(item.product_name || item.route_name) && (
                   <span style={{ color: '#37352f' }}>
                     {' '}·{' '}
@@ -207,10 +296,9 @@ function BatchCard({
                   </span>
                 )}
               </div>
-              {(item.product_name || item.route_version) && (
+              {item.product_name && item.route_name && (
                 <div style={{ fontSize: 13, color: '#787671', marginTop: 1 }}>
-                  {item.product_name ? item.route_name : ''}
-                  {item.route_version ? <span style={{ color: '#a4a097' }}> v{item.route_version}</span> : null}
+                  {item.route_name}
                 </div>
               )}
             </div>
@@ -224,18 +312,34 @@ function BatchCard({
               {cfg.icon}
               {cfg.label}
             </span>
+            {startBadge}
+            {readOnly && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '3px 10px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, lineHeight: '18px',
+                background: '#f0eeec', color: '#8a857c',
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+                他人批次
+              </span>
+            )}
           </div>
 
           {/* 工序面包屑 */}
-          <StageBreadcrumb nodes={item.stage_nodes} stageColor={stageColor(item.stage_name ?? '')} />
+          <StageBreadcrumb nodes={item.stage_nodes} currentNodeId={item.node_id} cardType={item.type} />
         </>
       ) : (
         <>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-            <span style={{
-              fontSize: 17, fontWeight: 600, color: '#1a1a1a',
-              lineHeight: 1.3, wordBreak: 'break-all',
-            }}>
+            <span
+              className="wb-batch-gradient"
+              style={{
+                fontSize: 17, fontWeight: 600,
+                lineHeight: 1.3, wordBreak: 'break-all',
+                ...batchNoGradientStyle(cfg.color),
+              }}
+            >
               {item.batch_no ?? '待创建批次'}
             </span>
             <span style={{
@@ -248,6 +352,18 @@ function BatchCard({
               {cfg.icon}
               {cfg.label}
             </span>
+            {startBadge}
+            {readOnly && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '3px 10px', borderRadius: 6,
+                fontSize: 12, fontWeight: 600, lineHeight: '18px',
+                background: '#f0eeec', color: '#8a857c',
+                whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+                他人批次
+              </span>
+            )}
           </div>
 
           {/* 产品 + 路线 */}
@@ -256,12 +372,11 @@ function BatchCard({
               {item.product_name && <span>{item.product_name}</span>}
               {item.product_name && item.route_name && <span style={{ color: '#c8c4be' }}> · </span>}
               {item.route_name && <span>{item.route_name}</span>}
-              {item.route_version ? <span style={{ color: '#a4a097' }}> v{item.route_version}</span> : null}
             </div>
           )}
 
           {/* 工序面包屑 */}
-          <StageBreadcrumb nodes={item.stage_nodes} stageColor={stageColor(item.stage_name ?? '')} />
+          <StageBreadcrumb nodes={item.stage_nodes} currentNodeId={item.node_id} cardType={item.type} />
         </>
       )}
 
@@ -284,9 +399,30 @@ function BatchCard({
         </div>
       )}
 
+      {/* 批次归属人（查看全部模式下他人批次展示） */}
+      {readOnly && item.batch_owner_name && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 11, color: '#5645d4',
+            background: '#f4f0ff', padding: '2px 8px', borderRadius: 4,
+          }}>
+            归属：{item.batch_owner_name}
+          </span>
+        </div>
+      )}
+
       {/* 操作按钮 */}
       <div style={{ marginTop: 2 }}>
-        {item.type === 'pending_receive' && canSubmit && item.parent_batch_ids.length > 0 && (
+        {readOnly && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '7px 18px', fontSize: 13, fontWeight: 500,
+            borderRadius: 8, background: '#f6f5f4', color: '#a4a097',
+          }}>
+            他人批次 · 仅读
+          </span>
+        )}
+        {!readOnly && item.type === 'pending_receive' && item.parent_batch_ids.length > 0 && (
           <button
             onClick={onReceive}
             style={{
@@ -303,7 +439,7 @@ function BatchCard({
             接收
           </button>
         )}
-        {item.type === 'pending_start' && item.batch_id && (
+        {!readOnly && item.type === 'pending_start' && item.batch_id && (
           <button
             onClick={onStart}
             style={{
@@ -322,7 +458,7 @@ function BatchCard({
             开始 {item.node_name}
           </button>
         )}
-        {item.type === 'pending_complete' && (
+        {!readOnly && item.type === 'pending_complete' && (
           <button
             onClick={onComplete}
             style={{
@@ -341,7 +477,7 @@ function BatchCard({
             结束 {item.node_name}
           </button>
         )}
-        {item.type === 'ready_to_complete' && canSubmit && (
+        {!readOnly && item.type === 'ready_to_complete' && (
           <button
             onClick={onCompleteBatch}
             style={{
@@ -356,6 +492,7 @@ function BatchCard({
             onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)' }}
           >
             完成批次
+            {(item.missing_executions?.length ?? 0) > 0 && '（需补录）'}
           </button>
         )}
       </div>
@@ -367,8 +504,6 @@ function BatchCard({
 
 export function WorkbenchInner() {
   const { message } = App.useApp()
-  const { hasPermission } = usePermission()
-  const canSubmit = hasPermission('production:batch:submit')
   const queryClient = useQueryClient()
 
   const [receiveItem, setReceiveItem] = useState<WorkbenchItem | null>(null)
@@ -381,8 +516,13 @@ export function WorkbenchInner() {
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [startNodeId, setStartNodeId] = useState<string | undefined>(undefined)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string; onSuccess?: () => void } | null>(null)
+  const [backfillExec, setBackfillExec] = useState<{ executions: BackfillExecution[]; routeId: string } | null>(null)
+
+  // 完成动画状态
+  const [completingIds, setCompletingIds] = useState<Set<string>>(new Set())
 
   const [showConfig, setShowConfig] = useState(false)
+  const [showSuffix, setShowSuffix] = useState(false)
   const [showRecent, setShowRecent] = useState(false)
 
   // 筛选状态
@@ -390,10 +530,13 @@ export function WorkbenchInner() {
   const [filterRoute, setFilterRoute] = useState<string | undefined>(undefined)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
 
+  // 视图模式：mine=只看自己的批次；all=查看全部（他人批次仅读）
+  const [viewMode, setViewMode] = useState<'mine' | 'all'>('mine')
+
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['production-workbench'],
+    queryKey: ['production-workbench', viewMode],
     queryFn: async () => {
-      const r = await fetchWorkbench()
+      const r = await fetchWorkbench(viewMode)
       if (!r.success) throw new Error(r.error ?? '获取失败')
       return r.data!
     },
@@ -412,7 +555,7 @@ export function WorkbenchInner() {
       setRecentDetailData(exec)
       setRecentOutputs(outputsR.success ? (outputsR.data ?? []) : [])
       setRecentConsumptions(consumptionsR.success ? (consumptionsR.data ?? []) : [])
-    } catch { setRecentDetailData(null) }
+    } catch (err) { console.error('获取最近执行明细失败', err); setRecentDetailData(null) }
   }
 
   // 筛选选项（从全量数据提取，不受筛选影响）
@@ -446,30 +589,66 @@ export function WorkbenchInner() {
 
   const stageGroups = useMemo(() => {
     if (!filteredItems.length) return []
-    const priority: Record<string, number> = { ready_to_complete: 4, pending_complete: 3, pending_start: 2, pending_receive: 1 }
-    const byStage: Record<string, Record<string, Record<string, WorkbenchItem>>> = {}
+
+    // 按状态类型分组的顺序和标签
+    const typeOrder: Record<string, { label: string; order: number }> = {
+      pending_complete: { label: '进行中', order: 1 },
+      pending_receive: { label: '待接收', order: 2 },
+      ready_to_complete: { label: '待完成批次', order: 3 },
+    }
+    // pending_start 按 start_type 细分
+    const startTypeOrder: Record<string, { label: string; order: number }> = {
+      normal: { label: '待开始', order: 4 },
+      parallel: { label: '可并行开始', order: 5 },
+      rework: { label: '可返工', order: 6 },
+    }
+
+    function getGroupKey(item: WorkbenchItem): string {
+      if (item.type === 'pending_start') {
+        const st = item.start_type || 'normal'
+        return `start_${st}`
+      }
+      return item.type
+    }
+
+    function getGroupLabel(item: WorkbenchItem): string {
+      if (item.type === 'pending_start') {
+        const st = item.start_type || 'normal'
+        return startTypeOrder[st]?.label ?? '待开始'
+      }
+      return typeOrder[item.type]?.label ?? item.type
+    }
+
+    function getGroupOrder(_key: string, item: WorkbenchItem): number {
+      if (item.type === 'pending_start') {
+        const st = item.start_type || 'normal'
+        return startTypeOrder[st]?.order ?? 50
+      }
+      return typeOrder[item.type]?.order ?? 50
+    }
+
+    // 按 stage → groupKey 分组
+    const byStage: Record<string, Record<string, WorkbenchItem[]>> = {}
     for (const item of filteredItems) {
       const stage = item.stage_name ?? '未分组'
-      const batchKey = item.batch_id ?? item.parent_batch_ids.join('_')
-      const routeKey = item.route_id
+      const gk = getGroupKey(item)
       byStage[stage] ??= {}
-      byStage[stage][routeKey] ??= {}
-      const existing = byStage[stage][routeKey][batchKey]
-      if (!existing || priority[item.type] > priority[existing.type]) {
-        byStage[stage][routeKey][batchKey] = item
-      }
+      byStage[stage][gk] ??= []
+      byStage[stage][gk]!.push(item)
     }
+
     return Object.entries(byStage)
-      .map(([stage, routes]) => ({
+      .map(([stage, groups]) => ({
         stage,
         color: stageColor(stage),
-        routes: Object.entries(routes).map(([routeId, batches]) => ({
-          routeId,
-          routeName: Object.values(batches)[0].route_name,
-          routeVersion: Object.values(batches)[0].route_version,
-          productName: Object.values(batches)[0].product_name,
-          items: Object.values(batches),
-        })),
+        typeGroups: Object.entries(groups)
+          .map(([gk, items]) => ({
+            key: gk,
+            label: getGroupLabel(items[0]),
+            order: getGroupOrder(gk, items[0]),
+            items,
+          }))
+          .sort((a, b) => a.order - b.order),
       }))
       .sort((a, b) => a.stage.localeCompare(b.stage))
   }, [filteredItems])
@@ -481,8 +660,13 @@ export function WorkbenchInner() {
       const exec = detail.executions.find(e => e.id === item.execution_id)
       if (exec) {
         setCompleteExec({ execution: exec, routeId: item.route_id, onSuccess })
-      } else message.error('未找到执行记录')
-    } catch { message.error('获取执行详情失败') }
+      } else {
+        message.error('未找到执行记录')
+      }
+    } catch (err) {
+      console.error('获取执行详情失败', err)
+      message.error('获取执行详情失败')
+    }
   }
 
   if (error) return (
@@ -493,41 +677,70 @@ export function WorkbenchInner() {
 
   const stageOwner = data?.role === 'stage_owner'
   const hasAssignedRoutes = (data?.assigned_routes?.length ?? 0) > 0
-  const totalCount = stageGroups.reduce((s, g) => s + g.routes.reduce((s2, r) => s2 + r.items.length, 0), 0)
+  const totalCount = stageGroups.reduce((s, g) => s + g.typeGroups.reduce((s2, tg) => s2 + tg.items.length, 0), 0)
 
   return (
     <>
       <style>{ANIM_STYLES}</style>
 
-      {/* ── 页面头部 ── */}
+      {/* ── 页面头部：标题 + 角色工牌 + 视图切换 ── */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24,
+        display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+        paddingBottom: 18, marginBottom: 24,
+        borderBottom: '1px solid #ede9e4',
       }}>
         <h2 style={{
           margin: 0, fontSize: 22, fontWeight: 600, color: '#1a1a1a',
-          lineHeight: 1.3,
+          lineHeight: 1.3, letterSpacing: '0.01em',
         }}>
           工作台
         </h2>
-        <span style={{
-          display: 'inline-block', padding: '3px 10px', borderRadius: 20,
-          fontSize: 11, fontWeight: 600, color: '#5645d4',
-          background: '#f4f0ff',
+
+        {/* 角色工牌：页面唯一的深色块，身份焦点 */}
+        <div style={{
+          display: 'inline-flex', alignItems: 'stretch',
+          borderRadius: 8, overflow: 'hidden',
+          background: '#0a1530', flexShrink: 0,
         }}>
-          {stageOwner ? '工段负责人' : '工序负责人'}
-        </span>
-        <span style={{ fontSize: 14, color: '#787671' }}>
-          {stageOwner ? '管理工段任务与工序负责人分配' : '我的工序待办'}
-        </span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', padding: '0 12px',
+          }}>
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%',
+              background: stageOwner ? '#7b3ff2' : '#0075de',
+              boxShadow: `0 0 0 3px ${stageOwner ? '#7b3ff2' : '#0075de'}26`,
+            }} />
+          </span>
+          <span style={{
+            display: 'flex', flexDirection: 'column', justifyContent: 'center',
+            padding: '5px 12px 5px 10px',
+            borderLeft: '1px solid rgba(255,255,255,0.14)',
+          }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#ffffff', lineHeight: 1.3 }}>
+              {stageOwner ? '工段负责人' : '工序负责人'}
+            </span>
+            <span style={{ fontSize: 10, color: '#a4a097', lineHeight: 1.5 }}>
+              {stageOwner ? '管理工段任务与负责人分配' : '我的工序待办'}
+            </span>
+          </span>
+        </div>
+
         <div style={{ flex: 1, minWidth: 0 }} />
+        <Segmented
+          value={viewMode}
+          onChange={v => setViewMode(v as 'mine' | 'all')}
+          options={[
+            { label: '我的批次', value: 'mine' },
+            { label: '查看全部', value: 'all' },
+          ]}
+        />
         <Button
+          type="text"
           icon={<ReloadOutlined spin={isFetching} />}
-          size="small"
           onClick={() => refetch()}
-          style={{ borderRadius: 6 }}
-        >
-          刷新
-        </Button>
+          aria-label="刷新"
+          style={{ color: '#787671' }}
+        />
       </div>
 
       {isLoading ? (
@@ -543,6 +756,21 @@ export function WorkbenchInner() {
               icon={<SettingOutlined style={{ fontSize: 14 }} />}
             >
               <AssigneeConfig
+                routes={data!.assigned_routes}
+                onChanged={() => queryClient.invalidateQueries({ queryKey: ['production-workbench'] })}
+              />
+            </CollapsiblePanel>
+          )}
+
+          {/* ── 工段尾缀设置 ── */}
+          {stageOwner && hasAssignedRoutes && (
+            <CollapsiblePanel
+              open={showSuffix}
+              onToggle={() => setShowSuffix(v => !v)}
+              label="工段尾缀设置"
+              icon={<SettingOutlined style={{ fontSize: 14 }} />}
+            >
+              <StageSuffixConfig
                 routes={data!.assigned_routes}
                 onChanged={() => queryClient.invalidateQueries({ queryKey: ['production-workbench'] })}
               />
@@ -611,10 +839,10 @@ export function WorkbenchInner() {
               ) : (
                 <>
                   {/* ── 卡片区域 ── */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 36 }}>
-                {stageGroups.map(group => {
-                  const receiveItems = group.routes.flatMap(r => r.items)
-                    .filter(it => it.type === 'pending_receive' && it.batch_id)
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                {stageGroups.map((group, idx) => {
+                  const allItems = group.typeGroups.flatMap(tg => tg.items)
+                  const receiveItems = allItems.filter(it => it.type === 'pending_receive' && it.batch_id)
                   const byNode: Record<string, WorkbenchItem[]> = {}
                   for (const it of receiveItems) {
                     byNode[it.node_id] ??= []
@@ -646,7 +874,7 @@ export function WorkbenchInner() {
                           fontSize: 12, color: '#a4a097',
                           background: '#f6f5f4', padding: '2px 10px', borderRadius: 10,
                         }}>
-                          {group.routes.reduce((s, r) => s + r.items.length, 0)} 项
+                          {allItems.length} 项
                         </span>
 
                         {mergeGroups.map(([nodeId, items]) => (
@@ -665,40 +893,73 @@ export function WorkbenchInner() {
                         ))}
                       </div>
 
-                      {/* 卡片网格 */}
-                      <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-                        gap: 14,
-                      }}>
-                        {group.routes.map(route =>
-                          route.items.map(item => {
-                            const idx = cardIdx++
-                            return (
-                              <BatchCard
-                                key={`${item.node_id}-${item.batch_id ?? item.parent_batch_ids.join('-')}`}
-                                item={item}
-                                canSubmit={canSubmit}
-                                index={idx}
-                                role={data!.role}
-                                onReceive={() => setReceiveItem(item)}
-                                onStart={() => { setStartBatchId(item.batch_id!); setStartNodeId(item.node_id) }}
-                                onComplete={() => openCompleteModal(item)}
-                                onCompleteBatch={async () => {
-                                  if (!item.batch_id) return
-                                  const r = await completeBatch(item.batch_id)
-                                  if (r.success) {
-                                    message.success('批次已完成')
-                                    queryClient.invalidateQueries({ queryKey: ['production-workbench'] })
-                                  } else {
-                                    message.error(r.error ?? '完成批次失败')
-                                  }
-                                }}
-                              />
-                            )
-                          }),
-                        )}
-                      </div>
+                      {/* 按类型分组展示 */}
+                      {group.typeGroups.map(tg => (
+                        <div key={tg.key} style={{ marginBottom: 20 }}>
+                          <div style={{
+                            fontSize: 12, fontWeight: 600, color: '#787671',
+                            marginBottom: 10, paddingLeft: 2,
+                          }}>
+                            {tg.label}
+                            <span style={{ fontWeight: 400, color: '#b5b1a8', marginLeft: 6 }}>
+                              {tg.items.length}
+                            </span>
+                          </div>
+                          <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                            gap: 14,
+                          }}>
+                            {tg.items.map(item => {
+                              const idx = cardIdx++
+                              const execId = item.execution_id ?? ''
+                              return (
+                                <BatchCard
+                                  key={`${item.node_id}-${item.batch_id ?? item.parent_batch_ids.join('-')}`}
+                                  item={item}
+                                  index={idx}
+                                  role={data!.role}
+                                  onReceive={() => setReceiveItem(item)}
+                                  onStart={() => { setStartBatchId(item.batch_id!); setStartNodeId(item.node_id) }}
+                                  onComplete={() => {
+                                    openCompleteModal(item, () => {
+                                      if (execId) setCompletingIds(prev => new Set(prev).add(execId))
+                                    })
+                                  }}
+                                  onCompleteBatch={async () => {
+                                    if (!item.batch_id) return
+                                    if (item.missing_executions?.length) {
+                                      setBackfillExec({
+                                        routeId: item.route_id,
+                                        executions: item.missing_executions.map(me => ({
+                                          id: me.execution_id,
+                                          batch_id: item.batch_id!,
+                                          node_id: me.node_id,
+                                          node_name: me.node_name,
+                                          missing_required_fields: me.missing_required_fields,
+                                        })),
+                                      })
+                                      return
+                                    }
+                                    const r = await completeBatch(item.batch_id)
+                                    if (r.success) {
+                                      message.success('批次已完成')
+                                      queryClient.invalidateQueries({ queryKey: ['production-workbench'] })
+                                    } else {
+                                      message.error(r.error ?? '完成批次失败')
+                                    }
+                                  }}
+                                  isCompleting={completingIds.has(execId)}
+                                />
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                      {/* 工段间分隔线 */}
+                      {idx < stageGroups.length - 1 && (
+                        <div style={{ height: 1, background: '#ede9e4', margin: '16px 0 36px' }} />
+                      )}
                     </div>
                   )
                 })}
@@ -707,7 +968,7 @@ export function WorkbenchInner() {
           )}
 
           {/* ── 计划批次 ── */}
-          <PlannedSection stageNames={data?.stage_names ?? []} canSubmit={canSubmit} />
+          <PlannedSection stageNames={data?.stage_names ?? []} />
 
           {/* ── 最近完成 ── */}
           {data?.recent_completed && data.recent_completed.length > 0 && (
@@ -829,8 +1090,18 @@ export function WorkbenchInner() {
           onSuccess={completeExec.onSuccess}
           onClose={() => {
             setCompleteExec(null)
+            setCompletingIds(new Set())
             queryClient.invalidateQueries({ queryKey: ['production-workbench'] })
           }}
+        />
+      )}
+
+      {backfillExec && (
+        <BackfillFieldsModal
+          executions={backfillExec.executions}
+          routeId={backfillExec.routeId}
+          autoCompleteBatch
+          onClose={() => setBackfillExec(null)}
         />
       )}
 

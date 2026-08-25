@@ -45,17 +45,28 @@ export interface RouteEdge {
 export interface ProcessRoute {
   id: string
   product_id: string
-  version: number
-  name: string
+  route_name: string
   status: RouteStatus
   created_at: string
   updated_at: string
+}
+
+export interface ComputedField {
+  id: string
+  route_id: string
+  node_code: string
+  field_key: string
+  field_label: string
+  unit: string | null
+  formula: string
+  sort_order: number
 }
 
 export interface RouteGraph {
   route: ProcessRoute
   nodes: RouteNode[]
   edges: RouteEdge[]
+  computed_fields: ComputedField[]
 }
 
 // ── 编辑入参（对齐后端 RouteGraphIn，边用 node_code 引用） ──
@@ -77,7 +88,7 @@ export interface FieldDefIn {
 export interface NodeIn {
   node_code: string
   name: string
-  stage_name?: string | null
+  stage_name: string
   node_type?: string
   sort_order: number
   fields: FieldDefIn[]
@@ -93,12 +104,22 @@ export interface EdgeIn {
   remark?: string | null
 }
 
+export interface ComputedFieldIn {
+  node_code: string
+  field_key: string
+  field_label: string
+  unit?: string | null
+  formula: string
+  sort_order?: number
+}
+
 export interface RouteGraphIn {
   nodes: NodeIn[]
   edges: EdgeIn[]
+  computed_fields?: ComputedFieldIn[]
 }
 
 export interface CreateRouteInput {
   product_id: string
-  name: string
+  route_name: string
 }

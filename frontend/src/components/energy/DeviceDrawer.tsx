@@ -7,14 +7,12 @@ import {
   Form,
   Input,
   Select,
-  InputNumber,
   Switch,
   Button,
   Space,
   Spin,
-  TimePicker,
+  Radio,
 } from 'antd'
-import dayjs from 'dayjs'
 import {
   ApiOutlined,
   EnvironmentOutlined,
@@ -26,7 +24,11 @@ import {
   updateEnergyDevice,
   getEnergyDeviceById,
 } from '@/actions/energy'
-import { fetchPlatformsClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
+import {
+  fetchPlatformsClient,
+  fetchEnabledTypeConfigsClient,
+  fetchEquipmentOptionsClient,
+} from '@/lib/api/energy'
 
 const { TextArea } = Input
 
@@ -43,13 +45,11 @@ const DEFAULT_VALUES = {
   platform_code: 'zhiheng',
   energy_type: 'electricity',
   unit: 'kWh',
-  collection_interval: 1,  // 小时
   monitor_level: 'normal',
   is_enabled: true,
   is_region_level: false,
+  stat_role: 'normal',
 }
-
-const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7]
 
 /** 判断平台是否已接入（非 "待接入" 即视为已接入） */
 function isPlatformReady(name: string): boolean {
@@ -105,7 +105,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
 
   const isEdit = deviceDrawerMode === 'edit'
   const selectedPlatform = Form.useWatch('platform_code', form)
-  const watchInterval = Form.useWatch('collection_interval', form)
   const watchIsRegionLevel = Form.useWatch('is_region_level', form)
 
   // 获取平台列表
@@ -151,13 +150,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     equipmentSearchTimer.current = setTimeout(async () => {
       setEquipmentLoading(true)
       try {
-        const params = new URLSearchParams({ keyword, page_size: '20' })
-        const res = await fetch(
-          `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/energy/equipments?${params}`
-        )
-        const json = await res.json()
-        const items = json.data?.items ?? json.data ?? []
-        const opts = items.map((item: any) => {
+        const items = await fetchEquipmentOptionsClient({ keyword })
+        const opts = items.map((item) => {
           const label = `${item.name} (${item.equipment_no})`
           equipmentNameMap.current.set(item.id, item.name)
           return { label, value: item.id }
@@ -171,31 +165,64 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
     }, 300)
   }
 
-  const handleEquipmentChange = (value: string | undefined) => {
-    if (value) {
-      form.setFieldsValue({ equipment_name: equipmentNameMap.current.get(value) || '' })
-    } else {
-      form.setFieldsValue({ equipment_id: null, equipment_name: null })
+  const handleEquipmentChange = (values: string[]) => {
+    const names = values.map((id) => equipmentNameMap.current.get(id) || '')
+    form.setFieldsValue({ equipment_names: names })
+  }
+
+  // 首次展开下拉时预加载首批设备，避免搜索式下拉初始为空
+  const loadInitialEquipmentOptions = async () => {
+    setEquipmentLoading(true)
+    try {
+      const items = await fetchEquipmentOptionsClient({})
+      const opts = items.map((item) => {
+        const label = `${item.name} (${item.equipment_no})`
+        equipmentNameMap.current.set(item.id, item.name)
+        return { label, value: item.id }
+      })
+      setEquipmentOptions(opts)
+    } catch {
+      setEquipmentOptions([])
+    } finally {
+      setEquipmentLoading(false)
     }
   }
 
-  // 打开抽屉时预加载设备列表（用于编辑时显示已选设备名称）
-  const loadEquipmentOption = async (equipmentId: string) => {
+  const handleEquipmentDropdownOpen = (open: boolean) => {
+    if (!open) return
+    loadInitialEquipmentOptions()
+  }
+
+  // 打开抽屉时预加载已选设备（编辑模式批量回显）
+  const loadEquipmentOptions = async (equipmentIds: string[], fallbackNames?: string[]) => {
+    if (!equipmentIds.length) return
     try {
-      const params = new URLSearchParams({ page_size: '1' })
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'}/api/v1/energy/equipments?${params}`
-      )
-      const json = await res.json()
-      const items = json.data?.items ?? json.data ?? []
-      // 如果已选的设备不在第一页，尝试直接通过 ID 构建选项（从已有 equipment_name 展示）
-      const found = items.find((item: any) => item.id === equipmentId)
-      if (found) {
-        equipmentNameMap.current.set(found.id, found.name)
-        setEquipmentOptions([{ label: `${found.name} (${found.equipment_no})`, value: found.id }])
-      }
+      const items = await fetchEquipmentOptionsClient({ ids: equipmentIds.join(',') })
+      const opts = items.map((item) => {
+        const label = `${item.name} (${item.equipment_no})`
+        equipmentNameMap.current.set(item.id, item.name)
+        return { label, value: item.id }
+      })
+      // 后端按 id 过滤，已删除/不存在的 id 不会返回，用快照名称兜底
+      const foundIds = new Set(items.map((i) => i.id))
+      equipmentIds.forEach((id, idx) => {
+        if (!foundIds.has(id)) {
+          equipmentNameMap.current.set(id, fallbackNames?.[idx] || '')
+          opts.push({ label: fallbackNames?.[idx] || id, value: id })
+        }
+      })
+      setEquipmentOptions(opts)
     } catch {
-      // 忽略加载失败
+      // 忽略加载失败，退回快照名称展示
+      equipmentIds.forEach((id, idx) => {
+        equipmentNameMap.current.set(id, fallbackNames?.[idx] || '')
+      })
+      setEquipmentOptions(
+        equipmentIds.map((id, idx) => ({
+          label: fallbackNames?.[idx] || id,
+          value: id,
+        }))
+      )
     }
   }
 
@@ -219,19 +246,10 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const loadDeviceData = async (id: string) => {
     try {
       const device = await getEnergyDeviceById(id)
-      // 采集间隔：后端存分钟，前端展示小时
-      const formData: Record<string, unknown> = { ...device }
-      if (device.collection_interval) {
-        formData.collection_interval = +(device.collection_interval / 60).toFixed(2)
-      }
-      // TimePicker 需要 dayjs 对象，后端返回 "HH:mm" 字符串
-      if (device.daily_collect_time && typeof device.daily_collect_time === 'string') {
-        formData.daily_collect_time = dayjs(device.daily_collect_time, 'HH:mm')
-      }
-      form.setFieldsValue(formData)
+      form.setFieldsValue({ ...device })
       // 编辑时，如果有已关联设备，预加载下拉选项
-      if (device.equipment_id) {
-        loadEquipmentOption(device.equipment_id)
+      if (device.equipment_ids?.length) {
+        loadEquipmentOptions(device.equipment_ids, device.equipment_names ?? undefined)
       }
     } catch {
       message.error('获取数据源信息失败')
@@ -241,18 +259,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
-      // 采集间隔：前端小时 → 后端分钟
-      if (values.collection_interval != null) {
-        values.collection_interval = Math.round(values.collection_interval * 60)
-      }
-      // TimePicker 返回值转为 HH:mm 字符串
-      if (values.daily_collect_time) {
-        if (typeof values.daily_collect_time === 'object' && values.daily_collect_time.format) {
-          values.daily_collect_time = values.daily_collect_time.format('HH:mm')
-        }
-      } else {
-        values.daily_collect_time = null
-      }
       setLoading(true)
 
       if (isEdit && deviceDrawerId) {
@@ -417,7 +423,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
             <SectionLabel icon={<EnvironmentOutlined />} text="数据源信息" />
 
             <Form.Item
-              name="equipment_id"
+              name="equipment_ids"
               label={
                 <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
                   关联设备
@@ -426,20 +432,22 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               style={{ marginBottom: 16 }}
             >
               <Select
+                mode="multiple"
                 placeholder="搜索并选择设备台账中的设备"
                 showSearch
                 allowClear
                 filterOption={false}
                 onSearch={handleEquipmentSearch}
+                onOpenChange={handleEquipmentDropdownOpen}
                 options={equipmentOptions}
                 loading={equipmentLoading}
                 onChange={handleEquipmentChange}
-                style={{ height: 44 }}
+                style={{ minHeight: 44 }}
               />
             </Form.Item>
 
-            {/* 隐藏的 equipment_name 字段 */}
-            <Form.Item name="equipment_name" hidden>
+            {/* 隐藏的 equipment_names 字段 */}
+            <Form.Item name="equipment_names" hidden>
               <Input />
             </Form.Item>
 
@@ -546,31 +554,6 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               </Form.Item>
             )}
 
-            {/* 不参与能源总耗统计 */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 16px',
-                marginBottom: 16,
-                borderRadius: 8,
-                background: '#f6f5f4',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', lineHeight: 1.5 }}>
-                  不参与能源总耗统计
-                </div>
-                <div style={{ fontSize: 12, color: '#787671', lineHeight: 1.4 }}>
-                  开启后该数据源不计入总耗统计与可视化分析
-                </div>
-              </div>
-              <Form.Item name="exclude_from_stats" valuePropName="checked" style={{ marginBottom: 0 }}>
-                <Switch />
-              </Form.Item>
-            </div>
-
             {/* ── 采集设置 ── */}
             <SectionLabel icon={<SettingOutlined />} text="采集设置" />
 
@@ -595,92 +578,7 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               />
             </Form.Item>
 
-            <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
-              <Form.Item
-                name="collection_interval"
-                label={
-                  <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                    采集间隔
-                  </span>
-                }
-                rules={[{ required: true, message: '必填' }]}
-                style={{ flex: 1, marginBottom: 0 }}
-                extra={
-                  <span style={{ fontSize: 12, color: '#a4a097' }}>
-                    {watchInterval >= 24
-                      ? `每 ${Math.round(watchInterval / 24)} 天自动采集一次汇总数据`
-                      : '自动采集开启后，按此间隔检查并拉取数据'}
-                  </span>
-                }
-              >
-                {watchInterval >= 24 ? (
-                  <div>
-                    <Select
-                      placeholder="选择天数"
-                      options={DAY_OPTIONS.map(d => ({ label: `${d} 天`, value: d * 24 }))}
-                      style={{ height: 44 }}
-                    />
-                    <Button
-                      type="link"
-                      size="small"
-                      style={{ padding: 0, fontSize: 12, marginTop: 4 }}
-                      onClick={() => {
-                        form.setFieldValue('collection_interval', 1)
-                        form.setFieldValue('daily_collect_time', null)
-                      }}
-                    >
-                      切换为按小时采集
-                    </Button>
-                  </div>
-                ) : (
-                  <div>
-                    <InputNumber
-                      min={0.25}
-                      step={0.25}
-                      placeholder="1"
-                      suffix="小时"
-                      style={{ width: '100%', height: 44 }}
-                    />
-                    <Button
-                      type="link"
-                      size="small"
-                      style={{ padding: 0, fontSize: 12, marginTop: 4 }}
-                      onClick={() => {
-                        form.setFieldValue('collection_interval', 24)
-                        form.setFieldValue('daily_collect_time', null)
-                      }}
-                    >
-                      切换为按天采集
-                    </Button>
-                  </div>
-                )}
-              </Form.Item>
-
-              {watchInterval >= 24 && (
-                <Form.Item
-                  name="daily_collect_time"
-                  label={
-                    <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
-                      每日采集时间
-                    </span>
-                  }
-                  style={{ flex: 1, marginBottom: 0 }}
-                  extra={
-                    <span style={{ fontSize: 12, color: '#a4a097' }}>
-                      每天定时将过去 N 天的数据汇总输出
-                    </span>
-                  }
-                >
-                  <TimePicker
-                    format="HH:mm"
-                    minuteStep={30}
-                    placeholder="08:00"
-                    style={{ width: '100%', height: 44 }}
-                  />
-                </Form.Item>
-              )}
-
-              <Form.Item
+            <Form.Item
                 name="monitor_level"
                 label={
                   <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
@@ -698,7 +596,27 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
                   style={{ height: 44 }}
                 />
               </Form.Item>
-            </div>
+
+            <Form.Item
+              name="stat_role"
+              label={
+                <span style={{ fontSize: 13, fontWeight: 500, color: '#5d5b54' }}>
+                  统计角色
+                </span>
+              }
+              style={{ marginBottom: 16 }}
+            >
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                size="middle"
+                options={[
+                  { label: '参与统计', value: 'normal' },
+                  { label: '不参与', value: 'excluded' },
+                  { label: '作为总耗', value: 'total' },
+                ]}
+              />
+            </Form.Item>
 
             {/* ── 备注 ── */}
             <div style={{ marginBottom: 16 }} />

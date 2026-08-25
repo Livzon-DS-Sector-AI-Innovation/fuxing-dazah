@@ -112,6 +112,7 @@ export interface InstrumentFilter {
   calibration_date_before?: string
   calibration_date_after?: string
   keyword?: string
+  has_report?: boolean
   page?: number
   page_size?: number
 }
@@ -207,6 +208,7 @@ export interface GasDetectorFilter {
   calibration_date_before?: string
   calibration_date_after?: string
   keyword?: string
+  has_report?: boolean
   page?: number
   page_size?: number
 }

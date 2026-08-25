@@ -62,7 +62,13 @@ export function ReceiveModal({ item, onClose }: Props) {
       <Form
         form={form}
         layout="vertical"
-        initialValues={{ children: [{ batch_no: '', quantity: undefined, unit: undefined }] }}
+        initialValues={{
+          children: [{
+            batch_no: !isMerge ? (item.suggested_batch_no ?? '') : '',
+            quantity: undefined,
+            unit: undefined,
+          }],
+        }}
       >
         {/* 父批次 */}
         <div style={{

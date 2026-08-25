@@ -20,6 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY as SA_ARRAY
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as SA_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -55,8 +56,8 @@ class EnergyDeviceConfig(BaseModel):
             name="ck_energy_device_config_monitor_level",
         ),
         CheckConstraint(
-            "collection_interval > 0",
-            name="ck_energy_device_config_interval_positive",
+            "stat_role IN ('normal', 'excluded', 'total')",
+            name="ck_energy_device_config_stat_role",
         ),
         {"schema": "energy"},
     )
@@ -88,20 +89,16 @@ class EnergyDeviceConfig(BaseModel):
     unit: Mapped[str] = mapped_column(
         String(20), nullable=False, comment="计量单位"
     )
-    collection_interval: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=60, comment="采集间隔(分钟)"
-    )
-    daily_collect_time: Mapped[str | None] = mapped_column(
-        String(5), nullable=True, comment="按天采集的触发时间 HH:MM，如 08:00；NULL 表示按小时采集"
-    )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="是否启用采集"
     )
-    equipment_id: Mapped[UUID | None] = mapped_column(
-        SA_UUID(as_uuid=True), nullable=True, comment="关联设备管理中的设备ID"
+    equipment_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="关联设备ID列表（设备台账，JSON 字符串数组）",
     )
-    equipment_name: Mapped[str | None] = mapped_column(
-        String(200), nullable=True, comment="关联设备名称（冗余存储，便于展示）"
+    equipment_names: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list,
+        comment="关联设备名称列表（冗余存储，便于展示）",
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
@@ -109,8 +106,9 @@ class EnergyDeviceConfig(BaseModel):
     is_region_level: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, comment="是否区域级别（False=部门级别）"
     )
-    exclude_from_stats: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, comment="是否不参与能源总耗统计与可视化"
+    stat_role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="normal",
+        comment="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗",
     )
 
 
@@ -177,8 +175,30 @@ class EnergyCollectLog(BaseModel):
     success_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, comment="成功条数"
     )
+    expected_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="预期数据条数（daily设备为1/台，hourly为24/台）"
+    )
     error_message: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="错误信息"
+    )
+
+
+class EnergyCollectSetting(BaseModel):
+    """自动采集运行时设置（键值对，持久化用户配置，重启保留）。"""
+
+    __tablename__ = "energy_collect_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "setting_key", "is_deleted", name="uq_energy_collect_setting_key"
+        ),
+        {"schema": "energy"},
+    )
+
+    setting_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="配置键"
+    )
+    setting_value: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", comment="配置值"
     )
 
 
@@ -219,6 +239,7 @@ class AlertRecordStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSED = "processed"
     IGNORED = "ignored"
+    REJECTED = "rejected"
 
 
 class EnergyAlertRule(BaseModel):
@@ -313,7 +334,7 @@ class EnergyAlertRecord(BaseModel):
             name="ck_energy_alert_record_alert_level",
         ),
         CheckConstraint(
-            "status IN ('pending', 'processed', 'ignored')",
+            "status IN ('pending', 'processed', 'ignored', 'rejected')",
             name="ck_energy_alert_record_status",
         ),
         {"schema": "energy"},
@@ -363,6 +384,9 @@ class EnergyAlertRecord(BaseModel):
     process_note: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="处理备注"
     )
+    reason: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="异常原因（车间负责人填写）"
+    )
 
 
 # ── 能源类型可视化配置 ──
@@ -377,14 +401,15 @@ class EnergyTypeConfig(BaseModel):
             "type_code", "is_deleted",
             name="uq_energy_type_config_code",
         ),
+        CheckConstraint(
+            "collect_granularity IN ('hourly', 'daily')",
+            name="ck_energy_type_config_collect_granularity",
+        ),
         {"schema": "energy"},
     )
 
     type_code: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="唯一编码，如 electricity"
-    )
-    parent_code: Mapped[str | None] = mapped_column(
-        String(50), nullable=True, comment="父级编码，顶层分类为 NULL"
     )
     display_name: Mapped[str] = mapped_column(
         String(100), nullable=False, comment="展示名称，如 电力"
@@ -403,6 +428,10 @@ class EnergyTypeConfig(BaseModel):
     )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, comment="启用状态"
+    )
+    collect_granularity: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="hourly",
+        comment="采集粒度: hourly=逐小时, daily=日汇总",
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
@@ -527,4 +556,37 @@ class EnergyNitrogenPushConfig(BaseModel):
     )
     remark: Mapped[str | None] = mapped_column(
         Text, nullable=True, comment="备注"
+    )
+
+
+class PricePeriod(BaseModel):
+    """峰谷电价时段规则。
+
+    每条规则定义某分类（尖/峰/平/谷）在指定小时范围和月份的适用性。
+    同一时段若多条规则匹配，优先级：尖 > 峰 > 平 > 谷。
+    """
+
+    __tablename__ = "price_periods"
+    __table_args__ = {"schema": "energy"}
+
+    category: Mapped[str] = mapped_column(
+        String(10), nullable=False, comment="分类: 尖/峰/平/谷"
+    )
+    start_hour: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="开始小时 (0-23, 含)"
+    )
+    end_hour: Mapped[int] = mapped_column(
+        Integer, nullable=False, comment="结束小时 (1-24, 不含)"
+    )
+    months: Mapped[list[int]] = mapped_column(
+        SA_ARRAY(Integer), nullable=False, comment="适用月份, 如 [7,8,9]"
+    )
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, comment="软删除标记"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), server_onupdate=func.now(),
     )

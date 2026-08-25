@@ -36,15 +36,14 @@ function StageTimelineBar({ stages }: { stages: PlannedBatchItem['stage_config']
 
 // ── 计划批次卡片 ──
 function PlannedCard({
-  item, index, canSubmit, onReceive,
+  item, index, onReceive,
 }: {
   item: PlannedBatchItem
   index: number
-  canSubmit: boolean
   onReceive: () => void
 }) {
   const cfg = STATUS_CFG.scheduled
-  const showReceive = canSubmit && item.is_first_stage_owner
+  const showReceive = item.is_first_stage_owner
 
   return (
     <div
@@ -85,7 +84,6 @@ function PlannedCard({
           {item.route_name && (
             <div style={{ fontSize: 12, color: '#a4a097', marginTop: 1 }}>
               {item.route_name}
-              {item.route_version ? <span> v{item.route_version}</span> : null}
             </div>
           )}
         </div>
@@ -149,7 +147,7 @@ function PlannedCard({
 
 // ── 主组件 ──
 
-export function PlannedSection({ stageNames, canSubmit }: { stageNames: string[]; canSubmit: boolean }) {
+export function PlannedSection({ stageNames }: { stageNames: string[] }) {
   const [filterProduct, setFilterProduct] = useState<string | undefined>(undefined)
   const [filterRoute, setFilterRoute] = useState<string | undefined>(undefined)
   const queryClient = useQueryClient()
@@ -321,7 +319,6 @@ export function PlannedSection({ stageNames, canSubmit }: { stageNames: string[]
                     key={item.batch_id}
                     item={item}
                     index={cardIdx++}
-                    canSubmit={canSubmit}
                     onReceive={() => handleReceive(item)}
                   />
                 ))}

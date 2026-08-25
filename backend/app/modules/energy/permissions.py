@@ -276,4 +276,20 @@ PERMISSIONS: list[PermissionDef] = [
         action="send",
         description="手动触发氮气月度进度报告推送",
     ),
+    PermissionDef(
+        code="energy:alert:process:approve",
+        name="审核通过预警",
+        module="energy",
+        resource="alert",
+        action="approve",
+        description="管理员审核通过车间预警记录",
+    ),
+    PermissionDef(
+        code="energy:alert:process:reject",
+        name="审核驳回预警",
+        module="energy",
+        resource="alert",
+        action="reject",
+        description="管理员驳回车间预警并重新飞书通知",
+    ),
 ]

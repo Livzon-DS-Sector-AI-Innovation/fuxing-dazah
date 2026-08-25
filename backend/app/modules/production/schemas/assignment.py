@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.modules.production.schemas.execution import MissingFieldOut
+
 # ── 工段负责人 ──
 
 class StageAssignmentCreate(BaseModel):
@@ -18,6 +20,21 @@ class StageAssignmentOut(BaseModel):
     stage_name: str
     route_id: uuid.UUID
     created_at: datetime
+
+
+class StageSuffixSetIn(BaseModel):
+    route_id: uuid.UUID
+    stage_name: str = Field(max_length=100)
+    suffix: str = Field(default="", max_length=50)
+
+
+class StageSuffixOut(BaseModel):
+    model_config = {"from_attributes": True}
+    id: uuid.UUID | None = None
+    route_id: uuid.UUID
+    stage_name: str
+    suffix: str
+    updated_at: datetime | None = None
 
 
 # ── 工序负责人 ──
@@ -53,6 +70,15 @@ class StageNodeInfo(BaseModel):
     status: str  # "completed" | "in_progress" | "pending"
 
 
+class MissingExecutionOut(BaseModel):
+    """待完成批次中缺填必填字段的工序执行，供工作台直接补录。"""
+
+    execution_id: uuid.UUID
+    node_id: uuid.UUID
+    node_name: str
+    missing_required_fields: list[MissingFieldOut]
+
+
 class WorkbenchItem(BaseModel):
     type: str  # pending_receive | pending_start | pending_complete | ready_to_complete
     batch_no: str | None = None
@@ -60,7 +86,6 @@ class WorkbenchItem(BaseModel):
     product_name: str | None = None
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     node_id: uuid.UUID
     node_name: str
     stage_name: str | None = None
@@ -69,12 +94,22 @@ class WorkbenchItem(BaseModel):
     # pending_receive 专用
     boundary_edge_id: uuid.UUID | None = None
     parent_batch_ids: list[uuid.UUID] = []
+    # 接收建议子批次号：根批号 + 目标工段尾缀；未配置尾缀或合并场景为空
+    suggested_batch_no: str | None = None
     # pending_complete 专用
     execution_id: uuid.UUID | None = None
     execution_seq: int | None = None
     owner_name: str | None = None
+    # 批次归属（多负责人产线隔离）：归属人姓名快照，无主批次为空
+    batch_owner_name: str | None = None
+    # 当前用户是否可操作该批次（归属自己/无主=True；归属他人=False，仅读）
+    can_operate: bool = True
+    # ready_to_complete 专用：该批次缺填必填字段的工序执行（工作台补录入口）
+    missing_executions: list[MissingExecutionOut] = []
     started_at: str | None = None
     is_last_in_stage: bool = False  # 是否是工段内最后一个节点，完成即可提交批次
+    # pending_start 工序的开始类型：normal / parallel / rework
+    start_type: str | None = None
     # 工序面包屑：当前工段内所有工序及其完成状态
     stage_nodes: list[StageNodeInfo] = []
 
@@ -92,7 +127,6 @@ class AssignedStageInfo(BaseModel):
 class AssignedRouteInfo(BaseModel):
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     product_name: str | None = None
     stages: list[AssignedStageInfo] = []
 
@@ -136,7 +170,6 @@ class PlannedBatchItem(BaseModel):
     product_name: str | None = None
     route_id: uuid.UUID
     route_name: str
-    route_version: int | None = None
     plan_item_id: uuid.UUID
     plan_order_no: str
     planned_start: str | None = None

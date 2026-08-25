@@ -2,11 +2,12 @@
 
 import { useState, useCallback, useMemo } from 'react'
 import { DatePicker, Select, Spin, Button, Modal, Input, App } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { PlanOrder, Product } from '@/types/production'
 import { fetchScheduleViewClient, fetchPlanOrdersClient, fetchProductsClient } from '@/lib/api/production-client'
 import { createPlanItem, schedulePlanItem } from '@/actions/production'
+import { usePermission } from '@/hooks/usePermission'
 import type { CreatePlanItemInput } from '@/types/production'
 
 import { ScheduleCardSwimlane } from './ScheduleCardSwimlane'
@@ -14,6 +15,8 @@ import dayjs from 'dayjs'
 import type { Dayjs } from 'dayjs'
 
 export function ScheduleView() {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const queryClient = useQueryClient()
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>(() => {
     const now = dayjs()
@@ -21,6 +24,7 @@ export function ScheduleView() {
   })
   const [productId, setProductId] = useState<string | undefined>()
   const [planOrderId, setPlanOrderId] = useState<string | undefined>()
+  const [matchedItemIds, setMatchedItemIds] = useState<string[]>([])
 
   const { data: items, isLoading, refetch } = useQuery({
     queryKey: ['scheduleView', dateRange[0].toISOString(), dateRange[1].toISOString()],
@@ -129,11 +133,55 @@ export function ScheduleView() {
     }))
   }, [planOrders, productId])
 
+  // ── 计划项搜索：选项来自当前已加载的计划项，选中后泳道卡片高亮 ──
+  const planItemMap = useMemo(
+    () => new Map((items ?? []).map((i) => [i.item_id, i])),
+    [items],
+  )
+
+  const planItemOptions = useMemo(
+    () => (items ?? []).map((i) => ({
+      value: i.item_id,
+      label: `${i.order_no} · ${i.product_name}${i.batch_no ? ` · ${i.batch_no}` : ''}`,
+    })),
+    [items],
+  )
+
+  // 只保留当前可见的计划项，避免日期切换后已选项 tag 退化为裸 uuid
+  const effectiveMatchedIds = useMemo(
+    () => matchedItemIds.filter((id) => planItemMap.has(id)),
+    [matchedItemIds, planItemMap],
+  )
+
   const onRefresh = useCallback(() => { refetch(); queryClient.invalidateQueries({ queryKey: ['plan-orders'] }); queryClient.invalidateQueries({ queryKey: ['plan-order-detail'] }) }, [refetch, queryClient])
+
+  // ── 选中产品的可见区间统计 ──
+  const monthStats = useMemo(() => {
+    if (!productId) return null
+    const [from, to] = dateRange
+    const fromT = from.startOf('day').valueOf()
+    const toT = to.endOf('day').valueOf()
+    const inRange = (d: string | null) => {
+      if (!d) return false
+      const t = dayjs(d).valueOf()
+      return t >= fromT && t <= toT
+    }
+    const filtered = (items ?? []).filter(i => i.product_id === productId)
+    const startCount = filtered.filter(i => inRange(i.planned_start)).length
+    const endCount = filtered.filter(i => inRange(i.planned_end)).length
+    const productName = (products ?? []).find(p => p.id === productId)?.product_name
+    return { startCount, endCount, productName }
+  }, [items, productId, dateRange, products])
+
+  // 默认区间为两个月（本月 + 下月），跨月时标签展示完整区间避免统计口径歧义
+  const selectedMonthLabel =
+    dateRange[0].format('YYYY年M月') === dateRange[1].format('YYYY年M月')
+      ? dateRange[0].format('YYYY年M月')
+      : `${dateRange[0].format('YYYY年M月')}-${dateRange[1].format('YYYY年M月')}`
 
   return (
     <div className="flex flex-col gap-4 h-full">
-      {/* Filter bar + 工具栏 */}
+      {/* Filter bar + 工具栏 — 左筛选 / 右搜索+操作 */}
       <div className="flex items-center gap-3 flex-wrap">
         <DatePicker.RangePicker
           value={dateRange}
@@ -150,7 +198,7 @@ export function ScheduleView() {
             (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
           }}
           size="small"
-          style={{ width: 220 }}
+          style={{ width: 200 }}
           value={productId}
           onChange={setProductId}
           options={productOptions}
@@ -163,23 +211,63 @@ export function ScheduleView() {
             (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
           }}
           size="small"
-          style={{ width: 220 }}
+          style={{ width: 200 }}
           value={planOrderId}
           onChange={setPlanOrderId}
           options={planOrderOptions}
         />
 
-        {selectedOrderEditable && (
-          <Button
-            type="primary"
+        <div className="ml-auto flex items-center gap-3">
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch={{ filterOption: (input, option) =>
+              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
+            }}
+            placeholder="搜索计划项"
             size="small"
-            icon={<PlusOutlined />}
-            onClick={() => setAddModalOpen(true)}
-          >
-            新增计划项
-          </Button>
-        )}
+            style={{ width: 320 }}
+            prefix={<SearchOutlined />}
+            value={effectiveMatchedIds}
+            onChange={setMatchedItemIds}
+            options={planItemOptions}
+            maxTagCount="responsive"
+          />
+
+          {selectedOrderEditable && canSubmit && (
+            <Button
+              type="primary"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={() => setAddModalOpen(true)}
+            >
+              新增计划项
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* 当月统计 — 仅在选中产品时显示 */}
+      {monthStats && (
+        <div style={{
+          display: 'flex', gap: 16,
+          padding: '10px 16px',
+          background: 'var(--color-surface-soft)',
+          borderRadius: 8,
+          fontSize: 13,
+        }}>
+          <span style={{ color: 'var(--color-slate)', fontWeight: 500 }}>
+            {monthStats.productName} · {selectedMonthLabel}
+          </span>
+          <span style={{ color: 'var(--color-hairline-strong)' }}>|</span>
+          <span style={{ color: 'var(--color-charcoal)' }}>
+            区间内开始 <strong style={{ color: '#0075de', fontSize: 15 }}>{monthStats.startCount}</strong> 批
+          </span>
+          <span style={{ color: 'var(--color-charcoal)' }}>
+            区间内结束 <strong style={{ color: '#1aae39', fontSize: 15 }}>{monthStats.endCount}</strong> 批
+          </span>
+        </div>
+      )}
 
       {/* Content — flex-1 min-h-0 flex flex-col 确保子组件能吃到高度 */}
       <div className="flex-1 min-h-0 flex flex-col">
@@ -194,6 +282,7 @@ export function ScheduleView() {
           productId={productId}
           onRefresh={onRefresh}
           dateRange={dateRange}
+          matchedItemIds={effectiveMatchedIds}
         />
       )}
       </div>

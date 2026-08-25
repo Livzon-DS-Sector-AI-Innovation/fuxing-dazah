@@ -16,9 +16,19 @@ from app.modules.production.schemas import (
     FieldValueOut,
     MergeIn,
 )
-from app.modules.production.service.assignment_service import require_stage_permission
+from app.modules.production.service.assignment_service import (
+    require_batch_owner_access,
+    require_operator_access,
+    require_stage_permission,
+)
+from app.modules.production.service.computed_service import expand_computed_fields
+from app.modules.production.service.execution_service import (
+    compute_missing_required_fields,
+)
+from app.modules.production.service.planning_service import sync_plan_item_status
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
+from app.platform.permission.deps import get_user_permissions
 
 
 async def _check_boundary_stage_permission(
@@ -138,6 +148,8 @@ async def derive_batches(
             quantity=child_in.quantity,
             unit=child_in.unit or parent.unit,
             entry_node_id=entry_node_id,
+            owner_user_id=user.id if user else None,
+            owner_name=user.name if user else None,
             created_by=user.id if user else None,
         )
         db.add(child)
@@ -162,6 +174,7 @@ async def derive_batches(
         resource_id=parent.id,
         extra={"children": [c.batch_no for c in children]},
     )
+    await sync_plan_item_status(db, parent.id)
     return children
 
 
@@ -202,6 +215,8 @@ async def merge_batches(
         quantity=payload.quantity,
         unit=payload.unit or parents[0].unit,
         entry_node_id=entry_node_id,
+        owner_user_id=user.id if user else None,
+        owner_name=user.name if user else None,
         remark=payload.remark,
         created_by=user.id if user else None,
     )
@@ -230,14 +245,59 @@ async def merge_batches(
     return child
 
 
+async def _missing_required_fields(
+    db: AsyncSession, batch_id: uuid.UUID
+) -> list[tuple[str, str]]:
+    """已结束工序缺填的必填字段（end 阶段），返回 (工序名, 字段名) 列表。"""
+    executions = await repo.list_executions(db, batch_id)
+    missing_by_exec = await compute_missing_required_fields(db, executions)
+    if not missing_by_exec:
+        return []
+    nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
+    node_names = {n.id: n.name for n in nodes}
+    ex_by_id = {e.id: e for e in executions}
+    missing: list[tuple[str, str]] = []
+    for exec_id, fields in missing_by_exec.items():
+        ex = ex_by_id.get(exec_id)
+        node_name = node_names.get(ex.node_id, ex.node_id.hex[:8]) if ex else ""
+        for f in fields:
+            missing.append((node_name, f.field_label))
+    return missing
+
+
 async def complete_batch(
     db: AsyncSession, batch_id: uuid.UUID, user: User | None
 ) -> Batch:
     batch = await _get_batch_or_404(db, batch_id)
     if batch.status != "in_progress":
         raise AppException(status_code=400, message="仅 in_progress 的批次可完成")
+
+    # 权限校验必须在业务校验之前，避免信息泄露
+    if user:
+        perms = await get_user_permissions(str(user.id), db)
+        if "production:batch:submit" not in perms:
+            # DB 层直接查最后一个完成的执行，避免全量拉取后 Python 排序
+            last_ex = await repo.get_last_completed_execution(db, batch_id)
+            if last_ex:
+                route_nodes = await repo.get_nodes_by_ids(db, [last_ex.node_id])
+                node = route_nodes[0] if route_nodes else None
+                # 与 start/complete_execution 同口径：工序负责人豁免归属限制
+                await require_operator_access(
+                    db, user.id, last_ex.node_id, batch.route_id,
+                    node.stage_name if node else None,
+                    batch=batch,
+                )
+            else:
+                await require_batch_owner_access(user.id, batch)
+
     if not await repo.completed_node_ids(db, batch_id):
         raise AppException(status_code=400, message="批次没有任何已完成的工序")
+    missing = await _missing_required_fields(db, batch_id)
+    if missing:
+        labels = ", ".join(f"{n}·{f}" for n, f in missing)
+        raise AppException(
+            status_code=400, message=f"以下工序的必填字段尚未上报，无法完成批次: {labels}"
+        )
     batch.status = "completed"
     batch.updated_by = user.id if user else None
     await db.flush()
@@ -264,6 +324,7 @@ async def cancel_batch(
     )
     refreshed = await repo.get_batch(db, batch_id)
     assert refreshed is not None
+    await sync_plan_item_status(db, batch.id)
     return refreshed
 
 
@@ -287,20 +348,23 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         val_by_exec.setdefault(v.execution_id, []).append(
             FieldValueOut.model_validate(v)
         )
+    missing_by_exec = await compute_missing_required_fields(db, executions)
     exec_outs = []
     for e in executions:
         out = ExecutionOut.model_validate(e)
         out.node_name = node_names.get(e.node_id)
         out.equipments = eq_by_exec.get(e.id, [])
         out.field_values = val_by_exec.get(e.id, [])
+        out.missing_required_fields = missing_by_exec.get(e.id, [])
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
-    # 填充路线名称和版本
+    # 填充路线名称
     route = await repo.get_route(db, batch.route_id)
     if route:
-        detail.route_name = route.name
-        detail.route_version = route.version
+        detail.route_name = route.route_name
+    # 计算字段汇总区
+    detail.computed_fields = await expand_computed_fields(db, batch)
     return detail
 
 
@@ -318,13 +382,11 @@ async def list_batches_paged(
     batches, total = await repo.list_batches(
         db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
     )
-    # 批量填充路线名称和版本
+    # 批量填充路线名称
     route_ids = list({b.route_id for b in batches})
     if route_ids:
         routes = await repo.get_routes_by_ids(db, route_ids)
-        route_map = {r.id: (r.name, r.version) for r in routes}
+        route_map = {r.id: r.route_name for r in routes}
         for b in batches:
-            name, ver = route_map.get(b.route_id, ("", 0))
-            b.route_name = name  # type: ignore[attr-defined]
-            b.route_version = ver  # type: ignore[attr-defined]
+            b.route_name = route_map.get(b.route_id, "")  # type: ignore[attr-defined]
     return batches, total

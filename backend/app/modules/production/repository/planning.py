@@ -40,8 +40,11 @@ __all__ = [
     "get_batches_for_allocations",
     "get_batch_by_no",
     "get_plan_item_by_batch_no",
-    "get_batch_single_branch_tip",
-    "get_node_execution_progress",
+    "list_plan_item_nos",
+    "list_batch_nos",
+    "get_parent_batch_id",
+    "get_child_batch_ids",
+    "get_chain_node_execution_progress",
     "get_change_logs",
     "get_batches_by_plan_items",
 ]
@@ -361,35 +364,75 @@ async def get_plan_item_by_batch_no(
     return (await db.execute(stmt)).scalars().first()
 
 
+async def list_plan_item_nos(db: AsyncSession, batch_nos: list[str]) -> set[str]:
+    """批量查计划项占用的批号（软删除项不计）。"""
+    if not batch_nos:
+        return set()
+    stmt = select(PlanItem.batch_no).where(
+        PlanItem.batch_no.in_(batch_nos),
+        PlanItem.is_deleted == False,  # noqa: E712
+    )
+    # batch_no 列为可空，IN 匹配到的均为非空值；过滤 None 满足 mypy 类型收窄
+    return {no for no in (await db.execute(stmt)).scalars() if no is not None}
+
+
+async def list_batch_nos(db: AsyncSession, batch_nos: list[str]) -> set[str]:
+    """批量查真实批次占用的批号（软删除批次不计）。"""
+    if not batch_nos:
+        return set()
+    stmt = select(Batch.batch_no).where(
+        Batch.batch_no.in_(batch_nos),
+        Batch.is_deleted == False,  # noqa: E712
+    )
+    return set((await db.execute(stmt)).scalars())
+
+
 # ── 批次追溯 / 执行进度 / 变更日志 ──
 
 
-async def get_batch_single_branch_tip(db: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
-    """沿单分支链追溯：子批次=1时继续，≠1时停止，返回停止节点的Batch。"""
+async def get_parent_batch_id(
+    db: AsyncSession, child_id: uuid.UUID,
+) -> uuid.UUID | None:
+    """按子批次查父批次（谱系回溯）。单线假设下父唯一，取第一条。"""
     from app.modules.production.models.batch import BatchLink
 
-    current_id = batch_id
-    while True:
-        child_stmt = (
-            select(BatchLink.child_batch_id)
-            .where(
-                BatchLink.parent_batch_id == current_id,
-                BatchLink.is_deleted == False,  # noqa: E712
-            )
-            .distinct()
+    stmt = (
+        select(BatchLink.parent_batch_id)
+        .where(
+            BatchLink.child_batch_id == child_id,
+            BatchLink.is_deleted == False,  # noqa: E712
         )
-        child_ids = list((await db.execute(child_stmt)).scalars())
-        if len(child_ids) != 1:
-            break
-        current_id = child_ids[0]
-    stmt = select(Batch).where(Batch.id == current_id, Batch.is_deleted == False)  # noqa: E712
+        .limit(1)
+    )
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def get_node_execution_progress(
-    db: AsyncSession, batch_id: uuid.UUID,
+async def get_child_batch_ids(
+    db: AsyncSession, parent_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """按父批次查全部非删除子批次 id。"""
+    from app.modules.production.models.batch import BatchLink
+
+    stmt = (
+        select(BatchLink.child_batch_id)
+        .where(
+            BatchLink.parent_batch_id == parent_id,
+            BatchLink.is_deleted == False,  # noqa: E712
+        )
+        .distinct()
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_chain_node_execution_progress(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
 ) -> tuple[str | None, str | None]:
-    """返回 (latest_node_name, latest_node_status)，该批次最远执行到的工序名称和状态。"""
+    """返回 (latest_node_name, latest_node_status)：谱系链上所有批次合并后最远执行到的工序。
+
+    拆分后子批次继承父批次已完成的工序进度，前端进度条按整条链计算。
+    """
+    if not batch_ids:
+        return None, None
     from app.modules.production.models.execution import NodeExecution
     from app.modules.production.models.route import RouteNode
 
@@ -397,11 +440,12 @@ async def get_node_execution_progress(
         select(RouteNode.name, NodeExecution.status)
         .join(NodeExecution, NodeExecution.node_id == RouteNode.id)
         .where(
-            NodeExecution.batch_id == batch_id,
+            NodeExecution.batch_id.in_(batch_ids),
             NodeExecution.is_deleted == False,  # noqa: E712
             RouteNode.is_deleted == False,  # noqa: E712
         )
-        .order_by(RouteNode.sort_order.desc())
+        # 同一节点多次执行（返工 seq+1）时取最新一次，避免状态随机
+        .order_by(RouteNode.sort_order.desc(), NodeExecution.execution_seq.desc())
         .limit(1)
     )
     row = (await db.execute(stmt)).first()

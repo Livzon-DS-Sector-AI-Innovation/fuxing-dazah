@@ -1,11 +1,16 @@
 """生产模块测试夹具。"""
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
+from app.main import app
 from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production.schemas import (
     EdgeIn,
@@ -16,11 +21,86 @@ from app.modules.production.schemas import (
     RouteGraphIn,
 )
 from app.modules.production.service import route_service
+from app.platform.identity.deps import get_current_user
+from app.platform.identity.models import User
+
+
+@pytest.fixture
+async def client(db_session: AsyncSession, test_user: User) -> AsyncIterator[AsyncClient]:
+    """HTTP 客户端：共享会话 + 固定用户 + 放行 production:batch:read。"""
+
+    async def _override_get_db() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    async def _override_get_current_user() -> User:
+        return test_user
+
+    async def _grant_read_perms(user_id: str, db: object) -> set[str]:
+        return {"production:batch:read"}
+
+    app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    with patch(
+        "app.platform.permission.deps.get_user_permissions", new=_grant_read_perms
+    ):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            yield ac
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def test_user(db_session: AsyncSession) -> User:
+    """获取已有测试用户，若无则创建。"""
+    from sqlalchemy import select
+
+    stmt = select(User).where(User.is_deleted == False).limit(1)  # noqa: E712
+    existing = (await db_session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return existing
+    user = User(name="测试用户", employee_no="TEST001")
+    db_session.add(user)
+    await db_session.flush()
+    return user
 
 
 def rand_code(prefix: str) -> str:
     """随机编码，避免开发库残留数据撞唯一索引。"""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
+
+
+async def make_raw_output(
+    db: AsyncSession,
+    *,
+    batch_id: Any = None,
+    node_id: Any = None,
+    intermediate_type_id: Any = None,
+    line_id: Any = None,
+    created_by: Any = None,
+    quantity: float = 100,
+):
+    """辅助：手造一条产出记录，精确控制 line_id、创建人与数量。
+
+    未指定 batch_id / node_id / intermediate_type_id 时随机生成。
+    """
+    from app.modules.production.models import BatchIntermediateOutput
+
+    out = BatchIntermediateOutput(
+        batch_id=batch_id or uuid.uuid4(),
+        execution_id=uuid.uuid4(),
+        node_id=node_id or uuid.uuid4(),
+        intermediate_type_id=intermediate_type_id or uuid.uuid4(),
+        intermediate_batch_no=rand_code("S"),
+        quantity=quantity,
+        unit="L",
+        is_product=False,
+        remark=None,
+        created_by=created_by,
+        line_id=line_id,
+    )
+    db.add(out)
+    await db.flush()
+    return out
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +178,7 @@ async def published_route(db_session: AsyncSession) -> dict[str, Any]:
         user=None,
     )
     route = await route_service.create_route(
-        db_session, RouteCreate(product_id=product.id, name="工艺V1"), user=None
+        db_session, RouteCreate(product_id=product.id, route_name="工艺V1"), user=None
     )
     await route_service.save_graph(db_session, route.id, build_graph_in(), user=None)
     route = await route_service.publish_route(db_session, route.id, user=None)

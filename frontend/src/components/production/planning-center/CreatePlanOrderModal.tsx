@@ -206,7 +206,7 @@ export function CreatePlanOrderModal({ open, onClose, onSuccess }: Props) {
               placeholder="先选产品"
               disabled={!selectedProductId}
               onChange={(id: string) => { setSelectedRouteId(id); setUserStageConfig(null) }}
-              options={(routes ?? []).map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
+              options={(routes ?? []).map((r) => ({ value: r.id, label: `${r.route_name}` }))}
             />
           </Form.Item>
         </div>

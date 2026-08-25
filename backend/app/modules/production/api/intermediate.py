@@ -11,8 +11,10 @@ from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
     IntermediateTypeCreate,
     IntermediateTypeUpdate,
+    MixingContainerCreate,
+    MixingContainerUpdate,
 )
-from app.modules.production.service import intermediate_service
+from app.modules.production.service import container_service, intermediate_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -86,14 +88,30 @@ async def delete_intermediate_type(
 # ── 批次中间体台账 ──
 
 
-@router.get("/intermediates/available-outputs", summary="可用中间体产出列表（跨批次消耗选择）")
+@router.get("/intermediates/available-outputs", summary="可用中间体产出列表（跨批次消耗选择，按产线可见性过滤）")
 async def list_available_outputs(
     intermediate_type_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    outputs = await intermediate_service.get_available_outputs(db, intermediate_type_id)
+    outputs = await intermediate_service.get_available_outputs(
+        db, intermediate_type_id, user_id=user.id, batch_id=batch_id,
+    )
     return success_response([o.model_dump(mode="json") for o in outputs])
+
+
+@router.get("/intermediates/available-containers", summary="可用混装容器列表（消耗选择，按产线可见性过滤）")
+async def list_available_containers(
+    intermediate_type_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    containers = await intermediate_service.get_available_containers(
+        db, intermediate_type_id, user_id=user.id, batch_id=batch_id,
+    )
+    return success_response([c.model_dump(mode="json") for c in containers])
 
 
 @router.get("/batches/{batch_id}/intermediates/outputs", summary="批次中间体产出列表")
@@ -114,6 +132,50 @@ async def list_batch_intermediate_consumptions(
 ) -> JSONResponse:
     consumptions = await intermediate_service.get_batch_consumptions(db, batch_id)
     return success_response([c.model_dump(mode="json") for c in consumptions])
+
+
+# ── 混装容器 ──
+
+
+@router.get("/mixing-containers", summary="混装容器列表")
+async def list_mixing_containers(
+    intermediate_type_id: uuid.UUID | None = None,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items = await container_service.list_containers(db, intermediate_type_id)
+    return success_response([i.model_dump(mode="json") for i in items])
+
+
+@router.post("/mixing-containers", summary="新增混装容器")
+async def create_mixing_container(
+    payload: MixingContainerCreate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    out = await container_service.create_container(db, payload, user)
+    return success_response(out.model_dump(mode="json"))
+
+
+@router.put("/mixing-containers/{container_id}", summary="编辑混装容器")
+async def update_mixing_container(
+    container_id: uuid.UUID,
+    payload: MixingContainerUpdate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    out = await container_service.update_container(db, container_id, payload, user)
+    return success_response(out.model_dump(mode="json"))
+
+
+@router.delete("/mixing-containers/{container_id}", summary="删除混装容器")
+async def delete_mixing_container(
+    container_id: uuid.UUID,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    await container_service.delete_container(db, container_id, user)
+    return success_response()
 
 
 @router.get("/intermediates/outputs/{output_id}/trace", summary="中间体物料流向追溯")

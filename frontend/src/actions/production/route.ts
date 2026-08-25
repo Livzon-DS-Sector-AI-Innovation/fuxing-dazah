@@ -43,10 +43,31 @@ export async function archiveRoute(routeId: string): Promise<ActionResult<Proces
   return result
 }
 
-export async function newRouteVersion(routeId: string): Promise<ActionResult<ProcessRoute>> {
+export async function copyRoute(
+  routeId: string,
+  routeName: string,
+): Promise<ActionResult<ProcessRoute>> {
   const result = await actionFetch<ProcessRoute>(
-    `${API_BASE}/production/routes/${routeId}/new-version`,
-    { method: 'POST' },
+    `${API_BASE}/production/routes/${routeId}/copy`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ route_name: routeName }),
+    },
+  )
+  if (result.success) revalidatePath('/production/process')
+  return result
+}
+
+export async function renameRoute(
+  routeId: string,
+  routeName: string,
+): Promise<ActionResult<ProcessRoute>> {
+  const result = await actionFetch<ProcessRoute>(
+    `${API_BASE}/production/routes/${routeId}/rename`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ route_name: routeName }),
+    },
   )
   if (result.success) revalidatePath('/production/process')
   return result

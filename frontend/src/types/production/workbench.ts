@@ -1,3 +1,5 @@
+import type { MissingField } from './execution'
+
 export interface NodeAssigneeInfo {
   user_id: string
   name: string | null
@@ -17,7 +19,6 @@ export interface WorkbenchItem {
   product_name: string | null
   route_id: string
   route_name: string
-  route_version: number | null
   node_id: string
   node_name: string
   stage_name: string | null
@@ -25,12 +26,27 @@ export interface WorkbenchItem {
   node_assignees: NodeAssigneeInfo[]
   boundary_edge_id: string | null
   parent_batch_ids: string[]
+  /** 接收建议子批次号：根批号 + 目标工段尾缀；未配置尾缀或合并场景为空 */
+  suggested_batch_no?: string | null
   execution_id: string | null
   execution_seq: number | null
   owner_name: string | null
+  /** 批次归属人姓名快照（多负责人隔离）；无主批次为空 */
+  batch_owner_name: string | null
+  /** 当前用户是否可操作该批次（归属他人=仅读） */
+  can_operate: boolean
   started_at: string | null
   is_last_in_stage: boolean
+  start_type?: string | null  // pending_start 卡片: normal | parallel | rework
   stage_nodes: StageNodeInfo[]
+  missing_executions?: MissingExecution[]
+}
+
+export interface MissingExecution {
+  execution_id: string
+  node_id: string
+  node_name: string
+  missing_required_fields: MissingField[]
 }
 
 export interface AssignedNodeInfo {
@@ -46,7 +62,6 @@ export interface AssignedStageInfo {
 export interface AssignedRouteInfo {
   route_id: string
   route_name: string
-  route_version: number | null
   product_name: string | null
   stages: AssignedStageInfo[]
 }
@@ -79,6 +94,14 @@ export interface StageAssignment {
   stage_name: string
   route_id: string
   created_at: string
+}
+
+export interface StageSuffixItem {
+  id: string | null
+  route_id: string
+  stage_name: string
+  suffix: string
+  updated_at: string | null
 }
 
 export interface NodeAssignment {
@@ -146,7 +169,6 @@ export interface PlannedBatchItem {
   product_name: string | null
   route_id: string
   route_name: string
-  route_version: number | null
   plan_item_id: string
   plan_order_no: string
   planned_start: string | null

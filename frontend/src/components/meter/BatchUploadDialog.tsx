@@ -1,12 +1,13 @@
 'use client'
 
 import { useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { App, Modal, Table, Button, Upload, Tag, Space, Progress } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { FileMatchItem, BatchUploadResult, ExtractResultEvent, ExtractCompleteEvent } from '@/types/meter'
-import { matchReportFiles, batchUploadReports } from '@/actions/meter'
-import { fetchBatchExtractDatesStream } from '@/lib/api/meter'
+import { matchReportFiles } from '@/actions/meter'
+import { batchUploadReportsClient, fetchBatchExtractDatesStream } from '@/lib/api/meter'
 import type { UploadFile } from 'antd/es/upload/interface'
 
 const { Dragger } = Upload
@@ -31,6 +32,7 @@ interface ExtractState {
 
 export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) {
   const { message } = App.useApp()
+  const router = useRouter()
 
   const [step, setStep] = useState<'select' | 'preview' | 'result'>('select')
   const [files, setFiles] = useState<UploadFile[]>([])
@@ -81,9 +83,10 @@ export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) 
       }))
       formData.append('items_json', JSON.stringify(items))
 
-      const res = await batchUploadReports(formData)
+      const res = await batchUploadReportsClient(formData)
       setResult(res)
       setStep('result')
+      router.refresh()
       // 重置 AI 识别状态
       setExtract({ phase: 'idle', current: 0, total: 0, currentFileName: '', completedIds: new Set(), results: [] })
     } catch {

@@ -2,12 +2,13 @@
 
 import uuid
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.time import now
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch, BatchLink, NodeExecution
 from app.modules.production.models.planning import PlanAllocation
@@ -16,6 +17,7 @@ from app.modules.production.schemas.assignment import (
     AssignedNodeInfo,
     AssignedRouteInfo,
     AssignedStageInfo,
+    MissingExecutionOut,
     NodeAssigneeInfo,
     PlannedBatchItem,
     PlannedBatchOut,
@@ -27,7 +29,10 @@ from app.modules.production.schemas.assignment import (
 )
 from app.modules.production.schemas.batch import DeriveIn, MergeIn, MergeParentIn
 from app.modules.production.service.batch_service import derive_batches, merge_batches
-from app.modules.production.service.execution_service import start_execution
+from app.modules.production.service.execution_service import (
+    compute_missing_required_fields,
+    start_execution,
+)
 from app.platform.identity.models import User
 
 
@@ -45,6 +50,39 @@ async def _get_user_names(
     return {u.id: u.name for u in rows}
 
 
+async def _batch_root_batch_nos(
+    db: AsyncSession,
+    batch_ids: set[uuid.UUID],
+    cache: dict[uuid.UUID, str | None],
+) -> None:
+    """批量求谱系根批号（写入 cache）。
+
+    逐层共享前沿批量取 parent 链接（每层一次 IN 查询），内存走链到根后
+    一次性查根批次批号。替代旧 get_root_batch_no 的逐卡逐跳查询。
+    """
+    missing = batch_ids - cache.keys()
+    if not missing:
+        return
+    child_to_parent: dict[uuid.UUID, uuid.UUID] = {}
+    frontier = missing
+    for _ in range(50):  # 防环上限，与旧逐跳实现一致
+        if not frontier:
+            break
+        links = await repo.get_parent_links(db, frontier)
+        child_to_parent.update(links)
+        frontier = {pid for pid in links.values() if pid not in child_to_parent}
+    roots: dict[uuid.UUID, uuid.UUID] = {}
+    for bid in missing:
+        cur, seen = bid, set()
+        while cur in child_to_parent and cur not in seen:
+            seen.add(cur)
+            cur = child_to_parent[cur]
+        roots[bid] = cur
+    batches = await repo.get_batches_by_ids(db, list(set(roots.values())))
+    no_by_id = {b.id: b.batch_no for b in batches}
+    cache.update({bid: no_by_id.get(root_id) for bid, root_id in roots.items()})
+
+
 def _build_assignee_info(assignments) -> list[NodeAssigneeInfo]:
     """将 NodeAssignment 列表转为 NodeAssigneeInfo。"""
     return [NodeAssigneeInfo(user_id=a.user_id) for a in assignments]
@@ -60,10 +98,11 @@ def _build_stage_nodes(
         return []
     result: list[StageNodeInfo] = []
     for n in stage_nodes:
-        if n.id in completed:
-            status = "completed"
-        elif n.id in in_progress:
+        # in_progress 优先：返工时节点同时存在 completed（旧执行）和 in_progress（新执行）
+        if n.id in in_progress:
             status = "in_progress"
+        elif n.id in completed:
+            status = "completed"
         else:
             status = "pending"
         result.append(StageNodeInfo(
@@ -102,7 +141,7 @@ def _calc_stage_times(
     durations: dict[str, float] = {}
     if stage_durations:
         for d in stage_durations:
-            durations[d.get("stage_name", "")] = d.get("duration_hours", 0)
+            durations[d.get("stage_name") or "未分组"] = d.get("duration_hours", 0)
     result: dict[str, str] = {}
     accumulated = timedelta(0)
     for sn in stage_order:
@@ -257,7 +296,7 @@ async def query_planned_batches(
             else:
                 batch_in_progress[row.batch_id].add(row.node_id)
 
-    now = datetime.now(UTC)
+    current = now()
 
     result: list[PlannedBatchItem] = []
     for batch in scheduled_batches:
@@ -277,7 +316,11 @@ async def query_planned_batches(
         if not user_stages:
             continue
 
-        stage_times = _calc_stage_times(item.planned_start, item.stage_durations, stage_order)
+        stage_times = _calc_stage_times(
+            item.planned_start,
+            item.stage_durations or (order.stage_config if order else None),
+            stage_order,
+        )
         completed = batch_completed.get(batch.id, set())
         in_progress = batch_in_progress.get(batch.id, set())
         stage_node_ids = route_stage_node_ids[batch.route_id]
@@ -288,9 +331,9 @@ async def query_planned_batches(
         # 时间过滤：±30天
         if item.planned_start:
             one_month = timedelta(days=30)
-            if item.planned_start > now + one_month:
+            if item.planned_start > current + one_month:
                 continue
-            if item.planned_end and item.planned_end < now - one_month:
+            if item.planned_end and item.planned_end < current - one_month:
                 continue
 
         # 标记该用户是否为第一工段负责人
@@ -307,8 +350,7 @@ async def query_planned_batches(
             batch_no=batch.batch_no,
             product_name=product.product_name if product else None,
             route_id=route.id,
-            route_name=route.name,
-            route_version=route.version,
+            route_name=route.route_name,
             plan_item_id=item.id,
             plan_order_no=order.order_no if order else "",
             planned_start=item.planned_start.isoformat() if item.planned_start else None,
@@ -324,12 +366,158 @@ async def query_planned_batches(
     return PlannedBatchOut(items=result)
 
 
+async def _missing_executions_by_batches(
+    db: AsyncSession, batch_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, list[MissingExecutionOut]]:
+    """批量查询这些批次缺填必填字段的已完成执行（工作台补录入口用）。
+
+    复用 execution_service.compute_missing_required_fields（同一缺填判定规则）。
+    """
+    if not batch_ids:
+        return {}
+    executions = await repo.list_executions_by_batches(db, batch_ids)
+    if not executions:
+        return {}
+    missing_by_exec = await compute_missing_required_fields(db, executions)
+    if not missing_by_exec:
+        return {}
+    nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
+    node_names = {n.id: n.name for n in nodes}
+    ex_by_id = {e.id: e for e in executions}
+    result: dict[uuid.UUID, list[MissingExecutionOut]] = {}
+    for exec_id, m in missing_by_exec.items():
+        e = ex_by_id[exec_id]
+        result.setdefault(e.batch_id, []).append(
+            MissingExecutionOut(
+                execution_id=e.id,
+                node_id=e.node_id,
+                node_name=node_names.get(e.node_id, "工序"),
+                missing_required_fields=m,
+            )
+        )
+    return result
+
+
+def _classify_pending_starts(
+    batches: list,
+    permitted_node_ids: set[uuid.UUID],
+    node_map: dict[uuid.UUID, RouteNode],
+    edges_by_to: dict[uuid.UUID, list],
+    rework_sources: dict[uuid.UUID, set[uuid.UUID]],
+    normal_outgoing: dict[uuid.UUID, set[uuid.UUID]],
+    batch_completed: dict[uuid.UUID, set[uuid.UUID]],
+    batch_in_progress: dict[uuid.UUID, set[uuid.UUID]],
+    batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]],
+) -> list[tuple]:
+    """对每个批次的每个已授权节点分类 start_type，返回 [(batch, node, start_type), ...]。
+
+    未通过的节点不会被包含在结果中。
+    """
+    results: list[tuple] = []
+    for b in batches:
+        completed = batch_completed.get(b.id, set())
+        in_progress = batch_in_progress.get(b.id, set())
+        for node_id in permitted_node_ids:
+            node = node_map.get(node_id)
+            if not node:
+                continue
+            # 进行中的节点已有 pending_complete 卡片，跳过
+            if node_id in in_progress:
+                continue
+
+            start_type: str | None = None
+
+            if node_id in completed:
+                # 已完成节点：先检查是否前驱刚被返工→应向前流转
+                incoming = edges_by_to.get(node_id, [])
+                node_done_at = batch_node_done_at.get(b.id, {}).get(node_id)
+                forward_legal = False
+                for e in incoming:
+                    if (
+                        e.edge_type == "normal"
+                        and not e.is_batch_boundary
+                        and e.from_node_id in completed
+                        and e.from_node_id not in in_progress
+                    ):
+                        pred_done_at = batch_node_done_at.get(b.id, {}).get(e.from_node_id)
+                        if pred_done_at and node_done_at and pred_done_at > node_done_at:
+                            start_type = "normal"
+                            forward_legal = True
+                            break
+                if not forward_legal:
+                    # 检查返工路径
+                    rework_from = rework_sources.get(node_id, set())
+                    if not rework_from:
+                        continue
+                    if not (rework_from & completed):
+                        continue
+                    window_open = False
+                    for rf in rework_from & completed:
+                        rf_normals = normal_outgoing.get(rf, set())
+                        if rf_normals & in_progress:
+                            continue
+                        rf_done_at = batch_node_done_at.get(b.id, {}).get(rf)
+                        if rf_done_at and (not node_done_at or rf_done_at > node_done_at):
+                            window_open = True
+                            break
+                    if not window_open:
+                        continue
+                    start_type = "rework"
+            else:
+                # 未开始节点：检查入边
+                incoming = edges_by_to.get(node_id, [])
+                if b.entry_node_id and node_id == b.entry_node_id:
+                    start_type = "normal"
+                elif incoming:
+                    legal = False
+                    for e in incoming:
+                        if (
+                            e.edge_type == "normal"
+                            and e.from_node_id in completed
+                            and not e.is_batch_boundary
+                        ):
+                            legal = True
+                            start_type = "normal"
+                            break
+                        if (
+                            e.allow_overlap
+                            and e.edge_type == "normal"
+                            and not e.is_batch_boundary
+                            and e.from_node_id in in_progress
+                        ):
+                            legal = True
+                            start_type = "parallel"
+                            break
+                    if not legal:
+                        continue
+                else:
+                    if b.entry_node_id and node_id != b.entry_node_id:
+                        continue
+                    start_type = "normal"
+
+            results.append((b, node, start_type))
+    return results
+
+
 async def query_workbench(
-    db: AsyncSession, user_id: uuid.UUID,
+    db: AsyncSession, user_id: uuid.UUID, view_mode: str = "mine",
 ) -> WorkbenchOut:
-    """工作台待办查询：pending_start + pending_receive。"""
+    """工作台待办查询：pending_start + pending_receive。
+
+    view_mode=mine：只显示归属自己/无主的批次；all：显示全部，他人批次 can_operate=False。
+    """
     stages = await repo.get_user_stages(db, user_id)
     node_assignments = await repo.get_user_node_assignments(db, user_id)
+
+    def _can_operate_batch(b: Batch, node_id: uuid.UUID | None = None) -> bool:
+        """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人时，
+        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。"""
+        if b.owner_user_id is None or b.owner_user_id == user_id:
+            return True
+        return (
+            node_id is not None
+            and node_id in route_nodes.get(b.route_id, set())
+        )
 
     role = "stage_owner" if stages else "node_owner"
     stage_names = list({s.stage_name for s in stages})
@@ -353,6 +541,12 @@ async def query_workbench(
     product_ids = {r.product_id for r in routes}
     products = await repo.get_products_by_ids(db, list(product_ids))
     product_map = {p.id: p for p in products}
+
+    # 工段尾缀配置：(route_id, stage_name) -> suffix，用于接收建议批号
+    suffix_map = {
+        (s.route_id, s.stage_name): s.suffix
+        for s in await repo.list_stage_suffixes(db, list(route_map))
+    }
 
     # 缓存所有路线的节点和边（避免每路线重复查询）
     route_nodes_cache: dict[uuid.UUID, list] = {}
@@ -391,8 +585,7 @@ async def query_workbench(
             stages_info.append(AssignedStageInfo(stage_name="直接分配", nodes=direct_nodes))
         assigned_routes.append(AssignedRouteInfo(
             route_id=route_id,
-            route_name=r.name,
-            route_version=r.version,
+            route_name=r.route_name,
             product_name=p.product_name if p else None,
             stages=stages_info,
         ))
@@ -417,10 +610,15 @@ async def query_workbench(
     ]
     batch_completed: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
     batch_in_progress: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    # 每个批次-节点的最新完成时间（返工判断关键：比较前后节点完成时间确定流转方向）
+    batch_node_done_at: dict[uuid.UUID, dict[uuid.UUID, datetime]] = defaultdict(dict)
     if all_batch_ids_for_status:
         for row in (
             await db.execute(
-                select(NodeExecution.batch_id, NodeExecution.node_id, NodeExecution.status).where(
+                select(
+                    NodeExecution.batch_id, NodeExecution.node_id,
+                    NodeExecution.status, NodeExecution.finished_at,
+                ).where(
                     NodeExecution.batch_id.in_(all_batch_ids_for_status),
                     NodeExecution.status.in_(["completed", "in_progress"]),
                     NodeExecution.is_deleted == False,  # noqa: E712
@@ -429,6 +627,10 @@ async def query_workbench(
         ).all():
             if row.status == "completed":
                 batch_completed[row.batch_id].add(row.node_id)
+                if row.finished_at:
+                    cur = batch_node_done_at[row.batch_id].get(row.node_id)
+                    if cur is None or row.finished_at > cur:
+                        batch_node_done_at[row.batch_id][row.node_id] = row.finished_at
             else:
                 batch_in_progress[row.batch_id].add(row.node_id)
 
@@ -460,6 +662,7 @@ async def query_workbench(
             in_progress_execs_by_batch[ex.batch_id].append(ex)
 
     items: list[WorkbenchItem] = []
+    root_no_cache: dict[uuid.UUID, str | None] = {}
 
     for route_id in sorted(all_route_ids):
         route = route_map.get(route_id)
@@ -498,59 +701,43 @@ async def query_workbench(
 
         # 边索引
         edges_by_to: dict[uuid.UUID, list] = defaultdict(list)
+        rework_sources: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)  # node -> rework from_node set
+        normal_outgoing: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
         for e in edges:
             edges_by_to[e.to_node_id].append(e)
+            if e.edge_type == "rework":
+                rework_sources[e.to_node_id].add(e.from_node_id)
+            elif e.edge_type == "normal":
+                normal_outgoing[e.from_node_id].add(e.to_node_id)
 
         # ── pending_start ──
-        for b in batches:
+        for b, node, start_type in _classify_pending_starts(
+            batches, permitted_node_ids, node_map,
+            edges_by_to, rework_sources, normal_outgoing,
+            batch_completed, batch_in_progress, batch_node_done_at,
+        ):
+            can_operate = _can_operate_batch(b, node.id)
+            if view_mode == "mine" and not can_operate:
+                continue
             completed = batch_completed.get(b.id, set())
             in_progress = batch_in_progress.get(b.id, set())
-            for node_id in permitted_node_ids:
-                node = node_map.get(node_id)
-                if not node:
-                    continue
-                if node_id in completed or node_id in in_progress:
-                    continue
-                # 衍生批次的 entry_node 无需前序条件 — 它从父批次继承了状态
-                if b.entry_node_id and node_id == b.entry_node_id:
-                    legal = True
-                else:
-                    incoming = edges_by_to.get(node_id, [])
-                    if incoming:
-                        legal = False
-                        for e in incoming:
-                            if e.from_node_id in completed and not e.is_batch_boundary:
-                                legal = True
-                                break
-                            if (
-                                e.allow_overlap
-                                and not e.is_batch_boundary
-                                and e.from_node_id in in_progress
-                            ):
-                                legal = True
-                                break
-                        if not legal:
-                            continue
-                    else:
-                        # 无入边 = 起点；非 entry 批次只允许 entry_node
-                        if b.entry_node_id and node_id != b.entry_node_id:
-                            continue
-
-                items.append(WorkbenchItem(
-                    type="pending_start",
-                    batch_id=b.id,
-                    batch_no=b.batch_no,
-                    product_name=product_name,
-                    route_id=route_id,
-                    route_name=route.name,
-                    route_version=route.version,
-                    node_id=node_id,
-                    node_name=node.name,
-                    stage_name=node.stage_name,
-                    predecessor_batches=[],
-                    node_assignees=[],
-                    stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
-                ))
+            items.append(WorkbenchItem(
+                type="pending_start",
+                batch_id=b.id,
+                batch_no=b.batch_no,
+                product_name=product_name,
+                route_id=route_id,
+                route_name=route.route_name,
+                node_id=node.id,
+                node_name=node.name,
+                stage_name=node.stage_name,
+                start_type=start_type,
+                batch_owner_name=b.owner_name,
+                can_operate=can_operate,
+                predecessor_batches=[],
+                node_assignees=[],
+                stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), completed, in_progress),
+            ))
 
         # ── pending_receive ──
         route_completed = completed_by_route.get(route_id, [])
@@ -585,11 +772,11 @@ async def query_workbench(
                 parent_ids = list({b.id for _, b in pairs})
                 parent_nos = [b.batch_no for _, b in pairs]
                 # 合并接收无单一 batch_id，面包屑全显示 pending
+                # 待接收是共享认领池：不按归属过滤，所有接收工段负责人均可操作
                 items.append(WorkbenchItem(
                     type="pending_receive",
                     route_id=route_id,
-                    route_name=route.name,
-                    route_version=route.version,
+                    route_name=route.route_name,
                     node_id=to_node_id,
                     node_name=node.name,
                     stage_name=node.stage_name,
@@ -597,19 +784,35 @@ async def query_workbench(
                     parent_batch_ids=parent_ids,
                     predecessor_batches=parent_nos,
                     node_assignees=[],
+                    can_operate=True,
                     stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), set(), set()),
                 ))
             else:
+                # 接收建议批号：根批号 + 目标工段尾缀（覆盖式，不解析批号字符串）
+                stage_suffix = (
+                    suffix_map.get((route_id, node.stage_name), "")
+                    if node.stage_name
+                    else ""
+                )
+                if stage_suffix:
+                    await _batch_root_batch_nos(
+                        db, {b.id for _, b in pairs}, root_no_cache
+                    )
                 for edge, b in pairs:
                     batch_comp = batch_completed.get(b.id, set())
                     batch_ip = batch_in_progress.get(b.id, set())
+                    suggested_batch_no: str | None = None
+                    if stage_suffix:
+                        root_no = root_no_cache.get(b.id)
+                        if root_no:
+                            suggested_batch_no = f"{root_no}{stage_suffix}"
+                    # 待接收是共享认领池：不按归属过滤，所有接收工段负责人均可操作
                     items.append(WorkbenchItem(
                         type="pending_receive",
                         batch_id=b.id,
                         batch_no=b.batch_no,
                         route_id=route_id,
-                        route_name=route.name,
-                        route_version=route.version,
+                        route_name=route.route_name,
                         node_id=to_node_id,
                         node_name=node.name,
                         stage_name=node.stage_name,
@@ -618,6 +821,8 @@ async def query_workbench(
                         parent_batch_ids=[b.id],
                         predecessor_batches=[],
                         node_assignees=[],
+                        can_operate=True,
+                        suggested_batch_no=suggested_batch_no,
                         stage_nodes=_build_stage_nodes(nodes_by_stage.get(node.stage_name or "未分组", []), batch_comp, batch_ip),
                     ))
 
@@ -635,6 +840,9 @@ async def query_workbench(
             b = next((b for b in batches if b.id == ex.batch_id), None)
             if not b:
                 continue
+            can_operate = _can_operate_batch(b, ex.node_id)
+            if view_mode == "mine" and not can_operate:
+                continue
             # 检查是否是工段内最后一个节点
             is_last = True
             stage_nodes = {n.id for n in nodes if n.stage_name == node.stage_name}
@@ -650,14 +858,15 @@ async def query_workbench(
                 batch_no=b.batch_no,
                 product_name=product_name,
                 route_id=route_id,
-                route_name=route.name,
-                route_version=route.version,
+                route_name=route.route_name,
                 node_id=node.id,
                 node_name=node.name,
                 stage_name=node.stage_name,
                 execution_id=ex.id,
                 execution_seq=ex.execution_seq,
                 owner_name=ex.owner_name,
+                batch_owner_name=b.owner_name,
+                can_operate=can_operate,
                 started_at=ex.started_at.isoformat() if ex.started_at else None,
                 is_last_in_stage=is_last,
                 predecessor_batches=[],
@@ -666,6 +875,10 @@ async def query_workbench(
             ))
 
         # ── ready_to_complete：工段内所有节点已完成且有批次边界出边 ──
+        # 一次性计算本路线批次缺填的必填字段（补录入口）
+        missing_exec_by_batch = await _missing_executions_by_batches(
+            db, [b.id for b in batches],
+        )
         # 按工段分组，每组独立判断
         stage_names_in_permitted = {
             node_map[nid].stage_name for nid in permitted_node_ids
@@ -677,9 +890,9 @@ async def query_workbench(
             comp = batch_completed.get(b.id, set())
             ip = batch_in_progress.get(b.id, set())
             for stage_name in stage_names_in_permitted:
+                # 使用路线全部节点（非仅授权节点），否则用户无权限的节点未完成时仍会误判工段完成
                 stage_node_ids = {
-                    nid for nid in permitted_node_ids
-                    if nid in node_map and node_map[nid].stage_name == stage_name
+                    n.id for n in nodes_by_stage.get(stage_name, [])
                 }
                 if not stage_node_ids:
                     continue
@@ -688,6 +901,19 @@ async def query_workbench(
                     continue
                 has_in_progress = any(nid in ip for nid in stage_node_ids)
                 if has_in_progress:
+                    continue
+                # 返工检测：工段末节点必须是最新完成的，否则说明有前驱被返工，工段未真正完成
+                stage_nodes_sorted = nodes_by_stage.get(stage_name, [])
+                if stage_nodes_sorted:
+                    last_in_stage = stage_nodes_sorted[-1]
+                    last_done_at = batch_node_done_at.get(b.id, {}).get(last_in_stage.id)
+                    if last_done_at:
+                        for nid in stage_node_ids:
+                            nid_done_at = batch_node_done_at.get(b.id, {}).get(nid)
+                            if nid_done_at and nid_done_at > last_done_at:
+                                all_stage_done = False
+                                break
+                if not all_stage_done:
                     continue
                 # 检查此工段是否有批次边界出边，或者是路线终点
                 has_boundary_out = any(
@@ -703,15 +929,22 @@ async def query_workbench(
                 last_node = next((node_map[nid] for nid in stage_node_ids if nid in node_map), None)
                 if not last_node:
                     continue
+                can_operate = _can_operate_batch(b, last_node.id)
+                if view_mode == "mine" and not can_operate:
+                    continue
                 items.append(WorkbenchItem(
                     type="ready_to_complete",
                     batch_id=b.id, batch_no=b.batch_no,
                     product_name=product_name,
-                    route_id=route_id, route_name=route.name, route_version=route.version,
+                    route_id=route_id,
+                    route_name=route.route_name,
                     node_id=last_node.id, node_name=last_node.name,
                     stage_name=stage_name,
+                    batch_owner_name=b.owner_name,
+                    can_operate=can_operate,
                     predecessor_batches=[],
                     node_assignees=[],
+                    missing_executions=missing_exec_by_batch.get(b.id, []),
                     stage_nodes=_build_stage_nodes(nodes_by_stage.get(stage_name or "未分组", []), comp, ip),
                 ))
 
@@ -754,7 +987,7 @@ async def query_workbench(
 
     # ── 最近30天完成的记录 ──
     recent: list[RecentCompletedItem] = []
-    since = datetime.now(UTC) - timedelta(days=30)
+    since = now() - timedelta(days=30)
     # 收集所有路线节点（使用已缓存的 route_nodes_cache）
     all_nodes: dict[uuid.UUID, tuple] = {}  # node_id -> (node, route)
     for rid in route_map:
@@ -791,11 +1024,14 @@ async def query_workbench(
         b = recent_batches_map.get(ex.batch_id)
         if not b:
             continue
+        # mine 模式按归属过滤：只显示自己/无主的完成记录
+        if view_mode == "mine" and not _can_operate_batch(b, ex.node_id):
+            continue
         p = product_map.get(route.product_id)
         recent.append(RecentCompletedItem(
             batch_no=b.batch_no, batch_id=b.id,
             product_name=p.product_name if p else None,
-            route_id=route.id, route_name=route.name,
+            route_id=route.id, route_name=route.route_name,
             node_id=node.id, node_name=node.name,
             stage_name=node.stage_name,
             execution_id=ex.id,

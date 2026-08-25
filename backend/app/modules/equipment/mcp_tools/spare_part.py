@@ -8,7 +8,9 @@ from sqlalchemy import or_, select
 from app.modules.equipment.models.spare_part import SparePart, SparePartStock
 from app.platform.identity.mcp_tools import resolve_user
 from app.platform.mcp.deps import get_db
-from app.platform.mcp.server import mcp
+from app.platform.mcp.server import get_module_mcp
+
+mcp = get_module_mcp("equipment")
 
 
 @mcp.tool()

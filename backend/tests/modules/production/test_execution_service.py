@@ -12,14 +12,22 @@
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch
+from app.modules.production.models import (
+    Batch,
+    BatchIntermediateConsumption,
+    BatchIntermediateOutput,
+    NodeExecution,
+)
 from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
@@ -27,9 +35,17 @@ from app.modules.production.schemas import (
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
+    IntermediateConsumptionIn,
+    IntermediateOutputIn,
+    LineCreate,
 )
-from app.modules.production.service import batch_service, execution_service
-from tests.modules.production.conftest import rand_code
+from app.modules.production.service import (
+    batch_service,
+    execution_service,
+    line_service,
+)
+from app.platform.identity.models import User
+from tests.modules.production.conftest import make_raw_output, rand_code
 
 
 async def _make_batch(db: AsyncSession, ctx: dict[str, Any]) -> Batch:
@@ -310,10 +326,10 @@ class TestStart:
 
 
 class TestCompleteAndRework:
-    async def test_complete_missing_required_end_field_rejected(
+    async def test_complete_without_required_end_field_allowed(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
-        """B 节点 end 阶段有 required 字段 yield_qty，缺失时完成被拒；补齐后完成成功。"""
+        """B 节点 end 阶段 required 字段 yield_qty 缺失时仍可结束工序（批次结束前可补录）。"""
         batch = await _make_batch(db_session, published_route)
         await _complete_node_a(db_session, published_route, batch)
         ex = await execution_service.start_execution(
@@ -325,11 +341,58 @@ class TestCompleteAndRework:
             ),
             user=None,
         )
-        with pytest.raises(AppException):
-            await execution_service.complete_execution(
-                db_session, ex.id, ExecutionCompleteIn(), user=None,
-            )
         done = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        assert done.status == "completed"
+        assert done.finished_at is not None
+
+    async def test_complete_batch_rejected_until_backfill(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次完成时必填字段未上报被拒；补录后批次可完成。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        with pytest.raises(AppException, match="yield_qty|产出量"):
+            await batch_service.complete_batch(db_session, batch.id, user=None)
+        # 补录后批次可完成
+        await execution_service.backfill_execution_fields(
+            db_session,
+            ex.id,
+            [FieldValueIn(field_key="yield_qty", value=80)],
+            user=None,
+        )
+        done = await batch_service.complete_batch(db_session, batch.id, user=None)
+        assert done.status == "completed"
+
+    async def test_backfill_rejected_after_batch_completed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次完成后禁止补录。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
             db_session,
             ex.id,
             ExecutionCompleteIn(
@@ -337,8 +400,42 @@ class TestCompleteAndRework:
             ),
             user=None,
         )
-        assert done.status == "completed"
-        assert done.finished_at is not None
+        await batch_service.complete_batch(db_session, batch.id, user=None)
+        with pytest.raises(AppException, match="批次已结束"):
+            await execution_service.backfill_execution_fields(
+                db_session,
+                ex.id,
+                [FieldValueIn(field_key="yield_qty", value=90)],
+                user=None,
+            )
+
+    async def test_backfill_records_filled_at(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """补录写入 filled_at/filled_by，覆盖更新已有行。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        values = await execution_service.backfill_execution_fields(
+            db_session,
+            ex.id,
+            [FieldValueIn(field_key="yield_qty", value=80)],
+            user=None,
+        )
+        row = next(v for v in values if v.field_key == "yield_qty")
+        assert row.filled_at is not None
+        assert row.value_numeric == 80
 
     async def test_rework_increments_seq(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -404,3 +501,632 @@ class TestCompleteAndRework:
             db_session, ex.id, user=None,
         )
         assert aborted.status == "aborted"
+
+
+async def _make_line(db: AsyncSession) -> Any:
+    """辅助：创建一条测试产线。"""
+    return await line_service.create_line(
+        db, LineCreate(name=rand_code("产线")), None,
+    )
+
+
+async def _make_im_type(db: AsyncSession) -> Any:
+    """辅助：创建真实中间体类型（complete 的类型存在性校验需要）。"""
+    from app.modules.production.schemas import IntermediateTypeCreate
+    from app.modules.production.service import intermediate_service
+
+    return await intermediate_service.create_intermediate_type(
+        db,
+        IntermediateTypeCreate(code=rand_code("IM"), name=rand_code("中间体")),
+        None,
+    )
+
+
+async def _make_raw_output(
+    db: AsyncSession, ctx: dict[str, Any], batch: Batch,
+    *, line_id: Any = None, creator: Any = None, quantity: float = 100,
+) -> BatchIntermediateOutput:
+    """辅助：手造一条产出记录，精确控制 line_id、归属人与数量。
+
+    薄封装 conftest.make_raw_output，保持本文件调用点不变。
+    """
+    return await make_raw_output(
+        db,
+        batch_id=batch.id,
+        node_id=ctx["node_a"].id,
+        line_id=line_id,
+        created_by=creator,
+        quantity=quantity,
+    )
+
+
+class TestLineVisibility:
+    """产线标记与消耗可见性校验。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock 权限查询为管理员，绕开 Redis 依赖，聚焦产线校验逻辑。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:submit"}
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", fake_perms)
+
+    async def test_complete_with_outputs_requires_line_id(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """有产出但未传产线 → 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex.id,
+                ExecutionCompleteIn(intermediate_outputs=[
+                    IntermediateOutputIn(
+                        intermediate_type_id=im_type.id, quantity=10, unit="L",
+                    ),
+                ]),
+                user=test_user,
+            )
+        assert "请选择产线" in str(ei.value.message)
+
+    async def test_complete_line_not_bound_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """产线存在但操作人未绑定（批次负责人也无绑定）→ 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex.id,
+                ExecutionCompleteIn(
+                    intermediate_outputs=[
+                        IntermediateOutputIn(
+                            intermediate_type_id=im_type.id,
+                            quantity=10, unit="L",
+                        ),
+                    ],
+                    line_id=line.id,
+                ),
+                user=test_user,
+            )
+        assert "未绑定该产线" in str(ei.value.message)
+
+    async def test_complete_batch_owner_fallback_allows(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """执行人未绑定产线，批次负责人绑定 → 兜底通过，产出行落产线。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        executor = User(name="执行人", employee_no=rand_code("E"))
+        db_session.add(executor)
+        await db_session.flush()
+
+        batch = await _make_batch(db_session, published_route)
+        # 批次负责人 = test_user（首次开始认领）
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id,
+            ExecutionCompleteIn(
+                intermediate_outputs=[
+                    IntermediateOutputIn(
+                        intermediate_type_id=im_type.id, quantity=10, unit="L",
+                    ),
+                ],
+                line_id=line.id,
+            ),
+            user=executor,
+        )
+        outputs = await repo.get_intermediate_outputs_by_batch(db_session, batch.id)
+        assert outputs[0].line_id == line.id
+
+    async def test_complete_no_outputs_skips_line_check(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """无产出结束不校验产线（MCP 路径回归守护）。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=test_user,
+        )
+
+    async def test_complete_duplicate_batch_no_in_payload_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """同一提交内两条产出批号相同（含留空默认批次号）→ 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex.id,
+                ExecutionCompleteIn(
+                    intermediate_outputs=[
+                        IntermediateOutputIn(
+                            intermediate_type_id=im_type.id, quantity=10, unit="L",
+                        ),
+                        IntermediateOutputIn(
+                            intermediate_type_id=im_type.id, quantity=5, unit="L",
+                        ),
+                    ],
+                    line_id=line.id,
+                ),
+                user=test_user,
+            )
+        assert "不重复的批号" in str(ei.value.message)
+
+    async def test_complete_duplicate_batch_no_in_history_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """产出批号与历史未删除产出重复 → 拒绝。"""
+        im_type = await _make_im_type(db_session)
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        dup_no = rand_code("IMB")
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=test_user,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id,
+            ExecutionCompleteIn(
+                intermediate_outputs=[
+                    IntermediateOutputIn(
+                        intermediate_type_id=im_type.id, quantity=10, unit="L",
+                        intermediate_batch_no=dup_no,
+                    ),
+                ],
+                line_id=line.id,
+            ),
+            user=test_user,
+        )
+        # 返工再执行一次（起点节点已完成，需偏离原因），用相同批号
+        ex2 = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                deviation_reason="返工",
+            ),
+            user=test_user,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.complete_execution(
+                db_session, ex2.id,
+                ExecutionCompleteIn(
+                    intermediate_outputs=[
+                        IntermediateOutputIn(
+                            intermediate_type_id=im_type.id, quantity=3, unit="L",
+                            intermediate_batch_no=dup_no,
+                        ),
+                    ],
+                    line_id=line.id,
+                ),
+                user=test_user,
+            )
+        assert "已存在" in str(ei.value.message)
+
+    async def test_start_consumption_same_line_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗产出属于操作人绑定产线 → 通过。"""
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=line.id, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def test_start_consumption_other_line_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗产出属其他产线 → 拒绝。"""
+        line1 = await _make_line(db_session)
+        line2 = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line2.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=line1.id, creator=uuid.uuid4(),
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=5, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "不在您负责的产线" in str(ei.value.message)
+
+    async def test_start_consumption_null_line_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史产出无产线标记 → 放行（过渡期）。"""
+        line = await _make_line(db_session)
+        await line_service.bind_user_line(
+            db_session, user_id=test_user.id, line_id=line.id,
+            created_by=test_user.id,
+        )
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def test_start_consumption_no_binding_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """操作人与批次负责人均未绑定产线 → 放行（过渡期全量）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(),
+        )
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=5, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+    async def _make_history_consumption(
+        self, db_session: AsyncSession, out: BatchIntermediateOutput,
+        quantity: float,
+    ) -> None:
+        """辅助：手造一条历史消耗记录，模拟该产出已被部分消耗。"""
+        db_session.add(
+            BatchIntermediateConsumption(
+                batch_id=uuid.uuid4(),
+                execution_id=uuid.uuid4(),
+                node_id=out.node_id,
+                intermediate_type_id=out.intermediate_type_id,
+                output_id=out.id,
+                quantity=quantity,
+                unit=out.unit,
+                remark=None,
+                created_by=uuid.uuid4(),
+            )
+        )
+        await db_session.flush()
+
+    async def test_start_consumption_exceeds_available_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """消耗数量超出产出余量 → 硬拦截。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=150, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "超出" in str(ei.value.message)
+
+    async def test_start_consumption_with_history_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史已消耗 80 后再耗 30（余量 20）→ 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        await self._make_history_consumption(db_session, out, 80)
+
+        with pytest.raises(AppException) as ei:
+            await execution_service.start_execution(
+                db_session, batch.id,
+                ExecutionStartIn(
+                    node_id=published_route["node_b"].id,
+                    field_values=[FieldValueIn(field_key="temp", value=25)],
+                    intermediate_consumptions=[
+                        IntermediateConsumptionIn(
+                            intermediate_type_id=out.intermediate_type_id,
+                            output_id=out.id, quantity=30, unit="L",
+                        ),
+                    ],
+                ),
+                user=test_user,
+            )
+        assert "余量" in str(ei.value.message)
+
+    async def test_start_consumption_edge_quantity_ok(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """历史已消耗 80 后刚好耗完余量 20 → 通过（边界）。"""
+        batch = await _make_batch(db_session, published_route)
+        await _complete_node_a(db_session, published_route, batch)
+        out = await _make_raw_output(
+            db_session, published_route, batch,
+            line_id=None, creator=uuid.uuid4(), quantity=100,
+        )
+        await self._make_history_consumption(db_session, out, 80)
+
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+                intermediate_consumptions=[
+                    IntermediateConsumptionIn(
+                        intermediate_type_id=out.intermediate_type_id,
+                        output_id=out.id, quantity=20, unit="L",
+                    ),
+                ],
+            ),
+            user=test_user,
+        )
+        assert ex.status == "in_progress"
+
+
+class TestGetLastCompletedExecutionByNode:
+    async def test_returns_last_completed_for_node(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """同批次同节点插两条 completed（finished_at 不同）+ 一条 in_progress，
+        断言返回 finished_at 最晚的 completed 那一条。"""
+        batch = await _make_batch(db_session, published_route)
+        node_id = published_route["node_a"].id
+        db_session.add_all([
+            NodeExecution(
+                batch_id=batch.id, node_id=node_id, execution_seq=1,
+                status="completed", started_at=datetime.now(UTC),
+                finished_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+            ),
+            NodeExecution(
+                batch_id=batch.id, node_id=node_id, execution_seq=2,
+                status="completed", started_at=datetime.now(UTC),
+                finished_at=datetime(2026, 8, 2, 10, 0, tzinfo=UTC),
+            ),
+            NodeExecution(
+                batch_id=batch.id, node_id=node_id, execution_seq=3,
+                status="in_progress", started_at=datetime.now(UTC),
+            ),
+        ])
+        await db_session.flush()
+
+        latest = await repo.get_last_completed_execution(
+            db_session, batch.id, node_id,
+        )
+        assert latest is not None
+        assert latest.execution_seq == 2
+        assert latest.status == "completed"
+
+    async def test_returns_none_when_no_last_completed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """同批次同节点只有 in_progress 执行 → 返回 None。"""
+        batch = await _make_batch(db_session, published_route)
+        node_id = published_route["node_a"].id
+        db_session.add(
+            NodeExecution(
+                batch_id=batch.id, node_id=node_id, execution_seq=1,
+                status="in_progress", started_at=datetime.now(UTC),
+            ),
+        )
+        await db_session.flush()
+
+        latest = await repo.get_last_completed_execution(
+            db_session, batch.id, node_id,
+        )
+        assert latest is None
+
+
+class TestManualTime:
+    """开始/结束工序手填时间：生效、时区归一化、未来时间拒绝、结束早于开始拒绝、不填回退服务器时间。"""
+
+    async def test_start_with_manual_started_at_sets_execution_and_batch_first_start(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """首工序手填过去时间 → 执行与批次 first_started_at 均为该值。"""
+        batch = await _make_batch(db_session, published_route)
+        t = now() - timedelta(hours=2)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=t),
+            user=None,
+        )
+        assert ex.started_at == t
+        refreshed = await repo.get_batch(db_session, batch.id)
+        assert refreshed is not None and refreshed.first_started_at == t
+
+    async def test_start_with_naive_started_at_normalized_to_app_tz(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """naive 输入按厂区时区（Asia/Shanghai）解释。"""
+        batch = await _make_batch(db_session, published_route)
+        naive = datetime(2026, 8, 20, 10, 30)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=naive),
+            user=None,
+        )
+        assert ex.started_at == naive.replace(tzinfo=APP_TZ)
+
+    async def test_start_rejects_future_started_at(
+        self, published_route: dict[str, Any],
+    ) -> None:
+        """未来开始时间在 schema 层即被拒绝。"""
+        with pytest.raises(ValidationError):
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                started_at=now() + timedelta(days=1),
+            )
+
+    async def test_complete_with_manual_finished_at_sets_execution_and_batch_last_finish(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """结束工序手填时间 → 执行与批次 last_finished_at 均为该值。"""
+        batch = await _make_batch(db_session, published_route)
+        t_start = now() - timedelta(hours=2)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id, started_at=t_start),
+            user=None,
+        )
+        t = t_start + timedelta(hours=1)
+        done = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(finished_at=t), user=None,
+        )
+        assert done.finished_at == t
+        refreshed = await repo.get_batch(db_session, batch.id)
+        assert refreshed is not None and refreshed.last_finished_at == t
+
+    async def test_complete_rejects_finished_before_started(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """结束时间早于开始时间 → 400 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id, ExecutionStartIn(node_id=published_route["node_a"].id), user=None,
+        )
+        with pytest.raises(AppException, match="早于开始"):
+            await execution_service.complete_execution(
+                db_session,
+                ex.id,
+                ExecutionCompleteIn(finished_at=ex.started_at - timedelta(minutes=1)),
+                user=None,
+            )
+
+    async def test_complete_rejects_future_finished_at(self) -> None:
+        """未来结束时间在 schema 层即被拒绝。"""
+        with pytest.raises(ValidationError):
+            ExecutionCompleteIn(finished_at=now() + timedelta(days=1))
+
+    async def test_complete_without_manual_time_uses_server_now(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """不填结束时间 → 回退服务器当前时间（回归守护"不填=现状"）。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id, ExecutionStartIn(node_id=published_route["node_a"].id), user=None,
+        )
+        done = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        assert done.finished_at is not None
+        assert abs((done.finished_at - now()).total_seconds()) < 60

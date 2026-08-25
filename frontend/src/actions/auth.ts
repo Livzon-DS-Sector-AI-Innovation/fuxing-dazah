@@ -14,8 +14,14 @@ export async function getCurrentUser(): Promise<User | null> {
   if (!token?.value) return null
 
   try {
+    // 转发 impersonate_token，模拟用户时 /me 返回目标用户身份
+    const impToken = cookieStore.get('impersonate_token')
+    const headers: Record<string, string> = { Authorization: `Bearer ${token.value}` }
+    if (impToken?.value) {
+      headers['Cookie'] = `impersonate_token=${impToken.value}`
+    }
     const res = await fetch(`${API_BASE}/api/v1/identity/me`, {
-      headers: { Authorization: `Bearer ${token.value}` },
+      headers,
       cache: 'no-store',
     })
     if (!res.ok) return null

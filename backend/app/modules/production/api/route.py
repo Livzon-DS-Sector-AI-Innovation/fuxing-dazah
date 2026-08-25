@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
-from app.modules.production.schemas import RouteCreate, RouteGraphIn, RouteOut
+from app.modules.production.schemas import (
+    RouteCreate,
+    RouteGraphIn,
+    RouteOut,
+    RouteRename,
+)
 from app.modules.production.service import route_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
@@ -87,13 +92,25 @@ async def archive_route(
     return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
 
 
-@router.post("/routes/{route_id}/new-version", summary="复制新版本（draft）")
-async def new_route_version(
+@router.post("/routes/{route_id}/copy", summary="复制为新产品路线（draft）")
+async def copy_route(
     route_id: uuid.UUID,
+    payload: RouteRename,
     user: User = Depends(_manage),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    route = await route_service.new_version(db, route_id, user)
+    route = await route_service.copy_route(db, route_id, payload.route_name, user)
+    return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
+
+
+@router.put("/routes/{route_id}/rename", summary="重命名路线（任意状态）")
+async def rename_route(
+    route_id: uuid.UUID,
+    payload: RouteRename,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    route = await route_service.rename_route(db, route_id, payload.route_name, user)
     return success_response(RouteOut.model_validate(route).model_dump(mode="json"))
 
 

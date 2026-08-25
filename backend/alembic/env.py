@@ -1,11 +1,7 @@
-import asyncio
 from collections.abc import MutableMapping
 from importlib import import_module
 from logging.config import fileConfig
 from typing import Literal
-
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from app.core.config import get_settings
@@ -15,7 +11,10 @@ from app.shared.module_registry import BUSINESS_MODULES, BUSINESS_SCHEMAS
 # Import platform and module models so Alembic can detect them.
 import_module("app.platform.audit.models")
 import_module("app.platform.identity.models")
+import_module("app.platform.permission.models")
 for module in BUSINESS_MODULES:
+    if module.db_schema is None:
+        continue  # 无数据库表的模块（如 toolbox）
     import_module(f"app.modules.{module.code}.models")
 
 config = context.config
@@ -27,7 +26,7 @@ target_metadata = Base.metadata
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
-PROJECT_SCHEMAS = frozenset(("identity", "audit", *BUSINESS_SCHEMAS))
+PROJECT_SCHEMAS = frozenset(("identity", "audit", "permission", *BUSINESS_SCHEMAS))
 
 
 def include_name(
@@ -70,9 +69,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    from urllib.parse import quote_plus, urlparse
+
     from sqlalchemy import create_engine
     from sqlalchemy.pool import NullPool
-    from urllib.parse import urlparse, quote_plus
 
     # Parse URL to separate host and database
     db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "")
@@ -84,7 +84,12 @@ def run_migrations_online() -> None:
     db_name = parsed.path.lstrip('/') or "postgres"
 
     # Build connection URL with db name for pg8000
-    sync_url = f"postgresql+pg8000://{quote_plus(parsed.username)}:{quote_plus(parsed.password)}@{parsed.hostname}:{parsed.port or 5432}/{db_name}"
+    creds = ""
+    if parsed.username or parsed.password:
+        creds = f"{quote_plus(parsed.username or '')}:{quote_plus(parsed.password or '')}@"
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    sync_url = f"postgresql+pg8000://{creds}{host}:{port}/{db_name}"
 
     engine = create_engine(
         sync_url,

@@ -1,10 +1,20 @@
 'use client'
 
-import { useState } from 'react'
-import { App, Form, Input, InputNumber, Modal } from 'antd'
+import { useEffect, useState } from 'react'
+import { App, Alert, Button, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
+import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { completeExecution } from '@/actions/production'
-import { fetchRouteGraphClient } from '@/lib/api/production-client'
+import type { Dayjs } from 'dayjs'
+import {
+  completeExecution,
+  fetchMyLineAssignments,
+  fetchLineAssignmentsByUser,
+} from '@/actions/production'
+import {
+  fetchAvailableContainersClient,
+  fetchBatchDetailClient,
+  fetchRouteGraphClient,
+} from '@/lib/api/production-client'
 import type { Execution } from '@/types/production'
 import { DynamicFieldFormItems, buildFieldValues } from './DynamicFieldFormItems'
 
@@ -29,26 +39,133 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
   const endDefs = node?.fields.filter(f => f.phase === 'end') ?? []
   const outputIntermediates = (node?.intermediates ?? []).filter(im => im.direction === 'output')
 
+  // ── 产线候选：操作人绑定 ∪ 批次负责人绑定（操作人绑定排前）──
+  const { data: batchDetail } = useQuery({
+    queryKey: ['production-batch-detail', execution.batch_id],
+    queryFn: () => fetchBatchDetailClient(execution.batch_id),
+    enabled: outputIntermediates.length > 0,
+  })
+  const { data: myLines } = useQuery({
+    queryKey: ['production-my-lines'],
+    queryFn: async () => {
+      const r = await fetchMyLineAssignments()
+      return r.success ? (r.data ?? []) : []
+    },
+    enabled: outputIntermediates.length > 0,
+  })
+  const { data: ownerLines } = useQuery({
+    queryKey: ['production-owner-lines', batchDetail?.owner_user_id],
+    queryFn: async () => {
+      if (!batchDetail?.owner_user_id) return []
+      const r = await fetchLineAssignmentsByUser(batchDetail.owner_user_id)
+      return r.success ? (r.data ?? []) : []
+    },
+    enabled: outputIntermediates.length > 0 && !!(batchDetail?.owner_user_id),
+  })
+  // 与后端 resolve_user_line_ids 同口径：操作人绑定优先，仅当操作人无绑定时用批次负责人绑定兜底
+  const myLineIds = new Set((myLines ?? []).map(la => la.line_id))
+  const lineOptions = (myLineIds.size > 0 ? (myLines ?? []) : (ownerLines ?? []))
+    .map(la => ({
+      value: la.line_id,
+      label: la.line_name ?? la.line_id,
+    }))
+  // 候选仅一条时自动带出；依赖派生原始值，避免每次渲染重跑 effect
+  const autoLineValue = lineOptions.length === 1 ? lineOptions[0].value : null
+
+  // ── 可用混装容器（按类型分组，产出可选落入容器）──
+  const { data: availableContainers } = useQuery({
+    queryKey: ['production-available-containers', execution.batch_id],
+    queryFn: () => fetchAvailableContainersClient(undefined, execution.batch_id),
+    enabled: outputIntermediates.length > 0,
+  })
+  const containersByType = new Map<string, typeof availableContainers>()
+  for (const ct of availableContainers ?? []) {
+    const list = containersByType.get(ct.intermediate_type_id) ?? []
+    list!.push(ct)
+    containersByType.set(ct.intermediate_type_id, list!)
+  }
+  const containerOptionsByType = (typeId: string) =>
+    (containersByType.get(typeId) ?? []).map(ct => ({
+      value: ct.id,
+      label: `${ct.name}（余量 ${ct.available_quantity ?? 0}）`,
+    }))
+
+  useEffect(() => {
+    // 字段为空才填充，避免覆盖用户选择
+    if (autoLineValue && !form.getFieldValue('line_id')) {
+      form.setFieldsValue({ line_id: autoLineValue })
+    }
+  }, [autoLineValue, form])
+
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
+    // 必填产出：至少填一行数量（动态行不能逐行加 required，此处整体校验）
+    const missingRequired = outputIntermediates
+      .filter(im => im.required)
+      .filter(im => !((values[`output_rows_${im.intermediate_type_id}`] ?? []) as Array<{ qty?: number }>)
+        .some(r => Number(r.qty) > 0))
+    if (missingRequired.length > 0) {
+      message.error(`请填写必填产出「${missingRequired.map(im => im.intermediate_type_name ?? im.intermediate_type_id).join('、')}」的数量`)
+      return
+    }
+    // 多行产出需分别填写互不重复的批号（留空会默认使用批次号，导致重复）
+    for (const im of outputIntermediates) {
+      const rows = (values[`output_rows_${im.intermediate_type_id}`] ?? []) as Array<{ batch_no?: string, qty?: number }>
+      const filled = rows.filter(r => Number(r.qty) > 0)
+      const batchNos = filled.map(r => (r.batch_no ?? '').trim()).filter(Boolean)
+      const name = im.intermediate_type_name ?? '产出'
+      if (filled.length > 1 && batchNos.length < filled.length) {
+        message.error(`「${name}」拆分为多个批次时，每行请填写不重复的中间体批号`)
+        return
+      }
+      if (new Set(batchNos).size !== batchNos.length) {
+        message.error(`「${name}」的中间体批号重复`)
+        return
+      }
+    }
     setSubmitting(true)
     try {
     const result = await completeExecution(execution.id, {
       field_values: buildFieldValues(endDefs, values),
       remark: (values.remark as string) ?? null,
+      finished_at: (values.finished_at as Dayjs | undefined)?.toISOString() ?? null,
       intermediate_outputs: outputIntermediates.length > 0
-        ? outputIntermediates.map(im => ({
-            intermediate_type_id: im.intermediate_type_id,
-            quantity: Number((values as Record<string, number>)[`output_qty_${im.intermediate_type_id}`]) || 0,
-            unit: ((values as Record<string, string>)[`output_unit_${im.intermediate_type_id}`]) || undefined,
-            intermediate_batch_no: ((values as Record<string, string>)[`output_batch_${im.intermediate_type_id}`]) || undefined,
-            remark: ((values as Record<string, string>)[`output_remark_${im.intermediate_type_id}`]) || undefined,
-          })).filter(o => o.quantity > 0)
+        ? outputIntermediates.flatMap(im => {
+            const rows = (values[`output_rows_${im.intermediate_type_id}`] ?? []) as Array<{
+              batch_no?: string, unit?: string, qty?: number, remark?: string, container_id?: string
+            }>
+            return rows
+              .filter(r => Number(r.qty) > 0)
+              .map(r => ({
+                intermediate_type_id: im.intermediate_type_id,
+                quantity: Number(r.qty),
+                unit: r.unit || undefined,
+                intermediate_batch_no: r.batch_no || undefined,
+                container_id: r.container_id || null,
+                remark: r.remark || undefined,
+              }))
+          })
         : [],
+      line_id: outputIntermediates.length > 0
+        ? ((values.line_id as string) ?? null)
+        : null,
     })
     if (result.success) {
-      message.success('工序已结束')
+      const startedMs = new Date(execution.started_at).getTime()
+      const isValid = !Number.isNaN(startedMs) && startedMs > 0
+      const stepName = execution.node_name ?? '工序'
+      if (isValid) {
+        const finishedMs = (values.finished_at as Dayjs | undefined)?.valueOf() ?? Date.now()
+        const durationMs = finishedMs - startedMs
+        const durationMin = Math.round(durationMs / 60000)
+        const durationStr = durationMin < 60
+          ? `${durationMin} 分钟`
+          : `${(durationMin / 60).toFixed(1)} 小时`
+        message.success(`${stepName}已完成，耗时 ${durationStr}`)
+      } else {
+        message.success(`${stepName}已完成`)
+      }
       queryClient.invalidateQueries({
         queryKey: ['production-batch-detail', execution.batch_id],
       })
@@ -83,12 +200,58 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
       styles={{ body: { padding: '16px 24px', maxHeight: '70vh', overflowY: 'auto' } }}
     >
       <Form form={form} layout="vertical">
-        {/* ── 动态字段 ── */}
-        <DynamicFieldFormItems defs={endDefs} />
+        {/* ── 结束时间（可选） ── */}
+        <Form.Item
+          name="finished_at"
+          label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>结束时间（可选）</span>}
+        >
+          <DatePicker
+            showTime={{ format: 'HH:mm' }}
+            format="YYYY-MM-DD HH:mm"
+            placeholder="留空默认为当前时间"
+            style={{ width: '100%', borderRadius: 8 }}
+          />
+        </Form.Item>
+
+        {/* ── 动态字段（必填不阻断，批次结束前可补录） ── */}
+        <DynamicFieldFormItems defs={endDefs} enforceRequired={false} />
 
         {/* ── 产出物料 ── */}
         {outputIntermediates.length > 0 && (
           <div style={{ marginTop: endDefs.length > 0 ? 8 : 0, marginBottom: 16 }}>
+            <Form.Item
+              name="line_id"
+              label={<span style={{ fontSize: 13, fontWeight: 500, color: '#37352f' }}>产线</span>}
+              rules={[
+                {
+                  // 与后端对齐：仅当有未选容器的产出（精确批次）时才要求产线；混装产出产线随容器
+                  validator: (_: unknown, value: string | undefined) => {
+                    const hasPreciseOutput = outputIntermediates.some(im => {
+                      const rows = (form.getFieldValue(`output_rows_${im.intermediate_type_id}`) ?? []) as Array<{ qty?: number, container_id?: string }>
+                      return rows.some(r => Number(r.qty) > 0 && !r.container_id)
+                    })
+                    if (!value && hasPreciseOutput) {
+                      return Promise.reject(new Error('请选择本次精确产出落地的产线'))
+                    }
+                    return Promise.resolve()
+                  },
+                },
+              ]}
+            >
+              <Select
+                placeholder="选择产线"
+                options={lineOptions}
+                style={{ borderRadius: 6 }}
+              />
+            </Form.Item>
+            {lineOptions.length === 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                title="您尚未绑定产线，请联系管理员在「主数据管理-产线」中配置"
+                style={{ marginBottom: 12 }}
+              />
+            )}
             {outputIntermediates.map(im => (
               <div key={im.intermediate_type_id} style={{
                 padding: '14px 16px', marginBottom: 10,
@@ -106,47 +269,83 @@ export function CompleteExecutionModal({ execution, routeId, onClose, onSuccess 
                   )}
                 </div>
 
-                {/* 产出详情 */}
-                <div style={{
-                  display: 'flex', flexDirection: 'column', gap: 10,
-                  padding: '12px 14px', borderRadius: 8,
-                  background: '#fafaf8',
-                }}>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <Form.Item
-                      name={`output_batch_${im.intermediate_type_id}`}
-                      label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>中间体批号</span>}
-                      style={{ margin: 0, flex: 1 }}
-                    >
-                      <Input placeholder="默认使用批次号" style={{ borderRadius: 6 }} />
-                    </Form.Item>
+                {/* 产出详情：同类型可拆多个中间体批次 */}
+                <Form.List name={`output_rows_${im.intermediate_type_id}`} initialValue={[{}]}>
+                  {(fields, { add, remove }) => (
+                    <div>
+                      {fields.map(({ key, name, ...rest }) => (
+                        <div key={key} style={{
+                          display: 'flex', flexDirection: 'column', gap: 10,
+                          padding: '12px 14px', marginBottom: 10, borderRadius: 8,
+                          background: '#fafaf8',
+                        }}>
+                          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                            <Form.Item
+                              {...rest}
+                              name={[name, 'batch_no']}
+                              label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>中间体批号</span>}
+                              style={{ margin: 0, flex: 1 }}
+                            >
+                              <Input placeholder="默认使用批次号" style={{ borderRadius: 6 }} />
+                            </Form.Item>
 
-                    <Form.Item
-                      name={`output_unit_${im.intermediate_type_id}`}
-                      label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>单位</span>}
-                      style={{ margin: 0, width: 120 }}
-                    >
-                      <Input placeholder={im.unit_override ?? '默认单位'} style={{ borderRadius: 6 }} />
-                    </Form.Item>
-                  </div>
+                            <Form.Item
+                              {...rest}
+                              name={[name, 'unit']}
+                              label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>单位</span>}
+                              style={{ margin: 0, width: 120 }}
+                            >
+                              <Input placeholder={im.unit_override ?? '默认单位'} style={{ borderRadius: 6 }} />
+                            </Form.Item>
 
-                  <Form.Item
-                    name={`output_qty_${im.intermediate_type_id}`}
-                    label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>数量</span>}
-                    rules={im.required ? [{ required: true, message: '请输入数量' }] : undefined}
-                    style={{ margin: 0 }}
-                  >
-                    <InputNumber min={1} placeholder="数量" style={{ width: '100%' }} />
-                  </Form.Item>
-                </div>
+                            <Form.Item
+                              {...rest}
+                              name={[name, 'qty']}
+                              label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>数量</span>}
+                              style={{ margin: 0, width: 130 }}
+                            >
+                              <InputNumber min={1} placeholder="数量" style={{ width: '100%', borderRadius: 6 }} />
+                            </Form.Item>
 
-                {/* 备注 */}
-                <Form.Item
-                  name={`output_remark_${im.intermediate_type_id}`}
-                  style={{ marginBottom: 0, marginTop: 10 }}
-                >
-                  <Input placeholder="备注（可选）" style={{ borderRadius: 6 }} />
-                </Form.Item>
+                            {fields.length > 1 && (
+                              <DeleteOutlined
+                                onClick={() => remove(name)}
+                                style={{ color: '#ff4d4f', cursor: 'pointer', marginTop: 28 }}
+                              />
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', gap: 10 }}>
+                            <Form.Item
+                              {...rest}
+                              name={[name, 'container_id']}
+                              label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>混装容器（可选）</span>}
+                              style={{ margin: 0, flex: 1 }}
+                            >
+                              <Select
+                                allowClear
+                                placeholder="选容器则混装入库（产线随容器）"
+                                options={containerOptionsByType(im.intermediate_type_id)}
+                                style={{ borderRadius: 6 }}
+                              />
+                            </Form.Item>
+                            <Form.Item
+                              {...rest}
+                              name={[name, 'remark']}
+                              label={<span style={{ fontSize: 12, fontWeight: 500, color: '#787671' }}>备注</span>}
+                              style={{ margin: 0, flex: 1 }}
+                            >
+                              <Input placeholder="备注（可选）" style={{ borderRadius: 6 }} />
+                            </Form.Item>
+                          </div>
+                        </div>
+                      ))}
+                      <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />} style={{ borderRadius: 8 }}>
+                        添加中间体批次
+                      </Button>
+                    </div>
+                  )}
+                </Form.List>
               </div>
             ))}
           </div>

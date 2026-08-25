@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DatePicker, Segmented, Spin, Empty, App, Button } from 'antd'
-import { Line, Bar } from '@ant-design/charts'
+import { Line, Bar, Pie } from '@ant-design/charts'
 import { DownloadOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
 import * as XLSX from 'xlsx'
 import { getEnergyOverview } from '@/actions/energy'
-import type { EnergyOverview, EnergyTypeMeta } from '@/types/energy'
+import { fetchPriceCategoryDistribution } from '@/lib/api/energy'
+import { PricePeriodDrawer } from '@/components/energy/PricePeriodDrawer'
+import type { EnergyOverview, EnergyTypeMeta, PriceCategoryDistribution } from '@/types/energy'
 
 const { RangePicker } = DatePicker
 
@@ -27,6 +29,9 @@ export default function VisualizationPage() {
   const [overview, setOverview] = useState<EnergyOverview | null>(null)
   const [prevOverview, setPrevOverview] = useState<EnergyOverview | null>(null)
   const [loading, setLoading] = useState(false)
+  const [priceCategory, setPriceCategory] = useState<PriceCategoryDistribution | null>(null)
+  const [periodDrawerOpen, setPeriodDrawerOpen] = useState(false)
+  const [peakValleyMode, setPeakValleyMode] = useState<'total' | 'workshop'>('total')
 
   const days = range[1].diff(range[0], 'day') + 1
 
@@ -50,17 +55,32 @@ export default function VisualizationPage() {
       ])
       setOverview(curr)
       setPrevOverview(prev)
+
+      // 峰谷分布（点部门时联动筛选，支持总耗/部门切换）
+      try {
+        const pc = await fetchPriceCategoryDistribution({
+          start_time: range[0].toISOString(),
+          end_time: range[1].toISOString(),
+          energy_type: selectedType || undefined,
+          workshop: peakValleyMode === 'workshop' ? (selectedWorkshop || undefined) : undefined,
+        })
+        setPriceCategory(pc)
+      } catch {
+        setPriceCategory(null)
+      }
     } catch {
       message.error('加载数据失败')
     } finally {
       setLoading(false)
     }
-  }, [range, selectedType])
+  }, [range, selectedType, selectedWorkshop, peakValleyMode])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { setSelectedWorkshop(null) }, [selectedType])
 
   const metadata = overview?.type_metadata || []
+  const selectedMeta = metadata.find((m) => m.type_code === selectedType)
+  const isElectricity = selectedMeta?.type_code === 'electricity'
 
   // 首次加载时自动选中第一个能源类型
   useEffect(() => {
@@ -407,7 +427,15 @@ export default function VisualizationPage() {
                       return (
                         <div
                           key={w.workshop}
-                          onClick={() => setSelectedWorkshop(active ? null : w.workshop)}
+                          onClick={() => {
+                            if (active) {
+                              setSelectedWorkshop(null)
+                              setPeakValleyMode('total')
+                            } else {
+                              setSelectedWorkshop(w.workshop)
+                              setPeakValleyMode('workshop')
+                            }
+                          }}
                           style={{
                             display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px',
                             borderRadius: 8, cursor: 'pointer',
@@ -465,6 +493,121 @@ export default function VisualizationPage() {
                 )}
               </div>
             </div>
+
+            {/* ── 峰谷用电分布（仅电耗）── */}
+            {isElectricity && priceCategory && priceCategory.categories.length > 0 && (
+              <div style={{
+                background: '#fff', borderRadius: 12, padding: '20px 24px', marginBottom: 20,
+                border: '1px solid #ede9e4', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+              }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: '#1a1a1a', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  峰谷用电分布
+                  <Button
+                    type="link" size="small"
+                    onClick={() => setPeriodDrawerOpen(true)}
+                    style={{ fontSize: 11, padding: 0 }}
+                  >
+                    配置规则
+                  </Button>
+                  {/* 总耗 / 部门切换 */}
+                  <span style={{ display: 'inline-flex', gap: 2, background: '#f0eeec', borderRadius: 20, padding: 2 }}>
+                    <button
+                      onClick={() => setPeakValleyMode('total')}
+                      style={{
+                        padding: '2px 12px', borderRadius: 18, border: 'none', cursor: 'pointer',
+                        fontSize: 12, fontWeight: peakValleyMode === 'total' ? 600 : 400,
+                        background: peakValleyMode === 'total' ? '#5645d4' : 'transparent',
+                        color: peakValleyMode === 'total' ? '#fff' : '#787671',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      总耗
+                    </button>
+                    <button
+                      onClick={() => selectedWorkshop && setPeakValleyMode('workshop')}
+                      disabled={!selectedWorkshop}
+                      style={{
+                        padding: '2px 12px', borderRadius: 18, border: 'none',
+                        cursor: selectedWorkshop ? 'pointer' : 'not-allowed',
+                        fontSize: 12, fontWeight: peakValleyMode === 'workshop' ? 600 : 400,
+                        background: peakValleyMode === 'workshop' ? '#5645d4' : 'transparent',
+                        color: peakValleyMode === 'workshop' ? '#fff' : selectedWorkshop ? '#787671' : '#c8c4be',
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {selectedWorkshop || '部门'}
+                    </button>
+                  </span>
+                  <span style={{ fontSize: 12, fontWeight: 400, color: '#a4a097' }}>
+                    总 {priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 })} {priceCategory.unit}
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'center' }}>
+                  <Pie
+                    data={priceCategory.categories.map((c) => ({
+                      type: c.category,
+                      value: c.total_value,
+                    }))}
+                    angleField="value"
+                    colorField="type"
+                    radius={0.8}
+                    innerRadius={0.5}
+                    height={300}
+                    appendPadding={[10, 40, 40, 40]}
+                    color={{ '尖': '#e03131', '峰': '#dd5b00', '平': '#1677ff', '谷': '#1aae39' }}
+                    label={{
+                      text: (d: { type: string; value: number }) => {
+                        const item = priceCategory.categories.find((c2) => c2.category === d.type)
+                        return `${d.type}\n${item?.percentage ?? 0}%`
+                      },
+                      position: 'outside',
+                      style: { fontSize: 12, fontWeight: 500, fill: '#37352f' },
+                      connector: { style: { stroke: '#c8c4be', lineWidth: 1 } },
+                    }}
+                    legend={false}
+                    tooltip={{}}
+                    statistic={{
+                      title: { style: { fontSize: 13, color: '#a4a097' }, content: '总用电' },
+                      content: {
+                        style: { fontSize: 18, fontWeight: 600, color: '#37352f' },
+                        content: priceCategory.total.toLocaleString('zh-CN', { maximumFractionDigits: 0 }),
+                      },
+                    }}
+                    animate={{ appear: { animation: 'wave-in', duration: 600 } }}
+                  />
+                  {/* 分类明细 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {priceCategory.categories.map((c) => {
+                      const catColors: Record<string, string> = {
+                        '尖': '#e03131', '峰': '#dd5b00', '平': '#1677ff', '谷': '#1aae39',
+                      }
+                      const labels: Record<string, string> = { '尖': '尖峰', '峰': '高峰', '平': '平段', '谷': '低谷' }
+                      return (
+                        <div key={c.category} style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '8px 12px', borderRadius: 8, background: '#fafaf9',
+                        }}>
+                          <span style={{
+                            width: 12, height: 12, borderRadius: 3,
+                            background: catColors[c.category] || '#999', flexShrink: 0,
+                          }} />
+                          <span style={{ fontSize: 14, fontWeight: 500, color: '#37352f', minWidth: 36 }}>
+                            {labels[c.category] || c.category}
+                          </span>
+                          <span style={{ flex: 1, fontSize: 13, color: '#a4a097' }}>
+                            {c.percentage}%
+                          </span>
+                          <span style={{ fontSize: 14, fontWeight: 600, color: '#37352f', fontVariantNumeric: 'tabular-nums' }}>
+                            {c.total_value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}
+                            <span style={{ fontSize: 11, fontWeight: 400, color: '#a4a097', marginLeft: 2 }}>{c.unit}</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 120 }}>
@@ -472,6 +615,7 @@ export default function VisualizationPage() {
           </div>
         )}
       </Spin>
+      <PricePeriodDrawer open={periodDrawerOpen} onClose={() => { setPeriodDrawerOpen(false); load() }} />
     </div>
   )
 }

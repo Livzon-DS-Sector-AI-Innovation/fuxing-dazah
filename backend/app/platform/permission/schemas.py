@@ -66,6 +66,7 @@ class RoleOut(BaseModel):
     permission_ids: list[uuid.UUID] = []
     data_scope_overrides: dict[str, str] = {}
     user_count: int = 0
+    department_count: int = 0
 
 
 # ── 用户角色 ──
@@ -107,3 +108,26 @@ class UserPermissionOut(BaseModel):
     permissions: list[str]
     data_scopes: dict[str, str]
     resource_scopes: dict[str, str] = {}
+
+
+# ── 部门角色 ──
+
+
+class AssignDepartmentRoleInput(BaseModel):
+    """将角色分配给一个或多个部门。"""
+
+    feishu_department_ids: list[str] = Field(
+        ..., min_length=1, description="飞书部门 ID 列表"
+    )
+
+
+class DepartmentRoleOut(BaseModel):
+    """部门角色关联（含部门名称和成员数）。"""
+
+    id: uuid.UUID
+    feishu_department_id: str
+    role_id: uuid.UUID
+    department_name: str = ""
+    member_count: int = 0
+
+    model_config = {"from_attributes": True}

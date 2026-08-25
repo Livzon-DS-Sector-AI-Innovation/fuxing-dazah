@@ -5,6 +5,7 @@ import type {
   UserPermissionDetail,
   PersonnelListResponse,
   DepartmentItem,
+  DepartmentRole,
   RoleUser,
 } from '@/types/permission'
 
@@ -91,6 +92,19 @@ export async function fetchDepartments(): Promise<DepartmentItem[]> {
     cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取部门列表失败')
+  const json = await res.json()
+  return json.data
+}
+
+export async function fetchRoleDepartments(
+  token: string,
+  roleId: string,
+): Promise<DepartmentRole[]> {
+  const res = await fetch(`${API_BASE}/api/v1/permission/roles/${roleId}/departments`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取角色已分配部门失败')
   const json = await res.json()
   return json.data
 }

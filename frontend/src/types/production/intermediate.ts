@@ -10,6 +10,7 @@ export interface IntermediateType {
   is_product: boolean
   product_id: string | null
   product_name: string | null
+  is_deleted: boolean
   created_at: string
   updated_at: string
 }
@@ -73,6 +74,11 @@ export interface IntermediateOutput {
   is_product: boolean
   remark: string | null
   created_at: string
+  line_id?: string | null
+  line_name?: string | null
+  container_id?: string | null  // 混装入库容器
+  container_name?: string | null
+  available_quantity?: number | null
 }
 
 export interface IntermediateOutputIn {
@@ -99,6 +105,7 @@ export interface IntermediateConsumption {
   unit: string
   remark: string | null
   created_at: string
+  line_name?: string | null
 }
 
 export interface IntermediateConsumptionIn {
@@ -116,6 +123,7 @@ export interface IntermediateTrace {
 }
 
 export interface MaterialMovement {
+  id: string
   type: 'output' | 'consumption'
   batch_id: string
   batch_no: string | null
@@ -125,13 +133,33 @@ export interface MaterialMovement {
   intermediate_batch_no: string | null
   source_batch_no: string | null
   source_output_id: string | null
+  container_name: string | null  // 混装入库容器 / 混装来源容器
   created_at: string
+  line_name?: string | null
+}
+
+export interface ContainerStock {
+  container_id: string
+  container_name: string
+  available_quantity: number
 }
 
 export interface MaterialStockSummary {
   total_output: number
   total_consumed: number
   current_stock: number
+  container_stocks: ContainerStock[]
+}
+
+export interface MixingContainer {
+  id: string
+  name: string
+  intermediate_type_id: string
+  intermediate_type_name: string | null
+  line_id: string
+  line_name: string | null
+  remark: string | null
+  available_quantity: number | null
 }
 
 export interface MaterialMovements {

@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Date, cast, exists, func, not_, or_, select
+from sqlalchemy import Date, and_, cast, exists, func, not_, or_, select
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import update as sa_update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.energy.collect_settings import CST
 from app.modules.energy.models import (
     EnergyAlertRecord,
     EnergyAlertRule,
     EnergyCollectLog,
+    EnergyCollectSetting,
     EnergyDailyPushConfig,
     EnergyData,
     EnergyDeviceConfig,
     EnergyNitrogenPushConfig,
     EnergyTypeConfig,
     EnergyWorkshopConfig,
+    PricePeriod,
 )
 from app.platform.identity.models import Department
 
@@ -46,6 +50,20 @@ async def get_device_config_by_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_device_names_by_ids(
+    db: AsyncSession, ids: list[UUID]
+) -> dict[UUID, str]:
+    """获取设备名称映射（含已删除设备，仅用于推送配置页面的名称回显）。"""
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(EnergyDeviceConfig.id, EnergyDeviceConfig.device_name).where(
+            EnergyDeviceConfig.id.in_(ids)
+        )
+    )
+    return {row.id: row.device_name for row in result.all()}
 
 
 async def list_device_configs(
@@ -85,15 +103,24 @@ async def list_device_configs(
 async def update_device_config(
     db: AsyncSession, config_id: UUID, data: dict[str, Any]
 ) -> EnergyDeviceConfig | None:
-    """更新设备配置（使用原始 SQL 避免 BaseModel FK 解析异常）。"""
-    result = await db.execute(
+    """更新设备配置，更新后 re-fetch 避免 identity map 返回旧值。"""
+    await db.execute(
         sa_update(EnergyDeviceConfig)
         .where(
             EnergyDeviceConfig.id == config_id,
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
         )
         .values(**data)
-        .returning(EnergyDeviceConfig)
+    )
+    await db.flush()
+    # Re-fetch 获取最新值（避免 session identity map 返回旧对象）
+    result = await db.execute(
+        select(EnergyDeviceConfig)
+        .where(
+            EnergyDeviceConfig.id == config_id,
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 
@@ -184,23 +211,6 @@ async def get_latest_energy_data(
     return result.scalar_one_or_none()
 
 
-async def daily_record_exists(
-    db: AsyncSession, device_config_id: UUID, day_start: datetime
-) -> bool:
-    """检查某设备某天是否已有日汇总记录（timestamp = 当天 00:00:00 且 daily_sum=true）。"""
-    from sqlalchemy import String
-
-    result = await db.execute(
-        select(func.count()).where(
-            EnergyData.device_config_id == device_config_id,
-            EnergyData.timestamp == day_start,
-            EnergyData.platform_raw_data["daily_sum"].cast(String) == "true",
-            EnergyData.is_deleted == False,  # noqa: E712
-        )
-    )
-    return (result.scalar() or 0) > 0
-
-
 async def get_distinct_enabled_platforms(db: AsyncSession) -> list[str]:
     """返回所有有启用设备的平台 code 列表（去重）。"""
     result = await db.execute(
@@ -212,6 +222,70 @@ async def get_distinct_enabled_platforms(db: AsyncSession) -> list[str]:
         .distinct()
     )
     return list(result.scalars().all())
+
+
+async def get_platform_latest_data_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最近一条能耗数据的数据日期（CST）。无数据时返回 None。"""
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
+    result = await db.execute(
+        select(cst_date)
+        .join(
+            EnergyDeviceConfig,
+            EnergyData.device_config_id == EnergyDeviceConfig.id,
+        )
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+            EnergyData.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyData.timestamp.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_earliest_device_created_day(
+    db: AsyncSession, platform_code: str
+) -> date | None:
+    """返回某平台最早启用设备的创建日期（CST），作为无数据时的回溯下限。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyDeviceConfig.created_at)
+    )
+    result = await db.execute(
+        select(cst_date)
+        .where(
+            EnergyDeviceConfig.platform_code == platform_code,
+            EnergyDeviceConfig.is_enabled == True,  # noqa: E712
+            EnergyDeviceConfig.is_deleted == False,  # noqa: E712
+        )
+        .order_by(EnergyDeviceConfig.created_at.asc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_platform_backfill_start_day(
+    db: AsyncSession, platform_code: str, yesterday: date
+) -> date:
+    """计算某平台本次采集的起始数据日（含），用于补齐缺失的历史日。
+
+    - 有历史数据且最近数据日早于昨天：从「最近数据日 + 1」开始回溯；
+    - 有历史数据但已补齐：仍返回昨天（幂等采集，保证每日都写采集日志）；
+    - 无历史数据（新平台/新设备）：从最早启用设备的创建日开始，不早于设备创建日。
+    返回值不晚于 yesterday。
+    """
+    latest = await get_platform_latest_data_day(db, platform_code)
+    if latest is None:
+        earliest = await get_platform_earliest_device_created_day(db, platform_code)
+        start = earliest or yesterday
+    elif latest < yesterday:
+        start = latest + timedelta(days=1)
+    else:
+        start = yesterday
+    return min(start, yesterday)
 
 
 # ── 能耗数据 ──
@@ -299,7 +373,11 @@ async def list_energy_data_history(
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict[str, Any]], int]:
-    """查询能耗数据历史明细，JOIN 设备配置表返回完整信息。"""
+    """查询能耗数据历史明细，JOIN 设备配置表返回完整信息。
+
+    granularity='daily': 按 (device_config_id, 日期) 逐小时数据 SUM 聚合。
+    granularity='hourly': 返回原始逐小时记录。
+    """
     from sqlalchemy import text
 
     where_clauses = [
@@ -324,36 +402,67 @@ async def list_energy_data_history(
         where_clauses.append("d.timestamp <= :end_time")
         params["end_time"] = end_time
     if keyword:
-        where_clauses.append("(c.device_name ILIKE :keyword OR c.platform_device_code ILIKE :keyword)")
+        where_clauses.append(
+            "(c.device_name ILIKE :keyword OR c.platform_device_code ILIKE :keyword)"
+        )
         params["keyword"] = f"%{keyword}%"
-    if granularity:
-        if granularity == "daily":
-            where_clauses.append("d.platform_raw_data->>'daily_sum' = 'true'")
-        elif granularity == "hourly":
-            where_clauses.append("(d.platform_raw_data->>'daily_sum' IS NULL OR d.platform_raw_data->>'daily_sum' != 'true')")
+    # Note: granularity filter no longer uses daily_sum flag;
+    # daily mode uses SQL aggregation instead.
 
     where_sql = " AND ".join(where_clauses)
 
-    count_sql = (
-        f"SELECT COUNT(*) FROM energy.energy_data d "
-        f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
-        f"WHERE {where_sql}"
-    )
+    if granularity == "daily":
+        # ── 日汇总：按 device + 日期 SUM 聚合 ──
+        count_sql = (
+            f"SELECT COUNT(*) FROM ("
+            f"SELECT 1 FROM energy.energy_data d "
+            f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
+            f"WHERE {where_sql} "
+            f"GROUP BY d.device_config_id, DATE(d.timestamp)"
+            f") sub"
+        )
+        query_sql = (
+            f"SELECT "
+            f"d.device_config_id::text || '_' || DATE(d.timestamp)::text AS id, "
+            f"d.device_config_id, c.device_name, c.platform_device_code, "
+            f"c.energy_type, c.workshop, c.production_line, "
+            f"DATE(d.timestamp) AS timestamp, "
+            f"SUM(d.value) AS value, "
+            f"COALESCE(MAX(tc.unit), MAX(d.unit)) AS unit, "
+            f"MAX(d.collected_at) AS collected_at, "
+            f"'true' AS granularity "
+            f"FROM energy.energy_data d "
+            f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
+            f"LEFT JOIN energy.energy_type_configs tc ON c.energy_type = tc.type_code AND tc.is_deleted = false "
+            f"WHERE {where_sql} "
+            f"GROUP BY d.device_config_id, c.device_name, c.platform_device_code, "
+            f"c.energy_type, c.workshop, c.production_line, DATE(d.timestamp) "
+            f"ORDER BY DATE(d.timestamp) DESC "
+            f"LIMIT :limit OFFSET :offset"
+        )
+    else:
+        # ── 逐小时：返回原始记录 ──
+        count_sql = (
+            f"SELECT COUNT(*) FROM energy.energy_data d "
+            f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
+            f"WHERE {where_sql}"
+        )
+        query_sql = (
+            f"SELECT d.id, d.device_config_id, c.device_name, c.platform_device_code, "
+            f"c.energy_type, c.workshop, c.production_line, "
+            f"d.timestamp, d.value, COALESCE(tc.unit, d.unit) AS unit, d.collected_at, "
+            f"'false' AS granularity "
+            f"FROM energy.energy_data d "
+            f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
+            f"LEFT JOIN energy.energy_type_configs tc ON c.energy_type = tc.type_code AND tc.is_deleted = false "
+            f"WHERE {where_sql} "
+            f"ORDER BY d.timestamp DESC "
+            f"LIMIT :limit OFFSET :offset"
+        )
+
     count_result = await db.execute(text(count_sql), params)
     total = count_result.scalar() or 0
 
-    query_sql = (
-        f"SELECT d.id, d.device_config_id, c.device_name, c.platform_device_code, "
-        f"c.energy_type, c.workshop, c.production_line, "
-        f"d.timestamp, d.value, COALESCE(tc.unit, d.unit) AS unit, d.collected_at, "
-        f"COALESCE(d.platform_raw_data->>'daily_sum', 'false') AS granularity "
-        f"FROM energy.energy_data d "
-        f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
-        f"LEFT JOIN energy.energy_type_configs tc ON c.energy_type = tc.type_code AND tc.is_deleted = false "
-        f"WHERE {where_sql} "
-        f"ORDER BY d.timestamp DESC "
-        f"LIMIT :limit OFFSET :offset"
-    )
     params["limit"] = page_size
     params["offset"] = (page - 1) * page_size
 
@@ -379,46 +488,77 @@ async def list_energy_data_history(
     return items, total
 
 
-def _exclude_hourly_overlap(outer: type[EnergyData]) -> Any:
-    """生成 WHERE 子句：排除已有日汇总记录的同一设备同一天的小时数据。
+def _department_priority_subquery(device_config: type[EnergyDeviceConfig]) -> Any:
+    """部门优先子条件：部门级设备始终保留，区域级仅在无部门级时保留。
 
-    避免 SUM 时把日汇总和小时数据重复累加。
-    使用 CST 时区（Asia/Shanghai）比较日期，避免 UTC 日期跨天导致的去重失效。
+    避免同一车间下部门级总表和区域级子表数据重复累加。
     """
-    inner = EnergyData.__table__.alias("d2")
-    # 将 timestamptz 转为 CST 日期再比较，避免 UTC 跨天问题
-    cst_date_inner = func.date(func.timezone('Asia/Shanghai', inner.c.timestamp))
-    cst_date_outer = func.date(func.timezone('Asia/Shanghai', outer.timestamp))
+    inner_dept = EnergyDeviceConfig.__table__.alias("d2")
     return or_(
-        outer.platform_raw_data["daily_sum"].astext == "true",
+        device_config.is_region_level == False,  # noqa: E712
         not_(
             exists().where(
-                inner.c.device_config_id == outer.device_config_id,
-                cst_date_inner == cst_date_outer,
-                inner.c.platform_raw_data["daily_sum"].astext == "true",
-                inner.c.is_deleted == False,  # noqa: E712
+                inner_dept.c.workshop == device_config.workshop,
+                inner_dept.c.energy_type == device_config.energy_type,
+                inner_dept.c.is_region_level == False,  # noqa: E712
+                inner_dept.c.is_enabled == True,       # noqa: E712
+                inner_dept.c.is_deleted == False,      # noqa: E712
             )
         ),
     )
 
 
-def _department_priority_filter(device_config: type[EnergyDeviceConfig]) -> Any:
-    """部门优先过滤：如果车间+能源类型存在部门级设备，只用部门级；否则汇总区域级。
+def _total_preferred_filter(device_config: type[EnergyDeviceConfig]) -> Any:
+    """总耗优先过滤器（用于总览卡片、趋势图、峰谷默认、车间预警）。
 
-    避免同一车间下部门级总表和区域级子表数据重复累加。
+    1. 排除 stat_role='excluded'
+    2. 存在区域级 total（is_region_level=True）→ 只用 total，排除所有 normal
+    3. 同车间存在 total → 只用 total，排除同车间 normal
+    4. 无 total → 用 normal，按部门优先去重
     """
-    inner = EnergyDeviceConfig.__table__.alias("d2")
-    return or_(
-        device_config.is_region_level == False,  # noqa: E712
-        not_(
-            exists().where(
-                inner.c.workshop == device_config.workshop,
-                inner.c.energy_type == device_config.energy_type,
-                inner.c.is_region_level == False,  # noqa: E712
-                inner.c.is_enabled == True,       # noqa: E712
-                inner.c.is_deleted == False,      # noqa: E712
-            )
+    inner_total = EnergyDeviceConfig.__table__.alias("d_total")
+    region_total = EnergyDeviceConfig.__table__.alias("d_region")
+    return and_(
+        device_config.stat_role != 'excluded',
+        or_(
+            device_config.stat_role == 'total',
+            and_(
+                device_config.stat_role == 'normal',
+                not_(
+                    or_(
+                        # 同车间存在 total 设备 → 排除本车间 normal
+                        exists().where(
+                            inner_total.c.workshop == device_config.workshop,
+                            inner_total.c.energy_type == device_config.energy_type,
+                            inner_total.c.stat_role == 'total',
+                            inner_total.c.is_enabled == True,       # noqa: E712
+                            inner_total.c.is_deleted == False,      # noqa: E712
+                        ),
+                        # 存在区域级 total 设备 → 排除所有 normal
+                        exists().where(
+                            region_total.c.energy_type == device_config.energy_type,
+                            region_total.c.stat_role == 'total',
+                            region_total.c.is_region_level == True,  # noqa: E712
+                            region_total.c.is_enabled == True,       # noqa: E712
+                            region_total.c.is_deleted == False,      # noqa: E712
+                        ),
+                    )
+                ),
+                _department_priority_subquery(device_config),
+            ),
         ),
+    )
+
+
+def _normal_only_filter(device_config: type[EnergyDeviceConfig]) -> Any:
+    """普通设备过滤器（用于部门排名、区域分布、设备分布）。
+
+    只用 stat_role='normal' 的设备，按部门优先去重。
+    排除 total（总耗设备不参与细分排名）和 excluded。
+    """
+    return and_(
+        device_config.stat_role == 'normal',
+        _department_priority_subquery(device_config),
     )
 
 
@@ -434,7 +574,7 @@ async def get_energy_statistics(
         group_col = EnergyDeviceConfig.workshop
         extra_cols = []
     elif group_by == "production_line":
-        group_col = EnergyDeviceConfig.production_line
+        group_col = func.coalesce(EnergyDeviceConfig.production_line, '部门级')
         # 同时带上车间，供前端下钻过滤
         extra_cols = [EnergyDeviceConfig.workshop.label("workshop")]
     else:
@@ -464,10 +604,8 @@ async def get_energy_statistics(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _normal_only_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(group_col, EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit, *extra_cols)
     )
@@ -500,7 +638,7 @@ async def get_overview_summary(
     start_time: datetime,
     end_time: datetime,
 ) -> list[dict[str, Any]]:
-    """按能源类型汇总能耗"""
+    """按能源类型汇总能耗，所有设备统一 SUM 聚合。"""
     query = (
         select(
             EnergyDeviceConfig.energy_type,
@@ -521,11 +659,8 @@ async def get_overview_summary(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.energy_type, EnergyTypeConfig.unit)
     )
@@ -549,7 +684,8 @@ async def get_overview_trend(
 ) -> list[dict[str, Any]]:
     """获取能耗趋势数据。
 
-    granularity: "hourly" 按小时分组, "daily" 按天分组（日汇总记录优先，小时数据自动聚合）
+    granularity: "hourly" 按小时分组, "daily" 按天分组（小时数据自动聚合为日汇总）
+    所有设备统一按 granularity 和 energy_type 聚合。
     """
     if granularity == "daily":
         time_col = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp)).label("time_point")
@@ -559,6 +695,17 @@ async def get_overview_trend(
         time_col = EnergyData.timestamp
         group_cols = [EnergyData.timestamp, EnergyDeviceConfig.energy_type]
         order_col = EnergyData.timestamp
+
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        return {
+            "time": (
+                row.time_point.isoformat()
+                if granularity == "daily"
+                else row.timestamp.isoformat()
+            ),
+            "value": float(row.total_value or 0),
+            "type": row.energy_type,
+        }
 
     query = (
         select(
@@ -574,10 +721,8 @@ async def get_overview_trend(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyData.timestamp >= start_time,
             EnergyData.timestamp <= end_time,
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(*group_cols)
         .order_by(order_col.asc())
@@ -586,18 +731,10 @@ async def get_overview_trend(
         query = query.where(EnergyDeviceConfig.energy_type == energy_type)
 
     result = await db.execute(query)
-    return [
-        {
-            "time": (
-                row.time_point.isoformat()
-                if granularity == "daily"
-                else row.timestamp.isoformat()
-            ),
-            "value": float(row.total_value or 0),
-            "type": row.energy_type,
-        }
-        for row in result.all()
-    ]
+    return sorted(
+        [_row_to_dict(row) for row in result.all()],
+        key=lambda r: r["time"],
+    )
 
 
 # ── 能耗数据删除 ──
@@ -698,15 +835,32 @@ async def clear_collect_logs(db: AsyncSession) -> int:
     return result.rowcount  # type: ignore[attr-defined,no-any-return]
 
 
+async def has_collect_log_for_date(db: AsyncSession, day: date) -> bool:
+    """判断指定日期（Asia/Shanghai）是否已产生采集日志。"""
+    cst_date = func.date(
+        func.timezone("Asia/Shanghai", EnergyCollectLog.collect_time)
+    )
+    result = await db.execute(
+        select(func.count())
+        .select_from(EnergyCollectLog)
+        .where(
+            EnergyCollectLog.is_deleted == False,  # noqa: E712
+            cst_date == day,
+        )
+    )
+    return (result.scalar() or 0) > 0
+
+
 async def get_collect_log_detail(
     db: AsyncSession,
     log_id: UUID,
-    time_window_seconds: int = 120,
 ) -> tuple[EnergyCollectLog | None, list[tuple[EnergyData, EnergyDeviceConfig]]]:
     """获取采集日志详情及关联的能耗数据。
 
-    通过 platform_code + 时间窗口匹配 EnergyData 和 EnergyCollectLog。
-    默认 ±120 秒窗口，覆盖日汇总采集的多轮 API 调用耗时。
+    按「数据归属日」匹配：采集日志采的是前一天的数据，
+    故查出该平台 timestamp 落在目标日（collect_time 前一天，CST）的数据。
+    不再依赖 collected_at，避免多次采集 on conflict 更新 collected_at 后，
+    较早日志的 ±120s 窗口匹配不到数据（详情显示「未找到关联的设备采集数据」）。
     """
     log = await db.scalar(
         select(EnergyCollectLog).where(
@@ -717,9 +871,10 @@ async def get_collect_log_detail(
     if log is None:
         return None, []
 
-    window_start = log.collect_time - timedelta(seconds=time_window_seconds)
-    window_end = log.collect_time + timedelta(seconds=time_window_seconds)
+    # 目标采集日 = collect_time（CST）的前一天
+    target_day = (log.collect_time.astimezone(CST) - timedelta(days=1)).date()
 
+    cst_date = func.date(func.timezone("Asia/Shanghai", EnergyData.timestamp))
     query = (
         select(EnergyData, EnergyDeviceConfig)
         .join(
@@ -728,8 +883,7 @@ async def get_collect_log_detail(
         )
         .where(
             EnergyDeviceConfig.platform_code == log.platform_code,
-            EnergyData.collected_at >= window_start,
-            EnergyData.collected_at <= window_end,
+            cst_date == target_day,
             EnergyData.is_deleted == False,  # noqa: E712
         )
         .order_by(EnergyData.timestamp.desc())
@@ -738,6 +892,40 @@ async def get_collect_log_detail(
     rows = list(result.all())
 
     return log, rows
+
+
+# ── 自动采集运行时设置 ──
+
+# 每日采集触发时间配置键
+COLLECT_SETTING_DAILY_COLLECT_TIME = "daily_collect_time"
+
+
+async def get_collect_setting_value(
+    db: AsyncSession, key: str
+) -> str | None:
+    """读取自动采集运行时设置值；未配置返回 None。"""
+    result = await db.execute(
+        select(EnergyCollectSetting.setting_value).where(
+            EnergyCollectSetting.setting_key == key,
+            EnergyCollectSetting.is_deleted == False,  # noqa: E712
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_collect_setting_value(
+    db: AsyncSession, key: str, value: str
+) -> None:
+    """写入自动采集运行时设置（存在则更新，不存在则新增）。"""
+    stmt = pg_insert(EnergyCollectSetting).values(
+        setting_key=key,
+        setting_value=value,
+    )
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_energy_collect_setting_key",
+        set_={"setting_value": value},
+    )
+    await db.execute(stmt)
 
 
 # ── 预警规则 ──
@@ -864,6 +1052,8 @@ async def list_alert_records(
     energy_type: str | None = None,
     alert_level: str | None = None,
     status: str | None = None,
+    workshop: str | None = None,
+    workshop_not_null: bool = False,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     page: int = 1,
@@ -878,6 +1068,10 @@ async def list_alert_records(
         query = query.where(EnergyAlertRecord.alert_level == alert_level)
     if status:
         query = query.where(EnergyAlertRecord.status == status)
+    if workshop:
+        query = query.where(EnergyAlertRecord.workshop == workshop)
+    if workshop_not_null:
+        query = query.where(EnergyAlertRecord.workshop.isnot(None))
     if start_time:
         query = query.where(EnergyAlertRecord.alert_time >= start_time)
     if end_time:
@@ -924,60 +1118,6 @@ async def list_departments(db: AsyncSession) -> list[dict[str, Any]]:
 
 
 # ── 关联设备列表（供数据源配置下拉使用） ──
-
-
-async def list_equipments_for_select(
-    db: AsyncSession,
-    *,
-    keyword: str | None = None,
-    status: str | None = None,
-    page: int = 1,
-    page_size: int = 50,
-) -> tuple[list[dict[str, Any]], int]:
-    """查询设备台账中在用的设备列表（只读，跨 schema 查询）。"""
-    from sqlalchemy import text
-
-    where_clauses = ["e.is_deleted = false"]
-    params: dict[str, Any] = {}
-
-    if keyword:
-        where_clauses.append("(e.name ILIKE :keyword OR e.equipment_no ILIKE :keyword)")
-        params["keyword"] = f"%{keyword}%"
-    if status:
-        where_clauses.append("e.status = :status")
-        params["status"] = status
-
-    where_sql = " AND ".join(where_clauses)
-
-    count_sql = f"SELECT COUNT(*) FROM equipment.equipments e WHERE {where_sql}"
-    count_result = await db.execute(text(count_sql), params)
-    total = count_result.scalar() or 0
-
-    query_sql = (
-        f"SELECT e.id, e.equipment_no, e.name, e.status, e.model, e.specification, e.location_id "
-        f"FROM equipment.equipments e "
-        f"WHERE {where_sql} "
-        f"ORDER BY e.name "
-        f"LIMIT :limit OFFSET :offset"
-    )
-    params["limit"] = page_size
-    params["offset"] = (page - 1) * page_size
-
-    result = await db.execute(text(query_sql), params)
-    rows = result.all()
-    items = [
-        {
-            "id": str(row.id),
-            "equipment_no": row.equipment_no,
-            "name": row.name,
-            "status": row.status,
-            "model": row.model,
-            "specification": row.specification,
-            "location_id": str(row.location_id) if row.location_id else None,
-        }
-        for row in rows
-    ]
-    return items, total
 
 
 # ── 能源类型可视化配置 ──
@@ -1256,10 +1396,8 @@ async def get_workshop_daily_consumption(
             EnergyDeviceConfig.workshop == workshop,
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date == cast(target_date.date(), Date),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1299,10 +1437,8 @@ async def get_workshop_avg_consumption(
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date >= cast(start_date.date(), Date),
             cst_date <= cast(end_date.date(), Date),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(cst_date)
         .subquery()
@@ -1331,7 +1467,6 @@ async def get_distinct_workshop_energy_types(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop, EnergyDeviceConfig.energy_type)
@@ -1358,7 +1493,6 @@ async def get_device_options_by_energy_type(
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     if energy_type:
@@ -1378,7 +1512,6 @@ async def get_distinct_workshops(db: AsyncSession) -> list[str]:
         .where(
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.is_enabled == True,    # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .distinct()
         .order_by(EnergyDeviceConfig.workshop)
@@ -1583,11 +1716,9 @@ async def get_daily_total_by_energy_type(
     energy_type: str,
     target_date: datetime,
 ) -> float | None:
-    """按能源类型汇总指定日期的总能耗（跨所有车间），仅统计日汇总/按天采集的设备。
-
-    复用 _department_priority_filter 和 _exclude_hourly_overlap。
-    """
+    """按能源类型汇总指定日期的总能耗（跨所有车间），总耗优先。"""
     cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+
     query = (
         select(func.coalesce(func.sum(EnergyData.value), 0))
         .join(
@@ -1598,11 +1729,8 @@ async def get_daily_total_by_energy_type(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date == cast(target_date.date(), Date),
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _total_preferred_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     result = await db.execute(query)
@@ -1619,10 +1747,11 @@ async def get_daily_top_workshops(
     """获取指定能源类型在某日用量最高的 TOP N 部门。
 
     返回列表，每项包含 workshop, total_value, percentage。
+    只用 stat_role='normal' 设备，总耗设备不参与排名。
     """
     cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
 
-    # 先查总量
+    # 总量：只用普通设备
     total_result = await db.execute(
         select(func.coalesce(func.sum(EnergyData.value), 0))
         .join(
@@ -1633,11 +1762,8 @@ async def get_daily_top_workshops(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date == cast(target_date.date(), Date),
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _normal_only_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
     )
     grand_total = float(total_result.scalar() or 0)
@@ -1659,11 +1785,8 @@ async def get_daily_top_workshops(
             EnergyData.is_deleted == False,  # noqa: E712
             EnergyDeviceConfig.energy_type == energy_type,
             cst_date == cast(target_date.date(), Date),
-            EnergyDeviceConfig.daily_collect_time.isnot(None),
-            _exclude_hourly_overlap(EnergyData),
-            _department_priority_filter(EnergyDeviceConfig),
+            _normal_only_filter(EnergyDeviceConfig),
             EnergyDeviceConfig.is_deleted == False,  # noqa: E712
-            EnergyDeviceConfig.exclude_from_stats == False,  # noqa: E712
         )
         .group_by(EnergyDeviceConfig.workshop)
         .order_by(func.sum(EnergyData.value).desc())
@@ -1696,7 +1819,6 @@ async def get_device_daily_value(
             EnergyData.device_config_id == device_id,
             EnergyData.is_deleted == False,  # noqa: E712
             cst_date == cast(target_date.date(), Date),
-            _exclude_hourly_overlap(EnergyData),
         )
     )
     result = await db.execute(query)
@@ -1803,6 +1925,25 @@ async def delete_nitrogen_push_config(db: AsyncSession, config_id: UUID) -> bool
 # ── 氮气月度查询 ──
 
 
+async def delete_hourly_data_for_device_on_date(
+    db: AsyncSession, device_config_id: UUID, target_date: datetime
+) -> int:
+    """物理删除指定设备在指定 CST 日期的所有能耗数据。
+
+    用于氮气月度推送前清理逐小时数据，避免日汇总与小时数据被 SUM 重复累加。
+    使用物理删除而非软删除，否则 upsert 会因 (device_config_id, timestamp)
+    唯一约束冲突而覆盖失败。
+    """
+    cst_date = func.date(func.timezone('Asia/Shanghai', EnergyData.timestamp))
+    result = await db.execute(
+        sa_delete(EnergyData).where(
+            EnergyData.device_config_id == device_config_id,
+            cst_date == cast(target_date.date(), Date),
+        )
+    )
+    return result.rowcount
+
+
 async def get_monthly_nitrogen_total(
     db: AsyncSession,
     device_ids: list[UUID],
@@ -1810,10 +1951,7 @@ async def get_monthly_nitrogen_total(
     month: int,
     up_to_day: int,
 ) -> float | None:
-    """从月1日到 up_to_day 汇总所有指定氮气设备的累计用量。
-
-    使用 CST 时区，复用 _exclude_hourly_overlap 排除小时级数据重叠。
-    """
+    """从月1日到 up_to_day 汇总所有指定氮气设备的累计用量。"""
     if not device_ids:
         return None
 
@@ -1826,9 +1964,238 @@ async def get_monthly_nitrogen_total(
             func.extract('year', cst_date) == year,
             func.extract('month', cst_date) == month,
             func.extract('day', cst_date) <= up_to_day,
-            _exclude_hourly_overlap(EnergyData),
         )
     )
     result = await db.execute(query)
     total = result.scalar()
     return float(total) if total is not None and total > 0 else None
+
+
+async def get_price_category_distribution(
+    db: AsyncSession,
+    start_time: datetime,
+    end_time: datetime,
+    energy_type: str | None = None,
+    workshop: str | None = None,
+) -> list[dict[str, Any]]:
+    """按峰谷电价分类聚合能耗数据。
+
+    从 energy.price_periods 表读取用户配置的规则，按优先级（尖>峰>平>谷）分类。
+    """
+    from sqlalchemy import text
+
+    # 1. 加载所有规则，构建 (hour, month) → category 映射
+    rules_result = await db.execute(
+        select(PricePeriod).where(PricePeriod.is_deleted == False)  # noqa: E712
+    )
+    rules = rules_result.scalars().all()
+
+    # 优先级：尖>峰>平>谷（数字越小优先级越高）
+    priority = {"尖": 1, "峰": 2, "平": 3, "谷": 4}
+
+    # 构建映射: {(hour, month): (priority, category)}
+    lookup: dict[tuple[int, int], tuple[int, str]] = {}
+    for r in rules:
+        for month in r.months:
+            for hour in range(r.start_hour, r.end_hour):
+                key = (hour, month)
+                prio = priority.get(r.category, 99)
+                if key not in lookup or prio < lookup[key][0]:
+                    lookup[key] = (prio, r.category)
+
+    # 2. 查询原始数据
+    where_clauses = [
+        "d.is_deleted = false",
+        "c.is_deleted = false",
+        "d.timestamp >= :start_time",
+        "d.timestamp <= :end_time",
+    ]
+    params: dict[str, Any] = {
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+    if energy_type:
+        where_clauses.append("c.energy_type = :energy_type")
+        params["energy_type"] = energy_type
+
+    if workshop:
+        where_clauses.append("c.workshop = :workshop")
+        params["workshop"] = workshop
+        # 按部门查看 → 只用普通设备（子表），排除总耗设备
+        where_clauses.append("c.stat_role = 'normal'")
+    else:
+        # 默认总览 → 总耗设备优先，无总耗时用普通设备（对齐 _total_preferred_filter：
+        # 区域级 total 存在时排除所有 normal，避免「总耗 + 子表相加」重复累加）
+        where_clauses.append("c.stat_role != 'excluded'")
+        where_clauses.append(
+            "("
+            "c.stat_role = 'total'"
+            " OR ("
+            "c.stat_role = 'normal'"
+            " AND NOT ("
+            "  EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs t "
+            "   WHERE t.workshop = c.workshop AND t.energy_type = c.energy_type "
+            "   AND t.stat_role = 'total' AND t.is_enabled = true AND t.is_deleted = false"
+            "  )"
+            "  OR EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs r "
+            "   WHERE r.energy_type = c.energy_type "
+            "   AND r.stat_role = 'total' AND r.is_region_level = true "
+            "   AND r.is_enabled = true AND r.is_deleted = false"
+            "  )"
+            " )"
+            " AND ("
+            "  c.is_region_level = false"
+            "  OR NOT EXISTS ("
+            "   SELECT 1 FROM energy.energy_device_configs d2 "
+            "   WHERE d2.workshop = c.workshop AND d2.energy_type = c.energy_type "
+            "   AND d2.is_region_level = false AND d2.is_enabled = true AND d2.is_deleted = false"
+            "  )"
+            " )"
+            ")"
+            ")"
+        )
+
+    where_sql = " AND ".join(where_clauses)
+    raw_sql = (
+        f"SELECT d.value, d.unit, "
+        f"EXTRACT(HOUR FROM d.timestamp AT TIME ZONE 'Asia/Shanghai')::int AS hour, "
+        f"EXTRACT(MONTH FROM d.timestamp AT TIME ZONE 'Asia/Shanghai')::int AS month "
+        f"FROM energy.energy_data d "
+        f"JOIN energy.energy_device_configs c ON d.device_config_id = c.id "
+        f"WHERE {where_sql}"
+    )
+
+    result = await db.execute(text(raw_sql), params)
+    raw_rows = result.all()
+
+    # 3. 分类聚合
+    from collections import defaultdict
+    agg: dict[str, dict[str, Any]] = defaultdict(lambda: {"total_value": 0.0, "unit": ""})
+    for row in raw_rows:
+        key = (int(row.hour), int(row.month))
+        cat = lookup.get(key, (99, "平"))[1]
+        agg[cat]["total_value"] += float(row.value or 0)
+        agg[cat]["unit"] = row.unit or agg[cat]["unit"]
+
+    # 4. 按优先级排序
+    order = {"尖": 1, "峰": 2, "平": 3, "谷": 4}
+    categories = sorted(
+        [
+            {
+                "category": cat,
+                "total_value": round(data["total_value"], 4),
+                "unit": data["unit"],
+                "percentage": 0.0,
+            }
+            for cat, data in agg.items()
+        ],
+        key=lambda c: order.get(c["category"], 99),
+    )
+
+    grand_total = sum(c["total_value"] for c in categories)
+    for c in categories:
+        c["percentage"] = round(c["total_value"] / grand_total * 100, 1) if grand_total > 0 else 0.0
+
+    return categories
+
+
+# ── 峰谷时段规则 CRUD ──
+
+
+async def list_price_periods(db: AsyncSession) -> list[dict[str, Any]]:
+    """列出所有未删除的峰谷时段规则。"""
+    result = await db.execute(
+        select(PricePeriod).where(PricePeriod.is_deleted == False).order_by(  # noqa: E712
+            PricePeriod.category, PricePeriod.start_hour
+        )
+    )
+    rows = result.scalars().all()
+    return [
+        {
+            "id": str(r.id),
+            "category": r.category,
+            "start_hour": r.start_hour,
+            "end_hour": r.end_hour,
+            "months": r.months,
+        }
+        for r in rows
+    ]
+
+
+async def create_price_period(
+    db: AsyncSession, category: str, start_hour: int, end_hour: int, months: list[int]
+) -> dict[str, Any]:
+    """新增一条峰谷时段规则。"""
+    period = PricePeriod(
+        category=category,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        months=months,
+    )
+    db.add(period)
+    await db.flush()
+    return {
+        "id": str(period.id),
+        "category": period.category,
+        "start_hour": period.start_hour,
+        "end_hour": period.end_hour,
+        "months": period.months,
+    }
+
+
+async def delete_price_period(db: AsyncSession, period_id: UUID) -> bool:
+    """软删除一条峰谷时段规则。"""
+    result = await db.execute(
+        select(PricePeriod).where(
+            PricePeriod.id == period_id,
+            PricePeriod.is_deleted == False,  # noqa: E712
+        )
+    )
+    period = result.scalars().first()
+    if period is None:
+        return False
+    period.is_deleted = True
+    await db.flush()
+    return True
+
+
+async def reset_price_periods(db: AsyncSession) -> list[dict[str, Any]]:
+    """重置为默认规则：软删除全部现有规则，插入默认值。"""
+    # 软删除全部
+    result = await db.execute(
+        select(PricePeriod).where(PricePeriod.is_deleted == False)  # noqa: E712
+    )
+    for r in result.scalars().all():
+        r.is_deleted = True
+    await db.flush()
+
+    # 插入默认规则
+    defaults = [
+        ("谷", 0, 8, list(range(1, 13))),
+        ("平", 8, 10, list(range(1, 13))),
+        ("平", 12, 15, list(range(1, 13))),
+        ("平", 20, 21, list(range(1, 13))),
+        ("平", 22, 24, list(range(1, 13))),
+        ("峰", 10, 11, list(range(1, 13))),
+        ("峰", 11, 12, [1, 2, 3, 4, 5, 6, 10, 11, 12]),
+        ("峰", 15, 17, list(range(1, 13))),
+        ("峰", 17, 18, [1, 2, 3, 4, 5, 6, 10, 11, 12]),
+        ("峰", 18, 20, list(range(1, 13))),
+        ("峰", 21, 22, list(range(1, 13))),
+        ("尖", 11, 12, [7, 8, 9]),
+        ("尖", 17, 18, [7, 8, 9]),
+    ]
+    periods = []
+    for cat, sh, eh, months in defaults:
+        p = PricePeriod(category=cat, start_hour=sh, end_hour=eh, months=months)
+        db.add(p)
+        periods.append(p)
+    await db.flush()
+    return [
+        {"id": str(p.id), "category": p.category, "start_hour": p.start_hour,
+         "end_hour": p.end_hour, "months": p.months}
+        for p in periods
+    ]

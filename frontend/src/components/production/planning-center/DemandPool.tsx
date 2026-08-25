@@ -34,7 +34,7 @@ const STATUS_LABELS: Record<string, string> = {
 
 export function DemandPool() {
   const { hasPermission } = usePermission()
-  const canSubmit = hasPermission('production:batch:submit')
+  const canSubmit = hasPermission('production:planning:submit')
   const queryClient = useQueryClient()
   const { message } = App.useApp()
 

@@ -63,7 +63,7 @@ export function SparePartTable({ onRefresh, onImportClick }: Props) {
           : <Tag color="orange">{count} 台设备</Tag>,
     },
     {
-      title: '操作', key: 'action', width: 220, fixed: 'end',
+      title: '操作', key: 'action', width: 240, fixed: 'end',
       render: (_: unknown, r: SparePart) => (
         <Space size={12}>
           {hasPermission('equipment:spare_part:update') && (

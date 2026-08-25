@@ -158,8 +158,8 @@ export function CollectLogTable({
     },
     {
       title: '采集时间',
-      dataIndex: 'collect_time',
-      key: 'collect_time',
+      dataIndex: 'created_at',
+      key: 'created_at',
       width: 180,
       render: (text: string) => (
         <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
@@ -180,28 +180,26 @@ export function CollectLogTable({
       },
     },
     {
-      title: '应采 / 成功',
+      title: '成功 / 应采',
       key: 'count',
       width: 110,
       align: 'right',
-      render: (_: unknown, record: CollectLog) => (
-        <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
-          <span
-            style={{
-              color:
-                record.success_count === record.device_count
-                  ? '#1aae39'
-                  : record.success_count === 0
-                    ? '#e03131'
-                    : '#dd5b00',
-            }}
-          >
-            {record.success_count}
+      render: (_: unknown, record: CollectLog) => {
+        const expected = record.expected_count || record.device_count * 24
+        const color =
+          record.success_count >= expected
+            ? '#1aae39'
+            : record.success_count === 0
+              ? '#e03131'
+              : '#dd5b00'
+        return (
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
+            <span style={{ color }}>{record.success_count}</span>
+            {' / '}
+            {expected}
           </span>
-          {' / '}
-          {record.device_count}
-        </span>
-      ),
+        )
+      },
     },
     {
       title: '错误信息',

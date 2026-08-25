@@ -1,5 +1,9 @@
 """生产模块 API 契约。按聚合拆分：product / route / batch / execution / trace / intermediate / assignment。"""
 
+from app.modules.production.schemas.analytics import (
+    StepCycleResponse,
+    StepCycleStat,
+)
 from app.modules.production.schemas.assignment import (
     NodeAssigneeInfo,
     NodeAssignmentCreate,
@@ -7,6 +11,8 @@ from app.modules.production.schemas.assignment import (
     ReceiveAndStartIn,
     StageAssignmentCreate,
     StageAssignmentOut,
+    StageSuffixOut,
+    StageSuffixSetIn,
     WorkbenchItem,
     WorkbenchOut,
 )
@@ -15,20 +21,25 @@ from app.modules.production.schemas.batch import (
     BatchDetailOut,
     BatchOut,
     ChildBatchIn,
+    ComputedFieldValueOut,
     DeriveIn,
     MergeIn,
     MergeParentIn,
 )
+from app.modules.production.schemas.equipment import EquipmentOptionOut
 from app.modules.production.schemas.execution import (
     EquipmentSnapshotOut,
+    ExecutionBackfillIn,
     ExecutionCompleteIn,
     ExecutionOut,
     ExecutionStartIn,
     FieldValueIn,
     FieldValueOut,
+    MissingFieldOut,
     NodeExecutionListItem,
 )
 from app.modules.production.schemas.intermediate import (
+    ContainerStockOut,
     IntermediateConsumptionIn,
     IntermediateConsumptionOut,
     IntermediateOutputIn,
@@ -39,8 +50,18 @@ from app.modules.production.schemas.intermediate import (
     MaterialMovement,
     MaterialMovementsOut,
     MaterialStockSummary,
+    MixingContainerCreate,
+    MixingContainerOut,
+    MixingContainerUpdate,
     NodeIntermediateIn,
     NodeIntermediateOut,
+)
+from app.modules.production.schemas.line import (
+    LineAssignmentCreate,
+    LineAssignmentOut,
+    LineCreate,
+    LineOut,
+    LineUpdate,
 )
 from app.modules.production.schemas.planning import (
     DemandAllocationCreate,
@@ -67,6 +88,8 @@ from app.modules.production.schemas.product import (
     ProductUpdate,
 )
 from app.modules.production.schemas.route import (
+    ComputedFieldIn,
+    ComputedFieldOut,
     EdgeIn,
     EdgeOut,
     FieldDefIn,
@@ -77,6 +100,7 @@ from app.modules.production.schemas.route import (
     RouteGraphIn,
     RouteGraphOut,
     RouteOut,
+    RouteRename,
 )
 from app.modules.production.schemas.trace import (
     TraceBatch,
@@ -86,14 +110,21 @@ from app.modules.production.schemas.trace import (
 )
 
 __all__ = [
+    "StepCycleResponse",
+    "StepCycleStat",
+    "EquipmentOptionOut",
     "BatchCreate",
     "BatchDetailOut",
     "BatchOut",
     "ChildBatchIn",
+    "ComputedFieldIn",
+    "ComputedFieldOut",
+    "ComputedFieldValueOut",
     "DeriveIn",
     "EdgeIn",
     "EdgeOut",
     "EquipmentSnapshotOut",
+    "ExecutionBackfillIn",
     "ExecutionCompleteIn",
     "ExecutionOut",
     "ExecutionStartIn",
@@ -108,11 +139,22 @@ __all__ = [
     "IntermediateTypeCreate",
     "IntermediateTypeOut",
     "IntermediateTypeUpdate",
+    "LineAssignmentCreate",
+    "LineAssignmentOut",
+    "LineCreate",
+    "LineOut",
+    "LineUpdate",
+    "ContainerStockOut",
     "MaterialMovement",
     "MaterialMovementsOut",
+    "MixingContainerCreate",
+    "MixingContainerOut",
+    "MixingContainerUpdate",
     "MaterialStockSummary",
     "MergeIn",
     "MergeParentIn",
+    "MissingExecutionOut",
+    "MissingFieldOut",
     "NodeExecutionListItem",
     "NodeIn",
     "NodeIntermediateIn",
@@ -125,6 +167,7 @@ __all__ = [
     "RouteGraphIn",
     "RouteGraphOut",
     "RouteOut",
+    "RouteRename",
     "TraceBatch",
     "TraceExecutionBrief",
     "TraceLink",
@@ -135,6 +178,8 @@ __all__ = [
     "ReceiveAndStartIn",
     "StageAssignmentCreate",
     "StageAssignmentOut",
+    "StageSuffixOut",
+    "StageSuffixSetIn",
     "WorkbenchItem",
     "WorkbenchOut",
     # Planning

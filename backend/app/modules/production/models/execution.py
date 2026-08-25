@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Index, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -112,3 +112,9 @@ class NodeFieldValue(BaseModel):
         default=False, comment="numeric 超出 min/max 自动判定"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    filled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="当前值最后填写时间(含补录)"
+    )
+    filled_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("identity.users.id"), nullable=True, comment="当前值最后填写人(含补录)"
+    )

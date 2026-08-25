@@ -8,18 +8,35 @@ export interface ProductionBatch {
   product_id: string
   route_id: string
   route_name: string
-  route_version: number
   status: ProductionBatchStatus
   quantity: number | null
   unit: string | null
   entry_node_id: string | null
+  first_started_at: string | null
+  last_finished_at: string | null
   remark: string | null
   created_at: string
   updated_at: string
+  owner_user_id?: string | null
+  owner_name?: string | null
+}
+
+export interface ComputedFieldValue {
+  field_key: string
+  field_label: string
+  unit: string | null
+  value: number | null
+}
+
+export interface ChildrenAggregateResult {
+  field_key: string
+  node_code: string | null
+  sum: number | null
 }
 
 export interface BatchDetail extends ProductionBatch {
   executions: Execution[]
+  computed_fields: ComputedFieldValue[]
 }
 
 export interface CreateBatchInput {

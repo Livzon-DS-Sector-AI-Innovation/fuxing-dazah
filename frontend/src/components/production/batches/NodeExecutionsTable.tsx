@@ -71,7 +71,7 @@ export function NodeExecutionsTable({ productId }: { productId: string }) {
           }}
           options={(routes ?? []).map(r => ({
             value: r.id,
-            label: `V${r.version} · ${r.name}（${
+            label: `${r.route_name}（${
               { draft: '草稿', published: '已发布', archived: '已归档' }[r.status]
             }）`,
           }))}

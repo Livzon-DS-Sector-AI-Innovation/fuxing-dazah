@@ -4,6 +4,7 @@ import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   App,
   Button,
+  DatePicker,
   Drawer,
   Empty,
   Form,
@@ -13,12 +14,15 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd'
 import type { FormInstance } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { usePermission } from '@/hooks/usePermission'
 import { fetchPlanOrderClient } from '@/lib/api/production-client'
 import {
   updatePlanOrder,
@@ -28,12 +32,13 @@ import {
   changePlanOrder,
 } from '@/actions/production'
 import { StageConfigItem, type PlanOrderDetail, type PlanItem, type PlanItemBatchProgress, type PlanOrderChangeItem } from '@/types/production'
+import { batchGenDayOffset, batchRhythmWarning } from './utils'
 import { fetchProductsClient, fetchRoutesClient, fetchRouteGraphClient } from '@/lib/api/production-client'
 import dayjs from 'dayjs'
 import { PlanItemTable, StageProgressBar } from './PlanItemTable'
 import { ReleaseConfirmModal } from './ReleaseConfirmModal'
 import { STATUS_CONFIG, STATUS_THEME, PRIORITY_CONFIG, STAGE_PRESET_COLORS } from './constants'
-import { incrementBatchNo } from '@/lib/utils'
+import { decrementBatchNo, incrementBatchNo } from '@/lib/utils'
 import { DownOutlined, RightOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -45,7 +50,7 @@ function InlineEditForm({ form, onSave, onCancel, products, routes, onProductCha
   onSave: () => Promise<void>
   onCancel: () => void
   products: { id: string; product_name: string }[]
-  routes: { id: string; name: string; version: number }[]
+  routes: { id: string; route_name: string }[]
   onProductChange: (productId: string) => void
 }) {
   const productId = Form.useWatch('product_id', form)
@@ -68,7 +73,7 @@ function InlineEditForm({ form, onSave, onCancel, products, routes, onProductCha
           <Select
             placeholder="先选产品"
             disabled={!productId}
-            options={routes.map((r) => ({ value: r.id, label: `${r.name} v${r.version}` }))}
+            options={routes.map((r) => ({ value: r.id, label: `${r.route_name}` }))}
           />
         </Form.Item>
       </div>
@@ -229,6 +234,8 @@ interface Props {
 }
 
 export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props) {
+  const { hasPermission } = usePermission()
+  const canSubmit = hasPermission('production:planning:submit')
   const { modal, message } = App.useApp()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -293,6 +300,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const [batchCount, setBatchCount] = useState(1)
   const [batchIntervalDays, setBatchIntervalDays] = useState(1) // m：每隔 m 天
   const [batchGroupSize, setBatchGroupSize] = useState(1) // n：生成 n 批
+  const [batchGapDays, setBatchGapDays] = useState(1) // k：每批间隔 k 天
+  const [batchIncludeFirst, setBatchIncludeFirst] = useState(true) // 前一项参与生成：参考项占序列第 1 位，新批次从其后续位置继续
 
   // 折叠区块
   const [showBasicInfo, setShowBasicInfo] = useState(false)
@@ -304,15 +313,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
       prevOrderRef.current = order.id
       setChangeMode(true)
       setLocalItems(order.items ? order.items.map(i => ({ ...i })) : [])
-      changeForm.setFieldsValue({
-        title: order.title,
-        scheduled_start: order.scheduled_start?.slice(0, 10) ?? undefined,
-        scheduled_end: order.scheduled_end?.slice(0, 10) ?? undefined,
-        priority: order.priority,
-        remark: order.remark ?? '',
-      })
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- changeMode guarded by !changeMode, changeForm is stable
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- changeMode guarded by !changeMode
   }, [order, changeReason])
 
   // drawer 关闭时重置状态，确保再次打开同一计划单可正常进入变更模式
@@ -342,7 +344,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const routeName = useMemo(() => {
     if (!routeId || !routes) return null
     const r = routes.find((r) => r.id === routeId)
-    return r ? `${r.name} v${r.version}` : null
+    return r ? `${r.route_name}` : null
   }, [routeId, routes])
 
   const status = order ? (STATUS_CONFIG[order.status] ?? { label: order.status, color: 'default' }) : null
@@ -382,7 +384,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     modal.confirm({
       title: `确认计划单「${order?.order_no}」?`,
       content: '确认后将锁定计划项，无法再增删或修改。',
-      okText: '确认',
+      okText: '确认并锁定',
       cancelText: '取消',
       onOk: async () => {
         const r = await confirmPlanOrder(orderId)
@@ -452,6 +454,12 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const handleBatchGenerate = () => {
     if (!batchStartNo || batchCount <= 0) return
     if (localItems.length === 0) { message.error('请先添加至少一个计划项'); return }
+    // 仅当生成批次足以跨组时组间才可能重叠（不足一组时全部落在同一组内、逐批间隔互不重叠）；
+    // 开启"前项参与"时参考项占组内第 1 位，新批次从第 2 位起，故跨组所需批次少一批
+    if (batchCount >= batchGroupSize + (batchIncludeFirst ? 0 : 1)) {
+      const warn = batchRhythmWarning(batchGroupSize, batchIntervalDays, batchGapDays)
+      if (warn) { message.warning(warn); return }
+    }
     const lastItem = localItems[localItems.length - 1]
     const lastStart = lastItem.planned_start ? new Date(lastItem.planned_start) : new Date()
     const lastEnd = lastItem.planned_end ? new Date(lastItem.planned_end) : new Date()
@@ -461,9 +469,11 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     const startBase = lastStart.getTime()
     const endBase = lastEnd.getTime()
 
-    for (let i = 0; i < batchCount; i++) {
-      const idx = i + 1
-      const dayOffset = Math.floor(idx / batchGroupSize) * batchIntervalDays + (idx % batchGroupSize)
+    for (let i = 1; i <= batchCount; i++) {
+      // 第 i 批：参考项作序列第 0 个（或开启"前一项参与生成"时作第 1 个，新批次从第 2 位继续），
+      // 第 i//n 组的起点偏移 i//n*m 天，组内第 i%n 批再间隔 (i%n)*k 天
+      const seqIdx = batchIncludeFirst ? i + 1 : i
+      const dayOffset = batchGenDayOffset(seqIdx, batchGroupSize, batchIntervalDays, batchGapDays)
       const msOffset = dayOffset * 86400000
 
       newItems.push({
@@ -483,7 +493,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
         priority: 'medium',
         sort_order: 0,
         remark: null,
-        stage_durations: order!.stage_config,
+        stage_durations: null,
         allocations: [],
         demand_allocations: [],
         created_at: '',
@@ -501,7 +511,56 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     setBatchCount(1)
     setBatchIntervalDays(1)
     setBatchGroupSize(1)
+    setBatchGapDays(1)
+    setBatchIncludeFirst(true)
     setBatchGenOpen(true)
+  }
+
+  const removeItem = (record: PlanItem, shift: boolean) => {
+    setLocalItems(prev => {
+      const idx = prev.findIndex(i => i.id === record.id && i.item_no === record.item_no)
+      let next = prev.filter(i => i.id !== record.id || i.item_no !== record.item_no)
+      if (shift && idx >= 0) {
+        // 被删行之后的每一行批号数字减 1（时间字段不动）
+        next = next.map((i, j) => j >= idx ? { ...i, batch_no: decrementBatchNo(i.batch_no ?? '') || null } : i)
+      }
+      return next
+    })
+    if (record.id && !String(record.id).startsWith('_new_')) setDeletedItemIds(prev => [...prev, record.id])
+  }
+
+  const handleDeleteItem = (record: PlanItem) => {
+    const idx = localItems.findIndex(i => i.id === record.id && i.item_no === record.item_no)
+    // 被删行之后、批号数字可减的后续行（用于预览与按钮显隐）
+    const following = idx >= 0
+      ? localItems.slice(idx + 1).filter(i => i.batch_no && decrementBatchNo(i.batch_no) !== i.batch_no)
+      : []
+    const label = record.batch_no || `#${record.item_no}`
+    const preview = following.slice(0, 5)
+      .map(i => `${i.batch_no} → ${decrementBatchNo(i.batch_no!)}`).join('、')
+
+    const ins = modal.confirm({
+      title: `删除计划项「${label}」?`,
+      content: following.length > 0 ? (
+        <div>
+          后续 {following.length} 个批号将前移补位：
+          <br />
+          {preview}{following.length > 5 ? ` …等 ${following.length} 个` : ''}
+        </div>
+      ) : (
+        <div>删除后不可恢复。</div>
+      ),
+      // footer 三按钮：取消 / 删除 / 删除并顺延
+      footer: (_originNode, { CancelBtn }) => (
+        <>
+          <CancelBtn />
+          <Button danger onClick={() => { ins.destroy(); removeItem(record, false) }}>删除</Button>
+          {following.length > 0 && (
+            <Button danger type="primary" onClick={() => { ins.destroy(); removeItem(record, true) }}>删除并补位</Button>
+          )}
+        </>
+      ),
+    })
   }
 
   const handleSaveChange = async () => {
@@ -558,7 +617,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
       title="计划单详情"
       open={!!orderId}
       onClose={handleDrawerClose}
-      maskClosable={false}
+      mask={{closable: false}}
       size="large"
       destroyOnHidden
       styles={{ body: { padding: 0 } }}
@@ -588,10 +647,11 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                 {formatDate(order.scheduled_start)} ~ {formatDate(order.scheduled_end)}
               </span>
             )}
+            {canSubmit && (
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
               {order.status === 'draft' && (
                 <>
-                  <Button type="primary" size="small" onClick={handleConfirm}>确认</Button>
+                  <Button type="primary" size="small" onClick={handleConfirm}>确认并锁定</Button>
                   <Button size="small" onClick={handleEdit}>编辑</Button>
                   <Button size="small" danger onClick={handleDelete}>删除</Button>
                 </>
@@ -616,6 +676,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                 </>
               )}
             </div>
+            )}
           </div>
 
           {/* Body — left accent strip + sections */}
@@ -625,7 +686,17 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
             {showBasicInfo && (
               <>
                 {changeMode ? (
-                  <Form form={changeForm} layout="vertical">
+                  <Form
+                    form={changeForm}
+                    layout="vertical"
+                    initialValues={{
+                      title: order.title,
+                      scheduled_start: order.scheduled_start?.slice(0, 10) ?? undefined,
+                      scheduled_end: order.scheduled_end?.slice(0, 10) ?? undefined,
+                      priority: order.priority,
+                      remark: order.remark ?? '',
+                    }}
+                  >
                     <div style={{ display: 'flex', gap: 12 }}>
                       <Form.Item name="title" label="标题" style={{ flex: 1 }} rules={[{ required: true }]}>
                         <Input />
@@ -684,6 +755,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>往后顺延</span>
                     <InputNumber size="small" min={0} step={1} value={delayDays} onChange={v => setDelayDays(v ?? 0)} style={{ width: 70 }} />
                     <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天</span>
+                    {canSubmit && (
                     <Button
                       size="small"
                       onClick={() => {
@@ -700,6 +772,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       }}
                       disabled={!delayStartItemNo || delayDays <= 0}
                     >顺延</Button>
+                    )}
                   </Space>
                 )}
                 <Table
@@ -715,21 +788,18 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'batch_no',
                       width: 145,
                       render: (v: string | null, record: PlanItem) => (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                          <Input
-                            size="small"
-                            value={v ?? ''}
-                            style={{ width: 120, fontWeight: 600 }}
-                            onChange={e => updateLocalItem(record.id, { batch_no: e.target.value || undefined })}
-                          />
-                          <span style={{ fontSize: 10, color: 'var(--color-steel)' }}>{record.product_name || '—'}</span>
-                        </div>
+                        <Input
+                          size="small"
+                          value={v ?? ''}
+                          style={{ width: 120, fontWeight: 600 }}
+                          onChange={e => updateLocalItem(record.id, { batch_no: e.target.value || undefined })}
+                        />
                       ),
                     },
                     {
                       title: '数量',
                       dataIndex: 'planned_quantity',
-                      width: 90,
+                      width: 60,
                       render: (v: number | null, record: PlanItem) => (
                         <InputNumber
                           size="small"
@@ -745,11 +815,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'planned_start',
                       width: 160,
                       render: (v: string | null, record: PlanItem) => (
-                        <input
-                          type="datetime-local"
-                          value={v ? dayjs(v).format('YYYY-MM-DDTHH:mm') : ''}
-                          onChange={e => updateLocalItem(record.id, { planned_start: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
-                          style={{ fontSize: 12 }}
+                        <DatePicker
+                          showTime
+                          format="YYYY-MM-DD HH:mm"
+                          size="small"
+                          style={{ width: 140 }}
+                          value={v ? dayjs(v) : null}
+                          onChange={d => updateLocalItem(record.id, { planned_start: d ? d.toISOString() : undefined })}
                         />
                       ),
                     },
@@ -758,11 +830,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       dataIndex: 'planned_end',
                       width: 160,
                       render: (v: string | null, record: PlanItem) => (
-                        <input
-                          type="datetime-local"
-                          value={v ? dayjs(v).format('YYYY-MM-DDTHH:mm') : ''}
-                          onChange={e => updateLocalItem(record.id, { planned_end: e.target.value ? new Date(e.target.value).toISOString() : undefined })}
-                          style={{ fontSize: 12 }}
+                        <DatePicker
+                          showTime
+                          format="YYYY-MM-DD HH:mm"
+                          size="small"
+                          style={{ width: 140 }}
+                          value={v ? dayjs(v) : null}
+                          onChange={d => updateLocalItem(record.id, { planned_end: d ? d.toISOString() : undefined })}
                         />
                       ),
                     },
@@ -772,7 +846,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       width: 180,
                       render: (bp: PlanItemBatchProgress | null, record: PlanItem) => (
                         <StageProgressBar
-                          stageDurations={record.stage_durations}
+                          stageDurations={record.stage_durations ?? order!.stage_config}
                           batchProgress={bp}
                         />
                       ),
@@ -781,13 +855,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       title: '操作',
                       width: 60,
                       render: (_: unknown, record: PlanItem) => (
-                        <Button
-                          type="text" size="small" danger
-                          onClick={() => {
-                            setLocalItems(prev => prev.filter(i => i.id !== record.id || i.item_no !== record.item_no))
-                            if (record.id && !String(record.id).startsWith('_new_')) setDeletedItemIds(prev => [...prev, record.id])
-                          }}
-                        >删除</Button>
+                        canSubmit ? <Button type="text" size="small" danger onClick={() => handleDeleteItem(record)}>删除</Button> : null
                       ),
                     },
                   ]}
@@ -803,7 +871,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       <InputNumber size="small" min={1} value={batchIntervalDays} onChange={v => setBatchIntervalDays(v ?? 1)} style={{ width: 50 }} />
                       <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天生成</span>
                       <InputNumber size="small" min={1} value={batchGroupSize} onChange={v => setBatchGroupSize(v ?? 1)} style={{ width: 50 }} />
-                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>批</span>
+                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>批，批间隔</span>
+                      <InputNumber size="small" min={0} value={batchGapDays} onChange={v => setBatchGapDays(v ?? 0)} style={{ width: 50 }} />
+                      <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>天</span>
+                      <Tooltip title="开启后最后一项计入序列，新批次从其后一位继续；关闭则与最后一项同日排入">
+                        <span style={{ fontSize: 12, color: 'var(--color-slate)' }}>前项参与</span>
+                        <Switch size="small" checked={batchIncludeFirst} onChange={setBatchIncludeFirst} />
+                      </Tooltip>
                       <Button size="small" type="primary" onClick={handleBatchGenerate} disabled={!batchStartNo}>生成</Button>
                       <Button size="small" onClick={() => setBatchGenOpen(false)}>收起</Button>
                     </Space>
@@ -813,6 +887,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     </Button>
                   )}
                 </div>
+                {canSubmit && (
                 <Button
                   type="dashed" size="small" style={{ marginTop: 8 }}
                   onClick={() => {
@@ -823,20 +898,21 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                       planned_quantity: null, unit: null, batch_no: '',
                       planned_start: null, planned_end: null,
                       status: 'allocated', priority: 'medium', sort_order: 0,
-                      remark: null, stage_durations: order!.stage_config,
+                      remark: null, stage_durations: null,
                       allocations: [], demand_allocations: [],
                       created_at: '', updated_at: '',
                     }
                     setLocalItems(prev => [...prev, newItem])
                   }}
                 >+ 新增计划项</Button>
+                )}
               </div>
             ) : (
               <PlanItemTable
                 planOrderId={order.id}
                 planOrderStatus={order.status}
                 planOrderProductId={order.product_id}
-                planOrderProductName={order.items?.[0]?.product_name ?? order.title}
+                planOrderProductName={productName ?? order.items?.[0]?.product_name ?? order.title}
                 planOrderRouteId={order.route_id}
                 planOrderStageConfig={order.stage_config}
                 items={order.items}

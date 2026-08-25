@@ -14,6 +14,7 @@ import {
   EnergyTypeMeta,
 } from '@/types/energy'
 import { fetchCollectLogDetailClient, fetchEnabledTypeConfigsClient } from '@/lib/api/energy'
+import { reportEnergyError } from '@/lib/energy/error-report'
 
 // ── 轻奢 Pill ──
 
@@ -188,6 +189,12 @@ export function CollectLogDetailDrawer({
       .catch((err) => {
         if (!cancelled) {
           console.error('获取采集日志详情失败:', err)
+          reportEnergyError({
+            message: err instanceof Error ? err.message : String(err),
+            api_url: `/api/v1/energy/collect/logs/${logId}/detail`,
+            page_url: window.location.href,
+            component: 'CollectLogDetailDrawer',
+          })
           message.error('获取采集日志详情失败')
         }
       })
@@ -264,6 +271,14 @@ export function CollectLogDetailDrawer({
       render: (text: string, record: CollectLogDeviceDetail) => {
         if (!text) return '-'
         const start = new Date(text)
+        // 日汇总数据只显示日期
+        if (record.is_daily) {
+          return (
+            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
+              {start.toLocaleDateString('zh-CN')}
+            </span>
+          )
+        }
         const end = record.data_time_range_end
           ? new Date(record.data_time_range_end)
           : new Date(start.getTime() + 60 * 60 * 1000)
@@ -349,13 +364,13 @@ export function CollectLogDetailDrawer({
             </InfoRow>
 
             <InfoRow label="采集时间">
-              {new Date(detail.collect_time).toLocaleString('zh-CN')}
+              {new Date(detail.created_at).toLocaleString('zh-CN')}
             </InfoRow>
 
             {/* 水务时间间隔告警：采集时间与数据时间 > 60 分钟时显示 */}
             {detail.time_range_start &&
               (() => {
-                const collectTime = new Date(detail.collect_time).getTime()
+                const collectTime = new Date(detail.created_at).getTime()
                 const dataTime = new Date(detail.time_range_start).getTime()
                 const gapMinutes = Math.abs(collectTime - dataTime) / 1000 / 60
                 if (gapMinutes > 60) {
@@ -386,23 +401,23 @@ export function CollectLogDetailDrawer({
                 return null
               })()}
 
-            <InfoRow label="应采 / 成功">
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                <span
-                  style={{
-                    color:
-                      detail.success_count === detail.device_count
-                        ? '#1aae39'
-                        : detail.success_count === 0
-                          ? '#e03131'
-                          : '#dd5b00',
-                  }}
-                >
-                  {detail.success_count}
-                </span>
-                {' / '}
-                {detail.device_count}
-              </span>
+            <InfoRow label="成功 / 应采">
+              {(() => {
+                const expected = detail.expected_count || detail.device_count * 24
+                const color =
+                  detail.success_count >= expected
+                    ? '#1aae39'
+                    : detail.success_count === 0
+                      ? '#e03131'
+                      : '#dd5b00'
+                return (
+                  <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color }}>{detail.success_count}</span>
+                    {' / '}
+                    {expected}
+                  </span>
+                )
+              })()}
             </InfoRow>
 
             <InfoRow label="数据时间范围">

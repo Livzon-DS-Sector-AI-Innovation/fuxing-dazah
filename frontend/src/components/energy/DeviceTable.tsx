@@ -33,6 +33,18 @@ const monitorConfig: Record<string, ReturnType<typeof luxuryPill>> = {
 const enabledPill = luxuryPill('#1aae39', '#d9f3e1')
 const disabledPill = luxuryPill('#787671', '#f0eeec')
 
+const statRoleConfig: Record<string, ReturnType<typeof luxuryPill>> = {
+  normal: luxuryPill('#5645d4', '#f6f3ff'),
+  excluded: luxuryPill('#787671', '#f0eeec'),
+  total: luxuryPill('#dd5b00', '#ffe8d4'),
+}
+
+const statRoleLabel: Record<string, string> = {
+  normal: '参与统计',
+  excluded: '不参与',
+  total: '作为总耗',
+}
+
 // ── 表格样式注入（仅影响本组件范围内的 .luxury-device-table） ──
 
 const tableStyles = `
@@ -222,6 +234,17 @@ export function DeviceTable({
       ),
     },
     {
+      title: '统计角色',
+      dataIndex: 'stat_role',
+      key: 'stat_role',
+      width: 90,
+      render: (role: string) => {
+        const s = statRoleConfig[role] || statRoleConfig.normal
+        const label = statRoleLabel[role] || role
+        return <span style={s}>{label}</span>
+      },
+    },
+    {
       title: '所属区域',
       dataIndex: 'production_line',
       key: 'production_line',
@@ -235,40 +258,17 @@ export function DeviceTable({
     },
     {
       title: '关联设备',
-      dataIndex: 'equipment_name',
-      key: 'equipment_name',
+      dataIndex: 'equipment_names',
+      key: 'equipment_names',
       width: 140,
       ellipsis: true,
-      render: (name: string | null | undefined) => (
-        name ? (
-          <span style={{ color: '#37352f' }}>{name}</span>
+      render: (names: string[] | null | undefined) => (
+        names && names.length ? (
+          <span style={{ color: '#37352f' }}>{names.join('、')}</span>
         ) : (
           <span style={{ color: '#c8c4be' }}>—</span>
         )
       ),
-    },
-    {
-      title: '间隔',
-      dataIndex: 'collection_interval',
-      key: 'collection_interval',
-      width: 110,
-      render: (_v: number, record: EnergyDeviceConfig) => {
-        const hours = _v / 60
-        if (record.daily_collect_time) {
-          const days = Math.round(hours / 24)
-          return (
-            <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54', fontSize: 13 }}>
-              {days} 天 · 每天 {record.daily_collect_time}
-            </span>
-          )
-        }
-        const display = hours % 1 === 0 ? `${hours}` : hours.toFixed(2)
-        return (
-          <span style={{ fontVariantNumeric: 'tabular-nums', color: '#5d5b54' }}>
-            {display} 小时
-          </span>
-        )
-      },
     },
     {
       title: '监控级别',
@@ -290,17 +290,6 @@ export function DeviceTable({
         <span style={enabled ? enabledPill : disabledPill}>
           {enabled ? '启用' : '禁用'}
         </span>
-      ),
-    },
-    {
-      title: '统计',
-      dataIndex: 'exclude_from_stats',
-      key: 'exclude_from_stats',
-      width: 90,
-      render: (excluded: boolean) => (
-        excluded
-          ? <span style={luxuryPill('#dd5b00', '#ffe8d4')}>不参与</span>
-          : <span style={luxuryPill('#1aae39', '#d9f3e1')}>参与统计</span>
       ),
     },
     {

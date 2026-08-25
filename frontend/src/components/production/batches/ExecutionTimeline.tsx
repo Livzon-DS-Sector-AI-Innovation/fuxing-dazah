@@ -51,9 +51,10 @@ interface Props {
   canSubmit: boolean
   onComplete: (execution: Execution) => void
   onAbort: (execution: Execution) => void
+  onBackfill?: (execution: Execution) => void
 }
 
-export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort }: Props) {
+export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort, onBackfill }: Props) {
   if (!executions.length) return <Empty description="该批次还没有工序执行记录" />
 
   return (
@@ -91,6 +92,11 @@ export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort }
                     </Popconfirm>
                   </Space>
                 )}
+                {canSubmit && e.status === 'completed' && onBackfill && (
+                  <Button size="small" onClick={() => onBackfill(e)}>
+                    补录字段
+                  </Button>
+                )}
               </div>
               {e.is_deviation && e.deviation_reason && (
                 <div
@@ -104,6 +110,21 @@ export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort }
                   }}
                 >
                   偏离原因：{e.deviation_reason}
+                </div>
+              )}
+              {(e.missing_required_fields?.length ?? 0) > 0 && (
+                <div
+                  style={{
+                    background: '#fff8e6',
+                    border: '1px solid #ffe58f',
+                    borderRadius: 8,
+                    padding: '4px 8px',
+                    margin: '8px 0',
+                    fontSize: 12,
+                    color: '#ad6800',
+                  }}
+                >
+                  待补录：{e.missing_required_fields!.map(f => f.field_label).join('、')}
                 </div>
               )}
               <div style={{ fontSize: 12, color: '#787671', marginTop: 4 }}>

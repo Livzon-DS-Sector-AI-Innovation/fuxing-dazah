@@ -159,12 +159,18 @@ export function Sidebar() {
     >
       <div className="flex-1 overflow-y-auto min-w-[224px]">
         <div
-          className={`px-4 pt-5 pb-3${moduleKey === "safety" ? " cursor-pointer group" : ""}`}
-          onClick={moduleKey === "safety" ? () => router.push(currentModule.path) : undefined}
+          className={`px-4 pt-5 pb-3${currentModule.clickableTitle ? " cursor-pointer group" : ""}`}
+          onClick={
+            currentModule.clickableTitle
+              ? () => router.push(currentModule.path)
+              : undefined
+          }
         >
           <h2
             className={`text-[18px] font-semibold text-[var(--color-charcoal)]${
-              moduleKey === "safety" ? " group-hover:text-[var(--color-primary)] transition-colors" : ""
+              currentModule.clickableTitle
+                ? " group-hover:text-[var(--color-primary)] transition-colors"
+                : ""
             }`}
           >
             {currentModule.label}

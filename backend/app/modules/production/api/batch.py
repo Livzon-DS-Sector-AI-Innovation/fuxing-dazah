@@ -14,9 +14,13 @@ from app.modules.production.schemas import (
     DeriveIn,
     MergeIn,
 )
-from app.modules.production.service import batch_service, trace_service
+from app.modules.production.service import (
+    batch_service,
+    computed_service,
+    trace_service,
+)
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
+from app.platform.permission.deps import RequireUser, require_permission
 
 router = APIRouter()
 _submit = require_permission("production:batch:submit")
@@ -93,10 +97,10 @@ async def merge_batches(
 @router.post("/batches/{batch_id}/complete", summary="批次完成")
 async def complete_batch(
     batch_id: uuid.UUID,
-    user: User = Depends(_submit),
+    current_user: RequireUser,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    batch = await batch_service.complete_batch(db, batch_id, user)
+    batch = await batch_service.complete_batch(db, batch_id, current_user)
     return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
 
 
@@ -118,3 +122,15 @@ async def get_trace(
 ) -> JSONResponse:
     trace = await trace_service.get_trace(db, batch_id)
     return success_response(trace.model_dump(mode="json"))
+
+
+@router.get("/batches/{batch_id}/children-aggregate", summary="子批次字段求和（沿谱系）")
+async def children_aggregate(
+    batch_id: uuid.UUID,
+    field_key: str = Query(..., max_length=50),
+    node_code: str | None = Query(default=None, max_length=50),
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    total = await computed_service.aggregate_children_field(db, batch_id, field_key, node_code)
+    return success_response({"field_key": field_key, "node_code": node_code, "sum": total})

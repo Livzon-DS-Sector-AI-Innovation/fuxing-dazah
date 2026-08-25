@@ -35,10 +35,26 @@ class FieldDefOut(FieldDefIn):
     data_type: str  # type: ignore[assignment]
 
 
+class ComputedFieldIn(BaseModel):
+    node_code: str = Field(max_length=50)
+    field_key: str = Field(max_length=50)
+    field_label: str = Field(max_length=100)
+    unit: str | None = Field(default=None, max_length=20)
+    formula: str
+    sort_order: int = 0
+
+
+class ComputedFieldOut(ComputedFieldIn):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    route_id: uuid.UUID
+
+
 class NodeIn(BaseModel):
     node_code: str = Field(max_length=50)
     name: str = Field(max_length=200)
-    stage_name: str | None = Field(default=None, max_length=100)
+    stage_name: str = Field(min_length=1, max_length=100)
     node_type: str = "process"
     sort_order: int = 0
     fields: list[FieldDefIn] = []
@@ -51,7 +67,7 @@ class NodeOut(BaseModel):
     id: uuid.UUID
     node_code: str
     name: str
-    stage_name: str | None
+    stage_name: str
     node_type: str
     sort_order: int
     fields: list[FieldDefOut] = []
@@ -81,7 +97,11 @@ class EdgeOut(BaseModel):
 
 class RouteCreate(BaseModel):
     product_id: uuid.UUID
-    name: str = Field(max_length=200)
+    route_name: str = Field(max_length=200)
+
+
+class RouteRename(BaseModel):
+    route_name: str = Field(max_length=200)
 
 
 class RouteOut(BaseModel):
@@ -89,8 +109,7 @@ class RouteOut(BaseModel):
 
     id: uuid.UUID
     product_id: uuid.UUID
-    version: int
-    name: str
+    route_name: str
     status: str
     created_at: datetime
     updated_at: datetime
@@ -99,9 +118,11 @@ class RouteOut(BaseModel):
 class RouteGraphIn(BaseModel):
     nodes: list[NodeIn]
     edges: list[EdgeIn] = []
+    computed_fields: list[ComputedFieldIn] = []
 
 
 class RouteGraphOut(BaseModel):
     route: RouteOut
     nodes: list[NodeOut]
     edges: list[EdgeOut]
+    computed_fields: list[ComputedFieldOut] = []

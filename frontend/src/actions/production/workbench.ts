@@ -9,12 +9,16 @@ import type {
   ReceiveAndStartInput,
   ReceiveAndStartResult,
   PlannedBatchData,
+  StageSuffixItem,
 } from '@/types/production'
 
-export async function fetchWorkbench(): Promise<ActionResult<WorkbenchData>> {
-  const result = await actionFetch<WorkbenchData>(`${API_BASE}/production/workbench`, {
-    method: 'GET',
-  })
+export async function fetchWorkbench(
+  viewMode: 'mine' | 'all' = 'mine',
+): Promise<ActionResult<WorkbenchData>> {
+  const result = await actionFetch<WorkbenchData>(
+    `${API_BASE}/production/workbench?view_mode=${viewMode}`,
+    { method: 'GET' },
+  )
   if (result.success) revalidatePath('/production/workbench')
   return result
 }
@@ -100,6 +104,24 @@ export async function activatePlannedBatch(
   const result = await actionFetch<{ id: string; batch_no: string; status: string }>(
     `${API_BASE}/production/workbench/activate-planned/${batchId}`,
     { method: 'POST' },
+  )
+  if (result.success) revalidatePath('/production/workbench')
+  return result
+}
+
+export async function fetchMyStageSuffixes(): Promise<ActionResult<StageSuffixItem[]>> {
+  return actionFetch<StageSuffixItem[]>(
+    `${API_BASE}/production/stage-suffixes`,
+    { method: 'GET' },
+  )
+}
+
+export async function setStageSuffix(
+  data: { route_id: string; stage_name: string; suffix: string },
+): Promise<ActionResult<StageSuffixItem>> {
+  const result = await actionFetch<StageSuffixItem>(
+    `${API_BASE}/production/stage-suffixes`,
+    { method: 'PUT', body: JSON.stringify(data) },
   )
   if (result.success) revalidatePath('/production/workbench')
   return result

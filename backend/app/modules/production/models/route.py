@@ -2,21 +2,21 @@
 
 import uuid
 
-from sqlalchemy import JSON, CheckConstraint, Index, String, text
+from sqlalchemy import JSON, CheckConstraint, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
 
 
 class ProcessRoute(BaseModel):
-    """工艺路线（一个产品多个版本，published 后图冻结）"""
+    """工艺路线（同一产品可有多条并行路径，published 后图冻结）"""
 
     __tablename__ = "process_routes"
     __table_args__ = (
         Index(
-            "uq_production_routes_product_version",
+            "uq_production_routes_product_name",
             "product_id",
-            "version",
+            "route_name",
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
@@ -31,8 +31,9 @@ class ProcessRoute(BaseModel):
     product_id: Mapped[uuid.UUID] = mapped_column(
         comment="产品ID，逻辑引用 production.products.id"
     )
-    version: Mapped[int] = mapped_column(comment="版本号，同产品内递增")
-    name: Mapped[str] = mapped_column(String(200), comment="路线名称")
+    route_name: Mapped[str] = mapped_column(
+        String(200), comment="路线名称，产品内唯一，兼作路径标识"
+    )
     status: Mapped[str] = mapped_column(
         String(20), default="draft", comment="draft/published/archived"
     )
@@ -50,6 +51,13 @@ class RouteNode(BaseModel):
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
+        Index(
+            "uq_route_nodes_name",
+            "route_id",
+            "name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         Index("ix_production_route_nodes_route", "route_id"),
         {"schema": "production"},
     )
@@ -57,8 +65,8 @@ class RouteNode(BaseModel):
     route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
     node_code: Mapped[str] = mapped_column(String(50), comment="节点编码，路线内唯一")
     name: Mapped[str] = mapped_column(String(200), comment="工序名称")
-    stage_name: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="工段分组标签（发酵/提炼/精制），纯展示"
+    stage_name: Mapped[str] = mapped_column(
+        String(100), comment="工序所属工段分组标签（如发酵/提炼/精制）"
     )
     node_type: Mapped[str] = mapped_column(
         String(20), default="process", comment="节点类型，现阶段恒为 process，预留扩展"
@@ -156,4 +164,34 @@ class NodeFieldDef(BaseModel):
     max_value: Mapped[float | None] = mapped_column(
         nullable=True, comment="numeric 上限，超出判 is_abnormal"
     )
+    sort_order: Mapped[int] = mapped_column(default=0, comment="排序")
+
+
+class RouteComputedField(BaseModel):
+    """路线级计算字段定义（模板层，查询时动态求值，不物化）。
+
+    node_id 为展示归属节点：计算字段展示在该工序下，引用语法统一为 {node_code.field_key}。
+    """
+
+    __tablename__ = "route_computed_fields"
+    __table_args__ = (
+        # 唯一索引前导列 route_id 已覆盖按路线查询，无需另建单列索引
+        Index(
+            "uq_production_route_computed_fields",
+            "route_id",
+            "field_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "production"},
+    )
+
+    route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="展示归属节点")
+    field_key: Mapped[str] = mapped_column(
+        String(50), comment="字段键，路线内唯一，可被其他计算字段引用"
+    )
+    field_label: Mapped[str] = mapped_column(String(100), comment="显示名")
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="单位，纯展示")
+    formula: Mapped[str] = mapped_column(Text, comment="公式，如 {G1.A1} * 0.9 + {G2.B2}")
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序")

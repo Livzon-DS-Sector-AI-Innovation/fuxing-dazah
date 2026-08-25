@@ -1,14 +1,16 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Select, Button, Switch, message, Popconfirm } from 'antd'
+import { Select, Button, Switch, App, Popconfirm, TimePicker } from 'antd'
+import dayjs, { type Dayjs } from 'dayjs'
 import { ThunderboltOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useEnergyStore } from '@/stores/energy'
-import { CollectLogTable, CollectLogDetailDrawer } from '@/components/energy'
+import { CollectLogTable, CollectLogDetailDrawer, EnergyErrorReporter } from '@/components/energy'
 import { getCollectLogs, triggerCollect, getCollectSettings, updateCollectSettings, clearCollectLogs } from '@/actions/energy'
 import type { CollectLog, PaginatedResponse, CollectSettings } from '@/types/energy'
 
 export default function CollectLogsPage() {
+  const { message } = App.useApp()
   const {
     logFilters,
     setLogFilters,
@@ -29,12 +31,15 @@ export default function CollectLogsPage() {
 
   // 自动采集开关
   const [autoCollectEnabled, setAutoCollectEnabled] = useState(false)
+  const [dailyCollectTime, setDailyCollectTime] = useState<string>('08:00')
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [timeSaving, setTimeSaving] = useState(false)
 
   const fetchSettings = useCallback(async () => {
     try {
       const s = await getCollectSettings()
       setAutoCollectEnabled(s.auto_collect_enabled)
+      setDailyCollectTime(s.daily_collect_time || '08:00')
     } catch {
       // 忽略设置加载失败，使用默认值
     }
@@ -54,6 +59,20 @@ export default function CollectLogsPage() {
       message.error('设置更新失败')
     } finally {
       setSettingsLoading(false)
+    }
+  }
+
+  const handleChangeDailyTime = async (t: Dayjs | null, timeString: string | null) => {
+    if (!t || !timeString) return
+    setDailyCollectTime(timeString)
+    setTimeSaving(true)
+    try {
+      await updateCollectSettings({ daily_collect_time: timeString })
+      message.success(`每日采集时间已设为 ${timeString}`)
+    } catch {
+      message.error('采集时间更新失败')
+    } finally {
+      setTimeSaving(false)
     }
   }
 
@@ -125,6 +144,9 @@ export default function CollectLogsPage() {
         background: '#fafaf9',
       }}
     >
+      {/* ════ 前端错误上报 ════ */}
+      <EnergyErrorReporter />
+
       {/* ════ 标题区 ════ */}
       <h1
         style={{
@@ -232,6 +254,28 @@ export default function CollectLogsPage() {
             loading={settingsLoading}
             onChange={handleToggleAutoCollect}
           />
+        </div>
+
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 12px', borderRadius: 8, background: '#f0edf7',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 500, color: '#5645d4', whiteSpace: 'nowrap' }}>
+            每日
+          </span>
+          <TimePicker
+            value={dayjs(dailyCollectTime, 'HH:mm')}
+            format="HH:mm"
+            minuteStep={30}
+            size="small"
+            disabled={timeSaving}
+            style={{ width: 80 }}
+            onChange={handleChangeDailyTime}
+            changeOnScroll
+          />
+          <span style={{ fontSize: 13, fontWeight: 500, color: '#5645d4', whiteSpace: 'nowrap' }}>
+            采集
+          </span>
         </div>
 
         <div

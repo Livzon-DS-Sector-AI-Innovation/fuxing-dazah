@@ -29,8 +29,8 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
 router = APIRouter()
-_submit = require_permission("production:batch:submit")
-_read = require_permission("production:batch:read")
+_submit = require_permission("production:planning:submit")
+_read = require_permission("production:planning:read")
 
 
 # ══════════════════════════════
@@ -278,11 +278,12 @@ async def update_plan_item(
 @router.delete("/plan-items/{item_id}", summary="删除计划项")
 async def delete_plan_item(
     item_id: uuid.UUID,
+    shift: bool = Query(False, description="是否让后续批次号前移补位"),
     user: User = Depends(_submit),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    await planning_service.delete_plan_item(db, item_id, user)
-    return success_response({"id": str(item_id)})
+    result = await planning_service.delete_plan_item(db, item_id, user, shift=shift)
+    return success_response({"id": str(item_id), **result})
 
 
 @router.put("/plan-items/{item_id}/schedule", summary="排程计划项")

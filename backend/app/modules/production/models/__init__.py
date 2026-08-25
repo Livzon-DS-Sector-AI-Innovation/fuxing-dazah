@@ -1,6 +1,10 @@
 """生产模块 ORM 模型。按聚合拆分：product / route / batch / execution / intermediate / assignment / planning。"""
 
-from app.modules.production.models.assignment import NodeAssignment, StageAssignment
+from app.modules.production.models.assignment import (
+    NodeAssignment,
+    StageAssignment,
+    StageSuffix,
+)
 from app.modules.production.models.batch import Batch, BatchLink
 from app.modules.production.models.execution import (
     NodeExecution,
@@ -11,8 +15,10 @@ from app.modules.production.models.intermediate import (
     BatchIntermediateConsumption,
     BatchIntermediateOutput,
     IntermediateType,
+    MixingContainer,
     RouteNodeIntermediate,
 )
+from app.modules.production.models.line import Line, LineAssignment
 from app.modules.production.models.planning import (
     Demand,
     DemandAllocation,
@@ -24,6 +30,7 @@ from app.modules.production.models.product import Product
 from app.modules.production.models.route import (
     NodeFieldDef,
     ProcessRoute,
+    RouteComputedField,
     RouteEdge,
     RouteNode,
 )
@@ -36,6 +43,9 @@ __all__ = [
     "Demand",
     "DemandAllocation",
     "IntermediateType",
+    "Line",
+    "LineAssignment",
+    "MixingContainer",
     "NodeAssignment",
     "NodeExecution",
     "NodeExecutionEquipment",
@@ -46,8 +56,10 @@ __all__ = [
     "PlanOrder",
     "ProcessRoute",
     "Product",
+    "RouteComputedField",
     "RouteEdge",
     "RouteNode",
     "RouteNodeIntermediate",
     "StageAssignment",
+    "StageSuffix",
 ]

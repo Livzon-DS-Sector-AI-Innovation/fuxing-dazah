@@ -34,25 +34,25 @@ setup_logging(
 logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
+import app.modules.production.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+from app.modules.toolbox.registry import TOOL_IMAGE_URL_PREFIX  # noqa: E402
 from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
 )
 from app.platform.mcp.middleware import build_mcp_middleware  # noqa: E402
-from app.platform.mcp.server import get_mcp_app  # noqa: E402
+from app.platform.mcp.server import get_mcp_app, get_module_mcp  # noqa: E402
 
 mcp_middleware = build_mcp_middleware()
-mcp_asgi = get_mcp_app(path="/", middleware=mcp_middleware)
+production_mcp_asgi = get_mcp_app(get_module_mcp("production"), path="/", middleware=mcp_middleware)
+equipment_mcp_asgi = get_mcp_app(get_module_mcp("equipment"), path="/", middleware=mcp_middleware)
+platform_mcp_asgi = get_mcp_app(get_module_mcp("platform"), path="/", middleware=mcp_middleware)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
 
-    from app.modules.energy.scheduler import (
-        energy_collection_loop,
-        stop_energy_collection_flag,
-    )
     from app.modules.equipment.scheduler import (
         maintenance_plan_loop,
         stop_maintenance_plan_flag,
@@ -66,7 +66,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     member_task = asyncio.ensure_future(member_sync_loop())
     timeout_task = asyncio.ensure_future(timeout_scan_loop())
-    energy_task = asyncio.ensure_future(energy_collection_loop())
     maintenance_plan_task = asyncio.ensure_future(maintenance_plan_loop())
 
     # ── 平台级飞书 WebSocket 长连接 ──
@@ -103,7 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
     from app.modules.safety.feishu.catch_up import recover_unprocessed_records
 
-    recovery_task = asyncio.create_task(recover_unprocessed_records())
+    recovery_task = asyncio.create_task(recover_unprocessed_records())  # noqa: F841 — 持有引用防止任务被 GC
 
     # ── 安全模块定时任务调度引擎 ──
     from app.modules.safety.scheduler import (
@@ -150,7 +149,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stop_member_sync_flag.set()
     stop_timeout_flag.set()
-    stop_energy_collection_flag.set()
     stop_maintenance_plan_flag.set()
 
     # 停止安全模块 WebSocket
@@ -170,13 +168,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     member_task.cancel()
     timeout_task.cancel()
-    energy_task.cancel()
     maintenance_plan_task.cancel()
 
     # 停止平台级飞书 WebSocket
     from app.platform.integrations.feishu.ws_client import stop_ws_client
 
     stop_ws_client()
+
+    # 关闭工具箱 AI 客户端连接池
+    from app.modules.toolbox.tools._qwen import close_service
+
+    await close_service()
 
     logger.info("Background tasks stopped")
 
@@ -187,7 +189,12 @@ app = FastAPI(
     title=settings.APP_NAME,
     description="原料药事业部工厂基座系统",
     version="0.1.0",
-    lifespan=combine_lifespans(lifespan, mcp_asgi.lifespan),
+    lifespan=combine_lifespans(
+        lifespan,
+        production_mcp_asgi.lifespan,
+        equipment_mcp_asgi.lifespan,
+        platform_mcp_asgi.lifespan,
+    ),
     docs_url="/docs" if not settings.is_production else None,
     redoc_url="/redoc" if not settings.is_production else None,
 )
@@ -208,9 +215,18 @@ uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
-# ── 挂载 MCP 服务（AI Agent 协议入口）──
-app.mount("/mcp", mcp_asgi, name="mcp")
-logger.info("MCP server mounted at /mcp")
+# ── 工具箱工具图片（公开静态，<img> 无法携带认证头，目录只放图片）──
+toolbox_images_dir = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "modules/toolbox/tools/images")
+)
+os.makedirs(toolbox_images_dir, exist_ok=True)
+app.mount(TOOL_IMAGE_URL_PREFIX, StaticFiles(directory=toolbox_images_dir), name="toolbox-tools")
+
+# ── 挂载 MCP 服务（按模块拆分端点，AI Agent 协议入口）──
+app.mount("/mcp/production", production_mcp_asgi, name="mcp-production")
+app.mount("/mcp/equipment", equipment_mcp_asgi, name="mcp-equipment")
+app.mount("/mcp/platform", platform_mcp_asgi, name="mcp-platform")
+logger.info("MCP servers mounted at /mcp/production, /mcp/equipment, /mcp/platform")
 
 
 @app.exception_handler(AppException)

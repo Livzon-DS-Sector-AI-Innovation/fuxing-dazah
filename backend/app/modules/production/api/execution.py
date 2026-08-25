@@ -9,16 +9,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
+    ExecutionBackfillIn,
     ExecutionCompleteIn,
     ExecutionOut,
     ExecutionStartIn,
+    FieldValueOut,
 )
 from app.modules.production.service import execution_service
 from app.platform.identity.models import User
-from app.platform.permission.deps import require_permission
+from app.platform.permission.deps import RequireUser, require_permission
 
 router = APIRouter()
-_submit = require_permission("production:batch:submit")
 _read = require_permission("production:batch:read")
 
 
@@ -26,10 +27,10 @@ _read = require_permission("production:batch:read")
 async def start_execution(
     batch_id: uuid.UUID,
     payload: ExecutionStartIn,
-    user: User = Depends(_submit),
+    current_user: RequireUser,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    execution = await execution_service.start_execution(db, batch_id, payload, user)
+    execution = await execution_service.start_execution(db, batch_id, payload, current_user)
     return success_response(
         ExecutionOut.model_validate(execution).model_dump(mode="json")
     )
@@ -39,24 +40,39 @@ async def start_execution(
 async def complete_execution(
     execution_id: uuid.UUID,
     payload: ExecutionCompleteIn,
-    user: User = Depends(_submit),
+    current_user: RequireUser,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     execution = await execution_service.complete_execution(
-        db, execution_id, payload, user
+        db, execution_id, payload, current_user
     )
     return success_response(
         ExecutionOut.model_validate(execution).model_dump(mode="json")
     )
 
 
+@router.post("/executions/{execution_id}/field-values", summary="补录工序字段（批次结束前）")
+async def backfill_field_values(
+    execution_id: uuid.UUID,
+    payload: ExecutionBackfillIn,
+    current_user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    values = await execution_service.backfill_execution_fields(
+        db, execution_id, payload.field_values, current_user
+    )
+    return success_response(
+        [FieldValueOut.model_validate(v).model_dump(mode="json") for v in values]
+    )
+
+
 @router.post("/executions/{execution_id}/abort", summary="中止工序执行")
 async def abort_execution(
     execution_id: uuid.UUID,
-    user: User = Depends(_submit),
+    current_user: RequireUser,
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    execution = await execution_service.abort_execution(db, execution_id, user)
+    execution = await execution_service.abort_execution(db, execution_id, current_user)
     return success_response(
         ExecutionOut.model_validate(execution).model_dump(mode="json")
     )

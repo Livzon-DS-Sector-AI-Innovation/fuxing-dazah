@@ -25,7 +25,6 @@ class BatchOut(BaseModel):
     product_id: uuid.UUID
     route_id: uuid.UUID
     route_name: str = ""
-    route_version: int = 0
     status: str
     quantity: float | None
     unit: str | None
@@ -33,8 +32,12 @@ class BatchOut(BaseModel):
     remark: str | None
     creation_type: str = "direct"
     plan_version: int | None = None
+    first_started_at: datetime | None = None
+    last_finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    owner_user_id: uuid.UUID | None = None
+    owner_name: str | None = None
 
 
 class ChildBatchIn(BaseModel):
@@ -66,5 +69,13 @@ class MergeIn(BaseModel):
     remark: str | None = None
 
 
+class ComputedFieldValueOut(BaseModel):
+    field_key: str
+    field_label: str
+    unit: str | None
+    value: float | None
+
+
 class BatchDetailOut(BatchOut):
     executions: list[ExecutionOut] = []
+    computed_fields: list[ComputedFieldValueOut] = []

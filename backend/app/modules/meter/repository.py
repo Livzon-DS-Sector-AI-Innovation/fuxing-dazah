@@ -105,6 +105,7 @@ async def list_instruments(
     calibration_date_before: date | None = None,
     calibration_date_after: date | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[InstrumentRecord], int]:
@@ -178,6 +179,16 @@ async def list_instruments(
             | InstrumentRecord.serial_number.ilike(f"%{keyword}%")
             | InstrumentRecord.location.ilike(f"%{keyword}%")
         )
+    if has_report is not None:
+        from sqlalchemy import exists as sa_exists, select as sa_select
+        sub = sa_select(CalibrationReport.id).where(
+            CalibrationReport.instrument_id == InstrumentRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        if has_report:
+            query = query.where(sa_exists(sub))
+        else:
+            query = query.where(~sa_exists(sub))
 
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0
@@ -265,6 +276,7 @@ async def get_all_instrument_ids(
     calibration_date_before: date | None = None,
     calibration_date_after: date | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
 ) -> list[UUID]:
     """获取当前筛选条件下所有记录 ID（用于跨页全选）。"""
     query = select(InstrumentRecord.id).where(
@@ -336,6 +348,15 @@ async def get_all_instrument_ids(
             | InstrumentRecord.serial_number.ilike(f"%{keyword}%")
             | InstrumentRecord.location.ilike(f"%{keyword}%")
         )
+    if has_report is not None:
+        sub = select(CalibrationReport.id).where(
+            CalibrationReport.instrument_id == InstrumentRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        if has_report:
+            query = query.where(sa_exists(sub))
+        else:
+            query = query.where(~sa_exists(sub))
 
     query = query.order_by(InstrumentRecord.sort_order.asc(), InstrumentRecord.id.asc())
     result = await db.execute(query)
@@ -483,6 +504,7 @@ async def list_gas_detectors(
     calibration_date_before: date | None = None,
     calibration_date_after: date | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[GasDetectorRecord], int]:
@@ -557,6 +579,16 @@ async def list_gas_detectors(
             | GasDetectorRecord.product_number.ilike(f"%{keyword}%")
             | GasDetectorRecord.installation_location.ilike(f"%{keyword}%")
         )
+    if has_report is not None:
+        from sqlalchemy import exists as sa_exists, select as sa_select
+        sub = sa_select(CalibrationReport.id).where(
+            CalibrationReport.gas_detector_id == GasDetectorRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        if has_report:
+            query = query.where(sa_exists(sub))
+        else:
+            query = query.where(~sa_exists(sub))
 
     count_query = select(func.count()).select_from(query.subquery())
     total = (await db.execute(count_query)).scalar() or 0
@@ -644,6 +676,7 @@ async def get_all_gas_detector_ids(
     calibration_date_before: date | None = None,
     calibration_date_after: date | None = None,
     keyword: str | None = None,
+    has_report: bool | None = None,
 ) -> list[UUID]:
     """获取当前筛选条件下所有记录 ID（用于跨页全选）。"""
     query = select(GasDetectorRecord.id).where(
@@ -716,6 +749,15 @@ async def get_all_gas_detector_ids(
             | GasDetectorRecord.product_number.ilike(f"%{keyword}%")
             | GasDetectorRecord.installation_location.ilike(f"%{keyword}%")
         )
+    if has_report is not None:
+        sub = select(CalibrationReport.id).where(
+            CalibrationReport.gas_detector_id == GasDetectorRecord.id,
+            CalibrationReport.is_deleted == False,  # noqa: E712
+        )
+        if has_report:
+            query = query.where(sa_exists(sub))
+        else:
+            query = query.where(~sa_exists(sub))
 
     query = query.order_by(GasDetectorRecord.sort_order.asc(), GasDetectorRecord.id.asc())
     result = await db.execute(query)
@@ -1111,6 +1153,17 @@ async def soft_delete_report(db: AsyncSession, report_id: UUID) -> bool:
     result = await db.execute(stmt)
     await db.flush()
     return result.rowcount > 0  # type: ignore[no-any-return,attr-defined]
+
+
+async def update_report_date(db: AsyncSession, report_id: UUID, report_date: date) -> None:
+    """更新检测报告的 report_date 字段。"""
+    stmt = (
+        sa_update(CalibrationReport)
+        .where(CalibrationReport.id == report_id)
+        .values(report_date=report_date)
+    )
+    await db.execute(stmt)
+    await db.flush()
 
 
 # ═══════════════════════════════════════════

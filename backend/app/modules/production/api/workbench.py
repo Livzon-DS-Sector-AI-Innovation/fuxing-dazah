@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -18,8 +18,9 @@ router = APIRouter(tags=["生产-工作台"])
 async def get_workbench(
     current_user: RequireUser,
     db: AsyncSession = Depends(get_db),
+    view_mode: str = Query("mine", description="mine=只看自己的批次；all=查看全部（他人批次仅读）"),
 ):
-    result = await workbench_service.query_workbench(db, current_user.id)
+    result = await workbench_service.query_workbench(db, current_user.id, view_mode=view_mode)
     return success_response(data=result)
 
 

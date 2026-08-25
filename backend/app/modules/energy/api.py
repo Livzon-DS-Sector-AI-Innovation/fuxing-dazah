@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,13 +14,10 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.energy import service
 from app.modules.energy.adapters import ADAPTERS
-from app.modules.energy.collect_settings import (
-    get_auto_collect_enabled,
-    set_auto_collect_enabled,
-)
 from app.modules.energy.schemas import (
     AlertRecordProcessRequest,
     AlertRuleCandidate,
+    ClientErrorLogRequest,
     CollectLogResponse,
     CollectSettingsResponse,
     CollectSettingsUpdate,
@@ -46,6 +45,7 @@ from app.modules.energy.schemas import (
     EnergyWorkshopConfigCreate,
     EnergyWorkshopConfigResponse,
     EnergyWorkshopConfigUpdate,
+    FillAlertReasonRequest,
     NitrogenReportSendRequest,
     PersonnelCandidate,
 )
@@ -66,20 +66,39 @@ async def _log_energy_request(request: Request) -> None:
     )
 
 
+async def _capture_unhandled_error(request: Request) -> AsyncGenerator[None, None]:
+    """捕获 energy 接口未处理异常并记录日志（仅 500 类，业务/校验异常跳过）。"""
+    try:
+        yield
+    except Exception as exc:
+        if isinstance(exc, (HTTPException, RequestValidationError)):
+            raise
+        logger.exception(
+            "energy 接口未处理异常: %s %s | path_params=%s query_params=%s | %s: %s",
+            request.method, request.url.path,
+            dict(request.path_params), dict(request.query_params),
+            type(exc).__name__, exc,
+        )
+        raise
+
+
 _log_dep = Depends(_log_energy_request)
+_error_dep = Depends(_capture_unhandled_error)
 
 router = create_module_router(MODULES_BY_CODE["energy"])
 router.dependencies.append(_log_dep)
+router.dependencies.append(_error_dep)
 
-device_router = APIRouter(dependencies=[_log_dep])
-data_router = APIRouter(dependencies=[_log_dep])
-collect_router = APIRouter(dependencies=[_log_dep])
-alert_router = APIRouter(dependencies=[_log_dep])
-alert_record_router = APIRouter(dependencies=[_log_dep])
-type_config_router = APIRouter(dependencies=[_log_dep])
-workshop_config_router = APIRouter(dependencies=[_log_dep])
-daily_report_router = APIRouter(dependencies=[_log_dep])
-nitrogen_report_router = APIRouter(dependencies=[_log_dep])
+device_router = APIRouter(dependencies=[_log_dep, _error_dep])
+data_router = APIRouter(dependencies=[_log_dep, _error_dep])
+collect_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_record_router = APIRouter(dependencies=[_log_dep, _error_dep])
+alert_process_router = APIRouter(dependencies=[_log_dep, _error_dep])
+type_config_router = APIRouter(dependencies=[_log_dep, _error_dep])
+workshop_config_router = APIRouter(dependencies=[_log_dep, _error_dep])
+daily_report_router = APIRouter(dependencies=[_log_dep, _error_dep])
+nitrogen_report_router = APIRouter(dependencies=[_log_dep, _error_dep])
 
 
 # ── 平台信息 ──
@@ -104,19 +123,24 @@ async def list_departments(
     return success_response(data)
 
 
-@router.get("/equipments", summary="获取设备台账列表（供数据源配置关联设备下拉使用）")
-async def list_equipments(
-    keyword: str | None = Query(default=None, description="设备名称/编号搜索"),
-    status: str | None = Query(default=None, description="设备状态筛选"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+@router.get("/equipment-options", summary="获取关联设备候选列表（来自设备台账）")
+async def list_equipment_options(
+    keyword: str | None = Query(default=None, description="设备名称/编号关键词"),
+    ids: str | None = Query(default=None, description="设备ID列表（逗号分隔），用于编辑回显"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:device:read")),
 ) -> JSONResponse:
-    """获取设备台账中在用的设备列表，供能源数据源配置关联设备使用。"""
-    items, total = await service.list_equipments_for_select(
-        db, keyword=keyword, status=status, page=page, page_size=page_size
-    )
-    return paginated_response(items, page, page_size, total)
+    """查询设备台账候选设备，供数据源「关联设备」下拉使用。
+
+    传入 ids 时按 ID 批量回显；否则按 keyword 搜索。
+    数据范围沿用设备台账（equipment:asset）权限配置。
+    """
+    if ids:
+        id_list = [UUID(i) for i in ids.split(",") if i.strip()]
+        options = await service.get_equipment_options_by_ids(db, id_list)
+    else:
+        options = await service.list_equipment_options(db, user, keyword=keyword)
+    return success_response(options)
 
 
 # ── 设备配置 ──
@@ -324,29 +348,28 @@ async def trigger_collection(
 
 @collect_router.get("/settings", summary="获取自动采集运行时设置")
 async def get_collect_settings(
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:collect:trigger")),
 ) -> JSONResponse:
-    """获取当前自动采集的启用状态和间隔设置。"""
-    return success_response(
-        CollectSettingsResponse(
-            auto_collect_enabled=get_auto_collect_enabled(),
-        ).model_dump()
-    )
+    """获取当前自动采集的启用状态和每日统一采集时间。"""
+    result = await service.get_collect_settings(db)
+    return success_response(CollectSettingsResponse(**result).model_dump())
 
 
 @collect_router.put("/settings", summary="更新自动采集运行时设置")
 async def update_collect_settings(
     data: CollectSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:collect:trigger")),
 ) -> JSONResponse:
-    """运行时更新自动采集的启用状态（无需重启）。"""
-    if data.auto_collect_enabled is not None:
-        set_auto_collect_enabled(data.auto_collect_enabled)
+    """更新自动采集的启用状态（内存）和每日统一采集时间（持久化 DB，重启保留）。"""
+    result = await service.update_collect_settings(
+        db,
+        auto_collect_enabled=data.auto_collect_enabled,
+        daily_collect_time=data.daily_collect_time,
+    )
     return success_response(
-        CollectSettingsResponse(
-            auto_collect_enabled=get_auto_collect_enabled(),
-        ).model_dump(),
-        message="设置已更新",
+        CollectSettingsResponse(**result).model_dump(), message="设置已更新"
     )
 
 
@@ -409,6 +432,74 @@ async def get_energy_overview(
         granularity=granularity,
     )
     return success_response(result)
+
+
+@router.get("/overview/price-category", summary="峰谷用电分布")
+async def get_price_category_distribution(
+    start_time: str = Query(..., description="开始时间(ISO格式)"),
+    end_time: str = Query(..., description="结束时间(ISO格式)"),
+    energy_type: str | None = Query(default=None, description="能源类型筛选"),
+    workshop: str | None = Query(default=None, description="部门筛选"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:read")),
+) -> JSONResponse:
+    result = await service.get_price_category_distribution(
+        db,
+        start_time=datetime.fromisoformat(start_time),
+        end_time=datetime.fromisoformat(end_time),
+        energy_type=energy_type,
+        workshop=workshop,
+    )
+    return success_response(result)
+
+
+# ── 峰谷时段规则配置 ──
+
+
+@router.get("/price-periods", summary="查询峰谷时段规则")
+async def list_price_periods(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:read")),
+) -> JSONResponse:
+    items = await service.list_price_periods(db)
+    return success_response(items)
+
+
+@router.post("/price-periods", summary="新增峰谷时段规则")
+async def create_price_period(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:read")),
+) -> JSONResponse:
+    result = await service.create_price_period(
+        db,
+        category=data["category"],
+        start_hour=data["start_hour"],
+        end_hour=data["end_hour"],
+        months=data["months"],
+    )
+    return success_response(result)
+
+
+@router.delete("/price-periods/{period_id}", summary="删除峰谷时段规则")
+async def delete_price_period(
+    period_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:read")),
+) -> JSONResponse:
+    ok = await service.delete_price_period(db, period_id)
+    if not ok:
+        return JSONResponse({"code": 404, "message": "规则不存在"}, status_code=404)
+    return success_response({"deleted": True})
+
+
+@router.post("/price-periods/reset", summary="重置为默认峰谷规则")
+async def reset_price_periods(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:overview:read")),
+) -> JSONResponse:
+    items = await service.reset_price_periods(db)
+    return success_response(items)
 
 
 # ── 预警规则 ──
@@ -523,6 +614,83 @@ async def process_alert_record(
     return success_response(
         EnergyAlertRecordResponse.model_validate(obj).model_dump(),
         message="处理完成",
+    )
+
+
+# ── 预警处理（车间预警审核流程） ──
+
+
+@alert_process_router.get("", summary="查询待处理车间预警列表")
+async def list_alert_process(
+    status: str | None = Query(default=None, description="状态筛选: pending / rejected"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:alert:read")),
+) -> JSONResponse:
+    """查询车间预警记录（workshop IS NOT NULL），用于预警处理页面。"""
+    items, total = await service.list_alert_records(
+        db,
+        status=status,
+        workshop_not_null=True,
+        page=page,
+        page_size=page_size,
+    )
+    # 批量查询车间配置，获取负责人信息
+    workshops = list({i.workshop for i in items if i.workshop})
+    heads_map: dict[str, list[dict[str, str]]] = {}
+    if workshops:
+        from app.modules.energy.repository import get_workshop_config_by_workshop
+        for ws in workshops:
+            cfg = await get_workshop_config_by_workshop(db, ws)
+            if cfg and cfg.heads:
+                heads_map[ws] = cfg.heads
+
+    data = []
+    for i in items:
+        d = EnergyAlertRecordResponse.model_validate(i).model_dump()
+        d["heads"] = heads_map.get(i.workshop or "", [])
+        data.append(d)
+    return paginated_response(data, page, page_size, total)
+
+
+@alert_process_router.put("/{record_id}/reason", summary="填写预警原因")
+async def fill_alert_reason(
+    record_id: UUID,
+    request: FillAlertReasonRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:alert:read")),
+) -> JSONResponse:
+    """任意用户填写车间预警异常原因。"""
+    obj = await service.fill_alert_reason(db, record_id, request.reason)
+    return success_response(
+        EnergyAlertRecordResponse.model_validate(obj).model_dump(),
+        message="原因已填写",
+    )
+
+
+@alert_process_router.put("/{record_id}/approve", summary="管理员通过预警")
+async def approve_alert_record(
+    record_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:alert:process:approve")),
+) -> JSONResponse:
+    """管理员审核通过 → 软删除。"""
+    await service.approve_alert_record(db, record_id)
+    return success_response(None, message="已通过")
+
+
+@alert_process_router.put("/{record_id}/reject", summary="管理员驳回预警")
+async def reject_alert_record(
+    record_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("energy:alert:process:reject")),
+) -> JSONResponse:
+    """管理员驳回 → status=rejected + 重新飞书通知。"""
+    obj = await service.reject_alert_record(db, record_id)
+    return success_response(
+        EnergyAlertRecordResponse.model_validate(obj).model_dump(),
+        message="已驳回并重新通知",
     )
 
 
@@ -884,11 +1052,31 @@ async def get_nitrogen_push_personnel_candidates(
     )
 
 
+@router.post("/client-error-logs", summary="上报前端错误日志")
+async def report_client_error(data: ClientErrorLogRequest) -> JSONResponse:
+    """接收 energy 前端上报的错误，记录到日志文件（不落库）。
+
+    无需登录校验：错误上报本身应在鉴权异常时也能正常工作。
+    请求来源 IP 由 _log_energy_request 统一记录。
+    """
+    logger.error(
+        "energy 前端报错: page=%s | api=%s status=%s | component=%s | %s%s",
+        data.page_url or "-",
+        data.api_url or "-",
+        data.status if data.status is not None else "-",
+        data.component or "-",
+        data.message,
+        f"\n{data.stack}" if data.stack else "",
+    )
+    return success_response(None, message="已记录")
+
+
 router.include_router(device_router, prefix="/devices")
 router.include_router(data_router, prefix="/data")
 router.include_router(collect_router, prefix="/collect")
 router.include_router(alert_router, prefix="/alerts/rules")
 router.include_router(alert_record_router, prefix="/alerts/records")
+router.include_router(alert_process_router, prefix="/alerts/process")
 router.include_router(type_config_router, prefix="/type-configs")
 router.include_router(workshop_config_router, prefix="/workshop-configs")
 router.include_router(daily_report_router, prefix="/daily-report")

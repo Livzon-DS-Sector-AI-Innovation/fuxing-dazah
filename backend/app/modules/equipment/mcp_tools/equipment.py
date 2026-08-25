@@ -20,7 +20,9 @@ from app.modules.equipment.service.data_scope import verify_write_ownership
 from app.modules.equipment.service.status_log import record_status_change
 from app.platform.identity.mcp_tools import resolve_user
 from app.platform.mcp.deps import get_db
-from app.platform.mcp.server import mcp
+from app.platform.mcp.server import get_module_mcp
+
+mcp = get_module_mcp("equipment")
 
 
 def _md_cell(value: str) -> str:

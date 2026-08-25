@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.production.models import (
     NodeFieldDef,
     ProcessRoute,
+    RouteComputedField,
     RouteEdge,
     RouteNode,
     RouteNodeIntermediate,
@@ -15,13 +16,17 @@ from app.modules.production.models import (
 
 __all__ = [
     "get_route",
+    "get_route_by_name",
     "get_routes_by_ids",
     "list_routes",
-    "next_route_version",
     "get_route_nodes",
     "get_route_edges",
     "get_edge",
     "get_field_defs_by_nodes",
+    "get_computed_fields_by_route",
+    "get_computed_fields_by_routes",
+    "list_nodes",
+    "get_node_by_code",
     "soft_delete_route_graph",
 ]
 
@@ -29,6 +34,17 @@ __all__ = [
 async def get_route(db: AsyncSession, route_id: uuid.UUID) -> ProcessRoute | None:
     stmt = select(ProcessRoute).where(
         ProcessRoute.id == route_id, ProcessRoute.is_deleted == False  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_route_by_name(
+    db: AsyncSession, product_id: uuid.UUID, route_name: str
+) -> ProcessRoute | None:
+    stmt = select(ProcessRoute).where(
+        ProcessRoute.product_id == product_id,
+        ProcessRoute.route_name == route_name,
+        ProcessRoute.is_deleted == False,  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 
@@ -58,19 +74,11 @@ async def list_routes(
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()
     stmt = (
-        stmt.order_by(ProcessRoute.created_at.desc())
+        stmt.order_by(ProcessRoute.route_name)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
     return list((await db.execute(stmt)).scalars()), total
-
-
-async def next_route_version(db: AsyncSession, product_id: uuid.UUID) -> int:
-    stmt = select(func.coalesce(func.max(ProcessRoute.version), 0)).where(
-        ProcessRoute.product_id == product_id,
-        ProcessRoute.is_deleted == False,  # noqa: E712
-    )
-    return int((await db.execute(stmt)).scalar_one()) + 1
 
 
 async def get_route_nodes(db: AsyncSession, route_id: uuid.UUID) -> list[RouteNode]:
@@ -109,8 +117,71 @@ async def get_field_defs_by_nodes(
     return list((await db.execute(stmt)).scalars())
 
 
+async def get_computed_fields_by_route(
+    db: AsyncSession, route_id: uuid.UUID
+) -> list[RouteComputedField]:
+    stmt = (
+        select(RouteComputedField)
+        .where(
+            RouteComputedField.route_id == route_id,
+            RouteComputedField.is_deleted == False,  # noqa: E712
+        )
+        .order_by(RouteComputedField.sort_order)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_computed_fields_by_routes(
+    db: AsyncSession, route_ids: list[uuid.UUID]
+) -> list[RouteComputedField]:
+    if not route_ids:
+        return []
+    stmt = (
+        select(RouteComputedField)
+        .where(
+            RouteComputedField.route_id.in_(route_ids),
+            RouteComputedField.is_deleted == False,  # noqa: E712
+        )
+        .order_by(RouteComputedField.sort_order)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_nodes(
+    db: AsyncSession,
+    route_id: uuid.UUID | None = None,
+    stage_name: str | None = None,
+    *,
+    exclude_draft_route: bool = False,
+) -> list[RouteNode]:
+    stmt = select(RouteNode).where(RouteNode.is_deleted == False)  # noqa: E712
+    if exclude_draft_route:
+        # 汇总场景只取有效路线的节点：排除草稿路线与已删除路线的孤儿节点
+        stmt = stmt.join(ProcessRoute, ProcessRoute.id == RouteNode.route_id).where(
+            ProcessRoute.is_deleted == False,  # noqa: E712
+            ProcessRoute.status != "draft",
+        )
+    if route_id is not None:
+        stmt = stmt.where(RouteNode.route_id == route_id)
+    if stage_name is not None:
+        stmt = stmt.where(RouteNode.stage_name == stage_name)
+    stmt = stmt.order_by(RouteNode.sort_order)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_node_by_code(
+    db: AsyncSession, route_id: uuid.UUID, node_code: str
+) -> RouteNode | None:
+    stmt = select(RouteNode).where(
+        RouteNode.route_id == route_id,
+        RouteNode.node_code == node_code,
+        RouteNode.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def soft_delete_route_graph(db: AsyncSession, route_id: uuid.UUID) -> None:
-    """整图替换前软删除路线现有节点、边、字段定义、中间体绑定。"""
+    """整图替换前软删除路线现有节点、边、字段定义、中间体绑定、计算字段。"""
     nodes = await get_route_nodes(db, route_id)
     node_ids = [n.id for n in nodes]
     for n in nodes:
@@ -119,6 +190,8 @@ async def soft_delete_route_graph(db: AsyncSession, route_id: uuid.UUID) -> None
         e.is_deleted = True
     for f in await get_field_defs_by_nodes(db, node_ids):
         f.is_deleted = True
+    for cf in await get_computed_fields_by_route(db, route_id):
+        cf.is_deleted = True
     im_stmt = select(RouteNodeIntermediate).where(
         RouteNodeIntermediate.node_id.in_(node_ids),
         RouteNodeIntermediate.is_deleted == False,  # noqa: E712

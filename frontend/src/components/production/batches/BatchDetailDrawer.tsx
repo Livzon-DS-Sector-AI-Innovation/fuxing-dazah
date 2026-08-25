@@ -1,18 +1,25 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
-import { App, Button, Drawer, Popconfirm, Skeleton, Space, Table, Tag } from 'antd'
+import { App, Button, Drawer, Popconfirm, Skeleton, Space, Table, Tabs, Tag } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { cancelBatch, completeBatch, abortExecution } from '@/actions/production'
 import {
   fetchBatchDetailClient,
+  fetchChildrenAggregateClient,
   fetchTraceClient,
 } from '@/lib/api/production-client'
 import { fetchBatchOutputs, fetchBatchConsumptions } from '@/actions/production'
-import type { IntermediateConsumption, IntermediateOutput, Execution } from '@/types/production'
+import type {
+  ComputedFieldValue,
+  IntermediateConsumption,
+  IntermediateOutput,
+  Execution,
+} from '@/types/production'
 import { BATCH_STATUS_META } from './BatchTable'
 import { TraceGraph } from './TraceGraph'
 import { ExecutionTimeline } from './ExecutionTimeline'
+import { BackfillFieldsModal } from './BackfillFieldsModal'
 
 // ── 设计令牌 ──────────────────────────────────────────────
 const T = {
@@ -85,6 +92,7 @@ export function BatchDetailDrawer({
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [currentId, setCurrentId] = useState(batchId)
+  const [backfillExec, setBackfillExec] = useState<Execution | null>(null)
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['production-batch-detail', currentId],
@@ -130,6 +138,10 @@ export function BatchDetailDrawer({
 
   const meta = detail ? BATCH_STATUS_META[detail.status] : null
   const hasMaterials = (outputsData?.length ?? 0) > 0 || (consumptionsData?.length ?? 0) > 0
+  const pendingBackfill = (detail?.executions ?? []).reduce(
+    (sum, e) => sum + (e.missing_required_fields?.length ?? 0),
+    0,
+  )
 
   return (
     <Drawer
@@ -160,7 +172,14 @@ export function BatchDetailDrawer({
       {isLoading ? (
         <Skeleton active paragraph={{ rows: 10 }} />
       ) : (
-        <>
+        <Tabs
+          defaultActiveKey="detail"
+          items={[
+            {
+              key: 'detail',
+              label: '详情',
+              children: (
+                <>
           {/* ── 批次溯源 ──────────────────────────── */}
           {trace && trace.batches.length > 1 && (
             <Section title="批次溯源">
@@ -177,21 +196,38 @@ export function BatchDetailDrawer({
             title="工序执行时间线"
             extra={
               canSubmit && detail?.status === 'in_progress' && (
-                <Popconfirm
-                  title="确认批次完成？"
-                  onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
-                >
-                  <Button type="primary">完成批次</Button>
-                </Popconfirm>
+                pendingBackfill > 0 ? (
+                  <Popconfirm
+                    title={`还有 ${pendingBackfill} 项必填字段待补录，批次完成后不可再补。确认完成？`}
+                    onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
+                  >
+                    <Button type="primary">完成批次（待补录 {pendingBackfill} 项）</Button>
+                  </Popconfirm>
+                ) : (
+                  <Popconfirm
+                    title="确认批次完成？"
+                    onConfirm={() => runAction(() => completeBatch(currentId), '批次已完成')}
+                  >
+                    <Button type="primary">完成批次</Button>
+                  </Popconfirm>
+                )
               )
             }
           >
             <ExecutionTimeline
               executions={detail?.executions ?? []}
-              canSubmit={canSubmit && detail?.status !== 'cancelled'}
+              canSubmit={canSubmit && detail?.status === 'in_progress'}
               onComplete={e => detail && onCompleteExecution?.(e, detail.route_id)}
               onAbort={e => runAction(() => abortExecution(e.id), '已中止')}
+              onBackfill={e => setBackfillExec(e)}
             />
+            {backfillExec && detail && (
+              <BackfillFieldsModal
+                executions={[backfillExec]}
+                routeId={detail.route_id}
+                onClose={() => setBackfillExec(null)}
+              />
+            )}
 
             {/* 时间线操作栏 */}
             {canSubmit && detail && (
@@ -259,6 +295,7 @@ export function BatchDetailDrawer({
                       { title: '批号', dataIndex: 'intermediate_batch_no', width: 120, render: v => v || '-' },
                       { title: '数量', width: 100, render: (_, r) => `${r.quantity} ${r.unit}` },
                       { title: '产出工序', dataIndex: 'node_name', width: 120, render: v => v || '-' },
+                      { title: '产线', dataIndex: 'line_name', width: 100, render: v => v || '-' },
                       { title: '备注', dataIndex: 'remark', ellipsis: true, render: v => v || '-' },
                     ]}
                   />
@@ -286,6 +323,7 @@ export function BatchDetailDrawer({
                       { title: '来源批号', dataIndex: 'output_batch_no', width: 120, render: v => v || '-' },
                       { title: '数量', width: 100, render: (_, r) => `${r.quantity} ${r.unit}` },
                       { title: '消耗工序', dataIndex: 'node_name', width: 120, render: v => v || '-' },
+                      { title: '产线', dataIndex: 'line_name', width: 100, render: v => v || '-' },
                       { title: '备注', dataIndex: 'remark', ellipsis: true, render: v => v || '-' },
                     ]}
                   />
@@ -293,8 +331,89 @@ export function BatchDetailDrawer({
               )}
             </Section>
           )}
-        </>
+                </>
+              ),
+            },
+            {
+              key: 'summary',
+              label: '汇总',
+              children: (
+                <ComputedSummary
+                  key={currentId}
+                  batchId={currentId}
+                  fields={detail?.computed_fields ?? []}
+                />
+              ),
+            },
+          ]}
+        />
       )}
     </Drawer>
+  )
+}
+
+// ── 汇总 Tab：计算字段列表 + 子批次合计 ──────────────────────
+function ComputedSummary({
+  batchId,
+  fields,
+}: {
+  batchId: string
+  fields: ComputedFieldValue[]
+}) {
+  const { message } = App.useApp()
+  const [sums, setSums] = useState<Record<string, number | null>>({})
+  const [loadingKey, setLoadingKey] = useState<string | null>(null)
+
+  const loadSum = async (fieldKey: string) => {
+    setLoadingKey(fieldKey)
+    try {
+      const r = await fetchChildrenAggregateClient(batchId, fieldKey)
+      setSums(s => ({ ...s, [fieldKey]: r.sum }))
+    } catch {
+      message.error('子批次合计查询失败')
+    } finally {
+      setLoadingKey(null)
+    }
+  }
+
+  return (
+    <Table<ComputedFieldValue>
+      size="small"
+      rowKey="field_key"
+      dataSource={fields}
+      pagination={false}
+      columns={[
+        { title: '字段键', dataIndex: 'field_key', width: 140 },
+        { title: '显示名', dataIndex: 'field_label', width: 140, render: v => v || '—' },
+        { title: '单位', dataIndex: 'unit', width: 80, render: v => v || '—' },
+        { title: '值', dataIndex: 'value', width: 100, render: v => (v == null ? '—' : v) },
+        {
+          title: '子批次合计',
+          width: 200,
+          render: (_, r) => {
+            const sum = sums[r.field_key]
+            if (sum === undefined) {
+              return (
+                <Button
+                  size="small"
+                  loading={loadingKey === r.field_key}
+                  onClick={() => loadSum(r.field_key)}
+                >
+                  子批次合计
+                </Button>
+              )
+            }
+            return sum == null ? (
+              <span style={{ color: T.textSecondary }}>无子批次或无数据</span>
+            ) : (
+              <span style={{ fontWeight: 500 }}>
+                {sum}
+                {r.unit ? ` ${r.unit}` : ''}
+              </span>
+            )
+          },
+        },
+      ]}
+    />
   )
 }

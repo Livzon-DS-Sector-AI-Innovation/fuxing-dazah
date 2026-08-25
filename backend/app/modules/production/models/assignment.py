@@ -31,6 +31,29 @@ class StageAssignment(BaseModel):
     route_id: Mapped[uuid.UUID]
 
 
+class StageSuffix(BaseModel):
+    """工段批次尾缀配置：接收时子批次默认号 = 根批号 + 尾缀（空=不追加）"""
+
+    __tablename__ = "stage_suffixes"
+    __table_args__ = (
+        Index(
+            "uq_production_stage_suffixes",
+            "route_id",
+            "stage_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_production_stage_suffixes_route", "route_id"),
+        {"schema": "production"},
+    )
+
+    route_id: Mapped[uuid.UUID]
+    stage_name: Mapped[str] = mapped_column(String(100))
+    suffix: Mapped[str] = mapped_column(
+        String(50), default="", server_default="", comment="批次尾缀，空字符串=不追加",
+    )
+
+
 class NodeAssignment(BaseModel):
     """工序节点负责人分配"""
 

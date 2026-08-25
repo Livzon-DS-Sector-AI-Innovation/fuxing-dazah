@@ -1,10 +1,15 @@
 // ── Stage Config ──
 
+import type { RouteNode } from './route'
+
 export interface StageConfigItem {
   stage_name: string
   duration_hours: number
   color: string
 }
+
+/** 进度条用的轻量工序节点（API 返回的 route_nodes 是 RouteNode 的子集） */
+export type RouteNodeBrief = Pick<RouteNode, 'name' | 'stage_name'>
 
 // ── Demand ──
 
@@ -231,6 +236,8 @@ export interface PlanItemBatchProgress {
   batch_status: string
   latest_stage: string | null
   latest_stage_status: string | null
+  /** 路线工序序列（按 sort_order），前端据此按工序渲染进度条 */
+  route_nodes: RouteNodeBrief[] | null
 }
 
 export interface PlanOrderChangeLog {

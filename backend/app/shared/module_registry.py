@@ -6,7 +6,7 @@ class ModuleDefinition:
     code: str
     name: str
     path: str
-    db_schema: str
+    db_schema: str | None  # 无数据库表的模块（如 toolbox）为 None
     owner_hint: str
     description: str
 
@@ -15,7 +15,9 @@ class ModuleDefinition:
             "code": self.code,
             "name": self.name,
             "path": self.path,
-            "db_schema": self.db_schema,
+            # 无数据库模块（如 toolbox）以空串表示，保持返回值全为 str，
+            # 避免 platform/system、shared/module_api 等消费方的 dict[str, str] 类型不兼容
+            "db_schema": self.db_schema or "",
             "owner_hint": self.owner_hint,
             "description": self.description,
         }
@@ -69,6 +71,14 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         db_schema="warehouse",
         owner_hint="仓储/物流负责人",
         description="原辅料、包材、中间体、成品库存和出入库数据入口。",
+    ),
+    ModuleDefinition(
+        code="toolbox",
+        name="工具箱",
+        path="/toolbox",
+        db_schema=None,  # 无数据库表
+        owner_hint="全员",
+        description="独立小工具集合（脚本操作，无数据库）。",
     ),
     ModuleDefinition(
         code="procurement",
@@ -129,4 +139,6 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
 )
 
 MODULES_BY_CODE = {module.code: module for module in BUSINESS_MODULES}
-BUSINESS_SCHEMAS = tuple(module.db_schema for module in BUSINESS_MODULES)
+BUSINESS_SCHEMAS = tuple(
+    module.db_schema for module in BUSINESS_MODULES if module.db_schema is not None
+)

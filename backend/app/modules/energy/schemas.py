@@ -26,16 +26,14 @@ class EnergyDeviceConfigCreate(BaseModel):
         default=None, max_length=100, description="所属区域"
     )
     monitor_level: MonitorLevel = Field(default="normal", description="监控等级")
-    collection_interval: int = Field(default=60, ge=1, description="采集间隔(分钟)")
-    daily_collect_time: str | None = Field(
-        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="按天采集触发时间 HH:MM，如 08:00"
-    )
     is_enabled: bool = Field(default=True, description="是否启用采集")
-    equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
-    equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
+    equipment_ids: list[str] = Field(default_factory=list, description="关联设备管理中的设备ID列表")
+    equipment_names: list[str] = Field(default_factory=list, description="关联设备名称列表")
     remark: str | None = Field(default=None, max_length=500, description="备注")
     is_region_level: bool = Field(default=False, description="是否区域级别（False=部门级别）")
-    exclude_from_stats: bool = Field(default=False, description="是否不参与能源总耗统计与可视化")
+    stat_role: Literal["normal", "excluded", "total"] = Field(
+        default="normal", description="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗"
+    )
 
 
 class EnergyDeviceConfigUpdate(BaseModel):
@@ -47,16 +45,14 @@ class EnergyDeviceConfigUpdate(BaseModel):
     workshop: str | None = Field(default=None, min_length=1, max_length=100)
     production_line: str | None = Field(default=None, max_length=100)
     monitor_level: MonitorLevel | None = Field(default=None)
-    collection_interval: int | None = Field(default=None, ge=1)
-    daily_collect_time: str | None = Field(
-        default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="按天采集触发时间 HH:MM"
-    )
     is_enabled: bool | None = Field(default=None)
-    equipment_id: str | None = Field(default=None, description="关联设备管理中的设备ID")
-    equipment_name: str | None = Field(default=None, max_length=200, description="关联设备名称")
+    equipment_ids: list[str] | None = Field(default=None, description="关联设备管理中的设备ID列表")
+    equipment_names: list[str] | None = Field(default=None, description="关联设备名称列表")
     remark: str | None = Field(default=None, max_length=500)
     is_region_level: bool | None = Field(default=None, description="是否区域级别")
-    exclude_from_stats: bool | None = Field(default=None, description="是否不参与能源总耗统计与可视化")
+    stat_role: Literal["normal", "excluded", "total"] | None = Field(
+        default=None, description="统计角色: normal=参与加和, excluded=不参与, total=直接作为总耗"
+    )
 
 
 class EnergyDeviceConfigResponse(BaseModel):
@@ -70,14 +66,12 @@ class EnergyDeviceConfigResponse(BaseModel):
     production_line: str | None
     monitor_level: str
     unit: str
-    collection_interval: int
-    daily_collect_time: str | None
     is_enabled: bool
-    equipment_id: str | None
-    equipment_name: str | None
+    equipment_ids: list[str]
+    equipment_names: list[str]
     remark: str | None
     is_region_level: bool
-    exclude_from_stats: bool
+    stat_role: str
     created_at: datetime
     updated_at: datetime
 
@@ -112,6 +106,7 @@ class CollectLogResponse(BaseModel):
     status: str
     device_count: int
     success_count: int
+    expected_count: int
     error_message: str | None
     created_at: datetime
 
@@ -128,11 +123,24 @@ class CollectTriggerRequest(BaseModel):
 class CollectSettingsResponse(BaseModel):
     """自动采集运行时设置"""
     auto_collect_enabled: bool = Field(description="是否启用自动采集")
+    daily_collect_time: str = Field(description="每日统一采集触发时间 HH:MM")
 
 
 class CollectSettingsUpdate(BaseModel):
     """更新自动采集运行时设置"""
     auto_collect_enabled: bool | None = Field(default=None, description="是否启用自动采集")
+    daily_collect_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$", max_length=5, description="每日统一采集触发时间 HH:MM")
+
+
+class ClientErrorLogRequest(BaseModel):
+    """前端错误上报请求（记录到日志文件，不落库）"""
+    message: str = Field(..., max_length=2000, description="错误信息")
+    stack: str | None = Field(default=None, max_length=10000, description="堆栈信息")
+    page_url: str | None = Field(default=None, max_length=500, description="页面地址")
+    api_url: str | None = Field(default=None, max_length=500, description="失败接口地址")
+    status: int | None = Field(default=None, description="HTTP 状态码")
+    component: str | None = Field(default=None, max_length=200, description="组件名")
+    occurred_at: datetime | None = Field(default=None, description="客户端发生时间")
 
 
 # ── 预警系统 ──
@@ -226,13 +234,20 @@ class EnergyAlertRecordResponse(BaseModel):
     processed_by: str | None
     processed_at: datetime | None
     process_note: str | None
+    reason: str | None
+    heads: list[dict[str, str]] = Field(default_factory=list, description="车间负责人列表")
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
+class FillAlertReasonRequest(BaseModel):
+    """填写预警原因"""
+    reason: str = Field(..., min_length=1, max_length=500, description="异常原因")
+
+
 class AlertRecordProcessRequest(BaseModel):
-    status: Literal["processed", "ignored"] = Field(..., description="处理结果")
+    status: Literal["processed", "ignored", "rejected"] = Field(..., description="处理结果")
     process_note: str | None = Field(
         default=None, max_length=500, description="处理备注"
     )
@@ -308,11 +323,13 @@ class AlertRuleCandidate(BaseModel):
 class EnergyTypeConfigCreate(BaseModel):
     """创建能源类型配置"""
     type_code: str = Field(..., min_length=1, max_length=50, description="唯一编码")
-    parent_code: str | None = Field(default=None, max_length=50, description="父级编码")
     display_name: str = Field(..., min_length=1, max_length=100, description="展示名称")
     unit: str = Field(..., min_length=1, max_length=20, description="计量单位")
     sort_order: int = Field(default=0, description="排序权重")
     is_enabled: bool = Field(default=True, description="是否启用")
+    collect_granularity: Literal["hourly", "daily"] = Field(
+        default="hourly", description="采集粒度: hourly=逐小时(24条/天), daily=日汇总(1条/天)"
+    )
     color: str | None = Field(default=None, max_length=20, description="卡片颜色")
     remark: str | None = Field(default=None, max_length=500, description="备注")
 
@@ -323,20 +340,23 @@ class EnergyTypeConfigUpdate(BaseModel):
     unit: str | None = Field(default=None, min_length=1, max_length=20)
     sort_order: int | None = Field(default=None)
     is_enabled: bool | None = Field(default=None)
-    parent_code: str | None = Field(default=None, max_length=50)
+    collect_granularity: Literal["hourly", "daily"] | None = Field(
+        default=None, description="采集粒度: hourly=逐小时, daily=日汇总"
+    )
+    color: str | None = Field(default=None, max_length=20)
     remark: str | None = Field(default=None, max_length=500)
 
 
 class EnergyTypeConfigResponse(BaseModel):
     id: StrUUID
     type_code: str
-    parent_code: str | None
     display_name: str
     unit: str
     icon: str | None
     color: str | None
     sort_order: int
     is_enabled: bool
+    collect_granularity: str
     remark: str | None
     created_at: datetime
     updated_at: datetime
@@ -471,3 +491,4 @@ class EnergyNitrogenPushConfigResponse(BaseModel):
 class NitrogenReportSendRequest(BaseModel):
     config_id: StrUUID = Field(..., description="推送配置ID")
     target_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$", description="目标日期 YYYY-MM-DD")
+

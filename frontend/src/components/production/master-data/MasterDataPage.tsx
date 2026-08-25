@@ -29,14 +29,19 @@ import {
   createIntermediateType,
   updateIntermediateType,
   deleteIntermediateType,
+  fetchLines,
 } from '@/actions/production'
 import {
   fetchProductsClient,
   fetchIntermediateTypesClient,
   fetchRoutesClient,
+  fetchMixingContainersClient,
+  createMixingContainerClient,
+  deleteMixingContainerClient,
 } from '@/lib/api/production-client'
-import type { Product, IntermediateType } from '@/types/production'
+import type { Product, IntermediateType, MixingContainer } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { LinesTab } from './LinesTab'
 
 const { Text } = Typography
 
@@ -89,7 +94,7 @@ function ProductFormModal({
         <Form.Item name="product_name" label="产品名称" rules={[{ required: true }]}>
           <Input maxLength={200} />
         </Form.Item>
-        <Form.Item name="unit" label="单位" initialValue="kg">
+        <Form.Item name="unit" label="单位">
           <Input maxLength={20} />
         </Form.Item>
         <Form.Item name="remark" label="备注">
@@ -197,9 +202,8 @@ function ProductDetail({ product }: { product: Product }) {
     enabled: !!product.id,
   })
 
-  const routeColumns: ColumnsType<{ id: string; name: string; version: number; status: string }> = [
-    { title: '路线名称', dataIndex: 'name', key: 'name' },
-    { title: '版本', dataIndex: 'version', key: 'version', width: 60 },
+  const routeColumns: ColumnsType<{ id: string; route_name: string; status: string }> = [
+    { title: '路线名称', dataIndex: 'route_name', key: 'route_name' },
     {
       title: '状态',
       dataIndex: 'status',
@@ -242,26 +246,120 @@ function ProductDetail({ product }: { product: Product }) {
   )
 }
 
-// ── 产出物详情面板 ──
+// ── 产出物卡片 ──
 
-function IntermediateTypeDetail({ item }: { item: IntermediateType }) {
+function IntermediateTypeCard({
+  item,
+  canManage,
+  containers,
+  onEdit,
+  onDelete,
+  onAddContainer,
+  onDeleteContainer,
+}: {
+  item: IntermediateType
+  canManage: boolean
+  containers: MixingContainer[]
+  onEdit: () => void
+  onDelete: () => void
+  onAddContainer: () => void
+  onDeleteContainer: (ct: MixingContainer) => void
+}) {
+  const props: [string, string | null][] = [
+    ['分类', item.category],
+    ['默认单位', item.default_unit],
+    ...(item.product_name ? [['关联产品', item.product_name] as [string, string]] : []),
+  ]
   return (
-    <div>
-      <div style={{ marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid #e5e3df' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{item.name}</h3>
-          {item.is_product && <Tag color="green">成品</Tag>}
+    <div
+      style={{
+        background: '#fff',
+        borderRadius: 14,
+        border: '1px solid #e5e3df',
+        padding: '18px 18px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'border-color .15s, box-shadow .15s, transform .15s',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'rgba(86,69,212,0.35)'
+        e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.06)'
+        e.currentTarget.style.transform = 'translateY(-1px)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = '#e5e3df'
+        e.currentTarget.style.boxShadow = 'none'
+        e.currentTarget.style.transform = 'none'
+      }}
+    >
+      {/* 头部：编码眉标 + 名称 */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: '#a4a097', letterSpacing: 0.4, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {item.code}
         </div>
-        <div style={{ display: 'flex', gap: 16, fontSize: 13, color: '#5d5b54', flexWrap: 'wrap' }}>
-          <span>编码: {item.code}</span>
-          <span>分类: {item.category || '—'}</span>
-          <span>默认单位: {item.default_unit || '—'}</span>
-          {item.product_name && <span>关联产品: {item.product_name}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontWeight: 600, fontSize: 16, color: '#1a1a1a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {item.name}
+          </span>
+          {item.is_product && <Tag color="green" style={{ fontSize: 10, lineHeight: '18px', padding: '0 5px', margin: 0 }}>成品</Tag>}
         </div>
-        {item.description && (
-          <div style={{ fontSize: 13, color: '#787671', marginTop: 8 }}>{item.description}</div>
+      </div>
+      {/* 属性区：标签/值 两列 */}
+      <div style={{ display: 'grid', gridTemplateColumns: '64px 1fr', rowGap: 6, fontSize: 12.5, marginBottom: 14 }}>
+        {props.map(([label, value]) => (
+          <div key={label} style={{ display: 'contents' }}>
+            <span style={{ color: '#a4a097' }}>{label}</span>
+            <span style={{ color: '#1a1a1a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {value || '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+      {item.description && (
+        <div style={{
+          fontSize: 12.5, color: '#787671', lineHeight: 1.6, marginBottom: 14,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+        }}>
+          {item.description}
+        </div>
+      )}
+      {/* 混装容器区 */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 11, color: '#a4a097' }}>混装容器</span>
+          {canManage && (
+            <Button size="small" type="text" icon={<PlusOutlined style={{ fontSize: 11 }} />} onClick={onAddContainer} style={{ fontSize: 11, padding: '0 4px' }}>
+              新增容器
+            </Button>
+          )}
+        </div>
+        {containers.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#c8c4bd' }}>无（按精确批次出入库）</div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {containers.map((ct) => (
+              <Tag
+                key={ct.id}
+                closable={canManage}
+                onClose={(e) => { e.preventDefault(); onDeleteContainer(ct) }}
+                style={{ fontSize: 11.5, margin: 0, borderRadius: 6 }}
+              >
+                {ct.name}
+                {ct.available_quantity !== null && (
+                  <span style={{ color: '#a4a097' }}> · 余量 {ct.available_quantity}</span>
+                )}
+              </Tag>
+            ))}
+          </div>
         )}
       </div>
+      {/* 底部操作区 */}
+      {canManage && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, borderTop: '1px solid #ede9e4', padding: '8px 0 12px', marginTop: 'auto' }}>
+          <Button size="small" type="text" icon={<EditOutlined style={{ fontSize: 13 }} />} onClick={onEdit}>编辑</Button>
+          <Button size="small" type="text" danger icon={<DeleteOutlined style={{ fontSize: 13 }} />} onClick={onDelete}>删除</Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -286,7 +384,6 @@ function MasterDataContent() {
   })
 
   // ── 产出物状态 ──
-  const [selectedIT, setSelectedIT] = useState<IntermediateType | null>(null)
   const [itModalOpen, setItModalOpen] = useState(false)
   const [editIT, setEditIT] = useState<IntermediateType | null>(null)
   const [itKeyword, setItKeyword] = useState('')
@@ -296,6 +393,75 @@ function MasterDataContent() {
     queryFn: () => fetchIntermediateTypesClient({ keyword: itKeyword || undefined }),
   })
   const intermediateTypes = itData?.items ?? []
+
+  // ── 混装容器状态 ──
+  const [ctModalOpen, setCtModalOpen] = useState(false)
+  const [ctTargetType, setCtTargetType] = useState<IntermediateType | null>(null)
+  const [ctForm] = Form.useForm()
+  const [ctSaving, setCtSaving] = useState(false)
+  const [lineOptions, setLineOptions] = useState<{ value: string; label: string }[]>([])
+
+  const { data: containers } = useQuery({
+    queryKey: ['production-mixing-containers'],
+    queryFn: () => fetchMixingContainersClient(),
+  })
+  const containersByType = new Map<string, MixingContainer[]>()
+  for (const ct of containers ?? []) {
+    const list = containersByType.get(ct.intermediate_type_id) ?? []
+    list.push(ct)
+    containersByType.set(ct.intermediate_type_id, list)
+  }
+
+  const openContainerModal = async (it: IntermediateType) => {
+    setCtTargetType(it)
+    setCtModalOpen(true)
+    if (lineOptions.length === 0) {
+      const r = await fetchLines()
+      if (r.success && r.data) {
+        setLineOptions(r.data.map((l) => ({ value: l.id, label: l.name })))
+      }
+    }
+  }
+
+  const handleContainerSaved = async () => {
+    const values = await ctForm.validateFields().catch(() => null)
+    if (!values || !ctTargetType) return
+    setCtSaving(true)
+    try {
+      await createMixingContainerClient({
+        name: values.name,
+        intermediate_type_id: ctTargetType.id,
+        line_id: values.line_id,
+      })
+      message.success('容器已创建')
+      setCtModalOpen(false)
+      ctForm.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['production-mixing-containers'] })
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '创建失败')
+    } finally {
+      setCtSaving(false)
+    }
+  }
+
+  const handleDeleteContainer = (ct: MixingContainer) => {
+    modal.confirm({
+      title: `删除容器「${ct.name}」?`,
+      content: '仅无出入库记录的空容器可删除',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deleteMixingContainerClient(ct.id)
+          message.success('已删除')
+          queryClient.invalidateQueries({ queryKey: ['production-mixing-containers'] })
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : '删除失败')
+        }
+      },
+    })
+  }
 
   // ── 产品 CRUD ──
   const handleDeleteProduct = (p: Product) => {
@@ -334,7 +500,6 @@ function MasterDataContent() {
         const result = await deleteIntermediateType(it.id)
         if (result.success) {
           message.success('已删除')
-          if (selectedIT?.id === it.id) setSelectedIT(null)
           queryClient.invalidateQueries({ queryKey: ['intermediate-types'] })
         } else {
           message.error(result.error)
@@ -434,77 +599,48 @@ function MasterDataContent() {
       key: 'intermediate-types',
       label: '产出物',
       children: (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
-          {/* 产出物列表 */}
-          <div style={{ width: 300, flexShrink: 0, background: '#fff', borderRadius: 12, border: '1px solid #e5e3df', overflow: 'hidden' }}>
-            <div style={{ padding: '14px 14px 10px', borderBottom: '1px solid #ede9e4', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Text strong style={{ fontSize: 14, flex: 1 }}>产出物列表</Text>
-              {canManage && (
-                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setEditIT(null); setItModalOpen(true) }}>
-                  新增
-                </Button>
-              )}
-            </div>
-            <div style={{ padding: '8px 14px' }}>
-              <Input
-                allowClear
-                size="small"
-                placeholder="搜索产出物..."
-                value={itKeyword}
-                onChange={(e) => setItKeyword(e.target.value)}
-              />
-            </div>
-            <div style={{ maxHeight: 420, overflowY: 'auto', padding: '0 8px 8px' }}>
-              {intermediateTypes.map((it) => {
-                const isSelected = selectedIT?.id === it.id
-                return (
-                  <div
-                    key={it.id}
-                    onClick={() => setSelectedIT(it)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '9px 10px', marginBottom: 2, borderRadius: 8, cursor: 'pointer',
-                      background: isSelected ? 'rgba(86,69,212,0.05)' : 'transparent',
-                      border: isSelected ? '1px solid rgba(86,69,212,0.15)' : '1px solid transparent',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontWeight: isSelected ? 600 : 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {it.name}
-                        </span>
-                        {it.is_product && <Tag color="green" style={{ fontSize: 10, lineHeight: '18px', padding: '0 4px', margin: 0 }}>成品</Tag>}
-                      </div>
-                      <div style={{ fontSize: 11, color: '#a4a097' }}>
-                        {it.code}
-                        {it.category && <span style={{ marginLeft: 6 }}>{it.category}</span>}
-                      </div>
-                    </div>
-                    {canManage && (
-                      <div style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                        <Button size="small" type="text" icon={<EditOutlined style={{ fontSize: 13 }} />}
-                          onClick={() => { setEditIT(it); setItModalOpen(true) }} />
-                        <Button size="small" type="text" danger icon={<DeleteOutlined style={{ fontSize: 13 }} />}
-                          onClick={() => handleDeleteIT(it)} />
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-          {/* 产出物详情 */}
-          <div style={{ flex: 1, background: '#fff', borderRadius: 12, border: '1px solid #e5e3df', padding: 20, minHeight: 480 }}>
-            {selectedIT ? (
-              <IntermediateTypeDetail item={selectedIT} />
-            ) : (
-              <div style={{ textAlign: 'center', padding: '80px 0' }}>
-                <Empty description="选择左侧产出物查看详情" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              </div>
+        <div>
+          <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
+            <Input
+              allowClear
+              style={{ maxWidth: 280 }}
+              placeholder="搜索产出物..."
+              value={itKeyword}
+              onChange={(e) => setItKeyword(e.target.value)}
+            />
+            {canManage && (
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditIT(null); setItModalOpen(true) }}>
+                新增产出物
+              </Button>
             )}
           </div>
+          {intermediateTypes.length === 0 ? (
+            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e3df', padding: '64px 0' }}>
+              <Empty description={itKeyword ? '未找到匹配的产出物' : '暂无产出物，点击右上角新增'} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+              {intermediateTypes.map((it) => (
+                <IntermediateTypeCard
+                  key={it.id}
+                  item={it}
+                  canManage={canManage}
+                  containers={containersByType.get(it.id) ?? []}
+                  onEdit={() => { setEditIT(it); setItModalOpen(true) }}
+                  onDelete={() => handleDeleteIT(it)}
+                  onAddContainer={() => openContainerModal(it)}
+                  onDeleteContainer={handleDeleteContainer}
+                />
+              ))}
+            </div>
+          )}
         </div>
       ),
+    },
+    {
+      key: 'lines',
+      label: '产线',
+      children: <LinesTab canManage={canManage} />,
     },
   ]
 
@@ -520,17 +656,46 @@ function MasterDataContent() {
       </div>
       <Tabs items={tabItems} />
       <ProductFormModal
+        key={editProduct?.id ?? 'product-new'}
         open={productModalOpen || !!editProduct}
         product={editProduct}
         onClose={() => { setProductModalOpen(false); setEditProduct(null) }}
         onSaved={handleProductSaved}
       />
       <IntermediateTypeFormModal
+        key={editIT?.id ?? 'it-new'}
         open={itModalOpen || !!editIT}
         editItem={editIT}
         onClose={() => { setItModalOpen(false); setEditIT(null) }}
         onSaved={handleITSaved}
       />
+      <Modal
+        open={ctModalOpen}
+        title={`新增混装容器 · ${ctTargetType?.name ?? ''}`}
+        onOk={handleContainerSaved}
+        onCancel={() => { setCtModalOpen(false); ctForm.resetFields() }}
+        confirmLoading={ctSaving}
+        okText="创建"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Form form={ctForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="name"
+            label="容器名称"
+            rules={[{ required: true, message: '请输入容器名称' }]}
+          >
+            <Input placeholder="如 1号储罐" maxLength={100} />
+          </Form.Item>
+          <Form.Item
+            name="line_id"
+            label="所属产线"
+            rules={[{ required: true, message: '请选择产线' }]}
+          >
+            <Select placeholder="选择产线" options={lineOptions} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   )
 }

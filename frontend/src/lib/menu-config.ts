@@ -14,6 +14,7 @@ export interface ModuleMenu {
   path: string
   children: SubMenuItem[]
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
+  clickableTitle?: boolean   // 侧边栏模块标题可点击跳转模块首页（无二级菜单的模块用）
 }
 
 export const moduleMenus: ModuleMenu[] = [
@@ -38,6 +39,7 @@ export const moduleMenus: ModuleMenu[] = [
         ],
       },
       { key: "materials", label: "产出物流水", path: "/production/materials" },
+      { key: "analytics", label: "数据汇总", path: "/production/analytics" },
     ],
   },
   {
@@ -71,6 +73,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "type-config", label: "能源配置", path: "/energy/type-config" },
       { key: "devices", label: "数据源配置", path: "/energy/devices" },
       { key: "alerts", label: "预警管理", path: "/energy/alerts" },
+      { key: "alert-process", label: "预警处理", path: "/energy/alert-process" },
       { key: "collect-logs", label: "采集日志", path: "/energy/collect-logs" },
     ],
   },
@@ -97,6 +100,7 @@ export const moduleMenus: ModuleMenu[] = [
     icon: "shield",
     path: "/safety",
     permissions: ["safety:*:read"],
+    clickableTitle: true,
     children: [
             // ── 系统配置 ──
       {
@@ -346,6 +350,15 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "roles", label: "角色管理", path: "/permission/roles" },
       { key: "users", label: "用户权限", path: "/permission/users" },
     ],
+  },
+  {
+    key: "toolbox",
+    label: "工具箱",
+    icon: "tool",
+    path: "/toolbox",
+    children: [], // 无二级菜单：Sidebar 只显示模块标题
+    clickableTitle: true, // 标题可点击回模块首页
+    // 不设 permissions：所有登录用户可见
   },
 ]
 

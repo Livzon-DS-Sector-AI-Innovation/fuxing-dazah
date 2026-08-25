@@ -4,7 +4,8 @@ export {
   saveRouteGraph,
   publishRoute,
   archiveRoute,
-  newRouteVersion,
+  copyRoute,
+  renameRoute,
   deleteRoute,
 } from './route'
 export {
@@ -14,7 +15,7 @@ export {
   completeBatch,
   cancelBatch,
 } from './batch'
-export { startExecution, completeExecution, abortExecution } from './execution'
+export { startExecution, completeExecution, backfillExecutionFields, abortExecution } from './execution'
 export {
   createIntermediateType,
   updateIntermediateType,
@@ -24,6 +25,17 @@ export {
   fetchBatchConsumptions,
   fetchIntermediateTrace,
 } from './intermediate'
+export {
+  fetchLines,
+  createLine,
+  updateLine,
+  deleteLine,
+  fetchMyLineAssignments,
+  fetchLineAssignments,
+  fetchLineAssignmentsByUser,
+  bindLineAssignment,
+  unbindLineAssignment,
+} from './line'
 export { getBatches } from './legacy'
 export {
   fetchWorkbench,
@@ -36,6 +48,8 @@ export {
   receiveAndStart,
   fetchPlannedBatches,
   activatePlannedBatch,
+  fetchMyStageSuffixes,
+  setStageSuffix,
 } from './workbench'
 export {
   createDemand,

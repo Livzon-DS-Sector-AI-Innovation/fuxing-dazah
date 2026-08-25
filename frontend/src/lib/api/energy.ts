@@ -3,6 +3,7 @@ import {
   CreateDeviceInput,
   UpdateDeviceInput,
   DeviceQueryParams,
+  EquipmentOption,
   EnergyData,
   EnergyDataHistory,
   DataQueryParams,
@@ -42,7 +43,9 @@ import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/htt
 
 // Server Actions 调用后端用绝对 URL，客户端调用用相对 URL（经 Next.js rewrites 代理）
 const SERVER_API_BASE = process.env.API_BASE_URL || 'http://localhost:8000'
-const CLIENT_API_BASE = ''
+// 客户端调用优先使用 NEXT_PUBLIC_API_BASE_URL（Docker 构建时注入），
+// 未配置时回退为空字符串走 Next.js rewrites 代理（本地开发）。
+const CLIENT_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 
 // ── 平台信息 ──
 export interface PlatformInfo {
@@ -56,6 +59,18 @@ export async function fetchPlatforms(): Promise<PlatformInfo[]> {
 
 export async function fetchPlatformsClient(): Promise<PlatformInfo[]> {
   return apiGet<PlatformInfo[]>(`${CLIENT_API_BASE}/api/v1/energy/platforms`)
+}
+
+export async function fetchEquipmentOptionsClient(
+  params: { keyword?: string; ids?: string } = {}
+): Promise<EquipmentOption[]> {
+  const searchParams = new URLSearchParams()
+  if (params.keyword) searchParams.set('keyword', params.keyword)
+  if (params.ids) searchParams.set('ids', params.ids)
+  const qs = searchParams.toString()
+  return apiGet<EquipmentOption[]>(
+    `${CLIENT_API_BASE}/api/v1/energy/equipment-options${qs ? `?${qs}` : ''}`
+  )
 }
 
 // ── 数据源配置（Server Actions）──
@@ -322,6 +337,41 @@ export async function processAlertRecord(
   )
 }
 
+// ── 预警处理（车间预警审核）──
+
+export async function fetchAlertProcessList(
+  params: { status?: string; page?: number; page_size?: number } = {}
+): Promise<PaginatedResponse<AlertRecord>> {
+  const searchParams = new URLSearchParams()
+  if (params.status) searchParams.set('status', String(params.status))
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.page_size) searchParams.set('page_size', String(params.page_size))
+
+  return apiFetchPaginated<AlertRecord>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/process?${searchParams.toString()}`
+  )
+}
+
+export async function fillAlertReason(
+  id: string,
+  data: { reason: string }
+): Promise<AlertRecord> {
+  return apiPut<AlertRecord>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/process/${id}/reason`,
+    data
+  )
+}
+
+export async function approveAlertRecord(id: string): Promise<void> {
+  await apiPut(`${SERVER_API_BASE}/api/v1/energy/alerts/process/${id}/approve`)
+}
+
+export async function rejectAlertRecord(id: string): Promise<AlertRecord> {
+  return apiPut<AlertRecord>(
+    `${SERVER_API_BASE}/api/v1/energy/alerts/process/${id}/reject`
+  )
+}
+
 // ── 能源类型配置 ──
 
 export async function fetchTypeConfigs(
@@ -555,4 +605,40 @@ export async function fetchNitrogenPushPersonnelCandidates(): Promise<EnergyPers
   return apiGet<EnergyPersonnelCandidate[]>(
     `${SERVER_API_BASE}/api/v1/energy/nitrogen-report/personnel-candidates`
   )
+}
+
+// ── 峰谷用电分布 ──
+
+export async function fetchPriceCategoryDistribution(params: {
+  start_time: string
+  end_time: string
+  energy_type?: string
+  workshop?: string
+}): Promise<{ categories: { category: string; total_value: number; unit: string; percentage: number }[]; total: number; unit: string }> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('start_time', params.start_time)
+  searchParams.set('end_time', params.end_time)
+  if (params.energy_type) searchParams.set('energy_type', params.energy_type)
+  if (params.workshop) searchParams.set('workshop', params.workshop)
+  return apiGet(
+    `${CLIENT_API_BASE}/api/v1/energy/overview/price-category?${searchParams.toString()}`
+  )
+}
+
+// ── 峰谷时段规则 ──
+
+export async function fetchPricePeriods(): Promise<{ id: string; category: string; start_hour: number; end_hour: number; months: number[] }[]> {
+  return apiGet(`${CLIENT_API_BASE}/api/v1/energy/price-periods`)
+}
+
+export async function createPricePeriod(data: { category: string; start_hour: number; end_hour: number; months: number[] }): Promise<any> {
+  return apiPost(`${CLIENT_API_BASE}/api/v1/energy/price-periods`, data)
+}
+
+export async function deletePricePeriod(id: string): Promise<void> {
+  await apiDelete(`${CLIENT_API_BASE}/api/v1/energy/price-periods/${id}`)
+}
+
+export async function resetPricePeriods(): Promise<any[]> {
+  return apiPost(`${CLIENT_API_BASE}/api/v1/energy/price-periods/reset`, {})
 }

@@ -16,13 +16,11 @@ export interface EnergyDeviceConfig {
   production_line?: string
   monitor_level: MonitorLevel
   unit: string
-  collection_interval: number
   is_enabled: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
-  daily_collect_time?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level: boolean
-  exclude_from_stats: boolean
+  stat_role: 'normal' | 'excluded' | 'total'
   remark?: string
   created_at: string
   updated_at: string
@@ -39,13 +37,11 @@ export interface CreateDeviceInput {
   production_line?: string
   monitor_level: MonitorLevel
   unit: string
-  collection_interval: number
   is_enabled?: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
-  daily_collect_time?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level?: boolean
-  exclude_from_stats?: boolean
+  stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
 }
 export interface UpdateDeviceInput {
@@ -58,13 +54,11 @@ export interface UpdateDeviceInput {
   production_line?: string
   monitor_level?: MonitorLevel
   unit?: string
-  collection_interval?: number
   is_enabled?: boolean
-  equipment_id?: string | null
-  equipment_name?: string | null
-  daily_collect_time?: string | null
+  equipment_ids?: string[]
+  equipment_names?: string[]
   is_region_level?: boolean
-  exclude_from_stats?: boolean
+  stat_role?: 'normal' | 'excluded' | 'total'
   remark?: string
 }
 
@@ -77,6 +71,13 @@ export interface DeviceQueryParams {
   is_enabled?: boolean
   page?: number
   page_size?: number
+}
+
+// 关联设备下拉选项（来自设备台账）
+export interface EquipmentOption {
+  id: string
+  equipment_no: string
+  name: string
 }
 
 // 能耗数据
@@ -176,6 +177,7 @@ export interface CollectLog {
   status: CollectStatus
   device_count: number
   success_count: number
+  expected_count: number
   error_message: string | null
   created_at: string
 }
@@ -188,7 +190,8 @@ export interface CollectLogDeviceDetail {
   value: number
   unit: string
   data_timestamp: string
-  data_time_range_end?: string  // 数据覆盖时段终点（整点+1h）
+  data_time_range_end?: string  // 数据覆盖时段终点（整点+1h 或 +1d）
+  is_daily?: boolean            // 日汇总数据，前端按天显示
 }
 
 // 采集日志详情（含设备数据）
@@ -199,6 +202,7 @@ export interface CollectLogDetail {
   status: CollectStatus
   device_count: number
   success_count: number
+  expected_count: number
   error_message: string | null
   created_at: string
   devices: CollectLogDeviceDetail[]
@@ -217,6 +221,7 @@ export interface LogQueryParams {
 // 自动采集运行时设置
 export interface CollectSettings {
   auto_collect_enabled: boolean
+  daily_collect_time: string
 }
 
 // 分页响应
@@ -314,7 +319,7 @@ export interface RuleQueryParams {
 }
 
 // 预警记录状态
-export type AlertRecordStatus = 'pending' | 'processed' | 'ignored'
+export type AlertRecordStatus = 'pending' | 'processed' | 'ignored' | 'rejected'
 
 // 预警记录
 export interface AlertRecord {
@@ -332,13 +337,20 @@ export interface AlertRecord {
   processed_by?: string
   processed_at?: string
   process_note?: string
+  reason?: string | null
+  heads?: { name: string; feishu_open_id: string }[]
   created_at: string
 }
 
 // 处理预警记录输入
 export interface ProcessRecordInput {
-  status: 'processed' | 'ignored'
+  status: 'processed' | 'ignored' | 'rejected'
   process_note?: string
+}
+
+// 填写预警原因
+export interface FillReasonInput {
+  reason: string
 }
 
 // 预警记录查询参数
@@ -362,7 +374,7 @@ export interface EnergyTypeConfig {
   color: string | null
   sort_order: number
   is_enabled: boolean
-  parent_code: string | null
+  collect_granularity: 'hourly' | 'daily'
   remark: string | null
   created_at: string
   updated_at: string
@@ -374,8 +386,8 @@ export interface CreateTypeConfigInput {
   unit: string
   sort_order?: number
   is_enabled?: boolean
+  collect_granularity?: 'hourly' | 'daily'
   color?: string | null
-  parent_code?: string | null
   remark?: string | null
 }
 
@@ -384,8 +396,8 @@ export interface UpdateTypeConfigInput {
   unit?: string
   sort_order?: number
   is_enabled?: boolean
+  collect_granularity?: 'hourly' | 'daily'
   color?: string | null
-  parent_code?: string | null
   remark?: string | null
 }
 
@@ -542,4 +554,36 @@ export interface UpdateNitrogenPushConfigInput {
 export interface NitrogenReportSendRequest {
   config_id: string
   target_date: string
+}
+
+// ── 峰谷时段规则 ──
+
+export interface PricePeriod {
+  id: string
+  category: string
+  start_hour: number
+  end_hour: number
+  months: number[]
+}
+
+export interface CreatePricePeriodInput {
+  category: string
+  start_hour: number
+  end_hour: number
+  months: number[]
+}
+
+// ── 峰谷电价分类 ──
+
+export interface PriceCategoryItem {
+  category: string   // 尖/峰/平/谷
+  total_value: number
+  unit: string
+  percentage: number
+}
+
+export interface PriceCategoryDistribution {
+  categories: PriceCategoryItem[]
+  total: number
+  unit: string
 }

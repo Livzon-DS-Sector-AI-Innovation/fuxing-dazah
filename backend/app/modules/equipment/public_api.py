@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.equipment.deps import build_access_context
 from app.modules.equipment.models import Equipment
 from app.modules.equipment.repository import equipment as equipment_repo
+from app.modules.equipment.service.data_scope import apply_equipment_scope
 from app.platform.identity.models import Department, User
 
 
@@ -35,6 +36,28 @@ async def get_equipment_briefs(
         Equipment.id.in_(ids),
         Equipment.is_deleted == False,  # noqa: E712
     )
+    result = await db.execute(stmt)
+    return [
+        EquipmentBrief(id=e.id, equipment_no=e.equipment_no, name=e.name)
+        for e in result.scalars()
+    ]
+
+
+async def get_equipment_briefs_for_user(
+    db: AsyncSession, user: User, ids: list[uuid.UUID],
+) -> list[EquipmentBrief]:
+    """按 ID 批量获取设备摘要，按调用用户的数据范围过滤（设备台账口径）。
+
+    不在用户可见范围内的 ID 缺失于结果，由调用方判断。
+    """
+    if not ids:
+        return []
+    ctx = await build_access_context(db, user, resource="asset")
+    stmt = select(Equipment).where(
+        Equipment.id.in_(ids),
+        Equipment.is_deleted == False,  # noqa: E712
+    )
+    stmt = apply_equipment_scope(stmt, ctx, Equipment.department_id, "department_id")
     result = await db.execute(stmt)
     return [
         EquipmentBrief(id=e.id, equipment_no=e.equipment_no, name=e.name)
