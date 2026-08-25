@@ -1,10 +1,9 @@
 """HR 模块测试 fixtures。
 
 为所有 HR 测试提供：
-- 独立测试库（dazah_test，与开发库隔离，避免互相污染）
 - 权限 mock（绕过 require_hr_basic 的 403）
 - 登录用户 mock（绕过 get_current_user）
-- 随机值生成器（避免唯一键冲突）
+- 随机值生成器（避免共享数据库唯一键冲突）
 """
 
 import uuid
@@ -13,41 +12,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.database import get_db
 from app.main import app
 from app.modules.hr.deps import HrAccessContext, get_hr_scope
 from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
-
-# ── 独立测试库（dazah_test）：与开发库隔离，避免测试/开发数据互相污染 ──
-
-
-def _hr_test_db_url() -> str:
-    url = get_settings().DATABASE_URL
-    return url if url.rstrip("/").endswith("_test") else f"{url}_test"
-
-
-_hr_test_engine = create_async_engine(_hr_test_db_url(), poolclass=pool.NullPool)
-_test_session_factory = async_sessionmaker(
-    _hr_test_engine, class_=AsyncSession, expire_on_commit=False
+from tests.conftest import (
+    _test_session_factory,  # noqa: F401 — 复用根 conftest 的 session factory
 )
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _migrate_hr_test_db() -> Iterator[None]:
-    """会话开始时把独立测试库迁移到最新 head（与开发库保持同构）。"""
-    from alembic.config import Config
-
-    from alembic import command
-
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", _hr_test_db_url())
-    command.upgrade(cfg, "head")
-    yield
 
 # ── 全部 HR 权限码（测试用超管视角） ──
 _ALL_HR_PERMS: set[str] = {
@@ -70,7 +45,6 @@ _ALL_HR_PERMS: set[str] = {
     "hr:training:exam", "hr:training:document", "hr:training:manage",
     "hr:training:export", "hr:profile:export", "hr:profile:transfer",
     "hr:recruitment:manage",
-    "hr:title:read", "hr:title:manage", "hr:title:scores:read", "hr:title:judge",
 }
 
 
@@ -121,8 +95,12 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 # ── 测试用户（API 测试用） ──
 
 @pytest.fixture
-async def test_user(db_session: AsyncSession) -> User:
-    """在测试 DB 中创建一个临时用户，用于 API 鉴权。"""
+async def test_user(db_session: AsyncSession) -> AsyncIterator[User]:
+    """在测试 DB 中创建一个临时用户，用于 API 鉴权。测试结束后物理删除。
+
+    被测代码可能自行 commit，回滚救不回已提交的行（历史泄漏来源），
+    因此 teardown 先回滚释放行锁，再用独立 session 物理删除。
+    """
     user = User(
         name="HR测试员",
         employee_no=f"HR-TEST-{uuid.uuid4().hex[:8]}",
@@ -130,7 +108,14 @@ async def test_user(db_session: AsyncSession) -> User:
     db_session.add(user)
     await db_session.flush()
     await db_session.refresh(user)
-    return user
+    try:
+        yield user
+    finally:
+        user_id = user.id  # 在 rollback 前取出：rollback 会 expire 对象，之后访问触发懒加载
+        await db_session.rollback()  # 先释放本事务对 user 行的锁
+        async with _test_session_factory() as session:
+            await session.execute(delete(User).where(User.id == user_id))
+            await session.commit()
 
 
 # ── API client（覆盖 DB session + 登录用户） ──

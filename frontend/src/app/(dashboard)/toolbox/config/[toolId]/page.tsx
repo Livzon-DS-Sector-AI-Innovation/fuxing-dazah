@@ -49,7 +49,10 @@ export default async function ToolConfigPage({
       cache: 'no-store',
     })
   } catch (e) {
-    loadError = e instanceof Error ? e.message : '页面数据加载失败'
+    // 404 = 尚未配置：显示空表单供管理员首次填写；其他错误才报加载失败
+    if ((e as { status?: number }).status !== 404) {
+      loadError = e instanceof Error ? e.message : '页面数据加载失败'
+    }
   }
   if (loadError) {
     return (
@@ -57,9 +60,6 @@ export default async function ToolConfigPage({
         页面数据加载失败：{loadError}，请稍后重试或联系管理员
       </p>
     )
-  }
-  if (!config) {
-    return <p className="p-6 text-[var(--color-stone)]">该工具配置不可用，请检查服务端配置</p>
   }
 
   return (
