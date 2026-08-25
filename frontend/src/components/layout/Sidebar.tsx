@@ -1,15 +1,35 @@
 "use client"
 
 import { usePathname, useRouter } from "next/navigation"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { Menu } from "antd"
 import type { MenuProps } from "antd"
 import { getModuleByKey } from "@/lib/menu-config"
 import type { SubMenuItem } from "@/lib/menu-config"
+import { hasAnyPermission } from "@/lib/permissions"
+import { usePermissionStore } from "@/stores/permission"
 import { useSidebarStore } from "@/stores/sidebar"
-import { usePermission } from "@/hooks/usePermission"
 
 type MenuItem = Required<MenuProps>['items'][number]
+
+// ── 按权限过滤菜单项（未声明 permissions 的项恒可见）──
+// 父项自身的 permissions 声明同样生效（有子项时不再被跳过）
+function filterByPermissions(
+  items: SubMenuItem[],
+  permissions: Set<string>,
+): SubMenuItem[] {
+  return items.flatMap((item) => {
+    if (item.permissions && item.permissions.length > 0 && !hasAnyPermission(permissions, item.permissions)) {
+      return []
+    }
+    if (item.children && item.children.length > 0) {
+      const children = filterByPermissions(item.children, permissions)
+      if (children.length === 0) return []
+      return [{ ...item, children }]
+    }
+    return [item]
+  })
+}
 
 // ── 构建 key → path 映射（叶子节点 key 唯一，path 可重复）──
 function buildKeyPathMap(items: SubMenuItem[]): Map<string, string> {
@@ -97,46 +117,43 @@ function containsPath(items: SubMenuItem[], pathname: string): boolean {
   return false
 }
 
-// ── 按权限递归过滤菜单项（无 permissions 的项不受影响）──
-function filterByPermission(
-  items: SubMenuItem[],
-  hasPermission: (...codes: string[]) => boolean
-): SubMenuItem[] {
-  const result: SubMenuItem[] = []
-  for (const item of items) {
-    const children = item.children ? filterByPermission(item.children, hasPermission) : undefined
-    const allowed = !item.permissions || item.permissions.length === 0 || hasPermission(...item.permissions)
-    if (!allowed && (!children || children.length === 0)) continue
-    result.push({ ...item, children })
-  }
-  return result
-}
-
 // ═══════════════════════════════════════════════════════════════
 
 export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const collapsed = useSidebarStore((s) => s.collapsed)
-  const { hasPermission } = usePermission()
+  const permissions = usePermissionStore((s) => s.permissions)
+  const permissionLoaded = usePermissionStore((s) => s.isLoaded)
   const moduleKey = pathname.split("/")[1] || "production"
   const currentModule = getModuleByKey(moduleKey)
-  const visibleItems = currentModule
-    ? filterByPermission(currentModule.children, hasPermission)
-    : []
 
-  const menuItems = currentModule ? buildMenuItems(visibleItems) : []
-  const keyPathMap = currentModule ? buildKeyPathMap(visibleItems) : new Map<string, string>()
+  // 权限加载完成前不过滤（避免闪烁）；加载后按模块级与 children 的 permissions 声明过滤
+  const visibleChildren = useMemo(() => {
+    if (!currentModule || !permissionLoaded) return currentModule?.children ?? []
+    // 模块级权限与 TopNav 口径一致：不满足则全部子项隐藏
+    if (
+      currentModule.permissions &&
+      currentModule.permissions.length > 0 &&
+      !hasAnyPermission(permissions, currentModule.permissions)
+    ) {
+      return []
+    }
+    return filterByPermissions(currentModule.children, permissions)
+  }, [currentModule, permissions, permissionLoaded])
+
+  const menuItems = currentModule ? buildMenuItems(visibleChildren) : []
+  const keyPathMap = currentModule ? buildKeyPathMap(visibleChildren) : new Map<string, string>()
   const selectedKey = currentModule
-    ? findSelectedKey(visibleItems, pathname)
+    ? findSelectedKey(visibleChildren, pathname)
     : undefined
 
   // 生产管理模块默认全展开所有子菜单
   const [openKeys, setOpenKeys] = useState<string[]>(() => {
     if (!currentModule) return []
-    const ancestors = collectAncestorKeys(visibleItems, pathname)
+    const ancestors = collectAncestorKeys(visibleChildren, pathname)
     return moduleKey === "production"
-      ? [...new Set([...collectAllSubMenuKeys(visibleItems), ...ancestors])]
+      ? [...new Set([...collectAllSubMenuKeys(visibleChildren), ...ancestors])]
       : ancestors
   })
 

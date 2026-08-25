@@ -175,11 +175,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stop_ws_client()
 
-    # 关闭工具箱 AI 客户端连接池
-    from app.modules.toolbox.tools._qwen import close_service
-
-    await close_service()
-
     logger.info("Background tasks stopped")
 
 

@@ -33,7 +33,9 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
       loadError: false,
     }),
 
-  setLoadError: () => set({ loadError: true }),
+  // 加载失败（重试耗尽）后也视为已加载：以空权限生效侧边栏/TopNav 过滤，
+  // 权限受限菜单 fail-closed，避免整会话静默 fail-open
+  setLoadError: () => set({ loadError: true, isLoaded: true }),
 
   hasPermission: (...codes: string[]) => {
     const { permissions } = get()

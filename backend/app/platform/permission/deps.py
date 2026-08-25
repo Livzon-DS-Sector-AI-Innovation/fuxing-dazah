@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Annotated, Any
 
 from fastapi import Depends
+from redis.exceptions import RedisError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,12 +35,18 @@ RequireUser = Annotated[User, Depends(require_user)]
 
 
 async def get_user_permissions(user_id: str, db: AsyncSession) -> set[str]:
-    """获取用户权限集合，优先从 Redis 缓存读取。"""
-    cached = await get_cached_permissions(user_id)
+    """获取用户权限集合，优先从 Redis 缓存读取；Redis 不可用时降级直查数据库。"""
+    try:
+        cached = await get_cached_permissions(user_id)
+    except RedisError:
+        cached = None
     if cached is not None:
         return cached
     perms = await _repo.get_user_permission_codes(db, uuid.UUID(user_id))
-    await set_cached_permissions(user_id, perms)
+    try:
+        await set_cached_permissions(user_id, perms)
+    except RedisError:
+        pass  # 缓存写入失败不阻断鉴权
     return perms
 
 

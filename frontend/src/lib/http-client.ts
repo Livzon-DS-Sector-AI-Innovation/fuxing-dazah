@@ -41,7 +41,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => '')
     let msg = `请求失败: ${res.status}`
     try { msg = JSON.parse(body).message || msg } catch { /* not JSON */ }
-    throw new Error(msg)
+    // 携带 status 便于调用方区分 403（无权限）与 5xx/网络错误
+    const err = new Error(msg) as Error & { status: number }
+    err.status = res.status
+    throw err
   }
   return res.json()
 }

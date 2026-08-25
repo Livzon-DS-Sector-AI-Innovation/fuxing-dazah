@@ -9,7 +9,18 @@ import pytest
 from app.modules.toolbox import storage
 
 
-def test_save_and_resolve_upload() -> None:
+def test_exec_dir_root_under_uploads() -> None:
+    """上传文件根目录位于项目 uploads/toolbox（不在系统临时目录）。"""
+    assert storage.EXEC_DIR_ROOT == Path("uploads") / "toolbox"
+
+
+@pytest.fixture
+def exec_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(storage, "EXEC_DIR_ROOT", tmp_path)
+    return tmp_path
+
+
+def test_save_and_resolve_upload(exec_root: Path) -> None:
     fid, path = storage.save_upload("exec-1", "报告.docx", b"fake-docx-bytes")
     assert fid
     assert path.exists()
@@ -19,14 +30,21 @@ def test_save_and_resolve_upload() -> None:
     assert p == path
 
 
-def test_resolve_missing_file_returns_none() -> None:
+def test_resolve_missing_file_returns_none(exec_root: Path) -> None:
     assert storage.resolve_file("exec-2", "no-such-id") is None
 
 
-def test_save_upload_dodgy_extension_falls_back() -> None:
+def test_save_upload_dodgy_extension_falls_back(exec_root: Path) -> None:
     fid, path = storage.save_upload("exec-3", "恶意.exe", b"x")
     assert path.suffix == ".bin"
     assert storage.resolve_file("exec-3", fid) == path
+
+
+def test_save_upload_keeps_xlsx_extension(exec_root: Path) -> None:
+    """打卡核对等工具上传的 .xlsx 必须保留扩展名（openpyxl 依赖后缀识别格式）。"""
+    fid, path = storage.save_upload("exec-4", "请假登记.xlsx", b"x")
+    assert path.suffix == ".xlsx"
+    assert storage.resolve_file("exec-4", fid) == path
 
 
 def test_cleanup_stale_removes_old_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
