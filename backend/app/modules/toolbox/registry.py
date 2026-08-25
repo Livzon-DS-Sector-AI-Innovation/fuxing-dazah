@@ -15,7 +15,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ToolInput:
-    """工具输入声明。type: file / text / textarea / boolean / number / select。"""
+    """工具输入声明。type: file / text / textarea / boolean / number / select / month / date。
+
+    show_when=(key, value)：当同步骤中 key 字段的值为 value 时该输入才显示（如日期字段跟随核对方式）。
+    """
 
     key: str
     label: str
@@ -28,6 +31,7 @@ class ToolInput:
     options: list[str] | None = None
     from_step: str | None = None
     from_key: str | None = None
+    show_when: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)

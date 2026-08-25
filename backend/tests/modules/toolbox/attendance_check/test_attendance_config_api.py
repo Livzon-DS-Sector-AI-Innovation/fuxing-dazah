@@ -1,19 +1,34 @@
-"""工具箱工具配置读写端点测试。"""
+"""工具箱工具配置读写端点测试（配置读写已加鉴权，这里以超管身份覆盖）。"""
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.toolbox import api
 from tests.modules.toolbox.conftest import FakeRedis
 
 
 @pytest.fixture
-def client(fake_redis: FakeRedis, fake_user: SimpleNamespace) -> AsyncClient:
-    """测试应用：挂 toolbox router，注入 FakeRedis 与假用户。"""
+def client(
+    fake_redis: FakeRedis,
+    fake_user: SimpleNamespace,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncClient:
+    """测试应用：挂 toolbox router，注入 FakeRedis、超管假用户与回滚测试会话。"""
     from fastapi import FastAPI
+
+    # 配置读写端点要求 can_config；以超管身份（拥有 permission:role:manage）放行
+    import app.modules.toolbox.service as service_mod
+
+    async def _admin_perms(_user_id: str, _db: object) -> set[str]:
+        return {"permission:role:manage"}
+
+    monkeypatch.setattr(service_mod, "get_user_permissions", _admin_perms)
 
     app = FastAPI()
     app.include_router(api.router)
@@ -24,8 +39,12 @@ def client(fake_redis: FakeRedis, fake_user: SimpleNamespace) -> AsyncClient:
     async def fake_redis_dep() -> FakeRedis:
         return fake_redis
 
+    async def fake_db_dep() -> Any:
+        yield db_session
+
     app.dependency_overrides[api.get_current_user] = fake_user_dep  # type: ignore[attr-defined]
     app.dependency_overrides[api.get_redis] = fake_redis_dep  # type: ignore[attr-defined]
+    app.dependency_overrides[api.get_db] = fake_db_dep  # type: ignore[attr-defined]
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 

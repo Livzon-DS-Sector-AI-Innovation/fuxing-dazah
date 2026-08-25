@@ -26,6 +26,9 @@ export default async function ToolConfigPage({
   if (tool.config_schema.length === 0) {
     return <p className="p-6 text-[var(--color-stone)]">该工具没有可配置项</p>
   }
+  if (!tool.can_config) {
+    return <p className="p-6 text-[var(--color-stone)]">没有修改该工具配置的权限</p>
+  }
 
   const config: ToolConfig | null = await apiGet<ToolConfig>(
     `${API_BASE}/api/v1/toolbox/tools/${toolId}/config`,

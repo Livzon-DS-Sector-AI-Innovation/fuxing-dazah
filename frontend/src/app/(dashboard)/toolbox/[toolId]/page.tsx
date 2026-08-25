@@ -27,9 +27,17 @@ export default async function ToolPage({
   if (!tool) {
     return <p className="p-6 text-[var(--color-stone)]">工具不存在</p>
   }
+  if (!tool.can_use) {
+    return (
+      <p className="p-6 text-[15px] text-[var(--color-stone)]">
+        没有使用该工具的权限，请联系管理员
+      </p>
+    )
+  }
 
   let initialOutputs: Record<string, Record<string, unknown>> = {}
   const initialFileIds: Record<string, string[]> = {}
+  const initialFileNames: Record<string, string> = {}
   if (execution) {
     try {
       const einfo: ExecutionInfo = await apiGet<ExecutionInfo>(
@@ -40,6 +48,9 @@ export default async function ToolPage({
       // files: {file_id: {input_key, filename}} → {input_key: file_id[]}（后出现者排在后面）
       for (const [fid, meta] of Object.entries(einfo.files)) {
         ;(initialFileIds[meta.input_key] ??= []).push(fid)
+        // 文件名供执行页「引用材料」芯片展示
+        const cur = initialFileNames[meta.input_key]
+        initialFileNames[meta.input_key] = cur ? `${cur}、${meta.filename}` : meta.filename
       }
     } catch {
       initialOutputs = {}
@@ -52,6 +63,7 @@ export default async function ToolPage({
       initialExecutionId={execution ?? null}
       initialOutputs={initialOutputs}
       initialFileIds={initialFileIds}
+      initialFileNames={initialFileNames}
     />
   )
 }

@@ -16,8 +16,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
+from app.core.database import get_db
 from app.core.redis import get_redis
 from app.core.response import error_response, success_response
 from app.modules.toolbox import sessions, storage
@@ -31,15 +33,25 @@ from app.modules.toolbox.registry import (
     get_tool,
     list_tools,
 )
-from app.modules.toolbox.schemas import ExecutionOut, StepRunResponse, ToolOut
+from app.modules.toolbox.schemas import (
+    ExecutionOut,
+    StepRunResponse,
+    ToolGrantsOut,
+    ToolOut,
+    UpdateToolGrantsIn,
+)
+from app.modules.toolbox.service import ToolboxGrantService, ToolGrantError
 from app.platform.identity.deps import get_current_user
 from app.platform.identity.models import User
+from app.platform.permission.deps import require_admin
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100MB
+
+_grant_service = ToolboxGrantService()
 
 _cleanup_tasks: set[asyncio.Task[None]] = set()
 
@@ -51,10 +63,12 @@ def _spawn_cleanup() -> None:
     task.add_done_callback(_cleanup_tasks.discard)
 
 
-def _tool_to_out(t: Tool) -> dict[str, Any]:
+def _tool_to_out(t: Tool, can_use: bool = False, can_config: bool = False) -> dict[str, Any]:
     d = ToolOut.model_validate(t).model_dump(mode="json")
     if t.image:
         d["image"] = f"{TOOL_IMAGE_URL_PREFIX}/{t.image}"
+    d["can_use"] = can_use
+    d["can_config"] = can_config
     return d
 
 
@@ -66,12 +80,24 @@ def _config_path(tool_id: str) -> Path:
 @router.get("/tools", summary="工具列表")
 async def list_tool_endpoints(
     user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """工具箱全部工具元数据（驱动首页卡片与执行页动态表单）。"""
+    """工具箱全部工具元数据（驱动首页卡片与执行页动态表单）。
+
+    返回全部工具（不过滤），每个工具带当前用户的 can_use / can_config 标志：
+    默认开放时全员 can_use=True；已配置名单的工具对名单外用户 can_use=False，
+    前端据此置灰卡片并提示无权限（执行接口另有 403 兜底）。超管标志全 True。
+    """
     if user is None:
         return error_response("未登录", status_code=401)
     discover_tools()
-    return success_response(data=[_tool_to_out(t) for t in list_tools()])
+    tools = list_tools()
+    access = await _grant_service.resolve_access_map(db, user, [t.id for t in tools])
+    out: list[dict[str, Any]] = []
+    for t in tools:
+        can_use, can_config = access.get(t.id, (False, False))
+        out.append(_tool_to_out(t, can_use, can_config))
+    return success_response(data=out)
 
 
 @router.post("/tools/{tool_id}/steps/{step_id}/run", summary="执行工具步骤")
@@ -81,6 +107,7 @@ async def run_step(
     request: Request,
     user: User | None = Depends(get_current_user),
     redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     """执行某工具某步骤（同步）。multipart：execution_id + params(JSON) + 文件。"""
     if user is None:
@@ -93,6 +120,9 @@ async def run_step(
         return error_response(f"工具不存在: {tool_id}", status_code=404)
     if step is None:
         return error_response(f"步骤不存在: {step_id}", status_code=404)
+    can_use, _ = await _grant_service.resolve_access(db, user, tool_id)
+    if not can_use:
+        return error_response("没有使用该工具的权限", status_code=403)
 
     form = await request.form()
     execution_id_raw = form.get("execution_id")
@@ -229,10 +259,15 @@ async def run_step(
 async def get_tool_config(
     tool_id: str,
     user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """读取工具配置 JSON 内容（存在 {tool_id}_config.json 时）。"""
+    """读取工具配置 JSON 内容（存在 {tool_id}_config.json 时）。仅配置人员/超管可读。"""
     if user is None:
         return error_response("未登录", status_code=401)
+    # 权限先于文件存在性：避免用 404/403 差异探测哪些工具有配置文件
+    _, can_config = await _grant_service.resolve_access(db, user, tool_id)
+    if not can_config:
+        return error_response("没有查看该工具配置的权限", status_code=403)
     path = _config_path(tool_id)
     if not path.exists():
         return error_response("该工具没有配置", status_code=404)
@@ -249,10 +284,14 @@ async def put_tool_config(
     tool_id: str,
     request: Request,
     user: User | None = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    """整体覆盖工具配置 JSON 文件（校验为 JSON 对象后写回）。"""
+    """整体覆盖工具配置 JSON 文件（校验为 JSON 对象后写回）。仅配置人员/超管可改。"""
     if user is None:
         return error_response("未登录", status_code=401)
+    _, can_config = await _grant_service.resolve_access(db, user, tool_id)
+    if not can_config:
+        return error_response("没有修改该工具配置的权限", status_code=403)
     path = _config_path(tool_id)
     if not path.exists():
         return error_response("该工具没有配置", status_code=404)
@@ -268,17 +307,62 @@ async def put_tool_config(
     return success_response(data=config)
 
 
+@router.get("/tool-grants", summary="工具使用权限概览（仅管理员）")
+async def list_tool_grants_endpoint(
+    db: AsyncSession = Depends(get_db),
+    _admin: User = Depends(require_admin),
+) -> JSONResponse:
+    """全部工具的使用/配置授权名单，驱动前端「使用权限」页面。"""
+    discover_tools()
+    grants = await _grant_service.list_tool_grants(db, list_tools())
+    return success_response(data=[g.model_dump(mode="json") for g in grants])
+
+
+@router.put("/tools/{tool_id}/grants", summary="更新工具使用权限（仅管理员）")
+async def put_tool_grants(
+    tool_id: str,
+    data: UpdateToolGrantsIn,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(require_admin),
+) -> JSONResponse:
+    """整体替换某工具的使用/配置授权名单。
+
+    未注册但存在残留授权行的工具（孤儿行）允许清空，纯未知 ID 仍 404 防手误。
+    """
+    discover_tools()
+    tool = get_tool(tool_id)
+    if tool is None and tool_id not in await _grant_service.list_tool_ids_with_grants(db):
+        return error_response(f"工具不存在: {tool_id}", status_code=404)
+    try:
+        await _grant_service.update_tool_grants(
+            db, admin, tool_id, data.use_user_ids, data.config_user_ids
+        )
+    except ToolGrantError as e:
+        return error_response(str(e), status_code=400)
+    grants = await _grant_service.list_tool_grants(db, list_tools())
+    target = next((g for g in grants if g.tool_id == tool_id), None)
+    if target is None:
+        # 孤儿行刚被清空：回退为空名单响应（注册工具恒有列表项，不会走到这里）
+        target = ToolGrantsOut(tool_id=tool_id, tool_name=tool_id)
+    return success_response(data=target.model_dump(mode="json"), message="使用权限保存成功")
+
+
 @router.get("/executions/{execution_id}", summary="执行会话状态")
 async def get_execution_state(
     execution_id: str,
     user: User | None = Depends(get_current_user),
     redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     if user is None:
         return error_response("未登录", status_code=401)
     exec_data = await sessions.get_execution(redis, execution_id)
     if exec_data is None or exec_data["user_id"] != str(user.id):
         return error_response("执行会话不存在", status_code=404)
+    # 会话归属之外再校验当前授权：被移出名单后不能继续轮询状态/下载产物
+    can_use, _ = await _grant_service.resolve_access(db, user, exec_data["tool_id"])
+    if not can_use:
+        return error_response("没有使用该工具的权限", status_code=403)
     return success_response(data=ExecutionOut(**exec_data).model_dump(mode="json"))
 
 
@@ -288,12 +372,16 @@ async def download_file(
     file_id: str,
     user: User | None = Depends(get_current_user),
     redis: Redis = Depends(get_redis),
+    db: AsyncSession = Depends(get_db),
 ) -> Response:
     if user is None:
         return error_response("未登录", status_code=401)
     exec_data = await sessions.get_execution(redis, execution_id)
     if exec_data is None or exec_data["user_id"] != str(user.id):
         return error_response("执行会话不存在", status_code=404)
+    can_use, _ = await _grant_service.resolve_access(db, user, exec_data["tool_id"])
+    if not can_use:
+        return error_response("没有使用该工具的权限", status_code=403)
     p = storage.resolve_file(execution_id, file_id)
     if p is None:
         return error_response("文件不存在", status_code=404)

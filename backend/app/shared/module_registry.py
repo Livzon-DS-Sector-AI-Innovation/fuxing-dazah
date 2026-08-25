@@ -76,9 +76,9 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         code="toolbox",
         name="工具箱",
         path="/toolbox",
-        db_schema=None,  # 无数据库表
+        db_schema="toolbox",
         owner_hint="全员",
-        description="独立小工具集合（脚本操作，无数据库）。",
+        description="独立小工具集合（文档提取、打卡核对等），按工具配置使用/配置权限。",
     ),
     ModuleDefinition(
         code="procurement",

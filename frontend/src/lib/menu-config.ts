@@ -291,16 +291,17 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "training-question-bank", label: "题库大全", path: "/hr/training/question-bank" },
         ],
       },
-      { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:settings:read"] },
+      // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage、SOP→training:read
+      { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:roster:read"] },
       {
         key: "settings",
         label: "系统设置",
         path: "/hr/settings",
-        permissions: ["hr:settings:read", "hr:position:read", "hr:trainer:read"],
+        permissions: ["hr:settings:manage", "hr:position:read", "hr:trainer:read", "hr:training:read"],
         children: [
-          { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:read"] },
+          { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:manage"] },
           { key: "positions", label: "岗位管理", path: "/hr/positions", permissions: ["hr:position:read"] },
-          { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:settings:read"] },
+          { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
           { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
         ],
       },
@@ -346,7 +347,14 @@ export const moduleMenus: ModuleMenu[] = [
     label: "工具箱",
     icon: "tool",
     path: "/toolbox",
-    children: [], // 无二级菜单：Sidebar 只显示模块标题
+    children: [
+      {
+        key: "usage-permissions",
+        label: "使用权限",
+        path: "/toolbox/permissions",
+        permissions: ["permission:role:manage"], // 仅系统超级管理员可见
+      },
+    ],
     clickableTitle: true, // 标题可点击回模块首页
     // 不设 permissions：所有登录用户可见
   },

@@ -3,7 +3,7 @@
 export interface ToolInputInfo {
   key: string
   label: string
-  type: 'file' | 'text' | 'textarea' | 'boolean' | 'number' | 'select'
+  type: 'file' | 'text' | 'textarea' | 'boolean' | 'number' | 'select' | 'month' | 'date'
   accept?: string | null
   required: boolean
   multiple: boolean
@@ -12,6 +12,7 @@ export interface ToolInputInfo {
   options?: string[] | null
   from_step?: string | null
   from_key?: string | null
+  show_when?: [string, string] | null // (字段 key, 值) 命中时才显示该输入
 }
 
 export interface ToolStepInfo {
@@ -28,6 +29,8 @@ export interface ToolInfo {
   image?: string | null
   steps: ToolStepInfo[]
   config_schema: ConfigFieldInfo[]
+  can_use: boolean
+  can_config: boolean
 }
 
 // 工具配置表单字段声明（与后端 registry.ConfigField 对齐），驱动配置页动态渲染
@@ -70,4 +73,30 @@ export interface ToolConfig {
   }
   offset_minutes: number
   overtime_gap_minutes: number
+}
+
+// ── 使用权限管理 ──
+
+/** 授权名单中的用户（后端 GrantUserOut） */
+export interface ToolGrantUser {
+  user_id: string
+  name: string
+  employee_no?: string | null
+  department?: string | null
+}
+
+/** 某工具的使用/配置授权名单（后端 ToolGrantsOut） */
+export interface ToolGrantInfo {
+  tool_id: string
+  tool_name: string
+  use_users: ToolGrantUser[]
+  config_users: ToolGrantUser[]
+}
+
+/** 人员选择器选项（identity/personnel 列表的精简映射） */
+export interface PersonnelOption {
+  id: string
+  name: string
+  employee_no?: string | null
+  department?: string | null
 }

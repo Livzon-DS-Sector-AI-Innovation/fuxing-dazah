@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.toolbox import api, storage
 from app.modules.toolbox.registry import StepContext, ToolInput, ToolStep, tool
@@ -14,8 +15,12 @@ from tests.modules.toolbox.conftest import FakeRedis
 
 
 @pytest.fixture
-def client(fake_redis: FakeRedis, fake_user: SimpleNamespace) -> AsyncClient:
-    """测试应用：挂 toolbox router，注入 FakeRedis 与假用户。"""
+def client(
+    fake_redis: FakeRedis,
+    fake_user: SimpleNamespace,
+    db_session: AsyncSession,
+) -> AsyncClient:
+    """测试应用：挂 toolbox router，注入 FakeRedis、假用户与回滚测试会话。"""
     from fastapi import FastAPI
 
     app = FastAPI()
@@ -27,8 +32,12 @@ def client(fake_redis: FakeRedis, fake_user: SimpleNamespace) -> AsyncClient:
     async def fake_redis_dep() -> FakeRedis:
         return fake_redis
 
+    async def fake_db_dep() -> Any:
+        yield db_session
+
     app.dependency_overrides[api.get_current_user] = fake_user_dep  # type: ignore[attr-defined]
     app.dependency_overrides[api.get_redis] = fake_redis_dep  # type: ignore[attr-defined]
+    app.dependency_overrides[api.get_db] = fake_db_dep  # type: ignore[attr-defined]
     client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
     client.app = app  # type: ignore[attr-defined]  # 测试便利：暴露 app 以改 dependency_overrides
     return client
@@ -127,7 +136,7 @@ async def test_list_tools(client: AsyncClient) -> None:
 
 
 async def test_run_step1_creates_execution_and_saves_file(
-    client: AsyncClient, fake_redis: FakeRedis
+    client: AsyncClient, fake_redis: FakeRedis, fake_user: SimpleNamespace
 ) -> None:
     resp = await client.post(
         "/tools/t-fake/steps/s1/run",
@@ -143,7 +152,7 @@ async def test_run_step1_creates_execution_and_saves_file(
     assert len(body["file_ids"]["doc"]) == 1
     # 会话已记录输出与文件
     exec_data = json.loads(fake_redis.store[_key(body["execution_id"])])
-    assert exec_data["user_id"] == "user-1"
+    assert exec_data["user_id"] == str(fake_user.id)
     assert exec_data["outputs"]["s1"]["ok"] is True
 
 
