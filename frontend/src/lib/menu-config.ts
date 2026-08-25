@@ -300,7 +300,7 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "performance-categories", label: "项目配置", path: "/hr/performance/categories" },
         ],
       },
-      { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read", "hr:title:judge"] },
+      { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read"] },
       { key: "title-judge", label: "职称评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
       { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:settings:read"] },
       {

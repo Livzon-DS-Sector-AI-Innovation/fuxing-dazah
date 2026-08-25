@@ -7,6 +7,7 @@
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -16,27 +17,68 @@ from app.modules.hr.title_review.bitable_client import TitleReviewBitableError
 
 logger = logging.getLogger(__name__)
 
+# tenant_access_token 内存缓存：{app_id}: {token, 过期时间戳}（飞书 token 有效期约 2 小时）
+_token_cache: dict[str, tuple[str, float]] = {}
+
+TOKEN_BASE = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+
+
+async def _request_with_retry(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+    attempts: int = 2,
+    timeout: float = 30,
+) -> dict[str, Any]:
+    """带一次重试的请求（飞书网络偶发抖动时提高成功率）。"""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as http:
+                resp = await http.request(
+                    method, url, headers=headers, params=params, json=json_body
+                )
+                return resp.json()
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                logger.warning("飞书请求失败重试: %s %s %s", method, url, type(exc).__name__)
+                await _sleep_async(1)
+    raise TitleReviewBitableError(
+        f"飞书请求网络异常: {method} {url} {type(last_exc).__name__}"
+    ) from last_exc
+
+
+async def _sleep_async(seconds: float) -> None:
+    import asyncio
+
+    await asyncio.sleep(seconds)
+
 
 async def _get_tenant_token() -> str:
     """获取审批独立应用（TITLE_REVIEW_FEISHU_*）的 tenant_access_token，缺省回落全局应用。
 
     审批权限（approval:approval:readonly / approval:definition）开通在独立应用上，
-    与多维表格读写使用的全局应用分离。
+    与多维表格读写使用的全局应用分离。token 内存缓存约 100 分钟。
     """
     settings = get_settings()
     app_id = settings.TITLE_REVIEW_FEISHU_APP_ID or settings.FEISHU_APP_ID
     app_secret = settings.TITLE_REVIEW_FEISHU_APP_SECRET or settings.FEISHU_APP_SECRET
-    async with httpx.AsyncClient(timeout=15) as http:
-        resp = await http.post(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": app_id, "app_secret": app_secret},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        token = data.get("tenant_access_token", "")
-        if not token:
-            raise TitleReviewBitableError("获取飞书token失败: " + json.dumps(data))
-        return str(token)
+    cache_key = f"{app_id}:{app_secret}"
+    cached = _token_cache.get(cache_key)
+    if cached and time.time() < cached[1]:
+        return cached[0]
+    data = await _request_with_retry(
+        "POST", TOKEN_BASE, json_body={"app_id": app_id, "app_secret": app_secret}, timeout=15
+    )
+    token = data.get("tenant_access_token", "")
+    if not token:
+        raise TitleReviewBitableError("获取飞书token失败: " + json.dumps(data))
+    _token_cache[cache_key] = (str(token), time.time() + 100 * 60)
+    return str(token)
 
 __all__ = [
     "list_instance_codes",
@@ -72,13 +114,12 @@ async def list_instance_codes(
             }
             if page_token:
                 params["page_token"] = page_token
-            async with httpx.AsyncClient(timeout=30) as http:
-                resp = await http.get(
-                    f"{APPROVAL_BASE}/instances",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params=params,
-                )
-                data = resp.json()
+            data = await _request_with_retry(
+                "GET",
+                f"{APPROVAL_BASE}/instances",
+                headers={"Authorization": f"Bearer {token}"},
+                params=params,
+            )
             if data.get("code") != 0:
                 raise TitleReviewBitableError(
                     f"审批实例列表查询失败: code={data.get('code')} msg={data.get('msg')}"
@@ -100,12 +141,11 @@ async def get_instance(instance_code: str) -> dict[str, Any]:
     form 字段为 JSON 字符串（控件列表），在此解析为 list。
     """
     token = await _get_tenant_token()
-    async with httpx.AsyncClient(timeout=30) as http:
-        resp = await http.get(
-            f"{APPROVAL_BASE}/instances/{instance_code}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        data = resp.json()
+    data = await _request_with_retry(
+        "GET",
+        f"{APPROVAL_BASE}/instances/{instance_code}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
     if data.get("code") != 0:
         raise TitleReviewBitableError(
             f"审批实例详情查询失败: code={data.get('code')} msg={data.get('msg')}"

@@ -13,8 +13,8 @@ from app.modules.hr.title_review import models as m
 from app.modules.hr.title_review.schemas import (
     TitleReviewActivityCreate,
     TitleReviewActivityUpdate,
-    TitleReviewDeptCommitteeIn,
     TitleReviewCommitteeMemberIn,
+    TitleReviewDeptCommitteeIn,
     TitleReviewJudgeAssignIn,
     TitleReviewJudgeAssignItemIn,
 )
@@ -82,7 +82,7 @@ class TestActivity:
         assert activity.status == m.ACTIVITY_DRAFT
         levels = await service.get_levels(activity.id)
         dims = await service.get_dimensions(activity.id)
-        assert len(levels) == 9  # 模板 9 条（原型申报职级 9 档）
+        assert len(levels) == 10  # 制度 10 档（技术员→专家 5 档 + 初级工→高级技师 5 档，技术助理已取消）
         assert len(dims) == 7
         assert {lv.sequence for lv in levels} == {m.SEQUENCE_TECH, m.SEQUENCE_SKILL}
 
@@ -122,7 +122,10 @@ class TestActivity:
 
 
 class TestCommittee:
-    async def test_upsert_idempotent(self, db_session: AsyncSession):
+    async def test_upsert_idempotent(self, db_session: AsyncSession, monkeypatch):
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
+        )
         service = TitleReviewService(db_session)
         emp1 = await _create_employee(db_session, "负责人", f"M{_rand()}")
         emp2 = await _create_employee(db_session, "小组成员", f"C{_rand()}")
@@ -138,10 +141,14 @@ class TestCommittee:
         c2 = await service.upsert_committee(data)
         assert c1.id == c2.id
         committees = await service.list_committees()
-        assert len(committees) == 1
+        # 只统计本测试部门（测试库与开发库共用，可能存在其他部门评审组）
+        assert len([c for c in committees if c.department == "测试部"]) == 1
         assert c2.leader_name == "领导A"
 
-    async def test_default_members(self, db_session: AsyncSession):
+    async def test_default_members(self, db_session: AsyncSession, monkeypatch):
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
+        )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
         emp = await _create_employee(db_session, "申报人", f"A{_rand()}")
@@ -165,6 +172,43 @@ class TestCommittee:
         members = await service.default_committee_members(application.id)
         assert len(members) == 1
         assert members[0]["employee_id"] == str(member.id)
+
+    async def test_upsert_committee_backfills_judges(self, db_session: AsyncSession, monkeypatch):
+        """评审组保存后，自动为评审期该部门投票中的申报补齐评委。"""
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
+        )
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(_activity_create())
+        activity.feishu_app_token = "app1"
+        activity.apply_table_id = "tbl1"
+        activity.vote_table_id = "tbl2"
+        await db_session.flush()
+        await service.open_activity(activity.id)
+        await service.start_review(activity.id)
+        emp = await _create_employee(db_session, "申报人2", f"A{_rand()}")
+        member = await _create_employee(db_session, "评委甲", f"J{_rand()}")
+        application = m.TitleReviewApplication(
+            activity_id=activity.id,
+            employee_id=emp.id,
+            employee_no=emp.employee_number,
+            name=emp.name,
+            department="测试部",
+            status=m.APPLICATION_VOTING,
+            feishu_record_id="rec1",
+        )
+        await service.application_repo.create(application)
+        assert await service.judge_repo.list_by_application(application.id) == []
+
+        await service.upsert_committee(
+            TitleReviewDeptCommitteeIn(
+                department="测试部",
+                committee_members=[TitleReviewCommitteeMemberIn(employee_id=member.id, name=member.name, employee_no=member.employee_number)],
+            )
+        )
+        judges = await service.judge_repo.list_by_application(application.id)
+        assert len(judges) == 1
+        assert judges[0].judge_name == "评委甲"
 
 
 # ─── 多级流程 + 评委 + 判定 ───
@@ -344,21 +388,43 @@ class TestJudgeVote:
 
         from app.modules.hr.title_review.schemas import TitleReviewJudgeVoteIn
 
+        # 7 项全填合格 → 综合等级合格 → 投票结果自动为同意
+        grades_ok = {name: "合格" for name in m.DEFAULT_DIMENSION_NAMES}
         vote1 = TitleReviewJudgeVoteIn(
-            vote_result=m.VOTE_AGREE,
-            comprehensive_grade="合格",
-            dimension_grades={"本职工作完成评价": "优秀"},
+            dimension_grades=grades_ok,
             review_comment="同意推荐",
         )
         await service.submit_vote(row_by_emp[judges[0].id].id, judges[0].employee_number, vote1)
         application = await service.application_repo.get_by_id(application.id)
         assert application.status == m.APPLICATION_VOTING  # 评委2 未投
 
-        vote2 = TitleReviewJudgeVoteIn(vote_result=m.VOTE_AGREE)
+        vote2 = TitleReviewJudgeVoteIn(dimension_grades=grades_ok)
         await service.submit_vote(row_by_emp[judges[1].id].id, judges[1].employee_number, vote2)
         application = await service.application_repo.get_by_id(application.id)
         assert application.status == m.APPLICATION_PASSED
         assert application.agree_votes == 2
+
+    async def test_vote_result_auto_from_dimensions(self, setup):
+        """投票结果由 7 维评价自动计算：不合格 → 不同意。"""
+        service, application, judges = setup
+        rows = await service.judge_repo.list_by_application(application.id)
+        row_by_emp = {r.judge_employee_id: r for r in rows}
+
+        from app.modules.hr.title_review.schemas import TitleReviewJudgeVoteIn
+
+        grades = {name: "合格" for name in m.DEFAULT_DIMENSION_NAMES}
+        # 3 项不合格 → 综合等级不合格 → 自动不同意
+        for name in list(m.DEFAULT_DIMENSION_NAMES)[:3]:
+            grades[name] = "不合格"
+        await service.submit_vote(
+            row_by_emp[judges[0].id].id,
+            judges[0].employee_number,
+            TitleReviewJudgeVoteIn(dimension_grades=grades),
+        )
+        rows = await service.judge_repo.list_by_application(application.id)
+        voted = next(r for r in rows if r.judge_employee_id == judges[0].id)
+        assert voted.vote_result == m.VOTE_OPPOSE
+        assert voted.comprehensive_grade == "不合格"
 
     async def test_vote_ownership_isolation(self, setup):
         service, application, judges = setup
@@ -375,18 +441,21 @@ class TestJudgeVote:
                 TitleReviewJudgeVoteIn(vote_result=m.VOTE_AGREE),
             )
 
-    async def test_invalid_vote_result(self, setup):
+    async def test_incomplete_dimensions_rejected(self, setup):
+        """维度未填齐不可提交投票。"""
         service, application, judges = setup
         rows = await service.judge_repo.list_by_application(application.id)
         row_by_emp = {r.judge_employee_id: r for r in rows}
 
         from app.modules.hr.title_review.schemas import TitleReviewJudgeVoteIn
 
-        with pytest.raises(HTTPException, match="同意/不同意/弃权"):
+        with pytest.raises(HTTPException, match="7 项维度评价"):
             await service.submit_vote(
                 row_by_emp[judges[0].id].id,
                 judges[0].employee_number,
-                TitleReviewJudgeVoteIn(vote_result="随便"),
+                TitleReviewJudgeVoteIn(
+                    dimension_grades={"本职工作完成评价": "优秀"}
+                ),
             )
 
 
@@ -493,3 +562,32 @@ class TestAutoAssign:
         tasks_b = await service.list_my_judge_tasks(judge_b.employee_number)
         assert [t["application"]["name"] for t in tasks_a] == ["甲申报人"]
         assert [t["application"]["name"] for t in tasks_b] == ["乙申报人"]
+
+
+# ─── 综合等级自动计算（制度附表5） ───
+
+
+class TestComprehensiveGrade:
+    def test_qualified(self):
+        from app.modules.hr.title_review.service import compute_comprehensive_grade
+
+        assert compute_comprehensive_grade(["合格"] * 7) == "合格"
+        # 附表5：≥5 项合格 → 合格（含恰好 5 项）
+        assert compute_comprehensive_grade(["合格"] * 5 + ["不合格"] * 2) == "合格"
+
+    def test_unqualified(self):
+        from app.modules.hr.title_review.service import compute_comprehensive_grade
+
+        # 附表5：>2 项不合格 → 不合格
+        assert compute_comprehensive_grade(["不合格"] * 3 + ["合格"] * 4) == "不合格"
+
+    def test_incomplete_returns_none(self):
+        from app.modules.hr.title_review.service import compute_comprehensive_grade
+
+        assert compute_comprehensive_grade(["合格"] * 5 + [None, None]) is None
+
+    def test_invalid_grade_returns_none(self):
+        from app.modules.hr.title_review.service import compute_comprehensive_grade
+
+        # 「优秀」等级已取消，出现即视为非法
+        assert compute_comprehensive_grade(["优秀"] * 7) is None

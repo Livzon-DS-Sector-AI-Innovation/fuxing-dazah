@@ -1,20 +1,25 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Button, Descriptions, Drawer, Form, Input, Radio, Select, Table, Tag, Typography } from 'antd'
+import { App, Button, Descriptions, Drawer, Form, Input, Radio, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { fetchMyJudgeTasks, submitJudgeVote } from '@/actions/hr'
+import TitleReviewProfile from './TitleReviewProfile'
+import TitleReviewWorkValue from './TitleReviewWorkValue'
 
-const DIMENSIONS = [
-  '本职工作完成评价',
-  '工作思想表现评价',
-  '组织协调能力评价',
-  '开拓创新能力评价',
-  '科技项目成果评价',
-  '培养指导人员评价',
-  '论文专利著作评价',
-]
-const GRADES = ['优秀', '合格', '不合格']
+/** 附表5 规则：综合等级与投票结果由 7 项维度评价自动计算（两档，与后端一致） */
+function computeAutoResult(
+  grades: Record<string, string> | undefined,
+  dimensions: { name: string }[],
+): { grade: string | null; result: string | null } {
+  const values = dimensions.map((d) => grades?.[d.name])
+  if (values.some((v) => !v)) return { grade: null, result: null }
+  const qualified = values.filter((v) => v === '合格').length
+  const grade = qualified >= 5 ? '合格' : '不合格'
+  return { grade, result: grade === '不合格' ? '不同意' : '同意' }
+}
+
+const GRADES = ['合格', '不合格']
 
 interface JudgeTask {
   judge_id: string
@@ -24,6 +29,8 @@ interface JudgeTask {
   comprehensive_grade?: string
   review_comment?: string
   dimension_grades: Record<string, string | null>
+  grade_tier: 'high' | 'low'
+  dimensions: { name: string; standard: string }[]
   activity_name: string
   application: {
     id: string
@@ -31,12 +38,15 @@ interface JudgeTask {
     employee_no: string
     department?: string
     sequence?: string
+    tech_domain?: string
     apply_level?: string
+    current_level?: string
     is_exception: boolean
     exception_reason?: string
     self_evaluations?: Record<string, string>
     work_statements?: Record<string, string>
     attachments?: Record<string, { file_token: string; name: string; size: number }[]>
+    profile?: Record<string, string> | null
     status: string
   }
 }
@@ -48,6 +58,11 @@ export default function TitleJudgeClient() {
   const [loading, setLoading] = useState(false)
   const [voting, setVoting] = useState<JudgeTask | null>(null)
   const [saving, setSaving] = useState(false)
+  const watchedDims = Form.useWatch('dimension_grades', form)
+  const auto = computeAutoResult(
+    watchedDims as Record<string, string> | undefined,
+    voting?.dimensions || [],
+  )
 
   const load = useCallback(() => {
     setLoading(true)
@@ -64,8 +79,6 @@ export default function TitleJudgeClient() {
   const openVote = (task: JudgeTask) => {
     setVoting(task)
     form.setFieldsValue({
-      vote_result: task.vote_result,
-      comprehensive_grade: task.comprehensive_grade,
       review_comment: task.review_comment,
       dimension_grades: task.dimension_grades || {},
     })
@@ -77,8 +90,6 @@ export default function TitleJudgeClient() {
     setSaving(true)
     try {
       const d = await submitJudgeVote(voting.judge_id, {
-        vote_result: values.vote_result,
-        comprehensive_grade: values.comprehensive_grade,
         dimension_grades: values.dimension_grades || {},
         review_comment: values.review_comment,
       })
@@ -123,7 +134,7 @@ export default function TitleJudgeClient() {
       <div>
         <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审投票</h1>
         <p className="text-[14px] text-[var(--color-steel)]">
-          评委投票（匿名编号 {tasks[0]?.judge_code || ''}）：请审阅申报材料后，逐维度评价并给出投票结果
+          评委投票（匿名编号 {tasks[0]?.judge_code || ''}）：请审阅申报材料后完成 7 项维度评价，综合等级与投票结果自动计算
         </p>
       </div>
 
@@ -134,7 +145,7 @@ export default function TitleJudgeClient() {
       <Table rowKey="judge_id" size="middle" loading={loading} columns={columns} dataSource={tasks} pagination={false} scroll={{ x: 900 }} />
 
       <Drawer
-        title={voting ? `投票：${voting.application.name}（${voting.application.sequence}·${voting.application.apply_level}）` : '投票'}
+        title={voting ? `投票：${voting.application.name}（${voting.application.employee_no}）` : '投票'}
         open={!!voting}
         width={680}
         onClose={() => setVoting(null)}
@@ -147,13 +158,20 @@ export default function TitleJudgeClient() {
       >
         {voting && (
           <div className="space-y-4">
-            <Descriptions column={2} size="small" bordered>
-              <Descriptions.Item label="部门">{voting.application.department || '-'}</Descriptions.Item>
-              <Descriptions.Item label="是否破格">{voting.application.is_exception ? '是' : '否'}</Descriptions.Item>
-              {voting.application.exception_reason && (
-                <Descriptions.Item label="破格理由" span={2}>{voting.application.exception_reason}</Descriptions.Item>
-              )}
-            </Descriptions>
+            <div>
+              <Typography.Text strong>申报信息</Typography.Text>
+              <Descriptions column={2} size="small" bordered className="mt-2">
+                <Descriptions.Item label="部门">{voting.application.department || '-'}</Descriptions.Item>
+                <Descriptions.Item label="申报序列">{voting.application.sequence || '-'}</Descriptions.Item>
+                <Descriptions.Item label="申报职级">{voting.application.apply_level || '-'}</Descriptions.Item>
+                <Descriptions.Item label="现任职级">{voting.application.current_level || '-'}</Descriptions.Item>
+                <Descriptions.Item label="是否破格">{voting.application.is_exception ? '是' : '否'}</Descriptions.Item>
+                {voting.application.exception_reason && (
+                  <Descriptions.Item label="破格理由" span={2}>{voting.application.exception_reason}</Descriptions.Item>
+                )}
+              </Descriptions>
+            </div>
+            <TitleReviewProfile profile={voting.application.profile} />
             {voting.application.self_evaluations && Object.keys(voting.application.self_evaluations).length > 0 && (
               <div>
                 <Typography.Text strong>申报人自我评价</Typography.Text>
@@ -169,7 +187,9 @@ export default function TitleJudgeClient() {
                 <Typography.Text strong>业绩陈述</Typography.Text>
                 <Descriptions column={1} size="small" bordered className="mt-2">
                   {Object.entries(voting.application.work_statements).map(([k, v]) => (
-                    <Descriptions.Item key={k} label={k}>{v}</Descriptions.Item>
+                    <Descriptions.Item key={k} label={k}>
+                      <TitleReviewWorkValue name={k} value={v} />
+                    </Descriptions.Item>
                   ))}
                 </Descriptions>
               </div>
@@ -186,21 +206,52 @@ export default function TitleJudgeClient() {
             )}
 
             <Form form={form} layout="vertical">
-              <Form.Item name="vote_result" label="投票结果" rules={[{ required: true, message: '请选择投票结果' }]}>
-                <Radio.Group>
-                  <Radio value="同意">同意</Radio>
-                  <Radio value="不同意">不同意</Radio>
-                  <Radio value="弃权">弃权</Radio>
-                </Radio.Group>
-              </Form.Item>
-              <Form.Item name="comprehensive_grade" label="综合等级">
-                <Select allowClear placeholder="优秀/合格/不合格" options={GRADES.map((g) => ({ value: g, label: g }))} style={{ width: 180 }} />
-              </Form.Item>
-              <Typography.Text strong>维度评价（{DIMENSIONS.length} 项）</Typography.Text>
-              <div className="grid grid-cols-1 gap-y-1 mt-2">
-                {DIMENSIONS.map((dim) => (
-                  <Form.Item key={dim} name={['dimension_grades', dim]} label={dim} className="!mb-2">
-                    <Select allowClear placeholder="优秀/合格/不合格" options={GRADES.map((g) => ({ value: g, label: g }))} style={{ width: 200 }} />
+              <div className="bg-[var(--color-surface)] border border-[var(--color-hairline)] rounded p-3 mb-3">
+                <Typography.Text type="secondary" className="text-[12px]">投票结果（由维度评价自动计算）</Typography.Text>
+                <div className="mt-1 flex items-center gap-8">
+                  <div>
+                    <Typography.Text type="secondary" className="text-[12px]">综合等级</Typography.Text>
+                    <div className="mt-1">{auto.grade || '待 7 项评价填齐'}</div>
+                  </div>
+                  <div>
+                    <Typography.Text type="secondary" className="text-[12px]">投票结果</Typography.Text>
+                    <div className="mt-1">
+                      {auto.result
+                        ? <Tag color={auto.result === '不同意' ? 'error' : 'success'}>{auto.result}</Tag>
+                        : '-'}
+                    </div>
+                  </div>
+                </div>
+                <Typography.Text type="secondary" className="block mt-2 text-[12px]">
+                  规则（附表5）：合格＝7项中≥5项合格；不合格＝7项中3项以上不合格。合格→同意，不合格→不同意。
+                </Typography.Text>
+              </div>
+              <Typography.Text strong>
+                维度评价（{voting.dimensions.length} 项，必填）{voting.grade_tier === 'high' ? '｜高档标准（工程/技师及以上）' : '｜低档标准'}
+              </Typography.Text>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 mt-2">
+                {voting.dimensions.map((dim, idx) => (
+                  <Form.Item
+                    key={dim.name}
+                    name={['dimension_grades', dim.name]}
+                    label={
+                      <span>
+                        {idx + 1}. {dim.name}
+                        <Typography.Text type="secondary" className="block text-[12px] font-normal">
+                          合格标准：{dim.standard || '-'}
+                        </Typography.Text>
+                      </span>
+                    }
+                    className="!mb-2"
+                    rules={[{ required: true, message: '请完成该项评价' }]}
+                  >
+                    <Radio.Group buttonStyle="solid" style={{ display: 'flex', width: '100%' }}>
+                      {GRADES.map((g) => (
+                        <Radio.Button key={g} value={g} style={{ flex: 1, textAlign: 'center' }}>
+                          {g}
+                        </Radio.Button>
+                      ))}
+                    </Radio.Group>
                   </Form.Item>
                 ))}
               </div>

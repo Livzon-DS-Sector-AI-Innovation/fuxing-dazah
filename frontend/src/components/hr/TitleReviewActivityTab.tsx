@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import {
-  App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography,
+  App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from 'antd'
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SyncOutlined, TeamOutlined } from '@ant-design/icons'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -25,15 +25,17 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
 }
 
 const DEFAULT_LEVELS: TitleReviewLevel[] = [
-  { sequence: '技术职级', level_name: '技术员', need_final_review: false },
-  { sequence: '技术职级', level_name: '助理工程师', need_final_review: false },
-  { sequence: '技术职级', level_name: '工程师', need_final_review: true },
-  { sequence: '技术职级', level_name: '高级工程师', need_final_review: true },
-  { sequence: '技术职级', level_name: '专家', need_final_review: true },
-  { sequence: '职业技能', level_name: '中级工', need_final_review: false },
-  { sequence: '职业技能', level_name: '高级工', need_final_review: false },
-  { sequence: '职业技能', level_name: '技师', need_final_review: true },
-  { sequence: '职业技能', level_name: '高级技师', need_final_review: true },
+  // 技术助理已取消（2026 年起不再设置）；评审标准文本与终审 v3 取消，只保留序列+职级名
+  { sequence: '技术职级', level_name: '技术员' },
+  { sequence: '技术职级', level_name: '助理工程师' },
+  { sequence: '技术职级', level_name: '工程师' },
+  { sequence: '技术职级', level_name: '高级工程师' },
+  { sequence: '技术职级', level_name: '专家' },
+  { sequence: '职业技能', level_name: '初级工' },
+  { sequence: '职业技能', level_name: '中级工' },
+  { sequence: '职业技能', level_name: '高级工' },
+  { sequence: '职业技能', level_name: '技师' },
+  { sequence: '职业技能', level_name: '高级技师' },
 ]
 
 interface Props {
@@ -55,6 +57,10 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
   const [committees, setCommittees] = useState<TitleReviewDeptCommittee[]>([])
   const [committeeForm] = Form.useForm()
   const [employeeOptions, setEmployeeOptions] = useState<Employee[]>([])
+  // 已选评定小组成员（独立状态保存，避免远程搜索替换选项后已选标签丢失文字）
+  const [selectedMembers, setSelectedMembers] = useState<
+    { employee_id: string; name: string; employee_no?: string }[]
+  >([])
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([])
 
   const canManage = hasPermission('hr:title:manage')
@@ -80,7 +86,6 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
         review_deadline: detail.review_deadline ? dayjs(detail.review_deadline) : undefined,
         feishu_app_token: detail.feishu_app_token,
         apply_table_id: detail.apply_table_id,
-        vote_table_id: detail.vote_table_id,
         approval_code: detail.approval_code,
       })
       setLevels(detail.levels || [])
@@ -99,7 +104,6 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       review_deadline: values.review_deadline ? (values.review_deadline as Dayjs).toISOString() : undefined,
       feishu_app_token: values.feishu_app_token,
       apply_table_id: values.apply_table_id,
-      vote_table_id: values.vote_table_id,
       approval_code: values.approval_code,
     }
     setSaving(true)
@@ -114,7 +118,6 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           pass_ratio: payload.pass_ratio,
           feishu_app_token: editable ? payload.feishu_app_token : undefined,
           apply_table_id: editable ? payload.apply_table_id : undefined,
-          vote_table_id: editable ? payload.vote_table_id : undefined,
           approval_code: editable ? payload.approval_code : undefined,
         }
         const d = await updateTitleActivity(editing.id, body)
@@ -142,6 +145,25 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     }
   }
 
+  // 手动对账：弹窗展示本次同步明细（新增/更新/移除/票数），避免用户不知道发生了什么
+  const handleReconcile = async (id: string) => {
+    try {
+      const d = await reconcileTitleActivity(id)
+      const s: Record<string, any> = d?.data || {}
+      const parts: string[] = []
+      if (s.approval_synced) parts.push(`审批写入 ${s.approval_synced} 条`)
+      if (s.approval_updated) parts.push(`审批更新 ${s.approval_updated} 条`)
+      if (s.applications_created) parts.push(`新增申报 ${s.applications_created} 条`)
+      if (s.applications_removed) parts.push(`移除申报 ${s.applications_removed} 条`)
+      if (s.votes_updated) parts.push(`票数更新 ${s.votes_updated} 条`)
+      if (s.errors?.length) parts.push(`失败 ${s.errors.length} 项`)
+      message.success(parts.length ? `对账完成：${parts.join('，')}` : '对账完成：本次无变化')
+      onRefresh()
+    } catch (err: any) {
+      message.error(err.message || '对账失败')
+    }
+  }
+
   const openCommittees = async () => {
     setCommitteeOpen(true)
     try {
@@ -158,24 +180,40 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     }
   }
 
+  // 员工远程搜索（在职员工 1200+，仅前端过滤前 200 条会搜不到）
+  const [employeeSearching, setEmployeeSearching] = useState(false)
+  const searchEmployees = async (keyword: string) => {
+    setEmployeeSearching(true)
+    try {
+      const d = await fetchEmployeesAction({
+        status: '在职',
+        keyword: keyword || undefined,
+        page: 1,
+        page_size: keyword ? 50 : 200,
+      })
+      setEmployeeOptions(d?.data || [])
+    } catch (err: any) {
+      message.error(err.message || '搜索员工失败')
+    } finally {
+      setEmployeeSearching(false)
+    }
+  }
+
   const handleSaveCommittee = async () => {
     const values = await committeeForm.validateFields()
     const memberIds: string[] = values.committee_members || []
     const payload = {
       department: values.department,
-      manager_employee_id: values.manager_employee_id,
-      manager_name: values.manager_name,
-      leader_employee_id: values.leader_employee_id,
-      leader_name: values.leader_name,
       committee_members: memberIds.map((id) => {
-        const emp = employeeOptions.find((x) => x.id === id)
-        return { employee_id: id, name: emp?.name || '', employee_no: emp?.employee_number }
+        const m = selectedMembers.find((x) => x.employee_id === id)
+        return { employee_id: id, name: m?.name || '', employee_no: m?.employee_no || '' }
       }),
     }
     try {
       const d = await saveTitleCommittee(payload)
       message.success(d.message || '已保存')
       committeeForm.resetFields()
+      setSelectedMembers([])
       const c = await fetchTitleCommittees()
       setCommittees(c?.data || [])
     } catch (err: any) {
@@ -215,7 +253,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
             <Button size="small" type="primary" onClick={() => runAction(startTitleReview, r.id, '已开启评审')}>开始评审</Button>
           )}
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
-            <Button size="small" icon={<SyncOutlined />} onClick={() => runAction(reconcileTitleActivity, r.id, '对账完成')}>同步</Button>
+            <Button size="small" icon={<SyncOutlined />} onClick={() => handleReconcile(r.id)}>同步</Button>
           )}
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
             <Button size="small" danger onClick={() => runAction(closeTitleActivity, r.id, '活动已结束')}>结束</Button>
@@ -248,7 +286,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Typography.Text type="secondary">
-          活动为 draft 时可配置职级组标准与飞书表格绑定；开启申报后员工即可在飞书表单提交
+          活动为 draft 时可配置职级组与飞书表格绑定；开启申报后员工即可在飞书表单提交
         </Typography.Text>
         <Space>
           {canManage && (
@@ -293,71 +331,35 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
               <Form.Item name="apply_table_id" label="申报表 table_id">
                 <Input placeholder="tbl 开头" disabled={!!editing && editing.status !== 'draft'} />
               </Form.Item>
-              <Form.Item name="vote_table_id" label="投票表 table_id">
-                <Input placeholder="tbl 开头" disabled={!!editing && editing.status !== 'draft'} />
-              </Form.Item>
               <Form.Item name="approval_code" label="飞书审批定义编码（可选，审批先行模式）">
                 <Input placeholder="如 3A2D82F4-xxx；填了则员工先走飞书审批，通过后自动同步" disabled={!!editing && editing.status !== 'draft'} />
               </Form.Item>
             </div>
           </div>
 
-          <Typography.Title level={5} className="!mb-2">职级组评审标准（{levels.length} 组，仅 draft 可改）</Typography.Title>
+          <Typography.Title level={5} className="!mb-2">职级组（{levels.length} 组，仅 draft 可改）</Typography.Title>
           <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
-            {levels.map((lv, idx) => (
-              <div key={idx} className="flex items-center gap-2">
-                <Select
-                  style={{ width: 110 }}
-                  value={lv.sequence}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(v) => setLevels(levels.map((x, i) => (i === idx ? { ...x, sequence: v } : x)))}
-                  options={[{ value: '技术职级', label: '技术职级' }, { value: '职业技能', label: '职业技能' }]}
-                />
-                <Input
-                  style={{ width: 110 }}
-                  value={lv.level_name}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, level_name: e.target.value } : x)))}
-                />
-                <Input.TextArea
-                  autoSize={{ minRows: 1, maxRows: 3 }}
-                  placeholder="基本条件"
-                  value={lv.basic_conditions}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, basic_conditions: e.target.value } : x)))}
-                />
-                <Input.TextArea
-                  autoSize={{ minRows: 1, maxRows: 3 }}
-                  placeholder="专业能力要求"
-                  value={lv.ability_requirements}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, ability_requirements: e.target.value } : x)))}
-                />
-                <Input.TextArea
-                  autoSize={{ minRows: 1, maxRows: 3 }}
-                  placeholder="业绩成果要求"
-                  value={lv.achievement_requirements}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, achievement_requirements: e.target.value } : x)))}
-                />
-                <Input.TextArea
-                  autoSize={{ minRows: 1, maxRows: 3 }}
-                  placeholder="评审要点"
-                  value={lv.review_points}
-                  disabled={!!editing && editing.status !== 'draft'}
-                  onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, review_points: e.target.value } : x)))}
-                />
-                <Space size={4} direction="vertical" align="center">
-                  <Switch
-                    size="small"
-                    checked={lv.need_final_review}
-                    disabled={!!editing && editing.status !== 'draft'}
-                    onChange={(v) => setLevels(levels.map((x, i) => (i === idx ? { ...x, need_final_review: v } : x)))}
+            {levels.map((lv, idx) => {
+              const disabled = !!editing && editing.status !== 'draft'
+              return (
+                <div key={idx} className="flex items-center gap-2">
+                  <Select
+                    style={{ width: 120 }}
+                    value={lv.sequence}
+                    disabled={disabled}
+                    onChange={(v) => setLevels(levels.map((x, i) => (i === idx ? { ...x, sequence: v } : x)))}
+                    options={[{ value: '技术职级', label: '技术职级' }, { value: '职业技能', label: '职业技能' }]}
                   />
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>需终审</Typography.Text>
-                </Space>
-              </div>
-            ))}
+                  <Input
+                    style={{ width: 160 }}
+                    value={lv.level_name}
+                    disabled={disabled}
+                    placeholder="职级名"
+                    onChange={(e) => setLevels(levels.map((x, i) => (i === idx ? { ...x, level_name: e.target.value } : x)))}
+                  />
+                </div>
+              )
+            })}
           </div>
         </Form>
       </Modal>
@@ -366,7 +368,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       <Modal title="部门评审组配置" open={committeeOpen} width={760} onCancel={() => setCommitteeOpen(false)} footer={null}>
         <div className="mt-4 space-y-3">
           <Form form={committeeForm} layout="vertical" className="grid grid-cols-2 gap-x-4">
-            <Form.Item name="department" label="部门名称（与员工档案体现部门一致）" rules={[{ required: true, message: '请选择部门' }]}>
+            <Form.Item name="department" label="部门名称（与员工档案实际部门一致）" rules={[{ required: true, message: '请选择部门' }]}>
               <Select
                 showSearch
                 optionFilterProp="label"
@@ -374,50 +376,39 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
                 options={departmentOptions.map((d) => ({ value: d, label: d }))}
               />
             </Form.Item>
-            <Form.Item name="committee_members" label="职级评定小组（默认评委）">
+            <Form.Item name="committee_members" label="职级评定小组（默认评委）" className="col-span-2">
               <Select
                 mode="multiple"
                 showSearch
-                optionFilterProp="label"
-                placeholder="搜索在职员工多选"
-                options={employeeOptions.map((e) => ({
-                  value: e.id,
-                  label: `${e.name}（${e.employee_number}）`,
-                }))}
+                filterOption={false}
+                loading={employeeSearching}
+                onSearch={searchEmployees}
+                maxTagTextLength={40}
+                placeholder="输入姓名/工号远程搜索在职员工"
+                options={[
+                  ...selectedMembers.map((m) => ({
+                    value: m.employee_id,
+                    label: `${m.name}（${m.employee_no || ''}）`,
+                  })),
+                  ...employeeOptions
+                    .filter((e) => !selectedMembers.some((m) => m.employee_id === e.id))
+                    .map((e) => ({
+                      value: e.id,
+                      label: `${e.name}（${e.employee_number}）`,
+                    })),
+                ]}
                 onChange={(ids: string[]) => {
-                  const members = ids.map((id) => {
+                  const next = ids.map((id) => {
+                    const existing = selectedMembers.find((m) => m.employee_id === id)
+                    if (existing) return existing
                     const emp = employeeOptions.find((x) => x.id === id)
-                    return { employee_id: id, name: emp?.name || '', employee_no: emp?.employee_number }
+                    return { employee_id: id, name: emp?.name || id, employee_no: emp?.employee_number }
                   })
-                  committeeForm.setFieldsValue({ committee_members: members })
+                  setSelectedMembers(next)
+                  // 表单只存 id（Select 的 value 必须与选项 value 同构才能显示标签文字）
+                  committeeForm.setFieldsValue({ committee_members: next.map((m) => m.employee_id) })
                 }}
-                value={(committeeForm.getFieldValue('committee_members') || []).map((m: any) => m.employee_id)}
-              />
-            </Form.Item>
-            <Form.Item name="manager_name" label="部门负责人（初审人）">
-              <Select
-                showSearch
-                optionFilterProp="label"
-                allowClear
-                placeholder="搜索在职员工"
-                options={employeeOptions.map((e) => ({ value: e.name, label: `${e.name}（${e.employee_number}）` }))}
-                onChange={(name?: string) => {
-                  const emp = employeeOptions.find((x) => x.name === name)
-                  committeeForm.setFieldsValue({ manager_employee_id: emp?.id })
-                }}
-              />
-            </Form.Item>
-            <Form.Item name="leader_name" label="分管领导（终审人）">
-              <Select
-                showSearch
-                optionFilterProp="label"
-                allowClear
-                placeholder="搜索在职员工"
-                options={employeeOptions.map((e) => ({ value: e.name, label: `${e.name}（${e.employee_number}）` }))}
-                onChange={(name?: string) => {
-                  const emp = employeeOptions.find((x) => x.name === name)
-                  committeeForm.setFieldsValue({ leader_employee_id: emp?.id })
-                }}
+                value={selectedMembers.map((m) => m.employee_id)}
               />
             </Form.Item>
             <div className="col-span-2 text-right">
@@ -431,8 +422,6 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
             dataSource={committees}
             columns={[
               { title: '部门', dataIndex: 'department', key: 'department', width: 120 },
-              { title: '部门负责人', dataIndex: 'manager_name', key: 'manager_name', width: 100, render: (v?: string) => v || '-' },
-              { title: '分管领导', dataIndex: 'leader_name', key: 'leader_name', width: 100, render: (v?: string) => v || '-' },
               {
                 title: '评定小组', key: 'members', ellipsis: true,
                 render: (_: unknown, r: TitleReviewDeptCommittee) => (r.committee_members || []).map((m) => m.name).join('、') || '-',

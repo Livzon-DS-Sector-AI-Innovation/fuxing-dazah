@@ -103,19 +103,6 @@ class TitleReviewLevelRepository:
         )
         return list(result.scalars().all())
 
-    async def get_by_sequence_level(
-        self, activity_id: UUID, sequence: str, level_name: str
-    ) -> TitleReviewLevel | None:
-        result = await self.session.execute(
-            select(TitleReviewLevel).where(
-                TitleReviewLevel.activity_id == activity_id,
-                TitleReviewLevel.sequence == sequence,
-                TitleReviewLevel.level_name == level_name,
-                TitleReviewLevel.is_deleted == False,  # noqa: E712
-            )
-        )
-        return result.scalar_one_or_none()
-
     async def create(self, level: TitleReviewLevel) -> TitleReviewLevel:
         self.session.add(level)
         await self.session.flush()

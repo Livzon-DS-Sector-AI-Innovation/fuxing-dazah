@@ -1,6 +1,6 @@
 """系统设置接口"""
 
-from fastapi import APIRouter, Depends, Form, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ router = APIRouter(tags=["HR-系统设置"])
 @router.get("/system-settings", summary="读取系统设置")
 async def get_settings(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
     from app.modules.hr.models import SystemSetting
-    r = await session.execute(select(SystemSetting).where(SystemSetting.is_deleted == False))
+    r = await session.execute(select(SystemSetting).where(not SystemSetting.is_deleted))
     result = {}
     for s in r.scalars().all():
         result[s.key] = s.value
@@ -45,16 +45,22 @@ _TABLE_LABELS = {
     "departments": "部门",
     "teams": "班组",
     "employees": "员工",
+    "employee_classifications": "员工自定义分类",
+    "employee_tags": "员工标签",
     "offboarding_records": "离职记录",
     "departure_records": "离厂记录",
     "training_ledgers": "培训台账",
     "training_ledger_pages": "培训台账页",
-    "onboarding_records": "入职记录",
     "annual_training_plans": "年度培训计划",
     "annual_training_plan_items": "培训计划明细",
+    "onboarding_records": "入职记录",
+    "onboarding_tasks": "入职任务",
     "trainers": "讲师",
     "dept_training_personnel": "部门培训人员",
     "sop_catalog": "SOP 目录",
+    "sop_training_masters": "SOP 培训统筹",
+    "sop_training_entries": "SOP 培训明细",
+    "sop_training_records": "SOP 培训记录",
     "exam_papers": "试卷",
     "system_settings": "系统设置",
     "email_logs": "邮件日志",
@@ -65,16 +71,25 @@ _TABLE_LABELS = {
     "interviews": "面试记录",
     "candidate_ai_evaluations": "候选人 AI 评估",
     "candidate_reviews": "候选人评审",
-    "offboarding_applications": "离职申请",
-    "onboarding_applications": "入职申请",
-    "offer_tokens": "Offer 令牌",
-    "probation_extensions": "试用期延期",
+    "candidate_analysis_reports": "候选人分析报告",
     "qa_assessments": "QA 考核",
     "qa_assessment_scores": "QA 考核成绩",
     "question_bank": "题库",
-    "training_assessments": "培训考核",
-    "training_assessment_scores": "培训考核成绩",
     "training_evaluations": "培训评估",
+    "monthly_performance_evaluations": "月度绩效评价",
+    "performance_categories": "绩效分类",
+    "performance_category_scores": "绩效分类评分",
+    "performance_dept_weights": "部门绩效权重",
+    "performance_evaluation_items": "绩效评价项目",
+    "position_trainings": "岗位培训",
+    "user_department_access": "用户部门权限",
+    "title_review_activities": "职称评审活动",
+    "title_review_applications": "职称评审申报",
+    "title_review_judges": "职称评审评委",
+    "title_review_scores": "职称评审评分",
+    "title_review_levels": "职称评审职级组",
+    "title_review_dimensions": "职称评审评价项",
+    "title_review_dept_committees": "职称评审部门评审组",
 }
 
 

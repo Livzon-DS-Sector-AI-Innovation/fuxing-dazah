@@ -1076,7 +1076,7 @@ export interface DashboardStats {
 
 export type TitleActivityStatus = 'draft' | 'open' | 'reviewing' | 'closed'
 export type TitleApplicationStatus =
-  | 'submitted' | 'dept_rejected' | 'voting' | 'passed' | 'failed'
+  | 'submitted' | 'voting' | 'passed' | 'failed'
   | 'final_passed' | 'final_failed' | 'invalid'
 
 export interface TitleReviewLevel {
@@ -1084,12 +1084,6 @@ export interface TitleReviewLevel {
   activity_id?: string
   sequence: string
   level_name: string
-  basic_conditions?: string
-  ability_requirements?: string
-  achievement_requirements?: string
-  review_points?: string
-  remark?: string
-  need_final_review: boolean
   sort_order?: number
 }
 
@@ -1171,6 +1165,7 @@ export interface TitleReviewApplication {
   name: string
   department?: string
   sequence?: string
+  tech_domain?: string
   apply_level?: string
   current_level?: string
   is_exception: boolean
@@ -1180,6 +1175,7 @@ export interface TitleReviewApplication {
   self_evaluations?: Record<string, string>
   work_statements?: Record<string, string>
   attachments?: Record<string, { file_token: string; name: string; size: number }[]>
+  profile?: Record<string, string> | null
   feishu_record_id?: string
   status: TitleApplicationStatus
   agree_votes: number
@@ -1201,7 +1197,7 @@ export interface TitleReviewJudge {
   judge_role?: string
   feishu_record_id?: string
   vote_result?: '同意' | '不同意' | '弃权'
-  comprehensive_grade?: '优秀' | '合格' | '不合格'
+  comprehensive_grade?: '合格' | '不合格'
   review_comment?: string
   voted_at?: string
 }
@@ -1211,7 +1207,7 @@ export interface TitleReviewScore {
   judge_id: string
   dimension_id: string
   dimension_name: string
-  grade?: '优秀' | '合格' | '不合格'
+  grade?: '合格' | '不合格'
   voted_at?: string
 }
 
@@ -1219,7 +1215,6 @@ export interface TitleReviewResultRow {
   application: TitleReviewApplication
   judges: (TitleReviewJudge & { scores: TitleReviewScore[] })[]
   vote_ratio?: number
-  need_final_review: boolean
 }
 
 export interface TitleReviewReconcileStats {

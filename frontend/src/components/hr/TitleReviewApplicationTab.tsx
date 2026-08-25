@@ -9,18 +9,19 @@ import {
   assignTitleJudges,
   fetchEmployeesAction, fetchTitleApplication, fetchTitleApplications,
   fetchTitleDefaultJudges,
-  finalizeTitleVotes, invalidateTitleApplication,
-} from '@/actions/hr' 
+  finalizeTitleVotes,
+} from '@/actions/hr'
+import TitleReviewProfile from './TitleReviewProfile'
+import TitleReviewWorkValue from './TitleReviewWorkValue'
 
 const APP_STATUS_META: Record<string, { label: string; color: string }> = {
-  submitted: { label: '待部门初审', color: 'blue' },
-  dept_rejected: { label: '部门退回', color: 'error' },
+  submitted: { label: '待评审', color: 'blue' },
   voting: { label: '投票中', color: 'processing' },
   passed: { label: '投票通过', color: 'success' },
   failed: { label: '投票未通过', color: 'error' },
   final_passed: { label: '终审通过', color: 'success' },
   final_failed: { label: '终审驳回', color: 'error' },
-  invalid: { label: '信息有误', color: 'warning' },
+  invalid: { label: '员工未匹配', color: 'warning' },
 }
 
 const JUDGE_ROLES = ['技术专家', '部门经理', '人力资源']
@@ -41,6 +42,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
   const [judgeModal, setJudgeModal] = useState<TitleReviewApplication | null>(null)
   const [selectedJudges, setSelectedJudges] = useState<{ employee_id: string; name: string; employee_no?: string; role: string }[]>([])
   const [employeeOptions, setEmployeeOptions] = useState<Employee[]>([])
+  const [employeeSearching, setEmployeeSearching] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const canManage = hasPermission('hr:title:manage')
@@ -100,6 +102,24 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
     }
   }
 
+  // 员工远程搜索（在职员工 1200+，仅前端过滤前 200 条会搜不到）
+  const searchEmployees = async (keyword: string) => {
+    setEmployeeSearching(true)
+    try {
+      const d = await fetchEmployeesAction({
+        status: '在职',
+        keyword: keyword || undefined,
+        page: 1,
+        page_size: keyword ? 50 : 200,
+      })
+      setEmployeeOptions(d?.data || [])
+    } catch (err: any) {
+      message.error(err.message || '搜索员工失败')
+    } finally {
+      setEmployeeSearching(false)
+    }
+  }
+
   const handleAssign = async () => {
     if (!judgeModal) return
     if (!selectedJudges.length) {
@@ -138,6 +158,8 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
     { title: '工号', dataIndex: 'employee_no', key: 'employee_no', width: 110 },
     { title: '部门', dataIndex: 'department', key: 'department', width: 110, ellipsis: true },
     { title: '序列/职级', key: 'level', width: 150, render: (_: unknown, r: TitleReviewApplication) => `${r.sequence || '-'} · ${r.apply_level || '-'}` },
+    { title: '现任职级', dataIndex: 'current_level', key: 'current_level', width: 100, render: (v: string) => v || '-' },
+    { title: '学历', key: 'education', width: 80, render: (_: unknown, r: TitleReviewApplication) => r.profile?.['学历'] || '-' },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 100,
       render: (s: string) => <Tag color={APP_STATUS_META[s]?.color}>{APP_STATUS_META[s]?.label || s}</Tag>,
@@ -145,7 +167,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
     {
       title: '票数(同意/反对/弃权)', key: 'votes', width: 140,
       render: (_: unknown, r: TitleReviewApplication) =>
-        r.status === 'submitted' || r.status === 'dept_rejected' || r.status === 'invalid'
+        r.status === 'submitted' || r.status === 'invalid'
           ? '-'
           : `${r.agree_votes}/${r.oppose_votes}/${r.abstain_votes}`,
     },
@@ -159,9 +181,6 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
           )}
           {reviewOpen && canManage && r.status === 'voting' && (
             <Button size="small" type="primary" onClick={() => runAction(finalizeTitleVotes, r.id, '已按票数判定')}>按当前票数判定</Button>
-          )}
-          {reviewOpen && canManage && ['submitted', 'voting'].includes(r.status) && (
-            <Button size="small" danger onClick={() => runAction(invalidateTitleApplication, r.id, '已标记')}>信息有误</Button>
           )}
         </Space>
       ),
@@ -201,19 +220,41 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
       >
         {detail && (
           <div className="space-y-4">
-            <Descriptions column={2} size="small" bordered>
-              <Descriptions.Item label="部门">{detail.department || '-'}</Descriptions.Item>
-              <Descriptions.Item label="申报序列/职级">{`${detail.sequence || '-'} · ${detail.apply_level || '-'}`}</Descriptions.Item>
-              <Descriptions.Item label="现任职级">{detail.current_level || '-'}</Descriptions.Item>
-              <Descriptions.Item label="是否破格">{detail.is_exception ? '是' : '否'}</Descriptions.Item>
-              <Descriptions.Item label="流程状态">
-                <Tag color={APP_STATUS_META[detail.status]?.color}>{APP_STATUS_META[detail.status]?.label || detail.status}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="票数">{`${detail.agree_votes}/${detail.oppose_votes}/${detail.abstain_votes}`}</Descriptions.Item>
-            </Descriptions>
+            <div>
+              <Typography.Text strong>申报信息</Typography.Text>
+              <Descriptions column={2} size="small" bordered className="mt-2">
+                <Descriptions.Item label="部门">{detail.department || '-'}</Descriptions.Item>
+                <Descriptions.Item label="申报序列">{detail.sequence || '-'}</Descriptions.Item>
+                <Descriptions.Item label="申报职级">{detail.apply_level || '-'}</Descriptions.Item>
+                <Descriptions.Item label="现任职级">{detail.current_level || '-'}</Descriptions.Item>
+                <Descriptions.Item label="是否破格">{detail.is_exception ? '是' : '否'}</Descriptions.Item>
+                <Descriptions.Item label="申报时间">
+                  {detail.created_at ? new Date(detail.created_at).toLocaleString('zh-CN', { hour12: false }) : '-'}
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+            <div className="flex items-center gap-6">
+              <div>
+                <Typography.Text type="secondary" className="text-[12px]">流程状态</Typography.Text>
+                <div className="mt-1">
+                  <Tag color={APP_STATUS_META[detail.status]?.color}>
+                    {APP_STATUS_META[detail.status]?.label || detail.status}
+                  </Tag>
+                </div>
+              </div>
+              {!['submitted', 'invalid'].includes(detail.status) && (
+                <div>
+                  <Typography.Text type="secondary" className="text-[12px]">票数（同意/反对/弃权）</Typography.Text>
+                  <div className="mt-1 text-[14px]">
+                    {`${detail.agree_votes} / ${detail.oppose_votes} / ${detail.abstain_votes}`}
+                  </div>
+                </div>
+              )}
+            </div>
             {detail.exception_reason && (
               <Typography.Paragraph><Typography.Text strong>破格理由：</Typography.Text>{detail.exception_reason}</Typography.Paragraph>
             )}
+            <TitleReviewProfile profile={detail.profile} />
             {detail.self_evaluations && Object.keys(detail.self_evaluations).length > 0 && (
               <div>
                 <Typography.Text strong>自我评价</Typography.Text>
@@ -229,7 +270,9 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
                 <Typography.Text strong>业绩陈述</Typography.Text>
                 <Descriptions column={1} size="small" bordered className="mt-2">
                   {Object.entries(detail.work_statements).map(([k, v]) => (
-                    <Descriptions.Item key={k} label={k}>{v}</Descriptions.Item>
+                    <Descriptions.Item key={k} label={k}>
+                      <TitleReviewWorkValue name={k} value={v} />
+                    </Descriptions.Item>
                   ))}
                 </Descriptions>
               </div>
@@ -300,9 +343,11 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
           ))}
           <Select
             style={{ width: '100%' }}
-            placeholder="搜索添加评委（在职员工）"
+            placeholder="输入姓名/工号远程搜索添加评委（在职员工）"
             showSearch
-            optionFilterProp="label"
+            filterOption={false}
+            loading={employeeSearching}
+            onSearch={searchEmployees}
             value={null as any}
             options={employeeOptions
               .filter((e) => !selectedJudges.some((j) => j.employee_id === e.id))

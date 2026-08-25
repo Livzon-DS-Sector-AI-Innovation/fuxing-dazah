@@ -3,7 +3,6 @@
 import uuid
 from unittest.mock import patch
 
-import pytest
 from httpx import AsyncClient
 
 
@@ -29,7 +28,7 @@ class TestActivityApi:
         detail = await client.get(f"/api/v1/hr/title/activities/{activity_id}")
         assert detail.status_code == 200
         body = detail.json()["data"]
-        assert len(body["levels"]) == 9
+        assert len(body["levels"]) == 10  # 制度 10 档（技术5+技能5，技术助理已取消）
         assert len(body["dimensions"]) == 7
 
     async def test_list(self, client: AsyncClient):

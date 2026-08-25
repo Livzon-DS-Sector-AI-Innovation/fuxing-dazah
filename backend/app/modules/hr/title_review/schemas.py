@@ -11,12 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class TitleReviewLevelIn(BaseModel):
     sequence: str = Field(..., max_length=32, description="序列：技术职级/职业技能")
     level_name: str = Field(..., max_length=32, description="职级名")
-    basic_conditions: str | None = Field(None, description="基本条件")
-    ability_requirements: str | None = Field(None, description="专业能力要求")
-    achievement_requirements: str | None = Field(None, description="业绩成果要求")
-    review_points: str | None = Field(None, description="评审要点")
-    remark: str | None = Field(None, description="备注说明")
-    need_final_review: bool = Field(False, description="是否需要终审")
 
 
 class TitleReviewActivityCreate(BaseModel):
@@ -50,12 +44,6 @@ class TitleReviewLevelOut(BaseModel):
     activity_id: UUID
     sequence: str
     level_name: str
-    basic_conditions: str | None
-    ability_requirements: str | None
-    achievement_requirements: str | None
-    review_points: str | None
-    remark: str | None
-    need_final_review: bool
     sort_order: int
 
 
@@ -135,6 +123,7 @@ class TitleReviewApplicationOut(BaseModel):
     name: str
     department: str | None
     sequence: str | None
+    tech_domain: str | None
     apply_level: str | None
     current_level: str | None
     is_exception: bool
@@ -144,6 +133,7 @@ class TitleReviewApplicationOut(BaseModel):
     self_evaluations: dict[str, Any] | None
     work_statements: dict[str, Any] | None
     attachments: dict[str, Any] | None
+    profile: dict[str, Any] | None
     feishu_record_id: str | None
     approval_instance_code: str | None
     status: str
@@ -187,8 +177,8 @@ class TitleReviewJudgeOut(BaseModel):
 
 
 class TitleReviewJudgeVoteIn(BaseModel):
-    vote_result: str = Field(..., description="投票结果：同意/不同意/弃权")
-    comprehensive_grade: str | None = Field(None, description="综合等级：优秀/合格/不合格")
+    vote_result: str | None = Field(None, description="（废弃）投票结果由 7 维评价自动计算")
+    comprehensive_grade: str | None = Field(None, description="（废弃）综合等级由 7 维评价自动计算")
     dimension_grades: dict[str, str] = Field(default_factory=dict, description="7 维评价 {维度名: 优秀/合格/不合格}")
     review_comment: str | None = Field(None, description="评审意见")
 

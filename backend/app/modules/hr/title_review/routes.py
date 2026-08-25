@@ -1,9 +1,10 @@
 """职称评审 HTTP 路由（v2）。"""
 
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -292,19 +293,6 @@ async def finalize_votes(
     )
 
 
-@router.put("/title/applications/{application_id}/invalidate", summary="标记申报信息有误")
-async def invalidate_application(
-    application_id: UUID,
-    ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
-    service: TitleReviewService = Depends(get_service),
-) -> JSONResponse:
-    application = await service.invalidate_application(application_id, user=ctx.user)
-    return success_response(
-        data=TitleReviewApplicationOut.model_validate(application).model_dump(mode="json"),
-        message="已标记为信息有误",
-    )
-
-
 # ─── 评委 ───
 
 
@@ -366,3 +354,49 @@ async def get_results(
 ) -> JSONResponse:
     results = await service.get_results(activity_id)
     return success_response(data=results)
+
+
+@router.get("/title/activities/{activity_id}/summary", summary="评审结果汇总统计")
+async def get_summary(
+    activity_id: UUID,
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
+    service: TitleReviewService = Depends(get_service),
+) -> JSONResponse:
+    data = await service.get_summary(activity_id)
+    return success_response(data=data)
+
+
+@router.get("/title/activities/{activity_id}/export", summary="导出评审结果汇总（xlsx）")
+async def export_results(
+    activity_id: UUID,
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:scores:read")),
+    service: TitleReviewService = Depends(get_service),
+) -> StreamingResponse:
+    """导出三个工作表：汇总统计 / 申报明细 / 评委明细（业务逻辑在 service 层）。"""
+    from urllib.parse import quote
+
+    content, filename = await service.export_results_xlsx(activity_id)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
+    )
+
+
+@router.post("/title/activities/{activity_id}/roster-export", summary="生成最终名单（docx 表格）")
+async def export_roster(
+    activity_id: UUID,
+    payload: dict[str, Any],
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
+    service: TitleReviewService = Depends(get_service),
+) -> StreamingResponse:
+    """HR 勾选评审合格人员 → 生成表格名单（序号/职务/姓名/职级认定结果）。"""
+    from urllib.parse import quote
+
+    ids = [UUID(str(i)) for i in (payload.get("application_ids") or [])]
+    content, filename = await service.generate_roster_docx(activity_id, ids)
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(filename)}"},
+    )

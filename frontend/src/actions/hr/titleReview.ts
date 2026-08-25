@@ -14,7 +14,7 @@ import type {
   TitleReviewReconcileStats,
   TitleReviewResultRow,
 } from '@/types/hr'
-import { fetchHrApi } from './_helpers'
+import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
 // ─── 活动 ───
@@ -166,14 +166,6 @@ export async function finalizeTitleVotes(applicationId: string) {
   return res
 }
 
-export async function invalidateTitleApplication(applicationId: string) {
-  const res = await fetchHrApi(`/hr/title/applications/${applicationId}/invalidate`, {
-    method: 'PUT',
-    errorMessage: '标记失败',
-  })
-  revalidatePath('/hr/title-review')
-  return res
-}
 
 // ─── 评委投票（内网） ───
 
@@ -187,7 +179,7 @@ export async function fetchMyJudgeTasks(): Promise<{
 
 export async function submitJudgeVote(
   judgeId: string,
-  data: { vote_result: string; comprehensive_grade?: string; dimension_grades: Record<string, string>; review_comment?: string }
+  data: { dimension_grades: Record<string, string>; review_comment?: string }
 ) {
   const res = await fetchHrApi(`/hr/title/judge-tasks/${judgeId}/vote`, {
     method: 'POST',
@@ -206,4 +198,35 @@ export async function fetchTitleResults(activityId: string): Promise<{
   data: TitleReviewResultRow[]
 }> {
   return fetchHrApi(`/hr/title/activities/${activityId}/results`, { errorMessage: '获取评审结果失败' })
+}
+
+
+/** 评审结果汇总统计（总量/按职级/按部门） */
+export async function fetchTitleSummary(activityId: string): Promise<{
+  code: number
+  message: string
+  data: {
+    total: { applications: number; passed: number; failed: number; pending: number; pass_rate: number | null }
+    by_level: { sequence: string; level_name: string; applications: number; passed: number; failed: number; pending: number; pass_rate: number | null }[]
+    by_department: { department: string; applications: number; passed: number; failed: number; pending: number; pass_rate: number | null }[]
+  }
+}> {
+  return fetchHrApi(`/hr/title/activities/${activityId}/summary`, { errorMessage: '获取汇总统计失败' })
+}
+
+/** 导出评审结果汇总 xlsx */
+export async function downloadTitleResultsExport(activityId: string): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(`/hr/title/activities/${activityId}/export`)
+}
+
+export async function downloadTitleRosterExport(
+  activityId: string,
+  applicationIds: string[],
+): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(`/hr/title/activities/${activityId}/roster-export`, {
+    method: 'POST',
+    body: JSON.stringify({ application_ids: applicationIds }),
+    headers: { 'Content-Type': 'application/json' },
+    errorMessage: '生成名单失败',
+  })
 }
