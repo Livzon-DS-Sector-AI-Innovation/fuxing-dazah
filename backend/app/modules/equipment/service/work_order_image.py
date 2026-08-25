@@ -43,7 +43,6 @@ async def upload_images(
         raise AppException(message="每个工单最多上传9张图片")
 
     upload_dir = os.path.join(settings.UPLOAD_DIR, "work-orders", str(work_order_id))
-    os.makedirs(upload_dir, exist_ok=True)
 
     images = []
     for file in files:
@@ -74,6 +73,7 @@ async def upload_images(
             )
             stored_path = object_key
         else:
+            os.makedirs(upload_dir, exist_ok=True)
             file_path = os.path.join(upload_dir, stored_name)
             with open(file_path, "wb") as f:
                 f.write(content)

@@ -1,7 +1,7 @@
 """工具箱临时文件存储：文件系统，无数据库。
 
-- 上传文件与工具产出文件统一落在项目 uploads/toolbox 下按 execution_id 分目录
-  （uploads 目录已整体 gitignore，运行时由 exec_dir 的 mkdir 自动创建）。
+- 上传文件与工具产出文件统一落在 {UPLOAD_DIR}/toolbox 下按 execution_id 分目录
+  （UPLOAD_DIR 默认 ./uploads，目录已 gitignore，运行时由 exec_dir 的 mkdir 自动创建）。
 - 扩展名白名单，其余回退 .bin。
 - 惰性清理：maybe_cleanup() 按小时节流扫描删除超龄执行目录。
 """
@@ -14,9 +14,11 @@ import time
 import uuid
 from pathlib import Path
 
+from app.core.config import get_settings
+
 logger = logging.getLogger(__name__)
 
-EXEC_DIR_ROOT = Path("uploads") / "toolbox"
+EXEC_DIR_ROOT = Path(get_settings().UPLOAD_DIR) / "toolbox"
 # 文件保留两倍会话 TTL，覆盖会话续期期间目录不被误删
 MAX_AGE_SECONDS = 48 * 3600
 _CLEANUP_INTERVAL_SECONDS = 3600

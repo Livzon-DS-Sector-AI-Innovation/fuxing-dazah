@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -94,8 +95,12 @@ async def db_session() -> AsyncIterator[AsyncSession]:
 # ── 测试用户（API 测试用） ──
 
 @pytest.fixture
-async def test_user(db_session: AsyncSession) -> User:
-    """在测试 DB 中创建一个临时用户，用于 API 鉴权。"""
+async def test_user(db_session: AsyncSession) -> AsyncIterator[User]:
+    """在测试 DB 中创建一个临时用户，用于 API 鉴权。测试结束后物理删除。
+
+    被测代码可能自行 commit，回滚救不回已提交的行（历史泄漏来源），
+    因此 teardown 先回滚释放行锁，再用独立 session 物理删除。
+    """
     user = User(
         name="HR测试员",
         employee_no=f"HR-TEST-{uuid.uuid4().hex[:8]}",
@@ -103,7 +108,14 @@ async def test_user(db_session: AsyncSession) -> User:
     db_session.add(user)
     await db_session.flush()
     await db_session.refresh(user)
-    return user
+    try:
+        yield user
+    finally:
+        user_id = user.id  # 在 rollback 前取出：rollback 会 expire 对象，之后访问触发懒加载
+        await db_session.rollback()  # 先释放本事务对 user 行的锁
+        async with _test_session_factory() as session:
+            await session.execute(delete(User).where(User.id == user_id))
+            await session.commit()
 
 
 # ── API client（覆盖 DB session + 登录用户） ──
