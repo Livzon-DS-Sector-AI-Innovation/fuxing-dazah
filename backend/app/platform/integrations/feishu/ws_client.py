@@ -1,7 +1,10 @@
 """飞书 WebSocket 长连接客户端。
 
 通过 lark-oapi SDK 的 ws.Client 建立长连接，接收飞书事件推送。
-支持多实例运行：每个实例在独立线程 + 独立 event loop 中运行。
+注意：lark_oapi SDK 的 ws.Client 使用模块级全局 loop 变量（ws/client.py 中
+start()/_connect() 等全部裸名解析），多线程并发实例会互相覆盖 loop 导致
+RuntimeError: This event loop is already running。因此本模块坚持单实例原则：
+同一时刻只允许一个 SDK WS 客户端运行，后续启动请求直接跳过。
 """
 
 import asyncio
@@ -13,6 +16,26 @@ logger = logging.getLogger(__name__)
 
 _ws_threads: dict[str, threading.Thread] = {}
 _stop_flags: dict[str, threading.Event] = {}
+
+# SDK 模块级 loop 全局变量互斥（单实例原则，见模块 docstring）
+_sdk_guard = threading.Lock()
+_sdk_active = False
+
+
+def _try_acquire_sdk() -> bool:
+    """尝试取得 lark_oapi SDK 客户端独占权（已有实例运行则返回 False）。"""
+    global _sdk_active
+    with _sdk_guard:
+        if _sdk_active:
+            return False
+        _sdk_active = True
+        return True
+
+
+def _release_sdk() -> None:
+    global _sdk_active
+    with _sdk_guard:
+        _sdk_active = False
 
 
 def start_ws_client(
@@ -82,7 +105,18 @@ def _run_ws_in_thread(
     name: str,
     stop_flag: threading.Event,
 ) -> None:
-    """在独立线程中创建 event loop 并运行 WS client。"""
+    """在独立线程中创建 event loop 并运行 WS client。
+
+    单实例原则：SDK 模块级 loop 全局变量不支持并发实例，
+    已有客户端运行时本线程直接退出。
+    """
+    if not _try_acquire_sdk():
+        logger.warning(
+            "[%s] 已有飞书 WS 客户端在运行（SDK 模块级 loop 全局变量不支持多实例并发），跳过启动",
+            name,
+        )
+        return
+
     import lark_oapi as lark
     import lark_oapi.ws as lark_ws
 
@@ -113,3 +147,4 @@ def _run_ws_in_thread(
         logger.exception("[%s] 飞书 WebSocket 客户端异常退出", name)
     finally:
         thread_loop.close()
+        _release_sdk()

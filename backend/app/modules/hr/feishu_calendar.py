@@ -38,7 +38,7 @@ class FeishuCalendarService:
             .app_type(lark.AppType.SELF)
             .build()
         )
-        self._calendar_id = getattr(settings, "HR_FEISHU_CALENDAR_ID", "primary")
+        self._calendar_id = settings.HR_FEISHU_CALENDAR_ID or "primary"
 
     async def create_interview_event(
         self,

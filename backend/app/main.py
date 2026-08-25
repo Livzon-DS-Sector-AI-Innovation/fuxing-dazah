@@ -77,7 +77,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         start_ws_client()
 
     # ── 职称评审专属多维表格事件长连接（独立应用凭证，事件共享同一处理器） ──
-    if settings.HR_TITLE_REVIEW_FEISHU_WS_ENABLED and settings.HR_TITLE_REVIEW_FEISHU_APP_ID:
+    # 单实例确认：lark_oapi SDK 的 WS 客户端使用模块级全局 loop，不支持与平台
+    # 全局长连接并发（后启动者会互相覆盖 loop 导致 RuntimeError 崩溃）。
+    # 平台全局长连接已启用时跳过；职称评审的表事件由全局连接（全局应用订阅）送达。
+    if (
+        settings.HR_TITLE_REVIEW_FEISHU_WS_ENABLED
+        and settings.HR_TITLE_REVIEW_FEISHU_APP_ID
+        and not settings.FEISHU_WS_ENABLED
+    ):
         from app.platform.integrations.feishu.event_handler import (
             build_event_handler,
         )
