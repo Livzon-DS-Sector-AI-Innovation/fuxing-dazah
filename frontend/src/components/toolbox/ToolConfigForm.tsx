@@ -39,7 +39,7 @@ export function ToolConfigForm({
   toolId: string
   toolName: string
   schema: ConfigFieldInfo[]
-  initial: ToolConfig
+  initial: ToolConfig | null
 }) {
   const [form] = Form.useForm<ToolConfig>()
   const [saving, setSaving] = useState(false)
@@ -86,9 +86,18 @@ export function ToolConfigForm({
       </p>
 
       <div className="mt-6 rounded-xl border border-[var(--color-hairline)] bg-[var(--color-canvas)] p-6">
+        {!initial && (
+          <Alert
+            className="mb-4"
+            type="info"
+            title="该工具尚未配置"
+            description="填写以下参数并保存后，工具即可开始使用"
+            showIcon
+          />
+        )}
         {error && <Alert className="mb-4" type="error" title={error} showIcon />}
         {saved && <Alert className="mb-4" type="success" title="配置已保存" showIcon />}
-        <Form form={form} layout="vertical" initialValues={initial} onFinish={onFinish}>
+        <Form form={form} layout="vertical" initialValues={initial ?? {}} onFinish={onFinish}>
           {sections.map((section, i) => (
             <Fragment key={section.title || `section-${i}`}>
               {i > 0 && <div className="my-4 border-t border-[var(--color-hairline-soft)]" />}
