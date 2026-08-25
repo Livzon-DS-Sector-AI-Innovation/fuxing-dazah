@@ -27,8 +27,8 @@ function StepRail({ count, ink }: { count: number; ink: string }) {
   )
 }
 
-/** 卡片主体（可点击/置灰两种外壳共用）。 */
-function ToolCardBody({ tool, apiBase }: { tool: ToolInfo; apiBase: string }) {
+/** 卡片主体（可点击/置灰两种外壳共用）。muted 时用灰阶弱化，保持不透明度（不透背景）但呈禁用态。 */
+function ToolCardBody({ tool, apiBase, muted = false }: { tool: ToolInfo; apiBase: string; muted?: boolean }) {
   const { bg, ink } = toolTint(tool.id)
   return (
     <>
@@ -39,20 +39,31 @@ function ToolCardBody({ tool, apiBase }: { tool: ToolInfo; apiBase: string }) {
             src={`${apiBase}${tool.image}`}
             alt={tool.name}
             className="h-12 w-12 rounded-xl object-cover border border-[var(--color-hairline-soft)]"
+            style={muted ? { filter: 'grayscale(1) opacity(0.7)' } : undefined}
           />
         ) : (
           <div
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-lg font-semibold"
-            style={{ background: bg, color: ink }}
+            style={muted ? { background: 'var(--color-surface-soft)', color: 'var(--color-muted)' } : { background: bg, color: ink }}
           >
             {tool.name.slice(0, 1)}
           </div>
         )}
         <div className="min-w-0">
-          <h3 className="text-[15px] font-semibold text-[var(--color-charcoal)] group-hover:text-[var(--color-primary)] transition-colors">
+          <h3
+            className={`text-[15px] font-semibold ${
+              muted
+                ? 'text-[var(--color-muted)]'
+                : 'text-[var(--color-charcoal)] group-hover:text-[var(--color-primary)] transition-colors'
+            }`}
+          >
             {tool.name}
           </h3>
-          <p className="mt-1 text-[13px] leading-snug text-[var(--color-slate)] line-clamp-2">
+          <p
+            className={`mt-1 text-[13px] leading-snug line-clamp-2 ${
+              muted ? 'text-[var(--color-steel)]' : 'text-[var(--color-slate)]'
+            }`}
+          >
             {tool.description}
           </p>
         </div>
@@ -60,10 +71,12 @@ function ToolCardBody({ tool, apiBase }: { tool: ToolInfo; apiBase: string }) {
       <div className="mt-4 flex items-center justify-between border-t border-[var(--color-hairline-soft)] pt-3">
         <span className="flex items-center gap-2">
           <StepRail count={tool.steps.length} ink={ink} />
-          <span className="text-[12px] text-[var(--color-steel)]">{tool.steps.length} 步</span>
+          <span className={`text-[12px] ${muted ? 'text-[var(--color-stone)]' : 'text-[var(--color-steel)]'}`}>
+            {tool.steps.length} 步
+          </span>
         </span>
         {tool.config_schema.length > 0 && tool.can_config && (
-          <span className="inline-flex items-center gap-1 text-[12px] text-[var(--color-steel)]">
+          <span className={`inline-flex items-center gap-1 text-[12px] ${muted ? 'text-[var(--color-stone)]' : 'text-[var(--color-steel)]'}`}>
             <SettingOutlined />
             可配置
           </span>
@@ -77,18 +90,21 @@ export function ToolGrid({ tools }: { tools: ToolInfo[] }) {
   const { message } = App.useApp()
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   return (
-    <div className="px-6 pb-6">
+    <div className="px-6 pb-6 pointer-events-none">
       <p className="mt-1 text-[13px] text-[var(--color-slate)]">
-        上传原始记录，按步骤执行核对、汇总与写入。每个工具由若干步骤组成，按顺序完成即可。
+        金漆描龙凤，朱砂点牡丹。
       </p>
-      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pointer-events-none">
         {tools.map((tool) => {
           if (tool.can_use) {
             return (
               <Link
                 key={tool.id}
                 href={`/toolbox/${tool.id}`}
-                className="group block rounded-xl border border-[var(--color-hairline)] bg-[var(--color-canvas)] p-5 transition-shadow hover:shadow-[rgba(15,15,15,0.04)_0px_1px_2px_0px,rgba(15,15,15,0.08)_0px_4px_12px_0px]"
+                // antd 的全局 reset 会覆盖 <a> 的背景（unlayered 优先于 Tailwind @layer utilities），
+                // 因此用内联样式设半透明白，配合 backdrop-blur-md 呈现毛玻璃；背景丝线会被柔化透出。
+                style={{ backgroundColor: 'rgba(255, 255, 255, 0.4)' }}
+                className="group block rounded-xl border border-[var(--color-hairline)] p-5 backdrop-blur-md shadow-[rgba(15,15,15,0.05)_0px_1px_2px_0px,rgba(15,15,15,0.09)_0px_4px_12px_0px] transition-shadow hover:shadow-[rgba(15,15,15,0.06)_0px_2px_4px_0px,rgba(15,15,15,0.12)_0px_10px_24px_0px] pointer-events-auto"
               >
                 <ToolCardBody tool={tool} apiBase={apiBase} />
               </Link>
@@ -107,9 +123,9 @@ export function ToolGrid({ tools }: { tools: ToolInfo[] }) {
                   message.info('没有使用该工具的权限，请联系管理员')
                 }
               }}
-              className="block cursor-not-allowed rounded-xl border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] p-5 opacity-60 select-none"
+              className="block cursor-not-allowed rounded-xl border border-[var(--color-hairline-soft)] bg-[var(--color-surface)] p-5 select-none pointer-events-auto"
             >
-              <ToolCardBody tool={tool} apiBase={apiBase} />
+              <ToolCardBody tool={tool} apiBase={apiBase} muted />
               <span className="mt-3 inline-flex items-center gap-1 text-[12px] text-[var(--color-stone)]">
                 <LockOutlined style={{ fontSize: 11 }} />
                 无权限
