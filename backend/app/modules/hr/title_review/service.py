@@ -1829,6 +1829,10 @@ class TitleReviewService:
         """图片转存兜底：把单元格中残留的飞书远程链接下载转存为本地路径（幂等）。"""
         from app.modules.hr.title_review import bitable_client as bc
 
+        app_token = activity.feishu_app_token
+        apply_table_id = activity.apply_table_id
+        if not (app_token and apply_table_id):
+            return 0
         refreshed = 0
         for item in records:
             fields = item.get("fields") or {}
@@ -1844,8 +1848,8 @@ class TitleReviewService:
                 continue
             try:
                 await bc.update_record(
-                    activity.feishu_app_token,
-                    activity.apply_table_id,
+                    app_token,
+                    apply_table_id,
                     str(item.get("record_id") or ""),
                     update,
                 )
@@ -2094,6 +2098,7 @@ class TitleReviewService:
 
         from docx import Document
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml.ns import qn
         from docx.shared import Pt
 
@@ -2116,7 +2121,7 @@ class TitleReviewService:
         normal._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
 
         title = doc.add_paragraph()
-        title.alignment = 1  # 居中
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER  # 居中
         title_run = title.add_run(f"{activity.name} 职级认定结果名单")
         title_run.bold = True
         _apply_song_font(title_run, size=16)

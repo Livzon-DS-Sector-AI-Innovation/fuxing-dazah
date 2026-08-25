@@ -71,7 +71,7 @@ class AiChatService:
 
         if not api_key:
             settings = get_settings()
-            api_key = getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "DEEPSEEK_API_KEY", "") or ""
+            api_key = getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "HR_DEEPSEEK_API_KEY", "") or ""
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"

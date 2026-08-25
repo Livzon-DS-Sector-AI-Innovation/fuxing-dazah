@@ -2,7 +2,7 @@
 
 - 按审批定义编码分页拉取实例 Code 列表（单次时间范围 ≤10 小时，自动分段）
 - 拉取实例详情（状态 + 表单控件值）
-凭证与多维表格客户端一致：优先 TITLE_REVIEW_FEISHU_* 独立应用，缺省回落全局应用。
+凭证与多维表格客户端一致：优先 HR_TITLE_REVIEW_FEISHU_* 独立应用，缺省回落全局应用。
 """
 
 import json
@@ -59,14 +59,14 @@ async def _sleep_async(seconds: float) -> None:
 
 
 async def _get_tenant_token() -> str:
-    """获取审批独立应用（TITLE_REVIEW_FEISHU_*）的 tenant_access_token，缺省回落全局应用。
+    """获取审批独立应用（HR_TITLE_REVIEW_FEISHU_*）的 tenant_access_token，缺省回落全局应用。
 
     审批权限（approval:approval:readonly / approval:definition）开通在独立应用上，
     与多维表格读写使用的全局应用分离。token 内存缓存约 100 分钟。
     """
     settings = get_settings()
-    app_id = settings.TITLE_REVIEW_FEISHU_APP_ID or settings.FEISHU_APP_ID
-    app_secret = settings.TITLE_REVIEW_FEISHU_APP_SECRET or settings.FEISHU_APP_SECRET
+    app_id = settings.HR_TITLE_REVIEW_FEISHU_APP_ID or settings.FEISHU_APP_ID
+    app_secret = settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET or settings.FEISHU_APP_SECRET
     cache_key = f"{app_id}:{app_secret}"
     cached = _token_cache.get(cache_key)
     if cached and time.time() < cached[1]:

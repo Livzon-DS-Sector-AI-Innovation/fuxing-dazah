@@ -19,7 +19,6 @@ from lark_oapi.api.calendar.v4 import (
     PatchCalendarEventRequest,
     PatchCalendarEventRequestBody,
 )
-from lark_oapi.api.contact.v3 import ListUserRequest
 
 from app.core.config import get_settings
 
@@ -39,7 +38,7 @@ class FeishuCalendarService:
             .app_type(lark.AppType.SELF)
             .build()
         )
-        self._calendar_id = getattr(settings, "FEISHU_CALENDAR_ID", "primary")
+        self._calendar_id = getattr(settings, "HR_FEISHU_CALENDAR_ID", "primary")
 
     async def create_interview_event(
         self,
