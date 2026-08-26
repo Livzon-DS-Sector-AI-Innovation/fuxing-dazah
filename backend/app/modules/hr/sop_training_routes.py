@@ -30,6 +30,16 @@ router = APIRouter(tags=["HR-SOP培训"])
 # ─── 工具函数 ───
 
 
+def _ensure_entry_in_scope(hr_scope: HrAccessContext, entry) -> None:
+    """二级表记录数据范围校验：记录按部门归属，越界抛 403。"""
+    if hr_scope.is_unrestricted:
+        return
+    if not hr_scope.scoped_departments:
+        raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+    if entry.department not in hr_scope.scoped_departments:
+        raise HTTPException(403, f"数据范围限制：仅可操作授权部门记录（{entry.department}）")
+
+
 def _json_loads(raw) -> list:
     """解析 JSON 数组字段，兼容 list 与 str。"""
     if not raw:
@@ -464,11 +474,13 @@ async def update_sop_entry(
     entry_id: UUID,
     payload: dict,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.models import SopTrainingEntry
     e = await session.get(SopTrainingEntry, entry_id)
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
+    _ensure_entry_in_scope(hr_scope, e)
     for key in ("classification", "trainer", "complete_time"):
         if key in payload:
             setattr(e, key, payload[key])
@@ -500,6 +512,7 @@ async def transfer_sop_entry(
     e = await session.get(SopTrainingEntry, entry_id)
     if not e or e.is_deleted:
         raise HTTPException(404, "记录不存在")
+    _ensure_entry_in_scope(hr_scope, e)
     await _do_transfer(session, e, hr_scope.user.name or "")
     await session.commit()
     return success_response(data={"trainer": e.trainer}, message="已转培训")
@@ -530,6 +543,7 @@ async def batch_transfer_sop_entries(
     for e in rows:
         if e.status == "已转训":
             continue
+        _ensure_entry_in_scope(hr_scope, e)
         await _do_transfer(session, e, hr_scope.user.name or "")
         transferred += 1
     await session.commit()
@@ -697,13 +711,13 @@ async def generate_record_materials(
                 sick, maternity = await _query_leave_counts(session, dept)
                 notif_buf = generate_training_notification(TrainingNotificationInput(
                     department=dept, training_date=today, subject=subject,
-                    trainer=trainer or level1 or "", content=record.change_note or "",
+                    trainer=level1 or trainer or "", content=record.change_note or "",
                     trainee_names=names, issuer_department=record.initiator_department if hasattr(record, "initiator_department") else dept,
                     issue_date=today, sick_count=sick, maternity_count=maternity,
                 ))
                 sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                     training_date=today, department=dept, training_subject=subject,
-                    topic=record.change_note or subject, instructor=trainer or level1 or "",
+                    topic=record.change_note or subject, instructor=level1 or trainer or "",
                     employee_names=names, employee_departments={n: dept for n in names},
                     sick_count=sick, maternity_count=maternity,
                 ))
@@ -715,7 +729,7 @@ async def generate_record_materials(
                     f"{dept}/培训登记表.docx",
                     _generate_register_docx(
                         subject=subject, training_date=today, department=dept,
-                        trainer=trainer or level1 or "", method=record.method or "",
+                        trainer=level1 or trainer or "", method=record.method or "",
                         trainee_names=names, sick=sick, maternity=maternity,
                     ).getvalue(),
                 )

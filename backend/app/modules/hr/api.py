@@ -3377,22 +3377,23 @@ async def sync_qa_to_ledger(
     no_emp_names: list[str] = []
 
     for name, emp_no, score in scores:
-        # 反查工号
+        # 反查工号（同名多人时不做猜测）
         if not emp_no:
-            emp = (await session.execute(
-                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+            emp_rows = (await session.execute(
+                text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false"),
                 {"nm": name},
-            )).fetchone()
-            if emp and emp[0]:
-                emp_no = emp[0]
+            )).fetchall()
+            if len(emp_rows) == 1 and emp_rows[0][0]:
+                emp_no = emp_rows[0][0]
         if not emp_no:
             no_emp += 1
             no_emp_names.append(name or "?")
             continue
 
+        # 去重按 员工+科目+日期：同名科目不同场次的培训各建一条台账
         exist = (await session.execute(
-            text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :ts AND is_deleted = false"),
-            {"en": emp_no, "ts": subj},
+            text("SELECT 1 FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :ts AND training_date = :td AND is_deleted = false"),
+            {"en": emp_no, "ts": subj, "td": td},
         )).fetchone()
         if exist:
             skipped_exist += 1
@@ -3551,10 +3552,10 @@ async def export_score_report(body: QaRecordExportRequest, session: AsyncSession
         )).fetchone()
         emp_no = emp_row[0] if emp_row else None
         if emp_no:
-            # 检查是否已有培训记录，有则更新成绩
+            # 检查是否已有该场次培训记录，有则更新成绩（同名科目不同日期各建一条）
             existing = (await session.execute(
-                text("SELECT id FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :subj AND is_deleted = false LIMIT 1"),
-                {"en": emp_no, "subj": body.training_content},
+                text("SELECT id FROM hr.training_ledgers WHERE employee_number = :en AND training_subject = :subj AND training_date = :date AND is_deleted = false LIMIT 1"),
+                {"en": emp_no, "subj": body.training_content, "date": training_date_val},
             )).fetchone()
             if existing:
                 await session.execute(
@@ -5330,12 +5331,17 @@ async def create_performance_evaluation(
 async def auto_create_performance_evaluations(
     month: str = Query(..., description="考核月份 YYYY-MM"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """为所有部门生成当月考核记录（已有则跳过）。"""
+    """为授权范围内部门生成当月考核记录（已有则跳过）。"""
+    if not hr_scope.is_unrestricted and not hr_scope.scoped_departments:
+        raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
     from app.modules.hr.models import HrDepartment as HrDept
     depts = (await session.execute(
         select(HrDept.name).where(HrDept.is_deleted == False)  # noqa: E712
     )).scalars().all()
+    if not hr_scope.is_unrestricted:
+        depts = [d for d in depts if d in hr_scope.scoped_departments]
     service = PerformanceEvaluationService(session)
     created = await service.auto_create_for_month(month, list(depts))
     return success_response(data={"created": len(created)}, message=f"已为 {len(created)} 个部门生成考核")

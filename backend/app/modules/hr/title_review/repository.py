@@ -142,6 +142,8 @@ class TitleReviewApplicationRepository:
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        departments: set[str] | None = None,
+        employee_no: str | None = None,
     ) -> tuple[list[TitleReviewApplication], int]:
         stmt = select(TitleReviewApplication).where(
             TitleReviewApplication.activity_id == activity_id,
@@ -154,6 +156,10 @@ class TitleReviewApplicationRepository:
                 TitleReviewApplication.name.ilike(f"%{keyword}%")
                 | TitleReviewApplication.employee_no.ilike(f"%{keyword}%")
             )
+        if departments is not None:
+            stmt = stmt.where(TitleReviewApplication.department.in_(departments))
+        if employee_no is not None:
+            stmt = stmt.where(TitleReviewApplication.employee_no == employee_no)
         count_stmt = select(func.count()).select_from(stmt.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
         rows = (

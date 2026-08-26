@@ -34,6 +34,16 @@ def get_service(session: AsyncSession = Depends(get_db)) -> TitleReviewService:
     return TitleReviewService(session)
 
 
+def _apply_scope(service: TitleReviewService, ctx: HrAccessContext) -> None:
+    """把数据范围注入服务：受限用户仅能访问授权部门（或本人）的申报数据。"""
+    if ctx.is_unrestricted:
+        service.set_scope(None, None)
+    elif ctx.data_scope == "self_only":
+        service.set_scope(None, ctx.employee_number)
+    else:
+        service.set_scope(set(ctx.scoped_departments), None)
+
+
 # ─── 活动 CRUD ───
 
 
@@ -252,6 +262,7 @@ async def list_applications(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     rows, total = await service.list_applications(
         activity_id, status=status, keyword=keyword, page=page_params.page, page_size=page_params.page_size
     )
@@ -272,6 +283,7 @@ async def get_application(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     application, judges = await service.get_application_detail(application_id)
     out = TitleReviewApplicationOut.model_validate(application).model_dump(mode="json")
     out["judges"] = [
@@ -286,6 +298,7 @@ async def finalize_votes(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     application = await service.finalize_by_votes(application_id, user=ctx.user, force=True)
     return success_response(
         data=TitleReviewApplicationOut.model_validate(application).model_dump(mode="json"),
@@ -325,6 +338,7 @@ async def default_judges(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     members = await service.default_committee_members(application_id)
     return success_response(data=members)
 
@@ -336,6 +350,7 @@ async def assign_judges(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     judges = await service.assign_judges(application_id, data, user=ctx.user)
     return success_response(
         data=[TitleReviewJudgeOut.model_validate(j).model_dump(mode="json") for j in judges],
@@ -352,6 +367,7 @@ async def get_results(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:scores:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     results = await service.get_results(activity_id)
     return success_response(data=results)
 
@@ -362,6 +378,7 @@ async def get_summary(
     ctx: HrAccessContext = Depends(require_hr_access("hr:title:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> JSONResponse:
+    _apply_scope(service, ctx)
     data = await service.get_summary(activity_id)
     return success_response(data=data)
 
@@ -375,6 +392,7 @@ async def export_results(
     """导出三个工作表：汇总统计 / 申报明细 / 评委明细（业务逻辑在 service 层）。"""
     from urllib.parse import quote
 
+    _apply_scope(service, ctx)
     content, filename = await service.export_results_xlsx(activity_id)
     return StreamingResponse(
         iter([content]),
@@ -393,6 +411,7 @@ async def export_roster(
     """HR 勾选评审合格人员 → 生成表格名单（序号/职务/姓名/职级认定结果）。"""
     from urllib.parse import quote
 
+    _apply_scope(service, ctx)
     ids = [UUID(str(i)) for i in (payload.get("application_ids") or [])]
     content, filename = await service.generate_roster_docx(activity_id, ids)
     return StreamingResponse(

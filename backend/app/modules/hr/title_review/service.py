@@ -403,6 +403,29 @@ class TitleReviewService:
         self.judge_repo = TitleReviewJudgeRepository(session)
         self.score_repo = TitleReviewScoreRepository(session)
         self.committee_repo = TitleReviewDeptCommitteeRepository(session)
+        # 数据范围（由路由层按 HrAccessContext 注入）：部门集合 或 本人工号
+        self._scope_departments: set[str] | None = None
+        self._scope_employee_no: str | None = None
+
+    def set_scope(
+        self, departments: set[str] | None, employee_no: str | None
+    ) -> None:
+        """设置数据范围：departments 非 None 时按部门过滤；否则按 employee_no 过滤本人。"""
+        self._scope_departments = departments
+        self._scope_employee_no = employee_no
+
+    def _scope_applications(
+        self, applications: list[m.TitleReviewApplication]
+    ) -> list[m.TitleReviewApplication]:
+        if self._scope_departments is not None:
+            return [
+                a for a in applications if a.department in self._scope_departments
+            ]
+        if self._scope_employee_no is not None:
+            return [
+                a for a in applications if a.employee_no == self._scope_employee_no
+            ]
+        return applications
 
     # ═══ 活动 CRUD ═══
 
@@ -1427,7 +1450,13 @@ class TitleReviewService:
     ) -> tuple[list[m.TitleReviewApplication], int]:
         await self.get_activity(activity_id)
         return await self.application_repo.list_by_activity(
-            activity_id, status=status, keyword=keyword, page=page, page_size=page_size
+            activity_id,
+            status=status,
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+            departments=self._scope_departments,
+            employee_no=self._scope_employee_no,
         )
 
     async def get_application_detail(
@@ -1436,13 +1465,17 @@ class TitleReviewService:
         application = await self.application_repo.get_by_id(application_id)
         if not application:
             raise HTTPException(404, "申报记录不存在")
+        if not self._scope_applications([application]):
+            raise HTTPException(403, "数据范围限制：无权访问该申报")
         judges = await self.judge_repo.list_by_application(application.id)
         return application, judges
 
     async def get_results(self, activity_id: UUID) -> list[dict[str, Any]]:
         """活动评审结果（票数、各评委投票明细）——hr:title:scores:read 数据。"""
         await self.get_activity(activity_id)
-        applications = await self.application_repo.list_all_by_activity(activity_id)
+        applications = self._scope_applications(
+            await self.application_repo.list_all_by_activity(activity_id)
+        )
         # 批量加载评委与维度分数（两条查询替代 2×N 条）
         judges_by_app: dict[UUID, list[m.TitleReviewJudge]] = {}
         for j in await self.judge_repo.list_by_activity(activity_id):
@@ -2041,7 +2074,9 @@ class TitleReviewService:
 
     async def get_summary(self, activity_id: UUID) -> dict[str, Any]:
         """结果汇总统计：总量 + 按职级分组 + 按部门分组。"""
-        applications = await self.application_repo.list_all_by_activity(activity_id)
+        applications = self._scope_applications(
+            await self.application_repo.list_all_by_activity(activity_id)
+        )
 
         def _rate(passed: int, total: int) -> float | None:
             return round(passed / total * 100, 1) if total else None
@@ -2166,6 +2201,7 @@ class TitleReviewService:
 
         activity = await self.get_activity(activity_id)
         applications = await self.application_repo.list_all_by_activity(activity_id)
+        applications = self._scope_applications(applications)
         by_id = {a.id: a for a in applications}
         selected = [by_id[i] for i in application_ids if i in by_id]
 
