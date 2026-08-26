@@ -4,7 +4,7 @@ bitable_client 全部 monkeypatch（不真连飞书）；Redis 全部 monkeypatc
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -482,6 +482,7 @@ class TestApprovalInstanceSync:
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
         monkeypatch.setattr(
             ac, "get_instance",
             AsyncMock(return_value={"status": "APPROVED", "form": _approved_instance_form()}),
@@ -532,6 +533,7 @@ class TestApprovalInstanceSync:
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
         form = _approved_instance_form() + [
             {
                 "name": "专利、论文、著作、总结、报告（本人负责部分）以及授权、刊出及交流情况 （时间、刊物或会议名称）",
@@ -593,6 +595,7 @@ class TestApprovalInstanceSync:
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["NEW"]))
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
         monkeypatch.setattr(
             ac, "get_instance",
             AsyncMock(return_value={"status": "APPROVED", "form": _approved_instance_form()}),
@@ -647,6 +650,7 @@ class TestApprovalInstanceSync:
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
         monkeypatch.setattr(
             bc, "list_all_records",
             AsyncMock(return_value=[{"record_id": "rec1", "fields": {"审批实例编号": "INST1"}}]),
@@ -675,6 +679,7 @@ class TestApprovalInstanceSync:
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
+        monkeypatch.setattr(bc, "list_tables", AsyncMock(return_value=[]))
         form = _approved_instance_form()
         form[4] = {"name": "本次申报职级（技术）", "type": "radioV2", "value": "无此职级"}
         monkeypatch.setattr(
@@ -695,6 +700,275 @@ class TestApprovalInstanceSync:
         # 非法单选值整列丢弃，其余列正常写入
         assert "申报职级" not in written[0]
         assert written[0]["申报序列"] == "技术职级"
+
+    async def test_sync_from_approval_mirror_table(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """Base 内存在审批镜像表时直接作为数据源（不调用审批 API）。"""
+        import base64 as b64
+
+        from app.modules.hr.title_review import approval_client as ac
+        from app.modules.hr.title_review import bitable_client as bc
+
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(
+            _activity_create(
+                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+            )
+        )
+        instance_code = "E4135F70-F67D-4C1A-B70E-80ECC622F5B1"
+        source_id = b64.b64encode(
+            f"7677215254350269401:{instance_code}-1:54aa1137".encode()
+        ).decode("utf-8")
+        start_ms, end_ms = 1758398400000, 1759003200000
+        mirror_fields = {
+            "申请状态": "已通过",
+            "SourceID": source_id,
+            "姓名": "测试员工",
+            "工号": "T-000001",
+            "本次申报职级类型": "技术职级",
+            "本次申报职级（技术）": "工程师",
+            "岗位规定职责自我评价": "合格",
+            "任职以来工作简历_开始时间": start_ms,
+            "任职以来工作简历_结束时间": end_ms,
+            "任职以来工作简历_部门/担任职位": "测试部",
+        }
+        monkeypatch.setattr(ac, "list_instance_codes", AsyncMock())
+        monkeypatch.setattr(
+            bc, "list_tables",
+            AsyncMock(return_value=[{"name": "福兴医药职称审批", "table_id": "tbl_mirror"}]),
+        )
+        monkeypatch.setattr(
+            bc, "list_all_records",
+            AsyncMock(side_effect=[[], [{"record_id": "mr1", "fields": mirror_fields}]]),
+        )
+        monkeypatch.setattr(
+            bc, "list_fields", AsyncMock(return_value=_table_fields_fixture())
+        )
+        written: list[dict] = []
+        async def _fake_batch_create(app_token, table_id, records):
+            written.extend(records)
+            return ["rec1"]
+        monkeypatch.setattr(bc, "batch_create_records", _fake_batch_create)
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.service._download_image_bytes",
+            AsyncMock(side_effect=Exception("offline")),
+        )
+
+        stats = await service.sync_approval_instances(activity.id)
+        ac.list_instance_codes.assert_not_awaited()
+        assert stats["approval_synced"] == 1
+        assert stats["approval_skipped"] == 0
+        assert written[0]["审批实例编号"] == instance_code
+        assert written[0]["申报序列"] == "技术职级"
+        assert written[0]["申报职级"] == "工程师"
+        assert written[0]["岗位任务自我评价"] == "合格"
+        expected_resume = (
+            f"任职时间：{datetime.fromtimestamp(start_ms / 1000).strftime('%Y-%m-%d')} ~ "
+            f"{datetime.fromtimestamp(end_ms / 1000).strftime('%Y-%m-%d')}\n"
+            "部门/担任职位：测试部"
+        )
+        assert written[0]["任职以来工作简历"] == expected_resume
+
+    async def test_sync_mirror_table_skips_done_and_updates_existing(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """镜像表已写入过的实例跳过；同员工新实例覆盖更新申报行并累积编号。"""
+        import base64 as b64
+
+        from app.modules.hr.title_review import bitable_client as bc
+
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(
+            _activity_create(
+                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+            )
+        )
+        old_code = "60A7E503-F16F-4CCB-8F5F-081C80F1C1E7"
+        new_code = "E4135F70-F67D-4C1A-B70E-80ECC622F5B1"
+
+        def _sid(code: str) -> str:
+            return b64.b64encode(
+                f"7677215254350269401:{code}-1:abc".encode()
+            ).decode("utf-8")
+
+        apply_row = {
+            "record_id": "apply_rec1",
+            "fields": {"姓名": "测试员工", "工号": "T-000001", "审批实例编号": old_code},
+        }
+        mirror_rows = [
+            {"record_id": "mr_old", "fields": {
+                "申请状态": "已通过", "SourceID": _sid(old_code),
+                "姓名": "测试员工", "工号": "T-000001",
+            }},
+            {"record_id": "mr_new", "fields": {
+                "申请状态": "已通过", "SourceID": _sid(new_code),
+                "姓名": "测试员工", "工号": "T-000001",
+                "本次申报职级（技术）": "工程师",
+            }},
+        ]
+        monkeypatch.setattr(
+            bc, "list_tables",
+            AsyncMock(return_value=[{"name": "福兴医药职称审批", "table_id": "tbl_mirror"}]),
+        )
+        monkeypatch.setattr(
+            bc, "list_all_records", AsyncMock(side_effect=[[apply_row], mirror_rows])
+        )
+        monkeypatch.setattr(
+            bc, "list_fields", AsyncMock(return_value=_table_fields_fixture())
+        )
+        updated: list[tuple] = []
+        async def _fake_update(app_token, table_id, record_id, fields):
+            updated.append((record_id, fields))
+        monkeypatch.setattr(bc, "update_record", _fake_update)
+        monkeypatch.setattr(bc, "batch_create_records", AsyncMock(return_value=[]))
+        monkeypatch.setattr(
+            "app.modules.hr.title_review.service._download_image_bytes",
+            AsyncMock(side_effect=Exception("offline")),
+        )
+
+        stats = await service.sync_approval_instances(activity.id)
+        assert stats["approval_updated"] == 1
+        assert stats["approval_skipped"] == 1
+        assert updated[0][0] == "apply_rec1"
+        assert updated[0][1]["审批实例编号"] == f"{old_code},{new_code}"
+        assert updated[0][1]["申报职级"] == "工程师"
+
+
+def test_extract_approval_code_from_source_id():
+    import base64 as b64
+
+    from app.modules.hr.title_review import service as svc
+
+    raw = "7677215254350269401:E4135F70-F67D-4C1A-B70E-80ECC622F5B1-1:54aa1137"
+    sid = b64.b64encode(raw.encode("utf-8")).decode("utf-8")
+    assert (
+        svc._extract_approval_code_from_source_id(sid)
+        == "E4135F70-F67D-4C1A-B70E-80ECC622F5B1"
+    )
+    assert svc._extract_approval_code_from_source_id("!!不是base64!!") is None
+    assert svc._extract_approval_code_from_source_id("") is None
+
+
+# ─── 对账 ───
+
+
+class TestReconcile:
+    async def _mk_activity(self, db_session: AsyncSession, monkeypatch):
+        """创建绑定申报表的 draft 活动，档案拉取打桩为 None（不连飞书）。"""
+        monkeypatch.setattr(
+            TitleReviewService, "_load_employee_profile", AsyncMock(return_value=None)
+        )
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(
+            _activity_create(
+                feishu_app_token="HKb0bhufoab2wwsblj1c9qxgnPI",
+                apply_table_id="tblq63r6qdlICQaJ",
+            )
+        )
+        return service, activity
+
+    async def _seed_application(self, service, activity, db_session, name: str):
+        employee_no = f"E{_rand()}"
+        await _create_employee(db_session, name, employee_no)
+        application = await service.sync_apply_record_added(
+            activity.id, "rec1", _apply_fields(name, employee_no)
+        )
+        return application, employee_no
+
+    async def test_updates_existing_fields_and_counts(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """对账应同步申报职级/现任职级等全部字段，并计入 applications_updated。"""
+        from app.modules.hr.title_review import bitable_client as bc
+
+        service, activity = await self._mk_activity(db_session, monkeypatch)
+        application, employee_no = await self._seed_application(
+            service, activity, db_session, "李四"
+        )
+        assert application.status == m.APPLICATION_SUBMITTED
+        updated = _apply_fields(
+            "李四", employee_no, **{"申报职级": "高级工程师", "现任职级": "工程师"}
+        )
+        monkeypatch.setattr(
+            bc, "list_all_records",
+            AsyncMock(return_value=[{"record_id": "rec1", "fields": updated}]),
+        )
+        stats = await service.reconcile_activity(activity.id)
+        assert stats["applications_updated"] == 1
+        assert stats["applications_created"] == 0
+        assert stats["errors"] == []
+        refreshed = await service.application_repo.get_by_feishu_record(
+            activity.id, "rec1"
+        )
+        assert refreshed.apply_level == "高级工程师"
+        assert refreshed.current_level == "工程师"
+
+    async def test_no_change_not_counted(self, db_session: AsyncSession, monkeypatch):
+        """字段无变化时不计入 applications_updated（5 分钟对账不产生噪音）。"""
+        from app.modules.hr.title_review import bitable_client as bc
+
+        service, activity = await self._mk_activity(db_session, monkeypatch)
+        _, employee_no = await self._seed_application(service, activity, db_session, "李四")
+        monkeypatch.setattr(
+            bc, "list_all_records",
+            AsyncMock(return_value=[{"record_id": "rec1", "fields": _apply_fields("李四", employee_no)}]),
+        )
+        stats = await service.reconcile_activity(activity.id)
+        assert stats["applications_updated"] == 0
+        assert stats["errors"] == []
+
+    async def test_updates_terminal_application_info_but_keeps_votes(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """终态（投票通过/未通过）申报：申报信息放开更新，票数/判定结果冻结。"""
+        from app.modules.hr.title_review import bitable_client as bc
+
+        service, activity = await self._mk_activity(db_session, monkeypatch)
+        application, employee_no = await self._seed_application(
+            service, activity, db_session, "李四"
+        )
+        application.status = m.APPLICATION_PASSED
+        application.agree_votes = 1
+        application.oppose_votes = 0
+        application.abstain_votes = 0
+        await db_session.flush()
+        updated = _apply_fields("李四", employee_no, **{"申报职级": "高级工程师"})
+        monkeypatch.setattr(
+            bc, "list_all_records",
+            AsyncMock(return_value=[{"record_id": "rec1", "fields": updated}]),
+        )
+        stats = await service.reconcile_activity(activity.id)
+        assert stats["applications_updated"] == 1
+        assert stats["terminal_applications_updated"] == 1
+        refreshed = await service.application_repo.get_by_feishu_record(
+            activity.id, "rec1"
+        )
+        assert refreshed.apply_level == "高级工程师"
+        # 票数与判定结果不动
+        assert refreshed.status == m.APPLICATION_PASSED
+        assert refreshed.agree_votes == 1
+
+    async def test_edited_event_updates_terminal_application_info(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """WS 事件路径同样放开终态申报信息更新。"""
+        service, activity = await self._mk_activity(db_session, monkeypatch)
+        application, employee_no = await self._seed_application(
+            service, activity, db_session, "李四"
+        )
+        application.status = m.APPLICATION_PASSED
+        await db_session.flush()
+        await service.sync_apply_record_edited(
+            activity.id,
+            "rec1",
+            _apply_fields("李四", employee_no, **{"申报职级": "高级工程师"}),
+        )
+        refreshed = await service.application_repo.get_by_feishu_record(
+            activity.id, "rec1"
+        )
+        assert refreshed.apply_level == "高级工程师"
+        assert refreshed.status == m.APPLICATION_PASSED
 
 
 # ─── 卡片审批 ───

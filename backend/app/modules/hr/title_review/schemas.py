@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+def _strip_pasted_token(v: str | None) -> str | None:
+    """粘贴飞书 token/table_id 时常带首尾空白，入库前去掉（防止绑定报 TableIdNotFound）。"""
+    return v.strip() if isinstance(v, str) else v
+
+
+TOKEN_FIELDS = ("feishu_app_token", "apply_table_id", "vote_table_id", "approval_code")
 
 # ─── 活动与职级组 ───
 
@@ -24,6 +32,11 @@ class TitleReviewActivityCreate(BaseModel):
     approval_code: str | None = Field(None, max_length=64, description="飞书审批定义编码（审批先行模式）")
     levels: list[TitleReviewLevelIn] | None = Field(None, description="职级组（缺省用 10 条默认模板）")
 
+    @field_validator(*TOKEN_FIELDS, mode="before")
+    @classmethod
+    def _clean_tokens(cls, v: str | None) -> str | None:
+        return _strip_pasted_token(v)
+
 
 class TitleReviewActivityUpdate(BaseModel):
     name: str | None = Field(None, max_length=128)
@@ -35,6 +48,11 @@ class TitleReviewActivityUpdate(BaseModel):
     vote_table_id: str | None = Field(None, max_length=64)
     approval_code: str | None = Field(None, max_length=64, description="飞书审批定义编码")
     levels: list[TitleReviewLevelIn] | None = Field(None, description="职级组全量替换（仅 draft）")
+
+    @field_validator(*TOKEN_FIELDS, mode="before")
+    @classmethod
+    def _clean_tokens(cls, v: str | None) -> str | None:
+        return _strip_pasted_token(v)
 
 
 class TitleReviewLevelOut(BaseModel):

@@ -154,6 +154,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       if (s.approval_synced) parts.push(`审批写入 ${s.approval_synced} 条`)
       if (s.approval_updated) parts.push(`审批更新 ${s.approval_updated} 条`)
       if (s.applications_created) parts.push(`新增申报 ${s.applications_created} 条`)
+      if (s.applications_updated) parts.push(`更新申报 ${s.applications_updated} 条`)
       if (s.applications_removed) parts.push(`移除申报 ${s.applications_removed} 条`)
       if (s.votes_updated) parts.push(`票数更新 ${s.votes_updated} 条`)
       if (s.errors?.length) parts.push(`失败 ${s.errors.length} 项`)
