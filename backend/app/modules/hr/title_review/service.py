@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import base64
 import json
 import logging
 import uuid
@@ -134,6 +135,10 @@ EMPLOYEE_PROFILE_FIELDS = _build_profile_fields()
 
 # 员工信息表 table_id 缓存（app_token → table_id，绑定表格时失效）
 _employee_table_cache: dict[str, str] = {}
+# 审批镜像表名（飞书审批自动化把每次提交镜像进 Base 的这张表，含申请状态与 SourceID）
+APPROVAL_TABLE_NAME = "福兴医药职称审批"
+# 审批镜像表 table_id 缓存（app_token → table_id，绑定表格时失效）
+_approval_table_cache: dict[str, str] = {}
 
 
 def _as_str(value: Any) -> str | None:
@@ -356,6 +361,58 @@ def _apply_fields_to_dict(fields: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+TERMINAL_APPLICATION_STATUSES = (
+    m.APPLICATION_PASSED,
+    m.APPLICATION_FAILED,
+    m.APPLICATION_FINAL_PASSED,
+    m.APPLICATION_FINAL_FAILED,
+)
+
+
+_SYNCED_FIELD_ATTRS: list[tuple[str, str]] = [
+    ("employee_no", "employee_no"),
+    ("name", "name"),
+    ("sequence", "sequence"),
+    ("tech_domain", "tech_domain"),
+    ("apply_level", "apply_level"),
+    ("current_level", "current_level"),
+    ("self_evaluations", "self_evaluations"),
+    ("work_statements", "work_statements"),
+    ("attachments", "attachments"),
+    ("tenure_start", "tenure_start"),
+    ("tenure_end", "tenure_end"),
+]
+
+
+def _apply_synced_fields(
+    application: m.TitleReviewApplication, parsed: dict[str, Any], fields: dict[str, Any]
+) -> bool:
+    """把飞书解析值同步到申报对象（事件/对账共用），返回是否有实际变化。
+
+    空值保留旧值（Base 清空不覆盖内网）；「是否破格申报」例外：该列一旦
+    出现在变更字段里即整体覆盖（改「否」为「是」或清空都需如实体现）。
+    """
+    changed = False
+    for attr, key in _SYNCED_FIELD_ATTRS:
+        new_value = parsed[key] or getattr(application, attr)
+        if new_value != getattr(application, attr):
+            setattr(application, attr, new_value)
+            changed = True
+    if "是否破格申报" in fields:
+        if parsed["is_exception"] != application.is_exception:
+            application.is_exception = parsed["is_exception"]
+            changed = True
+        if parsed["exception_reason"] != application.exception_reason:
+            application.exception_reason = parsed["exception_reason"]
+            changed = True
+    code = parsed["approval_instance_code"]
+    if code and code != application.approval_instance_code:
+        # 重复提交时飞书行编号累积，同步到内网
+        application.approval_instance_code = code
+        changed = True
+    return changed
+
+
 def _filter_writable_row(
     row: dict[str, Any], table_fields: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -389,6 +446,51 @@ def _filter_writable_row(
                 continue
         filtered[key] = value
     return filtered
+
+
+def _extract_approval_code_from_source_id(source_id: str) -> str | None:
+    """审批镜像表 SourceID 解码出审批实例编号（与审批 API 实例编号格式对齐）。
+
+    SourceID 形如 base64("{instance_id}:{实例编号}-{版本}:{suffix}")，
+    解码后取第二段并去掉末尾「-N」版本后缀。
+    """
+    try:
+        decoded = base64.b64decode(source_id).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+    parts = decoded.split(":")
+    if len(parts) < 2:
+        return None
+    code = parts[1].strip()
+    head, _, tail = code.rpartition("-")
+    if tail.isdigit():
+        code = head
+    return code or None
+
+
+def _resume_date_text(value: Any) -> str:
+    """镜像表日期值（毫秒时间戳/字符串）→ YYYY-MM-DD 文本。"""
+    text = _as_str(value) or ""
+    if text.isdigit() and len(text) >= 10:
+        try:
+            return datetime.fromtimestamp(int(text) / 1000).strftime("%Y-%m-%d")
+        except (ValueError, OSError):
+            return text
+    return text
+
+
+def _merge_resume_columns(fields: dict[str, Any]) -> None:
+    """审批镜像表把「任职以来工作简历」fieldList 拆成独立列，还原为原文本格式。"""
+    start = _resume_date_text(fields.get("任职以来工作简历_开始时间"))
+    end = _resume_date_text(fields.get("任职以来工作简历_结束时间"))
+    dept = _as_str(fields.get("任职以来工作简历_部门/担任职位"))
+    lines: list[str] = []
+    if start or end:
+        lines.append(f"任职时间：{start} ~ {end}".strip(" ~"))
+    if dept:
+        lines.append(f"部门/担任职位：{dept}")
+    if lines:
+        fields["任职以来工作简历"] = "\n".join(lines)
 
 
 class TitleReviewService:
@@ -609,8 +711,9 @@ class TitleReviewService:
         activity = await self.get_activity(activity_id)
         if not (activity.feishu_app_token and activity.apply_table_id):
             raise HTTPException(400, "请先在活动编辑中粘贴 app_token、申报表 table_id")
-        # 重新绑定表格后，员工信息表 table_id 缓存失效（Base 表结构可能变化）
+        # 重新绑定表格后，员工信息表/审批镜像表 table_id 缓存失效（Base 表结构可能变化）
         _employee_table_cache.pop(activity.feishu_app_token, None)
+        _approval_table_cache.pop(activity.feishu_app_token, None)
         try:
             apply_fields = await bc.list_fields(
                 activity.feishu_app_token, activity.apply_table_id
@@ -901,30 +1004,17 @@ class TitleReviewService:
         application = await self.application_repo.get_by_feishu_record(activity.id, record_id)
         if not application:
             return await self.sync_apply_record_added(activity.id, record_id, fields)
-        if application.status in (
-            m.APPLICATION_PASSED, m.APPLICATION_FAILED,
-            m.APPLICATION_FINAL_PASSED, m.APPLICATION_FINAL_FAILED,
-        ):
-            return application  # 已判定不再改
         parsed = _apply_fields_to_dict(fields)
-        application.employee_no = parsed["employee_no"] or application.employee_no
-        application.name = parsed["name"] or application.name
-        application.sequence = parsed["sequence"] or application.sequence
-        application.apply_level = parsed["apply_level"] or application.apply_level
-        application.current_level = parsed["current_level"] or application.current_level
-        if "是否破格申报" in fields:
-            application.is_exception = parsed["is_exception"]
-            application.exception_reason = parsed["exception_reason"]
-        application.tenure_start = parsed["tenure_start"] or application.tenure_start
-        application.tenure_end = parsed["tenure_end"] or application.tenure_end
-        application.self_evaluations = parsed["self_evaluations"] or application.self_evaluations
-        application.work_statements = parsed["work_statements"] or application.work_statements
-        application.attachments = parsed["attachments"] or application.attachments
-        if parsed["approval_instance_code"] and (
-            parsed["approval_instance_code"] != application.approval_instance_code
-        ):
-            # 重复提交时飞书行编号累积，同步到内网
-            application.approval_instance_code = parsed["approval_instance_code"]
+        changed = _apply_synced_fields(application, parsed, fields)
+        if changed and application.status in TERMINAL_APPLICATION_STATUSES:
+            # 终态申报放开申报信息更新（票数/判定结果仍冻结），记审计便于追溯
+            await _audit(
+                self.session,
+                action="hr.title.application_sync",
+                resource_type="title_review_application",
+                resource_id=application.id,
+                extra={"record_id": record_id, "terminal_override": True},
+            )
         employee = await self._match_employee(parsed["employee_no"], parsed["name"])
         application.employee_id = employee.id if employee else application.employee_id
         if employee and not application.department:
@@ -943,10 +1033,7 @@ class TitleReviewService:
         application = await self.application_repo.get_by_feishu_record(activity.id, record_id)
         if not application:
             return
-        if application.status in (
-            m.APPLICATION_PASSED, m.APPLICATION_FAILED,
-            m.APPLICATION_FINAL_PASSED, m.APPLICATION_FINAL_FAILED,
-        ):
+        if application.status in TERMINAL_APPLICATION_STATUSES:
             logger.warning("已判定申报不可撤回: record_id=%s", record_id)
             return
         application.is_deleted = True
@@ -1699,8 +1786,11 @@ class TitleReviewService:
     # ═══ 审批先行同步（飞书审批通过 → 写申报表） ═══
 
     async def sync_approval_instances(self, activity_id: UUID) -> dict[str, Any]:
-        """拉取近 30 天已通过且未同步的审批实例，写入申报表（事件自然落库）。"""
-        from app.modules.hr.title_review import approval_client as ac
+        """同步已通过的审批实例到申报表（事件自然落库）。
+
+        数据源优先 Base 审批镜像表「福兴医药职称审批」（含申请状态与实例编号，
+        不受审批 API 限流影响）；镜像表不存在时回退飞书审批 API。
+        """
         from app.modules.hr.title_review import bitable_client as bc
 
         activity = await self.get_activity(activity_id)
@@ -1713,21 +1803,6 @@ class TitleReviewService:
         if not activity.approval_code:
             return stats
         if not (activity.feishu_app_token and activity.apply_table_id):
-            return stats
-
-        now = datetime.now().astimezone()
-        end_ms = int(now.timestamp() * 1000)
-        # 窗口起点取 max(活动创建时间, 30 天前)：避免活动配置晚于审批通过时漏同步
-        window_start = now - timedelta(days=30)
-        if activity.created_at and activity.created_at < window_start:
-            window_start = activity.created_at
-        start_ms = int(window_start.timestamp() * 1000)
-        try:
-            codes = await ac.list_instance_codes(
-                activity.approval_code, start_ms, end_ms
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("拉取审批实例失败: activity=%s error=%s", activity.id, exc)
             return stats
 
         # 申报表现状：审批实例编号（支持逗号累积）→ 行；姓名+工号 → 行（同员工覆盖更新）
@@ -1762,31 +1837,17 @@ class TitleReviewService:
             return stats
 
         rows_to_write: list[dict[str, Any]] = []
-        pending_codes = [code for code in codes if code not in existing_map]
-        stats["approval_skipped"] += len(codes) - len(pending_codes)
+        # 数据源：优先审批镜像表，不存在/拉取失败时回退审批 API
+        fetched = await self._pending_approval_rows_from_table(activity, existing_map)
+        if fetched is None:
+            fetched = await self._pending_approval_rows_from_api(activity, existing_map)
+        if fetched is None:
+            return stats
+        pending, skipped = fetched
+        stats["approval_skipped"] += skipped
+        stats["approval_instances_fetched"] = len(pending) + skipped
 
-        # 并发拉取审批实例详情（限并发 5，独立请求无需串行等待）
-        sem = asyncio.Semaphore(5)
-
-        async def _fetch_instance(code: str) -> dict[str, Any] | None:
-            try:
-                async with sem:
-                    return await ac.get_instance(code)
-            except ac.TitleReviewBitableError as exc:
-                logger.warning("拉取审批实例详情失败: %s error=%s", code, exc)
-                return None
-
-        instances = await asyncio.gather(
-            *(_fetch_instance(code) for code in pending_codes)
-        )
-
-        for code, instance in zip(pending_codes, instances):
-            stats["approval_instances_fetched"] += 1
-            if instance is None:
-                continue
-            if instance.get("status") != "APPROVED":
-                continue
-            fields = ac.form_widgets_to_fields(instance.get("form") or [])
+        for code, fields in pending:
             if not _as_str(fields.get("姓名")) or not _as_str(fields.get("工号")):
                 logger.warning("审批实例缺少姓名/工号，跳过: %s", code)
                 continue
@@ -1913,6 +1974,101 @@ class TitleReviewService:
         )
         return stats
 
+    async def _pending_approval_rows_from_table(
+        self, activity: m.TitleReviewActivity, existing_map: dict[str, str]
+    ) -> tuple[list[tuple[str, dict[str, Any]]], int] | None:
+        """从 Base 审批镜像表读取已通过且未写入的实例。
+
+        返回 [(实例编号, 表单字段), ...] 与重复跳过数；镜像表不存在返回 None
+        （调用方回退审批 API）。
+        """
+        from app.modules.hr.title_review import bitable_client as bc
+
+        app_token = activity.feishu_app_token
+        if not app_token:
+            return None
+        table_id = _approval_table_cache.get(app_token)
+        if table_id is None:
+            tables = await bc.list_tables(app_token)
+            approval_table = next(
+                (t for t in tables if t.get("name") == APPROVAL_TABLE_NAME), None
+            )
+            if not approval_table:
+                logger.info(
+                    "Base 内未找到审批镜像表「%s」，回退审批 API: %s",
+                    APPROVAL_TABLE_NAME, app_token,
+                )
+                return None
+            table_id = str(approval_table.get("table_id") or "")
+            _approval_table_cache[app_token] = table_id
+        rows = await bc.list_all_records(app_token, table_id)
+        pending: list[tuple[str, dict[str, Any]]] = []
+        skipped = 0
+        for item in rows:
+            fields = item.get("fields") or {}
+            if _as_str(fields.get("申请状态")) != "已通过":
+                continue
+            source_id = _as_str(fields.get("SourceID")) or ""
+            code = _extract_approval_code_from_source_id(source_id)
+            if not code:
+                logger.warning(
+                    "审批镜像行 SourceID 无法解析，跳过: record_id=%s",
+                    item.get("record_id"),
+                )
+                continue
+            if code in existing_map:
+                skipped += 1
+                continue
+            _merge_resume_columns(fields)
+            pending.append((code, fields))
+        return pending, skipped
+
+    async def _pending_approval_rows_from_api(
+        self, activity: m.TitleReviewActivity, existing_map: dict[str, str]
+    ) -> tuple[list[tuple[str, dict[str, Any]]], int] | None:
+        """审批 API 兜底：拉取近 30 天已通过且未同步的实例。"""
+        from app.modules.hr.title_review import approval_client as ac
+
+        if not activity.approval_code:
+            return None
+        now = datetime.now().astimezone()
+        end_ms = int(now.timestamp() * 1000)
+        # 窗口起点取 max(活动创建时间, 30 天前)：避免活动配置晚于审批通过时漏同步
+        window_start = now - timedelta(days=30)
+        if activity.created_at and activity.created_at < window_start:
+            window_start = activity.created_at
+        start_ms = int(window_start.timestamp() * 1000)
+        try:
+            codes = await ac.list_instance_codes(
+                activity.approval_code, start_ms, end_ms
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("拉取审批实例失败: activity=%s error=%s", activity.id, exc)
+            return None
+        pending_codes = [code for code in codes if code not in existing_map]
+        skipped = len(codes) - len(pending_codes)
+        # 并发拉取审批实例详情（限并发 5，独立请求无需串行等待）
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_instance(code: str) -> dict[str, Any] | None:
+            try:
+                async with sem:
+                    return await ac.get_instance(code)
+            except ac.TitleReviewBitableError as exc:
+                logger.warning("拉取审批实例详情失败: %s error=%s", code, exc)
+                return None
+
+        instances = await asyncio.gather(
+            *(_fetch_instance(code) for code in pending_codes)
+        )
+        pending: list[tuple[str, dict[str, Any]]] = []
+        for code, instance in zip(pending_codes, instances):
+            if instance is None or instance.get("status") != "APPROVED":
+                continue
+            fields = ac.form_widgets_to_fields(instance.get("form") or [])
+            pending.append((code, fields))
+        return pending, skipped
+
     async def _refresh_image_urls(
         self,
         activity: m.TitleReviewActivity,
@@ -1964,6 +2120,8 @@ class TitleReviewService:
         activity = await self.get_activity(activity_id)
         stats: dict[str, Any] = {
             "applications_created": 0,
+            "applications_updated": 0,
+            "terminal_applications_updated": 0,
             "applications_removed": 0,
             "votes_updated": 0,
             "errors": [],
@@ -1993,35 +2151,31 @@ class TitleReviewService:
             fields = item.get("fields") or {}
             existing = local_by_record.get(record_id)
             if existing:
-                if existing.status not in (
-                    m.APPLICATION_PASSED, m.APPLICATION_FAILED,
-                    m.APPLICATION_FINAL_PASSED, m.APPLICATION_FINAL_FAILED,
-                ):
-                    parsed = _apply_fields_to_dict(fields)
-                    existing.employee_no = parsed["employee_no"] or existing.employee_no
-                    existing.name = parsed["name"] or existing.name
-                    existing.sequence = parsed["sequence"] or existing.sequence
-                    existing.tech_domain = parsed["tech_domain"] or existing.tech_domain
-                    existing.apply_level = parsed["apply_level"] or existing.apply_level
-                    existing.self_evaluations = parsed["self_evaluations"] or existing.self_evaluations
-                    existing.work_statements = parsed["work_statements"] or existing.work_statements
-                    existing.attachments = parsed["attachments"] or existing.attachments
-                    profile_stale = (
-                        existing.profile is None
-                        or existing.profile_refreshed_at is None
-                        or existing.profile_refreshed_at
-                        < datetime.now().astimezone() - timedelta(hours=6)
+                parsed = _apply_fields_to_dict(fields)
+                changed = _apply_synced_fields(existing, parsed, fields)
+                if changed:
+                    stats["applications_updated"] += 1
+                    if existing.status in TERMINAL_APPLICATION_STATUSES:
+                        # 终态申报仅申报信息放开更新，票数/判定结果仍冻结
+                        stats["terminal_applications_updated"] += 1
+                profile_stale = (
+                    existing.profile is None
+                    or existing.profile_refreshed_at is None
+                    or existing.profile_refreshed_at
+                    < datetime.now().astimezone() - timedelta(hours=6)
+                )
+                refreshed = None
+                if profile_stale and activity.feishu_app_token:
+                    # 档案缺失或超过 6 小时自动重拉（员工信息表补录数据后生效）
+                    refreshed = await self._load_employee_profile(
+                        activity,
+                        existing.name or parsed["name"],
+                        existing.employee_no or parsed["employee_no"],
                     )
-                    if profile_stale and activity.feishu_app_token:
-                        # 档案缺失或超过 6 小时自动重拉（员工信息表补录数据后生效）
-                        refreshed = await self._load_employee_profile(
-                            activity,
-                            existing.name or parsed["name"],
-                            existing.employee_no or parsed["employee_no"],
-                        )
-                        if refreshed is not None:
-                            existing.profile = refreshed
-                            existing.profile_refreshed_at = datetime.now().astimezone()
+                    if refreshed is not None:
+                        existing.profile = refreshed
+                        existing.profile_refreshed_at = datetime.now().astimezone()
+                if changed or refreshed is not None:
                     await self.application_repo.update(existing)
             else:
                 await self.sync_apply_record_added(activity.id, record_id, fields)
@@ -2030,10 +2184,7 @@ class TitleReviewService:
             if (
                 application.feishu_record_id
                 and application.feishu_record_id not in feishu_ids
-                and application.status not in (
-                    m.APPLICATION_PASSED, m.APPLICATION_FAILED,
-                    m.APPLICATION_FINAL_PASSED, m.APPLICATION_FINAL_FAILED,
-                )
+                and application.status not in TERMINAL_APPLICATION_STATUSES
             ):
                 application.is_deleted = True
                 await self.application_repo.update(application)
