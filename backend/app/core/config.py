@@ -66,6 +66,13 @@ class Settings(BaseSettings):
     # 职称评审定时对账开关（默认开启；关闭后仅保留手动「同步」按钮）
     HR_TITLE_REVIEW_SYNC_ENABLED: bool = True
 
+    # HR AI（DeepSeek）：出题/人事问答/面试评价/胜任度分析统一使用一个 key
+    HR_AI_API_KEY: str = ""
+    HR_AI_MODEL: str = "deepseek-chat"
+    HR_AI_SYSTEM_PROMPT: str = ""
+    # 绩效飞书通知开关（自评/领导评分提交后通知，默认关闭）
+    HR_PERFORMANCE_NOTIFY: bool = False
+
     # Feishu 安全模块机器人（独立应用凭证）
     SAFETY_FEISHU_APP_ID: str = ""
     SAFETY_FEISHU_APP_SECRET: str = ""

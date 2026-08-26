@@ -2509,9 +2509,10 @@ class OnboardingTaskService:
 
 
 def _is_notify_enabled() -> bool:
-    """是否启用飞书通知（测试阶段默认关闭，上线设置 PERFORMANCE_NOTIFY=true）"""
-    import os
-    return os.getenv("PERFORMANCE_NOTIFY", "").lower() == "true"
+    """是否启用绩效飞书通知（默认关闭，设置 HR_PERFORMANCE_NOTIFY=true 开启）"""
+    from app.core.config import get_settings
+
+    return get_settings().HR_PERFORMANCE_NOTIFY
 
 
 # ─── 候选人胜任度多维分析报告 ───
