@@ -24,6 +24,11 @@ def _hr_creds() -> tuple[str | None, str | None]:
     )
 
 
+def _clean(value: str) -> str:
+    """去掉 token/table_id 首尾空白（历史粘贴数据可能带空格，导致 TableIdNotFound）。"""
+    return value.strip()
+
+
 def active_app_id() -> str:
     """当前实际生效的飞书应用 ID（错误信息自证用）。
 
@@ -38,7 +43,7 @@ def active_app_id() -> str:
 
 async def subscribe_bitable(app_token: str) -> None:
     app_id, app_secret = _hr_creds()
-    await _pb.subscribe_bitable(app_token, app_id=app_id, app_secret=app_secret)
+    await _pb.subscribe_bitable(_clean(app_token), app_id=app_id, app_secret=app_secret)
 
 
 async def batch_create_records(
@@ -46,7 +51,8 @@ async def batch_create_records(
 ) -> list[str]:
     app_id, app_secret = _hr_creds()
     return await _pb.batch_create_records(
-        app_token, table_id, records, app_id=app_id, app_secret=app_secret
+        _clean(app_token), _clean(table_id), records,
+        app_id=app_id, app_secret=app_secret,
     )
 
 
@@ -55,7 +61,7 @@ async def update_record(
 ) -> None:
     app_id, app_secret = _hr_creds()
     await _pb.update_record(
-        app_token, table_id, record_id, fields,
+        _clean(app_token), _clean(table_id), _clean(record_id), fields,
         app_id=app_id, app_secret=app_secret,
     )
 
@@ -69,7 +75,7 @@ async def list_all_records(
 ) -> list[dict[str, Any]]:
     app_id, app_secret = _hr_creds()
     return await _pb.list_all_records(
-        app_token, table_id, page_size=page_size, filter_expr=filter_expr,
+        _clean(app_token), _clean(table_id), page_size=page_size, filter_expr=filter_expr,
         app_id=app_id, app_secret=app_secret,
     )
 
@@ -77,7 +83,7 @@ async def list_all_records(
 async def list_tables(app_token: str, *, page_size: int = 100) -> list[dict[str, Any]]:
     app_id, app_secret = _hr_creds()
     return await _pb.list_tables(
-        app_token, page_size=page_size, app_id=app_id, app_secret=app_secret
+        _clean(app_token), page_size=page_size, app_id=app_id, app_secret=app_secret
     )
 
 
@@ -86,7 +92,7 @@ async def list_fields(
 ) -> list[dict[str, Any]]:
     app_id, app_secret = _hr_creds()
     return await _pb.list_fields(
-        app_token, table_id, page_size=page_size,
+        _clean(app_token), _clean(table_id), page_size=page_size,
         app_id=app_id, app_secret=app_secret,
     )
 
@@ -99,7 +105,7 @@ async def create_grid_view(
 ) -> str:
     app_id, app_secret = _hr_creds()
     return await _pb.create_grid_view(
-        app_token, table_id, view_name, filter_info,
+        _clean(app_token), _clean(table_id), view_name, filter_info,
         app_id=app_id, app_secret=app_secret,
     )
 
