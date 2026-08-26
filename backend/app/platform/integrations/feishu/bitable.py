@@ -44,7 +44,9 @@ async def _request(
             method, url, json_body=json_body, params=params, headers=headers
         )
     except FeishuAPIError as exc:
-        raise BitableAPIError(str(exc)) from exc
+        raise BitableAPIError(
+            f"{exc} app={app_id or 'global'}"
+        ) from exc
     return dict(data.get("data") or {})
 
 
