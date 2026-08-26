@@ -683,17 +683,26 @@ class TitleReviewService:
         return activity
 
     async def delete_activity(self, activity_id: UUID, user: Any = None) -> None:
+        """删除活动（软删），级联软删名下申报/评委/评分/职级组/评价项。
+
+        不限制活动状态与申报数量：测试数据清理场景可直接从活动列表删除
+        （整表硬删仍走系统设置-数据管理）；部门评审组按部门全局维护，不随活动删除。
+        """
         activity = await self.get_activity(activity_id)
-        if activity.status != m.ACTIVITY_DRAFT:
-            raise HTTPException(400, "仅配置中（draft）的活动可删除")
-        count = await self.application_repo.count_by_activity(activity.id)
-        if count > 0:
-            raise HTTPException(400, f"活动已有 {count} 条申报记录，不可删除")
+        old = {"name": activity.name, "status": activity.status}
+        applications = await self.application_repo.list_all_by_activity(activity.id)
+        for application in applications:
+            application.is_deleted = True
+        for judge in await self.judge_repo.list_by_activity(activity.id):
+            judge.is_deleted = True
+        for score in await self.score_repo.list_by_activity(activity.id):
+            score.is_deleted = True
         for lv in await self.level_repo.list_by_activity(activity.id):
             lv.is_deleted = True
         for dim in await self.dimension_repo.list_by_activity(activity.id):
             dim.is_deleted = True
         activity.is_deleted = True
+        # 统一 flush（activity_repo.update 内部 flush + re-fetch）
         await self.activity_repo.update(activity)
         await _audit(
             self.session,
@@ -701,7 +710,8 @@ class TitleReviewService:
             user=user,
             resource_type="title_review_activity",
             resource_id=activity.id,
-            old_value={"name": activity.name},
+            old_value=old,
+            new_value={"applications_soft_deleted": len(applications)},
         )
 
     async def bind_tables(self, activity_id: UUID, user: Any = None) -> m.TitleReviewActivity:

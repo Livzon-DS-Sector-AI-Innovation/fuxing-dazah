@@ -262,7 +262,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           {(r.status === 'open' || r.status === 'reviewing') && (
             <Button size="small" onClick={() => onSelectActivity(r.id)}>管理申报</Button>
           )}
-          {r.status === 'draft' && canManage && (
+          {canManage && (
             <Popconfirm
               title="确认删除该活动？"
               onConfirm={async () => {
