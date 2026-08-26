@@ -5,7 +5,7 @@ import { Badge, Button, Input, Select, Table, Tag } from 'antd'
 import type { TableProps } from 'antd'
 import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
-import { fetchBatchesClient } from '@/lib/api/production-client'
+import { fetchBatchesClient, fetchRoutesClient } from '@/lib/api/production-client'
 import { formatDateTime } from '@/lib/utils'
 import type { ProductionBatch } from '@/types/production'
 
@@ -30,17 +30,24 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [entryNodeFilter, setEntryNodeFilter] = useState<string | undefined>()
+  const [routeFilter, setRouteFilter] = useState<string | undefined>()
   const [page, setPage] = useState(1)
   const [sort, setSort] = useState<{ field: string; order: 'asc' | 'desc' } | undefined>()
 
+  const { data: routes } = useQuery({
+    queryKey: ['production-routes', productId],
+    queryFn: () => fetchRoutesClient(productId),
+  })
+
   const { data, isLoading } = useQuery({
-    queryKey: ['production-batches', productId, { status, keyword, entryNodeFilter, page, sort }],
+    queryKey: ['production-batches', productId, { status, keyword, entryNodeFilter, routeFilter, page, sort }],
     queryFn: () =>
       fetchBatchesClient({
         product_id: productId,
         status,
         keyword: keyword || undefined,
         entry_node_filter: entryNodeFilter,
+        route_id: routeFilter,
         page,
         order_by: sort?.field,
         order: sort?.order,
@@ -88,6 +95,17 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
             { value: 'root', label: '起始批次' },
             { value: 'derived', label: '衍生批次' },
           ]}
+        />
+        <Select
+          allowClear
+          placeholder="工艺路线"
+          style={{ width: 200 }}
+          value={routeFilter}
+          onChange={v => {
+            setRouteFilter(v)
+            setPage(1)
+          }}
+          options={(routes ?? []).map(r => ({ value: r.id, label: r.route_name }))}
         />
         <Input
           allowClear

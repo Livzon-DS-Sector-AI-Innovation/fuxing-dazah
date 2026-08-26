@@ -95,6 +95,7 @@ export async function fetchBatchesClient(params: {
   status?: string
   keyword?: string
   entry_node_filter?: string
+  route_id?: string
   page?: number
   page_size?: number
   order_by?: string
@@ -107,6 +108,7 @@ export async function fetchBatchesClient(params: {
     status: params.status ?? null,
     keyword: params.keyword ?? null,
     entry_node_filter: params.entry_node_filter ?? null,
+    route_id: params.route_id ?? null,
     order_by: params.order_by ?? null,
     order: params.order ?? null,
   })

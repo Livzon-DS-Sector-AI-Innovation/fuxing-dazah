@@ -30,3 +30,8 @@ from app.modules.production.mcp_tools.user_scope import (  # noqa: F401
     query_user_active_batches,
     query_user_processes,
 )
+from app.modules.production.mcp_tools.workbench import (  # noqa: F401
+    activate_planned_batch,
+    query_workbench_todo,
+    receive_batch,
+)

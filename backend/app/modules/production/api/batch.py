@@ -33,6 +33,7 @@ async def list_batches(
     status: str | None = None,
     keyword: str | None = None,
     entry_node_filter: str | None = Query(None, pattern="^(root|derived)$"),
+    route_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     order_by: str = Query("created_at", pattern="^(batch_no|created_at)$"),
@@ -41,7 +42,7 @@ async def list_batches(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     items, total = await batch_service.list_batches_paged(
-        db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
+        db, product_id, status, keyword, entry_node_filter, route_id, page, page_size, order_by, order
     )
     return paginated_response(
         [BatchOut.model_validate(i).model_dump(mode="json") for i in items],

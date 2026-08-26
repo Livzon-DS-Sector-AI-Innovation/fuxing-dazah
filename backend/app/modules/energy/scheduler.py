@@ -36,9 +36,10 @@ _last_daily_collect_date: date | None = None
 # 每日采集检查间隔：60 秒
 COLLECT_TICK_SECONDS = 60
 
-# 预警/推送任务轮询间隔：60 秒
-# 保证用户配置的 notify_time 到点后 1 分钟内触发（见 evaluate_* 的 current>=target 判断）
-NOTIFY_TICK_SECONDS = 60
+# 预警/推送任务轮询间隔：300 秒（5 分钟）
+# 用户配置的 notify_time 到点后最迟 5 分钟内触发（见 evaluate_* 的 current>=target 判断），
+# DB 防重（last_sent_at/last_checked_at 日期判断）保证不重复发送
+NOTIFY_TICK_SECONDS = 300
 
 # 各平台 API 并发上限（避免冲垮三方接口）
 _PLATFORM_SEMAPHORES: dict[str, asyncio.Semaphore] = {
@@ -469,7 +470,7 @@ async def energy_workshop_alert_coro() -> None:
             result = await evaluate_workshop_alerts(db)
             await db.commit()
 
-            if result["checked"] > 0 or result["triggered"] > 0 or result["errors"] > 0:
+            if result["triggered"] > 0 or result["errors"] > 0:
                 logger.info(
                     "车间能耗预警检查完成: checked=%d, triggered=%d, errors=%d",
                     result["checked"], result["triggered"], result["errors"],
@@ -503,7 +504,7 @@ async def energy_daily_push_coro() -> None:
             result = await evaluate_daily_push(db)
             await db.commit()
 
-            if result["checked"] > 0 or result["sent"] > 0:
+            if result["sent"] > 0:
                 logger.info(
                     "能源日耗推送检查完成: checked=%d, sent=%d",
                     result["checked"], result["sent"],
@@ -537,7 +538,7 @@ async def energy_nitrogen_push_coro() -> None:
             result = await evaluate_nitrogen_push(db)
             await db.commit()
 
-            if result["checked"] > 0 or result["sent"] > 0:
+            if result["sent"] > 0:
                 logger.info(
                     "氮气月度推送检查完成: checked=%d, sent=%d",
                     result["checked"], result["sent"],

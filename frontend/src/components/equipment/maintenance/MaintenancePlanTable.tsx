@@ -116,7 +116,8 @@ export function MaintenancePlanTable({ onRefresh, equipments }: Props) {
       </div>
       <Table columns={columns} dataSource={maintenancePlans} rowKey="id" size="small" loading={maintenancePlanLoading}
         scroll={{ x: 'max-content' }}
-        onChange={(_pagination, _filters, sorter) => {
+        onChange={(_pagination, _filters, sorter, extra) => {
+          if (extra?.action !== 'sort') return
           if (Array.isArray(sorter)) return
           if (sorter.order) {
             setMaintenancePlanSortField(typeof sorter.field === 'string' ? sorter.field : String(sorter.field))

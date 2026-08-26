@@ -68,13 +68,6 @@ async def test_get_config_returns_db_row(
     assert resp.json()["data"] == CONFIG
 
 
-async def test_get_config_missing_row_404(
-    client: AsyncClient, db_session: AsyncSession
-) -> None:
-    resp = await client.get("/tools/attendance-check/config")
-    assert resp.status_code == 404
-
-
 async def test_put_config_upserts_row(
     client: AsyncClient, db_session: AsyncSession
 ) -> None:

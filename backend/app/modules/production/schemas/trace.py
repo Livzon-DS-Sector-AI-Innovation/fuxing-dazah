@@ -1,4 +1,9 @@
-"""溯源 API 契约。合并场景下谱系是 DAG，用 批次列表 + 谱系边列表 表达。"""
+"""溯源 API 契约。合并场景下谱系是 DAG，用 批次列表 + 谱系边列表 表达。
+
+除同路线谱系边（batch_links）外，还支持跨路线物料边（link_type="material"）：
+投料消耗引用上游批次产出，物料边方向与谱系一致，
+parent = 产出批次（上游），child = 消耗批次（下游）。
+"""
 
 import uuid
 from datetime import datetime
@@ -20,6 +25,7 @@ class TraceBatch(BaseModel):
     id: uuid.UUID
     batch_no: str
     product_id: uuid.UUID
+    product_name: str | None = None
     status: str
     quantity: float | None
     unit: str | None
@@ -28,11 +34,26 @@ class TraceBatch(BaseModel):
 
 
 class TraceLink(BaseModel):
+    """谱系边（link_type="lineage"）或物料边（link_type="material"）。
+
+    lineage 字段：edge_id / allocated_qty / is_deviation；
+    material 字段：intermediate_type_id / intermediate_type_name /
+    intermediate_batch_no / quantity（同对批次同物料聚合求和）/ unit。
+    """
+
     parent_batch_id: uuid.UUID
     child_batch_id: uuid.UUID
-    edge_id: uuid.UUID | None
-    allocated_qty: float | None
-    is_deviation: bool
+    link_type: str = "lineage"
+    # lineage 专属
+    edge_id: uuid.UUID | None = None
+    allocated_qty: float | None = None
+    is_deviation: bool = False
+    # material 专属
+    intermediate_type_id: uuid.UUID | None = None
+    intermediate_type_name: str | None = None
+    intermediate_batch_no: str | None = None
+    quantity: float | None = None
+    unit: str | None = None
 
 
 class TraceOut(BaseModel):

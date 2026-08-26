@@ -12,6 +12,7 @@ type BatchNodeData = {
   status: string
   quantity: number | null
   unit: string | null
+  productName: string | null
   isCurrent: boolean
   stageName: string | null
 }
@@ -45,6 +46,9 @@ function BatchNode({ data }: NodeProps) {
           </span>
         )}
       </div>
+      {d.productName && (
+        <div style={{ fontSize: 11, color: '#787671', marginTop: 2 }}>{d.productName}</div>
+      )}
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   )
@@ -69,24 +73,39 @@ export function TraceGraph({ trace, currentBatchId, onBatchClick }: Props) {
         status: b.status,
         quantity: b.quantity,
         unit: b.unit,
+        productName: b.product_name,
         isCurrent: b.id === currentBatchId,
         stageName: b.current_stage_name,
       },
     }))
-    const rfEdges: Edge[] = trace.links.map(l => ({
-      id: `${l.parent_batch_id}-${l.child_batch_id}`,
-      source: l.parent_batch_id,
-      target: l.child_batch_id,
-      type: 'smoothstep',
-      animated: true,
-      label: l.allocated_qty != null ? `${l.allocated_qty}` : undefined,
-      labelStyle: { fontSize: 11 },
-      style: l.is_deviation
-        ? { stroke: '#dd5b00', strokeDasharray: '6 4' }
-        : { stroke: '#5645d4' },
-    }))
+    const rfEdges: Edge[] = trace.links.map(l => {
+      const isMaterial = l.link_type === 'material'
+      return {
+        id: isMaterial
+          ? `material:${l.parent_batch_id}-${l.child_batch_id}-${l.intermediate_type_id ?? 'unknown'}`
+          : `lineage:${l.parent_batch_id}-${l.child_batch_id}`,
+        source: l.parent_batch_id,
+        target: l.child_batch_id,
+        type: 'smoothstep',
+        animated: true,
+        label: isMaterial
+          ? `${l.intermediate_type_name ?? '物料'} · ${l.quantity ?? ''}${l.unit ?? ''}`
+          : l.allocated_qty != null
+            ? `${l.allocated_qty}`
+            : undefined,
+        labelStyle: { fontSize: 11 },
+        style: isMaterial
+          ? { stroke: '#2b7a4b', strokeDasharray: '6 4' }
+          : l.is_deviation
+            ? { stroke: '#dd5b00', strokeDasharray: '6 4' }
+            : { stroke: '#5645d4' },
+      }
+    })
     return { rfNodes, rfEdges }
   }, [trace, currentBatchId])
+
+  // 画布高度随批次数量自适应：小图不至于空旷，大图有足够版面（380~620）
+  const graphHeight = Math.max(380, Math.min(620, trace.batches.length * 95))
 
   return (
     <FlowGraph
@@ -98,7 +117,7 @@ export function TraceGraph({ trace, currentBatchId, onBatchClick }: Props) {
         const node = rfNodes.find(n => n.id === id)
         if (node) onBatchClick(id, (node.data as BatchNodeData).batch_no)
       }}
-      height={260}
+      height={graphHeight}
     />
   )
 }

@@ -1,4 +1,8 @@
-"""批次全链路追溯 — 查询批次及其前序、后序批次的执行进度。"""
+"""批次全链路追溯 — 查询批次及其前序、后序批次，并沿物料链（投料消耗↔产出）扩展。
+
+结果以 Markdown 输出：谱系关系（derive/merge）与物料关系（跨路线投料）合并展示，
+每个批次带工序执行进度。适用于追溯批次来源、去向，以及确认当前批次执行到哪个工序。
+"""
 
 from __future__ import annotations
 
@@ -34,16 +38,23 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
 
     trace = await trace_service.get_trace(db, root_batch.id)
     batches_by_id = {batch.id: batch for batch in trace.batches}
-    products = await repo.get_products_by_ids(
-        db, list({batch.product_id for batch in trace.batches})
-    )
-    product_names = {product.id: product.product_name for product in products}
 
-    parents_by_child: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
-    children_by_parent: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
-    for link in trace.links:
-        parents_by_child[link.child_batch_id].add(link.parent_batch_id)
-        children_by_parent[link.parent_batch_id].add(link.child_batch_id)
+    lineage_links = [link for link in trace.links if link.link_type == "lineage"]
+    material_links = [link for link in trace.links if link.link_type == "material"]
+
+    # 谱系邻接表（仅 lineage 边）
+    lineage_parents_by_child: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    lineage_children_by_parent: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    for link in lineage_links:
+        lineage_parents_by_child[link.child_batch_id].add(link.parent_batch_id)
+        lineage_children_by_parent[link.parent_batch_id].add(link.child_batch_id)
+
+    # 物料邻接表（仅 material 边）：parent=产出批次，child=消耗批次
+    material_producers_by_consumer: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    material_consumers_by_producer: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    for link in material_links:
+        material_producers_by_consumer[link.child_batch_id].add(link.parent_batch_id)
+        material_consumers_by_producer[link.parent_batch_id].add(link.child_batch_id)
 
     def collect_related(
         start_id: uuid.UUID, relation_map: dict[uuid.UUID, set[uuid.UUID]],
@@ -58,8 +69,10 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
             pending.extend(relation_map.get(current, set()))
         return found
 
-    ancestor_ids = collect_related(root_batch.id, parents_by_child)
-    descendant_ids = collect_related(root_batch.id, children_by_parent)
+    ancestor_ids = collect_related(root_batch.id, lineage_parents_by_child)
+    descendant_ids = collect_related(root_batch.id, lineage_children_by_parent)
+    source_ids = collect_related(root_batch.id, material_producers_by_consumer)
+    destination_ids = collect_related(root_batch.id, material_consumers_by_producer)
 
     def describe_progress(trace_batch: TraceBatch) -> tuple[str, str]:
         latest_by_step: dict[str, TraceExecutionBrief] = {}
@@ -104,20 +117,37 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
             return "前序批次"
         if batch_id in descendant_ids:
             return "后序批次"
-        return "关联批次"
+        if batch_id in source_ids:
+            return "物料来源（投料）"
+        if batch_id in destination_ids:
+            return "物料去向（被消耗）"
+        return "物料关联"
 
     ordered_batches = sorted(
         trace.batches,
         key=lambda item: (
-            0 if item.id in ancestor_ids else 1 if item.id == root_batch.id else 2,
+            0 if item.id in ancestor_ids
+            else 1 if item.id == root_batch.id
+            else 2 if item.id in source_ids
+            else 3 if item.id in destination_ids
+            else 4,
             item.batch_no,
         ),
     )
 
+    summary_parts = [
+        f"前序 {len(ancestor_ids)} 个",
+        f"后序 {len(descendant_ids)} 个",
+    ]
+    if source_ids:
+        summary_parts.append(f"物料来源 {len(source_ids)} 个")
+    if destination_ids:
+        summary_parts.append(f"物料去向 {len(destination_ids)} 个")
+
     lines = [
         f"## 批次全链路追溯 · {batch_no}",
         "",
-        f"> 共关联 **{len(trace.batches)}** 个批次：前序 {len(ancestor_ids)} 个，后序 {len(descendant_ids)} 个。",
+        f"> 共关联 **{len(trace.batches)}** 个批次：{'，'.join(summary_parts)}。",
         "",
         "### 批次关系与进度",
         "",
@@ -134,14 +164,14 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
         lines.append(
             "| "
             f"{relation_label(trace_batch.id)} | `{trace_batch.batch_no}` | "
-            f"{product_names.get(trace_batch.product_id, '—')}{quantity} | "
+            f"{trace_batch.product_name or '—'}{quantity} | "
             f"{_BATCH_STATUS_CN.get(trace_batch.status, trace_batch.status)} | "
             f"{current} | {completed} |"
         )
 
-    if trace.links:
+    if lineage_links or material_links:
         lines.extend(["", "### 流转关系", ""])
-        for link in trace.links:
+        for link in lineage_links:
             parent = batches_by_id.get(link.parent_batch_id)
             child = batches_by_id.get(link.child_batch_id)
             if not parent or not child:
@@ -149,5 +179,17 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
             quantity = f"（分配 {link.allocated_qty:g}）" if link.allocated_qty is not None else ""
             deviation = " · 偏离流转" if link.is_deviation else ""
             lines.append(f"- `{parent.batch_no}` → `{child.batch_no}`{quantity}{deviation}")
+        for link in material_links:
+            parent = batches_by_id.get(link.parent_batch_id)
+            child = batches_by_id.get(link.child_batch_id)
+            if not parent or not child:
+                continue
+            material = link.intermediate_type_name or "物料"
+            if link.intermediate_batch_no:
+                material = f"{material}#{link.intermediate_batch_no}"
+            quantity = f" · {link.quantity:g}{link.unit or ''}" if link.quantity is not None else ""
+            lines.append(
+                f"- `{parent.batch_no}` → `{child.batch_no}`（物料：{material}{quantity}）"
+            )
 
     return ToolResult(content="\n".join(lines))

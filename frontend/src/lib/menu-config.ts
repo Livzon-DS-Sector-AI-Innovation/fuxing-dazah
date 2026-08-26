@@ -313,7 +313,6 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "system-config", label: "系统配置", path: "/hr/settings", permissions: ["hr:settings:manage"] },
           { key: "positions", label: "岗位管理", path: "/hr/positions", permissions: ["hr:position:read"] },
           { key: "sop-catalog", label: "SOP管理", path: "/hr/training/sop-catalog", permissions: ["hr:training:read"] },
-          { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
         ],
       },
     ],

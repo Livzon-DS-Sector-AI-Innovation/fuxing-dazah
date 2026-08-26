@@ -313,3 +313,30 @@ class TestListSort:
         )
         assert total == 3
         assert [b.batch_no for b in items] == [f"{base}-{s}" for s in ("a", "b", "c")]
+
+    async def test_list_batches_filter_by_route_id(
+        self, db_session: AsyncSession
+    ) -> None:
+        """按工艺路线过滤批次列表时只返回该路线下的批次。"""
+        from app.modules.production import repository as repo
+        from app.modules.production.models import Batch as BatchModel
+
+        product_id = uuid.uuid4()
+        route_a = uuid.uuid4()
+        route_b = uuid.uuid4()
+        base = uuid.uuid4().hex[:8]
+        for i, route_id in enumerate((route_a, route_b, route_a)):
+            db_session.add(
+                BatchModel(
+                    batch_no=f"{base}-{i}",
+                    product_id=product_id,
+                    route_id=route_id,
+                )
+            )
+        await db_session.flush()
+        items, total = await repo.list_batches(
+            db_session, product_id, None, None, route_id=route_a,
+            page=1, page_size=20, order_by="batch_no", order="asc",
+        )
+        assert total == 2
+        assert [b.batch_no for b in items] == [f"{base}-0", f"{base}-2"]

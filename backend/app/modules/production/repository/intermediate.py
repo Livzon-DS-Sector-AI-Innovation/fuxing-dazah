@@ -1,8 +1,9 @@
 """中间体数据查询。"""
 
 import uuid
+from typing import Any, Literal
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Row, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import (
@@ -45,6 +46,7 @@ __all__ = [
     "get_outputs_by_container_ids",
     "get_consumptions_by_container",
     "get_consumptions_by_container_ids",
+    "get_material_links_by_batches",
 ]
 
 
@@ -459,6 +461,51 @@ async def get_outputs_by_container_ids(
     if for_update:
         stmt = stmt.with_for_update()
     return list((await db.execute(stmt)).scalars())
+
+
+async def get_material_links_by_batches(
+    db: AsyncSession, batch_ids: set[uuid.UUID], direction: Literal["up", "down"],
+) -> list[Row[Any]]:
+    """批次集与物料链的关联行（精确模式消耗 → 产出批次，溯源用）。
+
+    - ``up``：我的投料来源 —— ``consumption.batch_id ∈ batch_ids``，产出批次为 parent；
+    - ``down``：我的产出去向 —— ``output.batch_id ∈ batch_ids``，消耗批次为 child。
+
+    行结构：``(parent_batch_id, child_batch_id, intermediate_type_id, quantity,
+    unit, intermediate_batch_no)``，parent 恒为产出批次（上游）。
+    只取 ``output_id`` 非空的精确模式行（混装容器消耗是刻意的溯源断点），
+    两表均过滤软删，排除已中止执行的消耗（与余量口径一致）。
+    """
+    if not batch_ids:
+        return []
+    c = BatchIntermediateConsumption
+    o = BatchIntermediateOutput
+    anchor = c.batch_id if direction == "up" else o.batch_id
+    stmt = (
+        select(
+            o.batch_id.label("parent_batch_id"),
+            c.batch_id.label("child_batch_id"),
+            c.id.label("consumption_id"),
+            c.intermediate_type_id,
+            c.quantity,
+            c.unit,
+            o.intermediate_batch_no,
+        )
+        .select_from(c)
+        .join(o, o.id == c.output_id)
+        .outerjoin(NodeExecution, NodeExecution.id == c.execution_id)
+        .where(
+            anchor.in_(batch_ids),
+            c.is_deleted == False,  # noqa: E712
+            o.is_deleted == False,  # noqa: E712
+            # 只排除已中止执行；执行缺失的孤儿行保守计入
+            or_(
+                NodeExecution.status.is_(None),
+                NodeExecution.status != "aborted",
+            ),
+        )
+    )
+    return list((await db.execute(stmt)).all())
 
 
 async def get_consumptions_by_container(

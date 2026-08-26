@@ -374,13 +374,14 @@ async def list_batches_paged(
     status: str | None,
     keyword: str | None,
     entry_node_filter: str | None = None,
+    route_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
     order_by: str = "created_at",
     order: str = "desc",
 ) -> tuple[list[Batch], int]:
     batches, total = await repo.list_batches(
-        db, product_id, status, keyword, entry_node_filter, page, page_size, order_by, order
+        db, product_id, status, keyword, entry_node_filter, route_id, page, page_size, order_by, order
     )
     # 批量填充路线名称
     route_ids = list({b.route_id for b in batches})

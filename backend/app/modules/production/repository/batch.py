@@ -64,6 +64,7 @@ async def list_batches(
     status: str | None,
     keyword: str | None,
     entry_node_filter: str | None = None,
+    route_id: uuid.UUID | None = None,
     page: int = 1,
     page_size: int = 20,
     order_by: str = "created_at",
@@ -74,6 +75,8 @@ async def list_batches(
         stmt = stmt.where(Batch.product_id == product_id)
     if status:
         stmt = stmt.where(Batch.status == status)
+    if route_id:
+        stmt = stmt.where(Batch.route_id == route_id)
     if entry_node_filter == "root":
         stmt = stmt.where(Batch.entry_node_id.is_(None))
     elif entry_node_filter == "derived":
