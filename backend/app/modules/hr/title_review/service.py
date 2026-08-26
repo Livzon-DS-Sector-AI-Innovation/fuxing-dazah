@@ -711,6 +711,16 @@ class TitleReviewService:
         activity = await self.get_activity(activity_id)
         if not (activity.feishu_app_token and activity.apply_table_id):
             raise HTTPException(400, "请先在活动编辑中粘贴 app_token、申报表 table_id")
+        # 同一申报表禁止绑定多个活动（审批实例编号全局唯一，重复绑定会在对账时冲突）
+        duplicate = await self.activity_repo.find_by_feishu_binding(
+            activity.feishu_app_token, activity.apply_table_id, exclude_id=activity.id
+        )
+        if duplicate:
+            raise HTTPException(
+                400,
+                f"该申报表已绑定活动「{duplicate.name}」，同一申报表不能绑定多个活动；"
+                "如原活动绑定信息有误，请修复原活动后重新绑定",
+            )
         # 重新绑定表格后，员工信息表/审批镜像表 table_id 缓存失效（Base 表结构可能变化）
         _employee_table_cache.pop(activity.feishu_app_token, None)
         _approval_table_cache.pop(activity.feishu_app_token, None)
@@ -2178,8 +2188,17 @@ class TitleReviewService:
                 if changed or refreshed is not None:
                     await self.application_repo.update(existing)
             else:
-                await self.sync_apply_record_added(activity.id, record_id, fields)
-                stats["applications_created"] += 1
+                try:
+                    await self.sync_apply_record_added(activity.id, record_id, fields)
+                    stats["applications_created"] += 1
+                except IntegrityError:
+                    # 审批实例编号全局唯一：申报行已归属其他活动时记入 errors 而非 500
+                    logger.warning(
+                        "申报记录重复/已归属其他活动，跳过: record_id=%s", record_id
+                    )
+                    stats["errors"].append(
+                        f"申报记录 {record_id} 与已有记录重复（可能已绑定其他活动），已跳过"
+                    )
         for application in local_apps:
             if (
                 application.feishu_record_id

@@ -970,5 +970,53 @@ class TestReconcile:
         assert refreshed.apply_level == "高级工程师"
         assert refreshed.status == m.APPLICATION_PASSED
 
+    async def test_reconcile_duplicate_across_activities_not_500(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """申报行已归属其他活动（审批实例编号全局唯一）时记入 errors，而非 500。"""
+        from app.modules.hr.title_review import bitable_client as bc
+
+        monkeypatch.setattr(
+            TitleReviewService, "_load_employee_profile", AsyncMock(return_value=None)
+        )
+        service = TitleReviewService(db_session)
+        activity_a = await service.create_activity(
+            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+        )
+        activity_b = await service.create_activity(
+            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+        )
+        employee_no = f"E{_rand()}"
+        await _create_employee(db_session, "李四", employee_no)
+        rec_id = f"rec{_rand()}"
+        fields = _apply_fields("李四", employee_no, **{"审批实例编号": f"CODE{_rand()}"})
+        await service.sync_apply_record_added(activity_a.id, rec_id, fields)
+        monkeypatch.setattr(
+            bc, "list_all_records",
+            AsyncMock(return_value=[{"record_id": rec_id, "fields": fields}]),
+        )
+        stats = await service.reconcile_activity(activity_b.id)
+        assert stats["applications_created"] == 0
+        assert any("重复" in err for err in stats["errors"])
+
+
+async def test_bind_rejects_duplicate_apply_table(
+    db_session: AsyncSession, monkeypatch
+):
+    """同一申报表禁止绑定多个活动：第二个活动绑定时直接 400 并说明归属。"""
+    from fastapi import HTTPException
+
+    service = TitleReviewService(db_session)
+    await service.create_activity(
+        _activity_create(name="活动A", feishu_app_token="app1", apply_table_id="tbl1")
+    )
+    activity_b = await service.create_activity(
+        _activity_create(name="活动B", feishu_app_token="app1", apply_table_id="tbl1")
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await service.bind_tables(activity_b.id)
+    assert exc_info.value.status_code == 400
+    assert "已绑定活动「活动A」" in str(exc_info.value.detail)
+
 
 # ─── 卡片审批 ───
