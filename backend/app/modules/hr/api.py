@@ -3202,7 +3202,7 @@ async def random_qa_scores(
             "employee_number": emp_no,
             "wrong_questions": wrong,
             "total_score": score,
-            "grade": "优秀" if is_excellent else "合格",
+            "grade": "优秀" if score >= el else ("合格" if score >= pl else "不合格"),
             "result_text": result_text[:16],
             "assessed_date": now_str,
         })

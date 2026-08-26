@@ -7,6 +7,7 @@
 系统不直接通知申报人。
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -211,7 +212,7 @@ async def _image_text_to_local(text: str) -> str:
                 break
         base_dir.mkdir(parents=True, exist_ok=True)
         fname = f"{uuid.uuid4().hex}{ext}"
-        (base_dir / fname).write_bytes(data)
+        await asyncio.to_thread((base_dir / fname).write_bytes, data)
         out.append(f"/uploads/title_review/{fname}")
     return "\n".join(out)
 
@@ -985,6 +986,24 @@ class TitleReviewService:
             return []
         return list(committee.committee_members)
 
+    async def _next_judge_code(self, application_id: UUID) -> str:
+        """下一个匿名评审人编号：包含软删除行取最大值+1，编号永不复用。"""
+        from sqlalchemy import select as sa_select
+
+        rows = (await self.session.execute(
+            sa_select(m.TitleReviewJudge.judge_code).where(
+                m.TitleReviewJudge.application_id == application_id
+            )
+        )).scalars().all()
+        max_index = 0
+        for code in rows:
+            if code and code.startswith("P"):
+                try:
+                    max_index = max(max_index, int(code[1:]))
+                except ValueError:
+                    continue
+        return f"P{max_index + 1}"
+
     async def _auto_assign_for_application(
         self, activity: m.TitleReviewActivity, application: m.TitleReviewApplication
     ) -> int:
@@ -1000,8 +1019,6 @@ class TitleReviewService:
         emp_repo = EmployeeRepository(self.session)
         existing = await self.judge_repo.list_by_application(application.id)
         existing_ids = {j.judge_employee_id for j in existing}
-        used_codes = {j.judge_code for j in existing}
-        next_index = len(used_codes) + 1
         added = 0
         new_judges: list[m.TitleReviewJudge] = []
         for member in committee.committee_members:
@@ -1017,8 +1034,6 @@ class TitleReviewService:
             emp = await emp_repo.get_by_id(emp_id)
             if not emp or emp.status == "离职":
                 continue
-            while f"P{next_index}" in used_codes:
-                next_index += 1
             judge = await self.judge_repo.create(
                 m.TitleReviewJudge(
                     activity_id=activity.id,
@@ -1026,12 +1041,10 @@ class TitleReviewService:
                     judge_employee_id=emp.id,
                     judge_name=emp.name,
                     judge_employee_no=emp.employee_number,
-                    judge_code=f"P{next_index}",
+                    judge_code=await self._next_judge_code(application.id),
                     judge_role="技术专家",
                 )
             )
-            used_codes.add(judge.judge_code)
-            next_index += 1
             new_judges.append(judge)
             added += 1
         if new_judges:
@@ -1095,15 +1108,11 @@ class TitleReviewService:
                 j.is_deleted = True
                 await self.judge_repo.update(j)
 
-        # 编号延续现有最大编号
-        used_codes = {j.judge_code for j in existing_judges}
-        next_index = len(used_codes) + 1
+        # 编号统一分配器（含软删除行，永不复用）
         new_judges: list[m.TitleReviewJudge] = []
         for emp, role in employees:
             if emp.id in existing_map and not existing_map[emp.id].is_deleted:
                 continue
-            while f"P{next_index}" in used_codes:
-                next_index += 1
             judge = await self.judge_repo.create(
                 m.TitleReviewJudge(
                     activity_id=activity.id,
@@ -1111,12 +1120,10 @@ class TitleReviewService:
                     judge_employee_id=emp.id,
                     judge_name=emp.name,
                     judge_employee_no=emp.employee_number,
-                    judge_code=f"P{next_index}",
+                    judge_code=await self._next_judge_code(application.id),
                     judge_role=role,
                 )
             )
-            used_codes.add(judge.judge_code)
-            next_index += 1
             new_judges.append(judge)
 
         await self.session.flush()
@@ -1594,6 +1601,9 @@ class TitleReviewService:
         judge, application = await self._resolve_judge_for_user(judge_id, employee_no)
         if application.status not in (m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED):
             raise HTTPException(400, f"当前状态不可投票：{application.status}")
+        activity = await self.activity_repo.get_by_id(application.activity_id)
+        if activity and activity.review_deadline and datetime.now().astimezone() > activity.review_deadline:
+            raise HTTPException(400, "评审已截止，不可再投票")
 
         dims = await self.dimension_repo.list_by_activity(application.activity_id)
         grades = [(data.dimension_grades or {}).get(d.name) for d in dims]
@@ -2110,7 +2120,7 @@ class TitleReviewService:
                 ])
 
         buf = io.BytesIO()
-        wb.save(buf)
+        await asyncio.to_thread(wb.save, buf)
         buf.seek(0)
         return buf.getvalue(), f"职称评审结果汇总_{activity.name}.xlsx"
 
@@ -2174,6 +2184,6 @@ class TitleReviewService:
                     _apply_song_font(run)
 
         buf = io.BytesIO()
-        doc.save(buf)
+        await asyncio.to_thread(doc.save, buf)
         buf.seek(0)
         return buf.getvalue(), f"{activity.name}_职级认定结果名单.docx"

@@ -41,8 +41,12 @@ async def _request_with_retry(
                 resp = await http.request(
                     method, url, headers=headers, params=params, json=json_body
                 )
+                if resp.status_code in (429,) or resp.status_code >= 500:
+                    raise httpx.HTTPStatusError(
+                        f"HTTP {resp.status_code}", request=resp.request, response=resp
+                    )
                 return resp.json()
-        except httpx.HTTPError as exc:
+        except Exception as exc:  # noqa: BLE001 — 传输/解析/限流统一重试
             last_exc = exc
             if attempt < attempts - 1:
                 logger.warning("飞书请求失败重试: %s %s %s", method, url, type(exc).__name__)

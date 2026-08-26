@@ -38,31 +38,40 @@ async def _get_feishu_token() -> str:
 
 
 async def _lookup_open_id(name: str) -> str | None:
-    """按姓名查 open_id：优先 hr.employees（通讯录同步），兜底 identity.users。"""
+    """按姓名查 open_id：优先 hr.employees（通讯录同步），兜底 identity.users。
+
+    同名多人且 open_id 不一致时返回 None（无法唯一定位，宁可不发也不发错人）。
+    """
     try:
         async with async_session_factory() as db:
             result = await db.execute(
                 text(
-                    "SELECT feishu_open_id FROM hr.employees "
+                    "SELECT DISTINCT feishu_open_id FROM hr.employees "
                     "WHERE name = :name AND is_deleted = false "
-                    "AND feishu_open_id IS NOT NULL LIMIT 1"
+                    "AND feishu_open_id IS NOT NULL"
                 ),
                 {"name": name},
             )
-            row = result.fetchone()
-            if row and row[0]:
-                return str(row[0])
+            rows = result.fetchall()
+            if len(rows) == 1 and rows[0][0]:
+                return str(rows[0][0])
+            if len(rows) > 1:
+                logger.warning("按姓名查到 %d 个 open_id，无法唯一定位，跳过: %s", len(rows), name)
+                return None
             result = await db.execute(
                 text(
-                    "SELECT feishu_open_id FROM identity.users "
+                    "SELECT DISTINCT feishu_open_id FROM identity.users "
                     "WHERE name = :name AND is_deleted = false "
-                    "AND feishu_open_id IS NOT NULL LIMIT 1"
+                    "AND feishu_open_id IS NOT NULL"
                 ),
                 {"name": name},
             )
-            row = result.fetchone()
-            if row and row[0]:
-                return str(row[0])
+            rows = result.fetchall()
+            if len(rows) == 1 and rows[0][0]:
+                return str(rows[0][0])
+            if len(rows) > 1:
+                logger.warning("按姓名查到 %d 个 open_id（identity），无法唯一定位，跳过: %s", len(rows), name)
+                return None
     except Exception as exc:  # noqa: BLE001
         logger.warning("查找open_id失败(%s): %s", name, exc)
     logger.warning("未找到用户 %s 的飞书open_id，无法推送", name)
@@ -247,7 +256,7 @@ async def send_judge_reminder(
                 "tag": "markdown",
                 "content": (
                     f"**{judge_name}**，您好！\n\n"
-                    f"您有新的投票任务（{applicant_name} 的申报）。\n"
+                    f"您有新的投票任务（{applicant_name} 的申报），您的匿名评审人编号为 **{judge_code}**。\n"
                     "请登录内网系统「职称评审」的「我的投票」页面完成投票。"
                 ),
             },

@@ -165,11 +165,28 @@ async def _process_action(
         logger.debug("忽略后端回写事件: record_id=%s action=%s", record_id, act)
         return
 
-    # 去重（事件重复投递）
+    # 去重（事件重复投递）：处理成功才保留 120s 去重键；
+    # 处理抛异常时让键 1 秒过期，事件可被重试而不是永久丢失
     if not await _redis_set(_dedup_key(record_id, act), "1", ex=120):
         logger.debug("重复事件已忽略: record_id=%s action=%s", record_id, act)
         return
+    try:
+        await _process_action_body(activity, table_id, field_map, record_id, act, action)
+    except Exception:
+        logger.exception(
+            "处理多维表格事件失败: record_id=%s action=%s", record_id, act,
+        )
+        await _redis_set(_dedup_key(record_id, act), "1", ex=1)
 
+
+async def _process_action_body(
+    activity: _ActivityRef,
+    table_id: str,
+    field_map: dict[str, str],
+    record_id: str,
+    act: str,
+    action: dict[str, Any],
+) -> None:
     # 后端稍后可能回写该行列 → 预先设置 ignore（60s 窗口）
     await _redis_set(_ignore_key(record_id), "1", ex=60)
 

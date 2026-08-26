@@ -60,7 +60,11 @@ class HrAccessContext:
             if employee.employee_number != self.employee_number:
                 raise ForbiddenException("数据范围限制：仅可访问本人记录")
         elif self.scoped_departments:
-            if employee.department not in self.scoped_departments:
+            allowed = employee.department in self.scoped_departments or (
+                employee.department == "未分类"
+                and employee.actual_department in self.scoped_departments
+            )
+            if not allowed:
                 raise ForbiddenException("数据范围限制：仅可访问授权部门员工")
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
