@@ -1,16 +1,18 @@
-"""Inspection route schedule generator — DB-driven dynamic task scanner."""
+"""Equipment scheduled tasks — 巡检任务生成器与静态定时任务。"""
 
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
 from app.core import time as app_time
+from app.core.config import get_settings
 from app.core.database import async_session_factory
 from app.core.exceptions import AppException
 from app.modules.equipment.deps import EquipmentAccessContext
+from app.modules.equipment.models import WorkOrder
 from app.modules.equipment.repository import inspection as inspection_repo
 from app.modules.equipment.repository import work_order as work_order_repo
 from app.modules.equipment.repository.inspection import get_due_schedules
@@ -20,8 +22,13 @@ from app.modules.equipment.service.inspection import (
     create_task,
     start_task,
 )
+from app.modules.equipment.service.maintenance_config import (
+    get_claim_timeout_config,
+)
 from app.modules.equipment.service.work_order import close_work_order
 from app.platform.identity.models import User
+from app.platform.integrations.feishu.contact import get_department_leader
+from app.platform.integrations.feishu.message import send_timeout_notification
 from app.platform.scheduler import (
     ScheduleConfig,
     ScheduleStrategy,
@@ -30,6 +37,7 @@ from app.platform.scheduler import (
 )
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class InspectionScheduleGenerator(TaskGenerator):
@@ -176,5 +184,62 @@ AUTO_CLOSE_TASK = TaskDefinition(
         timezone="Asia/Shanghai",
     ),
     coro=_auto_close_stale,
+    module="equipment",
+)
+
+
+async def scan_timeout_work_orders() -> None:
+    """扫描超时未接单的工单，通知设备主管。
+
+    原驻平台层 feishu/sync.py，迁入设备模块并挂到统一调度引擎。
+    """
+    dept_id = settings.FEISHU_EQUIPMENT_DEPT_ID
+    if not dept_id:
+        return
+
+    async with async_session_factory() as db:
+        try:
+            config = await get_claim_timeout_config(db)
+            result = await db.execute(
+                select(WorkOrder).where(
+                    WorkOrder.status == "待处理",
+                    WorkOrder.is_deleted == False,  # noqa: E712
+                )
+            )
+            pending_orders = result.scalars().all()
+
+            now = datetime.now(UTC)
+            priority_map = {
+                "紧急": "emergency", "高": "high",
+                "中": "medium", "低": "low",
+            }
+            for order in pending_orders:
+                attr = priority_map.get(order.priority, "medium")
+                timeout_minutes = getattr(config, attr, 60)
+                elapsed = (now - order.reported_at).total_seconds() / 60
+                if elapsed > timeout_minutes:
+                    leader = await get_department_leader(dept_id)
+                    leader_name = (
+                        leader.get("name", "主管") if leader else "主管"
+                    )
+                    await send_timeout_notification(
+                        order.work_order_no, "设备", leader_name,
+                    )
+                    logger.info(
+                        "Timeout WO %s (%.0f min > %d min)",
+                        order.work_order_no, elapsed, timeout_minutes,
+                    )
+        except Exception:
+            logger.exception("Timeout scan error")
+        finally:
+            await db.rollback()
+
+
+TIMEOUT_SCAN_TASK = TaskDefinition(
+    name="equipment.scan_timeout_work_orders",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL, interval_seconds=60,
+    ),
+    coro=scan_timeout_work_orders,
     module="equipment",
 )

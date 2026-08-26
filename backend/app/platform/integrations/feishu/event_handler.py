@@ -3,11 +3,16 @@
 事件处理器在 WebSocket 线程中同步调用，
 通过 asyncio.run_coroutine_threadsafe 桥接到主 async event loop。
 
-已合并设备模块巡检交互和验收卡片回调处理。
+事件到业务模块的分发全部采用注册制：
+- 卡片按钮回调按 action 查表分发（register_card_action_handler）
+- 多维表格事件广播给所有已注册 handler（register_bitable_record_handler），
+  各 handler 内部自行过滤归属
+平台层不内含任何业务逻辑。
 """
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import lark_oapi as lark
@@ -18,6 +23,11 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTr
 logger = logging.getLogger(__name__)
 
 _main_loop: asyncio.AbstractEventLoop | None = None
+
+CardActionHandler = Callable[[dict[str, Any], str], Awaitable[None]]
+BitableRecordHandler = Callable[
+    [str, str, list[dict[str, Any]]], Awaitable[None],
+]
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -99,8 +109,23 @@ async def _handle_message_async(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 卡片按钮回调（验收通过 / 退回）
+# 卡片按钮回调 — 注册制分发
 # ═══════════════════════════════════════════════════════════════
+
+_CARD_ACTION_HANDLERS: dict[str, CardActionHandler] = {}
+
+
+def register_card_action_handler(
+    action: str, handler: CardActionHandler,
+) -> None:
+    """业务模块注册卡片 action 的处理器。
+
+    应用启动时调用（见 main.py 接线），飞书卡片按钮点击后
+    按 payload["action"] 查表分发。重复注册视为配置错误。
+    """
+    if action in _CARD_ACTION_HANDLERS:
+        raise ValueError(f"Card action '{action}' is already registered")
+    _CARD_ACTION_HANDLERS[action] = handler
 
 
 def _on_card_action(data: P2CardActionTrigger) -> None:
@@ -136,127 +161,42 @@ async def _handle_card_action_async(
     action_value: dict[str, Any],
     user_id: str,
 ) -> None:
-    """处理验收卡片按钮点击。"""
-    import uuid as _uuid
-
-    from sqlalchemy import select as sa_select
-
-    from app.core.database import async_session_factory
-    from app.modules.equipment.deps import EquipmentAccessContext
-    from app.modules.equipment.schemas.work_order import WorkOrderVerify
-    from app.modules.equipment.service.work_order import verify_work_order
-    from app.platform.identity.models import User
-    from app.platform.integrations.feishu.notification import send_user_card
-
+    """按注册表分发卡片按钮点击给业务模块。"""
     if _main_loop is None:
         set_main_loop(asyncio.get_running_loop())
 
     # 新版 SDK 已预解析 action value 为 dict
     payload = action_value or {}
     action = payload.get("action")
-    work_order_id = payload.get("work_order_id")
-
-    if action == "approve":
-        result = "合格"
-    elif action == "reject":
-        result = "不合格"
-    else:
-        logger.error("无效的卡片 action: %s", payload)
+    if not action:
+        logger.error("卡片回调缺少 action: %s", payload)
         return
 
-    if not work_order_id:
-        logger.error("卡片回调缺少 work_order_id: %s", payload)
+    handler = _CARD_ACTION_HANDLERS.get(action)
+    if handler is None:
+        logger.error("未注册的卡片 action: %s", payload)
         return
 
-    async with async_session_factory() as db:
-        # 查找操作用户
-        user = None
-        if user_id:
-            user_result = await db.execute(
-                sa_select(User).where(
-                    User.feishu_user_id == user_id,
-                    User.is_deleted == False,  # noqa: E712
-                )
-            )
-            user = user_result.scalar_one_or_none()
-
-        if not user:
-            logger.warning("卡片回调：未找到飞书用户 %s", user_id)
-            return
-
-        # 查找工单 — FOR UPDATE 防并发重复验收
-        from app.modules.equipment.models.work_order import WorkOrder
-
-        wo = (
-            await db.execute(
-                sa_select(WorkOrder)
-                .where(
-                    WorkOrder.id == _uuid.UUID(work_order_id),
-                    WorkOrder.is_deleted == False,  # noqa: E712
-                )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if not wo:
-            if user.feishu_user_id:
-                await send_user_card(
-                    open_id=user.feishu_user_id,
-                title="❌ 工单不存在",
-                receive_id_type="user_id",
-                content=f"工单 {work_order_id} 不存在或已删除。",
-            )
-            return
-
-        if wo.status != "待验收":
-            if user.feishu_user_id:
-                await send_user_card(
-                    open_id=user.feishu_user_id,
-                title="⚠️ 无法验收",
-                receive_id_type="user_id",
-                content=(
-                    f"工单 **{wo.work_order_no}** 当前状态为「{wo.status}」，"
-                    "只有「待验收」的工单才能验收。"
-                ),
-            )
-            return
-
-        label = "验收通过" if result == "合格" else "退回"
-        try:
-            verify_data = WorkOrderVerify(
-                result=result,
-                remark=f"通过飞书卡片{label}",
-            )
-            ctx = EquipmentAccessContext(user=user, data_scope="all")
-            await verify_work_order(db, wo.id, ctx, verify_data)
-            await db.commit()
-        except Exception as e:
-            logger.exception("飞书卡片验收失败: %s", e)
-            if user.feishu_user_id:
-                await send_user_card(
-                    open_id=user.feishu_user_id,
-                title="❌ 操作失败",
-                receive_id_type="user_id",
-                content=f"验收操作失败：{e}",
-            )
-            return
-
-        # ponytail: 操作反馈，只发关键信息
-        eq_name = wo.equipment.name if wo.equipment else ""
-        if user.feishu_user_id:
-            await send_user_card(
-                open_id=user.feishu_user_id,
-            title=f"✅ {label}",
-            receive_id_type="user_id",
-            content=(
-                f"工单 **{wo.work_order_no}**（{eq_name}）\n"
-                f"已{label}"
-            ),
-        )
+    await handler(payload, user_id)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 多维表格记录变更（职称评审：申报表落库 / 打分表回传）
+# 多维表格记录变更 — 广播注册制
 # ═══════════════════════════════════════════════════════════════
+
+_BITABLE_RECORD_HANDLERS: list[BitableRecordHandler] = []
+
+
+def register_bitable_record_handler(handler: BitableRecordHandler) -> None:
+    """业务模块注册多维表格事件处理器。
+
+    每个事件广播给所有已注册 handler（多模块共享全局订阅），
+    各 handler 按 file_token/table_id 自行过滤归属。
+    应用启动时调用（见 main.py 接线），重复注册视为配置错误。
+    """
+    if handler in _BITABLE_RECORD_HANDLERS:
+        raise ValueError("Bitable record handler is already registered")
+    _BITABLE_RECORD_HANDLERS.append(handler)
 
 
 def _on_bitable_record_changed(data: P2DriveFileBitableRecordChangedV1) -> None:
@@ -306,10 +246,18 @@ async def _handle_bitable_record_changed_async(
     table_id: str,
     action_list: list[dict[str, Any]],
 ) -> None:
-    """多维表格事件异步处理（在主 event loop 中运行，转发给职称评审模块）。"""
+    """多维表格事件异步处理（在主 event loop 中运行，广播给已注册 handler）。"""
     if _main_loop is None:
         set_main_loop(asyncio.get_running_loop())
 
-    from app.modules.hr.title_review.bitable_handler import handle_record_changed
+    if not _BITABLE_RECORD_HANDLERS:
+        logger.warning("多维表格事件未注册处理器: file_token=%s", file_token)
+        return
 
-    await handle_record_changed(file_token, table_id, action_list)
+    for handler in _BITABLE_RECORD_HANDLERS:
+        try:
+            await handler(file_token, table_id, action_list)
+        except Exception:
+            logger.exception(
+                "多维表格事件处理器异常: file_token=%s", file_token,
+            )

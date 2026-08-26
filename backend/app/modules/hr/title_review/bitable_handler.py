@@ -1,6 +1,7 @@
 """飞书多维表格事件处理（职称评审 v2）。
 
-被 app/platform/integrations/feishu/event_handler.py 注册桥接调用（主事件循环）。
+通过 register_feishu_callbacks 注册到平台 bitable 广播注册表
+（main.py 启动接线），事件在主事件循环中送达。
 职责：按 file_token 路由活动 → 按 table_id 路由申报表/投票表 → 去重/防环 →
 落库/投票判定。Redis 不可用时自动降级（失去去重与防环，靠对账兜底）。
 """
@@ -14,6 +15,9 @@ from uuid import UUID
 from app.core.database import async_session_factory
 from app.modules.hr.title_review import models as m
 from app.modules.hr.title_review.service import TitleReviewService
+from app.platform.integrations.feishu.event_handler import (
+    register_bitable_record_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -255,3 +259,8 @@ async def _handle_vote_action(
         await service.sync_vote_record(activity_id, record_id, fields)
     # record_added 为后端写行触发（已 ignore）；手工加行暂不支持。
     # record_deleted 视为防御性事件：评审期间评委撤换走内网 API，此处不处理。
+
+
+def register_feishu_callbacks() -> None:
+    """应用启动时调用，注册多维表格事件处理器到平台广播注册表。"""
+    register_bitable_record_handler(handle_record_changed)

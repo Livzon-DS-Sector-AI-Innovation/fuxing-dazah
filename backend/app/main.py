@@ -60,13 +60,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.platform.integrations.feishu.sync import (
         member_sync_loop,
         stop_member_sync_flag,
-        stop_timeout_flag,
-        timeout_scan_loop,
     )
 
     member_task = asyncio.ensure_future(member_sync_loop())
-    timeout_task = asyncio.ensure_future(timeout_scan_loop())
     maintenance_plan_task = asyncio.ensure_future(maintenance_plan_loop())
+
+    # ── 业务模块注册飞书事件回调（注册制分发，须在 WS 启动前完成）──
+    from app.modules.equipment.feishu.callbacks import register_feishu_callbacks
+    from app.modules.hr.title_review.bitable_handler import (
+        register_feishu_callbacks as register_hr_feishu_callbacks,
+    )
+
+    register_feishu_callbacks()
+    register_hr_feishu_callbacks()
 
     # ── 平台级飞书 WebSocket 长连接 ──
     if settings.FEISHU_WS_ENABLED:
@@ -131,6 +137,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     scheduler_registry.register_generator(InspectionScheduleGenerator())
     scheduler_registry.register_task(AUTO_CLOSE_TASK)
+    # TIMEOUT_SCAN_TASK 暂不启用（设备模块决定后再挂调度引擎）
 
     from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
     scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
@@ -156,7 +163,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     stop_member_sync_flag.set()
-    stop_timeout_flag.set()
     stop_maintenance_plan_flag.set()
 
     # 停止安全模块 WebSocket
@@ -175,7 +181,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         pass
 
     member_task.cancel()
-    timeout_task.cancel()
     maintenance_plan_task.cancel()
 
     # 停止平台级飞书 WebSocket
