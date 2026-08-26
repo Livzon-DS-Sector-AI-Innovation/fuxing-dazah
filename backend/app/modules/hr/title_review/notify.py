@@ -59,10 +59,17 @@ async def _lookup_open_id(name: str) -> str | None:
 
 async def _send_card(open_id: str, card: dict[str, Any]) -> bool:
     """发送卡片（走平台集成层：SDK + token 管理 + 业务码校验）。"""
+    from app.core.config import get_settings
     from app.platform.integrations.feishu.notification import send_user_card
 
     try:
-        return await send_user_card(open_id, card=card)
+        _settings = get_settings()
+        return await send_user_card(
+            open_id,
+            card=card,
+            app_id=_settings.HR_TITLE_REVIEW_FEISHU_APP_ID or None,
+            app_secret=_settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET or None,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("发送飞书消息异常: %s", exc)
         return False

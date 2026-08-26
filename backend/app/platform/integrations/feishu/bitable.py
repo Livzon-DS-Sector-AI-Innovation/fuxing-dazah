@@ -20,6 +20,19 @@ class BitableAPIError(FeishuAPIError):
     """多维表格 API 调用失败。"""
 
 
+# 模块级默认应用凭证（None=全局 FEISHU_*）：业务模块可用独立应用覆盖，
+# 例如 hr/title_review 用 HR_TITLE_REVIEW_FEISHU_* 而不影响平台全局应用。
+_default_app_id: str | None = None
+_default_app_secret: str | None = None
+
+
+def set_default_app(app_id: str | None, app_secret: str | None) -> None:
+    """设置本适配器使用的应用凭证（传 None 回落全局 FEISHU_* 应用）。"""
+    global _default_app_id, _default_app_secret
+    _default_app_id = app_id
+    _default_app_secret = app_secret
+
+
 async def _request(
     method: str,
     url: str,
@@ -33,7 +46,7 @@ async def _request(
     （记录 errors 而非 500）。
     """
     try:
-        token = await get_tenant_token()
+        token = await get_tenant_token(_default_app_id, _default_app_secret)
         headers = {"Authorization": f"Bearer {token}"}
         if json_body is not None:
             headers["Content-Type"] = "application/json; charset=utf-8"

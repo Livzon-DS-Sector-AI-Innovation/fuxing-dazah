@@ -6,6 +6,8 @@ list_tables、list_fields、batch_create_records、subscribe_bitable、create_gr
 供 service.py / bitable_handler.py / 测试按原路径引用。
 """
 
+from app.core.config import get_settings
+from app.platform.integrations.feishu import bitable as _platform_bitable
 from app.platform.integrations.feishu.bitable import (  # noqa: F401
     BitableAPIError,
     batch_create_records,
@@ -16,6 +18,14 @@ from app.platform.integrations.feishu.bitable import (  # noqa: F401
     subscribe_bitable,
     update_record,
 )
+
+# HR 独立飞书应用（职称评审专用）：已配置时表格读写优先用它，不影响平台全局应用
+_settings = get_settings()
+if _settings.HR_TITLE_REVIEW_FEISHU_APP_ID and _settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET:
+    _platform_bitable.set_default_app(
+        _settings.HR_TITLE_REVIEW_FEISHU_APP_ID,
+        _settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET,
+    )
 
 # 兼容旧异常名（业务代码与测试均 catch 此名字）
 TitleReviewBitableError = BitableAPIError
