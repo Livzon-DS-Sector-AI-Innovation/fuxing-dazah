@@ -40,13 +40,26 @@ def parse_resume_pdf(file_bytes: bytes) -> dict:
     }
 
 
+# 简历文档中常见的标题词（不是姓名，不能作为候选名）
+_NAME_BLOCKLIST = {
+    "个人简历", "个人简介", "基本信息", "个人资料", "求职意向", "求职简历",
+    "应聘登记", "简历模板", "联系电话", "教育背景", "工作经历",
+}
+
+
 def _extract_name(text: str) -> str:
     m = re.search(r"姓名[：:]\s*([一-鿿]{2,4})", text)
     if m:
         return m.group(1)
-    first_line = text.split("\n")[0]
-    m = re.search(r"([一-鿿]{2,4})", first_line)
-    return m.group(1) if m else ""
+    # 清洗后的文本无换行结构：不要只取首行（那会是整个文档）。
+    # 取文档开头的前 30 个字符内首个 2-4 字中文串，并排除常见标题词。
+    head = text[:30]
+    for m in re.finditer(r"([一-鿿]{2,4})", head):
+        candidate = m.group(1)
+        if candidate in _NAME_BLOCKLIST:
+            continue
+        return candidate
+    return ""
 
 
 def _extract_phone(text: str) -> str:

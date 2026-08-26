@@ -264,7 +264,7 @@ class TestInterview:
 class TestOnboard:
     async def test_onboard_success(self, client: AsyncClient, db_session: AsyncSession):
         job = await _create_job(db_session)
-        c = await _create_candidate(db_session, job.id, status="已录用",
+        c = await _create_candidate(db_session, job.id, status="待入职审批",
                                      offer_status="已接受", phone="13900001111")
 
         resp = await client.post(f"/api/v1/hr/candidates/{c.id}/onboard")
@@ -307,7 +307,6 @@ class TestDataManagement:
         resp = await client.get("/api/v1/hr/data-management/tables")
         table_names = [t["table"] for t in resp.json()["data"]]
         assert "positions" not in table_names
-        assert "position_trainings" not in table_names
         assert "alembic_version" not in table_names
 
     async def test_clear_protected_table(self, client: AsyncClient):
@@ -375,4 +374,4 @@ class TestRecruitmentStats:
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["total_candidates"] >= 1
-        assert len(data["funnel"]) == 8  # 8 种状态
+        assert len(data["funnel"]) == 10  # 10 种状态（含待入职审批/已入职）

@@ -4,9 +4,11 @@
 日历操作失败不阻塞面试 CRUD（所有异常内部捕获，log warning）。
 """
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import lark_oapi as lark
 from lark_oapi.api.calendar.v4 import (
@@ -51,9 +53,12 @@ class FeishuCalendarService:
         interview_type: str = "初试",
     ) -> str:
         """创建飞书日历日程，返回 event_id。日程时长默认 1 小时，从 09:00 开始。"""
+        # 明确按 Asia/Shanghai 解释时间：服务器为 UTC（容器默认）时 naive
+        # .timestamp() 会按服务器本地时区算 epoch，导致日程时间错 8 小时
         start_time = datetime.combine(
             interview_date_val,
             datetime.strptime("09:00", "%H:%M").time(),
+            tzinfo=ZoneInfo("Asia/Shanghai"),
         )
         end_time = start_time + timedelta(hours=1)
 
@@ -107,7 +112,7 @@ class FeishuCalendarService:
             .build()
         )
 
-        response = self._client.calendar.v4.calendar_event.create(request)
+        response = await asyncio.to_thread(self._client.calendar.v4.calendar_event.create, request)
         if not response.success():
             msg = f"创建飞书日历事件失败: code={response.code}, msg={response.msg}"
             logger.error(msg)
@@ -132,6 +137,7 @@ class FeishuCalendarService:
             start_time = datetime.combine(
                 interview_date_val,
                 datetime.strptime("09:00", "%H:%M").time(),
+                tzinfo=ZoneInfo("Asia/Shanghai"),
             )
             end_time = start_time + timedelta(hours=1)
             event_builder.start_time(
@@ -169,7 +175,7 @@ class FeishuCalendarService:
             .build()
         )
 
-        response = self._client.calendar.v4.calendar_event.patch(request)
+        response = await asyncio.to_thread(self._client.calendar.v4.calendar_event.patch, request)
         if not response.success():
             logger.warning(
                 "更新日历事件失败: code=%s, msg=%s (事件 %s)",
@@ -185,7 +191,7 @@ class FeishuCalendarService:
             .build()
         )
 
-        response = self._client.calendar.v4.calendar_event.delete(request)
+        response = await asyncio.to_thread(self._client.calendar.v4.calendar_event.delete, request)
         if not response.success():
             logger.warning(
                 "删除日历事件失败: code=%s, msg=%s (事件 %s，可能已被手动删除)",

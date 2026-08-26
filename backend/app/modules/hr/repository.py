@@ -1,5 +1,6 @@
 """HR database queries live here."""
 
+import logging
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
@@ -7,6 +8,8 @@ from uuid import UUID
 from sqlalchemy import and_, asc, case, delete, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from app.modules.hr.models import (
     AnnualTrainingPlan,
@@ -184,7 +187,7 @@ class EmployeeRepository:
         return result.scalar_one()
 
     async def get_by_name_and_department(self, name: str, department: str) -> Employee | None:
-        """按姓名+部门精确匹配一位员工。"""
+        """按姓名+部门精确匹配一位员工（多人同名时返回 None，不做猜测）。"""
         result = await self.session.execute(
             select(Employee).where(
                 Employee.name == name,
@@ -192,7 +195,14 @@ class EmployeeRepository:
                 Employee.is_deleted.is_(False),
             )
         )
-        return result.scalar_one_or_none()
+        rows = list(result.scalars().all())
+        if len(rows) > 1:
+            logger.warning(
+                "按姓名+部门命中 %d 名员工，无法唯一定位: name=%s department=%s",
+                len(rows), name, department,
+            )
+            return None
+        return rows[0] if rows else None
 
     async def upsert_by_employee_number(self, data: dict) -> bool:
         """UPDATE-then-INSERT 策略：先 UPDATE，成功则完成；否则 INSERT。
@@ -208,17 +218,17 @@ class EmployeeRepository:
         insert_data = {k: v for k, v in data.items() if v is not None}
 
         # ── 构建 SET 子句（UPDATE 含 None 值 → NULL）──
+        # 注意：不在此处复活软删除员工（is_deleted=false 由显式恢复流程处理）
         skip_update = {"id", "employee_number", "created_at"}
         set_parts = []
         for c in data:  # 用原始 data，包含 None → NULL
             if c not in skip_update:
                 set_parts.append(f"{c} = :{c}")
-        set_parts.append("is_deleted = false")
         set_parts.append("updated_at = now()")
 
         sql_update = text(
             f"UPDATE hr.employees SET {', '.join(set_parts)} "
-            f"WHERE employee_number = :employee_number"
+            f"WHERE employee_number = :employee_number AND is_deleted = false"
         )
 
         conn = await self.session.connection()
@@ -241,10 +251,13 @@ class EmployeeRepository:
             await conn.execute(sql_insert, insert_data)
             return True
         except IntegrityError:
-            # 极低概率竞态：UPDATE 后 INSERT 前，另一请求插入了同工号
-            # 此时回退到 UPDATE
-            await conn.execute(sql_update, data)
-            return False
+            # 竞态或工号属于软删除员工：回退到 UPDATE（仅限未删除行）
+            result = await conn.execute(sql_update, data)
+            if result.rowcount and result.rowcount > 0:
+                return False
+            raise ValueError(
+                f"工号 {data.get('employee_number')} 已存在且处于删除状态，无法导入"
+            )
 
     async def count_total(self) -> int:
         result = await self.session.execute(

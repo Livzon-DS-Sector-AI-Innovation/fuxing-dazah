@@ -1,5 +1,6 @@
 """HR business workflows live here."""
 
+import asyncio
 import logging
 from datetime import UTC, date, datetime
 from uuid import UUID
@@ -352,17 +353,19 @@ class EmployeeService:
                     continue
         return None
 
-    async def upload_employees(self, file_bytes: bytes) -> dict:
-        """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, errors}。
+    async def upload_employees(
+        self, file_bytes: bytes, allowed_departments: set[str] | None = None
+    ) -> dict:
+        """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, skipped, errors}。
 
         每行使用独立的 SQL savepoint，单行失败通过 ROLLBACK TO SAVEPOINT 恢复事务，
-        确保失败行不影响其他行。
+        确保失败行不影响其他行。allowed_departments 非空时仅导入该范围内的部门行。
         """
         from io import BytesIO
 
         from openpyxl import load_workbook
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -381,6 +384,7 @@ class EmployeeService:
 
         created = 0
         updated = 0
+        skipped = 0
         errors: list[str] = []
 
         # 获取底层连接，用于手动管理 savepoint
@@ -458,6 +462,15 @@ class EmployeeService:
                     if field not in data:
                         data[field] = None
 
+                # 数据范围受限时仅导入授权部门行
+                if (
+                    allowed_departments is not None
+                    and data.get("department") not in allowed_departments
+                ):
+                    skipped += 1
+                    await conn.execute(text(f"RELEASE SAVEPOINT {sp_name}"))
+                    continue
+
                 is_new = await self.repo.upsert_by_employee_number(data)
                 if is_new:
                     created += 1
@@ -475,7 +488,7 @@ class EmployeeService:
         if created > 0 or updated > 0:
             await self._sync_departments_from_employees()
 
-        return {"created": created, "updated": updated, "errors": errors}
+        return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
     async def upload_trainers(self, file_bytes: bytes, allowed_departments: set[str] | None = None) -> dict:
         """上传内训师 Excel，按姓名+部门 upsert。allowed_departments 非空时仅导入该范围内的部门。"""
@@ -485,7 +498,7 @@ class EmployeeService:
 
         from app.modules.hr.models import HrTrainer
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -500,10 +513,14 @@ class EmployeeService:
             if h in col_name_map:
                 col_map[idx] = col_name_map[h]
 
+        from sqlalchemy import text as sql_text
+        conn = await self.repo.session.connection()
         created, updated, skipped, errors = 0, 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row): continue
+            sp_name = f"trainer_row_{row_idx}"
             try:
+                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
                 data = {}
                 for ci, fn in col_map.items():
                     v = row[ci] if ci < len(row) else None
@@ -531,7 +548,11 @@ class EmployeeService:
                     self.repo.session.add(HrTrainer(**data))
                     created += 1
                 await self.repo.session.flush()
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
             except Exception as e:
+                # 单行失败只回滚本行，不毒化整个导入事务
+                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
         return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
@@ -543,7 +564,7 @@ class EmployeeService:
 
         from app.modules.hr.models import PositionTraining, SopCatalog
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows: raise ValueError("文件为空")
@@ -557,10 +578,14 @@ class EmployeeService:
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
 
+        from sqlalchemy import text as sql_text
+        conn = await self.repo.session.connection()
         created, updated, errors = 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row): continue
+            sp_name = f"sop_row_{row_idx}"
             try:
+                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
                 data = {}
                 for ci, fn in col_map.items():
                     v = row[ci] if ci < len(row) else None
@@ -626,7 +651,10 @@ class EmployeeService:
                                 sop_number=row_data.get("sop_number"),
                                 file_name=name,
                             ))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
             except Exception as e:
+                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
         return {"created": created, "updated": updated, "errors": errors}
 
@@ -680,7 +708,11 @@ class EmployeeService:
         return result
 
     async def delete_employee(self, employee_id: UUID) -> None:
-        await self.repo.session.execute(text("DELETE FROM hr.employees WHERE id = :id"), {"id": employee_id})
+        employee = await self.repo.get_by_id(employee_id)
+        if not employee:
+            raise NotFoundException("员工", str(employee_id))
+        employee.is_deleted = True
+        await self.repo.update(employee)
 
     async def list_employees(
         self,
@@ -800,7 +832,7 @@ class EmployeeService:
 
         from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -1120,6 +1152,13 @@ class OffboardingRecordService:
         return result
 
     async def delete_record(self, record_id: UUID) -> None:
+        # 删除离职记录时恢复员工在职状态（与 departure 流程对称）
+        record = await self.get_record(record_id)
+        if record and record.employee_id:
+            employee = await self.employee_repo.get_by_id(record.employee_id)
+            if employee and employee.status == "离职":
+                employee.status = "在职"
+                await self.employee_repo.update(employee)
         await self.repo.session.execute(text("DELETE FROM hr.offboarding_records WHERE id = :id"), {"id": record_id})
 
     async def list_records(
@@ -1575,7 +1614,7 @@ class CandidateService:
         from openpyxl import load_workbook
         from sqlalchemy import text as sa_text
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -2051,14 +2090,11 @@ class CandidateReviewService:
         if rv.status != "待审核":
             raise ValueError("该审核已处理")
 
-        rv.status = decision
-        rv.review_comment = review_comment
-        rv.reviewed_at = datetime.now()
-        result = await self.repo.update(rv)
-
-        # 候选人状态更新
+        # 先校验候选人状态，再落库审核结果——避免校验失败时审核记录已被
+        # flush 且随路由 commit（候选人卡死、审核无法重做）
         is_onboarding = rv.review_type == "入职审批"
         c = await self.candidate_repo.get_by_id(rv.candidate_id)
+        new_status: str | None = None
         if c:
             if is_onboarding:
                 if c.status != "待入职审批":
@@ -2068,6 +2104,14 @@ class CandidateReviewService:
                 if c.status not in ("待部门审核", "面试中"):
                     raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
                 new_status = "面试中" if decision == "已同意" else "已拒绝"
+
+        rv.status = decision
+        rv.review_comment = review_comment
+        rv.reviewed_at = datetime.now()
+        result = await self.repo.update(rv)
+
+        # 候选人状态更新
+        if c and new_status:
             old_status = c.status
             c.status = new_status
             await self.candidate_repo.update(c)
@@ -2231,6 +2275,8 @@ class PerformanceEvaluationService:
             raise ValueError("考核记录不存在")
         if e.status != "draft":
             raise ValueError("仅草稿状态可提交自评")
+        if user_name and e.department_head and user_name != e.department_head:
+            raise PermissionError("仅部门负责人可提交自评")
         e.status = "self_submitted"
         e.self_submitted_at = datetime.now(UTC)
         await self.repo.update(e)
@@ -2240,12 +2286,14 @@ class PerformanceEvaluationService:
             await self.repo.get_by_id(evaluation_id)  # type: ignore[arg-type]
         )
 
-    async def submit_leader(self, evaluation_id: UUID) -> dict:
+    async def submit_leader(self, evaluation_id: UUID, user_name: str | None = None) -> dict:
         e = await self.repo.get_by_id(evaluation_id)
         if e is None:
             raise ValueError("考核记录不存在")
         if e.status not in ("draft", "self_submitted"):
             raise ValueError("仅草稿或已自评状态可提交领导评分")
+        if user_name and e.evaluator_leader and user_name != e.evaluator_leader:
+            raise PermissionError("仅分管领导可提交领导评分")
         e.status = "leader_scored"
         e.leader_submitted_at = datetime.now(UTC)
         await self.repo.update(e)

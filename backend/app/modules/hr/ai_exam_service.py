@@ -53,8 +53,11 @@ def _extract_text_content(file_bytes: bytes) -> dict[str, Any]:
 
 def _parse_file(file_bytes: bytes, filename: str) -> dict[str, Any]:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext in ("docx", "doc"):
+    if ext == "docx":
         return _extract_docx_content(file_bytes)
+    if ext == "doc":
+        # python-docx 无法解析 Word 97-2003 二进制 .doc，明确报错而非 500
+        raise ValueError("不支持 .doc 旧版 Word 格式，请另存为 .docx 后重新上传")
     return _extract_text_content(file_bytes)
 
 

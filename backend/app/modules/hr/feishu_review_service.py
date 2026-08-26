@@ -1,6 +1,9 @@
-"""飞书审核消息推送服务"""
+"""飞书审核消息推送服务。
 
-import json
+消息发送统一走平台集成 app/platform/integrations/feishu/notification.py
+（SDK + token 管理 + 业务码校验），业务模块不再直接散落飞书 HTTP 请求。
+"""
+
 import logging
 
 from app.core.config import get_settings
@@ -8,24 +11,8 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-async def _get_feishu_token() -> str:
-    """通过 HTTP 直接获取 tenant_access_token（不依赖 lark_oapi 版本）"""
-    import httpx
-    settings = get_settings()
-    resp = httpx.post(
-        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-        json={"app_id": settings.FEISHU_APP_ID, "app_secret": settings.FEISHU_APP_SECRET},
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    token = data.get("tenant_access_token", "")
-    if not token:
-        raise RuntimeError("获取飞书token失败: " + json.dumps(data))
-    return token
-
-
 async def _lookup_open_id(name: str) -> str | None:
-    """通过姓名查找飞书open_id（仅查 identity.users，系统登录过的用户）"""
+    """通过姓名查找飞书open_id（仅查 identity.users，系统登录过的用户）。"""
     try:
         from sqlalchemy import text
         from app.core.database import async_session_factory
@@ -45,22 +32,11 @@ async def _lookup_open_id(name: str) -> str | None:
 
 
 async def _send_card(open_id: str, card: dict) -> bool:
-    """发送飞书卡片消息给指定用户（纯 HTTP，不依赖 lark_oapi 版本）"""
+    """发送飞书卡片消息给指定用户（走平台集成层，含业务码校验）。"""
+    from app.platform.integrations.feishu.notification import send_user_card
+
     try:
-        import httpx
-        token = await _get_feishu_token()
-        resp = httpx.post(
-            "https://open.feishu.cn/open-apis/im/v1/messages",
-            params={"receive_id_type": "open_id"},
-            json={
-                "receive_id": open_id,
-                "msg_type": "interactive",
-                "content": json.dumps(card),
-            },
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        resp.raise_for_status()
-        return True
+        return await send_user_card(open_id, card=card)
     except Exception as e:
         logger.warning(f"发送飞书消息异常: {e}")
         return False

@@ -6,6 +6,7 @@
 支持多条 SOP 同场一起转训、合并生成一套培训材料。
 """
 import json
+import logging
 import zipfile
 from datetime import UTC, date, datetime
 from io import BytesIO
@@ -20,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.hr.deps import HrAccessContext, get_hr_scope
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["HR-SOP培训"])
 
@@ -104,7 +107,7 @@ async def _notify_training_admins(session: AsyncSession, record, departments: li
             if oid:
                 await _send_card(oid, card)
     except Exception:
-        pass  # 通知失败不影响登记
+        logger.exception("通知培训管理员失败: record_id=%s", getattr(record, "id", None))  # 记录失败，便于排查
 
 
 async def _sync_entries(session: AsyncSession, record) -> None:
@@ -234,7 +237,8 @@ async def create_sop_record(
         involved_departments=json.dumps(involved, ensure_ascii=False),
         change_note=payload.get("change_note"),
         color=payload.get("color", "新增"),
-        status=payload.get("status", "草稿"),
+        # 状态由提交流程控制：创建一律草稿，不允许客户端直接指定状态绕过状态机
+        status="草稿",
         initiator_department=initiator or None,
         created_by=hr_scope.user.name or "",
     )
@@ -279,9 +283,10 @@ async def update_sop_record(
         raise HTTPException(404, "记录不存在")
     for key in ("year", "training_date", "file_name", "file_no", "effective_date",
                 "method", "complete_time", "trainer", "trainees", "change_note",
-                "color", "status", "initiator_department"):
+                "color", "initiator_department"):
         if key in payload:
             setattr(r, key, payload[key])
+    # status 由提交/转训流程控制，不允许客户端直接改写
     if "involved_departments" in payload:
         involved = list(dict.fromkeys(
             str(d).strip() for d in _json_loads(payload["involved_departments"]) if str(d).strip()
@@ -511,10 +516,14 @@ async def batch_transfer_sop_entries(
     ids = payload.get("ids") or []
     if not ids:
         raise HTTPException(400, "请选择要转训的记录")
+    try:
+        entry_ids = [UUID(i) for i in ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "记录 ID 格式不正确")
     rows = (await session.execute(
         select(SopTrainingEntry).where(
             SopTrainingEntry.is_deleted == False,  # noqa: E712
-            SopTrainingEntry.id.in_([UUID(i) for i in ids]),
+            SopTrainingEntry.id.in_(entry_ids),
         )
     )).scalars().all()
     transferred = 0

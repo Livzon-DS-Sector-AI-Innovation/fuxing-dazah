@@ -89,9 +89,12 @@ class AiChatService:
         # 去掉 markdown 代码围栏
         content = re.sub(r"```(?:json)?\s*", "", content)
         content = content.strip()
-        # 提取 JSON
-        m = re.search(r"\{[\s\S]*\}", content)
-        parsed: dict[str, Any] = json.loads(m.group()) if m else json.loads(content)
+        # 提取 JSON：从第一个 { 到最后一个 } 截取（容忍模型在 JSON 前后附加解释文字）
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"AI 响应中未找到 JSON: {content[:200]}")
+        parsed: dict[str, Any] = json.loads(content[start : end + 1])
         return parsed
 
     @staticmethod

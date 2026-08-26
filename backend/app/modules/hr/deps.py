@@ -374,6 +374,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/training-evaluations/export-admin", "hr:training:export"),
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),
+    (r"/training-assessment-scores/export", "hr:training:export"),
     # 培训登记表
     (r"/training-registration", "hr:roster:read"),
     # 员工异动
@@ -389,6 +390,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/candidates", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
+                      "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
+    (r"/interviews", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                       "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/job-requirements/.*/candidates/comparison", "hr:recruitment:read"),
     (r"/job-requirements", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",

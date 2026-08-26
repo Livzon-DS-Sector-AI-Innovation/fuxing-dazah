@@ -1,6 +1,7 @@
 import json
 from datetime import date
 from io import BytesIO
+from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
@@ -278,7 +279,9 @@ async def list_employees(
 async def create_employee(
     payload: EmployeeCreate,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    hr_scope.ensure_dept_writable([payload.department])
     employee = await service.create_employee(payload)
     return success_response(
         data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
@@ -291,13 +294,15 @@ async def create_employee(
 async def upload_employees(
     file: UploadFile,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """上传 Excel 人员名单，按工号自动新增或更新。"""
+    """上传 Excel 人员名单，按工号自动新增或更新（受限用户仅可操作授权部门行）。"""
     if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
         raise HTTPException(400, "仅支持 .xlsx / .xls 格式")
     try:
         content = await file.read()
-        result = await service.upload_employees(content)
+        allowed_departments = None if hr_scope.is_unrestricted else set(hr_scope.scoped_departments)
+        result = await service.upload_employees(content, allowed_departments=allowed_departments)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return success_response(data=result, message=f"新增 {result['created']}，更新 {result['updated']}")
@@ -390,7 +395,14 @@ async def training_candidates(
         OnboardingRecord.is_employed == "是",
     )
     # 数据范围受限时强制收敛到本部门/本人
-    stmt = hr_scope.apply_list_scope(stmt, OnboardingRecord)
+    # （OnboardingRecord 无 actual_department 列，不能用 apply_list_scope 的未分类分支）
+    if not hr_scope.is_unrestricted:
+        if hr_scope.data_scope == "self_only":
+            stmt = stmt.where(OnboardingRecord.employee_number == hr_scope.employee_number)
+        elif hr_scope.scoped_departments:
+            stmt = stmt.where(OnboardingRecord.department.in_(hr_scope.scoped_departments))
+        else:
+            raise ForbiddenException("数据范围限制：无法确定您的部门，请联系管理员")
     if keyword:
         stmt = stmt.where(
             OnboardingRecord.name.ilike(f"{keyword}%")
@@ -497,6 +509,13 @@ def _fmt_list(val) -> str:
     if isinstance(val, list):
         return ",".join(str(v) for v in val)
     return str(val)
+
+
+async def _ensure_record_in_scope(hr_scope: HrAccessContext, record: Any) -> None:
+    """离职记录数据范围校验：记录按部门归属，越界抛 403。"""
+    if hr_scope.is_unrestricted:
+        return
+    hr_scope.ensure_dept_writable([getattr(record, "department", None)])
 
 
 def _xlsx_response(wb, filename: str) -> StreamingResponse:
@@ -918,6 +937,9 @@ async def update_employee(
 ):
     employee = await service.get_employee(employee_id)
     hr_scope.ensure_can_access_employee(employee)
+    # 目标部门也必须在数据范围内（防止把员工移出/移入越权部门）
+    if "department" in payload.model_fields_set and payload.department:
+        hr_scope.ensure_dept_writable([payload.department])
     employee = await service.update_employee(employee_id, payload)
     return success_response(
         data=EmployeeResponse.model_validate(employee).model_dump(mode="json"),
@@ -944,8 +966,12 @@ async def delete_employee(
 async def export_onboarding_training_record(
     employee_number: str,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据员工工号自动生成并下载入职培训记录 Word 文档。"""
+    emp = await service.repo.get_by_employee_number(employee_number)
+    if emp:
+        hr_scope.ensure_can_access_employee(emp)
     employee = await service.get_employee_by_number(employee_number)
     try:
         buffer: BytesIO = generate_onboarding_training_record(employee)
@@ -1045,7 +1071,11 @@ async def export_work_permit(
     employee_number: str,
     body: TrainingExportRequest,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    emp = await service.repo.get_by_employee_number(employee_number)
+    if emp:
+        hr_scope.ensure_can_access_employee(emp)
     """根据员工工号和培训项，生成上岗证 Word 文档。"""
     from app.modules.hr.work_permit_generator import generate_work_permit
 
@@ -1081,7 +1111,10 @@ async def export_prejob_training_plan(
     payload: PrejobTrainingItems | None = None,
     service: EmployeeService = Depends(get_employee_service),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    employee = await service.get_employee(employee_id)
+    hr_scope.ensure_can_access_employee(employee)
     """根据入职台账数据生成并下载岗前培训计划 Word 文档。
 
     优先使用入职台账（hr.onboarding_records）数据，
@@ -1173,9 +1206,11 @@ async def export_prejob_training_plan(
 async def export_onboarding_evaluation_by_employee(
     employee_id: UUID,
     service: EmployeeService = Depends(get_employee_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """根据员工档案预填基本信息并导出上岗评估表 Excel 文档。"""
     employee = await service.get_employee(employee_id)
+    hr_scope.ensure_can_access_employee(employee)
 
     payload = OnboardingEvaluationInput(
         employee_name=employee.name or "",
@@ -1726,7 +1761,11 @@ async def update_department(
     department_id: UUID,
     payload: DepartmentUpdate,
     service: DepartmentService = Depends(get_department_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    existing = await service.get_department(department_id)
+    target_name = payload.name or existing.name
+    hr_scope.ensure_dept_writable([existing.name, target_name])
     department = await service.update_department(department_id, payload)
     return success_response(
         data=DepartmentResponse.model_validate(department).model_dump(mode="json"),
@@ -1738,7 +1777,10 @@ async def update_department(
 async def delete_department(
     department_id: UUID,
     service: DepartmentService = Depends(get_department_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    existing = await service.get_department(department_id)
+    hr_scope.ensure_dept_writable([existing.name])
     await service.delete_department(department_id)
     return success_response(message="部门删除成功")
 
@@ -1796,8 +1838,10 @@ class PositionCreate(BaseModel):
 async def create_position(
     payload: PositionCreate,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """手动新建一个职位，写入 hr.positions 表。"""
+    hr_scope.ensure_dept_writable([payload.department])
     from app.modules.hr.models import HrPosition
 
     pos = HrPosition(department=payload.department, name=payload.name)
@@ -1815,8 +1859,10 @@ async def delete_position_by_name(
     position_name: str,
     department: str = Query(..., description="部门名称"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """删除指定部门和名称的职位，同时清除关联的 SOP 目录条目。"""
+    hr_scope.ensure_dept_writable([department])
     from app.modules.hr.models import HrPosition
 
     pos = (await session.execute(
@@ -1828,10 +1874,17 @@ async def delete_position_by_name(
     )).scalar_one_or_none()
     if not pos:
         raise HTTPException(404, "职位不存在")
-    await session.execute(text("DELETE FROM hr.position_trainings WHERE department = :d AND position_name = :p"), {"d": department, "p": position_name})
-    await session.execute(text("DELETE FROM hr.sop_catalog WHERE department = :d AND position_name = :p"), {"d": department, "p": position_name})
-    await session.execute(text("DELETE FROM hr.positions WHERE id = :id"), {"id": pos.id})
-    await session.commit()
+    # 软删除职位及关联培训内容（不做物理删除，保留历史可恢复）
+    await session.execute(
+        text("UPDATE hr.position_trainings SET is_deleted = true WHERE department = :d AND position_name = :p AND is_deleted = false"),
+        {"d": department, "p": position_name},
+    )
+    await session.execute(
+        text("UPDATE hr.sop_catalog SET is_deleted = true WHERE department = :d AND position_name = :p AND is_deleted = false"),
+        {"d": department, "p": position_name},
+    )
+    pos.is_deleted = True
+    await session.flush()
     return success_response(message="删除成功")
 
 
@@ -1972,7 +2025,14 @@ async def list_teams(
 async def create_team(
     payload: TeamCreate,
     service: TeamService = Depends(get_team_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    from app.modules.hr.models import HrDepartment
+    dept = (await service.department_repo.session.execute(
+        select(HrDepartment).where(HrDepartment.id == payload.department_id)
+    )).scalar_one_or_none()
+    if dept:
+        hr_scope.ensure_dept_writable([dept.name])
     team = await service.create_team(payload)
     return success_response(
         data=TeamResponse.model_validate(team).model_dump(mode="json"),
@@ -1997,7 +2057,13 @@ async def update_team(
     team_id: UUID,
     payload: TeamUpdate,
     service: TeamService = Depends(get_team_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    existing = await service.get_team(team_id)
+    if existing and existing.department_id:
+        dept = await service.department_repo.get_by_id(existing.department_id)
+        if dept:
+            hr_scope.ensure_dept_writable([dept.name])
     team = await service.update_team(team_id, payload)
     return success_response(
         data=TeamResponse.model_validate(team).model_dump(mode="json"),
@@ -2009,7 +2075,13 @@ async def update_team(
 async def delete_team(
     team_id: UUID,
     service: TeamService = Depends(get_team_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    existing = await service.get_team(team_id)
+    if existing and existing.department_id:
+        dept = await service.department_repo.get_by_id(existing.department_id)
+        if dept:
+            hr_scope.ensure_dept_writable([dept.name])
     await service.delete_team(team_id)
     return success_response(message="班组删除成功")
 
@@ -2094,8 +2166,10 @@ async def create_offboarding_record(
 async def get_offboarding_record(
     record_id: UUID,
     service: OffboardingRecordService = Depends(get_offboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     record = await service.get_record(record_id)
+    await _ensure_record_in_scope(hr_scope, record)
     return success_response(
         data=OffboardingRecordResponse.model_validate(record).model_dump(mode="json"),
     )
@@ -2106,7 +2180,10 @@ async def update_offboarding_record(
     record_id: UUID,
     payload: OffboardingRecordUpdate,
     service: OffboardingRecordService = Depends(get_offboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    await _ensure_record_in_scope(hr_scope, record)
     record = await service.update_record(record_id, payload)
     return success_response(
         data=OffboardingRecordResponse.model_validate(record).model_dump(mode="json"),
@@ -2118,7 +2195,10 @@ async def update_offboarding_record(
 async def delete_offboarding_record(
     record_id: UUID,
     service: OffboardingRecordService = Depends(get_offboarding_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    await _ensure_record_in_scope(hr_scope, record)
     await service.delete_record(record_id)
     return success_response(message="离职记录删除成功")
 
@@ -2256,8 +2336,11 @@ async def create_departure_record(
 async def get_departure_record(
     record_id: UUID,
     service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     record = await service.get_record(record_id)
+    if not hr_scope.is_unrestricted:
+        hr_scope.ensure_dept_writable([record.department])
     return success_response(
         data=DepartureRecordResponse.model_validate(record).model_dump(mode="json"),
     )
@@ -2268,7 +2351,11 @@ async def update_departure_record(
     record_id: UUID,
     payload: DepartureRecordUpdate,
     service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    if not hr_scope.is_unrestricted:
+        hr_scope.ensure_dept_writable([record.department])
     record = await service.update_record(record_id, payload)
     return success_response(
         data=DepartureRecordResponse.model_validate(record).model_dump(mode="json"),
@@ -2280,7 +2367,11 @@ async def update_departure_record(
 async def delete_departure_record(
     record_id: UUID,
     service: DepartureRecordService = Depends(get_departure_service),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    record = await service.get_record(record_id)
+    if not hr_scope.is_unrestricted:
+        hr_scope.ensure_dept_writable([record.department])
     await service.delete_record(record_id)
     return success_response(message="离职台账记录删除成功")
 
@@ -2297,14 +2388,15 @@ async def preview_departure_certificate(
     )
     record = await service.get_record(record_id)
 
-    # 兜底：离职台账缺少的字段从员工档案补
+    # 兜底：离职台账缺少的字段从员工档案补（同名多人时不做猜测，避免错打他人证件号）
     id_number = record.id_card or ""
     entry_date = record.livo_entry_date or record.factory_entry_date or None
     if (not id_number or not entry_date) and record.name:
         from app.modules.hr.models import Employee
-        emp_row = (await service.repo.session.execute(
+        emp_rows = list((await service.repo.session.execute(
             select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
-        )).scalars().first()
+        )).scalars().all())
+        emp_row = emp_rows[0] if len(emp_rows) == 1 else None
         if emp_row:
             if not id_number:
                 id_number = emp_row.id_card or ""
@@ -2335,14 +2427,15 @@ async def send_departure_certificate(
     record = await service.get_record(record_id)
     name = record.name or "员工"
 
-    # 兜底：离职台账缺少的字段从员工档案补
+    # 兜底：离职台账缺少的字段从员工档案补（同名多人时不做猜测，避免错打他人证件号）
     id_number = record.id_card or ""
     entry_date = record.livo_entry_date or record.factory_entry_date or None
     if (not id_number or not entry_date) and record.name:
         from app.modules.hr.models import Employee
-        emp_row = (await service.repo.session.execute(
+        emp_rows = list((await service.repo.session.execute(
             select(Employee).where(Employee.name == record.name, Employee.is_deleted == False)
-        )).scalars().first()
+        )).scalars().all())
+        emp_row = emp_rows[0] if len(emp_rows) == 1 else None
         if emp_row:
             if not id_number:
                 id_number = emp_row.id_card or ""
@@ -2448,10 +2541,22 @@ class BatchScoreRequest(BaseModel):
 async def batch_update_scores(
     body: BatchScoreRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """批量更新培训台账中的考核成绩字段。"""
+    """批量更新培训台账中的考核成绩字段（受限用户仅可更新授权范围内记录）。"""
     updated = 0
     for rec in body.records:
+        if not hr_scope.is_unrestricted:
+            row = (await session.execute(
+                text("SELECT department FROM hr.training_ledgers WHERE id = :id AND is_deleted = false"),
+                {"id": rec.id},
+            )).fetchone()
+            if not row:
+                continue
+            if not hr_scope.scoped_departments:
+                raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
+            if row[0] not in hr_scope.scoped_departments:
+                raise ForbiddenException(f"数据范围限制：仅可操作授权部门记录（{row[0]}）")
         result = await session.execute(
             text("UPDATE hr.training_ledgers SET assessment_result = :r, updated_at = now() WHERE id = :id AND is_deleted = false"),
             {"r": rec.assessment_result, "id": rec.id},
@@ -3096,14 +3201,14 @@ async def save_qa_scores(
             emp_no = s.get("employee_number", "")
             if not name:
                 continue
-            # 没工号时从员工表反查
+            # 没工号时从员工表反查（同名多人时不做猜测，跳过该行）
             if not emp_no:
-                emp = (await session.execute(
-                    text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false LIMIT 1"),
+                emp_rows = (await session.execute(
+                    text("SELECT employee_number FROM hr.employees WHERE name = :nm AND is_deleted = false"),
                     {"nm": name},
-                )).fetchone()
-                if emp and emp[0]:
-                    emp_no = emp[0]
+                )).fetchall()
+                if len(emp_rows) == 1 and emp_rows[0][0]:
+                    emp_no = emp_rows[0][0]
             if not emp_no:
                 continue
             wrong = s.get("wrong_questions") or []
@@ -3319,8 +3424,16 @@ async def sync_qa_to_ledger(
 async def delete_qa_assessment(
     assessment_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """软删除考核场次及关联成绩。"""
+    """软删除考核场次及关联成绩（受限用户仅可删除授权部门场次）。"""
+    row = (await session.execute(
+        text("SELECT department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
+        {"id": assessment_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(404, "考核场次不存在")
+    _ensure_qa_assessment_access(hr_scope, row[0])
     await session.execute(text("UPDATE hr.qa_assessments SET is_deleted = true WHERE id = :id"), {"id": assessment_id})
     await session.execute(text("UPDATE hr.qa_assessment_scores SET is_deleted = true WHERE assessment_id = :id"), {"id": assessment_id})
     await session.flush()
@@ -3359,7 +3472,8 @@ async def export_training_qa_record_with_scores(
         wrong_indices = s.get("wrong_questions", []) or []
         total_q = len(questions)
         if wrong_indices and total_q:
-            wrong_nums = "、".join(str(i + 1) for i in wrong_indices)
+            # wrong_questions 约定为 1 基序号（与保存路径一致）
+            wrong_nums = "、".join(str(i) for i in wrong_indices if isinstance(i, int) and 1 <= i <= total_q)
             result_text = f"第{wrong_nums}题错误，其他题目正确"
         else:
             result_text = "全对，所有题目回答正确"
@@ -3371,19 +3485,26 @@ async def export_training_qa_record_with_scores(
             "result_text": result_text,
         })
 
-    # 尝试保存考核记录到数据库（失败不影响导出）
+    # 尝试保存考核记录到数据库（失败不影响导出；同场次幂等，不重复插入）
     try:
         import uuid as _uuid
-        assessment_id = _uuid.uuid4()
-        await session.execute(
-            text("INSERT INTO hr.qa_assessments (id, subject, department, training_date, training_method, trainer, questions, trainee_names) VALUES (:id, :subject, :dept, :date, :method, :trainer, :questions, :trainees)"),
-            {"id": assessment_id, "subject": body.training_content or "问答考核", "dept": body.training_department, "date": training_date_val, "method": body.training_method, "trainer": body.trainer_name, "questions": _json.dumps(questions), "trainees": _json.dumps(trainee_names)},
-        )
-        for s in scores_raw:
+        existing_row = (await session.execute(
+            text("SELECT id FROM hr.qa_assessments WHERE subject = :s AND department = :d AND training_date = :date AND is_deleted = false LIMIT 1"),
+            {"s": body.training_content or "问答考核", "d": body.training_department, "date": training_date_val},
+        )).fetchone()
+        if existing_row:
+            assessment_id = existing_row[0]
+        else:
+            assessment_id = _uuid.uuid4()
             await session.execute(
-                text("INSERT INTO hr.qa_assessment_scores (id, assessment_id, employee_name, wrong_questions, total_score, assessed_date) VALUES (gen_random_uuid(), :aid, :name, :wrong, :score, :date)"),
-                {"aid": assessment_id, "name": s.get("name", ""), "wrong": _json.dumps(s.get("wrong_questions", [])), "score": s.get("total_score", 0), "date": training_date_val},
+                text("INSERT INTO hr.qa_assessments (id, subject, department, training_date, training_method, trainer, questions, trainee_names) VALUES (:id, :subject, :dept, :date, :method, :trainer, :questions, :trainees)"),
+                {"id": assessment_id, "subject": body.training_content or "问答考核", "dept": body.training_department, "date": training_date_val, "method": body.training_method, "trainer": body.trainer_name, "questions": _json.dumps(questions), "trainees": _json.dumps(trainee_names)},
             )
+            for s in scores_raw:
+                await session.execute(
+                    text("INSERT INTO hr.qa_assessment_scores (id, assessment_id, employee_name, wrong_questions, total_score, assessed_date) VALUES (gen_random_uuid(), :aid, :name, :wrong, :score, :date)"),
+                    {"aid": assessment_id, "name": s.get("name", ""), "wrong": _json.dumps(s.get("wrong_questions", [])), "score": s.get("total_score", 0), "date": training_date_val},
+                )
         await session.commit()
     except Exception:
         await session.rollback()
@@ -3524,7 +3645,8 @@ async def export_qa_record(
         wrong = s[2] if isinstance(s[2], list) else (_json.loads(s[2]) if s[2] else [])
         wrong_set = set(wrong)
         total_q = len(questions)
-        wrong_nums = "、".join(str(i+1) for i in range(total_q) if i in wrong_set) if total_q else ""
+        # wrong_questions 存储为 1 基序号，渲染需用 1 基比较（原 0 基比较整体错位一位）
+        wrong_nums = "、".join(str(i) for i in range(1, total_q + 1) if i in wrong_set) if total_q else ""
         result_text = f"第{wrong_nums}题错误，其他题目正确" if wrong_nums else "全对，所有题目回答正确"
         score_entries.append({
             "name": s[0],
@@ -3787,7 +3909,15 @@ async def list_annual_training_plans(
     )
     if not hr_scope.is_unrestricted and len(hr_scope.scoped_departments) > 1:
         plans = [p for p in plans if p.department in hr_scope.scoped_departments]
-        total = len(plans)
+        # 分页总数按范围统计全局数量（不能用过滤后的本页长度，否则翻页失效）
+        from app.modules.hr.models import AnnualTrainingPlan
+        count_stmt = select(func.count()).select_from(AnnualTrainingPlan).where(
+            AnnualTrainingPlan.department.in_(hr_scope.scoped_departments),
+            AnnualTrainingPlan.is_deleted == False,  # noqa: E712
+        )
+        if year is not None:
+            count_stmt = count_stmt.where(AnnualTrainingPlan.year == year)
+        total = (await session.execute(count_stmt)).scalar() or 0
     # 批量查每个计划的培训完成进度
     plan_ids = [p.id for p in plans]
     progress_map: dict = {}
@@ -3989,17 +4119,8 @@ async def delete_annual_training_plan_item(
     )).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "明细不存在")
-    # 同时物理删除关联的培训台账记录
-    if item.content_and_textbook:
-        from app.modules.hr.models import TrainingLedger
-        ledgers = (await session.execute(
-            select(TrainingLedger).where(
-                TrainingLedger.training_subject == item.content_and_textbook,
-            )
-        )).scalars().all()
-        for ledger in ledgers:
-            session.delete(ledger)
-    session.delete(item)
+    # 软删除计划明细；员工的培训台账是历史记录，不做任何级联删除
+    item.is_deleted = True
     await session.flush()
     return success_response(message="删除成功")
 
@@ -4603,9 +4724,25 @@ async def delete_sop_catalog_item(
     )).scalar_one_or_none()
     if not item:
         raise HTTPException(404, "SOP条目不存在")
-    await session.execute(text("DELETE FROM hr.position_trainings WHERE department = :d AND position_name = :p"), {"d": item.department, "p": item.position_name})
-    await session.execute(text("DELETE FROM hr.sop_catalog WHERE id = :id"), {"id": item_id})
-    await session.commit()
+    # 软删除目录条目；仅软删除与该条目直接关联的岗位培训行（按 SOP 编号/文件名匹配），
+    # 不动手工维护的同岗位其他培训内容
+    from app.modules.hr.models import PositionTraining
+    pt_conds = [PositionTraining.department == item.department]
+    if item.position_name:
+        pt_conds.append(PositionTraining.position_name == item.position_name)
+    if item.sop_number:
+        pt_conds.append(PositionTraining.sop_number == item.sop_number)
+    elif item.file_name:
+        pt_conds.append(PositionTraining.file_name == item.file_name)
+    linked = (await session.execute(
+        select(PositionTraining).where(
+            *pt_conds, PositionTraining.is_deleted == False  # noqa: E712
+        )
+    )).scalars().all()
+    for pt in linked:
+        pt.is_deleted = True
+    item.is_deleted = True
+    await session.flush()
     return success_response(message="删除成功")
 
 
@@ -4929,7 +5066,17 @@ async def save_employee_tag(
 async def get_employee_tags(
     employee_number: str = Query(...),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    from app.modules.hr.models import Employee as EmpModel
+    emp = (await session.execute(
+        select(EmpModel).where(
+            EmpModel.employee_number == employee_number,
+            EmpModel.is_deleted == False,  # noqa: E712
+        )
+    )).scalars().first()
+    if emp:
+        hr_scope.ensure_can_access_employee(emp)
     result = await session.execute(
         text("SELECT tag_name, created_by FROM hr.employee_tags WHERE employee_number = :en AND is_deleted = false"),
         {"en": employee_number},
@@ -5093,9 +5240,18 @@ async def delete_employee_classification(
 async def create_transfer(
     payload: TransferCreate,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """新增员工异动记录。"""
-    from app.modules.hr.models import TransferRecord
+    """新增员工异动记录（受限用户仅可操作授权范围内员工）。"""
+    from app.modules.hr.models import Employee as EmpModel, TransferRecord
+    emp = (await session.execute(
+        select(EmpModel).where(
+            EmpModel.id == payload.employee_id,
+            EmpModel.is_deleted == False,  # noqa: E712
+        )
+    )).scalar_one_or_none()
+    if emp:
+        hr_scope.ensure_can_access_employee(emp)
     t = TransferRecord(
         employee_id=payload.employee_id,
         transfer_type=payload.transfer_type,
@@ -5158,7 +5314,10 @@ async def my_performance_evaluations(
 async def create_performance_evaluation(
     payload: PerformanceEvaluationCreate,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    if payload.department:
+        hr_scope.ensure_dept_writable([payload.department])
     service = PerformanceEvaluationService(session)
     try:
         result = await service.create_evaluation(payload)
@@ -5186,11 +5345,15 @@ async def auto_create_performance_evaluations(
 async def get_performance_evaluation(
     evaluation_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     service = PerformanceEvaluationService(session)
     result = await service.get_evaluation(evaluation_id)
     if result is None:
         raise HTTPException(status_code=404, detail="考核记录不存在")
+    dept = result.get("department") if isinstance(result, dict) else getattr(result, "department", None)
+    if dept:
+        hr_scope.ensure_dept_writable([dept])
     return success_response(data=result)
 
 
@@ -5199,9 +5362,16 @@ async def update_performance_evaluation(
     evaluation_id: UUID,
     payload: PerformanceEvaluationUpdate,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """更新考核基本信息及指标项（仅草稿状态可编辑）。"""
+    """更新考核基本信息及指标项（仅草稿状态可编辑；受限用户仅限授权部门）。"""
     service = PerformanceEvaluationService(session)
+    current = await service.get_evaluation(evaluation_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="考核记录不存在")
+    dept = current.get("department") if isinstance(current, dict) else getattr(current, "department", None)
+    if dept:
+        hr_scope.ensure_dept_writable([dept])
     try:
         result = await service.update_evaluation(evaluation_id, payload)
         return success_response(data=result, message="考核已更新")
@@ -5221,19 +5391,24 @@ async def submit_self_evaluation(
         return success_response(data=result, message="自评已提交")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 @router.post("/performance-evaluations/{evaluation_id}/submit-leader", summary="提交领导评分")
 async def submit_leader_evaluation(
     evaluation_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     service = PerformanceEvaluationService(session)
     try:
-        result = await service.submit_leader(evaluation_id)
+        result = await service.submit_leader(evaluation_id, hr_scope.user.name or "")
         return success_response(data=result, message="领导评分已提交")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
 
 
 # ─── 考核项目配置 ───

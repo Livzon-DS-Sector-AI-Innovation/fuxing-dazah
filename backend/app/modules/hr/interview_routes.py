@@ -66,7 +66,11 @@ async def delete_interview(interview_id: UUID, service: InterviewService = Depen
 
 
 @router.post("/interviews/{interview_id}/evaluate", summary="AI评估面试")
-async def evaluate_interview(interview_id: UUID, service: AiEvaluationService = Depends(get_ai_service)):
+async def evaluate_interview(
+    interview_id: UUID,
+    service: AiEvaluationService = Depends(get_ai_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+):
     try:
         r = await service.evaluate(interview_id)
         return success_response(data=AiEvaluationResponse.model_validate(r).model_dump(mode="json"), message="AI评估完成")
@@ -75,7 +79,11 @@ async def evaluate_interview(interview_id: UUID, service: AiEvaluationService = 
 
 
 @router.get("/interviews/{interview_id}/evaluation", summary="获取AI评估结果")
-async def get_evaluation(interview_id: UUID, service: AiEvaluationService = Depends(get_ai_service)):
+async def get_evaluation(
+    interview_id: UUID,
+    service: AiEvaluationService = Depends(get_ai_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
+):
     r = await service.get_by_interview(interview_id)
     if not r:
         return success_response(data=None, message="尚未评估")

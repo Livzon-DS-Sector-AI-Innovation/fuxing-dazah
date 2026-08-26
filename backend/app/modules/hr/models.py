@@ -859,7 +859,6 @@ class HrTrainer(BaseModel):
     admin: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训管理员")
     remarks: Mapped[str | None] = mapped_column(Text)
     is_primary_trainer: Mapped[bool] = mapped_column(default=False, server_default="false")
-    admin: Mapped[str | None] = mapped_column(String(64))
     period: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="任期（如 2023.03.01起）")
 
 
