@@ -621,7 +621,9 @@ class TitleReviewService:
                     activity.feishu_app_token, activity.vote_table_id
                 )
         except bc.TitleReviewBitableError as exc:
-            raise HTTPException(502, f"绑定飞书表格失败：{exc}") from exc
+            raise HTTPException(
+                502, f"绑定飞书表格失败（所用飞书应用 {bc.active_app_id()}）：{exc}"
+            ) from exc
         # 事件订阅为增强能力：应用无 drive:drive 权限时降级为 5 分钟对账模式，不阻断绑定
         try:
             await bc.subscribe_bitable(activity.feishu_app_token)

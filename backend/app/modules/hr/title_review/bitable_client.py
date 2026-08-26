@@ -24,6 +24,18 @@ def _hr_creds() -> tuple[str | None, str | None]:
     )
 
 
+def active_app_id() -> str:
+    """当前实际生效的飞书应用 ID（错误信息自证用）。
+
+    优先 HR 独立凭证（HR_TITLE_REVIEW_FEISHU_APP_ID），缺省回落全局
+    FEISHU_APP_ID；都未配置时返回「未配置」。线上报错时一眼看出用的是哪套凭证。
+    """
+    app_id, _ = _hr_creds()
+    if app_id:
+        return app_id
+    return get_settings().FEISHU_APP_ID or "未配置"
+
+
 async def subscribe_bitable(app_token: str) -> None:
     app_id, app_secret = _hr_creds()
     await _pb.subscribe_bitable(app_token, app_id=app_id, app_secret=app_secret)
@@ -94,6 +106,7 @@ async def create_grid_view(
 
 __all__ = [
     "TitleReviewBitableError",
+    "active_app_id",
     "subscribe_bitable",
     "batch_create_records",
     "update_record",
