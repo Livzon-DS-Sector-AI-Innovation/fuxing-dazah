@@ -126,7 +126,7 @@ class EmployeeService:
         # 创建台账页面
         q = select(TrainingLedgerPage).where(
             TrainingLedgerPage.employee_number == employee.employee_number,
-            not TrainingLedgerPage.is_deleted,
+            TrainingLedgerPage.is_deleted == False,  # noqa: E712
         )
         r = await self.repo.session.execute(q)
         if not r.scalar_one_or_none():
@@ -138,7 +138,7 @@ class EmployeeService:
         # 根据岗位导入培训内容（兼容带部门前缀和不带前缀的岗位名）
         if employee.position and employee.department:
             pt_q = select(PositionTraining).where(
-                not PositionTraining.is_deleted,
+                PositionTraining.is_deleted == False,  # noqa: E712
                 PositionTraining.department == employee.department,
                 or_(
                     PositionTraining.position_name == employee.position,
@@ -150,7 +150,7 @@ class EmployeeService:
                 exist_q = select(TrainingLedger).where(
                     TrainingLedger.employee_number == employee.employee_number,
                     TrainingLedger.training_subject == pt.training_category,
-                    not TrainingLedger.is_deleted,
+                    TrainingLedger.is_deleted == False,  # noqa: E712
                 )
                 ext = await self.repo.session.execute(exist_q)
                 if not ext.scalar_one_or_none():
@@ -521,7 +521,7 @@ class EmployeeService:
                 q = select(HrTrainer).where(
                     HrTrainer.name == data["name"],
                     HrTrainer.department == data["department"],
-                    not HrTrainer.is_deleted)
+                    HrTrainer.is_deleted == False)  # noqa: E712
                 r = await self.repo.session.execute(q)
                 existing = r.scalar_one_or_none()
                 if existing:
@@ -585,13 +585,13 @@ class EmployeeService:
                         q = select(SopCatalog).where(
                             SopCatalog.sop_number == row_data["sop_number"],
                             SopCatalog.file_name == name,
-                            not SopCatalog.is_deleted)
+                            SopCatalog.is_deleted == False)  # noqa: E712
                     else:
                         q = select(SopCatalog).where(
                             SopCatalog.file_name == name,
                             SopCatalog.department == row_data.get("department"),
                             SopCatalog.position_name == row_data.get("position_name"),
-                            not SopCatalog.is_deleted)
+                            SopCatalog.is_deleted == False)  # noqa: E712
                     r = await self.repo.session.execute(q)
                     existing = r.scalar_one_or_none()
                     if existing:
@@ -611,7 +611,7 @@ class EmployeeService:
                             PositionTraining.position_name == row_data["position_name"],
                             PositionTraining.department == row_data["department"],
                             PositionTraining.training_category == pt_category,
-                            not PositionTraining.is_deleted)
+                            PositionTraining.is_deleted == False)  # noqa: E712
                         pt_r = await self.repo.session.execute(pt_q)
                         pt_existing = pt_r.scalar_one_or_none()
                         if pt_existing:
@@ -925,7 +925,7 @@ class EmployeeService:
                     q = select(AnnualTrainingPlan).where(
                         AnnualTrainingPlan.year == year,
                         AnnualTrainingPlan.department == dept,
-                        not AnnualTrainingPlan.is_deleted,
+                        AnnualTrainingPlan.is_deleted == False,  # noqa: E712
                     )
                     r = await self.repo.session.execute(q)
                     plan = r.scalar_one_or_none()
@@ -943,7 +943,7 @@ class EmployeeService:
                         AnnualTrainingPlanItem.plan_id == plan.id,
                         AnnualTrainingPlanItem.content_and_textbook == content,
                         AnnualTrainingPlanItem.month == month_val,
-                        not AnnualTrainingPlanItem.is_deleted,
+                        AnnualTrainingPlanItem.is_deleted == False,  # noqa: E712
                     )
                 )).scalar_one_or_none()
                 if existing_item:
@@ -1232,7 +1232,7 @@ class DepartureRecordService:
         onboarding_q = select(OnboardingRecord).where(
             OnboardingRecord.name == data.name,
             OnboardingRecord.department == data.department,
-            not OnboardingRecord.is_deleted,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
         )
         onboarding_r = await self.repo.session.execute(onboarding_q)
         for onboarding in onboarding_r.scalars().all():
@@ -1257,7 +1257,7 @@ class DepartureRecordService:
         onboarding_q = select(OnboardingRecord).where(
             OnboardingRecord.name == record.name,
             OnboardingRecord.department == record.department,
-            not OnboardingRecord.is_deleted,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
         )
         onboarding_r = await self.repo.session.execute(onboarding_q)
         for onboarding in onboarding_r.scalars().all():
@@ -1288,7 +1288,7 @@ class TrainingLedgerService:
                 TrainingLedger.employee_number == data.employee_number,
                 TrainingLedger.training_date == data.training_date,
                 TrainingLedger.training_subject == data.training_subject,
-                not TrainingLedger.is_deleted,
+                TrainingLedger.is_deleted == False,  # noqa: E712
             )
         )
         dup = existing.scalar_one_or_none()
@@ -1325,7 +1325,7 @@ class TrainingLedgerService:
         # 排除已离职员工的培训记录
         from app.modules.hr.models import OnboardingRecord
         departed_subq = select(OnboardingRecord.employee_number).where(
-            not OnboardingRecord.is_deleted,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
             OnboardingRecord.is_employed == "否",
         )
         return await self.repo.list_records(

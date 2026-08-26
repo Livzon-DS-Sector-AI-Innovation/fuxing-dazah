@@ -14,7 +14,9 @@ router = APIRouter(tags=["HR-系统设置"])
 @router.get("/system-settings", summary="读取系统设置")
 async def get_settings(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
     from app.modules.hr.models import SystemSetting
-    r = await session.execute(select(SystemSetting).where(not SystemSetting.is_deleted))
+    r = await session.execute(
+        select(SystemSetting).where(SystemSetting.is_deleted == False)  # noqa: E712
+    )
     result = {}
     for s in r.scalars().all():
         result[s.key] = s.value
