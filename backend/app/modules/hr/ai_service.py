@@ -1,15 +1,13 @@
 """Minimal AI chat service for HR turnover analysis.
 
 Self-contained within the HR module — no dependency on app.platform.ai.
-Uses the OpenAI SDK pointed at Moonshot API for streaming completions.
+Uses the OpenAI SDK pointed at DeepSeek API for streaming completions.
 """
 
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import openai
-
-from app.core.config import get_settings
 
 
 class AiChatService:
@@ -59,13 +57,20 @@ class AiChatService:
                 yield {"type": "content", "text": content}
 
     @staticmethod
-    async def call_json(prompt: str, system_prompt: str | None = None, model: str | None = None) -> dict:
+    async def call_json(
+        prompt: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> dict[str, Any]:
         """Non-streaming call that returns parsed JSON. Used for structured evaluation."""
         import json
         import re
 
-        settings = get_settings()
-        api_key = settings.OPENAI_API_KEY or settings.DEEPSEEK_API_KEY or ""
+        if not api_key:
+            from app.modules.hr.config import HR_AI_API_KEY
+
+            api_key = HR_AI_API_KEY
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"
@@ -83,11 +88,13 @@ class AiChatService:
         # 去掉 markdown 代码围栏
         content = re.sub(r"```(?:json)?\s*", "", content)
         content = content.strip()
-        # 提取 JSON
-        m = re.search(r"\{[\s\S]*\}", content)
-        if m:
-            return json.loads(m.group())
-        return json.loads(content)
+        # 提取 JSON：从第一个 { 到最后一个 } 截取（容忍模型在 JSON 前后附加解释文字）
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError(f"AI 响应中未找到 JSON: {content[:200]}")
+        parsed: dict[str, Any] = json.loads(content[start : end + 1])
+        return parsed
 
     @staticmethod
     def build_system_prompt(page: str | None = None) -> str:

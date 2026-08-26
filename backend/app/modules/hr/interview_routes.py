@@ -39,6 +39,7 @@ async def list_interviews(cid: UUID, service: InterviewService = Depends(get_int
 @router.post("/interviews", summary="安排面试")
 async def create_interview(payload: InterviewCreate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     r = await service.create(payload)
+    await _auto_generate_analysis(service, r)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="面试已安排", status_code=201)
 
 
@@ -51,6 +52,7 @@ async def get_interview(interview_id: UUID, service: InterviewService = Depends(
 @router.put("/interviews/{interview_id}", summary="更新面试")
 async def update_interview(interview_id: UUID, payload: InterviewUpdate, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
     r = await service.update(interview_id, payload)
+    await _auto_generate_analysis(service, r)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"), message="已更新")
 
 
@@ -64,7 +66,11 @@ async def delete_interview(interview_id: UUID, service: InterviewService = Depen
 
 
 @router.post("/interviews/{interview_id}/evaluate", summary="AI评估面试")
-async def evaluate_interview(interview_id: UUID, service: AiEvaluationService = Depends(get_ai_service)):
+async def evaluate_interview(
+    interview_id: UUID,
+    service: AiEvaluationService = Depends(get_ai_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage")),
+):
     try:
         r = await service.evaluate(interview_id)
         return success_response(data=AiEvaluationResponse.model_validate(r).model_dump(mode="json"), message="AI评估完成")
@@ -73,8 +79,26 @@ async def evaluate_interview(interview_id: UUID, service: AiEvaluationService = 
 
 
 @router.get("/interviews/{interview_id}/evaluation", summary="获取AI评估结果")
-async def get_evaluation(interview_id: UUID, service: AiEvaluationService = Depends(get_ai_service)):
+async def get_evaluation(
+    interview_id: UUID,
+    service: AiEvaluationService = Depends(get_ai_service),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read")),
+):
     r = await service.get_by_interview(interview_id)
     if not r:
         return success_response(data=None, message="尚未评估")
     return success_response(data=AiEvaluationResponse.model_validate(r).model_dump(mode="json"))
+
+
+async def _auto_generate_analysis(service: InterviewService, interview) -> None:
+    """面试记录含逐字稿/备注时自动生成胜任度报告（失败静默，可手动重新生成）。"""
+    try:
+        if not ((interview.transcript_text or "").strip() or (interview.notes or "").strip()):
+            return
+        from app.modules.hr.service import CandidateAnalysisService
+
+        analysis = CandidateAnalysisService(service.session)
+        await analysis.generate(interview.candidate_id, interview.id)
+    except Exception:
+        # AI 生成失败不阻断面试保存
+        pass

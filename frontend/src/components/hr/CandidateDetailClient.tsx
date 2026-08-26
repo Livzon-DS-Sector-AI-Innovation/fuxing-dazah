@@ -1,17 +1,19 @@
 'use client'
 
+import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
+
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  Button, Descriptions, Tag, Spin, Select, Input, message, Tabs,
-  Form, DatePicker, Modal, Card, InputNumber, Empty,
+  App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
+  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
   EditOutlined, SaveOutlined, CloseOutlined, PlusOutlined,
   RobotOutlined, CheckCircleOutlined, ClockCircleOutlined, SendOutlined,
 } from '@ant-design/icons'
-import type { Candidate, Interview, AiEvaluation } from '@/types/hr'
+import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
   transitionCandidateStatus,
@@ -19,6 +21,8 @@ import {
   pushCandidateReview, decideCandidateReview,
   fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
   onboardCandidate, fetchResumePreview,
+  fetchOnboardingTasks, updateOnboardingTask,
+  fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
@@ -29,6 +33,7 @@ interface CandidateDetailClientProps {
 
 export default function CandidateDetailClient({ candidate }: CandidateDetailClientProps) {
   const router = useRouter()
+  const { message } = App.useApp()
   const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState(false)
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
@@ -68,6 +73,8 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
   // 面试相关状态
   const [interviews, setInterviews] = useState<Interview[]>([])
+  const [analysisReports, setAnalysisReports] = useState<any[]>([])
+  const [reportGeneratingId, setReportGeneratingId] = useState<string | null>(null)
   const [interviewsLoading, setInterviewsLoading] = useState(false)
   const [interviewForm] = Form.useForm()
   const [interviewModalOpen, setInterviewModalOpen] = useState(false)
@@ -75,6 +82,18 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
 
   // AI评估状态
   const [evaluatingId, setEvaluatingId] = useState<string | null>(null)
+
+  // 入职任务状态
+  const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
+  const [tasksLoading, setTasksLoading] = useState(false)
+  const [tasksLoaded, setTasksLoaded] = useState(false)
+
+  const loadOnboardingTasks = useCallback(async () => {
+    if (tasksLoaded) return
+    setTasksLoading(true)
+    try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
+    finally { setTasksLoading(false); setTasksLoaded(true) }
+  }, [candidate.id, tasksLoaded])
   const [evaluations, setEvaluations] = useState<Record<string, AiEvaluation>>({})
 
   // 状态流转
@@ -227,6 +246,20 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     Modal.confirm({ title: '确认取消', content: '取消此面试安排？', onOk: async () => { try { await deleteInterview(id); message.success('已取消'); loadInterviews() } catch (err: any) { message.error(err.message || '操作失败') } } })
   }
 
+  const handleGenerateReport = async (interviewId: string) => {
+    setReportGeneratingId(interviewId)
+    try {
+      const r = await generateCandidateAnalysisReport(candidate.id, interviewId)
+      message.success(r?.message || '胜任度报告已生成')
+      const d = await fetchCandidateAnalysisReports(candidate.id)
+      setAnalysisReports(d?.data || [])
+    } catch (err: any) {
+      message.error(err.message || '生成报告失败')
+    } finally {
+      setReportGeneratingId(null)
+    }
+  }
+
   const handleEvaluate = async (interviewId: string) => {
     setEvaluatingId(interviewId)
     try {
@@ -259,13 +292,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     '面试中': ['已面试', '已拒绝'],
     '已面试': ['录用中', '已拒绝'],
     '录用中': ['已录用', '已拒绝'],
+    '已录用': ['待入职审批', '已拒绝'],
+    '待入职审批': ['已录用', '已入职', '已拒绝'],
   }
   // 推送审核操作
   const handlePushReview = async () => {
     const v = await pushForm.validateFields()
     setPushLoading(true)
     try {
-      await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note })
+      await pushCandidateReview(candidate.id, { pushed_by: 'HR', push_note: v.push_note, reviewer: v.reviewer || undefined })
       message.success('已推送至用人部门审核')
       setPushModalOpen(false); pushForm.resetFields()
       router.refresh()
@@ -300,11 +335,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const doDecide = async (decision: string, comment?: string) => {
     setReviewLoading(true)
     try {
-      // 获取最近的review_id
-      const d = await fetchPendingReviews()
-      const myReview = (d.data || []).find((item: any) => item.review?.candidate_id === candidate.id)
-      if (!myReview?.review?.id) { message.error('未找到审核记录'); return }
-      await decideCandidateReview(candidate.id, { review_id: myReview.review.id, decision, review_comment: comment })
+      await decideCandidateReview(candidate.id, { decision, review_comment: comment })
       message.success(decision === '已同意' ? '已同意面试' : '已标记为不合适')
       router.refresh()
     } catch (err: any) { message.error(err.message || '操作失败') }
@@ -378,16 +409,33 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
             {isEditing ? <Input value={formData.expected_salary} onChange={e => setFormData({ ...formData, expected_salary: e.target.value })} /> : (candidate.expected_salary || '-')}
           </Descriptions.Item>
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
-          {(candidate.status === '已录用' || candidate.offer_status === '已接受') && (
+          {candidate.status === '已录用' && (
             <Descriptions.Item label="入职操作">
-              <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
-                🎉 转为入职员工
+              <Button type="primary" onClick={() => setPushModalOpen(true)}>
+                📋 发起入职审批
               </Button>
+            </Descriptions.Item>
+          )}
+          {candidate.status === '待入职审批' && (
+            <Descriptions.Item label="入职操作">
+              <Space>
+                <Button type="primary" loading={onboardLoading} onClick={handleOnboard}>
+                  🎉 转为入职员工（审批通过）
+                </Button>
+                <Button danger onClick={() => handleDecideReview('已拒绝')}>
+                  驳回入职
+                </Button>
+              </Space>
             </Descriptions.Item>
           )}
           <Descriptions.Item label="备注">
             {isEditing ? <Input.TextArea value={formData.notes} onChange={e => setFormData({ ...formData, notes: e.target.value })} rows={2} /> : (candidate.notes || '-')}
           </Descriptions.Item>
+          {candidate.match_report && (
+            <Descriptions.Item label="AI匹配报告">
+              <div className="text-sm whitespace-pre-wrap">{candidate.match_report}</div>
+            </Descriptions.Item>
+          )}
         </Descriptions>
 
         <div className="mt-6 pt-4 border-t border-gray-100 space-y-4">
@@ -453,6 +501,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                     <Tag color={iv.status === '已完成' ? 'green' : iv.status === '已取消' ? 'red' : 'blue'}>{iv.status}</Tag>
                     <span>{iv.interview_type}</span>
                     <span className="text-gray-400 text-xs">{iv.interview_date}</span>
+                    {iv.calendar_event_id && <Tag color="purple" className="text-xs">日历已同步</Tag>}
                   </div>
                 } extra={
                   <div className="flex gap-1">
@@ -483,7 +532,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                   </div>
 
                   {/* AI评估区域 */}
-                  <div className="mt-3">
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
                     {eval_ ? (
                       <AIScoreCard evaluation={eval_} onReEvaluate={() => handleEvaluate(iv.id)} loading={evaluatingId === iv.id} />
                     ) : (
@@ -493,12 +542,33 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
                         {iv.transcript_text ? '🤖 AI 评估' : '请先填写逐字稿'}
                       </Button>
                     )}
+                    <Button
+                      icon={<SendOutlined />}
+                      loading={reportGeneratingId === iv.id}
+                      onClick={() => handleGenerateReport(iv.id)}
+                      disabled={!(iv.transcript_text || iv.notes)}
+                    >
+                      {iv.transcript_text || iv.notes ? '📊 生成胜任度报告' : '请先填写面试记录'}
+                    </Button>
                   </div>
                 </Card>
               )
             })}
           </div>
       }
+
+      {/* 胜任度分析报告 */}
+      {analysisReports.length > 0 && (
+        <Card title="📊 胜任度多维分析报告" className="mt-4">
+          <div className="space-y-4">
+            {analysisReports.map((r) => (
+              <div key={r.id} className="border-b border-[var(--color-hairline)] pb-3 last:border-b-0 last:pb-0">
+                <CandidateAnalysisReportCard report={r} />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* 面试安排 Modal */}
       <Modal title={editingInterview ? '编辑面试' : '安排面试'} open={interviewModalOpen}
@@ -510,6 +580,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <Form.Item name="interview_date" label="面试日期"><DatePicker style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="interviewer" label="面试官"><Input /></Form.Item>
           <Form.Item name="location" label="面试地点"><Input placeholder="会议室/线上链接等" /></Form.Item>
+          {!editingInterview && (
+            <Form.Item name="create_calendar_event" label="飞书日历" valuePropName="checked" initialValue={false}>
+              <Checkbox>同步创建飞书日历日程</Checkbox>
+            </Form.Item>
+          )}
           {editingInterview && (
             <>
               <Form.Item name="status" label="状态">
@@ -526,8 +601,11 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         onOk={handlePushReview} confirmLoading={pushLoading} okText="确认推送">
         <Form form={pushForm} layout="vertical" className="mt-2">
           <div className="text-sm text-gray-500 mb-3">
-            推送至：<Tag>{candidate.department}负责人</Tag>
+            推送至「{candidate.department}」用人部门负责人
           </div>
+          <Form.Item name="reviewer" label="审核人姓名" rules={[{ required: true, message: '请输入用人部门负责人姓名' }]}>
+            <Input placeholder="输入姓名，系统将发送飞书通知" />
+          </Form.Item>
           <Form.Item name="push_note" label="推送备注（选填）">
             <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
           </Form.Item>
@@ -536,9 +614,54 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     </div>
   )
 
+  // ─── 入职任务 Tab ───
+  const onboardingTasksTab = (
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <h3 className="text-lg font-medium">入职任务</h3>
+        <Button size="small" onClick={() => { setTasksLoaded(false); loadOnboardingTasks() }}>刷新</Button>
+      </div>
+      {tasksLoading ? <Spin className="flex justify-center py-12" /> :
+        onboardingTasks.length === 0 ? <Empty description="暂无入职任务（入职审批通过后自动创建）" className="py-12" /> :
+          <div className="space-y-2">
+            {onboardingTasks.map(task => {
+              const isDone = task.status === '已完成'
+              return (
+                <Card key={task.id} size="small" className={isDone ? 'opacity-70' : ''}
+                  style={{ borderRadius: 10, borderLeft: isDone ? '3px solid #1aae39' : '3px solid #dd5b00' }}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg">{isDone ? '✅' : '⏳'}</span>
+                      <div>
+                        <div className="font-medium text-sm" style={{ color: 'var(--color-charcoal)' }}>{task.task_type}</div>
+                        {task.completed_at && <div className="text-xs text-gray-400">完成于 {new Date(task.completed_at).toLocaleDateString('zh-CN')}{task.completed_by ? ` · ${task.completed_by}` : ''}</div>}
+                        {task.notes && <div className="text-xs text-gray-400 mt-0.5">{task.notes}</div>}
+                      </div>
+                    </div>
+                    <Button size="small" type={isDone ? 'default' : 'primary'}
+                      onClick={async () => {
+                        const newStatus = isDone ? '待完成' : '已完成'
+                        try {
+                          await updateOnboardingTask(candidate.id, task.id, { status: newStatus })
+                          setOnboardingTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus, completed_at: newStatus === '已完成' ? new Date().toISOString() : undefined } as OnboardingTask : t))
+                          message.success(isDone ? '已重置' : '已完成')
+                        } catch (err: any) { message.error(err.message || '操作失败') }
+                      }}>
+                      {isDone ? '重置' : '完成'}
+                    </Button>
+                  </div>
+                </Card>
+              )
+            })}
+          </div>
+      }
+    </div>
+  )
+
   const tabItems = [
     { key: 'info', label: '基本信息', children: infoTab },
     { key: 'interviews', label: `面试记录 (${interviews.length})`, children: interviewTab },
+    { key: 'onboarding', label: `入职任务 (${onboardingTasks.filter(t => t.status === '已完成').length}/${onboardingTasks.length})`, children: onboardingTasksTab },
   ]
 
   return (
@@ -552,7 +675,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           </>
         )}
       </div>
-      <Tabs items={tabItems} />
+      <Tabs items={tabItems} onChange={key => { if (key === 'onboarding') loadOnboardingTasks() }} />
     </div>
   )
 }

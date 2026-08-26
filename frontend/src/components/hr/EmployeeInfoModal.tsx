@@ -59,8 +59,9 @@ export default function EmployeeInfoModal({ employee, open, onClose }: Props) {
     ['其他信息', [
       ['银行账号', employee.bank_account], ['员工性质', employee.status_category],
       ['证书', employee.certificates as unknown],
-      ['工龄(年)', employee.work_years], ['厂龄', employee.factory_tenure], ['司龄', employee.company_tenure],
+      ['工龄(年)', employee.work_years], ['厂龄', employee.factory_tenure], ['司龄', employee.computed_tenure ?? employee.company_tenure],
       ['出生年', employee.birth_year], ['出生月', employee.birth_month], ['出生日', employee.birth_day],
+      ['动态年龄', employee.computed_age ?? employee.age ?? '-'],
     ]],
   ]
 

@@ -121,6 +121,25 @@ export async function fetchCandidates(params: Record<string, unknown> = {}): Pro
   return fetchHrApi(`/hr/candidates${qs}`, { errorMessage: '获取候选人列表失败' })
 }
 
+/** 批量导入候选人（Excel 上传） */
+export async function uploadCandidates(formData: FormData): Promise<{
+  code: number; message: string; data: { created: number; updated: number; errors?: string[] }
+}> {
+  return fetchHrApi('/hr/candidates/upload', {
+    method: 'POST',
+    body: formData,
+    errorMessage: '上传失败',
+  })
+}
+
+/** 下载候选人导入模板 */
+export async function downloadCandidateTemplate(): Promise<{ base64: string; filename: string }> {
+  const { base64, filename } = await fetchHrDownload('/hr/candidates/template', {
+    errorMessage: '下载模板失败',
+  })
+  return { base64, filename: filename || 'candidate_import_template.xlsx' }
+}
+
 export async function fetchCandidateById(id: string): Promise<{ code: number; message: string; data: unknown }> {
   return fetchHrApi(`/hr/candidates/${id}`, { errorMessage: '获取候选人失败' })
 }
@@ -259,11 +278,33 @@ export async function fetchCandidateComparison(jobRequirementId: string): Promis
   return fetchHrApi(`/hr/job-requirements/${jobRequirementId}/candidates/comparison`, { errorMessage: '获取对比数据失败' })
 }
 
-export async function fetchRecruitmentStats(): Promise<{ data: { total_candidates: number; active_jobs: number; funnel: { status: string; count: number }[] } }> {
+export async function fetchRecruitmentStats(): Promise<{ data: import('@/types/hr').RecruitmentStats }> {
   return fetchHrApi('/hr/recruitment/stats', { errorMessage: '获取统计数据失败' })
 }
 
-export async function pushCandidateReview(candidateId: string, data: { pushed_by: string; push_note?: string }) {
+export async function pushOnboardingReview(candidateId: string, data: { pushed_by: string; push_note?: string }) {
+  const res = await fetchHrApi(`/hr/candidates/${candidateId}/push-onboarding-review`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    errorMessage: '发起入职审批失败',
+  })
+  revalidatePath('/hr/recruitment')
+  return res
+}
+
+export async function fetchOnboardingTasks(candidateId: string): Promise<{ data: import('@/types/hr').OnboardingTask[] }> {
+  return fetchHrApi(`/hr/candidates/${candidateId}/onboarding-tasks`, { errorMessage: '获取入职任务失败' })
+}
+
+export async function updateOnboardingTask(candidateId: string, taskId: string, data: Record<string, unknown>): Promise<{ data: import('@/types/hr').OnboardingTask }> {
+  return fetchHrApi(`/hr/candidates/${candidateId}/onboarding-tasks/${taskId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    errorMessage: '更新任务失败',
+  })
+}
+
+export async function pushCandidateReview(candidateId: string, data: { pushed_by: string; push_note?: string; reviewer?: string }) {
   const res = await fetchHrApi(`/hr/candidates/${candidateId}/push-review`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -273,7 +314,7 @@ export async function pushCandidateReview(candidateId: string, data: { pushed_by
   return res
 }
 
-export async function decideCandidateReview(candidateId: string, data: { review_id: string; decision: string; review_comment?: string }) {
+export async function decideCandidateReview(candidateId: string, data: { review_id?: string; decision: string; review_comment?: string }) {
   const res = await fetchHrApi(`/hr/candidates/${candidateId}/decide-review`, {
     method: 'POST',
     body: JSON.stringify(data),
@@ -281,4 +322,23 @@ export async function decideCandidateReview(candidateId: string, data: { review_
   })
   revalidatePath('/hr/recruitment')
   return res
+}
+
+
+// ─── 候选人胜任度多维分析报告 ───
+
+export async function fetchCandidateAnalysisReports(candidateId: string): Promise<{
+  code: number
+  message: string
+  data: any[]
+}> {
+  return fetchHrApi(`/hr/candidates/${candidateId}/analysis-reports`, { errorMessage: '获取分析报告失败' })
+}
+
+export async function generateCandidateAnalysisReport(candidateId: string, interviewId: string) {
+  return fetchHrApi(`/hr/candidates/${candidateId}/analysis-reports`, {
+    method: 'POST',
+    body: JSON.stringify({ interview_id: interviewId }),
+    errorMessage: '生成分析报告失败',
+  })
 }

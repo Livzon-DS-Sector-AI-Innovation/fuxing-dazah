@@ -74,6 +74,10 @@ export interface Employee {
   feishu_synced_at?: string
   created_at?: string
   updated_at?: string
+  /** 从出生日期动态计算的年龄（优先于飞书静态值） */
+  computed_age?: number
+  /** 从入职日期动态计算的司龄，格式如"3年5个月" */
+  computed_tenure?: string
 }
 
 export interface EmployeeCreateInput {
@@ -398,6 +402,10 @@ export interface DepartureRecord {
   feishu_synced_at?: string
   created_at?: string
   updated_at?: string
+  cert_sign_status?: string
+  cert_signed_at?: string
+  cert_sign_name?: string
+  cert_sign_image?: string
 }
 
 export interface DepartureRecordListResponse {
@@ -465,6 +473,65 @@ export interface TrainingLedgerListResponse {
     page_size: number
     total: number
   }
+}
+
+// ─── SOP 培训文件登记表 / 二级表 ───
+
+export interface SopTrainingRecord {
+  id: string
+  year: string
+  training_date: string | null
+  file_name: string
+  file_no: string | null
+  effective_date: string | null
+  method: string | null
+  complete_time: string | null
+  trainer: string | null
+  trainees: string | null
+  involved_departments: string[]
+  change_note: string | null
+  color: string
+  status: string
+  initiator_department: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SopTrainingPersonnel {
+  employee_number: string
+  name: string
+}
+
+export interface SopTrainingEntry {
+  id: string
+  record_id: string | null
+  department: string
+  file_name: string | null
+  file_no: string | null
+  method: string | null
+  trainer: string | null
+  status: string
+  complete_time: string | null
+  classification: string | null
+  personnel: SopTrainingPersonnel[]
+  personnel_count: number
+  transferred_by: string | null
+  transferred_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SopClassificationOption {
+  tag_name: string
+  count: number
+}
+
+export interface SopPersonnelOption {
+  employee_number: string
+  name: string
+  position: string
+  status: string
 }
 
 // ─── AI 出题相关类型 ───
@@ -653,6 +720,7 @@ export interface CandidateCreateInput {
   expected_salary?: string
   current_company?: string
   work_years?: number
+  match_report?: string
   notes?: string
 }
 
@@ -675,6 +743,7 @@ export interface CandidateUpdateInput {
   expected_salary?: string
   current_company?: string
   work_years?: number
+  match_report?: string
   notes?: string
 }
 
@@ -694,6 +763,7 @@ export interface Interview {
   status: string
   transcript_text?: string
   notes?: string
+  calendar_event_id?: string
   created_at?: string
 }
 
@@ -705,6 +775,7 @@ export interface InterviewCreateInput {
   interviewer?: string
   location?: string
   notes?: string
+  create_calendar_event?: boolean
 }
 
 export interface InterviewUpdateInput {
@@ -715,6 +786,7 @@ export interface InterviewUpdateInput {
   status?: string
   transcript_text?: string
   notes?: string
+  calendar_event_id?: string
 }
 
 export interface AiEvaluation {
@@ -735,6 +807,47 @@ export interface AiEvaluation {
   model_version?: string
   evaluated_at?: string
   created_at?: string
+}
+
+// ─── 入职子任务 ───
+
+export interface OnboardingTask {
+  id: string
+  candidate_id: string
+  task_type: string
+  status: string
+  sort_order: number
+  completed_at?: string
+  completed_by?: string
+  notes?: string
+  created_at?: string
+}
+
+// ─── 招聘统计增强 ───
+
+export interface ConversionRate {
+  from: string
+  to: string
+  rate: number
+}
+
+export interface JobProgress {
+  id: string
+  position_name: string
+  department: string
+  headcount: number
+  hired_count: number
+}
+
+export interface RecruitmentStats {
+  total_candidates: number
+  active_jobs: number
+  funnel: Array<{ status: string; count: number }>
+  conversion_rates: ConversionRate[]
+  avg_cycle_days?: number
+  job_progress: JobProgress[]
+  monthly_hires?: Array<{ month: string; count: number }>
+  source_stats?: Array<{ source: string; count: number }>
 }
 
 // ─── 问答/实操考核 ───
@@ -883,4 +996,235 @@ export interface PositionOption {
   department: string
   name: string
   categories?: string[]
+}
+
+// ─── 月度绩效考核 ───
+
+export interface PerformanceItem {
+  id?: string
+  category: 'key_work' | 'routine_work' | 'reward_penalty'
+  indicator: string
+  standard?: string | null
+  weight: number
+  self_score?: number | null
+  leader_score?: number | null
+  final_score?: number | null
+  completion?: string | null
+  sort_order: number
+}
+
+export interface PerformanceEvaluation {
+  id: string
+  department: string
+  department_head: string
+  evaluator_leader?: string | null
+  evaluation_month: string
+  headcount?: number | null
+  status: 'draft' | 'self_submitted' | 'leader_scored' | 'confirmed'
+  self_submitted_at?: string | null
+  leader_submitted_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  items: PerformanceItem[]
+}
+
+// ─── 仪表盘 ───
+
+export interface DashboardSummary {
+  total_employees: number
+  new_hires_this_month: number
+  departures_this_month: number
+  age_avg: number
+}
+
+export interface DistributionItem {
+  name: string
+  value: number
+}
+
+export interface MonthlyByDeptItem {
+  month: string
+  department: string
+  value: number
+}
+
+export interface MonthlyItem {
+  month: string
+  value: number
+}
+
+export interface MonthlyComparisonItem {
+  month: string
+  label: string
+  last_year: number
+  current_year: number
+}
+
+export interface DashboardStats {
+  summary: DashboardSummary
+  education_distribution: DistributionItem[]
+  department_distribution: DistributionItem[]
+  monthly_hires_by_dept: MonthlyByDeptItem[]
+  monthly_hires: MonthlyItem[]
+  monthly_departures: MonthlyItem[]
+  monthly_departure_comparison: MonthlyComparisonItem[]
+  departures_by_dept: DistributionItem[]
+  distributions: Record<string, DistributionItem[]>
+}
+
+// ─── 职称评审（v2 投票制） ───
+
+export type TitleActivityStatus = 'draft' | 'open' | 'reviewing' | 'closed'
+export type TitleApplicationStatus =
+  | 'submitted' | 'voting' | 'passed' | 'failed'
+  | 'final_passed' | 'final_failed' | 'invalid'
+
+export interface TitleReviewLevel {
+  id?: string
+  activity_id?: string
+  sequence: string
+  level_name: string
+  sort_order?: number
+}
+
+export interface TitleReviewActivity {
+  id: string
+  name: string
+  status: TitleActivityStatus
+  apply_deadline?: string
+  review_deadline?: string
+  pass_ratio: number
+  feishu_app_token?: string
+  apply_table_id?: string
+  vote_table_id?: string
+  feishu_folder_token?: string
+  approval_code?: string
+  created_at?: string
+  levels: TitleReviewLevel[]
+}
+
+export interface TitleReviewActivityListItem extends Omit<TitleReviewActivity, 'levels'> {
+  application_count?: number
+  voted_judge_count?: number
+  total_judge_count?: number
+}
+
+export interface TitleReviewActivityCreateInput {
+  name: string
+  apply_deadline?: string
+  review_deadline?: string
+  pass_ratio?: number
+  feishu_app_token?: string
+  apply_table_id?: string
+  vote_table_id?: string
+  approval_code?: string
+  levels?: TitleReviewLevel[]
+}
+
+export interface TitleReviewActivityUpdateInput {
+  name?: string
+  apply_deadline?: string
+  review_deadline?: string
+  pass_ratio?: number
+  feishu_app_token?: string
+  apply_table_id?: string
+  vote_table_id?: string
+  levels?: TitleReviewLevel[]
+}
+
+export interface TitleReviewCommitteeMember {
+  employee_id: string
+  name: string
+  employee_no?: string
+}
+
+export interface TitleReviewDeptCommittee {
+  id: string
+  department: string
+  manager_employee_id?: string
+  manager_name?: string
+  leader_employee_id?: string
+  leader_name?: string
+  committee_members?: TitleReviewCommitteeMember[]
+}
+
+export interface TitleReviewDeptCommitteeInput {
+  department: string
+  manager_employee_id?: string
+  manager_name?: string
+  leader_employee_id?: string
+  leader_name?: string
+  committee_members: TitleReviewCommitteeMember[]
+}
+
+export interface TitleReviewApplication {
+  id: string
+  activity_id: string
+  employee_id?: string
+  employee_no: string
+  name: string
+  department?: string
+  sequence?: string
+  tech_domain?: string
+  apply_level?: string
+  current_level?: string
+  is_exception: boolean
+  exception_reason?: string
+  tenure_start?: string
+  tenure_end?: string
+  self_evaluations?: Record<string, string>
+  work_statements?: Record<string, string>
+  attachments?: Record<string, { file_token: string; name: string; size: number }[]>
+  profile?: Record<string, string> | null
+  feishu_record_id?: string
+  status: TitleApplicationStatus
+  agree_votes: number
+  oppose_votes: number
+  abstain_votes: number
+  final_result?: 'passed' | 'failed'
+  final_opinion?: string
+  result_notified_at?: string
+  created_at?: string
+}
+
+export interface TitleReviewJudge {
+  id: string
+  application_id: string
+  judge_employee_id: string
+  judge_name: string
+  judge_employee_no?: string
+  judge_code: string
+  judge_role?: string
+  feishu_record_id?: string
+  vote_result?: '同意' | '不同意' | '弃权'
+  comprehensive_grade?: '合格' | '不合格'
+  review_comment?: string
+  voted_at?: string
+}
+
+export interface TitleReviewScore {
+  id: string
+  judge_id: string
+  dimension_id: string
+  dimension_name: string
+  grade?: '合格' | '不合格'
+  voted_at?: string
+}
+
+export interface TitleReviewResultRow {
+  application: TitleReviewApplication
+  judges: (TitleReviewJudge & { scores: TitleReviewScore[] })[]
+  vote_ratio?: number
+}
+
+export interface TitleReviewReconcileStats {
+  applications_created: number
+  applications_removed: number
+  votes_updated: number
+  errors: string[]
+}
+
+export interface TitleReviewJudgeAssignItem {
+  employee_id: string
+  role: string
 }

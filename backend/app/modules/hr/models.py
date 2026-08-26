@@ -6,6 +6,8 @@ from uuid import UUID
 from sqlalchemy import (
     JSON,
     Date,
+    DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -259,7 +261,7 @@ class Employee(BaseModel):
         nullable=False,
         default="待审批",
         server_default="待审批",
-        comment="状态: 在职, 离职, 试用期, 待审批",
+        comment="状态: 在职, 离职, 试用期, 待审批, 病假, 产假",
     )
 
     # ─── Sort order ───
@@ -315,6 +317,51 @@ class Employee(BaseModel):
     feishu_synced_at: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="上次飞书同步时间"
     )
+
+    # ─── 动态计算属性 ───
+
+    @property
+    def computed_age(self) -> int | None:
+        """从出生日期动态计算年龄（优于飞书静态值；非法日期容错防 500）。"""
+        if not self.birth_year:
+            return self.age  # fallback to stored value
+        today = date.today()
+        age = today.year - self.birth_year
+        if self.birth_month:
+            if self.birth_day:
+                try:
+                    birthday_this_year = date(today.year, self.birth_month, self.birth_day)
+                except ValueError:
+                    # 数据源存在非法日期（如 2 月 30 日），退回按月份粗算或存值
+                    if 1 <= self.birth_month <= 12 and today.month < self.birth_month:
+                        age -= 1
+                    return age
+                if today < birthday_this_year:
+                    age -= 1
+            elif today.month < self.birth_month:
+                age -= 1
+        return age
+
+    @property
+    def computed_tenure(self) -> str | None:
+        """从入职日期动态计算司龄。"""
+        if not self.hire_date:
+            return self.company_tenure  # fallback to stored value
+        today = date.today()
+        delta = today - self.hire_date
+        years = delta.days // 365
+        months = (delta.days % 365) // 30
+        if years > 0:
+            return f"{years}年{months}个月"
+        return f"{months}个月"
+
+    @property
+    def computed_tenure_years(self) -> float | None:
+        """司龄（年，数值格式，用于统计）。"""
+        if not self.hire_date:
+            return None
+        delta = date.today() - self.hire_date
+        return round(delta.days / 365.25, 1)
 
 
 class OffboardingRecord(BaseModel):
@@ -434,6 +481,23 @@ class DepartureRecord(BaseModel):
     )
     feishu_synced_at: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="上次飞书同步时间"
+    )
+
+    # ─── 离职证明签署 ───
+    cert_sign_token: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True, comment="签署链接 token"
+    )
+    cert_sign_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="签署状态: pending / signed"
+    )
+    cert_signed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="签署时间"
+    )
+    cert_sign_image: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="手写签名图片 base64"
+    )
+    cert_sign_name: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="签署人确认姓名"
     )
 
 
@@ -795,7 +859,7 @@ class HrTrainer(BaseModel):
     admin: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训管理员")
     remarks: Mapped[str | None] = mapped_column(Text)
     is_primary_trainer: Mapped[bool] = mapped_column(default=False, server_default="false")
-    admin: Mapped[str | None] = mapped_column(String(64))
+    period: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="任期（如 2023.03.01起）")
 
 
 # ─── Department Training Personnel ───
@@ -926,6 +990,71 @@ class ExamPaper(BaseModel):
     multi_choice_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     fill_blank_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="AI生成", server_default="AI生成")
+
+
+# ─── QA 题库与问答考核 ───
+
+
+class QuestionBank(BaseModel):
+    """共享题库：问答考核从题库选题。"""
+
+    __tablename__ = "question_bank"
+    __table_args__ = (
+        Index("ix_question_bank_file_no", "file_no"),
+        {"schema": "hr"},
+    )
+
+    file_no: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="SOP/文件编号")
+    question: Mapped[str] = mapped_column(Text, nullable=False, comment="题目")
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True, comment="参考答案")
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True, default=10, comment="分值")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="来源：手工录入 / docx_import")
+    subject: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="关联主题（检索用）")
+    usage_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="被引用次数")
+
+
+class QaAssessment(BaseModel):
+    """问答考核场次：含选题快照与受训人员名单。"""
+
+    __tablename__ = "qa_assessments"
+    __table_args__ = (
+        Index("ix_qa_assessments_department", "department"),
+        Index("ix_qa_assessments_subject", "subject"),
+        {"schema": "hr"},
+    )
+
+    subject: Mapped[str] = mapped_column(String(256), nullable=False, comment="培训内容/主题")
+    department: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="培训部门")
+    training_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="培训日期")
+    training_method: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训方式")
+    assessment_method: Mapped[str | None] = mapped_column(String(32), nullable=True, default="问答", comment="考核方式：笔试/问答")
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师")
+    questions: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="题目快照")
+    question_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="题目数量")
+    full_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default="100", comment="满分")
+    excellent_line: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90", comment="优秀线")
+    pass_line: Mapped[int] = mapped_column(Integer, nullable=False, default=80, server_default="80", comment="合格线")
+    trainee_names: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="受训人员姓名列表")
+
+
+class QaAssessmentScore(BaseModel):
+    """问答考核成绩：按人一行，记录错题与总分。"""
+
+    __tablename__ = "qa_assessment_scores"
+    __table_args__ = (
+        Index("ix_qa_scores_assessment", "assessment_id"),
+        Index("ix_qa_scores_employee", "employee_name"),
+        {"schema": "hr"},
+    )
+
+    assessment_id: Mapped[UUID] = mapped_column(nullable=False, comment="考核场次 ID")
+    employee_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="员工姓名")
+    employee_number: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="员工工号")
+    wrong_questions: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="错题序号（1-indexed）")
+    total_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default="100", comment="总分")
+    grade: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="等级：优秀/合格/不合格")
+    result_text: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="成绩说明")
+    assessed_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="考核日期")
 
 
 class SystemSetting(BaseModel):
@@ -1079,6 +1208,51 @@ class Interview(BaseModel):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="待安排", server_default="待安排", comment="待安排/已安排/已完成/已取消")
     transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="面试逐字稿（HR粘贴）")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+    calendar_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="飞书日历事件ID")
+
+
+# ─── 招聘：候选人胜任度分析报告（多维度） ───
+
+
+class CandidateAnalysisReport(BaseModel):
+    """候选人胜任度多维分析报告：面试记录提交后 AI 自动生成。
+
+    维度评分/星级/优势风险/综合评分/推荐等级/面试建议/培养建议。
+    """
+
+    __tablename__ = "candidate_analysis_reports"
+    __table_args__ = (
+        Index("ix_car_candidate", "candidate_id"),
+        Index(
+            "uq_car_interview", "interview_id", unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    job_requirement_id: Mapped[UUID | None] = mapped_column(nullable=True, comment="关联岗位需求")
+    interview_id: Mapped[UUID] = mapped_column(nullable=False, comment="关联面试记录")
+    dimensions: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="维度评估 [{name, score, star, assessment}]"
+    )
+    strengths: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="核心优势 [str]")
+    risks: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="潜在风险 [str]")
+    total_score: Mapped[float | None] = mapped_column(Float, nullable=True, comment="综合胜任度评分（0-100）")
+    recommend_level: Mapped[str | None] = mapped_column(
+        String(16), nullable=True, comment="推荐等级：强烈推荐/推荐/待定/不推荐"
+    )
+    interview_suggestions: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="面试建议 [str]（联动写入面试备注）"
+    )
+    training_suggestions: Mapped[list | None] = mapped_column(
+        JSON, nullable=True, comment="录用后培养建议 [str]"
+    )
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="AI 原始输出")
+    model_version: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="模型版本")
+    generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="生成时间"
+    )
 
 
 # ─── 招聘：AI 面试评估 ───
@@ -1137,6 +1311,154 @@ class CandidateReview(BaseModel):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="待审核", server_default="待审核", comment="待审核/已同意/已拒绝")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True, comment="审核意见")
     reviewed_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="审核时间")
+    review_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="部门审核", server_default="部门审核",
+        comment="部门审核 / 入职审批"
+    )
+
+
+class OnboardingTask(BaseModel):
+    """入职子任务（体检、资料审核、合同签署、入职培训）"""
+
+    __tablename__ = "onboarding_tasks"
+    __table_args__ = (
+        Index("ix_onboarding_tasks_candidate", "candidate_id"),
+        {"schema": "hr"},
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(nullable=False, comment="候选人ID")
+    task_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="任务类型：体检/资料审核/合同签署/入职培训"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="待完成", server_default="待完成",
+        comment="待完成 / 已完成"
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="排序")
+    completed_at: Mapped[datetime | None] = mapped_column(nullable=True, comment="完成时间")
+    completed_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="完成人")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
+# ─── 员工自定义分类标签 ───
+
+
+class EmployeeTag(BaseModel):
+    """员工自定义分类标签，按创建人隔离数据。"""
+
+    __tablename__ = "employee_tags"
+    __table_args__ = (
+        Index("ix_employee_tags_employee", "employee_number"),
+        Index("ix_employee_tags_creator", "created_by"),
+        {"schema": "hr"},
+    )
+
+    employee_number: Mapped[str] = mapped_column(String(32), nullable=False, comment="员工工号")
+    tag_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="标签名称")
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, comment="创建人")
+
+
+class EmployeeClassification(BaseModel):
+    """员工自定义分类清单：培训管理员维护，员工档案以「下拉选项」形式选择。"""
+
+    __tablename__ = "employee_classifications"
+    __table_args__ = (
+        Index("ix_employee_classifications_creator", "created_by"),
+        {"schema": "hr"},
+    )
+
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="分类名称")
+    created_by: Mapped[str] = mapped_column(String(64), nullable=False, comment="创建人")
+
+
+# ─── SOP 培训统筹总表 ───
+
+
+class SopTrainingMaster(BaseModel):
+    """SOP 培训统筹总表，记录发起部门、关联 SOP 和培训状态。"""
+
+    __tablename__ = "sop_training_masters"
+    __table_args__ = (
+        Index("ix_sop_master_department", "department"),
+        Index("ix_sop_master_status", "status"),
+        {"schema": "hr"},
+    )
+
+    department: Mapped[str] = mapped_column(String(128), nullable=False, comment="发起部门")
+    sop_ids: Mapped[str | None] = mapped_column(Text, nullable=True, comment="关联 SOP 条目 ID，JSON 数组")
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="草稿", server_default="草稿", comment="草稿/已提交/已转训")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="创建人")
+    related_departments: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="关联相关部门（二级表按此自动生成），JSON 数组"
+    )
+
+
+# ─── SOP 培训文件登记表 ───
+
+
+class SopTrainingRecord(BaseModel):
+    """SOP 培训文件登记表：每年一张登记表，每行一个培训文件（对齐 010版 Excel 模板）。"""
+
+    __tablename__ = "sop_training_records"
+    __table_args__ = (
+        Index("ix_sop_record_year", "year"),
+        Index("ix_sop_record_status", "status"),
+        {"schema": "hr"},
+    )
+
+    year: Mapped[str] = mapped_column(String(4), nullable=False, comment="登记年份，如 2026")
+    training_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="培训日期，如 01.05")
+    file_name: Mapped[str] = mapped_column(String(512), nullable=False, comment="文件名称")
+    file_no: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="文件编号（SOP编号，(CA)前缀=草案）")
+    effective_date: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="生效日期，草案填——")
+    method: Mapped[str | None] = mapped_column(String(4), nullable=True, comment="培训方式：R（按完成时间）/ T（按课时）")
+    complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="R：培训完成时间；T：培训课时（日期+时段）")
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（集中培训时填写）")
+    trainees: Mapped[str | None] = mapped_column(String(256), nullable=True, comment="培训对象，默认「X部门全体员工及相关部门培训师」")
+    involved_departments: Mapped[str | None] = mapped_column(Text, nullable=True, comment="培训涉及部门，JSON 数组")
+    change_note: Mapped[str | None] = mapped_column(Text, nullable=True, comment="变更内容（新制订/修改原因）")
+    color: Mapped[str] = mapped_column(String(8), nullable=False, default="新增", server_default="新增", comment="新增/撤销/修改")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="草稿", server_default="草稿", comment="草稿/已提交")
+    initiator_department: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="发起部门（主办部门）")
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="登记人")
+
+
+# ─── SOP 培训二级表（按部门） ───
+
+
+class SopTrainingEntry(BaseModel):
+    """SOP 培训二级表：登记提交后按培训涉及部门自动生成的部门级培训记录。"""
+
+    __tablename__ = "sop_training_entries"
+    __table_args__ = (
+        Index("ix_sop_entry_record", "record_id"),
+        Index("ix_sop_entry_department", "department"),
+        Index("ix_sop_entry_status", "status"),
+        {"schema": "hr"},
+    )
+
+    record_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, comment="登记表记录 ID"
+    )
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="培训部门"
+    )
+    trainer: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="培训师（转培训时自动带出当前培训师）")
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="待转训", server_default="待转训", comment="待转训/已转训"
+    )
+    complete_time: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="该部门培训完成时间/课时")
+    classification: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="自定义分类（对应部门员工标签）"
+    )
+    personnel: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="分类人员，JSON 数组：[{\"employee_number\":\"\",\"name\":\"\"}]"
+    )
+    transferred_by: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="转培训操作人")
+    transferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="转培训时间"
+    )
 
 
 # ─── HR 内部多部门数据范围 ───
@@ -1155,3 +1477,178 @@ class HrUserDepartmentAccess(BaseModel):
 
     user_id: Mapped[UUID] = mapped_column(nullable=False, comment="用户ID (identity.users)")
     department: Mapped[str] = mapped_column(String(128), nullable=False, comment="可访问的部门名称")
+
+
+# ─── 月度绩效考核 ───
+
+class MonthlyPerformanceEvaluation(BaseModel):
+    """月度部门负责人绩效考核主表"""
+
+    __tablename__ = "monthly_performance_evaluations"
+    __table_args__ = (
+        Index("ix_mpe_department", "department"),
+        Index("ix_mpe_month", "evaluation_month"),
+        Index("ix_mpe_status", "status"),
+        {"schema": "hr"},
+    )
+
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="部门名称"
+    )
+    department_head: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="部门负责人姓名"
+    )
+    evaluator_leader: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="分管领导姓名"
+    )
+    evaluation_month: Mapped[str] = mapped_column(
+        String(7), nullable=False, comment="考核月份 YYYY-MM"
+    )
+    headcount: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="考核定编"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="draft", server_default="draft",
+        comment="状态: draft/self_submitted/leader_scored/confirmed",
+    )
+    self_submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="自评提交时间"
+    )
+    leader_submitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="领导评分提交时间"
+    )
+
+    items: Mapped[list["PerformanceEvaluationItem"]] = relationship(
+        "PerformanceEvaluationItem", back_populates="evaluation",
+        lazy="select", cascade="all, delete-orphan",
+    )
+
+
+class PerformanceEvaluationItem(BaseModel):
+    """绩效考核指标明细"""
+
+    __tablename__ = "performance_evaluation_items"
+    __table_args__ = (
+        Index("ix_pei_evaluation_id", "evaluation_id"),
+        {"schema": "hr"},
+    )
+
+    evaluation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.monthly_performance_evaluations.id"),
+        nullable=False, comment="关联考核主表",
+    )
+    category: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="key_work",
+        comment="类别: key_work/routine_work/reward_penalty",
+    )
+    indicator: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="考核指标"
+    )
+    standard: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="考核标准/目标"
+    )
+    weight: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, comment="权重(%)"
+    )
+    self_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="自评分"
+    )
+    leader_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="分管领导评分"
+    )
+    final_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="核定分"
+    )
+    completion: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, comment="完成情况"
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )
+
+    evaluation: Mapped["MonthlyPerformanceEvaluation"] = relationship(
+        "MonthlyPerformanceEvaluation", back_populates="items",
+    )
+
+
+class PerformanceCategory(BaseModel):
+    """考核项目配置（环保/安全/质量/人才/生产/综合 等）"""
+
+    __tablename__ = "performance_categories"
+    __table_args__ = (
+        Index("ix_pc_is_active", "is_active"),
+        {"schema": "hr"},
+    )
+
+    name: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="考核项目名称"
+    )
+    weight: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, comment="权重(%)"
+    )
+    evaluator: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="项目负责人姓名"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True, server_default="true", comment="是否启用"
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="排序"
+    )
+
+
+class PerformanceDeptWeight(BaseModel):
+    """各部门 × 考核项目 的权重配置"""
+
+    __tablename__ = "performance_dept_weights"
+    __table_args__ = (
+        Index("ix_pdw_category_dept", "category_id", "department"),
+        {"schema": "hr"},
+    )
+
+    category_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.performance_categories.id"),
+        nullable=False, comment="关联考核项目",
+    )
+    department: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="部门名称"
+    )
+    weight: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, comment="该部门此项目权重(%)"
+    )
+
+
+class PerformanceCategoryScore(BaseModel):
+    """各部门 × 考核项目 × 月度 的评分明细（含部门独立权重）"""
+
+    __tablename__ = "performance_category_scores"
+    __table_args__ = (
+        Index("ix_pcs_evaluation_id", "evaluation_id"),
+        Index("ix_pcs_category_id", "category_id"),
+        {"schema": "hr"},
+    )
+
+    evaluation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.monthly_performance_evaluations.id"),
+        nullable=False, comment="关联考核主表",
+    )
+    category_id: Mapped[UUID] = mapped_column(
+        ForeignKey("hr.performance_categories.id"),
+        nullable=False, comment="关联考核项目",
+    )
+    weight: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, comment="该部门此项目权重(%)"
+    )
+    score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="分数(0-100)"
+    )
+    scored_by: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="评分人"
+    )
+    scored_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="评分时间"
+    )
+
+
+# 职称评审子包模型注册到同一 metadata（alembic env 只 import 模块级 models）
+from app.modules.hr.title_review import models as title_review_models  # noqa: E402, F401

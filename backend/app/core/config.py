@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
 
+    # 职称评审：独立飞书应用凭证（审批同步用：approval:approval:readonly / approval:definition；
+    # 缺省回落全局应用）。多维表格读写与通知卡片始终使用全局应用。
+    HR_TITLE_REVIEW_FEISHU_APP_ID: str = ""
+    HR_TITLE_REVIEW_FEISHU_APP_SECRET: str = ""
+    HR_TITLE_REVIEW_FEISHU_WS_ENABLED: bool = False
+
+    # HR 飞书日历 ID（primary=主日历，或指定团队日历 ID）
+    HR_FEISHU_CALENDAR_ID: str = "primary"
+    # 职称评审定时对账开关（默认开启；关闭后仅保留手动「同步」按钮）
+    HR_TITLE_REVIEW_SYNC_ENABLED: bool = True
+
     # Feishu 安全模块机器人（独立应用凭证）
     SAFETY_FEISHU_APP_ID: str = ""
     SAFETY_FEISHU_APP_SECRET: str = ""

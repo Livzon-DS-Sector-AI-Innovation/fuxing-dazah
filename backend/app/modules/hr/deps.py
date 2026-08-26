@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 
 from fastapi import Depends, Request
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -60,7 +60,11 @@ class HrAccessContext:
             if employee.employee_number != self.employee_number:
                 raise ForbiddenException("数据范围限制：仅可访问本人记录")
         elif self.scoped_departments:
-            if employee.department not in self.scoped_departments:
+            allowed = employee.department in self.scoped_departments or (
+                employee.department == "未分类"
+                and employee.actual_department in self.scoped_departments
+            )
+            if not allowed:
                 raise ForbiddenException("数据范围限制：仅可访问授权部门员工")
         elif employee.department != self.department:
             raise ForbiddenException("数据范围限制：仅可访问本部门员工")
@@ -76,9 +80,32 @@ class HrAccessContext:
             return stmt
         if self.data_scope == "self_only":
             return stmt.where(employee.employee_number == self.employee_number)
+        # 「未分类」人员按实际部门归属授权部门
         if self.scoped_departments:
-            return stmt.where(employee.department.in_(self.scoped_departments))
-        return stmt.where(employee.department == self.department)
+            return stmt.where(or_(
+                employee.department.in_(self.scoped_departments),
+                and_(employee.department == "未分类", employee.actual_department.in_(self.scoped_departments)),
+            ))
+        return stmt.where(or_(
+            employee.department == self.department,
+            and_(employee.department == "未分类", employee.actual_department == self.department),
+        ))
+
+    def ensure_dept_writable(self, departments: list[str | None]) -> None:
+        """校验写入的部门是否在数据范围内，越界抛 403。
+
+        - all：放行
+        - department / department_and_children：部门必须都在 scoped_departments 内
+        - self_only：无部门数据可写，直接拒绝
+        """
+        if self.is_unrestricted:
+            return
+        scoped = self.scoped_departments
+        if not scoped:
+            raise ForbiddenException("数据范围限制：仅可操作本人相关数据")
+        for d in departments:
+            if d and d not in scoped:
+                raise ForbiddenException(f"数据范围限制：您无权操作部门 '{d}' 的数据")
 
     def resolve_export_department(self, requested: str | None) -> str | None:
         """文档导出时按数据范围收敛部门参数。"""
@@ -89,6 +116,20 @@ class HrAccessContext:
         if requested and requested not in self.scoped_departments:
             raise ForbiddenException(f"数据范围限制：您无权访问部门 '{requested}'")
         return requested or (next(iter(self.scoped_departments)) if len(self.scoped_departments) == 1 else None)
+
+
+async def check_sensitive_permission(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> bool:
+    """检查当前用户是否有敏感信息查看权限"""
+    from app.core.config import get_settings as _gs
+    from app.platform.identity.deps import get_current_user
+    user = await get_current_user(request, db=db, settings=_gs())
+    if user is None:
+        return False
+    perms = await _perm_repo.get_user_permission_codes(db, user.id)
+    return "hr:profile:sensitive" in perms
 
 
 def require_hr_access(*codes: str):
@@ -228,6 +269,7 @@ async def get_hr_scope(
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
 _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     # 员工档案
+    (r"/employees/export", "hr:profile:export"),
     (r"/employees/upload", "hr:profile:export"),
     (r"/employees/by-number", "hr:profile:read"),
     (r"/employees/batch-regularize", "hr:profile:update"),
@@ -255,8 +297,30 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                               "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     (r"/trainers", {"GET": "hr:trainer:read", "POST": "hr:trainer:manage",
                     "PUT": "hr:trainer:manage", "DELETE": "hr:trainer:manage"}),
+    # 绩效考核
+    (r"/performance-categories", {"GET": "hr:performance:read",
+                                  "POST": "hr:performance:manage",
+                                  "PUT": "hr:performance:manage",
+                                  "DELETE": "hr:performance:manage"}),
+    (r"/performance-evaluations", {"GET": "hr:performance:read",
+                                   "POST": "hr:performance:manage",
+                                   "PUT": "hr:performance:manage",
+                                   "DELETE": "hr:performance:manage"}),
+    # 员工标签 / 员工自定义分类（写操作需档案管理权限）
+    (r"/employee-tags", {"GET": "hr:profile:read",
+                         "POST": "hr:profile:update",
+                         "DELETE": "hr:profile:update"}),
+    (r"/employee-classifications", {"GET": "hr:profile:read",
+                                    "POST": "hr:profile:update",
+                                    "DELETE": "hr:profile:update"}),
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
+    # SOP培训文件登记表（查看/编辑对所有人开放）
+    # SOP培训二级表（查看开放；编辑/转培训需培训管理权限；批量生成材料需培训文档权限）
+    (r"/sop-training-entries/batch-transfer", {"POST": "hr:training:manage"}),
+    (r"/sop-training-entries/batch-materials", {"POST": "hr:training:document"}),
+    (r"/sop-training-records/.*/materials", {"POST": "hr:training:document"}),
+    (r"/sop-training-entries", {"PUT": "hr:training:manage", "POST": "hr:training:manage"}),
     (r"/dept-training-personnel", {"GET": "hr:training:read", "POST": "hr:training:manage",
                                     "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # 入职管理
@@ -289,6 +353,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     # 问答考核
     (r"/qa-assessments/.*/sync-ledger", "hr:training:manage"),
     (r"/qa-assessments/.*/export-", "hr:training:export"),
+    (r"/qa-assessments/.*/random-scores", "hr:training:manage"),
     (r"/qa-assessments/.*/scores", "hr:training:manage"),
     (r"/qa-assessments", {"GET": "hr:training:assessment",
                            "POST": "hr:training:manage",
@@ -309,12 +374,13 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/training-evaluations/export-admin", "hr:training:export"),
     (r"/training-evaluations", "hr:training:document"),
     (r"/training-evaluation", "hr:training:document"),
+    (r"/training-assessment-scores/export", "hr:training:export"),
     # 培训登记表
     (r"/training-registration", "hr:roster:read"),
     # 员工异动
     (r"/transfers", "hr:profile:transfer"),
     # 人事看板
-    # （dashboard-stats 功能待后续实现后恢复映射）
+    (r"/dashboard/stats", "hr:profile:read"),
     # 招聘管理 — 注意：具体路径必须在通用路径之前（re.search 首匹配即 break）
     (r"/candidates/pending-review", "hr:recruitment:read"),
     (r"/candidates/.*/push-review", "hr:recruitment:manage"),
@@ -324,6 +390,8 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
     (r"/recruitment", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                        "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/candidates", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
+                      "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
+    (r"/interviews", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",
                       "PUT": "hr:recruitment:manage", "DELETE": "hr:recruitment:manage"}),
     (r"/job-requirements/.*/candidates/comparison", "hr:recruitment:read"),
     (r"/job-requirements", {"GET": "hr:recruitment:read", "POST": "hr:recruitment:manage",

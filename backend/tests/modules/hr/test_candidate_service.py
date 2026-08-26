@@ -115,7 +115,7 @@ class TestCandidateOnboard:
         service = CandidateService(db_session)
         with pytest.raises(ValueError) as exc:
             await service.onboard(c.id)
-        assert "已录用" in str(exc.value)
+        assert "待入职审批" in str(exc.value)
 
     @pytest.mark.asyncio
     async def test_onboard_generates_employee_number(self, db_session):
@@ -127,7 +127,7 @@ class TestCandidateOnboard:
         await db_session.flush()
 
         c = Candidate(
-            id=uuid4(), name="测试入职", status="已录用",
+            id=uuid4(), name="测试入职", status="待入职审批",
             department="技术部", position="工程师",
             job_requirement_id=jd.id,
         )

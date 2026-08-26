@@ -18,6 +18,7 @@ class TrainingEvaluationInput(BaseModel):
     trainer: str | None = Field(None, max_length=64)
     trainee_names: list[str] = Field(default_factory=list)
     assessment_method: str | None = Field(None, max_length=32)
+    department: str | None = Field(None, max_length=64, description="培训部门（培训对象以「x部门 全体成员」展示）")
     # Post-training fields
     expected_count: int | None = Field(None, description="应到人数")
     actual_count: int | None = Field(None, description="实到人数")
@@ -102,8 +103,13 @@ def generate_training_evaluation(data: TrainingEvaluationInput) -> BytesIO:
 
     # Row 3: 培训教材 — skip
 
-    # Row 4: 培训对象 (cols 1-14 merged)
-    people = "、".join(data.trainee_names) if data.trainee_names else ""
+    # Row 4: 培训对象 (cols 1-14 merged) — 统一「x部门 全体成员」
+    if data.department:
+        people = f"「{data.department}」全体成员"
+        if data.trainee_names:
+            people += f"（{len(data.trainee_names)}人）"
+    else:
+        people = "、".join(data.trainee_names) if data.trainee_names else ""
     _set_cell(table.rows[4].cells[1], f"部门/班组/人员(Dept./group/personnel)：{people}")
 
     # Row 5-7: 应到/实到/缺席 (fill if data available)

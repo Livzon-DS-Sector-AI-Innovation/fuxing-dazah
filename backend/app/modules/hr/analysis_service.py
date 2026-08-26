@@ -209,9 +209,9 @@ class TurnoverAnalysisService:
         reason_counter: Counter[str] = Counter()
         for row in reason_result.all():
             if row[0]:
-                reason_counter.update(row[0])
+                reason_counter[row[0]] += 1
             if row[1]:
-                reason_counter.update(row[1])
+                reason_counter[row[1]] += 1
 
         return {
             "departure_count": total,

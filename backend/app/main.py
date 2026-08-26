@@ -76,6 +76,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         set_main_loop(asyncio.get_running_loop())
         start_ws_client()
 
+    # ── 职称评审专属多维表格事件长连接（独立应用凭证，事件共享同一处理器） ──
+    # 单实例确认：lark_oapi SDK 的 WS 客户端使用模块级全局 loop，不支持与平台
+    # 全局长连接并发（后启动者会互相覆盖 loop 导致 RuntimeError 崩溃）。
+    # 平台全局长连接已启用时跳过；职称评审的表事件由全局连接（全局应用订阅）送达。
+    if (
+        settings.HR_TITLE_REVIEW_FEISHU_WS_ENABLED
+        and settings.HR_TITLE_REVIEW_FEISHU_APP_ID
+        and not settings.FEISHU_WS_ENABLED
+    ):
+        from app.platform.integrations.feishu.event_handler import (
+            build_event_handler,
+        )
+        from app.platform.integrations.feishu.event_handler import (
+            set_main_loop as set_loop_tr,
+        )
+        from app.platform.integrations.feishu.ws_client import start_ws_client
+
+        set_loop_tr(asyncio.get_running_loop())
+        start_ws_client(
+            settings.HR_TITLE_REVIEW_FEISHU_APP_ID,
+            settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET,
+            build_event_handler(),
+            name="title-review-ws",
+        )
+
     # ── 安全模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
     from app.modules.safety.feishu.event_client import start_ws, stop_ws
 
@@ -112,6 +137,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
+
+    if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
+        from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
+        scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
 
     scheduler_engine_task = asyncio.create_task(scheduler_engine.run())
 

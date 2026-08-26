@@ -1,18 +1,22 @@
 """HR database queries live here."""
 
-from datetime import UTC, date
+import logging
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import asc, delete, desc, func, or_, select, text
+from sqlalchemy import and_, asc, case, delete, desc, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from app.modules.hr.models import (
     AnnualTrainingPlan,
     AnnualTrainingPlanItem,
     Candidate,
     CandidateAiEvaluation,
+    CandidateAnalysisReport,
     CandidateReview,
     CandidateStatusLog,
     DepartureRecord,
@@ -20,8 +24,13 @@ from app.modules.hr.models import (
     HrDepartment,
     Interview,
     JobRequirement,
+    MonthlyPerformanceEvaluation,
     OffboardingRecord,
     OnboardingRecord,
+    PerformanceCategory,
+    PerformanceCategoryScore,
+    PerformanceDeptWeight,
+    PerformanceEvaluationItem,
     Team,
     TrainingLedger,
     TrainingLedgerPage,
@@ -74,15 +83,23 @@ class EmployeeRepository:
         factory_entry_date_before: date | None = None,
         work_start_date_after: date | None = None,
         work_start_date_before: date | None = None,
+        include_uncategorized: bool = False,
         page: int = 1,
         page_size: int = 20,
-        sort_by: str = "sort_order",
+        sort_by: str = "department",
         sort_order: str = "asc",
     ) -> tuple[list[Employee], int]:
         stmt = select(Employee).where(Employee.is_deleted.is_(False))
 
         if department:
-            stmt = stmt.where(Employee.department.ilike(f"{department}%"))
+            # 体现部门 + 兼任部门；include_uncategorized 时额外纳入「未分类」人员按实际部门归属
+            conds = [
+                Employee.department.ilike(f"{department}%"),
+                Employee.concurrent_departments.ilike(f"%{department}%"),
+            ]
+            if include_uncategorized:
+                conds.append(and_(Employee.department == "未分类", Employee.actual_department.ilike(f"{department}%")))
+            stmt = stmt.where(or_(*conds))
         if status:
             stmt = stmt.where(Employee.status == status)
         else:
@@ -136,8 +153,17 @@ class EmployeeRepository:
         count_stmt = select(func.count()).select_from(stmt.subquery())
         sort_column = getattr(Employee, sort_by, Employee.created_at)
         order_func = desc if sort_order == "desc" else asc
+
+        # 排序时，"未分类"部门的员工按实际部门作为二级排序，让同实际部门的人聚在一起
+        sort_expr = case(
+            (Employee.department == "未分类", Employee.actual_department),
+            else_=None,
+        )
         data_stmt = (
-            stmt.order_by(order_func(sort_column))
+            stmt.order_by(
+                order_func(sort_column),
+                asc(sort_expr),
+            )
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -161,7 +187,7 @@ class EmployeeRepository:
         return result.scalar_one()
 
     async def get_by_name_and_department(self, name: str, department: str) -> Employee | None:
-        """按姓名+部门精确匹配一位员工。"""
+        """按姓名+部门精确匹配一位员工（多人同名时返回 None，不做猜测）。"""
         result = await self.session.execute(
             select(Employee).where(
                 Employee.name == name,
@@ -169,7 +195,14 @@ class EmployeeRepository:
                 Employee.is_deleted.is_(False),
             )
         )
-        return result.scalar_one_or_none()
+        rows = list(result.scalars().all())
+        if len(rows) > 1:
+            logger.warning(
+                "按姓名+部门命中 %d 名员工，无法唯一定位: name=%s department=%s",
+                len(rows), name, department,
+            )
+            return None
+        return rows[0] if rows else None
 
     async def upsert_by_employee_number(self, data: dict) -> bool:
         """UPDATE-then-INSERT 策略：先 UPDATE，成功则完成；否则 INSERT。
@@ -185,17 +218,17 @@ class EmployeeRepository:
         insert_data = {k: v for k, v in data.items() if v is not None}
 
         # ── 构建 SET 子句（UPDATE 含 None 值 → NULL）──
+        # 注意：不在此处复活软删除员工（is_deleted=false 由显式恢复流程处理）
         skip_update = {"id", "employee_number", "created_at"}
         set_parts = []
         for c in data:  # 用原始 data，包含 None → NULL
             if c not in skip_update:
                 set_parts.append(f"{c} = :{c}")
-        set_parts.append("is_deleted = false")
         set_parts.append("updated_at = now()")
 
         sql_update = text(
             f"UPDATE hr.employees SET {', '.join(set_parts)} "
-            f"WHERE employee_number = :employee_number"
+            f"WHERE employee_number = :employee_number AND is_deleted = false"
         )
 
         conn = await self.session.connection()
@@ -218,10 +251,13 @@ class EmployeeRepository:
             await conn.execute(sql_insert, insert_data)
             return True
         except IntegrityError:
-            # 极低概率竞态：UPDATE 后 INSERT 前，另一请求插入了同工号
-            # 此时回退到 UPDATE
-            await conn.execute(sql_update, data)
-            return False
+            # 竞态或工号属于软删除员工：回退到 UPDATE（仅限未删除行）
+            result = await conn.execute(sql_update, data)
+            if result.rowcount and result.rowcount > 0:
+                return False
+            raise ValueError(
+                f"工号 {data.get('employee_number')} 已存在且处于删除状态，无法导入"
+            )
 
     async def count_total(self) -> int:
         result = await self.session.execute(
@@ -978,6 +1014,26 @@ class CandidateRepository:
         result = await self.session.execute(select(Candidate).where(Candidate.id == candidate.id))
         return result.scalar_one()
 
+    async def upsert(self, name: str, phone: str | None, email: str | None, data: dict) -> Candidate:
+        """按姓名+手机/邮箱查重 upsert，返回候选人与是否新增。"""
+        conditions = [Candidate.name == name, Candidate.is_deleted == False]
+        if phone:
+            conditions.append(Candidate.phone == phone)
+        if email:
+            conditions.append(Candidate.email == email)
+
+        stmt = select(Candidate).where(and_(*conditions))
+        result = await self.session.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            for k, v in data.items():
+                setattr(existing, k, v)
+            return await self.update(existing)
+        else:
+            obj = Candidate(name=name, **data)
+            return await self.create(obj)
+
     async def soft_delete(self, candidate_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.candidates SET is_deleted = true WHERE id = :id"), {"id": candidate_id})
         await self.session.flush()
@@ -1010,6 +1066,41 @@ class CandidateRepository:
             select(func.count()).select_from(Candidate).where(Candidate.is_deleted.is_(False))
         )
         return result.scalar() or 0
+
+    async def count_monthly_hires(self, months: int = 12) -> list[dict]:
+        """统计近N个月每月入职人数（按 updated_at 统计「已入职」候选人）。"""
+        from datetime import timedelta
+        cutoff = date.today() - timedelta(days=months * 31)
+        stmt = (
+            select(
+                func.extract('year', Candidate.updated_at).label('year'),
+                func.extract('month', Candidate.updated_at).label('month'),
+                func.count().label('count'),
+            )
+            .where(
+                Candidate.status == '已入职',
+                Candidate.is_deleted == False,
+                Candidate.updated_at >= cutoff,
+            )
+            .group_by(func.extract('year', Candidate.updated_at), func.extract('month', Candidate.updated_at))
+            .order_by(func.extract('year', Candidate.updated_at), func.extract('month', Candidate.updated_at))
+        )
+        result = await self.session.execute(stmt)
+        return [
+            {"year": int(r.year), "month": int(r.month), "count": r.count}
+            for r in result.all()
+        ]
+
+    async def count_by_source(self) -> list[dict]:
+        """按简历来源统计候选人数量。"""
+        stmt = (
+            select(Candidate.source, func.count().label('count'))
+            .where(Candidate.is_deleted == False, Candidate.source.isnot(None), Candidate.source != '')
+            .group_by(Candidate.source)
+            .order_by(func.count().desc())
+        )
+        result = await self.session.execute(stmt)
+        return [{"source": r.source, "count": r.count} for r in result.all()]
 
 
 class InterviewRepository:
@@ -1166,3 +1257,245 @@ class CandidateStatusLogRepository:
             .order_by(desc(CandidateStatusLog.created_at))
         )
         return list(result.scalars().all())
+
+
+class PerformanceEvaluationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_evaluations(
+        self, *, month: str | None = None, department: str | None = None,
+        status: str | None = None, departments: frozenset[str] | None = None,
+        page: int = 1, page_size: int = 20,
+    ) -> tuple[list[MonthlyPerformanceEvaluation], int]:
+        stmt = select(MonthlyPerformanceEvaluation).where(
+            MonthlyPerformanceEvaluation.is_deleted == False  # noqa: E712
+        ).options(selectinload(MonthlyPerformanceEvaluation.items))
+        count_stmt = select(func.count()).select_from(MonthlyPerformanceEvaluation).where(
+            MonthlyPerformanceEvaluation.is_deleted == False  # noqa: E712
+        )
+        if month:
+            stmt = stmt.where(MonthlyPerformanceEvaluation.evaluation_month == month)
+            count_stmt = count_stmt.where(MonthlyPerformanceEvaluation.evaluation_month == month)
+        if department:
+            stmt = stmt.where(MonthlyPerformanceEvaluation.department == department)
+            count_stmt = count_stmt.where(MonthlyPerformanceEvaluation.department == department)
+        if status:
+            stmt = stmt.where(MonthlyPerformanceEvaluation.status == status)
+            count_stmt = count_stmt.where(MonthlyPerformanceEvaluation.status == status)
+        if departments is not None:
+            stmt = stmt.where(MonthlyPerformanceEvaluation.department.in_(departments))
+            count_stmt = count_stmt.where(MonthlyPerformanceEvaluation.department.in_(departments))
+        stmt = stmt.order_by(desc(MonthlyPerformanceEvaluation.evaluation_month), MonthlyPerformanceEvaluation.department)
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        total = (await self.session.execute(count_stmt)).scalar() or 0
+        return list(result.unique().scalars().all()), total
+
+    async def get_by_id(self, evaluation_id: UUID) -> MonthlyPerformanceEvaluation | None:
+        result = await self.session.execute(
+            select(MonthlyPerformanceEvaluation)
+            .where(MonthlyPerformanceEvaluation.id == evaluation_id)
+            .where(MonthlyPerformanceEvaluation.is_deleted == False)  # noqa: E712
+            .options(selectinload(MonthlyPerformanceEvaluation.items))
+        )
+        return result.unique().scalar_one_or_none()
+
+    async def get_by_month_dept(self, month: str, department: str) -> MonthlyPerformanceEvaluation | None:
+        result = await self.session.execute(
+            select(MonthlyPerformanceEvaluation)
+            .where(MonthlyPerformanceEvaluation.evaluation_month == month)
+            .where(MonthlyPerformanceEvaluation.department == department)
+            .where(MonthlyPerformanceEvaluation.is_deleted == False)  # noqa: E712
+            .options(selectinload(MonthlyPerformanceEvaluation.items))
+        )
+        return result.unique().scalar_one_or_none()
+
+    async def create(self, evaluation: MonthlyPerformanceEvaluation) -> MonthlyPerformanceEvaluation:
+        self.session.add(evaluation)
+        await self.session.flush()
+        return evaluation
+
+    async def update(self, evaluation: MonthlyPerformanceEvaluation) -> MonthlyPerformanceEvaluation:
+        await self.session.flush()
+        result = await self.session.execute(
+            select(MonthlyPerformanceEvaluation)
+            .where(MonthlyPerformanceEvaluation.id == evaluation.id)
+            .options(selectinload(MonthlyPerformanceEvaluation.items))
+        )
+        return result.unique().scalar_one()
+
+    async def delete_items(self, evaluation_id: UUID) -> None:
+        await self.session.execute(
+            delete(PerformanceEvaluationItem).where(
+                PerformanceEvaluationItem.evaluation_id == evaluation_id
+            )
+        )
+
+    async def upsert_items(self, evaluation_id: UUID, items: list[dict]) -> list[PerformanceEvaluationItem]:
+        await self.delete_items(evaluation_id)
+        new_items: list[PerformanceEvaluationItem] = []
+        for i, item_data in enumerate(items):
+            item = PerformanceEvaluationItem(
+                evaluation_id=evaluation_id,
+                category=item_data.get("category", "key_work"),
+                indicator=item_data.get("indicator", ""),
+                standard=item_data.get("standard"),
+                weight=item_data.get("weight", 0),
+                self_score=item_data.get("self_score"),
+                leader_score=item_data.get("leader_score"),
+                final_score=item_data.get("final_score"),
+                completion=item_data.get("completion"),
+                sort_order=item_data.get("sort_order", i),
+            )
+            self.session.add(item)
+            new_items.append(item)
+        await self.session.flush()
+        return new_items
+
+    # ─── 考核项目配置 ───
+
+    async def list_categories(self) -> list[PerformanceCategory]:
+        result = await self.session.execute(
+            select(PerformanceCategory).where(PerformanceCategory.is_deleted == False)  # noqa: E712
+            .order_by(PerformanceCategory.sort_order)
+        )
+        return list(result.scalars().all())
+
+    async def get_category_by_id(self, cid: UUID) -> PerformanceCategory | None:
+        result = await self.session.execute(
+            select(PerformanceCategory).where(
+                PerformanceCategory.id == cid,
+                PerformanceCategory.is_deleted == False,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create_category(self, cat: PerformanceCategory) -> PerformanceCategory:
+        self.session.add(cat)
+        await self.session.flush()
+        return cat
+
+    async def update_category(self, cat: PerformanceCategory) -> PerformanceCategory:
+        await self.session.flush()
+        result = await self.session.execute(
+            select(PerformanceCategory).where(PerformanceCategory.id == cat.id)
+        )
+        return result.scalar_one()
+
+    async def delete_category(self, cid: UUID) -> None:
+        cat = await self.get_category_by_id(cid)
+        if cat:
+            cat.is_deleted = True
+            await self.session.flush()
+
+    # ─── 考核项目评分 ───
+
+    async def get_category_scores(self, evaluation_id: UUID) -> list[PerformanceCategoryScore]:
+        result = await self.session.execute(
+            select(PerformanceCategoryScore).where(
+                PerformanceCategoryScore.evaluation_id == evaluation_id,
+                PerformanceCategoryScore.is_deleted == False,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
+    async def upsert_category_score(
+        self, evaluation_id: UUID, category_id: UUID, score: float | None,
+        scored_by: str | None, weight: float = 0,
+    ) -> PerformanceCategoryScore:
+        result = await self.session.execute(
+            select(PerformanceCategoryScore).where(
+                PerformanceCategoryScore.evaluation_id == evaluation_id,
+                PerformanceCategoryScore.category_id == category_id,
+                PerformanceCategoryScore.is_deleted == False,  # noqa: E712
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.score = score
+            existing.weight = weight
+            existing.scored_by = scored_by
+            existing.scored_at = datetime.now(UTC)
+            await self.session.flush()
+            return existing
+        new_score = PerformanceCategoryScore(
+            evaluation_id=evaluation_id,
+            category_id=category_id,
+            score=score,
+            weight=weight,
+            scored_by=scored_by,
+            scored_at=datetime.now(UTC),
+        )
+        self.session.add(new_score)
+        await self.session.flush()
+        return new_score
+
+    # ─── 部门权重配置 ───
+
+    async def get_dept_weights(self, category_id: UUID) -> list[PerformanceDeptWeight]:
+        result = await self.session.execute(
+            select(PerformanceDeptWeight).where(
+                PerformanceDeptWeight.category_id == category_id,
+                PerformanceDeptWeight.is_deleted == False,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
+    async def get_dept_weight(self, category_id: UUID, department: str) -> PerformanceDeptWeight | None:
+        result = await self.session.execute(
+            select(PerformanceDeptWeight).where(
+                PerformanceDeptWeight.category_id == category_id,
+                PerformanceDeptWeight.department == department,
+                PerformanceDeptWeight.is_deleted == False,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert_dept_weight(self, category_id: UUID, department: str, weight: float) -> PerformanceDeptWeight:
+        existing = await self.get_dept_weight(category_id, department)
+        if existing:
+            existing.weight = weight
+            await self.session.flush()
+            return existing
+        dw = PerformanceDeptWeight(category_id=category_id, department=department, weight=weight)
+        self.session.add(dw)
+        await self.session.flush()
+        return dw
+
+
+class CandidateAnalysisReportRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def get_by_interview(self, interview_id: UUID) -> CandidateAnalysisReport | None:
+        result = await self.session.execute(
+            select(CandidateAnalysisReport).where(
+                CandidateAnalysisReport.interview_id == interview_id,
+                CandidateAnalysisReport.is_deleted == False,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateAnalysisReport]:
+        result = await self.session.execute(
+            select(CandidateAnalysisReport)
+            .where(
+                CandidateAnalysisReport.candidate_id == candidate_id,
+                CandidateAnalysisReport.is_deleted == False,  # noqa: E712
+            )
+            .order_by(desc(CandidateAnalysisReport.generated_at))
+        )
+        return list(result.scalars().all())
+
+    async def create(self, report: CandidateAnalysisReport) -> CandidateAnalysisReport:
+        self.session.add(report)
+        await self.session.flush()
+        return report
+
+    async def update(self, report: CandidateAnalysisReport) -> CandidateAnalysisReport:
+        await self.session.flush()
+        result = await self.session.execute(
+            select(CandidateAnalysisReport).where(CandidateAnalysisReport.id == report.id)
+        )
+        return result.scalar_one()

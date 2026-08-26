@@ -1,7 +1,8 @@
 """HR business workflows live here."""
 
+import asyncio
 import logging
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import func, or_, select, text
@@ -13,15 +14,19 @@ from app.modules.hr.models import (
     AnnualTrainingPlanItem,
     Candidate,
     CandidateAiEvaluation,
+    CandidateAnalysisReport,
     CandidateReview,
     CandidateStatusLog,
     DepartureRecord,
+    DeptTrainingPersonnel,
     Employee,
     HrDepartment,
     Interview,
     JobRequirement,
+    MonthlyPerformanceEvaluation,
     OffboardingRecord,
     OnboardingRecord,
+    OnboardingTask,
     PositionTraining,
     Team,
     TrainingLedger,
@@ -31,6 +36,7 @@ from app.modules.hr.repository import (
     AnnualTrainingPlanItemRepository,
     AnnualTrainingPlanRepository,
     CandidateAiEvaluationRepository,
+    CandidateAnalysisReportRepository,
     CandidateRepository,
     CandidateReviewRepository,
     CandidateStatusLogRepository,
@@ -41,6 +47,7 @@ from app.modules.hr.repository import (
     JobRequirementRepository,
     OffboardingRecordRepository,
     OnboardingRecordRepository,
+    PerformanceEvaluationRepository,
     TeamRepository,
     TrainingLedgerPageRepository,
     TrainingLedgerRepository,
@@ -63,6 +70,9 @@ from app.modules.hr.schemas import (
     JobRequirementUpdate,
     OffboardingRecordCreate,
     OffboardingRecordUpdate,
+    PerformanceEvaluationCreate,
+    PerformanceEvaluationUpdate,
+    PerformanceListParams,
     TeamCreate,
     TeamUpdate,
     TrainingLedgerCreate,
@@ -117,7 +127,7 @@ class EmployeeService:
         # 创建台账页面
         q = select(TrainingLedgerPage).where(
             TrainingLedgerPage.employee_number == employee.employee_number,
-            TrainingLedgerPage.is_deleted == False,
+            TrainingLedgerPage.is_deleted == False,  # noqa: E712
         )
         r = await self.repo.session.execute(q)
         if not r.scalar_one_or_none():
@@ -129,7 +139,7 @@ class EmployeeService:
         # 根据岗位导入培训内容（兼容带部门前缀和不带前缀的岗位名）
         if employee.position and employee.department:
             pt_q = select(PositionTraining).where(
-                PositionTraining.is_deleted == False,
+                PositionTraining.is_deleted == False,  # noqa: E712
                 PositionTraining.department == employee.department,
                 or_(
                     PositionTraining.position_name == employee.position,
@@ -141,7 +151,7 @@ class EmployeeService:
                 exist_q = select(TrainingLedger).where(
                     TrainingLedger.employee_number == employee.employee_number,
                     TrainingLedger.training_subject == pt.training_category,
-                    TrainingLedger.is_deleted == False,
+                    TrainingLedger.is_deleted == False,  # noqa: E712
                 )
                 ext = await self.repo.session.execute(exist_q)
                 if not ext.scalar_one_or_none():
@@ -343,17 +353,19 @@ class EmployeeService:
                     continue
         return None
 
-    async def upload_employees(self, file_bytes: bytes) -> dict:
-        """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, errors}。
+    async def upload_employees(
+        self, file_bytes: bytes, allowed_departments: set[str] | None = None
+    ) -> dict:
+        """从 Excel 文件批量导入员工，按工号 upsert。返回 {created, updated, skipped, errors}。
 
         每行使用独立的 SQL savepoint，单行失败通过 ROLLBACK TO SAVEPOINT 恢复事务，
-        确保失败行不影响其他行。
+        确保失败行不影响其他行。allowed_departments 非空时仅导入该范围内的部门行。
         """
         from io import BytesIO
 
         from openpyxl import load_workbook
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -372,6 +384,7 @@ class EmployeeService:
 
         created = 0
         updated = 0
+        skipped = 0
         errors: list[str] = []
 
         # 获取底层连接，用于手动管理 savepoint
@@ -425,7 +438,7 @@ class EmployeeService:
                         val_str = str(val).strip()
                         if val_str in ("—", "——", "-", "", "无"):
                             continue  # 跳过，后续默认设为"在职"
-                        if val_str in ("在职", "离职", "待审批"):
+                        if val_str in ("在职", "离职", "待审批", "病假", "产假", "产假复岗"):
                             val = val_str
                         else:
                             # 未知状态值，跳过（保留默认"在职"）
@@ -449,6 +462,15 @@ class EmployeeService:
                     if field not in data:
                         data[field] = None
 
+                # 数据范围受限时仅导入授权部门行
+                if (
+                    allowed_departments is not None
+                    and data.get("department") not in allowed_departments
+                ):
+                    skipped += 1
+                    await conn.execute(text(f"RELEASE SAVEPOINT {sp_name}"))
+                    continue
+
                 is_new = await self.repo.upsert_by_employee_number(data)
                 if is_new:
                     created += 1
@@ -466,17 +488,17 @@ class EmployeeService:
         if created > 0 or updated > 0:
             await self._sync_departments_from_employees()
 
-        return {"created": created, "updated": updated, "errors": errors}
+        return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
-    async def upload_trainers(self, file_bytes: bytes) -> dict:
-        """上传内训师 Excel，按姓名+部门 upsert。"""
+    async def upload_trainers(self, file_bytes: bytes, allowed_departments: set[str] | None = None) -> dict:
+        """上传内训师 Excel，按姓名+部门 upsert。allowed_departments 非空时仅导入该范围内的部门。"""
         from io import BytesIO
 
         from openpyxl import load_workbook
 
         from app.modules.hr.models import HrTrainer
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -491,10 +513,14 @@ class EmployeeService:
             if h in col_name_map:
                 col_map[idx] = col_name_map[h]
 
-        created, updated, errors = 0, 0, []
+        from sqlalchemy import text as sql_text
+        conn = await self.repo.session.connection()
+        created, updated, skipped, errors = 0, 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row): continue
+            sp_name = f"trainer_row_{row_idx}"
             try:
+                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
                 data = {}
                 for ci, fn in col_map.items():
                     v = row[ci] if ci < len(row) else None
@@ -505,11 +531,14 @@ class EmployeeService:
                     data[fn] = v
                 if "name" not in data or "department" not in data:
                     errors.append(f"第{row_idx}行: 缺少姓名或部门"); continue
+                if allowed_departments is not None and data.get("department") not in allowed_departments:
+                    skipped += 1
+                    continue
 
                 q = select(HrTrainer).where(
                     HrTrainer.name == data["name"],
                     HrTrainer.department == data["department"],
-                    HrTrainer.is_deleted == False)
+                    HrTrainer.is_deleted == False)  # noqa: E712
                 r = await self.repo.session.execute(q)
                 existing = r.scalar_one_or_none()
                 if existing:
@@ -519,9 +548,13 @@ class EmployeeService:
                     self.repo.session.add(HrTrainer(**data))
                     created += 1
                 await self.repo.session.flush()
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
             except Exception as e:
+                # 单行失败只回滚本行，不毒化整个导入事务
+                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
-        return {"created": created, "updated": updated, "errors": errors}
+        return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
     async def upload_sop_catalog(self, file_bytes: bytes) -> dict:
         """上传 SOP 目录 Excel，按 SOP 编号 upsert。"""
@@ -531,7 +564,7 @@ class EmployeeService:
 
         from app.modules.hr.models import PositionTraining, SopCatalog
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows: raise ValueError("文件为空")
@@ -545,10 +578,14 @@ class EmployeeService:
         for idx, h in enumerate(header):
             if h in col_name_map: col_map[idx] = col_name_map[h]
 
+        from sqlalchemy import text as sql_text
+        conn = await self.repo.session.connection()
         created, updated, errors = 0, 0, []
         for row_idx, row in enumerate(rows[1:], start=2):
             if all(c is None for c in row): continue
+            sp_name = f"sop_row_{row_idx}"
             try:
+                await conn.execute(sql_text(f"SAVEPOINT {sp_name}"))
                 data = {}
                 for ci, fn in col_map.items():
                     v = row[ci] if ci < len(row) else None
@@ -573,13 +610,13 @@ class EmployeeService:
                         q = select(SopCatalog).where(
                             SopCatalog.sop_number == row_data["sop_number"],
                             SopCatalog.file_name == name,
-                            SopCatalog.is_deleted == False)
+                            SopCatalog.is_deleted == False)  # noqa: E712
                     else:
                         q = select(SopCatalog).where(
                             SopCatalog.file_name == name,
                             SopCatalog.department == row_data.get("department"),
                             SopCatalog.position_name == row_data.get("position_name"),
-                            SopCatalog.is_deleted == False)
+                            SopCatalog.is_deleted == False)  # noqa: E712
                     r = await self.repo.session.execute(q)
                     existing = r.scalar_one_or_none()
                     if existing:
@@ -599,7 +636,7 @@ class EmployeeService:
                             PositionTraining.position_name == row_data["position_name"],
                             PositionTraining.department == row_data["department"],
                             PositionTraining.training_category == pt_category,
-                            PositionTraining.is_deleted == False)
+                            PositionTraining.is_deleted == False)  # noqa: E712
                         pt_r = await self.repo.session.execute(pt_q)
                         pt_existing = pt_r.scalar_one_or_none()
                         if pt_existing:
@@ -614,7 +651,10 @@ class EmployeeService:
                                 sop_number=row_data.get("sop_number"),
                                 file_name=name,
                             ))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
             except Exception as e:
+                await conn.execute(sql_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
+                await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                 errors.append(f"第{row_idx}行: {e}")
         return {"created": created, "updated": updated, "errors": errors}
 
@@ -668,7 +708,11 @@ class EmployeeService:
         return result
 
     async def delete_employee(self, employee_id: UUID) -> None:
-        await self.repo.session.execute(text("DELETE FROM hr.employees WHERE id = :id"), {"id": employee_id})
+        employee = await self.repo.get_by_id(employee_id)
+        if not employee:
+            raise NotFoundException("员工", str(employee_id))
+        employee.is_deleted = True
+        await self.repo.update(employee)
 
     async def list_employees(
         self,
@@ -678,11 +722,13 @@ class EmployeeService:
         keyword: str | None = None,
         page: int = 1,
         page_size: int = 20,
-        sort_by: str = "sort_order",
+        sort_by: str = "department",
         sort_order: str = "asc",
+        include_uncategorized: bool = False,
     ) -> tuple[list[Employee], int]:
         return await self.repo.list_employees(
             department=department,
+            include_uncategorized=include_uncategorized,
             status=status,
             keyword=keyword,
             page=page,
@@ -786,7 +832,7 @@ class EmployeeService:
 
         from app.modules.hr.models import AnnualTrainingPlan, AnnualTrainingPlanItem
 
-        wb = load_workbook(BytesIO(file_bytes), data_only=True)
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -911,7 +957,7 @@ class EmployeeService:
                     q = select(AnnualTrainingPlan).where(
                         AnnualTrainingPlan.year == year,
                         AnnualTrainingPlan.department == dept,
-                        AnnualTrainingPlan.is_deleted == False,
+                        AnnualTrainingPlan.is_deleted == False,  # noqa: E712
                     )
                     r = await self.repo.session.execute(q)
                     plan = r.scalar_one_or_none()
@@ -929,7 +975,7 @@ class EmployeeService:
                         AnnualTrainingPlanItem.plan_id == plan.id,
                         AnnualTrainingPlanItem.content_and_textbook == content,
                         AnnualTrainingPlanItem.month == month_val,
-                        AnnualTrainingPlanItem.is_deleted == False,
+                        AnnualTrainingPlanItem.is_deleted == False,  # noqa: E712
                     )
                 )).scalar_one_or_none()
                 if existing_item:
@@ -1106,6 +1152,13 @@ class OffboardingRecordService:
         return result
 
     async def delete_record(self, record_id: UUID) -> None:
+        # 删除离职记录时恢复员工在职状态（与 departure 流程对称）
+        record = await self.get_record(record_id)
+        if record and record.employee_id:
+            employee = await self.employee_repo.get_by_id(record.employee_id)
+            if employee and employee.status == "离职":
+                employee.status = "在职"
+                await self.employee_repo.update(employee)
         await self.repo.session.execute(text("DELETE FROM hr.offboarding_records WHERE id = :id"), {"id": record_id})
 
     async def list_records(
@@ -1218,7 +1271,7 @@ class DepartureRecordService:
         onboarding_q = select(OnboardingRecord).where(
             OnboardingRecord.name == data.name,
             OnboardingRecord.department == data.department,
-            OnboardingRecord.is_deleted == False,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
         )
         onboarding_r = await self.repo.session.execute(onboarding_q)
         for onboarding in onboarding_r.scalars().all():
@@ -1243,7 +1296,7 @@ class DepartureRecordService:
         onboarding_q = select(OnboardingRecord).where(
             OnboardingRecord.name == record.name,
             OnboardingRecord.department == record.department,
-            OnboardingRecord.is_deleted == False,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
         )
         onboarding_r = await self.repo.session.execute(onboarding_q)
         for onboarding in onboarding_r.scalars().all():
@@ -1274,7 +1327,7 @@ class TrainingLedgerService:
                 TrainingLedger.employee_number == data.employee_number,
                 TrainingLedger.training_date == data.training_date,
                 TrainingLedger.training_subject == data.training_subject,
-                TrainingLedger.is_deleted == False,
+                TrainingLedger.is_deleted == False,  # noqa: E712
             )
         )
         dup = existing.scalar_one_or_none()
@@ -1311,7 +1364,7 @@ class TrainingLedgerService:
         # 排除已离职员工的培训记录
         from app.modules.hr.models import OnboardingRecord
         departed_subq = select(OnboardingRecord.employee_number).where(
-            OnboardingRecord.is_deleted == False,
+            OnboardingRecord.is_deleted == False,  # noqa: E712
             OnboardingRecord.is_employed == "否",
         )
         return await self.repo.list_records(
@@ -1453,7 +1506,8 @@ _CANDIDATE_TRANSITIONS: dict[str, set[str]] = {
     "面试中": {"已面试", "已拒绝"},
     "已面试": {"录用中", "已拒绝"},
     "录用中": {"已录用", "已拒绝"},
-    "已录用": set(),
+    "已录用": {"待入职审批", "已拒绝"},
+    "待入职审批": {"已录用", "已入职", "已拒绝"},
     "已拒绝": set(),
 }
 
@@ -1528,6 +1582,141 @@ class CandidateService:
         c = await self.get(candidate_id)
         await self.repo.soft_delete(c.id)
 
+    # ─── Excel 批量导入 ───
+
+    _CANDIDATE_UPLOAD_COLUMN_MAP: dict[str, str] = {
+        "姓名": "name",
+        "手机": "phone",
+        "邮箱": "email",
+        "应聘岗位": "position",
+        "部门": "department",
+        "性别": "gender",
+        "学校": "school",
+        "学历": "education",
+        "专业": "major",
+        "毕业时间": "graduation_date",
+        "推荐等级": "recommendation_level",
+        "候选人类型": "candidate_type",
+        "简历来源": "source",
+        "期望薪资": "expected_salary",
+        "当前公司": "current_company",
+        "工作年限": "work_years",
+        "备注": "notes",
+    }
+
+    _CANDIDATE_DATE_FIELDS: set[str] = {"graduation_date"}
+    _CANDIDATE_INT_FIELDS: set[str] = {"work_years"}
+
+    async def upload_candidates(self, file_bytes: bytes) -> dict:
+        """从 Excel 批量导入候选人，按姓名+手机/邮箱 upsert。"""
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+        from sqlalchemy import text as sa_text
+
+        wb = await asyncio.to_thread(load_workbook, BytesIO(file_bytes), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            raise ValueError("文件为空")
+
+        header = [str(c).strip() if c else "" for c in rows[0]]
+        col_map: dict[int, str] = {}
+        for idx, col_name in enumerate(header):
+            field = self._CANDIDATE_UPLOAD_COLUMN_MAP.get(col_name)
+            if field:
+                col_map[idx] = field
+
+        if "name" not in col_map.values():
+            raise ValueError("缺少「姓名」列，无法导入")
+
+        created = 0
+        updated = 0
+        errors: list[str] = []
+
+        conn = await self.repo.session.connection()
+        sp_id = 0
+
+        for row_idx, row in enumerate(rows[1:], start=2):
+            if all(c is None for c in row):
+                continue
+            sp_id += 1
+            sp_name = f"cand_row_{sp_id}"
+            try:
+                await conn.execute(sa_text(f"SAVEPOINT {sp_name}"))
+                data: dict = {}
+                name = ""
+                phone = None
+                email = None
+                for col_idx, field_name in col_map.items():
+                    val = row[col_idx] if col_idx < len(row) else None
+                    if val is None or (isinstance(val, str) and val.strip() == ""):
+                        continue
+                    if isinstance(val, str):
+                        val = val.strip()
+                    if field_name == "name":
+                        name = str(val)
+                    elif field_name == "phone":
+                        phone = str(val)
+                    elif field_name == "email":
+                        email = str(val)
+                    if field_name in self._CANDIDATE_DATE_FIELDS:
+                        parsed = self._parse_date_value(val)
+                        if parsed:
+                            val = parsed
+                        else:
+                            continue
+                    elif field_name in self._CANDIDATE_INT_FIELDS:
+                        try:
+                            val = int(float(str(val)))
+                        except (ValueError, TypeError):
+                            continue
+                    data[field_name] = val
+
+                if not name:
+                    raise ValueError("姓名为空")
+                data.setdefault("status", "待筛选")
+                data.setdefault("candidate_type", "职能")
+
+                await self.repo.upsert(name, phone, email, data)
+                # 如果是新候选人也记录初始状态日志（upsert 内部 create 不会记 log）
+                created += 1  # 简化：不做精确 is_new 判断，统一计数
+                await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
+            except Exception as e:
+                await conn.execute(sa_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
+                try:
+                    await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
+                except Exception:
+                    pass
+                errors.append(f"第{row_idx}行: {e}")
+
+        return {"created": created, "updated": updated, "errors": errors}
+
+    @staticmethod
+    def _parse_date_value(val) -> date | None:
+        """日期解析，复用 EmployeeService 模式。"""
+        from datetime import datetime as _dt
+        if isinstance(val, (int, float)):
+            try:
+                return date.fromordinal(date(1900, 1, 1).toordinal() + int(val) - 2)
+            except Exception:
+                return None
+        if isinstance(val, _dt):
+            return val.date()
+        if isinstance(val, date):
+            return val
+        import re as _re
+        s = str(val).strip()
+        for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y年%m月%d日"]:
+            try:
+                return _dt.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        m = _re.match(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
+        if m:
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return None
+
     async def transition_status(self, candidate_id: UUID, new_status: str, remark: str | None = None) -> Candidate:
         c = await self.get(candidate_id)
         allowed = _CANDIDATE_TRANSITIONS.get(c.status, set())
@@ -1547,11 +1736,14 @@ class CandidateService:
 
     async def onboard(self, candidate_id: UUID) -> tuple[Candidate, OnboardingRecord, str]:
         """候选人入职：校验状态、生成工号、创建入职记录、更新岗位需求 hired_count。"""
-        from datetime import date as date_type
         import uuid as _uuid
+        from datetime import date as date_type
 
         from app.modules.hr.models import OnboardingRecord
-        from app.modules.hr.repository import CandidateRepository, JobRequirementRepository
+        from app.modules.hr.repository import (
+            CandidateRepository,
+            JobRequirementRepository,
+        )
         from app.modules.hr.schemas import CandidateUpdate
 
         # SELECT FOR UPDATE 防止并发入职
@@ -1559,8 +1751,8 @@ class CandidateService:
         c = await candidate_repo.get_by_id_for_update(candidate_id)
         if not c:
             raise NotFoundException("候选人", str(candidate_id))
-        if c.status != "已录用":
-            raise ValueError("候选人状态必须为「已录用」才能入职")
+        if c.status != "待入职审批":
+            raise ValueError("候选人状态必须为「待入职审批」才能入职（请先通过入职审批）")
 
         # 生成工号
         emp_no = f"ZP{date_type.today().strftime('%y%m%d')}{str(_uuid.uuid4())[:4].upper()}"
@@ -1579,6 +1771,20 @@ class CandidateService:
             source="recruitment",
         )
         self.repo.session.add(onboarding)
+        await self.repo.session.flush()
+
+        # 自动创建入职子任务
+        task_types = [
+            ("体检确认", 0), ("资料审核", 1), ("合同签署", 2), ("入职培训", 3),
+        ]
+        for task_type, sort_order in task_types:
+            task = OnboardingTask(
+                candidate_id=candidate_id,
+                task_type=task_type,
+                sort_order=sort_order,
+                status="待完成",
+            )
+            self.repo.session.add(task)
         await self.repo.session.flush()
 
         # 更新候选人状态
@@ -1609,17 +1815,73 @@ class InterviewService:
         return iv
 
     async def create(self, data: InterviewCreate) -> Interview:
-        iv = Interview(**data.model_dump())
-        return await self.repo.create(iv)
+        create_calendar = data.create_calendar_event
+        iv = Interview(**data.model_dump(exclude={"create_calendar_event"}))
+        result = await self.repo.create(iv)
+
+        if create_calendar and data.interview_date:
+            try:
+                candidate_repo = CandidateRepository(self.repo.session)
+                candidate = await candidate_repo.get_by_id(data.candidate_id)
+                candidate_name = candidate.name if candidate else "候选人"
+                position = candidate.position if candidate else ""
+
+                from app.modules.hr.feishu_calendar import FeishuCalendarService
+                calendar = FeishuCalendarService()
+                event_id = await calendar.create_interview_event(
+                    interview_id=result.id,
+                    candidate_name=candidate_name,
+                    position=position,
+                    interview_date_val=data.interview_date,
+                    interviewer_name=data.interviewer or "未指定",
+                    location=data.location or "未指定",
+                    interview_type=data.interview_type,
+                )
+                result.calendar_event_id = event_id
+                result = await self.repo.update(result)
+            except Exception as e:
+                logger.warning("创建日历事件失败（面试已保存）: %s", e)
+
+        return result
 
     async def update(self, interview_id: UUID, data: InterviewUpdate) -> Interview:
         iv = await self.get(interview_id)
+        old_date = iv.interview_date
+        old_location = iv.location
+        old_interviewer = iv.interviewer
+
         for k, v in data.model_dump(exclude_unset=True).items():
             setattr(iv, k, v)
-        return await self.repo.update(iv)
+        result = await self.repo.update(iv)
+
+        if result.calendar_event_id and (
+            old_date != result.interview_date
+            or old_location != result.location
+            or old_interviewer != result.interviewer
+        ):
+            try:
+                from app.modules.hr.feishu_calendar import FeishuCalendarService
+                calendar = FeishuCalendarService()
+                await calendar.update_interview_event(
+                    result.calendar_event_id,
+                    interview_date_val=result.interview_date,
+                    location=result.location,
+                    interviewer_name=result.interviewer,
+                )
+            except Exception as e:
+                logger.warning("同步日历事件失败（面试已更新）: %s", e)
+
+        return result
 
     async def delete(self, interview_id: UUID) -> None:
         iv = await self.get(interview_id)
+        if iv.calendar_event_id:
+            try:
+                from app.modules.hr.feishu_calendar import FeishuCalendarService
+                calendar = FeishuCalendarService()
+                await calendar.delete_interview_event(iv.calendar_event_id)
+            except Exception as e:
+                logger.warning("删除日历事件失败: %s", e)
         await self.repo.soft_delete(iv.id)
 
 
@@ -1694,7 +1956,15 @@ class AiEvaluationService:
             transcript_snapshot=interview.transcript_text,
             model_version="deepseek-v3",
         )
-        return await self.repo.create(eval_obj)
+        eval_obj = await self.repo.create(eval_obj)
+
+        # 回写候选人 match_report
+        c = await candidate_repo.get_by_id(interview.candidate_id)
+        if c:
+            c.match_report = result.get("ai_summary")
+            await candidate_repo.update(c)
+
+        return eval_obj
 
     @staticmethod
     def _build_evaluation_prompt(jd_text: str, resume_text: str, transcript: str) -> str:
@@ -1761,7 +2031,7 @@ class CandidateReviewService:
             })
         return result
 
-    async def push(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None) -> CandidateReview:
+    async def push(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None, reviewer: str | None = None) -> CandidateReview:
         c = await self.candidate_repo.get_by_id(candidate_id)
         if not c:
             raise NotFoundException("候选人", str(candidate_id))
@@ -1769,9 +2039,10 @@ class CandidateReviewService:
             raise ValueError("该候选人未关联岗位需求，无法推送审核")
 
         jd = await self.jd_repo.get_by_id(c.job_requirement_id)
-        reviewer = jd.owner if jd and jd.owner else None
-        if not reviewer:
-            raise ValueError("岗位需求未设置负责人，无法推送审核")
+        # 优先用传入的 reviewer，其次用岗位负责人，最后报错
+        final_reviewer = reviewer or (jd.owner if jd and jd.owner else None)
+        if not final_reviewer:
+            raise ValueError("请填写审核人姓名，或为岗位需求设置负责人")
 
         # 候选人状态前置校验：已入职/已录用/已拒绝 不可推送审核
         if c.status in ("已录用", "已入职", "已拒绝"):
@@ -1782,7 +2053,7 @@ class CandidateReviewService:
             job_requirement_id=c.job_requirement_id,
             pushed_by=pushed_by,
             push_note=push_note,
-            reviewer=reviewer,
+            reviewer=final_reviewer,
             status="待审核",
         )
         result = await self.repo.create(rv)
@@ -1795,13 +2066,22 @@ class CandidateReviewService:
             candidate_id=candidate_id,
             from_status=old_status,
             to_status="待部门审核",
-            remark=f"推送至{reviewer}审核",
+            remark=f"推送至{final_reviewer}审核",
         ))
 
         # 发送飞书消息卡片给审核人
         await self._send_review_card(result, c, jd, push_note)
 
         return result
+
+    async def find_pending_review_id(self, candidate_id: UUID) -> UUID:
+        """按候选人查找待审核记录的ID（用于审核决策时自动查找）。"""
+        rv = await self.repo.get_by_candidate(candidate_id)
+        if not rv:
+            raise ValueError("未找到审核记录")
+        if rv.status != "待审核":
+            raise ValueError("该审核已处理")
+        return rv.id
 
     async def decide(self, review_id: UUID, decision: str, review_comment: str | None = None) -> CandidateReview:
         rv = await self.repo.get_by_id(review_id)
@@ -1810,17 +2090,28 @@ class CandidateReviewService:
         if rv.status != "待审核":
             raise ValueError("该审核已处理")
 
+        # 先校验候选人状态，再落库审核结果——避免校验失败时审核记录已被
+        # flush 且随路由 commit（候选人卡死、审核无法重做）
+        is_onboarding = rv.review_type == "入职审批"
+        c = await self.candidate_repo.get_by_id(rv.candidate_id)
+        new_status: str | None = None
+        if c:
+            if is_onboarding:
+                if c.status != "待入职审批":
+                    raise ValueError(f"候选人状态为「{c.status}」，与入职审批不匹配")
+                new_status = "已入职" if decision == "已同意" else "已录用"
+            else:
+                if c.status not in ("待部门审核", "面试中"):
+                    raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
+                new_status = "面试中" if decision == "已同意" else "已拒绝"
+
         rv.status = decision
         rv.review_comment = review_comment
         rv.reviewed_at = datetime.now()
         result = await self.repo.update(rv)
 
-        # 候选人状态更新（需校验候选人仍在待审核状态，防止已录用/已入职候选人被覆盖）
-        c = await self.candidate_repo.get_by_id(rv.candidate_id)
-        if c:
-            if c.status not in ("待部门审核", "面试中"):
-                raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
-            new_status = "面试中" if decision == "已同意" else "已拒绝"
+        # 候选人状态更新
+        if c and new_status:
             old_status = c.status
             c.status = new_status
             await self.candidate_repo.update(c)
@@ -1845,6 +2136,43 @@ class CandidateReviewService:
         except Exception as e:
             logger.warning(f"发送飞书审核卡片失败: {e}")
 
+    async def push_onboarding(self, candidate_id: UUID, pushed_by: str, push_note: str | None = None) -> CandidateReview:
+        """发起入职审批"""
+        c = await self.candidate_repo.get_by_id(candidate_id)
+        if not c:
+            raise NotFoundException("候选人", str(candidate_id))
+        if c.status != "已录用":
+            raise ValueError(f"候选人状态必须为「已录用」才能发起入职审批，当前状态：「{c.status}」")
+
+        reviewer = pushed_by  # 入职审批由发起人自行指定审批人，或使用部门负责人
+        if c.job_requirement_id:
+            jd = await self.jd_repo.get_by_id(c.job_requirement_id)
+            if jd and jd.owner:
+                reviewer = jd.owner
+
+        rv = CandidateReview(
+            candidate_id=candidate_id,
+            job_requirement_id=c.job_requirement_id,
+            pushed_by=pushed_by,
+            push_note=push_note,
+            reviewer=reviewer,
+            status="待审核",
+            review_type="入职审批",
+        )
+        result = await self.repo.create(rv)
+
+        old_status = c.status
+        c.status = "待入职审批"
+        await self.candidate_repo.update(c)
+        self.candidate_repo.session.add(CandidateStatusLog(
+            candidate_id=candidate_id,
+            from_status=old_status,
+            to_status="待入职审批",
+            remark=f"发起入职审批，审批人：{reviewer}",
+        ))
+
+        return result
+
     async def _send_decision_notification(self, review: CandidateReview, candidate: Candidate | None, decision: str, comment: str | None) -> None:
         """通知HR审核结果"""
         try:
@@ -1852,3 +2180,476 @@ class CandidateReviewService:
             await send_decision_notification(review, candidate, decision, comment)
         except Exception as e:
             logger.warning(f"发送飞书审核通知失败: {e}")
+
+
+# ─── 月度绩效考核 ───
+
+
+class PerformanceEvaluationService:
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.repo = PerformanceEvaluationRepository(db)
+
+    async def list_evaluations(
+        self, params: PerformanceListParams, departments: frozenset[str] | None = None,
+    ) -> tuple[list[dict], int]:
+        evals, total = await self.repo.list_evaluations(
+            month=params.evaluation_month,
+            department=params.department,
+            status=params.status,
+            departments=departments,
+            page=params.page,
+            page_size=params.page_size,
+        )
+        items = []
+        for e in evals:
+            items.append(self._to_response_dict(e))
+        return items, total
+
+    async def get_evaluation(self, evaluation_id: UUID) -> dict | None:
+        e = await self.repo.get_by_id(evaluation_id)
+        if e is None:
+            return None
+        return self._to_response_dict(e)
+
+    async def create_evaluation(self, data: PerformanceEvaluationCreate) -> dict:
+        existing = await self.repo.get_by_month_dept(data.evaluation_month, data.department)
+        if existing:
+            raise ValueError(f"部门 {data.department} 在 {data.evaluation_month} 已有考核记录")
+
+        # 如果未提供部门负责人，从部门培训人员表拉取
+        dept_head = data.department_head
+        if not dept_head:
+            dtp = (await self.db.execute(
+                select(DeptTrainingPersonnel).where(
+                    DeptTrainingPersonnel.department == data.department,
+                    DeptTrainingPersonnel.is_deleted == False,  # noqa: E712
+                )
+            )).scalars().first()
+            if dtp and dtp.department_head:
+                dept_head = dtp.department_head
+
+        evaluation = MonthlyPerformanceEvaluation(
+            department=data.department,
+            department_head=dept_head or "",
+            evaluator_leader=data.evaluator_leader,
+            evaluation_month=data.evaluation_month,
+            headcount=data.headcount,
+        )
+        evaluation = await self.repo.create(evaluation)
+
+        if data.items:
+            await self.repo.upsert_items(evaluation.id, [
+                it.model_dump() for it in data.items
+            ])
+        evaluation = await self.repo.get_by_id(evaluation.id)
+        assert evaluation is not None
+        return self._to_response_dict(evaluation)
+
+    async def update_evaluation(self, evaluation_id: UUID, data: PerformanceEvaluationUpdate) -> dict:
+        e = await self.repo.get_by_id(evaluation_id)
+        if e is None:
+            raise ValueError("考核记录不存在")
+        if e.status not in ("draft",):
+            raise ValueError("仅草稿状态可编辑")
+
+        if data.department_head is not None:
+            e.department_head = data.department_head
+        if data.evaluator_leader is not None:
+            e.evaluator_leader = data.evaluator_leader
+        if data.headcount is not None:
+            e.headcount = data.headcount
+        e = await self.repo.update(e)
+
+        if data.items is not None:
+            await self.repo.upsert_items(e.id, [
+                it.model_dump() for it in data.items
+            ])
+        e = await self.repo.get_by_id(evaluation_id)
+        assert e is not None
+        return self._to_response_dict(e)
+
+    async def submit_self(self, evaluation_id: UUID, user_name: str) -> dict:
+        e = await self.repo.get_by_id(evaluation_id)
+        if e is None:
+            raise ValueError("考核记录不存在")
+        if e.status != "draft":
+            raise ValueError("仅草稿状态可提交自评")
+        if user_name and e.department_head and user_name != e.department_head:
+            raise PermissionError("仅部门负责人可提交自评")
+        e.status = "self_submitted"
+        e.self_submitted_at = datetime.now(UTC)
+        await self.repo.update(e)
+        if _is_notify_enabled():
+            await self._notify_leader(e)
+        return self._to_response_dict(
+            await self.repo.get_by_id(evaluation_id)  # type: ignore[arg-type]
+        )
+
+    async def submit_leader(self, evaluation_id: UUID, user_name: str | None = None) -> dict:
+        e = await self.repo.get_by_id(evaluation_id)
+        if e is None:
+            raise ValueError("考核记录不存在")
+        if e.status not in ("draft", "self_submitted"):
+            raise ValueError("仅草稿或已自评状态可提交领导评分")
+        if user_name and e.evaluator_leader and user_name != e.evaluator_leader:
+            raise PermissionError("仅分管领导可提交领导评分")
+        e.status = "leader_scored"
+        e.leader_submitted_at = datetime.now(UTC)
+        await self.repo.update(e)
+        if _is_notify_enabled():
+            await self._notify_dept_head(e)
+        return self._to_response_dict(
+            await self.repo.get_by_id(evaluation_id)  # type: ignore[arg-type]
+        )
+
+    async def auto_create_for_month(self, month: str, departments: list[str]) -> list[dict]:
+        created: list[dict] = []
+        for dept in departments:
+            existing = await self.repo.get_by_month_dept(month, dept)
+            if existing:
+                continue
+            dtp = (await self.db.execute(
+                select(DeptTrainingPersonnel).where(
+                    DeptTrainingPersonnel.department == dept,
+                    DeptTrainingPersonnel.is_deleted == False,  # noqa: E712
+                )
+            )).scalars().first()
+            dept_head = dtp.department_head if dtp and dtp.department_head else ""
+            evaluation = MonthlyPerformanceEvaluation(
+                department=dept,
+                department_head=dept_head,
+                evaluation_month=month,
+            )
+            await self.repo.create(evaluation)
+            # 为每个启用的考核项目预填空评分记录
+            active_cats = await self.repo.list_categories()
+            for cat in active_cats:
+                if cat.is_active:
+                    await self.repo.upsert_category_score(
+                        evaluation.id, cat.id, None, None, cat.weight,
+                    )
+            # 添加默认考核项目
+            default_items = [
+                {"category": "key_work", "indicator": "月度重点工作1", "weight": 20, "sort_order": 0},
+                {"category": "key_work", "indicator": "月度重点工作2", "weight": 20, "sort_order": 1},
+                {"category": "key_work", "indicator": "月度重点工作3", "weight": 20, "sort_order": 2},
+                {"category": "routine_work", "indicator": "月度常规工作", "weight": 30, "sort_order": 3},
+                {"category": "reward_penalty", "indicator": "奖惩项目", "standard": "造成重大事故可否决绩效总分；获得省级以上奖项可加分", "weight": 10, "sort_order": 4},
+            ]
+            await self.repo.upsert_items(evaluation.id, default_items)
+            # re-fetch 避免 MissingGreenlet（items 是 lazy relationship）
+            evaluation = await self.repo.get_by_id(evaluation.id)
+            assert evaluation is not None
+            # 通知部门负责人（测试阶段默认关闭）
+            if dept_head and _is_notify_enabled():
+                await self._notify_self_required(evaluation)
+            created.append(self._to_response_dict(evaluation))
+        # 通知所有项目负责人（仅 PERFORMANCE_NOTIFY=true 时发送）
+        if created and _is_notify_enabled():
+            await self._notify_evaluators(month, created)
+        return created
+
+    async def _notify_evaluators(self, month: str, evaluations: list[dict]) -> None:
+        """通知各项目负责人：本月有 N 个部门需要评分"""
+        cats = await self.repo.list_categories()
+        # evaluator → list of departments
+        evaluator_depts: dict[str, list[str]] = {}
+        for cat in cats:
+            if not cat.is_active or not cat.evaluator:
+                continue
+            evaluator_depts.setdefault(cat.evaluator, []).extend(
+                [e["department"] for e in evaluations]
+            )
+        for evaluator, depts in evaluator_depts.items():
+            unique_depts = list(dict.fromkeys(depts))  # 去重保序
+            try:
+                from app.modules.hr.feishu_review_service import (
+                    _lookup_open_id,
+                    _send_card,
+                )
+                open_id = await _lookup_open_id(evaluator)
+                if open_id:
+                    card = {
+                        "config": {"wide_screen_mode": True},
+                        "header": {"title": {"tag": "plain_text", "content": f"📋 {month} 月度考核 - 待评分"}, "template": "blue"},
+                        "elements": [
+                            {"tag": "markdown", "content": f"您负责的考核项目需要为 **{len(unique_depts)}** 个部门评分：\n\n" + "\n".join(f"• {d}" for d in unique_depts[:10]) + ("\n..." if len(unique_depts) > 10 else "")},
+                            {"tag": "hr"},
+                            {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/score?month={month}"}]},
+                        ],
+                    }
+                    await _send_card(open_id, card)
+            except Exception as exc:
+                logger.warning(f"通知项目负责人 {evaluator} 失败: {exc}")
+
+    async def _notify_self_required(self, evaluation: MonthlyPerformanceEvaluation) -> None:
+        try:
+            from app.modules.hr.feishu_review_service import _lookup_open_id, _send_card
+            open_id = await _lookup_open_id(evaluation.department_head)
+            if open_id:
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"title": {"tag": "plain_text", "content": "📋 月度绩效考核 - 待自评"}, "template": "blue"},
+                    "elements": [
+                        {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 月度绩效考核已生成，请及时完成自评。\n\n部门：{evaluation.department}\n负责人：{evaluation.department_head}"},
+                        {"tag": "hr"},
+                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往填写自评"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                    ],
+                }
+                await _send_card(open_id, card)
+        except Exception as exc:
+            logger.warning(f"发送绩效考核自评提醒失败: {exc}")
+
+    async def _notify_leader(self, evaluation: MonthlyPerformanceEvaluation) -> None:
+        if not evaluation.evaluator_leader:
+            return
+        try:
+            from app.modules.hr.feishu_review_service import _lookup_open_id, _send_card
+            open_id = await _lookup_open_id(evaluation.evaluator_leader)
+            if open_id:
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"title": {"tag": "plain_text", "content": "📋 月度绩效考核 - 待领导评分"}, "template": "blue"},
+                    "elements": [
+                        {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 部门负责人已完成自评，请进行分管领导评分。\n\n部门：{evaluation.department}\n负责人：{evaluation.department_head}"},
+                        {"tag": "hr"},
+                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                    ],
+                }
+                await _send_card(open_id, card)
+        except Exception as exc:
+            logger.warning(f"发送绩效考核领导评分提醒失败: {exc}")
+
+    async def _notify_dept_head(self, evaluation: MonthlyPerformanceEvaluation) -> None:
+        try:
+            from app.modules.hr.feishu_review_service import _lookup_open_id, _send_card
+            open_id = await _lookup_open_id(evaluation.department_head)
+            if open_id:
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"title": {"tag": "plain_text", "content": "📋 月度绩效考核 - 领导已评分"}, "template": "green"},
+                    "elements": [
+                        {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 绩效考核领导评分已完成，请查看结果。\n\n部门：{evaluation.department}"},
+                        {"tag": "hr"},
+                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "查看考核结果"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                    ],
+                }
+                await _send_card(open_id, card)
+        except Exception as exc:
+            logger.warning(f"发送绩效考核结果通知失败: {exc}")
+
+    @staticmethod
+    def _to_response_dict(e: MonthlyPerformanceEvaluation) -> dict:
+        sorted_items = sorted(e.items or [], key=lambda x: x.sort_order)
+        return {
+            "id": str(e.id),
+            "department": e.department,
+            "department_head": e.department_head,
+            "evaluator_leader": e.evaluator_leader,
+            "evaluation_month": e.evaluation_month,
+            "headcount": e.headcount,
+            "status": e.status,
+            "self_submitted_at": e.self_submitted_at.isoformat() if e.self_submitted_at else None,
+            "leader_submitted_at": e.leader_submitted_at.isoformat() if e.leader_submitted_at else None,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+            "updated_at": e.updated_at.isoformat() if e.updated_at else None,
+            "items": [
+                {
+                    "id": str(it.id),
+                    "category": it.category,
+                    "indicator": it.indicator,
+                    "standard": it.standard,
+                    "weight": it.weight,
+                    "self_score": it.self_score,
+                    "leader_score": it.leader_score,
+                    "final_score": it.final_score,
+                    "completion": it.completion,
+                    "sort_order": it.sort_order,
+                }
+                for it in sorted_items
+            ],
+        }
+
+
+def _get_base_url() -> str:
+    from app.core.config import get_settings
+    return getattr(get_settings(), "APP_BASE_URL", "http://localhost:3000")
+
+
+class OnboardingTaskService:
+    """入职子任务管理"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[OnboardingTask]:
+        from sqlalchemy import select as _select
+        result = await self.session.execute(
+            _select(OnboardingTask)
+            .where(OnboardingTask.candidate_id == candidate_id, OnboardingTask.is_deleted == False)  # noqa: E712
+            .order_by(OnboardingTask.sort_order)
+        )
+        return list(result.scalars().all())
+
+    async def update(self, task_id: UUID, data: dict) -> OnboardingTask:
+        from app.core.exceptions import NotFoundException as _NF
+        result = await self.session.execute(
+            select(OnboardingTask).where(OnboardingTask.id == task_id, OnboardingTask.is_deleted == False)  # noqa: E712
+        )
+        task = result.scalar_one_or_none()
+        if not task:
+            raise _NF("入职任务", str(task_id))
+        for k, v in data.items():
+            setattr(task, k, v)
+        if data.get("status") == "已完成" and not task.completed_at:
+            task.completed_at = datetime.now()
+        await self.session.flush()
+        return task
+
+
+def _is_notify_enabled() -> bool:
+    """是否启用飞书通知（测试阶段默认关闭，上线设置 PERFORMANCE_NOTIFY=true）"""
+    import os
+    return os.getenv("PERFORMANCE_NOTIFY", "").lower() == "true"
+
+
+# ─── 候选人胜任度多维分析报告 ───
+
+_ANALYSIS_SYSTEM_PROMPT = """你是企业人力资源部的资深招聘评估专家。基于候选人简历、岗位JD和面试记录，输出结构化的胜任度多维分析报告。评估必须客观、具体，引用事实依据，评分严格（不及格就直说不及格，合格就直说合格）。"""
+
+_ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，参照以下报告结构输出 JSON：
+
+{{
+  "dimensions": [
+    {{"name": "学历专业匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "英语能力匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "工作经验匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "专业技能匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "软素质匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "稳定性评估", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
+    {{"name": "薪资匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}}
+  ],
+  "strengths": ["核心优势1", "核心优势2"],
+  "risks": ["潜在风险1", "潜在风险2"],
+  "total_score": 0-100,
+  "recommend_level": "强烈推荐/推荐/待定/不推荐 之一",
+  "interview_suggestions": ["面试考察重点建议1", "建议2"],
+  "training_suggestions": ["录用后培养建议1", "建议2"],
+  "summary": "总体结论一段话"
+}}
+
+【候选人简历】
+{resume_text}
+
+【岗位JD】
+{jd_text}
+
+【面试记录】
+{interview_text}
+"""
+
+
+class CandidateAnalysisService:
+    """候选人胜任度多维分析报告：面试记录提交后自动生成。"""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+        self.repo = CandidateAnalysisReportRepository(session)
+
+    async def list_by_candidate(self, candidate_id: UUID) -> list[CandidateAnalysisReport]:
+        return await self.repo.list_by_candidate(candidate_id)
+
+    async def get_by_interview(self, interview_id: UUID) -> CandidateAnalysisReport | None:
+        return await self.repo.get_by_interview(interview_id)
+
+    async def generate(
+        self, candidate_id: UUID, interview_id: UUID
+    ) -> CandidateAnalysisReport:
+        """基于简历+JD+面试记录生成报告；面试建议联动写入面试备注。"""
+        from datetime import datetime as _dt
+
+        interview = await InterviewRepository(self.session).get_by_id(interview_id)
+        if not interview:
+            raise NotFoundException("面试记录", str(interview_id))
+        interview_text = (interview.transcript_text or "").strip() or (interview.notes or "").strip()
+        if not interview_text:
+            raise ValueError("请先填写面试记录（逐字稿或备注）")
+
+        candidate = await CandidateRepository(self.session).get_by_id(candidate_id)
+        if not candidate:
+            raise NotFoundException("候选人", str(candidate_id))
+
+        jd_text = ""
+        if interview.job_requirement_id:
+            jd = await JobRequirementRepository(self.session).get_by_id(interview.job_requirement_id)
+            if jd and jd.requirements:
+                jd_text = jd.requirements
+
+        resume_parts = [
+            f"姓名：{candidate.name}",
+            f"学历：{candidate.education or '未知'}",
+            f"学校：{candidate.school or '未知'}",
+            f"专业：{candidate.major or '未知'}",
+        ]
+        if candidate.current_company:
+            resume_parts.append(f"当前公司：{candidate.current_company}")
+        if candidate.work_years is not None:
+            resume_parts.append(f"工作年限：{candidate.work_years}年")
+        if candidate.resume_url:
+            resume_parts.append(f"简历文件：{candidate.resume_url}")
+        resume_text = "\n".join(resume_parts)
+
+        from app.modules.hr.ai_service import AiChatService
+
+        prompt = _ANALYSIS_PROMPT_TEMPLATE.format(
+            resume_text=resume_text,
+            jd_text=jd_text or "（无岗位JD）",
+            interview_text=interview_text[:6000],
+        )
+        result = await AiChatService.call_json(prompt, system_prompt=_ANALYSIS_SYSTEM_PROMPT)
+        if not isinstance(result, dict) or not result.get("dimensions"):
+            raise ValueError("AI 返回结构异常，请重试")
+
+        # 同面试记录旧报告软删
+        existing = await self.repo.get_by_interview(interview_id)
+        if existing:
+            existing.is_deleted = True
+            await self.repo.session.flush()
+
+        report = await self.repo.create(
+            CandidateAnalysisReport(
+                candidate_id=candidate_id,
+                job_requirement_id=interview.job_requirement_id,
+                interview_id=interview_id,
+                dimensions=result.get("dimensions"),
+                strengths=result.get("strengths"),
+                risks=result.get("risks"),
+                total_score=result.get("total_score"),
+                recommend_level=result.get("recommend_level"),
+                interview_suggestions=result.get("interview_suggestions"),
+                training_suggestions=result.get("training_suggestions"),
+                raw_text=str(result.get("summary") or ""),
+                model_version="deepseek-chat",
+                generated_at=_dt.now().astimezone(),
+            )
+        )
+
+        # 联动：面试建议写入面试备注，HR 面试流程中直接可见
+        suggestions = result.get("interview_suggestions") or []
+        if suggestions:
+            prefix = "【AI面试建议】"
+            notes = interview.notes or ""
+            if prefix not in notes:
+                joined = "；".join(str(s) for s in suggestions)
+                interview.notes = f"{notes}\n{prefix} {joined}".strip()
+                await InterviewRepository(self.session).update(interview)
+
+        # 回写候选人匹配报告摘要
+        if result.get("summary"):
+            c = await CandidateRepository(self.session).get_by_id(candidate_id)
+            if c:
+                c.match_report = str(result["summary"])
+                await CandidateRepository(self.session).update(c)
+
+        return report

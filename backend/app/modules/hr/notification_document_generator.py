@@ -14,6 +14,13 @@ class TrainingNotificationInput(BaseModel):
     subject: str
     training_time_start: str | None = None
     training_time_end: str | None = None
+    face_to_face_time_start: str | None = None
+    face_to_face_time_end: str | None = None
+    self_study_time_start: str | None = None
+    self_study_time_end: str | None = None
+    face_date: date | None = None
+    self_study_date: date | None = None
+    time_slots: list[dict] | None = None
     location: str | None = None
     trainer: str | None = None
     training_method: str | None = None
@@ -82,37 +89,69 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
     _set_cell(table.rows[0].cells[1], " — ".join(topic_parts))
 
     # ── Row 1: 培训日期 | value (含时间) | 课时 | value ──
-    face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
-    face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
-    self_start = getattr(data, "self_study_time_start", None)
-    self_end = getattr(data, "self_study_time_end", None)
-    face_date = getattr(data, "face_date", None) or data.training_date
-    self_date = getattr(data, "self_study_date", None)
-    # 格式化中文日期
-    def _fmt_date(d, t_start, t_end, label):
-        if not d or not t_start:
-            return ""
-        ds = f"{d.year}年{d.month}月{d.day}日"
-        if t_start and t_end:
-            return f"{label}：{ds} {t_start}—{t_end}"
-        return f"{label}：{ds} {t_start}"
-    parts = []
-    face_part = _fmt_date(face_date, face_start, face_end, "面授")
-    if face_part:
-        parts.append(face_part)
-    if self_date and self_start:
-        parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
-    date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
-    _set_cell(table.rows[1].cells[1], date_text)
-    # 课时仅按面授时间计算
-    _set_cell(table.rows[1].cells[3], _compute_hours(face_start, face_end))
+    # 优先使用 time_slots（多时段），否则回退到旧字段
+    if data.time_slots:
+        slot_parts = []
+        total_minutes = 0
+        for s in data.time_slots:
+            d = s.get("date", "")
+            t_start = s.get("start", "")
+            t_end = s.get("end", "")
+            if d and t_start:
+                slot_parts.append(f"{d} {t_start}—{t_end}")
+            if t_start and t_end:
+                try:
+                    s_dt = datetime.strptime(t_start, "%H:%M")
+                    e_dt = datetime.strptime(t_end, "%H:%M")
+                    diff = (e_dt - s_dt).total_seconds() / 60
+                    if diff > 0:
+                        total_minutes += diff
+                except ValueError:
+                    pass
+        date_text = "；".join(slot_parts)
+        total_hours = round(total_minutes / 30) / 2
+        hours_text = f"{int(total_hours)}小时" if total_hours == int(total_hours) else f"{total_hours}小时" if total_hours > 0 else ""
+        _set_cell(table.rows[1].cells[1], date_text)
+        _set_cell(table.rows[1].cells[3], hours_text)
+    else:
+        face_start = getattr(data, "face_to_face_time_start", None) or data.training_time_start
+        face_end = getattr(data, "face_to_face_time_end", None) or data.training_time_end
+        self_start = getattr(data, "self_study_time_start", None)
+        self_end = getattr(data, "self_study_time_end", None)
+        face_date = getattr(data, "face_date", None) or data.training_date
+        self_date = getattr(data, "self_study_date", None)
+        # 格式化中文日期
+        def _fmt_date(d, t_start, t_end, label):
+            if not d or not t_start:
+                return ""
+            ds = f"{d.year}年{d.month}月{d.day}日"
+            if t_start and t_end:
+                return f"{label}：{ds} {t_start}—{t_end}"
+            return f"{label}：{ds} {t_start}"
+        parts = []
+        face_part = _fmt_date(face_date, face_start, face_end, "面授")
+        if face_part:
+            parts.append(face_part)
+        if self_date and self_start:
+            parts.append(_fmt_date(self_date, self_start, self_end, "自学"))
+        date_text = "；".join(parts) if parts else (str(data.training_date) if data.training_date else "")
+        _set_cell(table.rows[1].cells[1], date_text)
+        # 课时仅按面授时间计算
+        _set_cell(table.rows[1].cells[3], _compute_hours(face_start, face_end))
 
     # ── Row 2: 培训方式 | value | 授课人 | value ──
     _set_cell(table.rows[2].cells[1], data.training_method or "")
     _set_cell(table.rows[2].cells[3], data.trainer or "")
 
     # ── Row 3: 培训对象 (merged cols 1-3) ──
-    people = "、".join(data.trainee_names) if data.trainee_names else ""
+    # 培训对象统一以「x部门 全体成员」展示，不再列人名；附病假/产假人数
+    if data.trainee_names:
+        people = f"「{data.department}」全体成员（{len(data.trainee_names)}人）"
+    else:
+        people = f"「{data.department}」全体成员"
+    sick = data.sick_count if data.sick_count is not None else 0
+    maternity = data.maternity_count if data.maternity_count is not None else 0
+    people += f"（病假{sick}人、产假{maternity}人除外）"
     _set_cell(table.rows[3].cells[1], people)
 
     # ── Row 4: 培训地点 (merged cols 1-3) ──
@@ -139,7 +178,16 @@ def generate_training_notification(data: TrainingNotificationInput) -> BytesIO:
         dept_name = data.issuer_department or data.department or ""
         doc.paragraphs[0].runs[0].text = f"部门/Dept：{dept_name}          签发人/ Issued by："
     if len(doc.paragraphs) > 1:
-        d = data.training_date
+        # 优先从 time_slots 取首个日期，否则使用 training_date
+        issue_d = data.training_date
+        if data.time_slots:
+            first_slot_date = data.time_slots[0].get("date", "")
+            if first_slot_date:
+                try:
+                    issue_d = datetime.strptime(first_slot_date, "%Y-%m-%d").date()
+                except ValueError:
+                    pass
+        d = issue_d
         doc.paragraphs[1].runs[0].text = f"{d.year}年{d.month:02d}月{d.day:02d}日"
 
     buf = BytesIO()

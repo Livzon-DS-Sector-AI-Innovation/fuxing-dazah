@@ -13,7 +13,7 @@ import {
   TeamListResponse,
   PositionOption,
 } from '@/types/hr'
-import { fetchHrApi } from './_helpers'
+import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
 // ─── 员工 ───
@@ -25,6 +25,7 @@ export async function fetchEmployeesAction(
     keyword?: string
     page?: number
     page_size?: number
+    include_uncategorized?: boolean
   }
 ): Promise<EmployeeListResponse> {
   const qs = buildQueryString({ ...params, page: params?.page || 1, page_size: params?.page_size || 20 })
@@ -71,6 +72,14 @@ export async function uploadEmployees(formData: FormData): Promise<{ code: numbe
     body: formData,
     errorMessage: '上传失败',
   })
+}
+
+/** 导出员工档案（Excel），列头与导入模板一致 */
+export async function exportEmployees(): Promise<{ base64: string; filename: string }> {
+  const { base64, filename } = await fetchHrDownload('/hr/employees/export', {
+    errorMessage: '导出员工档案失败',
+  })
+  return { base64, filename: filename || `员工档案_${new Date().toISOString().slice(0, 10)}.xlsx` }
 }
 
 /** 试用期到期预警列表 */

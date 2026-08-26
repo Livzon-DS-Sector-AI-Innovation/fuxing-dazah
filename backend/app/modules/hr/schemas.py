@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ─── Department Schemas ───
 
@@ -234,6 +234,13 @@ class EmployeeUpdate(BaseModel):
     status: str | None = Field(None, max_length=16)
 
 
+def _mask_id_card(value: str | None) -> str | None:
+    """身份证脱敏：全部屏蔽"""
+    if not value:
+        return value
+    return "*" * len(value)
+
+
 class EmployeeResponse(EmployeeBase):
     model_config = ConfigDict(from_attributes=True)
 
@@ -243,6 +250,20 @@ class EmployeeResponse(EmployeeBase):
     feishu_synced_at: date | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    # 动态计算字段（优先于飞书静态值）
+    computed_age: int | None = Field(None, description="从出生日期动态计算的年龄")
+    computed_tenure: str | None = Field(None, description="从入职日期动态计算的司龄")
+
+
+def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:
+    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证"""
+    if has_sensitive:
+        return data
+    for key in ("id_card", "id_card_address"):
+        if data.get(key):
+            data[key] = "*" * len(str(data[key]))
+    return data
 
 
 class TrainingSignInSheetInput(BaseModel):
@@ -255,6 +276,7 @@ class TrainingSignInSheetInput(BaseModel):
     self_study_time_end: str | None = Field(None, max_length=32, description="自学结束时间")
     face_date: date | None = Field(None, description="面授日期")
     self_study_date: date | None = Field(None, description="自学日期")
+    time_slots: list[dict] | None = Field(None, description="多时段列表，每项含 date/start/end")
     department: str = Field(..., max_length=64, description="受训部门")
     training_subject: str | None = Field(None, max_length=128, description="培训主题")
     topic: str = Field(..., max_length=256, description="培训题目或内容概要")
@@ -264,6 +286,8 @@ class TrainingSignInSheetInput(BaseModel):
     assessment_method: str | None = Field(None, max_length=32, description="考核方式")
     employee_names: list[str] = Field(default_factory=list, description="应出席受训人员姓名列表")
     employee_departments: dict[str, str] = Field(default_factory=dict, description="员工姓名→部门映射")
+    sick_count: int | None = Field(None, description="病假人数（无则0，后端自动统计）")
+    maternity_count: int | None = Field(None, description="产假人数（无则0，后端自动统计）")
     remarks: str | None = Field(None, max_length=512, description="备注")
 
 
@@ -279,12 +303,15 @@ class TrainingNotificationInput(BaseModel):
     self_study_time_end: str | None = Field(None, max_length=32, description="自学结束时间")
     face_date: date | None = Field(None, description="面授日期")
     self_study_date: date | None = Field(None, description="自学日期")
+    time_slots: list[dict] | None = Field(None, description="多时段列表，每项含 date/start/end")
     location: str | None = Field(None, max_length=128, description="培训地点")
     trainer: str | None = Field(None, max_length=64, description="培训师")
     training_method: str | None = Field(None, max_length=32, description="培训方式")
     assessment_method: str | None = Field(None, max_length=32, description="考核方式")
     content: str | None = Field(None, max_length=512, description="培训内容")
     trainee_names: list[str] = Field(default_factory=list, description="培训人员姓名列表")
+    sick_count: int | None = Field(None, description="病假人数（无则0，后端自动统计）")
+    maternity_count: int | None = Field(None, description="产假人数（无则0，后端自动统计）")
     issuer_department: str | None = Field(None, max_length=64, description="落款部门")
     issue_date: date | None = Field(None, description="落款日期")
 
@@ -299,6 +326,7 @@ class TrainingEvaluationInput(BaseModel):
     trainer: str | None = Field(None, max_length=64)
     trainee_names: list[str] = Field(default_factory=list)
     assessment_method: str | None = Field(None, max_length=32)
+    department: str | None = Field(None, max_length=64, description="培训部门")
 
 
 class OnboardingEvaluationInput(BaseModel):
@@ -462,6 +490,11 @@ class DepartureRecordResponse(DepartureRecordBase):
     feishu_synced_at: date | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # 离职证明签署
+    cert_sign_status: str | None = None
+    cert_signed_at: datetime | None = None
+    cert_sign_name: str | None = None
+    cert_sign_image: str | None = None
 
 
 # ─── OnboardingRecord Schemas ───
@@ -791,6 +824,7 @@ class TrainerResponse(BaseModel):
     is_primary_trainer: bool = False
     is_level1: str | None = None
     admin: str | None = None
+    period: str | None = None
     created_at: datetime | None = None
 
 
@@ -945,6 +979,7 @@ class CandidateCreate(BaseModel):
     expected_salary: str | None = Field(None, max_length=32)
     current_company: str | None = Field(None, max_length=128)
     work_years: int | None = None
+    match_report: str | None = None
     notes: str | None = None
 
 
@@ -969,6 +1004,7 @@ class CandidateUpdate(BaseModel):
     expected_salary: str | None = Field(None, max_length=32)
     current_company: str | None = Field(None, max_length=128)
     work_years: int | None = None
+    match_report: str | None = None
     notes: str | None = None
 
 
@@ -997,6 +1033,7 @@ class CandidateResponse(BaseModel):
     current_company: str | None = None
     work_years: int | None = None
     notes: str | None = None
+    match_report: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -1018,6 +1055,7 @@ class InterviewCreate(BaseModel):
     interviewer: str | None = Field(None, max_length=64)
     location: str | None = Field(None, max_length=256)
     notes: str | None = None
+    create_calendar_event: bool = Field(default=False, description="是否创建飞书日历日程")
 
 
 class InterviewUpdate(BaseModel):
@@ -1028,6 +1066,7 @@ class InterviewUpdate(BaseModel):
     status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
     transcript_text: str | None = None
     notes: str | None = None
+    calendar_event_id: str | None = Field(None, max_length=128)
 
 
 class InterviewResponse(BaseModel):
@@ -1042,6 +1081,7 @@ class InterviewResponse(BaseModel):
     status: str
     transcript_text: str | None = None
     notes: str | None = None
+    calendar_event_id: str | None = None
     created_at: datetime | None = None
 
 
@@ -1085,11 +1125,12 @@ class CandidateComparisonItem(BaseModel):
 class PushReviewRequest(BaseModel):
     pushed_by: str | None = Field(None, description="推送人")
     push_note: str | None = Field(None, description="HR推送备注")
+    reviewer: str | None = Field(None, description="审核人姓名（用人部门负责人），不填则使用岗位负责人")
 
 
 class DecideReviewRequest(BaseModel):
-    review_id: str = Field(..., description="审核记录ID")
-    decision: str = Field(..., max_length=16, description="已同意/已拒绝")
+    review_id: str | None = Field(None, description="审核记录ID（为空时自动按候选人查找）")
+    decision: str = Field(default="已同意", max_length=16, description="已同意/已拒绝")
     review_comment: str | None = Field(None, description="审核意见（拒绝时必填）")
 
 
@@ -1105,3 +1146,179 @@ class CandidateReviewResponse(BaseModel):
     review_comment: str | None = None
     reviewed_at: datetime | None = None
     created_at: datetime | None = None
+    review_type: str | None = None  # "部门审核" / "入职审批"
+
+
+# ─── Recruitment: OnboardingTask Schemas ───
+
+
+class OnboardingTaskBase(BaseModel):
+    task_type: str = Field(..., max_length=32, description="任务类型：体检/资料审核/合同签署/入职培训")
+    sort_order: int = Field(default=0, description="排序")
+
+
+class OnboardingTaskCreate(OnboardingTaskBase):
+    candidate_id: UUID
+
+
+class OnboardingTaskUpdate(BaseModel):
+    status: str | None = Field(None, max_length=16, description="待完成 / 已完成")
+    completed_by: str | None = Field(None, max_length=64)
+    notes: str | None = Field(None)
+
+
+class OnboardingTaskResponse(OnboardingTaskBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    candidate_id: UUID
+    status: str
+    completed_at: datetime | None = None
+    completed_by: str | None = None
+    notes: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+# ─── 月度绩效考核 ───
+
+class PerformanceItemInput(BaseModel):
+    category: str = Field(default="key_work", max_length=16, description="类别: key_work/routine_work/reward_penalty")
+    indicator: str = Field(..., max_length=256, description="考核指标")
+    standard: str | None = Field(None, max_length=512, description="考核标准/目标")
+    weight: float = Field(default=0, description="权重(%)")
+    self_score: float | None = Field(None, description="自评分")
+    leader_score: float | None = Field(None, description="分管领导评分")
+    final_score: float | None = Field(None, description="核定分")
+    completion: str | None = Field(None, max_length=512, description="完成情况")
+    sort_order: int = Field(default=0, description="排序")
+
+
+class PerformanceEvaluationCreate(BaseModel):
+    department: str = Field(..., max_length=128, description="部门名称")
+    department_head: str | None = Field(None, max_length=64, description="部门负责人")
+    evaluator_leader: str | None = Field(None, max_length=64, description="分管领导")
+    evaluation_month: str = Field(..., max_length=7, description="考核月份 YYYY-MM")
+    headcount: int | None = Field(None, description="考核定编")
+    items: list[PerformanceItemInput] = Field(default_factory=list, description="考核指标列表")
+
+
+class PerformanceEvaluationUpdate(BaseModel):
+    department_head: str | None = Field(None, max_length=64)
+    evaluator_leader: str | None = Field(None, max_length=64)
+    headcount: int | None = Field(None)
+    items: list[PerformanceItemInput] | None = Field(None, description="考核指标列表(全量替换)")
+
+
+class PerformanceItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    category: str
+    indicator: str
+    standard: str | None = None
+    weight: float
+    self_score: float | None = None
+    leader_score: float | None = None
+    final_score: float | None = None
+    completion: str | None = None
+    sort_order: int
+
+
+class PerformanceEvaluationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    department: str
+    department_head: str
+    evaluator_leader: str | None = None
+    evaluation_month: str
+    headcount: int | None = None
+    status: str
+    self_submitted_at: datetime | None = None
+    leader_submitted_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    items: list[PerformanceItemResponse] = Field(default_factory=list)
+
+
+class PerformanceSelfSubmit(BaseModel):
+    """提交自评的请求体"""
+
+
+class PerformanceLeaderSubmit(BaseModel):
+    """提交领导评分的请求体"""
+
+
+class PerformanceListParams(BaseModel):
+    evaluation_month: str | None = Field(None, description="按月份筛选")
+    department: str | None = Field(None, description="按部门筛选")
+    status: str | None = Field(None, description="按状态筛选")
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=20, ge=1, le=100)
+
+
+# ─── 考核项目配置 ───
+
+class PerformanceCategoryCreate(BaseModel):
+    name: str = Field(..., max_length=64, description="考核项目名称")
+    weight: float = Field(default=0, description="权重(%)")
+    evaluator: str | None = Field(None, max_length=64, description="项目负责人")
+    sort_order: int = Field(default=0)
+
+
+class PerformanceCategoryUpdate(BaseModel):
+    name: str | None = Field(None, max_length=64)
+    weight: float | None = Field(None)
+    evaluator: str | None = Field(None, max_length=64)
+    is_active: bool | None = Field(None)
+    sort_order: int | None = Field(None)
+
+
+class PerformanceCategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    weight: float
+    evaluator: str | None = None
+    is_active: bool
+    sort_order: int
+    created_at: datetime | None = None
+
+
+class CategoryScoreInput(BaseModel):
+    evaluation_id: UUID
+    category_id: UUID
+    score: float | None = None
+    weight: float = 0
+
+
+class CategoryScoreBatchInput(BaseModel):
+    scores: list[CategoryScoreInput]
+
+
+class CategoryScoreResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    evaluation_id: UUID
+    category_id: UUID
+    score: float | None = None
+    scored_by: str | None = None
+    scored_at: datetime | None = None
+
+
+class CandidateAnalysisReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    candidate_id: UUID
+    job_requirement_id: UUID | None
+    interview_id: UUID
+    dimensions: list | None
+    strengths: list | None
+    risks: list | None
+    total_score: float | None
+    recommend_level: str | None
+    interview_suggestions: list | None
+    training_suggestions: list | None
+    raw_text: str | None
+    model_version: str | None
+    generated_at: datetime | None

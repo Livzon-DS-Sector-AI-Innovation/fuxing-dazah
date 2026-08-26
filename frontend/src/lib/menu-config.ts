@@ -270,9 +270,9 @@ export const moduleMenus: ModuleMenu[] = [
     label: "人事管理",
     icon: "users",
     path: "/hr",
-    permissions: ["hr:*:read"],
+    permissions: ["hr:*:read", "hr:title:judge"],
     children: [
-      { key: "dashboard", label: "📊 人事看板", path: "/hr" },
+      { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard" },
       { key: "departments", label: "部门管理", path: "/hr/departments" },
       { key: "profile", label: "员工档案", path: "/hr/profile" },
       { key: "recruitment", label: "招聘管理", path: "/hr/recruitment" },
@@ -285,12 +285,23 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "onboarding-training", label: "新员工入职培训", path: "/hr/training/onboarding" },
           { key: "training-notification", label: "培训通知", path: "/hr/training/notification" },
+          { key: "sop-master", label: "SOP培训登记表", path: "/hr/training/sop-master" },
+          { key: "sop-secondary", label: "SOP培训二级表", path: "/hr/training/sop-secondary" },
           { key: "training-ai-exam", label: "AI 出题", path: "/hr/training/ai-exam" },
           { key: "training-annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan" },
           { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger" },
           { key: "training-question-bank", label: "题库大全", path: "/hr/training/question-bank" },
+          { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
         ],
       },
+      { key: "performance", label: "📋 绩效考核", path: "/hr/performance",
+        children: [
+          { key: "performance-list", label: "考核列表", path: "/hr/performance" },
+          { key: "performance-categories", label: "项目配置", path: "/hr/performance/categories" },
+        ],
+      },
+      { key: "title-review", label: "职称评审", path: "/hr/title-review", permissions: ["hr:title:read"] },
+      { key: "title-judge", label: "职称评审投票", path: "/hr/title-judge", permissions: ["hr:title:judge"] },
       // 权限码与后端 hr/deps.py 路由映射对齐：资料下载→roster、系统配置→settings:manage、SOP→training:read
       { key: "printing", label: "资料下载", path: "/hr/printing", permissions: ["hr:roster:read"] },
       {

@@ -171,6 +171,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               {commonSelect('status', '状态', [
                 { value: '在职', label: '在职' }, { value: '试用期', label: '试用期' },
                 { value: '离职', label: '离职' }, { value: '待审批', label: '待审批' },
+                { value: '病假', label: '病假' }, { value: '产假', label: '产假' },
                 { value: '产假复岗', label: '产假复岗' },
               ], true)}
               {dateItem('hire_date', '入职日期', true)}
