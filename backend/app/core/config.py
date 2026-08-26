@@ -70,9 +70,6 @@ class Settings(BaseSettings):
     SAFETY_FEISHU_APP_ID: str = ""
     SAFETY_FEISHU_APP_SECRET: str = ""
 
-    # AI 模型
-    HR_DEEPSEEK_API_KEY: str = ""  # DeepSeek API 密钥，用于面试评价等 AI 功能
-
     # Upload
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 10

@@ -1,15 +1,13 @@
 """Minimal AI chat service for HR turnover analysis.
 
 Self-contained within the HR module — no dependency on app.platform.ai.
-Uses the OpenAI SDK pointed at Moonshot API for streaming completions.
+Uses the OpenAI SDK pointed at DeepSeek API for streaming completions.
 """
 
 from collections.abc import AsyncGenerator
 from typing import Any
 
 import openai
-
-from app.core.config import get_settings
 
 
 class AiChatService:
@@ -70,8 +68,9 @@ class AiChatService:
         import re
 
         if not api_key:
-            settings = get_settings()
-            api_key = getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "HR_DEEPSEEK_API_KEY", "") or ""
+            from app.modules.hr.config import HR_AI_API_KEY
+
+            api_key = HR_AI_API_KEY
         client = openai.AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         from app.modules.hr.config import HR_AI_MODEL
         model = model or HR_AI_MODEL or "deepseek-chat"
