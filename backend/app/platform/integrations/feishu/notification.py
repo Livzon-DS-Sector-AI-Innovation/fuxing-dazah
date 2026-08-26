@@ -70,19 +70,21 @@ async def _get_tenant_token(client: Any) -> str:
 
 async def send_user_card(
     open_id: str,
-    title: str,
-    content: str,
+    title: str = "",
+    content: str = "",
     elements: list[dict[str, Any]] | None = None,
     receive_id_type: str = "open_id",
+    card: dict[str, Any] | None = None,
 ) -> bool:
     """发送卡片消息给单个用户（DM）。
 
     Args:
         open_id: 飞书用户标识（含义由 receive_id_type 决定）
-        title: 卡片标题
-        content: 卡片正文（支持 markdown）
+        title: 卡片标题（card 未提供时使用）
+        content: 卡片正文（支持 markdown；card 未提供时使用）
         elements: 额外的卡片元素（按钮、分割线等）
         receive_id_type: 接收者 ID 类型，"open_id"（默认）或 "user_id"
+        card: 预构建的完整卡片 dict（提供时直接使用，忽略 title/content/elements）
 
     Returns:
         True 表示发送成功，False 表示失败（不抛异常）
@@ -97,18 +99,20 @@ async def send_user_card(
             CreateMessageRequestBody,
         )
 
-        card = {
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": title},
-                "template": "orange",
-            },
-            "elements": [
-                {"tag": "markdown", "content": content},
-            ],
-        }
+        if card is None:
+            card = {
+                "config": {"wide_screen_mode": True},
+                "header": {
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": "orange",
+                },
+                "elements": [
+                    {"tag": "markdown", "content": content},
+                ],
+            }
         if elements:
-            card["elements"].extend(elements)  # type: ignore[attr-defined]
+            card.setdefault("elements", [])
+            card["elements"].extend(elements)
 
         card_json = json.dumps(card, ensure_ascii=False)
         logger.info("send_user_card: card JSON length=%d", len(card_json))

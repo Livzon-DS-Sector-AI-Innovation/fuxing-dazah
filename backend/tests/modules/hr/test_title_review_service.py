@@ -226,12 +226,6 @@ class TestFlowAndVotes:
             "app.modules.hr.title_review.bitable_client.update_record", AsyncMock()
         )
         monkeypatch.setattr(
-            "app.modules.hr.title_review.notify.send_dept_review_card", AsyncMock(return_value=True)
-        )
-        monkeypatch.setattr(
-            "app.modules.hr.title_review.notify.send_final_review_card", AsyncMock(return_value=True)
-        )
-        monkeypatch.setattr(
             "app.modules.hr.title_review.notify.send_result_card", AsyncMock(return_value=True)
         )
         monkeypatch.setattr(

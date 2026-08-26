@@ -70,7 +70,6 @@ class TitleReviewActivityOut(BaseModel):
     feishu_app_token: str | None
     apply_table_id: str | None
     vote_table_id: str | None
-    feishu_folder_token: str | None
     approval_code: str | None
     created_at: datetime | None = None
     levels: list[TitleReviewLevelOut] = []
@@ -150,7 +149,7 @@ class TitleReviewApplicationOut(BaseModel):
 
 class TitleReviewJudgeAssignItemIn(BaseModel):
     employee_id: UUID = Field(..., description="hr.employees.id")
-    role: str = Field("技术专家", max_length=32, description="评审人角色")
+    role: str = Field("评委", max_length=32, description="评审人角色")
 
 
 class TitleReviewJudgeAssignIn(BaseModel):
@@ -183,20 +182,6 @@ class TitleReviewJudgeVoteIn(BaseModel):
     review_comment: str | None = Field(None, description="评审意见")
 
 
-class TitleReviewJudgeTaskOut(BaseModel):
-    """评委视角的投票任务（不含其他评委信息）。"""
-
-    judge_id: UUID
-    judge_code: str
-    status: str
-    vote_result: str | None
-    comprehensive_grade: str | None
-    review_comment: str | None
-    voted_at: datetime | None
-    dimension_grades: dict[str, str | None] = {}
-    application: TitleReviewApplicationOut
-
-
 # ─── 评审结果（scores:read 权限才可见） ───
 
 class TitleReviewScoreOut(BaseModel):
@@ -208,24 +193,3 @@ class TitleReviewScoreOut(BaseModel):
     dimension_name: str
     grade: str | None
     voted_at: datetime | None
-
-
-class TitleReviewJudgeScoreOut(TitleReviewJudgeOut):
-    scores: list[TitleReviewScoreOut] = []
-
-
-class TitleReviewResultRow(BaseModel):
-    application: TitleReviewApplicationOut
-    judges: list[TitleReviewJudgeScoreOut] = []
-    vote_ratio: float | None = None  # 同意÷(同意+不同意)
-    need_final_review: bool = False
-
-
-# ─── 对账 ───
-
-class TitleReviewReconcileOut(BaseModel):
-    activity_id: UUID
-    applications_created: int = 0
-    applications_removed: int = 0
-    votes_updated: int = 0
-    errors: list[str] = []

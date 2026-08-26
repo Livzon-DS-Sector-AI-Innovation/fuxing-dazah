@@ -121,7 +121,7 @@ class TitleReviewActivity(BaseModel):
         DateTime(timezone=True), nullable=True, comment="评审截止时间"
     )
     pass_ratio: Mapped[float] = mapped_column(
-        Float, nullable=False, default=DEFAULT_PASS_RATIO, server_default="0.6667",
+        Float, nullable=False, default=DEFAULT_PASS_RATIO, server_default="0.6666666666666667",
         comment="通过比例：同意÷(同意+不同意) ≥ 此值（默认三分之二）",
     )
     feishu_app_token: Mapped[str | None] = mapped_column(
@@ -132,9 +132,6 @@ class TitleReviewActivity(BaseModel):
     )
     vote_table_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="投票表 table_id"
-    )
-    feishu_folder_token: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="备用：存放多维表格的文件夹 token"
     )
     approval_code: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="飞书审批定义编码（申报先过审批，通过后自动同步）"
@@ -300,7 +297,7 @@ class TitleReviewJudge(BaseModel):
         String(16), nullable=False, comment="评审人编号（匿名，写入投票表）"
     )
     judge_role: Mapped[str] = mapped_column(
-        String(32), nullable=True, comment="评审人角色：技术专家/部门经理/人力资源"
+        String(32), nullable=True, comment="评审人角色：评委/部门经理/人力资源"
     )
     feishu_record_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True, comment="投票表行 id（批量写行后回写）"

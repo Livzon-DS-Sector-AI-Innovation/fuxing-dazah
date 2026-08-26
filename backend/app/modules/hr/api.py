@@ -499,15 +499,26 @@ def _fmt_list(val) -> str:
     return str(val)
 
 
+def _xlsx_response(wb, filename: str) -> StreamingResponse:
+    """openpyxl 工作簿 → xlsx 下载响应（统一保存/媒体类型/文件名头）。"""
+    from io import BytesIO
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/employees/export", summary="导出员工档案（Excel）")
 async def export_employees(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """导出员工档案为 Excel 文件（按数据范围限制），列头与导入模板一致（身份证已脱敏）。"""
-    from io import BytesIO
-
-    from fastapi.responses import StreamingResponse
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font
 
@@ -562,15 +573,8 @@ async def export_employees(
             cell_val = str(val) if val is not None else ""
             ws.cell(row=row_idx, column=col_idx, value=cell_val)
 
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
     filename = f"employee_export_{date.today().isoformat()}.xlsx"
-    return StreamingResponse(
-        buf,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    return _xlsx_response(wb, filename)
 
 
 @router.get("/dashboard/stats", summary="人事仪表盘统计数据")
@@ -587,8 +591,15 @@ async def get_dashboard_stats(
     from app.modules.hr.models import Employee as EmpModel
 
     def _scoped():
-        """数据范围过滤（未分类按实际部门归属），unrestricted 返回 []。"""
-        if hr_scope.is_unrestricted or not hr_scope.scoped_departments:
+        """数据范围过滤（未分类按实际部门归属），unrestricted 返回 []。
+
+        self_only：按工号过滤到本人（与 apply_list_scope 语义一致）。
+        """
+        if hr_scope.is_unrestricted:
+            return []
+        if hr_scope.data_scope == "self_only":
+            return [EmpModel.employee_number == hr_scope.employee_number]
+        if not hr_scope.scoped_departments:
             return []
         return [or_(
             EmpModel.department.in_(hr_scope.scoped_departments),
@@ -750,7 +761,7 @@ async def get_dashboard_stats(
         col = getattr(EmpModel, field_name)
         rows = (await session.execute(
             select(col, func.count(EmpModel.id))
-            .where(EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
+            .where(*_scoped(), EmpModel.is_deleted == False, EmpModel.status == "在职")  # noqa: E712
             .group_by(col)
             .order_by(func.count(EmpModel.id).desc())
         )).all()
@@ -765,6 +776,7 @@ async def get_dashboard_stats(
         label = f"{lo}-{hi}岁" if hi < 999 else f"{lo}岁以上"
         cnt = (await session.execute(
             select(func.count(EmpModel.id)).where(
+                *_scoped(),
                 EmpModel.is_deleted == False,  # noqa: E712
                 EmpModel.status == "在职",
                 EmpModel.birth_year > 0,
@@ -786,6 +798,7 @@ async def get_dashboard_stats(
         hi_date = date(current_year - lo + 1, 1, 1)
         cnt = (await session.execute(
             select(func.count(EmpModel.id)).where(
+                *_scoped(),
                 EmpModel.is_deleted == False,  # noqa: E712
                 EmpModel.status == "在职",
                 EmpModel.hire_date > lo_date,
@@ -810,6 +823,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.hire_date >= year_start,
             EmpModel.hire_date < next_year_start,
@@ -828,6 +842,7 @@ async def get_dashboard_stats(
             func.count(EmpModel.id),
         )
         .where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "离职",
             EmpModel.departure_date >= year_start,
@@ -843,6 +858,7 @@ async def get_dashboard_stats(
     # ── 在职员工平均年龄（从出生年份动态计算）──
     age_avg_result = (await session.execute(
         select(func.avg(current_year - EmpModel.birth_year)).where(
+            *_scoped(),
             EmpModel.is_deleted == False,  # noqa: E712
             EmpModel.status == "在职",
             EmpModel.birth_year > 0,
@@ -1547,14 +1563,7 @@ async def export_training_evaluation_admin(
             text("SELECT count(*) FROM hr.employees WHERE department = :dept AND is_deleted = false AND status = '在职'"),
             {"dept": department},
         )).scalar()
-        # 统计病假/产假人数
-        leave_result = await session.execute(
-            text("SELECT status, count(*) FROM hr.employees WHERE department = :dept AND is_deleted = false AND status IN ('病假', '产假') GROUP BY status"),
-            {"dept": department},
-        )
-        for row in leave_result.fetchall():
-            if row[0] == '病假': sick_count = row[1]
-            elif row[0] == '产假': maternity_count = row[1]
+        sick_count, maternity_count = await _query_leave_counts(session, department)
         if not emp_count:
             emp_count = (await session.execute(
                 text("SELECT count(*) FROM hr.onboarding_records WHERE department = :dept AND is_deleted = false AND is_employed = '是'"),

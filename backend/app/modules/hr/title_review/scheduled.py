@@ -10,7 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 async def run_reconcile_all() -> None:
-    """对进行中（open/reviewing）的活动逐一执行双向对账。"""
+    """对进行中（open/reviewing）的活动逐一执行双向对账。
+
+    每个活动独立提交：单活动失败只回滚自身，不影响其他活动的对账结果，
+    也避免失败事务毒化会话（PendingRollbackError 级联）。
+    """
     async with async_session_factory() as db:
         service = TitleReviewService(db)
         activities = await service.activity_repo.list_active()
@@ -19,11 +23,11 @@ async def run_reconcile_all() -> None:
                 stats = await service.reconcile_activity(activity.id)
                 if any(stats.values()):
                     logger.info("活动对账完成: activity=%s stats=%s", activity.id, stats)
+                await db.commit()
             except Exception:
                 logger.exception("活动对账失败: activity_id=%s", activity.id)
                 # 回滚本活动产生的脏状态，避免后续活动触发 PendingRollbackError
                 await db.rollback()
-        await db.commit()
 
 
 TITLE_REVIEW_SYNC_TASK = TaskDefinition(

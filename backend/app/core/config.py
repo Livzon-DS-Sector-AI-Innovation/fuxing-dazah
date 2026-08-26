@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     # Feishu WebSocket 长连接（接收消息/事件推送）
     FEISHU_WS_ENABLED: bool = True
 
-    # 职称评审：存放多维表格的云空间文件夹 token（飞书自动建表用，可选）
-    HR_TITLE_REVIEW_FEISHU_FOLDER_TOKEN: str = ""
     # 职称评审：独立飞书应用凭证（审批同步用：approval:approval:readonly / approval:definition；
     # 缺省回落全局应用）。多维表格读写与通知卡片始终使用全局应用。
     HR_TITLE_REVIEW_FEISHU_APP_ID: str = ""

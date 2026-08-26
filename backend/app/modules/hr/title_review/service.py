@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import httpx
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,9 +34,12 @@ from app.modules.hr.title_review.repository import (
 from app.modules.hr.title_review.schemas import (
     TitleReviewActivityCreate,
     TitleReviewActivityUpdate,
+    TitleReviewApplicationOut,
     TitleReviewDeptCommitteeIn,
     TitleReviewJudgeAssignIn,
+    TitleReviewJudgeOut,
     TitleReviewLevelIn,
+    TitleReviewScoreOut,
 )
 from app.platform.audit.service import record_audit_log
 
@@ -98,6 +100,8 @@ APPROVAL_FORM_FIELD_MAP = {
 }
 # 申报表只读列类型：lookup(19)/formula(20)/系统自动列(1001-1005)
 READONLY_FIELD_TYPES = {19, 20, 1001, 1002, 1003, 1004, 1005}
+# 单选列类型（飞书 field type=3），写入前做选项校验
+FEISHU_FIELD_SINGLE_SELECT = 3
 # 审批表单图片证明控件（image 类型）：值为 URL 列表，落库为文本列（旧表单名保留兼容）
 IMAGE_EVIDENCE_FIELDS = [
     "外部专业技术职称证书等证明材料上传",
@@ -106,24 +110,30 @@ IMAGE_EVIDENCE_FIELDS = [
     "两项以上担任项目技术负责人的业绩证明材料",
 ]
 # 员工信息表自动带出的个人档案字段（申报表/审批表单未体现的信息由此补充展示）
-EMPLOYEE_PROFILE_FIELDS = [
-    "学历",
-    "司龄",
-    "入职日期",
-    "性别",
-    "职务",
-    "岗位职级",
-    "毕业院校",
-    "专业",
-    "目前职级",
-    "2021年评定职级",
-    "2022年评定职级",
-    "2023年评定职级",
-    "2024年评定职级",
-    "2025年评定职级",
-    "近5年年终绩效考评结果",
-    "2026年最高可申报（根据年限）",
-]
+# 评定职级按年度滚动：近 5 个已评定年份 + 当前年度最高可申报
+def _build_profile_fields() -> list[str]:
+    year = datetime.now().year
+    recent_years = [f"{y}年评定职级" for y in range(year - 5, year)]
+    return [
+        "学历",
+        "司龄",
+        "入职日期",
+        "性别",
+        "职务",
+        "岗位职级",
+        "毕业院校",
+        "专业",
+        "目前职级",
+        *recent_years,
+        "近5年年终绩效考评结果",
+        f"{year}年最高可申报（根据年限）",
+    ]
+
+
+EMPLOYEE_PROFILE_FIELDS = _build_profile_fields()
+
+# 员工信息表 table_id 缓存（app_token → table_id，绑定表格时失效）
+_employee_table_cache: dict[str, str] = {}
 
 
 def _as_str(value: Any) -> str | None:
@@ -174,11 +184,10 @@ def _cell_has_remote_url(text: str) -> bool:
 
 
 async def _download_image_bytes(url: str) -> bytes:
-    """下载图片（飞书签名链接有效期内可下载）。"""
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
-        resp = await http.get(url)
-        resp.raise_for_status()
-        return resp.content
+    """下载图片（飞书签名链接有效期内可下载）——走平台集成层下载。"""
+    from app.platform.integrations.feishu.http import download
+
+    return await download(url)
 
 
 async def _image_text_to_local(text: str) -> str:
@@ -249,10 +258,11 @@ def _parse_attachments(raw: Any) -> list[dict[str, Any]] | None:
 def compute_comprehensive_grade(dimension_grades: list[str | None]) -> str | None:
     """按《员工职级评定管理办法》附表5 自动计算综合等级（两档）。
 
-    规则：合格=7项中≥5项合格；不合格=7项中>2项不合格；
+    规则：合格=全维度中≥5项合格；不合格=超过2项不合格；
     维度未填齐或出现非法值则不计算（返回 None）。
     """
-    if len(dimension_grades) < 7 or any(g not in ("合格", "不合格") for g in dimension_grades):
+    total = len(m.DEFAULT_DIMENSION_NAMES)
+    if len(dimension_grades) < total or any(g not in ("合格", "不合格") for g in dimension_grades):
         return None
     qualified = dimension_grades.count("合格")
     return "合格" if qualified >= 5 else "不合格"
@@ -360,7 +370,7 @@ def _filter_writable_row(
         if not name or field.get("type") in READONLY_FIELD_TYPES:
             continue
         options: set[str] = set()
-        if field.get("type") == 3:  # 单选列做选项校验
+        if field.get("type") == FEISHU_FIELD_SINGLE_SELECT:  # 单选列做选项校验
             options = {
                 str(opt.get("name", ""))
                 for opt in (field.get("property") or {}).get("options") or []
@@ -576,6 +586,8 @@ class TitleReviewService:
         activity = await self.get_activity(activity_id)
         if not (activity.feishu_app_token and activity.apply_table_id):
             raise HTTPException(400, "请先在活动编辑中粘贴 app_token、申报表 table_id")
+        # 重新绑定表格后，员工信息表 table_id 缓存失效（Base 表结构可能变化）
+        _employee_table_cache.pop(activity.feishu_app_token, None)
         try:
             apply_fields = await bc.list_fields(
                 activity.feishu_app_token, activity.apply_table_id
@@ -655,11 +667,11 @@ class TitleReviewService:
         # 批量流转：submitted → voting，并按部门自动分配评委
         assigned = 0
         applications = await self.application_repo.list_all_by_activity(activity.id)
+        committees = {c.department: c for c in await self.committee_repo.list_all()}
         for application in applications:
-            if application.status == m.APPLICATION_SUBMITTED:
-                application.status = m.APPLICATION_VOTING
-                await self.application_repo.update(application)
-                assigned += await self._auto_assign_for_application(activity, application)
+            assigned += await self._promote_and_assign_if_reviewing(
+                activity, application, committees
+            )
         if assigned:
             logger.info("开始评审批量分配评委: activity=%s assigned=%s", activity.id, assigned)
         await _audit(
@@ -763,6 +775,7 @@ class TitleReviewService:
     async def _backfill_judges_for_department(self, department: str) -> int:
         """评审组成员变更后，为该部门评审期投票中的申报补齐评委（幂等）。"""
         total = 0
+        committees = {c.department: c for c in await self.committee_repo.list_all()}
         for activity in await self.activity_repo.list_active():
             if activity.status != m.ACTIVITY_REVIEWING:
                 continue
@@ -772,7 +785,9 @@ class TitleReviewService:
                     continue
                 if application.status != m.APPLICATION_VOTING:
                     continue
-                total += await self._auto_assign_for_application(activity, application)
+                total += await self._auto_assign_for_application(
+                    activity, application, committees
+                )
         return total
 
     async def delete_committee(self, committee_id: UUID, user: Any = None) -> None:
@@ -842,10 +857,7 @@ class TitleReviewService:
             logger.warning("申报并发创建冲突，按已存在处理: record_id=%s", record_id)
             return existing
         # 活动已进入评审期 → 自动流转到投票并按部门分配评委
-        if application.status == m.APPLICATION_SUBMITTED and activity.status == m.ACTIVITY_REVIEWING:
-            application.status = m.APPLICATION_VOTING
-            await self.application_repo.update(application)
-            await self._auto_assign_for_application(activity, application)
+        await self._promote_and_assign_if_reviewing(activity, application)
         await _audit(
             self.session,
             action="hr.title.application_sync",
@@ -894,10 +906,7 @@ class TitleReviewService:
         if application.status == m.APPLICATION_INVALID and employee:
             application.status = m.APPLICATION_SUBMITTED
             await self.application_repo.update(application)
-            if activity.status == m.ACTIVITY_REVIEWING:
-                application.status = m.APPLICATION_VOTING
-                await self.application_repo.update(application)
-                await self._auto_assign_for_application(activity, application)
+            await self._promote_and_assign_if_reviewing(activity, application)
             return application
         await self.application_repo.update(application)
         return application
@@ -945,16 +954,20 @@ class TitleReviewService:
         if not app_token:
             return None
         try:
-            tables = await bc.list_tables(app_token)
-            emp_table = next(
-                (t for t in tables if t.get("name") == "员工信息表"), None
-            )
-            if not emp_table:
-                logger.warning("Base 内未找到员工信息表: %s", app_token)
-                return None
+            emp_table_id = _employee_table_cache.get(app_token)
+            if emp_table_id is None:
+                tables = await bc.list_tables(app_token)
+                emp_table = next(
+                    (t for t in tables if t.get("name") == "员工信息表"), None
+                )
+                if not emp_table:
+                    logger.warning("Base 内未找到员工信息表: %s", app_token)
+                    return None
+                emp_table_id = str(emp_table.get("table_id") or "")
+                _employee_table_cache[app_token] = emp_table_id
             records = await bc.list_all_records(
                 app_token,
-                str(emp_table.get("table_id") or ""),
+                emp_table_id,
                 filter_expr=f'CurrentValue.[姓名]="{name}"',
             )
             for item in records:
@@ -1005,33 +1018,55 @@ class TitleReviewService:
         return f"P{max_index + 1}"
 
     async def _auto_assign_for_application(
-        self, activity: m.TitleReviewActivity, application: m.TitleReviewApplication
+        self,
+        activity: m.TitleReviewActivity,
+        application: m.TitleReviewApplication,
+        committees: dict[str, m.TitleReviewDeptCommittee] | None = None,
     ) -> int:
-        """按申报人部门自动分配评委（部门评审组评定小组）；无配置返回 0。"""
+        """按申报人部门自动分配评委（部门评审组评定小组）；无配置返回 0。
+
+        committees: 批量场景预加载的 {部门: 评审组} 映射（避免逐申报查询）。
+        """
         if not application.department:
             return 0
-        committee = await self.committee_repo.get_by_department(application.department)
+        if committees is not None:
+            committee = committees.get(application.department)
+        else:
+            committee = await self.committee_repo.get_by_department(application.department)
         if not committee or not committee.committee_members:
             logger.info("部门 %s 未配置评审组，跳过自动分配", application.department)
             return 0
-        from app.modules.hr.repository import EmployeeRepository
+        from sqlalchemy import select as sa_select
 
-        emp_repo = EmployeeRepository(self.session)
         existing = await self.judge_repo.list_by_application(application.id)
         existing_ids = {j.judge_employee_id for j in existing}
-        added = 0
-        new_judges: list[m.TitleReviewJudge] = []
+        # 批量加载评审组成员员工档案（一条 IN 查询替代逐成员查询）
+        member_ids: list[UUID] = []
         for member in committee.committee_members:
             member_id = member.get("employee_id")
             if not member_id:
                 continue
             try:
-                emp_id = UUID(str(member_id))
+                member_ids.append(UUID(str(member_id)))
             except (TypeError, ValueError):
                 continue
+        emps: dict[UUID, Employee] = {}
+        if member_ids:
+            emp_rows = (
+                await self.session.execute(
+                    sa_select(Employee).where(
+                        Employee.id.in_(member_ids),
+                        Employee.is_deleted == False,  # noqa: E712
+                    )
+                )
+            ).scalars().all()
+            emps = {e.id: e for e in emp_rows}
+        added = 0
+        new_judges: list[m.TitleReviewJudge] = []
+        for emp_id in member_ids:
             if emp_id in existing_ids:
                 continue
-            emp = await emp_repo.get_by_id(emp_id)
+            emp = emps.get(emp_id)
             if not emp or emp.status == "离职":
                 continue
             judge = await self.judge_repo.create(
@@ -1042,7 +1077,7 @@ class TitleReviewService:
                     judge_name=emp.name,
                     judge_employee_no=emp.employee_number,
                     judge_code=await self._next_judge_code(application.id),
-                    judge_role="技术专家",
+                    judge_role="评委",
                 )
             )
             new_judges.append(judge)
@@ -1058,19 +1093,47 @@ class TitleReviewService:
                     "judges": [j.judge_code for j in new_judges],
                 },
             )
-            from app.modules.hr.title_review.notify import send_judge_reminder
-
-            for j in new_judges:
-                try:
-                    await send_judge_reminder(
-                        judge_name=j.judge_name,
-                        activity_name=activity.name,
-                        applicant_name=application.name,
-                        judge_code=j.judge_code,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.warning("评委提醒发送失败: %s", j.judge_name)
+            await self._notify_new_judges(activity, application, new_judges)
         return added
+
+    async def _notify_new_judges(
+        self,
+        activity: m.TitleReviewActivity,
+        application: m.TitleReviewApplication,
+        new_judges: list[m.TitleReviewJudge],
+    ) -> None:
+        """提醒新评委登录内网投票（容错：提醒失败不阻断业务）。"""
+        if not new_judges:
+            return
+        from app.modules.hr.title_review.notify import send_judge_reminder
+
+        for j in new_judges:
+            try:
+                await send_judge_reminder(
+                    judge_name=j.judge_name,
+                    activity_name=activity.name,
+                    applicant_name=application.name,
+                    judge_code=j.judge_code,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("评委提醒发送失败: %s", j.judge_name)
+
+    async def _promote_and_assign_if_reviewing(
+        self,
+        activity: m.TitleReviewActivity,
+        application: m.TitleReviewApplication,
+        committees: dict[str, m.TitleReviewDeptCommittee] | None = None,
+    ) -> int:
+        """评审期新申报自动流转：submitted → voting 并分配评委（幂等），返回分配数。"""
+        if application.status != m.APPLICATION_SUBMITTED:
+            return 0
+        if activity.status != m.ACTIVITY_REVIEWING:
+            return 0
+        application.status = m.APPLICATION_VOTING
+        await self.application_repo.update(application)
+        return await self._auto_assign_for_application(
+            activity, application, committees
+        )
 
     async def assign_judges(
         self, application_id: UUID, data: TitleReviewJudgeAssignIn, user: Any = None
@@ -1140,19 +1203,7 @@ class TitleReviewService:
             },
         )
         # 提醒新评委登录内网系统投票
-        if new_judges:
-            from app.modules.hr.title_review.notify import send_judge_reminder
-
-            for j in new_judges:
-                try:
-                    await send_judge_reminder(
-                        judge_name=j.judge_name,
-                        activity_name=activity.name,
-                        applicant_name=application.name,
-                        judge_code=j.judge_code,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.warning("评委提醒发送失败: %s", j.judge_name)
+        await self._notify_new_judges(activity, application, new_judges)
         return all_judges
 
     async def sync_vote_record(
@@ -1205,27 +1256,12 @@ class TitleReviewService:
         judge = await self.judge_repo.update(judge)
 
         dims = await self.dimension_repo.list_by_activity(activity.id)
-        for dim in dims:
-            raw = _as_str(fields.get(dim.feishu_field_name))
-            if raw is None:
-                continue
-            existing = await self.score_repo.get_by_judge_and_dimension(judge.id, dim.id)
-            if existing:
-                existing.grade = raw
-                existing.voted_at = judge.voted_at
-                await self.score_repo.update(existing)
-            else:
-                await self.score_repo.create(
-                    m.TitleReviewScore(
-                        activity_id=activity.id,
-                        application_id=application.id,
-                        judge_id=judge.id,
-                        dimension_id=dim.id,
-                        dimension_name=dim.name,
-                        grade=raw,
-                        voted_at=judge.voted_at,
-                    )
-                )
+        grades = {
+            dim.name: _as_str(fields.get(dim.feishu_field_name)) for dim in dims
+        }
+        await self._upsert_dimension_scores(
+            activity.id, application.id, judge.id, dims, grades, judge.voted_at
+        )
         await _audit(
             self.session,
             action="hr.title.vote_sync",
@@ -1247,10 +1283,54 @@ class TitleReviewService:
             except bc.TitleReviewBitableError as exc:
                 logger.warning("回写投票状态失败: record_id=%s error=%s", record_id, exc)
         # 全部评委已投票 → 自动判定
-        judges = await self.judge_repo.list_by_application(application.id)
+        await self._maybe_finalize(application.id)
+
+    async def _upsert_dimension_scores(
+        self,
+        activity_id: UUID,
+        application_id: UUID,
+        judge_id: UUID,
+        dims: list[m.TitleReviewDimension],
+        grades: dict[str, str | None],
+        voted_at: datetime | None,
+    ) -> None:
+        """维度分数幂等 upsert（单条查询 + 内存匹配，替代逐维度查询）。"""
+        existing_scores = await self.score_repo.list_by_judge(judge_id)
+        existing_by_dim: dict[UUID, m.TitleReviewScore] = {
+            s.dimension_id: s for s in existing_scores
+        }
+        for dim in dims:
+            grade = grades.get(dim.name)
+            if grade is None:
+                continue
+            existing = existing_by_dim.get(dim.id)
+            if existing:
+                existing.grade = grade
+                existing.voted_at = voted_at
+                await self.score_repo.update(existing)
+            else:
+                await self.score_repo.create(
+                    m.TitleReviewScore(
+                        activity_id=activity_id,
+                        application_id=application_id,
+                        judge_id=judge_id,
+                        dimension_id=dim.id,
+                        dimension_name=dim.name,
+                        grade=grade,
+                        voted_at=voted_at,
+                    )
+                )
+
+    async def _maybe_finalize(self, application_id: UUID) -> None:
+        """全部评委已投票 → 自动票数判定（幂等）。"""
+        application = await self.application_repo.get_by_id(application_id)
+        if not application or application.status not in (
+            m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED
+        ):
+            return
+        judges = await self.judge_repo.list_by_application(application_id)
         if judges and all(j.vote_result is not None for j in judges):
-            if application.status in (m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED):
-                await self.finalize_by_votes(application.id)
+            await self.finalize_by_votes(application_id)
 
     async def finalize_by_votes(
         self, application_id: UUID, user: Any = None, force: bool = False
@@ -1361,72 +1441,31 @@ class TitleReviewService:
         """活动评审结果（票数、各评委投票明细）——hr:title:scores:read 数据。"""
         await self.get_activity(activity_id)
         applications = await self.application_repo.list_all_by_activity(activity_id)
+        # 批量加载评委与维度分数（两条查询替代 2×N 条）
+        judges_by_app: dict[UUID, list[m.TitleReviewJudge]] = {}
+        for j in await self.judge_repo.list_by_activity(activity_id):
+            judges_by_app.setdefault(j.application_id, []).append(j)
+        scores_by_judge: dict[UUID, list[m.TitleReviewScore]] = {}
+        for s in await self.score_repo.list_by_activity(activity_id):
+            scores_by_judge.setdefault(s.judge_id, []).append(s)
+
         results: list[dict[str, Any]] = []
         for application in applications:
-            judges = await self.judge_repo.list_by_application(application.id)
-            scores = await self.score_repo.list_by_application(application.id)
-            scores_by_judge: dict[UUID, list[dict[str, Any]]] = {}
-            for s in scores:
-                scores_by_judge.setdefault(s.judge_id, []).append(
-                    {
-                        "id": s.id,
-                        "judge_id": s.judge_id,
-                        "dimension_id": s.dimension_id,
-                        "dimension_name": s.dimension_name,
-                        "grade": s.grade,
-                        "voted_at": s.voted_at,
-                    }
-                )
+            judges = judges_by_app.get(application.id, [])
             judge_out = []
             for j in judges:
-                item = {
-                    "id": j.id,
-                    "application_id": j.application_id,
-                    "judge_employee_id": j.judge_employee_id,
-                    "judge_name": j.judge_name,
-                    "judge_employee_no": j.judge_employee_no,
-                    "judge_code": j.judge_code,
-                    "judge_role": j.judge_role,
-                    "feishu_record_id": j.feishu_record_id,
-                    "vote_result": j.vote_result,
-                    "comprehensive_grade": j.comprehensive_grade,
-                    "review_comment": j.review_comment,
-                    "voted_at": j.voted_at,
-                    "scores": scores_by_judge.get(j.id, []),
-                }
+                item = TitleReviewJudgeOut.model_validate(j).model_dump(mode="json")
+                item["scores"] = [
+                    TitleReviewScoreOut.model_validate(s).model_dump(mode="json")
+                    for s in scores_by_judge.get(j.id, [])
+                ]
                 judge_out.append(item)
             voted = application.agree_votes + application.oppose_votes
             results.append(
                 {
-                    "application": {
-                        "id": application.id,
-                        "activity_id": application.activity_id,
-                        "employee_id": application.employee_id,
-                        "employee_no": application.employee_no,
-                        "name": application.name,
-                        "department": application.department,
-                        "sequence": application.sequence,
-                        "tech_domain": application.tech_domain,
-                        "apply_level": application.apply_level,
-                        "current_level": application.current_level,
-                        "is_exception": application.is_exception,
-                        "exception_reason": application.exception_reason,
-                        "tenure_start": application.tenure_start,
-                        "tenure_end": application.tenure_end,
-                        "self_evaluations": application.self_evaluations,
-                        "work_statements": application.work_statements,
-                        "attachments": application.attachments,
-                        "profile": application.profile,
-                        "feishu_record_id": application.feishu_record_id,
-                        "status": application.status,
-                        "agree_votes": application.agree_votes,
-                        "oppose_votes": application.oppose_votes,
-                        "abstain_votes": application.abstain_votes,
-                        "final_result": application.final_result,
-                        "final_opinion": application.final_opinion,
-                        "result_notified_at": application.result_notified_at,
-                        "created_at": application.created_at,
-                    },
+                    "application": TitleReviewApplicationOut.model_validate(
+                        application
+                    ).model_dump(mode="json"),
                     "judges": judge_out,
                     "vote_ratio": round(application.agree_votes / voted, 4) if voted else None,
                 }
@@ -1553,36 +1592,9 @@ class TitleReviewService:
                         for d in dims
                     ],
                     "activity_name": activity.name,
-                    "application": {
-                        "id": application.id,
-                        "activity_id": application.activity_id,
-                        "employee_id": application.employee_id,
-                        "employee_no": application.employee_no,
-                        "name": application.name,
-                        "department": application.department,
-                        "sequence": application.sequence,
-                        "tech_domain": application.tech_domain,
-                        "apply_level": application.apply_level,
-                        "current_level": application.current_level,
-                        "is_exception": application.is_exception,
-                        "exception_reason": application.exception_reason,
-                        "tenure_start": application.tenure_start,
-                        "tenure_end": application.tenure_end,
-                        "self_evaluations": application.self_evaluations,
-                        "work_statements": application.work_statements,
-                        "attachments": application.attachments,
-                        "profile": application.profile,
-                        "feishu_record_id": application.feishu_record_id,
-                        "approval_instance_code": application.approval_instance_code,
-                        "status": application.status,
-                        "agree_votes": application.agree_votes,
-                        "oppose_votes": application.oppose_votes,
-                        "abstain_votes": application.abstain_votes,
-                        "final_result": application.final_result,
-                        "final_opinion": application.final_opinion,
-                        "result_notified_at": application.result_notified_at,
-                        "created_at": application.created_at,
-                    },
+                    "application": TitleReviewApplicationOut.model_validate(
+                        application
+                    ).model_dump(mode="json"),
                 }
             )
         return tasks
@@ -1607,8 +1619,13 @@ class TitleReviewService:
 
         dims = await self.dimension_repo.list_by_activity(application.activity_id)
         grades = [(data.dimension_grades or {}).get(d.name) for d in dims]
-        if len(dims) < 7 or any(g not in ("合格", "不合格") for g in grades):
-            raise HTTPException(400, "请完成全部 7 项维度评价，投票结果将自动计算")
+        if len(dims) < len(m.DEFAULT_DIMENSION_NAMES) or any(
+            g not in ("合格", "不合格") for g in grades
+        ):
+            raise HTTPException(
+                400,
+                f"请完成全部 {len(m.DEFAULT_DIMENSION_NAMES)} 项维度评价，投票结果将自动计算",
+            )
         auto_grade = compute_comprehensive_grade(grades)
         judge.vote_result = (
             m.VOTE_OPPOSE if auto_grade == "不合格" else m.VOTE_AGREE
@@ -1618,28 +1635,14 @@ class TitleReviewService:
         judge.voted_at = datetime.now().astimezone()
         judge = await self.judge_repo.update(judge)
 
-        dims = await self.dimension_repo.list_by_activity(application.activity_id)
-        for dim in dims:
-            grade = (data.dimension_grades or {}).get(dim.name)
-            if grade is None:
-                continue
-            existing = await self.score_repo.get_by_judge_and_dimension(judge.id, dim.id)
-            if existing:
-                existing.grade = grade
-                existing.voted_at = judge.voted_at
-                await self.score_repo.update(existing)
-            else:
-                await self.score_repo.create(
-                    m.TitleReviewScore(
-                        activity_id=application.activity_id,
-                        application_id=application.id,
-                        judge_id=judge.id,
-                        dimension_id=dim.id,
-                        dimension_name=dim.name,
-                        grade=grade,
-                        voted_at=judge.voted_at,
-                    )
-                )
+        await self._upsert_dimension_scores(
+            application.activity_id,
+            application.id,
+            judge.id,
+            dims,
+            dict(data.dimension_grades or {}),
+            judge.voted_at,
+        )
         await _audit(
             self.session,
             action="hr.title.judge_vote",
@@ -1648,9 +1651,7 @@ class TitleReviewService:
             extra={"judge_code": judge.judge_code, "vote_result": judge.vote_result},
         )
         # 全部评委已投票 → 自动判定
-        judges = await self.judge_repo.list_by_application(application.id)
-        if judges and all(j.vote_result is not None for j in judges):
-            await self.finalize_by_votes(application.id)
+        await self._maybe_finalize(application.id)
         return judge
 
     # ═══ 审批先行同步（飞书审批通过 → 写申报表） ═══
@@ -1719,15 +1720,27 @@ class TitleReviewService:
             return stats
 
         rows_to_write: list[dict[str, Any]] = []
-        for code in codes:
-            if code in existing_map:
-                stats["approval_skipped"] += 1
-                continue
-            stats["approval_instances_fetched"] += 1
+        pending_codes = [code for code in codes if code not in existing_map]
+        stats["approval_skipped"] += len(codes) - len(pending_codes)
+
+        # 并发拉取审批实例详情（限并发 5，独立请求无需串行等待）
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_instance(code: str) -> dict[str, Any] | None:
             try:
-                instance = await ac.get_instance(code)
+                async with sem:
+                    return await ac.get_instance(code)
             except ac.TitleReviewBitableError as exc:
                 logger.warning("拉取审批实例详情失败: %s error=%s", code, exc)
+                return None
+
+        instances = await asyncio.gather(
+            *(_fetch_instance(code) for code in pending_codes)
+        )
+
+        for code, instance in zip(pending_codes, instances):
+            stats["approval_instances_fetched"] += 1
+            if instance is None:
                 continue
             if instance.get("status") != "APPROVED":
                 continue
@@ -1928,10 +1941,15 @@ class TitleReviewService:
             stats["errors"].append(f"拉取申报表失败: {exc}")
             return stats
         feishu_ids = {item.get("record_id") for item in feishu_records}
+        # 预加载本地申报 → 内存映射（替代逐行 get_by_feishu_record 的 N 次查询）
+        local_apps = await self.application_repo.list_all_by_activity(activity.id)
+        local_by_record = {
+            a.feishu_record_id: a for a in local_apps if a.feishu_record_id
+        }
         for item in feishu_records:
             record_id = str(item.get("record_id") or "")
             fields = item.get("fields") or {}
-            existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
+            existing = local_by_record.get(record_id)
             if existing:
                 if existing.status not in (
                     m.APPLICATION_PASSED, m.APPLICATION_FAILED,
@@ -1966,7 +1984,7 @@ class TitleReviewService:
             else:
                 await self.sync_apply_record_added(activity.id, record_id, fields)
                 stats["applications_created"] += 1
-        for application in await self.application_repo.list_all_by_activity(activity.id):
+        for application in local_apps:
             if (
                 application.feishu_record_id
                 and application.feishu_record_id not in feishu_ids
@@ -2021,7 +2039,7 @@ class TitleReviewService:
         def _rate(passed: int, total: int) -> float | None:
             return round(passed / total * 100, 1) if total else None
 
-        def _stats(apps):
+        def _stats(apps: list[m.TitleReviewApplication]) -> dict[str, Any]:
             passed = sum(1 for a in apps if a.status in (m.APPLICATION_PASSED, m.APPLICATION_FINAL_PASSED))
             failed = sum(1 for a in apps if a.status in (m.APPLICATION_FAILED, m.APPLICATION_FINAL_FAILED))
             pending = sum(1 for a in apps if a.status not in (
@@ -2031,8 +2049,8 @@ class TitleReviewService:
             return {"applications": len(apps), "passed": passed, "failed": failed,
                     "pending": pending, "pass_rate": _rate(passed, len(apps))}
 
-        by_level: dict[tuple[str, str], list] = {}
-        by_department: dict[str, list] = {}
+        by_level: dict[tuple[str, str], list[m.TitleReviewApplication]] = {}
+        by_department: dict[str, list[m.TitleReviewApplication]] = {}
         for a in applications:
             key = (a.sequence or "未分类", a.apply_level or "未分类")
             by_level.setdefault(key, []).append(a)

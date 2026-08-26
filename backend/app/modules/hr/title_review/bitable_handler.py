@@ -67,8 +67,15 @@ def _ignore_key(record_id: str) -> str:
     return f"title:bitable:ignore:{record_id}"
 
 
-def _dedup_key(record_id: str, action: str) -> str:
-    return f"title:bitable:event:{record_id}:{action}"
+def _dedup_key(record_id: str, action: str, action_data: dict[str, Any]) -> str:
+    """去重键包含内容哈希：同一事件重复投递可去重，同一行的合法二次修改不受影响。"""
+    import hashlib
+
+    content = json.dumps(
+        action_data.get("after_value") or {}, ensure_ascii=False, sort_keys=True
+    )
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return f"title:bitable:event:{record_id}:{action}:{digest}"
 
 
 async def _find_activity(file_token: str) -> _ActivityRef | None:
@@ -167,7 +174,8 @@ async def _process_action(
 
     # 去重（事件重复投递）：处理成功才保留 120s 去重键；
     # 处理抛异常时让键 1 秒过期，事件可被重试而不是永久丢失
-    if not await _redis_set(_dedup_key(record_id, act), "1", ex=120):
+    dedup_key = _dedup_key(record_id, act, action)
+    if not await _redis_set(dedup_key, "1", ex=120):
         logger.debug("重复事件已忽略: record_id=%s action=%s", record_id, act)
         return
     try:
@@ -176,7 +184,7 @@ async def _process_action(
         logger.exception(
             "处理多维表格事件失败: record_id=%s action=%s", record_id, act,
         )
-        await _redis_set(_dedup_key(record_id, act), "1", ex=1)
+        await _redis_set(dedup_key, "1", ex=1)
 
 
 async def _process_action_body(

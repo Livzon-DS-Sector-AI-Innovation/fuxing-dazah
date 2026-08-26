@@ -310,6 +310,15 @@ class TitleReviewScoreRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_activity(self, activity_id: UUID) -> list[TitleReviewScore]:
+        result = await self.session.execute(
+            select(TitleReviewScore).where(
+                TitleReviewScore.activity_id == activity_id,
+                TitleReviewScore.is_deleted == False,  # noqa: E712
+            )
+        )
+        return list(result.scalars().all())
+
     async def get_by_judge_and_dimension(
         self, judge_id: UUID, dimension_id: UUID
     ) -> TitleReviewScore | None:
