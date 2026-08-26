@@ -847,10 +847,12 @@ class TitleReviewService:
             status=m.APPLICATION_SUBMITTED if employee else m.APPLICATION_INVALID,
         )
         try:
-            await self.application_repo.create(application)
+            # SAVEPOINT 隔离本次插入：竞态失败只回滚自身，
+            # 不丢弃同一会话中其他申报已 flush 的更新（对账循环/事件事务）
+            async with self.session.begin_nested():
+                await self.application_repo.create(application)
         except IntegrityError:
             # WS 事件与 5 分钟对账并发时唯一约束竞态：对方已建，按已存在处理
-            await self.session.rollback()
             existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
             if not existing:
                 raise
@@ -1614,8 +1616,13 @@ class TitleReviewService:
         if application.status not in (m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED):
             raise HTTPException(400, f"当前状态不可投票：{application.status}")
         activity = await self.activity_repo.get_by_id(application.activity_id)
-        if activity and activity.review_deadline and datetime.now().astimezone() > activity.review_deadline:
-            raise HTTPException(400, "评审已截止，不可再投票")
+        if activity and activity.review_deadline:
+            deadline = activity.review_deadline
+            if deadline.tzinfo is None:
+                # 客户端传入无时区的截止时间：按本地时区解释，避免 naive/aware 比较 TypeError
+                deadline = deadline.astimezone()
+            if datetime.now().astimezone() > deadline:
+                raise HTTPException(400, "评审已截止，不可再投票")
 
         dims = await self.dimension_repo.list_by_activity(application.activity_id)
         grades = [(data.dimension_grades or {}).get(d.name) for d in dims]

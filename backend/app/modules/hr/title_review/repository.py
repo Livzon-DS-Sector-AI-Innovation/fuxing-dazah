@@ -238,10 +238,12 @@ class TitleReviewJudgeRepository:
 
     async def list_by_activity(self, activity_id: UUID) -> list[TitleReviewJudge]:
         result = await self.session.execute(
-            select(TitleReviewJudge).where(
+            select(TitleReviewJudge)
+            .where(
                 TitleReviewJudge.activity_id == activity_id,
                 TitleReviewJudge.is_deleted == False,  # noqa: E712
             )
+            .order_by(TitleReviewJudge.created_at, TitleReviewJudge.judge_code)
         )
         return list(result.scalars().all())
 

@@ -173,7 +173,8 @@ async def _process_action(
         return
 
     # 去重（事件重复投递）：处理成功才保留 120s 去重键；
-    # 处理抛异常时让键 1 秒过期，事件可被重试而不是永久丢失
+    # 处理抛异常时把键缩短到 1 秒（nx=False 覆盖原键，否则 SET NX 不生效），
+    # 事件可被快速重试而不是被 120s 窗口永久吞掉
     dedup_key = _dedup_key(record_id, act, action)
     if not await _redis_set(dedup_key, "1", ex=120):
         logger.debug("重复事件已忽略: record_id=%s action=%s", record_id, act)
@@ -184,7 +185,9 @@ async def _process_action(
         logger.exception(
             "处理多维表格事件失败: record_id=%s action=%s", record_id, act,
         )
-        await _redis_set(dedup_key, "1", ex=1)
+        await _redis_set(dedup_key, "1", ex=1, nx=False)
+        # 失败时也没有发生回写：把 ignore 键同样缩短，避免阻塞下一轮真实事件
+        await _redis_set(_ignore_key(record_id), "1", ex=1, nx=False)
 
 
 async def _process_action_body(
