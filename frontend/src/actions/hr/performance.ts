@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { fetchHrApi } from './_helpers'
+import { fetchHrApi, fetchHrDownload } from './_helpers'
 import { buildQueryString } from './_utils'
 
 // ─── 月度绩效考核 ───
@@ -97,6 +97,12 @@ export async function saveCategoryScores(evaluationId: string, scores: { evaluat
   })
   revalidatePath('/hr/performance')
   return result
+}
+
+// ─── 汇总报表（按项目一张表） ───
+
+export async function fetchPerformanceReport(month: string): Promise<{ base64: string; filename: string | null }> {
+  return fetchHrDownload(`/hr/performance-reports?month=${encodeURIComponent(month)}`)
 }
 
 // ─── 部门权重 ───

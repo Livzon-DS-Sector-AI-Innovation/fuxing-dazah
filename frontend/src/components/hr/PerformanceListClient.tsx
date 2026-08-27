@@ -3,13 +3,15 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button, Card, DatePicker, Select, Space, Table, Tag, message, Modal } from 'antd'
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import {
   fetchPerformanceEvaluations,
   fetchMyPerformanceEvaluations,
   autoCreatePerformanceEvaluations,
+  fetchPerformanceReport,
 } from '@/actions/hr'
+import { downloadBase64File } from '@/lib/hr'
 
 const STATUS_MAP: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
@@ -73,6 +75,15 @@ export default function PerformanceListClient() {
     })
   }
 
+  const handleDownloadReport = async () => {
+    try {
+      const { base64, filename } = await fetchPerformanceReport(month)
+      downloadBase64File(base64, filename || `绩效汇总_${month}.xlsx`)
+    } catch (err: any) {
+      message.error(err.message || '导出失败')
+    }
+  }
+
   const columns = [
     { title: '部门', dataIndex: 'department', key: 'department', width: 150 },
     { title: '考核月份', dataIndex: 'evaluation_month', key: 'month', width: 100 },
@@ -102,6 +113,7 @@ export default function PerformanceListClient() {
         <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
         {mode === 'all' && <Button icon={<PlusOutlined />} onClick={handleAutoCreate}>批量生成当月考核</Button>}
         <Button onClick={() => router.push('/hr/performance/score')}>批量项目评分</Button>
+        <Button icon={<DownloadOutlined />} onClick={handleDownloadReport}>汇总报表</Button>
       </Space>
       {!loading && data.length === 0 && (
         <div className="text-center py-12 text-gray-400">

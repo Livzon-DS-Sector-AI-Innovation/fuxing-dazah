@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import Body, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, Form, HTTPException, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -5485,7 +5485,14 @@ async def save_dept_weights(
 # ─── 考核项目评分 ───
 
 @router.get("/performance-evaluations/{evaluation_id}/category-scores", summary="获取考核项目评分")
-async def get_category_scores(evaluation_id: UUID, session: AsyncSession = Depends(get_db)):
+async def get_category_scores(
+    evaluation_id: UUID,
+    session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
+):
+    """评分矩阵数据：每行带 can_edit（当前用户是否为该项目负责人/管理权限）。"""
+    from app.platform.permission.deps import get_user_permissions
+
     repo = PerformanceEvaluationRepository(session)
     # 获取考核所属部门
     from app.modules.hr.models import MonthlyPerformanceEvaluation
@@ -5493,6 +5500,8 @@ async def get_category_scores(evaluation_id: UUID, session: AsyncSession = Depen
         select(MonthlyPerformanceEvaluation).where(MonthlyPerformanceEvaluation.id == evaluation_id)
     )).scalar_one_or_none()
     dept = ev.department if ev else ""
+    perms = await get_user_permissions(str(hr_scope.user.id), session)
+    is_manager = "hr:performance:manage" in perms
     scores = await repo.get_category_scores(evaluation_id)
     cats = await repo.list_categories()
     score_map = {s.category_id: s for s in scores}
@@ -5509,6 +5518,8 @@ async def get_category_scores(evaluation_id: UUID, session: AsyncSession = Depen
             "evaluation_id": str(evaluation_id),
             "category_id": str(cat.id),
             "category_name": cat.name,
+            "evaluator": cat.evaluator,
+            "can_edit": is_manager or not cat.evaluator or cat.evaluator == hr_scope.user.name,
             "weight": weight,
             "score": s.score if s else None,
             "scored_by": s.scored_by if s else None,
@@ -5590,5 +5601,88 @@ async def save_category_scores(
         )
     await _recalc_evaluation_total(session, evaluation_id)
     return success_response(message="评分已保存")
+
+
+def _safe_sheet_name(name: str) -> str:
+    """Excel 工作表名去非法字符并截断（≤31 字符）。"""
+    import re as _re
+
+    name = _re.sub(r"[\\/*?:\[\]]", "", name)[:31].strip()
+    return name or "项目"
+
+
+@router.get("/performance-reports", summary="绩效汇总报表（按项目一张表）")
+async def export_performance_report(
+    month: str = Query(..., description="考核月份 YYYY-MM"),
+    session: AsyncSession = Depends(get_db),
+):
+    """汇总报表：一个工作簿，每个考核项目一个工作表（行=部门评分明细），
+    另有「部门总分」总表。适配多人评分模型：部门×项目子集各不相同。"""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from app.modules.hr.models import (
+        MonthlyPerformanceEvaluation,
+        PerformanceCategory,
+        PerformanceCategoryScore,
+    )
+
+    evs = (await session.execute(
+        select(MonthlyPerformanceEvaluation).where(
+            MonthlyPerformanceEvaluation.evaluation_month == month,
+            MonthlyPerformanceEvaluation.is_deleted == False,  # noqa: E712
+        )
+    )).scalars().all()
+    if not evs:
+        raise HTTPException(404, f"{month} 无考核数据")
+    ev_by_id = {e.id: e for e in evs}
+    scores = (await session.execute(
+        select(PerformanceCategoryScore).where(
+            PerformanceCategoryScore.evaluation_id.in_(ev_by_id.keys()),
+            PerformanceCategoryScore.is_deleted == False,  # noqa: E712
+        )
+    )).scalars().all()
+    cats = (await session.execute(
+        select(PerformanceCategory).where(
+            PerformanceCategory.is_deleted == False  # noqa: E712
+        )
+    )).scalars().all()
+
+    wb = Workbook()
+    ws_total = wb.active
+    ws_total.title = "部门总分"
+    ws_total.append(["部门", "部门负责人", "加权总分"])
+    for ev in evs:
+        ws_total.append([ev.department, ev.department_head, ev.final_score])
+    for cat in cats:
+        ws = wb.create_sheet(title=_safe_sheet_name(cat.name))
+        ws.append(["部门", "权重%", "分数", "评分人", "评分时间"])
+        for s in scores:
+            if s.category_id != cat.id:
+                continue
+            ev = ev_by_id.get(s.evaluation_id)
+            ws.append([
+                ev.department if ev else "",
+                s.weight,
+                s.score,
+                s.scored_by,
+                s.scored_at.strftime("%Y-%m-%d %H:%M") if s.scored_at else "",
+            ])
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from urllib.parse import quote
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                "attachment; "
+                f"filename*=UTF-8''{quote(f'绩效汇总_{month}.xlsx')}"
+            )
+        },
+    )
 
 

@@ -1518,6 +1518,9 @@ class MonthlyPerformanceEvaluation(BaseModel):
     leader_submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="领导评分提交时间"
     )
+    final_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="部门加权总分（多项目评分保存后自动计算）"
+    )
 
     items: Mapped[list["PerformanceEvaluationItem"]] = relationship(
         "PerformanceEvaluationItem", back_populates="evaluation",
