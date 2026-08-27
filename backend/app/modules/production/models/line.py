@@ -45,3 +45,24 @@ class LineAssignment(BaseModel):
 
     user_id: Mapped[uuid.UUID]
     line_id: Mapped[uuid.UUID]
+
+
+class LineProductLink(BaseModel):
+    """产线-产品关联（多对多，主数据展示用途）"""
+
+    __tablename__ = "line_product_links"
+    __table_args__ = (
+        Index(
+            "uq_production_line_product_links",
+            "line_id",
+            "product_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_production_line_product_links_line", "line_id"),
+        Index("ix_production_line_product_links_product", "product_id"),
+        {"schema": "production"},
+    )
+
+    line_id: Mapped[uuid.UUID]
+    product_id: Mapped[uuid.UUID]

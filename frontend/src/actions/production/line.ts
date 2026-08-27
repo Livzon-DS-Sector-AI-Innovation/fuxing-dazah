@@ -7,6 +7,8 @@ import type {
   LineAssignment,
   LineAssignmentCreateInput,
   LineCreateInput,
+  LineProductLink,
+  LineProductLinkCreateInput,
   LineUpdateInput,
 } from '@/types/production'
 
@@ -90,6 +92,39 @@ export async function unbindLineAssignment(
 ): Promise<ActionResult> {
   const result = await actionFetch(
     `${BASE}/line-assignments/${assignmentId}`,
+    { method: 'DELETE' },
+  )
+  if (result.success) revalidatePath(MASTER_DATA_PATH)
+  return result
+}
+
+// ── 产线-产品关联 ──
+
+export async function fetchLineProducts(
+  filter: { lineId?: string; productId?: string } = {},
+): Promise<ActionResult<LineProductLink[]>> {
+  const params = new URLSearchParams()
+  if (filter.lineId) params.set('line_id', filter.lineId)
+  if (filter.productId) params.set('product_id', filter.productId)
+  return actionFetch<LineProductLink[]>(`${BASE}/line-products?${params}`)
+}
+
+export async function bindLineProduct(
+  input: LineProductLinkCreateInput,
+): Promise<ActionResult<LineProductLink>> {
+  const result = await actionFetch<LineProductLink>(`${BASE}/line-products`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  if (result.success) revalidatePath(MASTER_DATA_PATH)
+  return result
+}
+
+export async function unbindLineProduct(
+  linkId: string,
+): Promise<ActionResult> {
+  const result = await actionFetch(
+    `${BASE}/line-products/${linkId}`,
     { method: 'DELETE' },
   )
   if (result.success) revalidatePath(MASTER_DATA_PATH)

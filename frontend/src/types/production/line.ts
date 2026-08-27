@@ -31,3 +31,17 @@ export interface LineAssignmentCreateInput {
   user_id: string
   line_id: string
 }
+
+export interface LineProductLink {
+  id: string
+  line_id: string
+  product_id: string
+  line_name?: string | null
+  product_name?: string | null
+  created_at: string
+}
+
+export interface LineProductLinkCreateInput {
+  line_id: string
+  product_id: string
+}

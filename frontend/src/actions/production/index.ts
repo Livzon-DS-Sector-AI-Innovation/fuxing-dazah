@@ -35,6 +35,9 @@ export {
   fetchLineAssignmentsByUser,
   bindLineAssignment,
   unbindLineAssignment,
+  fetchLineProducts,
+  bindLineProduct,
+  unbindLineProduct,
 } from './line'
 export { getBatches } from './legacy'
 export {

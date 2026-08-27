@@ -24,7 +24,7 @@ export function ImpersonateBanner({ targetUser }: Props) {
   }
 
   return (
-    <div style={{ position: 'sticky', top: 0, zIndex: 1001 }}>
+    <div style={{ position: 'sticky', top: 0, zIndex: 999 }}>
       <Alert
         type="warning"
         banner

@@ -26,7 +26,7 @@ from app.modules.production.schemas import (
     RouteCreate,
     RouteGraphIn,
 )
-from app.modules.production.service import route_service
+from app.modules.production.service import assignment_service, route_service
 from tests.modules.production.conftest import build_graph_in, rand_code
 
 
@@ -222,6 +222,46 @@ class TestGraph:
         assert g1.nodes[0].name == g2.nodes[0].name == "发酵"
 
 
+    async def test_save_graph_prunes_removed_stage_assignments(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """删除工段后其负责人分配级联软删，保留工段不受影响。
+
+        （尾缀配置仅 published 路线可设，而图仅 draft 可改，
+        故 stage_suffixes 不存在孤儿场景，不在此清理。）
+        """
+        _, route = await _draft_route(db_session)
+        await route_service.save_graph(
+            db_session, route.id,
+            RouteGraphIn(nodes=[NodeIn(node_code="A", name="发酵", stage_name="发酵")]),
+            user=None,
+        )
+
+        user_id = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=user_id, stage_name="发酵",
+            route_id=route.id, created_by=user_id,
+        )
+        other_id = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=other_id, stage_name="提炼",
+            route_id=route.id, created_by=other_id,
+        )
+
+        # 新图：工段"发酵"删除，仅保留"提炼"
+        await route_service.save_graph(
+            db_session, route.id,
+            RouteGraphIn(nodes=[NodeIn(node_code="A", name="发酵", stage_name="提炼")]),
+            user=None,
+        )
+
+        remaining = await assignment_service.list_stage_assignments(
+            db_session, route_id=route.id,
+        )
+        assert all(s.stage_name != "发酵" for s in remaining)
+        assert any(s.stage_name == "提炼" for s in remaining)
+
+
 class TestComputedFieldsInGraph:
     async def test_save_and_get_graph_with_computed_fields(
         self, db_session: AsyncSession,
@@ -361,3 +401,5 @@ class TestComputedFieldsInGraph:
         got = await route_service.get_graph(db_session, route.id)
         assert [c.field_key for c in got.computed_fields] == ["C1", "C2"]
         assert got.computed_fields[0].field_label == "收率V2"
+
+

@@ -28,13 +28,14 @@ _read = require_permission("production:batch:read")
 @router.get("/intermediate-types", summary="中间体字典列表")
 async def list_intermediate_types(
     keyword: str | None = None,
+    product_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     items, total = await intermediate_service.list_intermediate_types_paged(
-        db, keyword, page, page_size
+        db, keyword, page, page_size, product_id=product_id,
     )
     return paginated_response(
         [i.model_dump(mode="json") for i in items],

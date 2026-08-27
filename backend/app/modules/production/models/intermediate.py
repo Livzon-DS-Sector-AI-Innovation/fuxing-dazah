@@ -69,7 +69,7 @@ class MixingContainer(BaseModel):
 
 
 class RouteNodeIntermediate(BaseModel):
-    """节点-中间体绑定（模板层，属于路线图定义）"""
+    """工序节点-中间体绑定（模板层，属于路线图定义）"""
 
     __tablename__ = "route_node_intermediates"
     __table_args__ = (
@@ -89,7 +89,7 @@ class RouteNodeIntermediate(BaseModel):
         {"schema": "production"},
     )
 
-    node_id: Mapped[uuid.UUID] = mapped_column(comment="所属节点")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="所属工序节点")
     intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="中间体类型")
     direction: Mapped[str] = mapped_column(
         String(10), comment="产出(output) / 消耗(input)"
@@ -120,7 +120,7 @@ class BatchIntermediateOutput(BaseModel):
 
     batch_id: Mapped[uuid.UUID] = mapped_column(comment="所属批次")
     execution_id: Mapped[uuid.UUID] = mapped_column(comment="产出所属执行")
-    node_id: Mapped[uuid.UUID] = mapped_column(comment="产出节点")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="产出工序节点")
     intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="中间体类型")
     intermediate_batch_no: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="中间体批号，为空则默认用批次号"
@@ -150,7 +150,7 @@ class BatchIntermediateConsumption(BaseModel):
 
     batch_id: Mapped[uuid.UUID] = mapped_column(comment="所属批次")
     execution_id: Mapped[uuid.UUID] = mapped_column(comment="消耗所属执行")
-    node_id: Mapped[uuid.UUID] = mapped_column(comment="消耗节点")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="消耗工序节点")
     intermediate_type_id: Mapped[uuid.UUID] = mapped_column(comment="中间体类型")
     output_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True, comment="引用的产出记录，溯源关键字段（混装消耗为空）"

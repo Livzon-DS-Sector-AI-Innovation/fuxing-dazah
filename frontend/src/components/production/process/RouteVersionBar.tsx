@@ -13,7 +13,7 @@ import {
 } from '@/actions/production'
 import type { ProcessRoute } from '@/types/production'
 
-const STATUS_META: Record<string, { color: string; label: string }> = {
+export const STATUS_META: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
   published: { color: 'green', label: '已发布' },
   archived: { color: 'default', label: '已归档' },
