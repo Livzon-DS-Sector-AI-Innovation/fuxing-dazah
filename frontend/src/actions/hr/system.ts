@@ -35,6 +35,21 @@ export async function clearDataTables(tables: string[]): Promise<{ message: stri
   return res
 }
 
+// ─── 测试数据分类 ───
+
+export async function fetchTestData(): Promise<{ data: { total: number; tables: { table: string; label: string; count: number }[] } }> {
+  return fetchHrApi('/hr/data-management/test-data', { errorMessage: '加载测试数据分类失败' })
+}
+
+export async function clearTestData(): Promise<{ message: string }> {
+  const res = await fetchHrApi('/hr/data-management/clear-test-data', {
+    method: 'POST',
+    errorMessage: '清理测试数据失败',
+  })
+  revalidatePath('/hr/settings')
+  return res
+}
+
 // ─── 系统设置 ───
 
 export async function getSystemSettings(): Promise<{ data: Record<string, unknown> }> {

@@ -47,7 +47,7 @@ class TestActivityApi:
         resp = await client.post(
             "/api/v1/hr/title/activities",
             json=_activity_payload(
-                feishu_app_token="app1", apply_table_id="tbl1", vote_table_id="tbl2"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", vote_table_id="tbl12345678902"
             ),
         )
         activity_id = resp.json()["data"]["id"]
@@ -100,7 +100,7 @@ class TestPermission:
         resp = await client.post(
             "/api/v1/hr/title/activities",
             json=_activity_payload(
-                feishu_app_token="app1", apply_table_id="tbl1", vote_table_id="tbl2"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", vote_table_id="tbl12345678902"
             ),
         )
         activity_id = resp.json()["data"]["id"]

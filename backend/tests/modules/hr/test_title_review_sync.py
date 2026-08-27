@@ -149,7 +149,7 @@ class TestApplySync:
 
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
-            _activity_create(feishu_app_token="app1")
+            _activity_create(feishu_app_token="app12345678901234567890")
         )
         employee_no = f"E{_rand()}"
         await _create_employee(db_session, "郑十一", employee_no)
@@ -246,9 +246,9 @@ class TestVoteSync:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
         employee_no = f"E{_rand()}"
@@ -340,9 +340,9 @@ class TestHandlerRouting:
     async def test_apply_record_added_routed(self, db_session: AsyncSession, monkeypatch):
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         employee_no = f"E{_rand()}"
         await _create_employee(db_session, "路由测试员", employee_no)
@@ -373,7 +373,7 @@ class TestHandlerRouting:
             "f3": "工程师", "f4": "助理工程师", "f5": "否",
         }
         await bh.handle_record_changed(
-            "app1", "tbl1",
+            "app12345678901234567890", "tbl12345678901",
             [{"action": "record_added", "record_id": "rec1", "after_value": after}],
         )
         applications = await service.application_repo.list_all_by_activity(activity.id)
@@ -384,9 +384,9 @@ class TestHandlerRouting:
     async def test_ignore_key_skips(self, db_session: AsyncSession, monkeypatch):
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
 
         from contextlib import asynccontextmanager
@@ -409,7 +409,7 @@ class TestHandlerRouting:
         )
         after = {"f0": "某人", "f1": "E-NONE"}
         await bh.handle_record_changed(
-            "app1", "tbl1",
+            "app12345678901234567890", "tbl12345678901",
             [{"action": "record_added", "record_id": "rec-ignored", "after_value": after}],
         )
         applications = await service.application_repo.list_all_by_activity(activity.id)
@@ -478,7 +478,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
@@ -529,7 +529,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
@@ -591,7 +591,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["NEW"]))
@@ -646,7 +646,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
@@ -675,7 +675,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         monkeypatch.setattr(ac, "list_instance_codes", AsyncMock(return_value=["INST1"]))
@@ -711,9 +711,10 @@ class TestApprovalInstanceSync:
         from app.modules.hr.title_review import bitable_client as bc
 
         service = TitleReviewService(db_session)
+        # 未填审批定义编码：镜像表数据源不依赖审批 API，仍应正常同步
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901"
             )
         )
         instance_code = "E4135F70-F67D-4C1A-B70E-80ECC622F5B1"
@@ -781,7 +782,7 @@ class TestApprovalInstanceSync:
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
             _activity_create(
-                feishu_app_token="app1", apply_table_id="tbl1", approval_code="CODE1"
+                feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901", approval_code="CODE1"
             )
         )
         old_code = "60A7E503-F16F-4CCB-8F5F-081C80F1C1E7"
@@ -981,10 +982,10 @@ class TestReconcile:
         )
         service = TitleReviewService(db_session)
         activity_a = await service.create_activity(
-            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+            _activity_create(feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901")
         )
         activity_b = await service.create_activity(
-            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+            _activity_create(feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901")
         )
         employee_no = f"E{_rand()}"
         await _create_employee(db_session, "李四", employee_no)
@@ -1008,10 +1009,10 @@ async def test_bind_rejects_duplicate_apply_table(
 
     service = TitleReviewService(db_session)
     await service.create_activity(
-        _activity_create(name="活动A", feishu_app_token="app1", apply_table_id="tbl1")
+        _activity_create(name="活动A", feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901")
     )
     activity_b = await service.create_activity(
-        _activity_create(name="活动B", feishu_app_token="app1", apply_table_id="tbl1")
+        _activity_create(name="活动B", feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901")
     )
     with pytest.raises(HTTPException) as exc_info:
         await service.bind_tables(activity_b.id)

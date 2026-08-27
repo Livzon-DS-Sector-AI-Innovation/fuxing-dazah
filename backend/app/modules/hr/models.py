@@ -1128,6 +1128,7 @@ class JobRequirement(BaseModel):
     headcount: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1", comment="招聘人数")
     hired_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0", comment="已入职人数")
     requirements: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位要求描述")
+    duties: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位职责描述（胜任度报告「岗位要求回顾」用）")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="招聘中", server_default="招聘中", comment="招聘中/已关闭")
     urgency: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="紧急程度")
     owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="招聘负责人")
@@ -1516,6 +1517,9 @@ class MonthlyPerformanceEvaluation(BaseModel):
     )
     leader_submitted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, comment="领导评分提交时间"
+    )
+    final_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="部门加权总分（多项目评分保存后自动计算）"
     )
 
     items: Mapped[list["PerformanceEvaluationItem"]] = relationship(

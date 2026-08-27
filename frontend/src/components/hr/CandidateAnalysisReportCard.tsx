@@ -1,6 +1,7 @@
 'use client'
 
-import { Descriptions, Tag, Typography } from 'antd'
+import { Button, Descriptions, Tag, Typography } from 'antd'
+import { PrinterOutlined } from '@ant-design/icons'
 
 const RECOMMEND_COLOR: Record<string, string> = {
   强烈推荐: 'success',
@@ -51,6 +52,8 @@ export default function CandidateAnalysisReportCard({ report }: Props) {
             {new Date(report.generated_at).toLocaleString()}
           </Typography.Text>
         )}
+        <Button size="small" icon={<PrinterOutlined />}
+          onClick={() => window.print()}>打印/导出报告</Button>
       </div>
 
       {report.dimensions && report.dimensions.length > 0 && (

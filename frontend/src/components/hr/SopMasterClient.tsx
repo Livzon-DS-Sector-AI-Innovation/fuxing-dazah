@@ -9,6 +9,7 @@ import {
   fetchSopTrainingRecords, fetchSopRecordYears, createSopTrainingRecord,
   updateSopTrainingRecord, deleteSopTrainingRecord, exportSopTrainingRecords,
   submitSopTrainingRecord, fetchDepartmentsAction, fetchSopDeptTrainers,
+  downloadSopMasterMaterials,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 import type { SopTrainingRecord } from '@/types/hr'
@@ -29,6 +30,7 @@ export default function SopMasterClient() {
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [submitting, setSubmitting] = useState<string | null>(null)
+  const [generating, setGenerating] = useState<string | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<SopTrainingRecord | null>(null)
   const [form] = Form.useForm()
@@ -155,6 +157,16 @@ export default function SopMasterClient() {
     finally { setSubmitting(null) }
   }
 
+  const handleGenerateMaterials = async (r: SopTrainingRecord) => {
+    setGenerating(r.id)
+    try {
+      const { base64, filename } = await downloadSopMasterMaterials(r.id)
+      downloadBase64File(base64, filename || 'SOP全套培训材料.zip')
+      message.success('全套材料已生成')
+    } catch (e: any) { message.error(e.message || '生成失败') }
+    finally { setGenerating(null) }
+  }
+
   const handleExport = async () => {
     setExporting(true)
     try {
@@ -195,13 +207,16 @@ export default function SopMasterClient() {
       render: (s: string) => <Tag color={s === '已提交' ? 'blue' : 'default'}>{s === '已提交' ? '已提交' : '草稿'}</Tag>,
     },
     {
-      title: '操作', width: 190, fixed: 'right' as const, render: (_: any, r: SopTrainingRecord) => (
+      title: '操作', width: 260, fixed: 'right' as const, render: (_: any, r: SopTrainingRecord) => (
         <Space size={4}>
           {r.status !== '已提交' && (
             <Button type="text" size="small" icon={<SendOutlined />}
               loading={submitting === r.id}
               onClick={() => handleSubmit(r)}>提交/通知</Button>
           )}
+          <Button type="text" size="small" icon={<DownloadOutlined />}
+            loading={generating === r.id}
+            onClick={() => handleGenerateMaterials(r)}>全套材料</Button>
           <Button type="text" size="small" onClick={() => openEdit(r)}>编辑</Button>
           <Popconfirm title="确定删除该登记？未转训的二级表记录将一并删除" onConfirm={() => handleDelete(r.id)}>
             <Button type="text" size="small" danger>删除</Button>

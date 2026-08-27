@@ -2,6 +2,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # dazah-backend/
@@ -68,7 +69,19 @@ class Settings(BaseSettings):
 
     # HR AI（DeepSeek）：出题/人事问答/面试评价/胜任度分析统一使用一个 key
     HR_AI_API_KEY: str = ""
+    HR_DEEPSEEK_API_KEY: str = ""  # 旧命名兼容：仅作为 HR_AI_API_KEY 为空时的兜底
     HR_AI_MODEL: str = "deepseek-chat"
+
+    @model_validator(mode="after")
+    def _ai_key_fallback(self) -> "Settings":
+        """HR_AI_API_KEY 未配置时回落旧命名 HR_DEEPSEEK_API_KEY。
+
+        历史 .env 文件里两种命名并存，且部分环境只填了旧命名——
+        空 key 会让 DeepSeek 调用 401，AI 评估/出题/报告全 500。
+        """
+        if not self.HR_AI_API_KEY and self.HR_DEEPSEEK_API_KEY:
+            self.HR_AI_API_KEY = self.HR_DEEPSEEK_API_KEY
+        return self
     HR_AI_SYSTEM_PROMPT: str = ""
     # 绩效飞书通知开关（自评/领导评分提交后通知，默认关闭）
     HR_PERFORMANCE_NOTIFY: bool = False

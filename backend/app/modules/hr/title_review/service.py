@@ -1812,8 +1812,6 @@ class TitleReviewService:
             "approval_updated": 0,
             "approval_skipped": 0,
         }
-        if not activity.approval_code:
-            return stats
         if not (activity.feishu_app_token and activity.apply_table_id):
             return stats
 

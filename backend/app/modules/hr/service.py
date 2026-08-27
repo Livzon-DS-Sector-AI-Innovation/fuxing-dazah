@@ -434,14 +434,14 @@ class EmployeeService:
                             data["birth_day"] = parsed_date.day
                         continue  # 不把 _birth_date 本身写入 data
                     elif field_name == "status":
-                        # 规范化人员状态：'—' 或空 → 默认为在职
+                        # 规范化人员状态：'—'/空/未知值 → 不写入（更新保留原状态，
+                        # 新员工由 upsert INSERT 分支默认「在职」）
                         val_str = str(val).strip()
                         if val_str in ("—", "——", "-", "", "无"):
-                            continue  # 跳过，后续默认设为"在职"
+                            continue
                         if val_str in ("在职", "离职", "待审批", "病假", "产假", "产假复岗"):
                             val = val_str
                         else:
-                            # 未知状态值，跳过（保留默认"在职"）
                             continue
                     data[field_name] = val
 
@@ -454,8 +454,8 @@ class EmployeeService:
 
                 if "hire_date" not in data:
                     data["hire_date"] = date.today()
-                if "status" not in data:
-                    data["status"] = "在职"
+                # 状态列缺失/为空时不再默认「在职」：已有员工保留原状态（病假/产假不被覆盖），
+                # 新员工由 upsert INSERT 分支默认「在职」
 
                 # ── Excel 没有的字段全部置空，确保完全以 Excel 为准 ──
                 for field in self._EXCEL_RESETTABLE_FIELDS:
@@ -2523,13 +2523,7 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
 
 {{
   "dimensions": [
-    {{"name": "学历专业匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "英语能力匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "工作经验匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "专业技能匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "软素质匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "稳定性评估", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}},
-    {{"name": "薪资匹配度", "score": 0-100, "star": 1-5, "assessment": "该维度评价"}}
+    {{"name": "维度名", "score": 0-100, "star": 1-5, "assessment": "岗位要求 vs 候选人情况 vs 评价"}}
   ],
   "strengths": ["核心优势1", "核心优势2"],
   "risks": ["潜在风险1", "潜在风险2"],
@@ -2539,6 +2533,14 @@ _ANALYSIS_PROMPT_TEMPLATE = """请对候选人进行多维度胜任度分析，�
   "training_suggestions": ["录用后培养建议1", "建议2"],
   "summary": "总体结论一段话"
 }}
+
+维度确定规则（重要）：
+1. 评估维度从【岗位JD】的任职要求中提取 4-6 个核心维度（如学历专业、
+   工作经验、专业技能、沟通协作等）——JD 明确要求的才纳入；
+   例如 JD 有英语要求才设「英语能力」维度，未提及的能力不要强行评估
+2. 另外补充两项通用评估：稳定性（跳槽频率/职业规划）与薪资期望匹配度
+   （与 JD 预算或市场水平比较），信息不足时如实写明「信息不足」
+3. 每个维度的 assessment 按「岗位要求 → 候选人情况 → 评价结论」结构撰写
 
 【候选人简历】
 {resume_text}
@@ -2584,8 +2586,13 @@ class CandidateAnalysisService:
         jd_text = ""
         if interview.job_requirement_id:
             jd = await JobRequirementRepository(self.session).get_by_id(interview.job_requirement_id)
-            if jd and jd.requirements:
-                jd_text = jd.requirements
+            if jd:
+                jd_parts = []
+                if jd.duties:
+                    jd_parts.append(f"岗位职责：{jd.duties}")
+                if jd.requirements:
+                    jd_parts.append(f"任职要求：{jd.requirements}")
+                jd_text = "\n".join(jd_parts)
 
         resume_parts = [
             f"姓名：{candidate.name}",

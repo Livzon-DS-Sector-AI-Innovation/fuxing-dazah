@@ -366,7 +366,8 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       </Modal>
 
       {/* 部门评审组 */}
-      <Modal title="部门评审组配置" open={committeeOpen} width={760} onCancel={() => setCommitteeOpen(false)} footer={null}>
+      <Modal title="部门评审组配置" open={committeeOpen} width={760} onCancel={() => setCommitteeOpen(false)} footer={null}
+        styles={{ body: { maxHeight: '70vh', overflowY: 'auto' } }}>
         <div className="mt-4 space-y-3">
           <Form form={committeeForm} layout="vertical" className="grid grid-cols-2 gap-x-4">
             <Form.Item name="department" label="部门名称（与员工档案实际部门一致）" rules={[{ required: true, message: '请选择部门' }]}>
