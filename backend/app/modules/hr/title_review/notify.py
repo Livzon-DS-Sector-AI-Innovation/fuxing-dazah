@@ -58,18 +58,16 @@ async def _lookup_open_id(name: str) -> str | None:
 
 
 async def _send_card(open_id: str, card: dict[str, Any]) -> bool:
-    """发送卡片（走平台集成层：SDK + token 管理 + 业务码校验）。"""
-    from app.core.config import get_settings
+    """发送卡片（走平台集成层：SDK + token 管理 + 业务码校验）。
+
+    必须用全局 FEISHU 应用发送：identity.users.feishu_open_id 由 SSO 登录
+    （全局应用）产生，而 open_id 分应用域——用 HR 独立应用发送会被飞书拒绝
+    （99992361 open_id cross app）。
+    """
     from app.platform.integrations.feishu.notification import send_user_card
 
     try:
-        _settings = get_settings()
-        return await send_user_card(
-            open_id,
-            card=card,
-            app_id=_settings.HR_TITLE_REVIEW_FEISHU_APP_ID or None,
-            app_secret=_settings.HR_TITLE_REVIEW_FEISHU_APP_SECRET or None,
-        )
+        return await send_user_card(open_id, card=card)
     except Exception as exc:  # noqa: BLE001
         logger.warning("发送飞书消息异常: %s", exc)
         return False

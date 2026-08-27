@@ -86,6 +86,49 @@ class TestActivity:
         assert len(dims) == 7
         assert {lv.sequence for lv in levels} == {m.SEQUENCE_TECH, m.SEQUENCE_SKILL}
 
+    async def test_delete_activity_cascades_soft_delete(
+        self, db_session: AsyncSession, monkeypatch
+    ):
+        """删除活动不限状态/申报数量，级联软删申报与职级组/评价项。"""
+        from sqlalchemy import select as sa_select
+
+        monkeypatch.setattr(
+            TitleReviewService, "_load_employee_profile", AsyncMock(return_value=None)
+        )
+        service = TitleReviewService(db_session)
+        activity = await service.create_activity(
+            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+        )
+        employee_no = f"E{_rand()}"
+        await _create_employee(db_session, "李四", employee_no)
+        application = await service.sync_apply_record_added(
+            activity.id,
+            "rec1",
+            {
+                "姓名": "李四",
+                "工号": employee_no,
+                "申报序列": "技术职级",
+                "申报职级": "工程师",
+            },
+        )
+        assert application is not None
+        activity.status = m.ACTIVITY_REVIEWING  # 非 draft 也可删除
+        await db_session.flush()
+        await service.delete_activity(activity.id)
+        assert activity.is_deleted is True
+        apps = (await db_session.execute(
+            sa_select(m.TitleReviewApplication).where(
+                m.TitleReviewApplication.activity_id == activity.id
+            )
+        )).scalars().all()
+        assert apps and all(a.is_deleted for a in apps)
+        levels = (await db_session.execute(
+            sa_select(m.TitleReviewLevel).where(
+                m.TitleReviewLevel.activity_id == activity.id
+            )
+        )).scalars().all()
+        assert levels and all(lv.is_deleted for lv in levels)
+
     async def test_update_levels_only_draft(self, db_session: AsyncSession):
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
@@ -127,23 +170,20 @@ class TestCommittee:
             "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
         )
         service = TitleReviewService(db_session)
-        emp1 = await _create_employee(db_session, "负责人", f"M{_rand()}")
         emp2 = await _create_employee(db_session, "小组成员", f"C{_rand()}")
         data = TitleReviewDeptCommitteeIn(
             department="测试部",
-            manager_employee_id=emp1.id,
-            manager_name=emp1.name,
             committee_members=[TitleReviewCommitteeMemberIn(employee_id=emp2.id, name=emp2.name, employee_no=emp2.employee_number)],
         )
         c1 = await service.upsert_committee(data)
         # 同部门再次保存 → 更新而非新建
-        data.leader_name = "领导A"
+        data.committee_members = []
         c2 = await service.upsert_committee(data)
         assert c1.id == c2.id
         committees = await service.list_committees()
         # 只统计本测试部门（测试库与开发库共用，可能存在其他部门评审组）
         assert len([c for c in committees if c.department == "测试部"]) == 1
-        assert c2.leader_name == "领导A"
+        assert c2.committee_members is None
 
     async def test_default_members(self, db_session: AsyncSession, monkeypatch):
         monkeypatch.setattr(

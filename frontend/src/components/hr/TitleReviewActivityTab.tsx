@@ -244,7 +244,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       render: (_: unknown, r: TitleReviewActivityListItem) => (
         <Space size={4} wrap>
           {r.status === 'draft' && canManage && <Button size="small" onClick={() => openEdit(r)}>编辑</Button>}
-          {r.status === 'draft' && canManage && (
+          {r.status !== 'closed' && canManage && (
             <Button size="small" icon={<ReloadOutlined />} onClick={() => runAction(bindTitleTables, r.id, '绑定成功')}>绑定表格</Button>
           )}
           {r.status === 'draft' && canManage && (
@@ -262,7 +262,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           {(r.status === 'open' || r.status === 'reviewing') && (
             <Button size="small" onClick={() => onSelectActivity(r.id)}>管理申报</Button>
           )}
-          {r.status === 'draft' && canManage && (
+          {canManage && (
             <Popconfirm
               title="确认删除该活动？"
               onConfirm={async () => {

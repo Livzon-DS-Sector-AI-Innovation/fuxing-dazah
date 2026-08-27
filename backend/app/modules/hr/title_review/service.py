@@ -683,17 +683,26 @@ class TitleReviewService:
         return activity
 
     async def delete_activity(self, activity_id: UUID, user: Any = None) -> None:
+        """删除活动（软删），级联软删名下申报/评委/评分/职级组/评价项。
+
+        不限制活动状态与申报数量：测试数据清理场景可直接从活动列表删除
+        （整表硬删仍走系统设置-数据管理）；部门评审组按部门全局维护，不随活动删除。
+        """
         activity = await self.get_activity(activity_id)
-        if activity.status != m.ACTIVITY_DRAFT:
-            raise HTTPException(400, "仅配置中（draft）的活动可删除")
-        count = await self.application_repo.count_by_activity(activity.id)
-        if count > 0:
-            raise HTTPException(400, f"活动已有 {count} 条申报记录，不可删除")
+        old = {"name": activity.name, "status": activity.status}
+        applications = await self.application_repo.list_all_by_activity(activity.id)
+        for application in applications:
+            application.is_deleted = True
+        for judge in await self.judge_repo.list_by_activity(activity.id):
+            judge.is_deleted = True
+        for score in await self.score_repo.list_by_activity(activity.id):
+            score.is_deleted = True
         for lv in await self.level_repo.list_by_activity(activity.id):
             lv.is_deleted = True
         for dim in await self.dimension_repo.list_by_activity(activity.id):
             dim.is_deleted = True
         activity.is_deleted = True
+        # 统一 flush（activity_repo.update 内部 flush + re-fetch）
         await self.activity_repo.update(activity)
         await _audit(
             self.session,
@@ -701,7 +710,8 @@ class TitleReviewService:
             user=user,
             resource_type="title_review_activity",
             resource_id=activity.id,
-            old_value={"name": activity.name},
+            old_value=old,
+            new_value={"applications_soft_deleted": len(applications)},
         )
 
     async def bind_tables(self, activity_id: UUID, user: Any = None) -> m.TitleReviewActivity:
@@ -711,6 +721,16 @@ class TitleReviewService:
         activity = await self.get_activity(activity_id)
         if not (activity.feishu_app_token and activity.apply_table_id):
             raise HTTPException(400, "请先在活动编辑中粘贴 app_token、申报表 table_id")
+        # 同一申报表禁止绑定多个活动（审批实例编号全局唯一，重复绑定会在对账时冲突）
+        duplicate = await self.activity_repo.find_by_feishu_binding(
+            activity.feishu_app_token, activity.apply_table_id, exclude_id=activity.id
+        )
+        if duplicate:
+            raise HTTPException(
+                400,
+                f"该申报表已绑定活动「{duplicate.name}」，同一申报表不能绑定多个活动；"
+                "如原活动绑定信息有误，请修复原活动后重新绑定",
+            )
         # 重新绑定表格后，员工信息表/审批镜像表 table_id 缓存失效（Base 表结构可能变化）
         _employee_table_cache.pop(activity.feishu_app_token, None)
         _approval_table_cache.pop(activity.feishu_app_token, None)
@@ -866,20 +886,12 @@ class TitleReviewService:
         committee = await self.committee_repo.get_by_department(data.department)
         members = [item.model_dump(mode="json") for item in data.committee_members]
         if committee:
-            committee.manager_employee_id = data.manager_employee_id
-            committee.manager_name = data.manager_name
-            committee.leader_employee_id = data.leader_employee_id
-            committee.leader_name = data.leader_name
             committee.committee_members = members or None
             committee = await self.committee_repo.update(committee)
         else:
             committee = await self.committee_repo.create(
                 m.TitleReviewDeptCommittee(
                     department=data.department,
-                    manager_employee_id=data.manager_employee_id,
-                    manager_name=data.manager_name,
-                    leader_employee_id=data.leader_employee_id,
-                    leader_name=data.leader_name,
                     committee_members=members or None,
                 )
             )
@@ -2178,8 +2190,17 @@ class TitleReviewService:
                 if changed or refreshed is not None:
                     await self.application_repo.update(existing)
             else:
-                await self.sync_apply_record_added(activity.id, record_id, fields)
-                stats["applications_created"] += 1
+                try:
+                    await self.sync_apply_record_added(activity.id, record_id, fields)
+                    stats["applications_created"] += 1
+                except IntegrityError:
+                    # 审批实例编号全局唯一：申报行已归属其他活动时记入 errors 而非 500
+                    logger.warning(
+                        "申报记录重复/已归属其他活动，跳过: record_id=%s", record_id
+                    )
+                    stats["errors"].append(
+                        f"申报记录 {record_id} 与已有记录重复（可能已绑定其他活动），已跳过"
+                    )
         for application in local_apps:
             if (
                 application.feishu_record_id

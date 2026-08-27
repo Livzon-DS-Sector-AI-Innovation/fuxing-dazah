@@ -74,6 +74,20 @@ class TitleReviewActivityRepository:
         )
         return list(result.scalars().all())
 
+    async def find_by_feishu_binding(
+        self, app_token: str, table_id: str, exclude_id: UUID | None = None
+    ) -> TitleReviewActivity | None:
+        """按申报表绑定查找其他活动（同一申报表禁止绑定多个活动）。"""
+        stmt = select(TitleReviewActivity).where(
+            TitleReviewActivity.feishu_app_token == app_token,
+            TitleReviewActivity.apply_table_id == table_id,
+            TitleReviewActivity.is_deleted == False,  # noqa: E712
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(TitleReviewActivity.id != exclude_id)
+        result = await self.session.execute(stmt)
+        return result.scalars().first()
+
     async def create(self, activity: TitleReviewActivity) -> TitleReviewActivity:
         self.session.add(activity)
         await self.session.flush()

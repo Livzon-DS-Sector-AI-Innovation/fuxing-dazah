@@ -72,8 +72,6 @@ class TestCommitteeApi:
     async def test_upsert_and_list(self, client: AsyncClient):
         payload = {
             "department": f"部门{_rand()}",
-            "manager_name": "负责人A",
-            "leader_name": "领导B",
             "committee_members": [],
         }
         r = await client.post("/api/v1/hr/title/committees", json=payload)
