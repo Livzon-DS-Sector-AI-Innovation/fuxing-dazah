@@ -129,3 +129,45 @@ async def clear_data_tables(tables: list[str], session: AsyncSession = Depends(g
         cleared.append(table)
     await session.commit()
     return success_response(data={"cleared": cleared}, message=f"已清空 {len(cleared)} 张表")
+
+
+# ─── 测试数据分类 ───
+
+# 测试数据识别规则：表名 → 附加 WHERE 条件（测试产生的数据按约定特征收纳，
+# 新增测试数据类型时在此登记规则；条件为代码内常量，无注入风险）
+TEST_DATA_RULES: dict[str, str] = {
+    "employees": "name = '员工甲' AND department = '甲部门'",
+    "sop_training_entries": "trainer LIKE '%员工甲%' OR personnel LIKE '%员工甲%'",
+}
+
+
+@router.get("/data-management/test-data", summary="测试数据分类汇总")
+async def list_test_data(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
+    """测试过程中实际产生的数据收纳于此：按约定特征统计各表测试行数。"""
+    from sqlalchemy import text
+    tables = []
+    total = 0
+    for table, where in TEST_DATA_RULES.items():
+        cnt = (await session.execute(
+            text(f"SELECT COUNT(*) FROM hr.{table} WHERE {where} AND is_deleted = false")
+        )).scalar() or 0
+        total += cnt
+        tables.append({"table": table, "label": _TABLE_LABELS.get(table, table), "count": cnt})
+    return success_response(data={"total": total, "tables": tables})
+
+
+@router.post("/data-management/clear-test-data", summary="清空测试数据分类")
+async def clear_test_data(session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
+    """物理删除测试数据分类收纳的全部行（与数据管理整表清空语义一致）。"""
+    from sqlalchemy import text
+    cleared = []
+    for table, where in TEST_DATA_RULES.items():
+        rowcount = (await session.execute(
+            text(f"DELETE FROM hr.{table} WHERE {where}")
+        )).rowcount or 0
+        cleared.append({"table": table, "count": rowcount})
+    await session.commit()
+    return success_response(
+        data={"cleared": cleared},
+        message=f"已清空测试数据 {sum(c['count'] for c in cleared)} 条",
+    )

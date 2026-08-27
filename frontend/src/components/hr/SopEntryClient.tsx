@@ -226,7 +226,7 @@ export default function SopEntryClient() {
               onClick={handleBatchTransfer}>批量转培训</Button>
           )}
           {canGenerateDoc && (
-            <Button type="primary" ghost icon={<FileZipOutlined />} loading={generating}
+            <Button type="primary" icon={<FileZipOutlined />} loading={generating}
               onClick={handleBatchMaterials}>生成一套材料</Button>
           )}
           {selectedKeys.length > 0 && (

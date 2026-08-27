@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { App, Button, Card, Form, Input, Select, Alert, Spin, Table, Checkbox, Popconfirm, Space, Divider } from 'antd'
 import { SaveOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons'
 import { logError } from '@/lib/hr'
-import { fetchDataTables, clearDataTables, getSystemSettings, updateSystemSettings } from '@/actions/hr'
+import { fetchDataTables, clearDataTables, fetchTestData, clearTestData, getSystemSettings, updateSystemSettings } from '@/actions/hr'
 
 export default function SystemSettingsClient() {
   const { message } = App.useApp()
@@ -14,6 +14,7 @@ export default function SystemSettingsClient() {
   const [tables, setTables] = useState<any[]>([])
   const [tablesLoading, setTablesLoading] = useState(true)
   const [selected, setSelected] = useState<string[]>([])
+  const [testData, setTestData] = useState<{ total: number; tables: { table: string; label: string; count: number }[] }>({ total: 0, tables: [] })
 
   const loadTables = () => {
     setTablesLoading(true)
@@ -23,7 +24,13 @@ export default function SystemSettingsClient() {
       .finally(() => setTablesLoading(false))
   }
 
-  useEffect(() => { loadTables() }, [])
+  const loadTestData = () => {
+    fetchTestData()
+      .then(d => setTestData(d?.data || { total: 0, tables: [] }))
+      .catch((err: any) => { message.error('加载测试数据分类失败: ' + (err.message || '未知错误')) })
+  }
+
+  useEffect(() => { loadTables(); loadTestData() }, [])
   const toggleSelect = (table: string) => setSelected(prev => prev.includes(table) ? prev.filter(t => t !== table) : [...prev, table])
   const handleClearSelected = () => {
     if (!selected.length) return message.warning('请选择要清空的表')
@@ -36,6 +43,13 @@ export default function SystemSettingsClient() {
   const handleClearAll = () => {
     clearDataTables(tables.map(t => t.table)).then(d => {
       message.success(d.message || '已清空')
+      loadTables()
+    }).catch((err: any) => { message.error(err.message || '操作失败') })
+  }
+  const handleClearTestData = () => {
+    clearTestData().then(d => {
+      message.success(d.message || '已清空测试数据')
+      loadTestData()
       loadTables()
     }).catch((err: any) => { message.error(err.message || '操作失败') })
   }
@@ -144,6 +158,35 @@ export default function SystemSettingsClient() {
           </div>
         </Card>
       </div>
+
+      {/* ─── 测试数据分类 ─── */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-[var(--color-charcoal)]">测试数据</h2>
+            <p className="text-sm text-gray-400 mt-1">测试过程中实际产生的数据收纳于此，一键清理（识别规则在后端登记，可按需扩展）</p>
+          </div>
+          <Space>
+            <Button size="small" icon={<ReloadOutlined />} onClick={loadTestData} />
+            <Popconfirm title="确认清空全部测试数据？" onConfirm={handleClearTestData}>
+              <Button danger type="primary" icon={<DeleteOutlined />} disabled={!testData.total}>
+                清空测试数据（{testData.total} 条）
+              </Button>
+            </Popconfirm>
+          </Space>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 min-h-[40px]">
+          {testData.tables.map(t => (
+            <div key={t.table}
+              className="rounded-lg border border-amber-200 bg-amber-50 p-3"
+            >
+              <div className="text-sm font-medium text-gray-700">{t.label}</div>
+              <div className="mt-1 text-2xl font-bold text-gray-900">{t.count}</div>
+              <div className="text-xs text-gray-400">条测试数据</div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       {/* ─── 数据管理 ─── */}
       <Card>
