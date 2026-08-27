@@ -5517,17 +5517,78 @@ async def get_category_scores(evaluation_id: UUID, session: AsyncSession = Depen
     return success_response(data=result)
 
 
+async def _recalc_evaluation_total(session: AsyncSession, evaluation_id: UUID) -> None:
+    """重算月度考核部门加权总分：Σ(权重×分数)/Σ(权重)，仅统计已评分项目。
+
+    部门×项目子集不同（A 部门有环保项目、B 部门没有），权重即该部门该
+    项目的 PerformanceDeptWeight；未评分的项目不参与计算。
+    """
+    from app.modules.hr.models import (
+        MonthlyPerformanceEvaluation,
+        PerformanceCategoryScore,
+    )
+
+    rows = (await session.execute(
+        select(PerformanceCategoryScore).where(
+            PerformanceCategoryScore.evaluation_id == evaluation_id,
+            PerformanceCategoryScore.is_deleted == False,  # noqa: E712
+            PerformanceCategoryScore.score.isnot(None),
+        )
+    )).scalars().all()
+    total_weight = 0.0
+    weighted_sum = 0.0
+    for r in rows:
+        w = float(r.weight or 0)
+        if w <= 0:
+            continue
+        total_weight += w
+        weighted_sum += w * float(r.score or 0)
+    final = round(weighted_sum / total_weight, 2) if total_weight > 0 else None
+    ev = (await session.execute(
+        select(MonthlyPerformanceEvaluation).where(
+            MonthlyPerformanceEvaluation.id == evaluation_id
+        )
+    )).scalar_one_or_none()
+    if ev:
+        ev.final_score = final
+        await session.flush()
+
+
 @router.post("/performance-evaluations/{evaluation_id}/category-scores", summary="批量提交考核项目评分")
 async def save_category_scores(
     evaluation_id: UUID, payload: CategoryScoreBatchInput,
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    """仅项目负责人（或 hr:performance:manage 权限）可保存本项目评分。
+
+    多人评分模型：每个考核项目有独立负责人，评分对象是部门；部门×项目
+    子集由 PerformanceDeptWeight 决定（有的项目 A 部门有、B 部门没有）。
+    保存后自动重算该考核的部门加权总分 final_score。
+    """
+    from app.modules.hr.models import PerformanceCategory
+    from app.platform.permission.deps import get_user_permissions
+
+    perms = await get_user_permissions(str(hr_scope.user.id), session)
+    is_manager = "hr:performance:manage" in perms
+    category_ids = {s.category_id for s in payload.scores}
+    categories = (await session.execute(
+        select(PerformanceCategory).where(PerformanceCategory.id.in_(category_ids))
+    )).scalars().all()
+    cat_map = {c.id: c for c in categories}
     repo = PerformanceEvaluationRepository(session)
     for s in payload.scores:
+        cat = cat_map.get(s.category_id)
+        if not cat:
+            raise HTTPException(400, f"考核项目不存在: {s.category_id}")
+        if not is_manager and cat.evaluator and cat.evaluator != hr_scope.user.name:
+            raise HTTPException(
+                403, f"「{cat.name}」由 {cat.evaluator} 负责评分，您无权提交"
+            )
         await repo.upsert_category_score(
             evaluation_id, s.category_id, s.score, hr_scope.user.name, s.weight,
         )
+    await _recalc_evaluation_total(session, evaluation_id)
     return success_response(message="评分已保存")
 
 

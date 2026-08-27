@@ -269,7 +269,7 @@ async def get_hr_scope(
 
 # ── 路径 → 权限码映射（用于自动权限校验） ──
 # 规则：key 是正则，匹配 URL 路径；value 是 method→权限码 或 直接权限码
-_HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
+_HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 员工档案
     (r"/employees/export", "hr:profile:export"),
     (r"/employees/upload", "hr:profile:export"),
@@ -304,6 +304,9 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                                   "POST": "hr:performance:manage",
                                   "PUT": "hr:performance:manage",
                                   "DELETE": "hr:performance:manage"}),
+    # 评分保存不设路由级权限码：负责人由 handler 内按项目负责人校验，
+    # 评分人只需任意 hr: 权限即可（否则非管理员的负责人无法评分）
+    (r"/performance-evaluations/.*/category-scores", None),
     (r"/performance-evaluations", {"GET": "hr:performance:read",
                                    "POST": "hr:performance:manage",
                                    "PUT": "hr:performance:manage",
