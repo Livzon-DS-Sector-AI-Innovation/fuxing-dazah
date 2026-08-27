@@ -1,5 +1,6 @@
 """职称评审 API 契约（v2 投票制多级评审）。"""
 
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -12,7 +13,22 @@ def _strip_pasted_token(v: str | None) -> str | None:
     return v.strip() if isinstance(v, str) else v
 
 
-TOKEN_FIELDS = ("feishu_app_token", "apply_table_id", "vote_table_id", "approval_code")
+_APP_TOKEN_RE = re.compile(r"^[A-Za-z0-9]{20,32}$")
+_TABLE_ID_RE = re.compile(r"^tbl[A-Za-z0-9]{10,40}$")
+
+
+def _table_id_validator(v: str | None) -> str | None:
+    v = _strip_pasted_token(v)
+    if v is not None and v and not _TABLE_ID_RE.match(v):
+        raise ValueError("table_id 格式不正确：应为以 tbl 开头的字母数字（检查是否粘贴丢字符）")
+    return v
+
+
+def _app_token_validator(v: str | None) -> str | None:
+    v = _strip_pasted_token(v)
+    if v is not None and v and not _APP_TOKEN_RE.match(v):
+        raise ValueError("app_token 格式不正确：应为 20-32 位字母数字（检查是否粘贴丢字符）")
+    return v
 
 # ─── 活动与职级组 ───
 
@@ -32,9 +48,19 @@ class TitleReviewActivityCreate(BaseModel):
     approval_code: str | None = Field(None, max_length=64, description="飞书审批定义编码（审批先行模式）")
     levels: list[TitleReviewLevelIn] | None = Field(None, description="职级组（缺省用 10 条默认模板）")
 
-    @field_validator(*TOKEN_FIELDS, mode="before")
+    @field_validator("feishu_app_token", mode="before")
     @classmethod
-    def _clean_tokens(cls, v: str | None) -> str | None:
+    def _clean_app_token(cls, v: str | None) -> str | None:
+        return _app_token_validator(v)
+
+    @field_validator("apply_table_id", "vote_table_id", mode="before")
+    @classmethod
+    def _clean_table_ids(cls, v: str | None) -> str | None:
+        return _table_id_validator(v)
+
+    @field_validator("approval_code", mode="before")
+    @classmethod
+    def _clean_approval_code(cls, v: str | None) -> str | None:
         return _strip_pasted_token(v)
 
 
@@ -49,9 +75,19 @@ class TitleReviewActivityUpdate(BaseModel):
     approval_code: str | None = Field(None, max_length=64, description="飞书审批定义编码")
     levels: list[TitleReviewLevelIn] | None = Field(None, description="职级组全量替换（仅 draft）")
 
-    @field_validator(*TOKEN_FIELDS, mode="before")
+    @field_validator("feishu_app_token", mode="before")
     @classmethod
-    def _clean_tokens(cls, v: str | None) -> str | None:
+    def _clean_app_token(cls, v: str | None) -> str | None:
+        return _app_token_validator(v)
+
+    @field_validator("apply_table_id", "vote_table_id", mode="before")
+    @classmethod
+    def _clean_table_ids(cls, v: str | None) -> str | None:
+        return _table_id_validator(v)
+
+    @field_validator("approval_code", mode="before")
+    @classmethod
+    def _clean_approval_code(cls, v: str | None) -> str | None:
         return _strip_pasted_token(v)
 
 

@@ -97,7 +97,7 @@ class TestActivity:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(
-            _activity_create(feishu_app_token="app1", apply_table_id="tbl1")
+            _activity_create(feishu_app_token="app12345678901234567890", apply_table_id="tbl12345678901")
         )
         employee_no = f"E{_rand()}"
         await _create_employee(db_session, "李四", employee_no)
@@ -132,9 +132,9 @@ class TestActivity:
     async def test_update_levels_only_draft(self, db_session: AsyncSession):
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
         with pytest.raises(HTTPException, match="仅配置中"):
@@ -149,9 +149,9 @@ class TestActivity:
     async def test_full_status_flow(self, db_session: AsyncSession):
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         activity = await service.open_activity(activity.id)
         assert activity.status == m.ACTIVITY_OPEN
@@ -220,9 +220,9 @@ class TestCommittee:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
         await service.start_review(activity.id)
@@ -273,9 +273,9 @@ class TestFlowAndVotes:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
         emp = await _create_employee(db_session, "申报人", f"A{_rand()}")
@@ -376,9 +376,9 @@ class TestJudgeVote:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
         emp = await _create_employee(db_session, "申报人", f"A{_rand()}")
@@ -506,9 +506,9 @@ class TestAutoAssign:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
 
@@ -554,9 +554,9 @@ class TestAutoAssign:
         )
         service = TitleReviewService(db_session)
         activity = await service.create_activity(_activity_create())
-        activity.feishu_app_token = "app1"
-        activity.apply_table_id = "tbl1"
-        activity.vote_table_id = "tbl2"
+        activity.feishu_app_token = "app12345678901234567890"
+        activity.apply_table_id = "tbl12345678901"
+        activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
 

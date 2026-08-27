@@ -36,6 +36,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const { message } = App.useApp()
   const [pdfLoading, setPdfLoading] = useState(true)
   const [pdfError, setPdfError] = useState(false)
+  const [pdfErrorMsg, setPdfErrorMsg] = useState('')
   const [pdfUrl, setPdfUrl] = useState<string | null>(null)
 
   // 简历 PDF 通过 Server Action 获取（不经 /api rewrite 代理），转 blob URL 嵌入 iframe
@@ -46,7 +47,12 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         objectUrl = base64ToObjectUrl(r.base64, 'application/pdf')
         setPdfUrl(objectUrl)
       })
-      .catch(() => {
+      .catch((err: any) => {
+        setPdfErrorMsg(
+          err?.message?.includes('无简历文件')
+            ? '简历文件缺失，请重新上传'
+            : '简历加载失败'
+        )
         setPdfError(true)
         setPdfLoading(false)
       })
@@ -351,7 +357,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         <Spin spinning={pdfLoading} className="absolute inset-0 z-10 flex items-center justify-center" />
         {pdfError && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white">
-            <p className="text-gray-500 mb-4">简历加载失败</p>
+            <p className="text-gray-500 mb-4">{pdfErrorMsg || '简历加载失败'}</p>
             <Button onClick={() => window.location.reload()}>刷新页面</Button>
           </div>
         )}
