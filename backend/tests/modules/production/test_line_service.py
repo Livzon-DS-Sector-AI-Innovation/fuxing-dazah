@@ -150,3 +150,94 @@ class TestLineAssignment:
         )
         ids = await line_service.get_user_line_ids(db_session, user_id)
         assert ids == [line_id]
+
+
+class TestLineProductLinks:
+    """产线-产品关联。"""
+
+    async def _create_line(self, db: AsyncSession, name: str = "关联产线") -> uuid.UUID:
+        line = await line_service.create_line(db, LineCreate(name=name), None)
+        return line.id
+
+    async def _create_product(
+        self, db: AsyncSession, name: str = "关联产品",
+    ) -> uuid.UUID:
+        from app.modules.production.models import Product
+        p = Product(product_name=name, unit="kg")
+        db.add(p)
+        await db.flush()
+        return p.id
+
+    async def test_bind_and_list_by_line_and_product(
+        self, db_session: AsyncSession,
+    ) -> None:
+        line_id = await self._create_line(db_session)
+        product_id = await self._create_product(db_session)
+
+        link = await line_service.bind_product_line(
+            db_session, line_id=line_id, product_id=product_id, created_by=None,
+        )
+        assert link.product_name == "关联产品"
+        assert link.line_name == "关联产线"
+
+        by_line = await line_service.list_line_products(db_session, line_id=line_id)
+        assert [x.id for x in by_line] == [link.id]
+        by_product = await line_service.list_line_products(
+            db_session, product_id=product_id,
+        )
+        assert [x.id for x in by_product] == [link.id]
+
+    async def test_duplicate_bind_rejected(self, db_session: AsyncSession) -> None:
+        line_id = await self._create_line(db_session)
+        product_id = await self._create_product(db_session)
+        await line_service.bind_product_line(
+            db_session, line_id=line_id, product_id=product_id, created_by=None,
+        )
+        with pytest.raises(DuplicateException):
+            await line_service.bind_product_line(
+                db_session, line_id=line_id, product_id=product_id, created_by=None,
+            )
+
+    async def test_bind_missing_product_rejected(
+        self, db_session: AsyncSession,
+    ) -> None:
+        line_id = await self._create_line(db_session)
+        with pytest.raises(NotFoundException):
+            await line_service.bind_product_line(
+                db_session, line_id=line_id, product_id=uuid.uuid4(), created_by=None,
+            )
+
+    async def test_unbind_and_rebind(self, db_session: AsyncSession) -> None:
+        line_id = await self._create_line(db_session)
+        product_id = await self._create_product(db_session)
+        link = await line_service.bind_product_line(
+            db_session, line_id=line_id, product_id=product_id, created_by=None,
+        )
+        await line_service.unbind_product_line(db_session, link.id)
+        assert await line_service.list_line_products(
+            db_session, line_id=line_id,
+        ) == []
+        # 软删后重新绑定成功（新行）
+        again = await line_service.bind_product_line(
+            db_session, line_id=line_id, product_id=product_id, created_by=None,
+        )
+        assert again.id != link.id
+
+    async def test_unbind_missing_raises(self, db_session: AsyncSession) -> None:
+        with pytest.raises(NotFoundException):
+            await line_service.unbind_product_line(db_session, uuid.uuid4())
+
+    async def test_delete_line_cascades_product_links(
+        self, db_session: AsyncSession,
+    ) -> None:
+        line_id = await self._create_line(db_session)
+        product_id = await self._create_product(db_session)
+        await line_service.bind_product_line(
+            db_session, line_id=line_id, product_id=product_id, created_by=None,
+        )
+        await line_service.delete_line(db_session, line_id, None)
+
+        by_product = await line_service.list_line_products(
+            db_session, product_id=product_id,
+        )
+        assert by_product == []

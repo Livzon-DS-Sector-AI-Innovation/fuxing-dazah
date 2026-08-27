@@ -42,7 +42,7 @@ class Batch(BaseModel):
     unit: Mapped[str | None] = mapped_column(String(20), nullable=True, comment="单位")
     entry_node_id: Mapped[uuid.UUID | None] = mapped_column(
         nullable=True,
-        comment="入口节点：derive/merge 产生的批次记录边界边的 to_node；根批次为空",
+        comment="入口工序节点：derive/merge 产生的批次记录边界边的 to_node；根批次为空",
     )
     creation_type: Mapped[str] = mapped_column(
         String(20), default="direct", comment="plan/rework/outsource/trial/direct"

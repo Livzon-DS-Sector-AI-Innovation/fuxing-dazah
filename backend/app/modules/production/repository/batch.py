@@ -15,6 +15,7 @@ __all__ = [
     "get_batches_by_ids",
     "get_parent_links",
     "list_batches",
+    "list_active_batches_by_route",
     "list_batches_started_within",
     "list_descendant_batch_ids",
     "count_unfinished_batches",
@@ -47,6 +48,22 @@ async def get_batch_by_no(db: AsyncSession, batch_no: str) -> Batch | None:
         Batch.batch_no == batch_no, Batch.is_deleted == False  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_active_batches_by_route(
+    db: AsyncSession, route_id: uuid.UUID,
+) -> list[Batch]:
+    """看板：某路线下所有未完成（未报废/未完工）的批次，按创建时间倒序。"""
+    stmt = (
+        select(Batch)
+        .where(
+            Batch.route_id == route_id,
+            Batch.status.not_in(("completed", "cancelled")),
+            Batch.is_deleted == False,  # noqa: E712
+        )
+        .order_by(Batch.created_at.desc())
+    )
+    return list((await db.execute(stmt)).scalars())
 
 
 async def get_batches_by_ids(

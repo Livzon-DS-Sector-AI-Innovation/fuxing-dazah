@@ -179,7 +179,16 @@ async def save_graph(
             )
     _validate_computed_fields(graph, numeric_refs)
 
+    # 节点重建会换新 UUID：先记录旧节点 id，重建后重定向工序负责人分配
+    old_nodes_by_code = {
+        n.node_code: n.id for n in await repo.get_route_nodes(db, route_id)
+    }
+
     await repo.soft_delete_route_graph(db, route_id)
+
+    # 清理已删除工段的负责人分配（stage_name 字符串关联，节点重建不会自动失效）
+    keep_stages = {n.stage_name for n in graph.nodes}
+    await repo.delete_stage_assignments_not_in(db, route_id, keep_stages)
 
     node_by_code: dict[str, RouteNode] = {}
     for n in graph.nodes:
@@ -195,6 +204,14 @@ async def save_graph(
         db.add(node)
         node_by_code[n.node_code] = node
     await db.flush()
+
+    # 同 node_code 的工序负责人分配从旧节点迁到新节点，避免 UUID 悬空丢权限
+    id_map = {
+        old_nodes_by_code[code]: node_by_code[code].id
+        for code in node_by_code
+        if code in old_nodes_by_code and old_nodes_by_code[code] != node_by_code[code].id
+    }
+    await repo.remap_node_assignments(db, id_map)
 
     for n in graph.nodes:
         field_keys = [f.field_key for f in n.fields]
@@ -353,6 +370,16 @@ async def get_graph(db: AsyncSession, route_id: uuid.UUID) -> RouteGraphOut:
             for c in computed
         ],
     )
+
+
+def build_stage_order(nodes: list[RouteNode]) -> list[str]:
+    """从路线节点提取有序工段列表（按 sort_order 首次出现顺序）。"""
+    seen: dict[str, int] = {}
+    for n in sorted(nodes, key=lambda n: n.sort_order):
+        sn = n.stage_name or "未分组"
+        if sn not in seen:
+            seen[sn] = n.sort_order
+    return sorted(seen.keys(), key=lambda s: seen[s])
 
 
 def compute_start_nodes(

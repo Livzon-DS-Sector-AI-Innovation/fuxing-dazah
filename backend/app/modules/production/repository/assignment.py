@@ -1,8 +1,9 @@
 """工段工序负责人分配数据查询。"""
 
+import logging
 import uuid
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import case, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,8 @@ from app.modules.production.models.assignment import (
     StageAssignment,
     StageSuffix,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def list_stage_assignments(
@@ -52,6 +55,39 @@ async def delete_stage_assignment(db: AsyncSession, assignment_id: uuid.UUID) ->
     sa.is_deleted = True
     await db.flush()
     return True
+
+
+async def delete_stage_assignments_not_in(
+    db: AsyncSession, route_id: uuid.UUID, keep_stages: set[str],
+) -> None:
+    """软删 route 中 stage_name 不在 keep_stages 的活跃工段分配（图保存后清理孤儿）。"""
+    items = await list_stage_assignments(db, route_id=route_id)
+    for sa in items:
+        if sa.stage_name not in keep_stages:
+            sa.is_deleted = True
+            # 图保存即重建节点，工段改名/删除会连带清掉负责人分配且不可恢复：
+            # 留审计日志，避免静默丢权限
+            logger.warning(
+                "图保存清理工段分配: route_id=%s stage_name=%s user_id=%s",
+                route_id, sa.stage_name, sa.user_id,
+            )
+    await db.flush()
+
+
+async def remap_node_assignments(
+    db: AsyncSession, id_map: dict[uuid.UUID, uuid.UUID],
+) -> None:
+    """节点重建后把工序分配重定向到同 node_code 的新节点 id（保活跃分配不悬空）。"""
+    if not id_map:
+        return
+    await db.execute(
+        update(NodeAssignment)
+        .where(
+            NodeAssignment.node_id.in_(id_map.keys()),
+            NodeAssignment.is_deleted == False,  # noqa: E712
+        )
+        .values(node_id=case(id_map, value=NodeAssignment.node_id))
+    )
 
 
 async def get_user_stages(db: AsyncSession, user_id: uuid.UUID) -> list[StageAssignment]:

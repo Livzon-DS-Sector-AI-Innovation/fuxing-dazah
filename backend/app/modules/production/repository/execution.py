@@ -80,7 +80,9 @@ async def get_last_completed_execution(
 
 
 async def list_executions_by_batches(
-    db: AsyncSession, batch_ids: list[uuid.UUID]
+    db: AsyncSession,
+    batch_ids: list[uuid.UUID],
+    node_ids: list[uuid.UUID] | None = None,
 ) -> list[NodeExecution]:
     if not batch_ids:
         return []
@@ -92,6 +94,8 @@ async def list_executions_by_batches(
         )
         .order_by(NodeExecution.started_at)
     )
+    if node_ids is not None:
+        stmt = stmt.where(NodeExecution.node_id.in_(node_ids))
     return list((await db.execute(stmt)).scalars())
 
 

@@ -408,6 +408,18 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   const [editForm] = Form.useForm()
   const canEdit = planOrderStatus === 'draft'
 
+  // 备注行内编辑
+  const [editingRemarkId, setEditingRemarkId] = useState<string | null>(null)
+  const [remarkDraft, setRemarkDraft] = useState('')
+  const remarkCancelRef = useRef(false)
+
+  const handleSaveRemark = async (itemId: string) => {
+    setEditingRemarkId(null)
+    const r = await updatePlanItem(itemId, { remark: remarkDraft.trim() ? remarkDraft : '' })
+    if (!r.success) { message.error(r.error); return }
+    onRefresh()
+  }
+
   // 批量生成
   const [batchGenOpen, setBatchGenOpen] = useState(false)
   const [batchStartNo, setBatchStartNo] = useState('')
@@ -692,6 +704,11 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       dataIndex: 'batch_no',
       key: 'batch_no',
       width: 120,
+      fixed: 'left',
+      // 行状态色条移到固定列上，滚动时仍可见
+      onCell: (r: PlanItem) => ({
+        style: { borderLeft: `3px solid ${ITEM_ACCENT[r.status] ?? ITEM_ACCENT.draft}` },
+      }),
       render: (v: string, r: PlanItem) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--color-charcoal)' }}>
@@ -753,6 +770,56 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
       },
     },
     {
+      title: '备注',
+      key: 'remark',
+      width: 170,
+      render: (_, r: PlanItem) =>
+        editingRemarkId === r.id ? (
+          <Input.TextArea
+            size="small"
+            autoSize={{ minRows: 1, maxRows: 3 }}
+            defaultValue={r.remark ?? ''}
+            autoFocus
+            onChange={e => setRemarkDraft(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') {
+                remarkCancelRef.current = true
+                setEditingRemarkId(null)
+              }
+            }}
+            onBlur={() => {
+              if (remarkCancelRef.current) { remarkCancelRef.current = false; return }
+              handleSaveRemark(r.id)
+            }}
+          />
+        ) : (
+          <div
+            onClick={() => {
+              if (!canEdit || !canSubmit) return
+              // 上一次编辑的 Escape 取消标记必须在这里清掉：
+              // Escape 卸载 TextArea 不触发 blur，残留的 true 会吞掉本次保存
+              remarkCancelRef.current = false
+              setRemarkDraft(r.remark ?? '')
+              setEditingRemarkId(r.id)
+            }}
+            title={r.remark ?? undefined}
+            style={{
+              cursor: canEdit && canSubmit ? 'pointer' : 'default',
+              minHeight: 20,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.remark || (
+              <span style={{ color: 'var(--color-stone)' }}>
+                {canEdit && canSubmit ? '点击填写备注' : '—'}
+              </span>
+            )}
+          </div>
+        ),
+    },
+    {
       title: '操作',
       key: 'actions',
       width: 120,
@@ -809,12 +876,7 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
           rowKey="id"
           size="small"
           pagination={false}
-          scroll={{ x: 780 }}
-          onRow={(record) => ({
-            style: {
-              borderLeft: `3px solid ${ITEM_ACCENT[record.status] ?? ITEM_ACCENT.draft}`,
-            },
-          })}
+          scroll={{ x: 920 }}
         />
       )}
 

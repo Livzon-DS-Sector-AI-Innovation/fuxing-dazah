@@ -16,7 +16,7 @@ import { StartExecutionModal } from './StartExecutionModal'
 import { CompleteExecutionModal } from './CompleteExecutionModal'
 import { DeriveModal } from './DeriveModal'
 import { MergeModal } from './MergeModal'
-import { NodeExecutionsTable } from './NodeExecutionsTable'
+import { ProcessBoard } from './ProcessBoard'
 
 function BatchesPageInner() {
   const router = useRouter()
@@ -86,7 +86,7 @@ function BatchesPageInner() {
                 {
                   key: 'nodes',
                   label: '工序视角',
-                  children: <NodeExecutionsTable productId={selectedProductId} />,
+                  children: <ProcessBoard key={selectedProductId} productId={selectedProductId} />,
                 },
               ]}
             />

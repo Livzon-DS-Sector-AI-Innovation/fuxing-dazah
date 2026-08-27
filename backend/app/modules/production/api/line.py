@@ -10,6 +10,7 @@ from app.core.response import success_response
 from app.modules.production.schemas.line import (
     LineAssignmentCreate,
     LineCreate,
+    LineProductLinkCreate,
     LineUpdate,
 )
 from app.modules.production.service import line_service
@@ -104,4 +105,43 @@ async def delete_line_assignment(
     db: AsyncSession = Depends(get_db),
 ):
     await line_service.unbind_user_line(db, assignment_id)
+    return success_response()
+
+
+# ── 产线-产品关联 ──
+
+
+@router.get("/line-products", summary="产线产品关联列表")
+async def list_line_products(
+    _user: User = Depends(_read),
+    line_id: uuid.UUID | None = None,
+    product_id: uuid.UUID | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    items = await line_service.list_line_products(
+        db, line_id=line_id, product_id=product_id,
+    )
+    return success_response(data=[i.model_dump(mode="json") for i in items])
+
+
+@router.post("/line-products", summary="绑定产品到产线")
+async def create_line_product_link(
+    body: LineProductLinkCreate,
+    user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+):
+    item = await line_service.bind_product_line(
+        db, line_id=body.line_id, product_id=body.product_id,
+        created_by=user.id,
+    )
+    return success_response(data=item.model_dump(mode="json"))
+
+
+@router.delete("/line-products/{link_id}", summary="解除产线产品关联")
+async def delete_line_product_link(
+    link_id: uuid.UUID,
+    _user: User = Depends(_manage),
+    db: AsyncSession = Depends(get_db),
+):
+    await line_service.unbind_product_line(db, link_id)
     return success_response()

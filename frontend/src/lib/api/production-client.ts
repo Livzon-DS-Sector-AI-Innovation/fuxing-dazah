@@ -8,6 +8,7 @@ import type {
   MaterialMovements,
   MixingContainer,
   NodeExecutionListItem,
+  ProcessBoardData,
   ProcessRoute,
   Product,
   ProductionBatch,
@@ -35,6 +36,7 @@ export async function fetchProductsClient(keyword?: string): Promise<Product[]> 
 
 export async function fetchIntermediateTypesClient(params: {
   keyword?: string
+  product_id?: string
   page?: number
   page_size?: number
 } = {}): Promise<{ items: IntermediateType[]; total: number }> {
@@ -42,6 +44,7 @@ export async function fetchIntermediateTypesClient(params: {
     page: params.page ?? 1,
     page_size: params.page_size ?? 100,
     keyword: params.keyword ?? null,
+    product_id: params.product_id ?? null,
   })
   return apiFetchPaginated<IntermediateType>(
     `${API_BASE}/api/v1/production/intermediate-types?${s}`,
@@ -88,6 +91,14 @@ export async function fetchRoutesClient(productId?: string, status?: string): Pr
 
 export async function fetchRouteGraphClient(routeId: string): Promise<RouteGraph> {
   return apiGet<RouteGraph>(`${API_BASE}/api/v1/production/routes/${routeId}`)
+}
+
+export async function fetchProcessBoardClient(
+  routeId: string,
+): Promise<ProcessBoardData> {
+  return apiGet<ProcessBoardData>(
+    `${API_BASE}/api/v1/production/routes/${routeId}/process-board`,
+  )
 }
 
 export async function fetchBatchesClient(params: {

@@ -26,6 +26,7 @@ __all__ = [
     "list_plan_orders",
     "get_plan_item",
     "list_plan_items",
+    "list_released_plan_batches_by_route",
     "get_plan_items_by_ids",
     "get_max_item_no",
     "list_plan_items_schedule_view",
@@ -178,6 +179,41 @@ async def list_plan_items(db: AsyncSession, plan_order_id: uuid.UUID) -> list[Pl
         .order_by(PlanItem.planned_start.asc().nulls_last(), PlanItem.sort_order, PlanItem.item_no)
     )
     return list((await db.execute(stmt)).scalars())
+
+
+async def list_released_plan_batches_by_route(
+    db: AsyncSession, route_id: uuid.UUID
+) -> list[tuple[Batch, PlanItem, str, int]]:
+    """工序看板计划批次：路线下"已分配未执行"的实际批次与其计划来源。
+
+    经 PlanAllocation → Batch 取实际创建的批次（批号以 Batch.batch_no 为准，
+    下达时可能经 _ensure_unique_batch_no 去重改写），过滤条件：
+    - 计划单已下达（released）
+    - 计划项已分配且未开工（item.status == 'allocated'）
+    - 计划项匹配该路线
+
+    返回 (批次, 计划项, 计划单号, 计划版本)，按计划开始时间升序（nulls last）再行号排序。
+    """
+    stmt = (
+        select(Batch, PlanItem, PlanOrder.order_no, PlanOrder.plan_version)
+        .join(PlanAllocation, PlanAllocation.batch_id == Batch.id)
+        .join(PlanItem, PlanItem.id == PlanAllocation.plan_item_id)
+        .join(PlanOrder, PlanOrder.id == PlanItem.plan_order_id)
+        .where(
+            PlanItem.route_id == route_id,
+            PlanItem.status == "allocated",
+            Batch.is_deleted == False,  # noqa: E712
+            PlanItem.is_deleted == False,  # noqa: E712
+            PlanOrder.status == "released",
+            PlanOrder.is_deleted == False,  # noqa: E712
+        )
+        .order_by(
+            PlanItem.planned_start.asc().nulls_last(),
+            PlanItem.item_no,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
 
 
 async def get_plan_items_by_ids(db: AsyncSession, item_ids: list[uuid.UUID]) -> list[PlanItem]:

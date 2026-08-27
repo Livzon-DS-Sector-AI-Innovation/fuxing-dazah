@@ -26,6 +26,12 @@ from app.modules.production.schemas.batch import (
     MergeIn,
     MergeParentIn,
 )
+from app.modules.production.schemas.board import (
+    ProcessBoardExecutionOut,
+    ProcessBoardNodeOut,
+    ProcessBoardOut,
+    ProcessBoardPlannedItemOut,
+)
 from app.modules.production.schemas.equipment import EquipmentOptionOut
 from app.modules.production.schemas.execution import (
     EquipmentSnapshotOut,
@@ -132,6 +138,10 @@ __all__ = [
     "FieldDefOut",
     "FieldValueIn",
     "FieldValueOut",
+    "ProcessBoardExecutionOut",
+    "ProcessBoardNodeOut",
+    "ProcessBoardOut",
+    "ProcessBoardPlannedItemOut",
     "IntermediateConsumptionIn",
     "IntermediateConsumptionOut",
     "IntermediateOutputIn",
