@@ -925,6 +925,7 @@ class JobRequirementCreate(BaseModel):
     department: str = Field(..., max_length=64)
     headcount: int = Field(default=1, ge=1)
     requirements: str | None = None
+    duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     urgency: str | None = Field(None, max_length=8, description="紧急/普通")
     owner: str | None = Field(None, max_length=64)
     deadline: date | None = None
@@ -935,6 +936,7 @@ class JobRequirementUpdate(BaseModel):
     department: str | None = Field(None, max_length=64)
     headcount: int | None = Field(None, ge=1)
     requirements: str | None = None
+    duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     status: str | None = Field(None, max_length=16)
     urgency: str | None = Field(None, max_length=8)
     owner: str | None = Field(None, max_length=64)

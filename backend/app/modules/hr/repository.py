@@ -216,6 +216,8 @@ class EmployeeRepository:
         from sqlalchemy.exc import IntegrityError
 
         insert_data = {k: v for k, v in data.items() if v is not None}
+        # 新员工无状态字段时默认「在职」（Excel 导入缺状态列的场景；更新路径不写该字段以保留原状态）
+        insert_data.setdefault("status", "在职")
 
         # ── 构建 SET 子句（UPDATE 含 None 值 → NULL）──
         # 注意：不在此处复活软删除员工（is_deleted=false 由显式恢复流程处理）

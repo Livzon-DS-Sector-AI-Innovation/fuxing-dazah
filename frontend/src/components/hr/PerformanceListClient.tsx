@@ -15,7 +15,6 @@ const STATUS_MAP: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
   self_submitted: { color: 'blue', label: '待领导评分' },
   leader_scored: { color: 'green', label: '已完成' },
-  confirmed: { color: 'purple', label: '已确认' },
 }
 
 export default function PerformanceListClient() {
@@ -99,7 +98,7 @@ export default function PerformanceListClient() {
       <Space className="mb-4" wrap>
         <DatePicker picker="month" value={month ? dayjs(month) : null} onChange={(d) => setMonth(d ? d.format('YYYY-MM') : '')} allowClear placeholder="按月份筛选" />
         <Select value={status || undefined} onChange={(v) => setStatus(v || '')} allowClear placeholder="按状态筛选" style={{ width: 140 }}
-          options={[{value:'draft',label:'草稿'},{value:'self_submitted',label:'待领导评分'},{value:'leader_scored',label:'已完成'},{value:'confirmed',label:'已确认'}]} />
+          options={[{value:'draft',label:'草稿'},{value:'self_submitted',label:'待领导评分'},{value:'leader_scored',label:'已完成'}]} />
         <Button icon={<ReloadOutlined />} onClick={loadData}>刷新</Button>
         {mode === 'all' && <Button icon={<PlusOutlined />} onClick={handleAutoCreate}>批量生成当月考核</Button>}
         <Button onClick={() => router.push('/hr/performance/score')}>批量项目评分</Button>

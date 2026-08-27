@@ -199,6 +199,8 @@ def _resource_for_path(path: str, method: str) -> str | None:
     for pattern, val in _HR_PATH_PERMISSIONS:
         if re.search(pattern, path):
             code = val.get(method) or val.get("*") if isinstance(val, dict) else val
+            if isinstance(code, (tuple, list)):
+                code = code[0]
             if code and ":" in code:
                 return code.split(":")[1]
             return None
@@ -306,13 +308,14 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str]]] = [
                                    "POST": "hr:performance:manage",
                                    "PUT": "hr:performance:manage",
                                    "DELETE": "hr:performance:manage"}),
-    # 员工标签 / 员工自定义分类（写操作需档案管理权限）
+    # 员工标签 / 员工自定义分类（写操作：档案管理 或 培训管理 任一即可，
+    # 分类是培训流程（二级表联动）的载体，培训管理员应有管理权限）
     (r"/employee-tags", {"GET": "hr:profile:read",
-                         "POST": "hr:profile:update",
-                         "DELETE": "hr:profile:update"}),
+                         "POST": ("hr:profile:update", "hr:training:manage"),
+                         "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/employee-classifications", {"GET": "hr:profile:read",
-                                    "POST": "hr:profile:update",
-                                    "DELETE": "hr:profile:update"}),
+                                    "POST": ("hr:profile:update", "hr:training:manage"),
+                                    "DELETE": ("hr:profile:update", "hr:training:manage")}),
     (r"/sop-catalog", {"GET": "hr:training:read", "POST": "hr:training:manage",
                        "PUT": "hr:training:manage", "DELETE": "hr:training:manage"}),
     # SOP培训文件登记表（查看/编辑对所有人开放）
@@ -430,8 +433,10 @@ async def require_hr_basic(
                 required_perm = val
             break
 
-    if required_perm and required_perm not in perms:
-        raise ForbiddenException(f"缺少权限: {required_perm}")
+    if required_perm:
+        allowed = (required_perm,) if isinstance(required_perm, str) else required_perm
+        if not any(c in perms for c in allowed):
+            raise ForbiddenException(f"缺少权限: {required_perm}")
 
     # 未匹配到的路径，有任意 hr: 权限即可
     if not any(p.startswith("hr:") for p in perms):

@@ -434,14 +434,14 @@ class EmployeeService:
                             data["birth_day"] = parsed_date.day
                         continue  # 不把 _birth_date 本身写入 data
                     elif field_name == "status":
-                        # 规范化人员状态：'—' 或空 → 默认为在职
+                        # 规范化人员状态：'—'/空/未知值 → 不写入（更新保留原状态，
+                        # 新员工由 upsert INSERT 分支默认「在职」）
                         val_str = str(val).strip()
                         if val_str in ("—", "——", "-", "", "无"):
-                            continue  # 跳过，后续默认设为"在职"
+                            continue
                         if val_str in ("在职", "离职", "待审批", "病假", "产假", "产假复岗"):
                             val = val_str
                         else:
-                            # 未知状态值，跳过（保留默认"在职"）
                             continue
                     data[field_name] = val
 
@@ -454,8 +454,8 @@ class EmployeeService:
 
                 if "hire_date" not in data:
                     data["hire_date"] = date.today()
-                if "status" not in data:
-                    data["status"] = "在职"
+                # 状态列缺失/为空时不再默认「在职」：已有员工保留原状态（病假/产假不被覆盖），
+                # 新员工由 upsert INSERT 分支默认「在职」
 
                 # ── Excel 没有的字段全部置空，确保完全以 Excel 为准 ──
                 for field in self._EXCEL_RESETTABLE_FIELDS:
@@ -2584,8 +2584,13 @@ class CandidateAnalysisService:
         jd_text = ""
         if interview.job_requirement_id:
             jd = await JobRequirementRepository(self.session).get_by_id(interview.job_requirement_id)
-            if jd and jd.requirements:
-                jd_text = jd.requirements
+            if jd:
+                jd_parts = []
+                if jd.duties:
+                    jd_parts.append(f"岗位职责：{jd.duties}")
+                if jd.requirements:
+                    jd_parts.append(f"任职要求：{jd.requirements}")
+                jd_text = "\n".join(jd_parts)
 
         resume_parts = [
             f"姓名：{candidate.name}",

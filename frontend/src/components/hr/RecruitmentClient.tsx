@@ -131,6 +131,7 @@ export default function RecruitmentClient() {
       department: v.department || parts[0],
       headcount: v.headcount ?? 1,
       requirements: v.requirements || undefined,
+      duties: v.duties || undefined,
       urgency: v.urgency || undefined,
       owner: v.owner || undefined,
       deadline: v.deadline ? dayjs(v.deadline).format('YYYY-MM-DD') : undefined,
@@ -542,6 +543,7 @@ export default function RecruitmentClient() {
           <Form.Item name="department" hidden><Input /></Form.Item>
           <Form.Item name="headcount" label="招聘人数"><InputNumber min={1} /></Form.Item>
           <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={4} /></Form.Item>
+          <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={3} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
           <Form.Item name="owner" label="招聘负责人"><Input placeholder="可选" /></Form.Item>
           <Form.Item name="urgency" label="紧急程度">
             <Select options={[{ label: '普通', value: '普通' }, { label: '紧急', value: '紧急' }]} allowClear />
