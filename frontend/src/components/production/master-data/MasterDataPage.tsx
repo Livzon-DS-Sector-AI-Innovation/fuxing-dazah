@@ -30,6 +30,7 @@ import {
   updateIntermediateType,
   deleteIntermediateType,
   fetchLines,
+  fetchLineProducts,
 } from '@/actions/production'
 import {
   fetchProductsClient,
@@ -202,6 +203,39 @@ function ProductDetail({ product }: { product: Product }) {
     enabled: !!product.id,
   })
 
+  // 关联产出物（中间体字典中 product_id 指向该产品）
+  const { data: intermediates } = useQuery({
+    queryKey: ['intermediate-types-by-product', product.id],
+    // 后端 page_size 上限 100 且表格无分页，翻页取全避免静默截断
+    queryFn: async () => {
+      const pageSize = 100
+      const result = await fetchIntermediateTypesClient({
+        product_id: product.id, page_size: pageSize,
+      })
+      let page = 2
+      while (result.items.length < result.total) {
+        const more = await fetchIntermediateTypesClient({
+          product_id: product.id, page_size: pageSize, page,
+        })
+        result.items.push(...more.items)
+        page += 1
+      }
+      return result
+    },
+    enabled: !!product.id,
+  })
+
+  // 关联产线（产线-产品关联反向查）
+  const { data: lineLinks } = useQuery({
+    queryKey: ['line-products-by-product', product.id],
+    queryFn: async () => {
+      const r = await fetchLineProducts({ productId: product.id })
+      if (!r.success) throw new Error(r.error ?? '获取失败')
+      return r.data ?? []
+    },
+    enabled: !!product.id,
+  })
+
   const routeColumns: ColumnsType<{ id: string; route_name: string; status: string }> = [
     { title: '路线名称', dataIndex: 'route_name', key: 'route_name' },
     {
@@ -221,6 +255,25 @@ function ProductDetail({ product }: { product: Product }) {
     },
   ]
 
+  const intermediateColumns: ColumnsType<IntermediateType> = [
+    { title: '编码', dataIndex: 'code', key: 'code', width: 120 },
+    { title: '名称', dataIndex: 'name', key: 'name' },
+    {
+      title: '分类',
+      dataIndex: 'category',
+      key: 'category',
+      width: 110,
+      render: (v: string | null) => v || '—',
+    },
+    {
+      title: '成品',
+      dataIndex: 'is_product',
+      key: 'is_product',
+      width: 70,
+      render: (v: boolean) => (v ? <Tag color="green" style={{ margin: 0, fontSize: 11, lineHeight: '18px' }}>是</Tag> : '—'),
+    },
+  ]
+
   return (
     <div>
       <div style={{ marginBottom: 24, paddingBottom: 16, borderBottom: '1px solid #e5e3df' }}>
@@ -233,6 +286,7 @@ function ProductDetail({ product }: { product: Product }) {
           <div style={{ fontSize: 13, color: '#787671', marginTop: 8 }}>{product.remark}</div>
         )}
       </div>
+
       <Text strong style={{ fontSize: 14, display: 'block', marginBottom: 8 }}>关联工艺路线</Text>
       <Table
         dataSource={routes ?? []}
@@ -242,6 +296,31 @@ function ProductDetail({ product }: { product: Product }) {
         pagination={false}
         locale={{ emptyText: <Empty description="暂无工艺路线" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
       />
+
+      <Text strong style={{ fontSize: 14, display: 'block', margin: '20px 0 8px' }}>关联产出物</Text>
+      <Table
+        dataSource={intermediates?.items ?? []}
+        columns={intermediateColumns}
+        rowKey="id"
+        size="small"
+        pagination={false}
+        locale={{ emptyText: <Empty description="暂无关联产出物" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+      />
+
+      <Text strong style={{ fontSize: 14, display: 'block', margin: '20px 0 8px' }}>关联产线</Text>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {(lineLinks ?? []).map(l => (
+          <Tag
+            key={l.id}
+            style={{ margin: 0, fontSize: 12, borderRadius: 6, padding: '0 8px', lineHeight: '24px' }}
+          >
+            {l.line_name ?? '—'}
+          </Tag>
+        ))}
+        {(lineLinks ?? []).length === 0 && (
+          <Empty description="暂无关联产线" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ margin: '8px auto' }} />
+        )}
+      </div>
     </div>
   )
 }

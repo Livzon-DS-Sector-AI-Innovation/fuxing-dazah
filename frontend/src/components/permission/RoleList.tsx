@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons'
 import { RoleForm } from './RoleForm'
 import { deleteRole, assignRoleToUser, removeRoleFromUser, assignRoleToDepartment, removeRoleFromDepartment } from '@/actions/permission'
-import { fetchRoleUsers, fetchRoleDepartments, fetchDepartments } from '@/lib/api/permission'
+import { fetchRoles, fetchRoleUsers, fetchRoleDepartments, fetchDepartments } from '@/lib/api/permission'
 import { UserSelect } from '@/components/shared'
 import type { Role, PermissionModuleGroup, DataScope, RoleUser, DepartmentRole, DepartmentItem } from '@/types/permission'
 
@@ -91,6 +91,16 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
       router.refresh()
     } catch {
       message.error('删除失败')
+    }
+  }
+
+  // 新建/编辑成功后重取角色列表并写入本地 state，让新角色（或改动）立即出现在卡片网格中。
+  // router.refresh() 只刷新服务端 props，不会更新这里 useState 初始化的 roles，所以需要单独重取。
+  const refreshRoles = async () => {
+    try {
+      setRoles(await fetchRoles(apiToken))
+    } catch {
+      message.error('刷新角色列表失败')
     }
   }
 
@@ -517,7 +527,7 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
       <RoleForm
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        onSuccess={() => {}}
+        onSuccess={() => { void refreshRoles() }}
         role={editingRole}
         permissionGroups={permissionGroups}
       />

@@ -18,7 +18,7 @@ from app.modules.production.models.intermediate import (
     MixingContainer,
     RouteNodeIntermediate,
 )
-from app.modules.production.models.line import Line, LineAssignment
+from app.modules.production.models.line import Line, LineAssignment, LineProductLink
 from app.modules.production.models.planning import (
     Demand,
     DemandAllocation,
@@ -45,6 +45,7 @@ __all__ = [
     "IntermediateType",
     "Line",
     "LineAssignment",
+    "LineProductLink",
     "MixingContainer",
     "NodeAssignment",
     "NodeExecution",

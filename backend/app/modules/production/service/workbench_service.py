@@ -33,6 +33,11 @@ from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
     start_execution,
 )
+
+# 工段顺序提取已上提为 route_service 公开函数，保留旧名供模块内调用
+from app.modules.production.service.route_service import (
+    build_stage_order as _build_stage_order,
+)
 from app.platform.identity.models import User
 
 
@@ -115,16 +120,6 @@ def _build_stage_nodes(
 
 
 # ── 计划批次辅助 ──
-
-
-def _build_stage_order(nodes: list[RouteNode]) -> list[str]:
-    """从路线节点提取有序工段列表（按 sort_order 首次出现顺序）。"""
-    seen: dict[str, int] = {}
-    for n in sorted(nodes, key=lambda n: n.sort_order):
-        sn = n.stage_name or "未分组"
-        if sn not in seen:
-            seen[sn] = n.sort_order
-    return sorted(seen.keys(), key=lambda s: seen[s])
 
 
 def _calc_stage_times(

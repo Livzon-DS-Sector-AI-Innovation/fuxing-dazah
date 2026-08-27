@@ -1,4 +1,4 @@
-"""节点执行实例层 ORM：执行 / 设备快照 / 字段值。"""
+"""工序节点执行实例层 ORM：执行 / 设备快照 / 字段值。"""
 
 import uuid
 from datetime import datetime
@@ -34,7 +34,7 @@ class NodeExecution(BaseModel):
     batch_id: Mapped[uuid.UUID] = mapped_column(comment="批次")
     node_id: Mapped[uuid.UUID] = mapped_column(comment="工序节点")
     execution_seq: Mapped[int] = mapped_column(
-        default=1, comment="同批次同节点第几次执行"
+        default=1, comment="同批次同工序节点第几次执行"
     )
     status: Mapped[str] = mapped_column(
         String(20), default="in_progress", comment="in_progress/completed/aborted"

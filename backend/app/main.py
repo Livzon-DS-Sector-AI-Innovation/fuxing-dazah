@@ -142,6 +142,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
     scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
 
+    from app.modules.production.scheduled import BATCH_START_REMINDER_TASK
+    scheduler_registry.register_task(BATCH_START_REMINDER_TASK)
+
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
 

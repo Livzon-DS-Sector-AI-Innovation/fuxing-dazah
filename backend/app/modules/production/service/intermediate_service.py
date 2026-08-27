@@ -151,10 +151,12 @@ async def list_intermediate_types_paged(
     page_size: int,
     *,
     include_deleted: bool = False,
+    product_id: uuid.UUID | None = None,
 ) -> tuple[list[IntermediateTypeOut], int]:
     """分页查询中间体类型，批量补全 product_name。"""
     items, total = await repo.list_intermediate_types(
         db, keyword, page, page_size, include_deleted=include_deleted,
+        product_id=product_id,
     )
     product_ids = [i.product_id for i in items if i.product_id]
     product_name_map: dict[uuid.UUID, str] = {}

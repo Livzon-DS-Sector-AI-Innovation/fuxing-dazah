@@ -1,4 +1,4 @@
-"""工段节点负责人分配 ORM。"""
+"""工段与工序节点负责人分配 ORM（StageAssignment / NodeAssignment）。"""
 
 import uuid
 

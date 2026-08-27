@@ -1,11 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Empty, Form, Input, Modal, Tag, Typography } from 'antd'
+import { App, Button, Empty, Form, Input, Modal, Select, Tag, Typography } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { UserSelect } from '@/components/shared'
 import { fetchIdentityPersonnel } from '@/lib/api/identity'
+import { fetchProductsClient } from '@/lib/api/production-client'
 import {
   fetchLines,
   createLine,
@@ -14,6 +15,9 @@ import {
   fetchLineAssignments,
   bindLineAssignment,
   unbindLineAssignment,
+  fetchLineProducts,
+  bindLineProduct,
+  unbindLineProduct,
 } from '@/actions/production'
 import type { Line } from '@/types/production'
 
@@ -204,6 +208,126 @@ function LineBindArea({ lineId, canManage }: { lineId: string; canManage: boolea
   )
 }
 
+// ── 产品关联区（卡片内嵌） ──
+
+function LineProductArea({ lineId, canManage }: { lineId: string; canManage: boolean }) {
+  const { message } = App.useApp()
+  const queryClient = useQueryClient()
+  const [adding, setAdding] = useState(false)
+
+  const { data: links } = useQuery({
+    queryKey: ['production-line-products', lineId],
+    queryFn: async () => {
+      const r = await fetchLineProducts({ lineId })
+      if (!r.success) throw new Error(r.error ?? '获取失败')
+      return r.data ?? []
+    },
+  })
+
+  // 服务端搜索：产品列表按页上限 100 条，本地过滤够不到第 2 页，
+  // 关键字下推后端才能选到任意产品。key 挂在 ['production-products'] 前缀下，
+  // 产品增删改的既有 invalidateQueries(['production-products']) 会一并刷新此下拉
+  const [productKeyword, setProductKeyword] = useState('')
+  const { data: products } = useQuery({
+    queryKey: ['production-products', 'all', productKeyword],
+    queryFn: () => fetchProductsClient(productKeyword || undefined),
+    staleTime: 60_000,
+  })
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['production-line-products', lineId] })
+  }
+
+  const handleAdd = async (productId: string) => {
+    const result = await bindLineProduct({ product_id: productId, line_id: lineId })
+    if (result.success) {
+      invalidate()
+    } else {
+      message.error(result.error ?? '关联失败')
+    }
+  }
+
+  const handleRemove = async (linkId: string) => {
+    const result = await unbindLineProduct(linkId)
+    if (result.success) {
+      invalidate()
+    } else {
+      message.error(result.error ?? '移除失败')
+    }
+  }
+
+  const list = links ?? []
+
+  return (
+    <div style={{ borderTop: '1px solid #ede9e4', paddingTop: 12, marginTop: 14 }}>
+      <div style={{ fontSize: 11, color: '#a4a097', letterSpacing: 0.4, marginBottom: 8 }}>
+        关联产品
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minHeight: 26 }}>
+        {list.map(l => (
+          <Tag
+            key={l.id}
+            closable={canManage}
+            onClose={e => {
+              e.preventDefault()
+              handleRemove(l.id)
+            }}
+            style={{
+              margin: 0,
+              fontSize: 12,
+              fontWeight: 500,
+              borderRadius: 6,
+              padding: '0 8px',
+              lineHeight: '24px',
+              background: '#e3f2ea',
+              color: '#175238',
+              border: 'none',
+            }}
+          >
+            {l.product_name ?? '—'}
+          </Tag>
+        ))}
+        {list.length === 0 && (
+          <span style={{ fontSize: 12.5, color: '#a4a097' }}>
+            {canManage ? '尚未关联产品' : '暂无产品'}
+          </span>
+        )}
+        {canManage && (
+          adding ? (
+            <Select
+              size="small"
+              style={{ width: 160 }}
+              placeholder="选择产品"
+              showSearch={{
+                filterOption: false,
+                onSearch: setProductKeyword,
+              }}
+              autoFocus
+              options={(products ?? [])
+                .filter(p => !list.some(l => l.product_id === p.id))
+                .map(p => ({ value: p.id, label: p.product_name }))}
+              onSelect={productId => {
+                handleAdd(productId)
+                setAdding(false)
+              }}
+              onBlur={() => setAdding(false)}
+            />
+          ) : (
+            <Button
+              type="dashed"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={() => setAdding(true)}
+            >
+              添加
+            </Button>
+          )
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── 产线卡片 ──
 
 function LineCard({
@@ -312,6 +436,9 @@ function LineCard({
       {/* 人员绑定区 */}
       <LineBindArea lineId={line.id} canManage={canManage} />
 
+      {/* 产品关联区 */}
+      <LineProductArea lineId={line.id} canManage={canManage} />
+
       {/* 底部操作区 */}
       {canManage && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, borderTop: '1px solid #ede9e4', padding: '8px 0 12px', marginTop: 12 }}>
@@ -344,7 +471,7 @@ export function LinesTab({ canManage }: { canManage: boolean }) {
   const handleDelete = (line: Line) => {
     modal.confirm({
       title: `删除产线「${line.name}」?`,
-      content: '删除后其名下人员绑定将同步解除，历史流水仍会显示该产线名称。',
+      content: '删除后其名下人员绑定与产品关联将同步解除，历史流水仍会显示该产线名称。',
       okText: '删除',
       okButtonProps: { danger: true },
       cancelText: '取消',

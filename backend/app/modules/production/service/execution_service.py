@@ -3,6 +3,8 @@
 import math
 import uuid
 from collections import defaultdict
+from datetime import datetime
+from typing import cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,11 +24,17 @@ from app.modules.production.models import (
     NodeFieldValue,
 )
 from app.modules.production.schemas import (
+    EquipmentSnapshotOut,
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
+    FieldValueOut,
     MissingFieldOut,
     NodeExecutionListItem,
+    ProcessBoardExecutionOut,
+    ProcessBoardNodeOut,
+    ProcessBoardOut,
+    ProcessBoardPlannedItemOut,
 )
 from app.modules.production.service.assignment_service import require_operator_access
 from app.modules.production.service.intermediate_service import (
@@ -34,6 +42,9 @@ from app.modules.production.service.intermediate_service import (
 )
 from app.modules.production.service.line_service import resolve_user_line_ids
 from app.modules.production.service.planning_service import sync_plan_item_status
+from app.modules.production.service.reminder_service import (
+    schedule_step_completed_notification,
+)
 from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
@@ -662,6 +673,8 @@ async def complete_execution(
     refreshed = await repo.get_execution(db, execution_id)
     assert refreshed is not None
     await sync_plan_item_status(db, execution.batch_id)
+    # 飞书提醒：下一工序负责人（最后一道工序自动跳过；后台尽力而为）
+    schedule_step_completed_notification(batch.id, execution.id, execution.node_id)
     return refreshed
 
 
@@ -781,10 +794,7 @@ async def list_node_executions(
     batches = await repo.get_batches_by_ids(db, list({e.batch_id for e in executions}))
     batch_no_map = {b.id: b.batch_no for b in batches}
     values = await repo.get_field_values_by_executions(db, [e.id for e in executions])
-    abnormal: dict[uuid.UUID, int] = {}
-    for v in values:
-        if v.is_abnormal:
-            abnormal[v.execution_id] = abnormal.get(v.execution_id, 0) + 1
+    abnormal = _count_abnormal(values)
     items = [
         NodeExecutionListItem(
             id=e.id,
@@ -801,3 +811,156 @@ async def list_node_executions(
         for e in executions
     ]
     return items, total
+
+
+def _count_abnormal(values: list[NodeFieldValue]) -> dict[uuid.UUID, int]:
+    """执行 → 异常字段数（仅统计 is_abnormal 的字段值）。"""
+    abnormal: dict[uuid.UUID, int] = {}
+    for v in values:
+        if v.is_abnormal:
+            abnormal[v.execution_id] = abnormal.get(v.execution_id, 0) + 1
+    return abnormal
+
+
+async def get_process_board(
+    db: AsyncSession, route_id: uuid.UUID
+) -> ProcessBoardOut:
+    """工序流程看板：路线全部节点 + 计划批次列 + 各节点上"当前位置"的未完成批次。
+
+    工序列按批次当前位置归组：
+    - 有 in_progress 执行 → 归入该执行所在节点（正在做）；
+    - 无 in_progress 但批次整体未完成 → 归入最近一次已结束执行所在节点（刚做完、等待流转）；
+    - 批次整体 completed/cancelled 不展示。
+    组内按该节点最近一次活动时间降序。字段/设备随板返回，hover 即时渲染。
+    """
+    route = await repo.get_route(db, route_id)
+    if not route:
+        raise NotFoundException("工艺路线", str(route_id))
+    nodes = await repo.get_route_nodes(db, route_id)
+    node_ids = {n.id for n in nodes}
+
+    batches = await repo.list_active_batches_by_route(db, route_id)
+    batch_ids = [b.id for b in batches]
+
+    # 只取本路线节点上的执行（node_id 过滤下推 SQL，避免整表拉取）
+    executions = await repo.list_executions_by_batches(
+        db, batch_ids, node_ids=list(node_ids),
+    )
+    execs_by_batch: dict[uuid.UUID, list[NodeExecution]] = defaultdict(list)
+    for e in executions:
+        execs_by_batch[e.batch_id].append(e)
+
+    # 先在内存中确定各批次锚点执行，再只按锚点查询字段值/设备
+    columns: dict[uuid.UUID, list[ProcessBoardExecutionOut]] = {
+        n.id: [] for n in nodes
+    }
+    anchors: list[tuple[Batch, NodeExecution, str]] = []
+    for batch in batches:
+        bexecs = execs_by_batch.get(batch.id, [])
+        if not bexecs:
+            continue  # 未到任何工序
+        by_node: dict[uuid.UUID, list[NodeExecution]] = defaultdict(list)
+        for e in bexecs:
+            by_node[e.node_id].append(e)
+        # 当前位置：优先取进行中的执行节点；否则取最近一次已结束执行所在节点（等待流转）
+        active: dict[uuid.UUID, NodeExecution] = {}
+        for nid, es in by_node.items():
+            running = [e for e in es if e.status == "in_progress"]
+            if running:
+                active[nid] = max(running, key=lambda e: e.started_at)
+        if active:
+            for nid, anchor in active.items():
+                anchors.append((batch, anchor, "in_progress"))
+        else:
+            finished = [e for e in bexecs if e.finished_at is not None]
+            if not finished:
+                continue
+            # finished 已过滤非空，cast 仅为满足 mypy 收窄
+            anchor = max(finished, key=lambda e: cast(datetime, e.finished_at))
+            state = "aborted" if anchor.status == "aborted" else "waiting"
+            anchors.append((batch, anchor, state))
+
+    anchor_ids = [a.id for _, a, _ in anchors]
+    values = await repo.get_field_values_by_executions(db, anchor_ids)
+    abnormal = _count_abnormal(values)
+    equipments = await repo.get_equipments_by_executions(db, anchor_ids)
+    eq_map: dict[uuid.UUID, list[EquipmentSnapshotOut]] = defaultdict(list)
+    for eq in equipments:
+        eq_map[eq.execution_id].append(
+            EquipmentSnapshotOut(
+                equipment_id=eq.equipment_id,
+                equipment_no=eq.equipment_no,
+                equipment_name=eq.equipment_name,
+            )
+        )
+    fv_map: dict[uuid.UUID, list[FieldValueOut]] = defaultdict(list)
+    for v in values:
+        fv_map[v.execution_id].append(FieldValueOut.model_validate(v))
+
+    for batch, anchor, state in anchors:
+        columns[anchor.node_id].append(
+            ProcessBoardExecutionOut(
+                execution_id=anchor.id,
+                batch_id=batch.id,
+                batch_no=batch.batch_no,
+                execution_seq=anchor.execution_seq,
+                status=anchor.status,
+                board_state=state,
+                owner_name=anchor.owner_name,
+                started_at=anchor.started_at,
+                finished_at=anchor.finished_at,
+                is_deviation=anchor.is_deviation,
+                abnormal_count=abnormal.get(anchor.id, 0),
+                batch_status=batch.status,
+                batch_quantity=batch.quantity,
+                batch_unit=batch.unit,
+                equipments=eq_map.get(anchor.id, []),
+                field_values=fv_map.get(anchor.id, []),
+            )
+        )
+
+    for items in columns.values():
+        # 组内按节点最近一次活动时间降序（最新在上）
+        items.sort(key=lambda i: i.finished_at or i.started_at, reverse=True)
+
+    planned: list[ProcessBoardPlannedItemOut] = []
+    for batch, item, order_no, plan_version in (
+        await repo.list_released_plan_batches_by_route(db, route_id)
+    ):
+        planned.append(
+            ProcessBoardPlannedItemOut(
+                batch_id=batch.id,
+                batch_no=batch.batch_no,
+                batch_status=batch.status,
+                plan_order_id=item.plan_order_id,
+                order_no=order_no,
+                plan_version=plan_version,
+                item_id=item.id,
+                item_no=item.item_no,
+                planned_quantity=batch.quantity,
+                unit=batch.unit,
+                planned_start=item.planned_start,
+                planned_end=item.planned_end,
+                item_status=item.status,
+                priority=item.priority,
+                equipment_id=item.equipment_id,
+            )
+        )
+
+    return ProcessBoardOut(
+        route_id=route.id,
+        route_name=route.route_name,
+        route_status=route.status,
+        nodes=[
+            ProcessBoardNodeOut(
+                id=n.id,
+                node_code=n.node_code,
+                name=n.name,
+                stage_name=n.stage_name,
+                sort_order=n.sort_order,
+            )
+            for n in nodes
+        ],
+        planned=planned,
+        columns=columns,
+    )

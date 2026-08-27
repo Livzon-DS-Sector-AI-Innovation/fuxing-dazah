@@ -1,4 +1,8 @@
-"""工艺路线模板层 ORM：路线 / 节点 / 边 / 字段定义。"""
+"""工艺路线模板层 ORM：路线 / 节点 / 边 / 字段定义。
+
+本模块中「节点」(node) 即工序：RouteNode 为工序节点（name=工序名称），
+现阶段 node_type 恒为 process，预留图节点扩展。
+"""
 
 import uuid
 
@@ -63,7 +67,7 @@ class RouteNode(BaseModel):
     )
 
     route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
-    node_code: Mapped[str] = mapped_column(String(50), comment="节点编码，路线内唯一")
+    node_code: Mapped[str] = mapped_column(String(50), comment="工序节点编码，路线内唯一")
     name: Mapped[str] = mapped_column(String(200), comment="工序名称")
     stage_name: Mapped[str] = mapped_column(
         String(100), comment="工序所属工段分组标签（如发酵/提炼/精制）"
@@ -102,8 +106,8 @@ class RouteEdge(BaseModel):
     )
 
     route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
-    from_node_id: Mapped[uuid.UUID] = mapped_column(comment="起始节点")
-    to_node_id: Mapped[uuid.UUID] = mapped_column(comment="目标节点")
+    from_node_id: Mapped[uuid.UUID] = mapped_column(comment="起始工序节点")
+    to_node_id: Mapped[uuid.UUID] = mapped_column(comment="目标工序节点")
     edge_type: Mapped[str] = mapped_column(
         String(20), default="normal", comment="normal/rework"
     )
@@ -119,7 +123,7 @@ class RouteEdge(BaseModel):
 
 
 class NodeFieldDef(BaseModel):
-    """节点字段定义（动态表单的定义半边）"""
+    """工序节点字段定义（动态表单的定义半边）"""
 
     __tablename__ = "node_field_defs"
     __table_args__ = (
@@ -141,8 +145,8 @@ class NodeFieldDef(BaseModel):
         {"schema": "production"},
     )
 
-    node_id: Mapped[uuid.UUID] = mapped_column(comment="所属节点")
-    field_key: Mapped[str] = mapped_column(String(50), comment="字段键，节点内唯一")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="所属工序节点")
+    field_key: Mapped[str] = mapped_column(String(50), comment="字段键，工序节点内唯一")
     field_label: Mapped[str] = mapped_column(String(100), comment="显示名")
     field_group: Mapped[str | None] = mapped_column(
         String(50), nullable=True, comment="分组标签：过程检测/产出物/物料消耗（未来）"
@@ -170,7 +174,7 @@ class NodeFieldDef(BaseModel):
 class RouteComputedField(BaseModel):
     """路线级计算字段定义（模板层，查询时动态求值，不物化）。
 
-    node_id 为展示归属节点：计算字段展示在该工序下，引用语法统一为 {node_code.field_key}。
+    node_id 为展示归属工序节点：计算字段展示在该工序下，引用语法统一为 {node_code.field_key}。
     """
 
     __tablename__ = "route_computed_fields"
@@ -187,7 +191,7 @@ class RouteComputedField(BaseModel):
     )
 
     route_id: Mapped[uuid.UUID] = mapped_column(comment="所属路线")
-    node_id: Mapped[uuid.UUID] = mapped_column(comment="展示归属节点")
+    node_id: Mapped[uuid.UUID] = mapped_column(comment="展示归属工序节点")
     field_key: Mapped[str] = mapped_column(
         String(50), comment="字段键，路线内唯一，可被其他计算字段引用"
     )

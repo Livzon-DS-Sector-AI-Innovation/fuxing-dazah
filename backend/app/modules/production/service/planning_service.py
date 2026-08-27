@@ -46,6 +46,9 @@ from app.modules.production.schemas.planning import (
     ScheduleViewItem,
     TraceNode,
 )
+from app.modules.production.service.reminder_service import (
+    schedule_plan_released_notification,
+)
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
@@ -416,6 +419,7 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
             message=f"以下计划项未排程: {[i.item_no for i in unscheduled]}",
         )
     # 事务内：为每个 PlanItem 创建 Batch + Allocation
+    item_batch_nos: dict[uuid.UUID, str] = {}
     for item in items:
         _validate_item_releasable(item)
         base_no = item.batch_no if item.batch_no else f"{order.order_no}-{item.item_no}"
@@ -433,6 +437,7 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
         )
         db.add(batch)
         await db.flush()
+        item_batch_nos[item.id] = batch.batch_no
         alloc = PlanAllocation(
             plan_item_id=item.id,
             batch_id=batch.id,
@@ -457,6 +462,8 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
                 das_for_demand = [da for da in all_das if da.demand_id == did]
                 _recalc_demand_fulfillment(demand, das_for_demand)
                 _update_demand_status(demand)
+    # 飞书提醒：计划单下达（收集在事务内，发送为后台尽力而为）
+    await schedule_plan_released_notification(db, order, items, item_batch_nos)
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
     return refreshed

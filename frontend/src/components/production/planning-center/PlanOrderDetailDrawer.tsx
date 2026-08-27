@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import {
   App,
   Button,
@@ -62,9 +62,11 @@ function InlineEditForm({ form, onSave, onCancel, products, routes, onProductCha
       <div style={{ display: 'flex', gap: 12 }}>
         <Form.Item name="product_id" label="产品" style={{ flex: 1 }} rules={[{ required: true }]}>
           <Select
-            showSearch
+            showSearch={{
+              filterOption: (input, option) =>
+                (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+            }}
             placeholder="选择产品"
-            filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
             onChange={(id: string) => { onProductChange(id); form.setFieldValue('route_id', undefined) }}
             options={products.map((p) => ({ value: p.id, label: p.product_name }))}
           />
@@ -286,7 +288,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   })
 
   // 变更模式
-  const prevOrderRef = useRef<string | null>(null)
+  const [initOrderId, setInitOrderId] = useState<string | null>(null)
   const [changeMode, setChangeMode] = useState(false)
   const [changeForm] = Form.useForm()
   const [localItems, setLocalItems] = useState<PlanItem[]>([])
@@ -307,19 +309,20 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
   const [showBasicInfo, setShowBasicInfo] = useState(false)
   const [showDemands, setShowDemands] = useState(false)
 
-  // 变更模式下订单数据到达时自动进入变更模式
-  useEffect(() => {
-    if (order && changeReason && !changeMode && prevOrderRef.current !== order.id) {
-      prevOrderRef.current = order.id
-      setChangeMode(true)
-      setLocalItems(order.items ? order.items.map(i => ({ ...i })) : [])
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- changeMode guarded by !changeMode
-  }, [order, changeReason])
+  // 变更模式下订单数据到达时自动进入变更模式。
+  // 渲染期间直接调整 state（React 官方「adjust state during render」模式），
+  // 不用 effect 同步 setState，避免级联渲染。
+  if (order && changeReason && !changeMode && initOrderId !== order.id) {
+    setInitOrderId(order.id)
+    setChangeMode(true)
+    // 自动展开基本信息：变更表单在里面，否则 changeForm 无 Form 挂载（antd useForm 警告）
+    setShowBasicInfo(true)
+    setLocalItems(order.items ? order.items.map(i => ({ ...i })) : [])
+  }
 
   // drawer 关闭时重置状态，确保再次打开同一计划单可正常进入变更模式
   const handleDrawerClose = () => {
-    prevOrderRef.current = null
+    setInitOrderId(null)
     setChangeMode(false)
     setDeletedItemIds([])
     onClose()
@@ -364,6 +367,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
     })
     setEditProductId(order?.product_id ?? undefined)
     setEditing(true)
+    // 展开基本信息，确保编辑表单（InlineEditForm）挂载
+    setShowBasicInfo(true)
   }
 
   const handleSaveEdit = async () => {
@@ -587,7 +592,8 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
             planned_start: i.planned_start || undefined,
             planned_end: i.planned_end || undefined,
             priority: i.priority,
-            remark: i.remark || undefined,
+            // 清空备注须传空串（undefined 会被 JSON 序列化丢弃，后端 exclude_unset 不覆盖）
+            remark: i.remark ?? '',
             sort_order: i.sort_order,
           }
           if (i.id && !String(i.id).startsWith('_new_')) (base as Record<string, unknown>).id = i.id
@@ -668,7 +674,7 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                   {changeMode ? (
                     <>
                       <Button type="primary" size="small" onClick={handleSaveChange}>保存变更</Button>
-                      <Button size="small" onClick={() => { setChangeMode(false); setDeletedItemIds([]); prevOrderRef.current = null }}>取消</Button>
+                      <Button size="small" onClick={() => { setChangeMode(false); setDeletedItemIds([]); setInitOrderId(order?.id ?? null) }}>取消</Button>
                     </>
                   ) : (
                     <Button size="small" onClick={handleCloseOrder}>关闭计划单</Button>
@@ -780,13 +786,14 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                   rowKey={(record) => record.id || `new-${record.item_no}`}
                   size="small"
                   pagination={false}
-                  scroll={{ x: 850 }}
+                  scroll={{ x: 1100 }}
                   columns={[
-                    { title: '序号', dataIndex: 'item_no', width: 55 },
+                    { title: '序号', dataIndex: 'item_no', width: 55, fixed: 'left' as const },
                     {
                       title: '批号',
                       dataIndex: 'batch_no',
                       width: 145,
+                      fixed: 'left' as const,
                       render: (v: string | null, record: PlanItem) => (
                         <Input
                           size="small"
@@ -848,6 +855,19 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                         <StageProgressBar
                           stageDurations={record.stage_durations ?? order!.stage_config}
                           batchProgress={bp}
+                        />
+                      ),
+                    },
+                    {
+                      title: '备注',
+                      dataIndex: 'remark',
+                      width: 150,
+                      render: (v: string | null, record: PlanItem) => (
+                        <Input
+                          size="small"
+                          placeholder="备注"
+                          value={v ?? ''}
+                          onChange={e => updateLocalItem(record.id, { remark: e.target.value || undefined })}
                         />
                       ),
                     },

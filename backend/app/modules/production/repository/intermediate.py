@@ -70,7 +70,7 @@ async def get_intermediate_type_by_code(
 
 async def list_intermediate_types(
     db: AsyncSession, keyword: str | None, page: int, page_size: int,
-    *, include_deleted: bool = False,
+    *, include_deleted: bool = False, product_id: uuid.UUID | None = None,
 ) -> tuple[list[IntermediateType], int]:
     stmt = select(IntermediateType)
     if not include_deleted:
@@ -81,6 +81,8 @@ async def list_intermediate_types(
             IntermediateType.code.ilike(pattern)
             | IntermediateType.name.ilike(pattern)
         )
+    if product_id:
+        stmt = stmt.where(IntermediateType.product_id == product_id)
     total = (
         await db.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()

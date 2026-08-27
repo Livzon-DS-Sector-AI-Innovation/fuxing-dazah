@@ -2,15 +2,19 @@
 
 import uuid
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.modules.production.models.line import LineProductLink
 from app.modules.production.repository import intermediate as im_repo
 from app.modules.production.repository import line as repo
+from app.modules.production.repository import product as product_repo
 from app.modules.production.schemas.line import (
     LineAssignmentOut,
     LineCreate,
     LineOut,
+    LineProductLinkOut,
     LineUpdate,
 )
 from app.platform.identity.models import User
@@ -72,6 +76,7 @@ async def delete_line(db: AsyncSession, line_id: uuid.UUID, user: User | None) -
             status_code=400, message="该产线下存在混装容器，请先删除容器",
         )
     await repo.delete_line_assignments_by_line(db, line_id)
+    await repo.delete_line_product_links_by_line(db, line_id)
     line.is_deleted = True
     if user:
         line.updated_by = user.id
@@ -149,3 +154,75 @@ async def resolve_user_line_ids(
     if line_ids or not owner_user_id:
         return line_ids
     return await get_user_line_ids(db, owner_user_id)
+
+
+# ═══════════════════════════════════════════
+# 产线-产品关联
+# ═══════════════════════════════════════════
+
+
+async def _build_product_link_out(
+    db: AsyncSession, items: list[LineProductLink],
+) -> list[LineProductLinkOut]:
+    if not items:
+        return []
+    line_ids = list({link.line_id for link in items})
+    product_ids = list({link.product_id for link in items})
+    lines = await repo.get_lines_by_ids(db, line_ids, include_deleted=True)
+    products = await product_repo.get_products_by_ids(db, product_ids)
+    line_map = {ln.id: ln for ln in lines}
+    product_map = {p.id: p for p in products}
+    result: list[LineProductLinkOut] = []
+    for link in items:
+        line = line_map.get(link.line_id)
+        product = product_map.get(link.product_id)
+        result.append(
+            LineProductLinkOut(
+                id=link.id,
+                line_id=link.line_id,
+                product_id=link.product_id,
+                line_name=line.name if line else None,
+                product_name=product.product_name if product else None,
+                created_at=link.created_at,
+            )
+        )
+    return result
+
+
+async def list_line_products(
+    db: AsyncSession, *, line_id: uuid.UUID | None = None,
+    product_id: uuid.UUID | None = None,
+) -> list[LineProductLinkOut]:
+    items = await repo.list_line_product_links(db, line_id=line_id, product_id=product_id)
+    return await _build_product_link_out(db, items)
+
+
+async def bind_product_line(
+    db: AsyncSession, *, line_id: uuid.UUID, product_id: uuid.UUID,
+    created_by: uuid.UUID | None,
+) -> LineProductLinkOut:
+    """绑定产品到产线。软删过的旧关联留着，重新绑定直接插新行。"""
+    line = await repo.get_line(db, line_id)
+    if not line:
+        raise NotFoundException("产线", str(line_id))
+    product = await product_repo.get_product(db, product_id)
+    if not product:
+        raise NotFoundException("产品", str(product_id))
+    if await repo.get_line_product_link(db, line_id, product_id):
+        raise DuplicateException("产线产品关联", "产线+产品")
+    try:
+        async with db.begin_nested():
+            link = await repo.create_line_product_link(
+                db, line_id=line_id, product_id=product_id, created_by=created_by,
+            )
+    except IntegrityError:
+        # 并发绑定同产线+产品触发唯一索引，转 409 而非 500
+        raise DuplicateException("产线产品关联", "产线+产品") from None
+    outs = await _build_product_link_out(db, [link])
+    return outs[0]
+
+
+async def unbind_product_line(db: AsyncSession, link_id: uuid.UUID) -> None:
+    ok = await repo.delete_line_product_link(db, link_id)
+    if not ok:
+        raise NotFoundException("产线产品关联")

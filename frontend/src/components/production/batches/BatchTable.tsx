@@ -151,6 +151,12 @@ export function BatchTable({ productId, canSubmit, onCreate, onOpenDetail }: Pro
             render: (_, r) => r.route_name || '—',
           },
           {
+            title: '归属人',
+            dataIndex: 'owner_name',
+            width: 110,
+            render: (v: string | null) => v ?? '无主共享',
+          },
+          {
             title: '状态',
             dataIndex: 'status',
             width: 100,

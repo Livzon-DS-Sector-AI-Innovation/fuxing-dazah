@@ -38,3 +38,17 @@ class LineAssignmentOut(BaseModel):
     line_id: uuid.UUID
     line_name: str | None = None
     created_at: datetime
+
+
+class LineProductLinkCreate(BaseModel):
+    line_id: uuid.UUID
+    product_id: uuid.UUID
+
+
+class LineProductLinkOut(BaseModel):
+    id: uuid.UUID
+    line_id: uuid.UUID
+    product_id: uuid.UUID
+    line_name: str | None = None
+    product_name: str | None = None
+    created_at: datetime

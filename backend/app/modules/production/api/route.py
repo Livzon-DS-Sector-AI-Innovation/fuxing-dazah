@@ -14,7 +14,7 @@ from app.modules.production.schemas import (
     RouteOut,
     RouteRename,
 )
-from app.modules.production.service import route_service
+from app.modules.production.service import execution_service, route_service
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -59,6 +59,16 @@ async def get_route_graph(
 ) -> JSONResponse:
     graph = await route_service.get_graph(db, route_id)
     return success_response(graph.model_dump(mode="json"))
+
+
+@router.get("/routes/{route_id}/process-board", summary="工序流程看板")
+async def get_process_board(
+    route_id: uuid.UUID,
+    user: User = Depends(_read),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    board = await execution_service.get_process_board(db, route_id)
+    return success_response(board.model_dump(mode="json"))
 
 
 @router.put("/routes/{route_id}/graph", summary="整图保存（仅 draft）")
