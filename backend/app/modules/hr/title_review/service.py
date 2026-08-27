@@ -886,20 +886,12 @@ class TitleReviewService:
         committee = await self.committee_repo.get_by_department(data.department)
         members = [item.model_dump(mode="json") for item in data.committee_members]
         if committee:
-            committee.manager_employee_id = data.manager_employee_id
-            committee.manager_name = data.manager_name
-            committee.leader_employee_id = data.leader_employee_id
-            committee.leader_name = data.leader_name
             committee.committee_members = members or None
             committee = await self.committee_repo.update(committee)
         else:
             committee = await self.committee_repo.create(
                 m.TitleReviewDeptCommittee(
                     department=data.department,
-                    manager_employee_id=data.manager_employee_id,
-                    manager_name=data.manager_name,
-                    leader_employee_id=data.leader_employee_id,
-                    leader_name=data.leader_name,
                     committee_members=members or None,
                 )
             )

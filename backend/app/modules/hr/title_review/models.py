@@ -341,7 +341,10 @@ class TitleReviewScore(BaseModel):
 
 
 class TitleReviewDeptCommittee(BaseModel):
-    """部门评审组：部门初审人（负责人）、终审人（分管领导）、默认评委（评定小组）。"""
+    """部门评审组：评定小组成员（默认评委）。
+
+    初审/终审环节由飞书审批与线下流程完成，不属于系统职责范围。
+    """
 
     __tablename__ = "title_review_dept_committees"
     __table_args__ = (
@@ -353,14 +356,6 @@ class TitleReviewDeptCommittee(BaseModel):
     )
 
     department: Mapped[str] = mapped_column(String(64), nullable=False, comment="部门名称")
-    manager_employee_id: Mapped[UUID | None] = mapped_column(
-        nullable=True, comment="部门负责人（初审人） hr.employees.id"
-    )
-    manager_name: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="负责人姓名")
-    leader_employee_id: Mapped[UUID | None] = mapped_column(
-        nullable=True, comment="分管领导（终审人） hr.employees.id"
-    )
-    leader_name: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="分管领导姓名")
     committee_members: Mapped[list[dict[str, Any]] | None] = mapped_column(
         JSON, nullable=True, comment="职级评定小组成员 [{employee_id,name,employee_no}]"
     )

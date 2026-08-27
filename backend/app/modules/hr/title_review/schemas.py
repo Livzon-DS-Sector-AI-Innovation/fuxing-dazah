@@ -109,11 +109,9 @@ class TitleReviewCommitteeMemberIn(BaseModel):
 
 class TitleReviewDeptCommitteeIn(BaseModel):
     department: str = Field(..., max_length=64, description="部门名称")
-    manager_employee_id: UUID | None = Field(None, description="部门负责人（初审人）")
-    manager_name: str | None = Field(None, max_length=64)
-    leader_employee_id: UUID | None = Field(None, description="分管领导（终审人）")
-    leader_name: str | None = Field(None, max_length=64)
-    committee_members: list[TitleReviewCommitteeMemberIn] = Field(default_factory=list)
+    committee_members: list[TitleReviewCommitteeMemberIn] = Field(
+        default_factory=list, description="评定小组成员（默认评委）"
+    )
 
 
 class TitleReviewDeptCommitteeOut(BaseModel):
@@ -121,10 +119,6 @@ class TitleReviewDeptCommitteeOut(BaseModel):
 
     id: UUID
     department: str
-    manager_employee_id: UUID | None
-    manager_name: str | None
-    leader_employee_id: UUID | None
-    leader_name: str | None
     committee_members: list[dict[str, Any]] | None
 
 

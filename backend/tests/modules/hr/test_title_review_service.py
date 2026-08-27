@@ -170,23 +170,20 @@ class TestCommittee:
             "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
         )
         service = TitleReviewService(db_session)
-        emp1 = await _create_employee(db_session, "负责人", f"M{_rand()}")
         emp2 = await _create_employee(db_session, "小组成员", f"C{_rand()}")
         data = TitleReviewDeptCommitteeIn(
             department="测试部",
-            manager_employee_id=emp1.id,
-            manager_name=emp1.name,
             committee_members=[TitleReviewCommitteeMemberIn(employee_id=emp2.id, name=emp2.name, employee_no=emp2.employee_number)],
         )
         c1 = await service.upsert_committee(data)
         # 同部门再次保存 → 更新而非新建
-        data.leader_name = "领导A"
+        data.committee_members = []
         c2 = await service.upsert_committee(data)
         assert c1.id == c2.id
         committees = await service.list_committees()
         # 只统计本测试部门（测试库与开发库共用，可能存在其他部门评审组）
         assert len([c for c in committees if c.department == "测试部"]) == 1
-        assert c2.leader_name == "领导A"
+        assert c2.committee_members is None
 
     async def test_default_members(self, db_session: AsyncSession, monkeypatch):
         monkeypatch.setattr(
