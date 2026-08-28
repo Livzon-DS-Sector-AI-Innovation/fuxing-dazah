@@ -80,6 +80,7 @@ export default function AssessmentFlow({
   // 随机赋分弹窗
   const [randomOpen, setRandomOpen] = useState(false)
   const [randomRatio, setRandomRatio] = useState(0.3)
+  const [randomPassRatio, setRandomPassRatio] = useState(0.7)
   const [randomizing, setRandomizing] = useState(false)
 
   // 历史列表
@@ -216,9 +217,16 @@ export default function AssessmentFlow({
 
   const handleRandomize = async () => {
     if (!assessmentId) { message.warning('请先创建考核场次'); return }
+    if (randomRatio + randomPassRatio > 1) {
+      message.error('优秀率与合格率之和不能超过 1')
+      return
+    }
     setRandomizing(true)
     try {
-      const res = await randomizeQaScores(assessmentId, { excellent_ratio: randomRatio })
+      const res = await randomizeQaScores(assessmentId, {
+        excellent_ratio: randomRatio,
+        pass_ratio: randomPassRatio,
+      })
       const generated = res.data?.scores || []
       // 直接回填矩阵，可继续点击格子调整随机结果
       setScoreRows((rows) => rows.map((r) => {
@@ -376,19 +384,32 @@ export default function AssessmentFlow({
       >
         <div className="space-y-3 py-2">
           <p className="text-sm text-gray-600">
-            按比例随机选取「优秀」，其余为「合格」；错题位置随机分布。
+            按比例随机分配「优秀 / 合格 / 不合格」三档成绩，错题位置随机分布。
             生成后可继续在矩阵中点击格子微调，最后「同步到台账」保存。
           </p>
           <div className="flex items-center gap-3">
-            <span className="text-sm">优秀比例：</span>
+            <span className="text-sm">优秀率：</span>
             <InputNumber
               min={0} max={1} step={0.05}
               value={randomRatio}
-              onChange={(v) => setRandomRatio(v ?? 0.3)}
+              onChange={(v) => setRandomRatio(v ?? 0)}
               style={{ width: 120 }}
             />
-            <span className="text-xs text-gray-400">0-1，默认 0.3</span>
+            <span className="text-xs text-gray-400">0-1</span>
           </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm">合格率：</span>
+            <InputNumber
+              min={0} max={1} step={0.05}
+              value={randomPassRatio}
+              onChange={(v) => setRandomPassRatio(v ?? 0)}
+              style={{ width: 120 }}
+            />
+            <span className="text-xs text-gray-400">0-1</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            剩余比例（{Math.max(0, Math.round((1 - randomRatio - randomPassRatio) * 100))}%）自动为「不合格」
+          </p>
         </div>
       </Modal>
     </div>

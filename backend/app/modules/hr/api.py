@@ -3245,12 +3245,16 @@ async def save_qa_scores(
 async def random_qa_scores(
     assessment_id: UUID,
     excellent_ratio: float = Query(0.3, ge=0, le=1, description="优秀比例，默认30%"),
+    pass_ratio: float | None = Query(None, ge=0, le=1, description="合格比例（缺省余量全为合格）"),
     excellent_line: int | None = Query(None, description="优秀线，缺省取场次配置"),
     pass_line: int | None = Query(None, description="合格线，缺省取场次配置"),
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """按优秀/合格比例随机赋分。"""
+    """按优秀/合格比例随机赋分。
+
+    优秀率+合格率由人员自行填写，余量自动为不合格（分数落在合格线以下）。
+    """
     import random as _random
     asmt = (await session.execute(
         text("SELECT id, full_score, excellent_line, pass_line, trainee_names, questions, department FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
@@ -3272,21 +3276,32 @@ async def random_qa_scores(
     total = len(unique_names)
     if total == 0:
         raise HTTPException(400, "没有受训人员")
+    if pass_ratio is not None and excellent_ratio + pass_ratio > 1:
+        raise HTTPException(400, "优秀率与合格率之和不能超过 1")
     excellent_count = int(total * excellent_ratio)
+    pass_count = int(total * (pass_ratio or 0))
     indices = list(range(total))
     _random.shuffle(indices)
     excellent_set = set(indices[:excellent_count])
+    pass_set: set[int] = set()
+    if pass_ratio is not None:
+        pass_set = set(indices[excellent_count:excellent_count + pass_count])
 
     scores = []
     q_scores = [q.get("score", 10) if isinstance(q, dict) else 10 for q in questions]
     total_q = len(q_scores)
-    now_str = str(date.today())
+    today = date.today()
 
     for i, name in enumerate(unique_names):
         is_excellent = i in excellent_set
-        # 目标区间：优秀 [el, full_score_val]，合格 [pl, el-1]
-        min_target = el if is_excellent else pl
-        max_target = full_score_val if is_excellent else el - 1
+        is_fail = pass_ratio is not None and i not in excellent_set and i not in pass_set
+        # 目标区间：优秀 [el, 满分]，合格 [pl, el-1]，不合格 [0, pl-1]
+        if is_fail:
+            min_target, max_target = 0, pl - 1
+        elif is_excellent:
+            min_target, max_target = el, full_score_val
+        else:
+            min_target, max_target = pl, el - 1
         # 随机选择错题直到分数落到目标区间
         wrong = []
         deduction = 0
@@ -3318,7 +3333,7 @@ async def random_qa_scores(
             "total_score": score,
             "grade": "优秀" if score >= el else ("合格" if score >= pl else "不合格"),
             "result_text": result_text[:16],
-            "assessed_date": now_str,
+            "assessed_date": today,
         })
 
     # 写入数据库
