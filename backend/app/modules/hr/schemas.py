@@ -1008,6 +1008,7 @@ class CandidateUpdate(BaseModel):
     work_years: int | None = None
     match_report: str | None = None
     notes: str | None = None
+    resume_url: str | None = Field(None, max_length=512, description="简历文件路径（补传/更新简历）")
 
 
 class CandidateResponse(BaseModel):

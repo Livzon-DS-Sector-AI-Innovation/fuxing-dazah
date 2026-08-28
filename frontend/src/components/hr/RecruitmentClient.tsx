@@ -11,9 +11,22 @@ import {
   sendOfferAction, parseResumeAction, transitionCandidateStatus,
   fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
-  uploadCandidates, downloadCandidateTemplate,
+  uploadCandidates, downloadCandidateTemplate, decideCandidateReview,
 } from '@/actions/hr'
 import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
+
+// 与后端 _CANDIDATE_TRANSITIONS 对齐：下拉只显示当前状态可流转的目标
+const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
+  '待筛选': ['已筛选', '已拒绝'],
+  '已筛选': ['待部门审核', '已拒绝'],
+  '待部门审核': ['面试中', '已拒绝'],
+  '面试中': ['已面试', '已拒绝'],
+  '已面试': ['录用中', '已拒绝'],
+  '录用中': ['已录用', '已拒绝'],
+  '已录用': ['待入职审批', '已拒绝'],
+  '待入职审批': ['已录用', '已入职', '已拒绝'],
+  '已拒绝': [],
+}
 
 export default function RecruitmentClient() {
   const { message: msg } = App.useApp()
@@ -66,6 +79,14 @@ export default function RecruitmentClient() {
     } catch { setPendingReviews([]) }
     finally { setReviewsLoading(false) }
   }, [])
+
+  const handleDecideReview = async (candidateId: string, decision: string) => {
+    try {
+      await decideCandidateReview(candidateId, { decision })
+      msg.success(decision === '已同意' ? '已同意' : '已驳回')
+      loadPendingReviews()
+    } catch (err: any) { msg.error(err.message || '操作失败') }
+  }
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -302,6 +323,10 @@ export default function RecruitmentClient() {
                     </div>
                     <div className="text-xs text-gray-500">岗位：{jd?.position_name || c.position} · {jd?.department || c.department}</div>
                     {rv.push_note && <div className="text-xs text-blue-600 mt-1">💬 HR备注：{rv.push_note}</div>}
+                    <div className="flex gap-2 mt-2" onClick={(e) => e.stopPropagation()}>
+                      <Button size="small" type="primary" onClick={() => handleDecideReview(c.id, '已同意')}>同意</Button>
+                      <Button size="small" danger onClick={() => handleDecideReview(c.id, '已拒绝')}>驳回</Button>
+                    </div>
                   </Card>
                 )
               })}
@@ -514,7 +539,7 @@ export default function RecruitmentClient() {
                             {isStale && <span className="text-xs text-red-400 whitespace-nowrap" title={`已停留${days}天`}>⚠️{days}天</span>}
                             <Select size="small" value={c.status} loading={changingStatus === c.id}
                               style={{ width: 95 }}
-                              options={STATUS_OPTIONS}
+                              options={STATUS_OPTIONS.filter(o => o.value === c.status || CANDIDATE_TRANSITIONS[c.status || '']?.includes(o.value))}
                               onChange={v => handleStatusChange(c.id, v)}
                             />
                             <Button size="small" icon={<SendOutlined />} onClick={() => handleSendOffer(c)} title="发Offer" />

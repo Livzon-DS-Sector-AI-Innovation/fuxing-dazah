@@ -322,6 +322,48 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict[str, Any]
     return result
 
 
+async def save_questions_to_bank(
+    session, questions: list[dict[str, Any]], file_no: str, source: str = "AI生成"
+) -> int:
+    """把出题结果写入共享题库（question_bank），后续考核矩阵/题库选题可复用。
+
+    选择题把选项并入题干多行文本，保证题库详情信息完整。
+    """
+    from sqlalchemy import text
+
+    inserted = 0
+    for q in questions:
+        question = str(q.get("question") or "").strip()
+        if not question:
+            continue
+        options = q.get("options")
+        if isinstance(options, list):
+            lines = [question]
+            lines += [
+                f"{o.get('label')}. {o.get('text')}"
+                for o in options
+                if isinstance(o, dict) and str(o.get("text") or "").strip()
+            ]
+            question = "\n".join(lines)
+        await session.execute(
+            text(
+                "INSERT INTO hr.question_bank (id, file_no, question, answer, score, source) "
+                "VALUES (gen_random_uuid(), :fn, :q, :a, :s, :src)"
+            ),
+            {
+                "fn": file_no,
+                "q": question,
+                "a": str(q.get("answer") or ""),
+                "s": q.get("score") or 10,
+                "src": source,
+            },
+        )
+        inserted += 1
+    if inserted:
+        await session.commit()
+    return inserted
+
+
 def _find_exam_template() -> str:
     """查找试卷模板文件，复用 find_hr_template 的多路径搜索逻辑。"""
     from app.modules.hr.template_utils import find_hr_template

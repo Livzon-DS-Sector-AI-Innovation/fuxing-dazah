@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
-  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox,
+  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
@@ -16,9 +16,10 @@ import {
 import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
+  parseResumeAction,
   transitionCandidateStatus,
   createInterview, updateInterview, deleteInterview, evaluateInterview,
-  pushCandidateReview, decideCandidateReview,
+  pushCandidateReview, decideCandidateReview, pushOnboardingReview,
   fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
@@ -294,13 +295,45 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const recommendationColors: Record<string, string> = { '强烈推荐': 'green', '推荐': 'blue', '待定': 'orange', '不推荐': 'red' }
   const statusTransitions: Record<string, string[]> = {
     '待筛选': ['已筛选', '已拒绝'],
-    '已筛选': ['面试中', '已拒绝'],
+    '已筛选': ['待部门审核', '已拒绝'],
+    '待部门审核': ['面试中', '已拒绝'],
     '面试中': ['已面试', '已拒绝'],
     '已面试': ['录用中', '已拒绝'],
     '录用中': ['已录用', '已拒绝'],
     '已录用': ['待入职审批', '已拒绝'],
     '待入职审批': ['已录用', '已入职', '已拒绝'],
   }
+  // 补传/更新简历：解析 PDF → 更新 resume_url → 刷新预览
+  const handleResumeUpload = async (file: File) => {
+    const fd = new FormData()
+    fd.append('resume', file)
+    try {
+      const r = await parseResumeAction(fd)
+      const path = (r?.data as any)?.resume_file_path || (r as any)?.resume_file_path
+      if (!path) throw new Error('简历解析失败，未返回文件路径')
+      await updateCandidateAction(candidate.id, { resume_url: path })
+      message.success('简历已更新')
+      window.location.reload()
+    } catch (err: any) { message.error(err.message || '上传失败') }
+    return false // 阻止 Upload 默认上传
+  }
+
+  // 发起入职审批（已录用状态 → 推送入职审批，审核人同意后由 HR 转为入职员工）
+  const handlePushOnboarding = () => {
+    Modal.confirm({
+      title: '发起入职审批',
+      content: '将把该候选人推送至入职审批流程，确认？',
+      okText: '确认发起',
+      onOk: async () => {
+        try {
+          await pushOnboardingReview(candidate.id, { pushed_by: 'HR' })
+          message.success('已发起入职审批')
+          router.refresh()
+        } catch (err: any) { message.error(err.message || '发起失败') }
+      },
+    })
+  }
+
   // 推送审核操作
   const handlePushReview = async () => {
     const v = await pushForm.validateFields()
@@ -358,7 +391,16 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         {pdfError && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white">
             <p className="text-gray-500 mb-4">{pdfErrorMsg || '简历加载失败'}</p>
-            <Button onClick={() => window.location.reload()}>刷新页面</Button>
+            <Space>
+              <Upload
+                accept=".pdf"
+                showUploadList={false}
+                beforeUpload={handleResumeUpload}
+              >
+                <Button type="primary">上传简历</Button>
+              </Upload>
+              <Button onClick={() => window.location.reload()}>刷新页面</Button>
+            </Space>
           </div>
         )}
         {pdfUrl && (
@@ -417,7 +459,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
           {candidate.status === '已录用' && (
             <Descriptions.Item label="入职操作">
-              <Button type="primary" onClick={() => setPushModalOpen(true)}>
+              <Button type="primary" onClick={handlePushOnboarding}>
                 📋 发起入职审批
               </Button>
             </Descriptions.Item>

@@ -1386,8 +1386,9 @@ async def generate_assessment_questions(
     file: UploadFile,
     assessment_method: str = Form("笔试"),
     subject: str = Form(""),
+    session: AsyncSession = Depends(get_db),
 ):
-    """上传培训材料文件，AI 自动生成笔试试卷。问答考核不再 AI 出题，改从题库选题。"""
+    """上传培训材料文件，AI 自动生成笔试试卷（结果同步入共享题库）。问答考核不再 AI 出题，改从题库选题。"""
     if not file.filename:
         raise HTTPException(400, "请上传文件")
     if assessment_method != "笔试":
@@ -1502,7 +1503,14 @@ async def generate_assessment_questions(
         else:
             raise HTTPException(400, "服务端未配置 HR_AI_API_KEY，无法生成笔试试卷")
 
-        return success_response(data=result)
+        # 生成结果同步入共享题库（AI生成来源），考核矩阵/题库选题可复用
+        from app.modules.hr.ai_exam_service import save_questions_to_bank
+
+        questions = result.get("questions") or []
+        bank_inserted = await save_questions_to_bank(
+            session, questions, subject or "培训考核"
+        )
+        return success_response(data={**result, "bank_inserted": bank_inserted}, message=f"生成成功，{bank_inserted} 题已入题库")
     except HTTPException:
         raise
     except Exception as e:
@@ -2887,7 +2895,14 @@ async def qbank_search(file_no: str | None = Query(None), keyword: str | None = 
     if file_no: where += " AND file_no ILIKE :fn"; params["fn"] = f"%{file_no}%"
     if keyword: where += " AND (question ILIKE :kw OR subject ILIKE :kw)"; params["kw"] = f"%{keyword}%"
     r = await session.execute(text(f"SELECT id, file_no, question, answer, score, source, usage_count FROM hr.question_bank {where} ORDER BY usage_count DESC LIMIT :lim OFFSET :off"), params)
-    return success_response(data=[{"id":str(row[0]),"file_no":row[1],"question":row[2],"answer":row[3],"score":row[4],"source":row[5],"usage_count":row[6]} for row in r])
+    total = (await session.execute(
+        text(f"SELECT COUNT(*) FROM hr.question_bank {where}"),
+        {k: v for k, v in params.items() if k != "lim" and k != "off"},
+    )).scalar() or 0
+    return success_response(
+        data=[{"id":str(row[0]),"file_no":row[1],"question":row[2],"answer":row[3],"score":row[4],"source":row[5],"usage_count":row[6]} for row in r],
+        meta={"total": total, "page": page, "page_size": page_size},
+    )
 
 
 @router.delete("/question-bank/{item_id}", summary="删除题目")

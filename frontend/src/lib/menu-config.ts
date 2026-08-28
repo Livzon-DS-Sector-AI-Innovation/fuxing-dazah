@@ -291,6 +291,7 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "training-annual-plan", label: "年度培训计划", path: "/hr/training/annual-plan" },
           { key: "training-ledger", label: "培训台账", path: "/hr/training/ledger" },
           { key: "training-question-bank", label: "题库大全", path: "/hr/training/question-bank" },
+          { key: "training-qa-assessments", label: "问答考核历史", path: "/hr/training/qa-assessments", permissions: ["hr:training:assessment"] },
           { key: "trainers", label: "内训师管理", path: "/hr/training/trainers", permissions: ["hr:trainer:read"] },
         ],
       },

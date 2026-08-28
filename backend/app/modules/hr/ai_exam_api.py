@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.hr.ai_exam_schemas import ExamExportRequest
 from app.modules.hr.ai_exam_service import export_exam, generate_exam
@@ -18,8 +20,12 @@ async def api_generate_exam(
     true_false_count: int = Form(5),
     multi_choice_count: int = Form(0),
     fill_blank_count: int = Form(0),
+    session: AsyncSession = Depends(get_db),
 ):
-    """上传培训材料（docx/txt），AI 自动识别内容并按指定题型/题量生成试卷。"""
+    """上传培训材料（docx/txt），AI 自动识别内容并按指定题型/题量生成试卷。
+
+    生成结果同步写入共享题库（source=AI生成），后续考核矩阵/题库选题可复用。
+    """
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
     import logging
@@ -37,7 +43,15 @@ async def api_generate_exam(
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"AI 出题失败: {e}")
-    return success_response(data=result, message="出题完成")
+    # 写入共享题库（AI生成来源）
+    from app.modules.hr.ai_exam_service import EXAM_QUESTION_KEYS, save_questions_to_bank
+
+    questions: list[dict] = []
+    for key in EXAM_QUESTION_KEYS:
+        questions.extend(result.get(key, []))
+    file_no = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
+    bank_inserted = await save_questions_to_bank(session, questions, file_no)
+    return success_response(data={**result, "bank_inserted": bank_inserted}, message=f"出题完成，{bank_inserted} 题已入题库")
 
 
 @router.post("/export", summary="导出考试试卷")

@@ -1514,8 +1514,23 @@ class TitleReviewService:
             },
         )
 
-        # 小组评审结果并非最终结果（最终名单须经总经理确认），不直接通知申报人；
-        # 结果由 HR 在公示环节线下发布。
+        # 判定完成 → 飞书结果卡通知申报人（仅首次发送，失败不阻断判定）
+        if application.result_notified_at is None:
+            try:
+                from app.modules.hr.title_review.notify import send_result_card
+
+                activity = await self.get_activity(application.activity_id)
+                ok = await send_result_card(
+                    applicant_name=application.name,
+                    activity_name=activity.name,
+                    level_name=application.apply_level or "职级评定",
+                    passed=passed,
+                )
+                if ok:
+                    application.result_notified_at = datetime.now().astimezone()
+                    application = await self.application_repo.update(application)
+            except Exception:  # noqa: BLE001
+                logger.warning("结果卡发送失败: application=%s", application.id)
         return application
 
     async def _writeback_votes(
@@ -2143,9 +2158,9 @@ class TitleReviewService:
             "errors": [],
         }
         # 审批先行：先同步审批通过的实例 → 写入申报表（随后本对账立即拉取落库）
-        if activity.approval_code:
-            approval_stats = await self.sync_approval_instances(activity.id)
-            stats.update(approval_stats)
+        # 镜像表数据源不依赖审批定义编码（API 兜底路径才需要），无条件执行
+        approval_stats = await self.sync_approval_instances(activity.id)
+        stats.update(approval_stats)
         if not (activity.feishu_app_token and activity.apply_table_id):
             return stats
 

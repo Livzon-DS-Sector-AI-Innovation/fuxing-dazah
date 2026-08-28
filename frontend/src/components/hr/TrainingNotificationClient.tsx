@@ -303,7 +303,10 @@ export default function TrainingNotificationClient() {
         training_method: values.training_method,
         assessment_method: values.assessment_method,
         content: values.content,
-        trainee_names: traineeDepts,
+        // 传实际受训员工姓名（缺省回落部门列表），通知人数按真实人数展示
+        trainee_names: (values.employee_names && values.employee_names.length)
+          ? values.employee_names
+          : traineeDepts,
         issuer_department: values.issuer_department || values.department,
         issue_date: values.issue_date
           ? values.issue_date.format('YYYY-MM-DD')
