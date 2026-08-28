@@ -59,7 +59,6 @@ const TRAINING_METHODS = [
   { value: '面授', label: '面授' },
   { value: '自学', label: '自学' },
   { value: '面授+自学', label: '面授+自学' },
-  { value: '自学+面授', label: '自学+面授' },
 ]
 
 const ASSESSMENT_METHODS = [
@@ -104,6 +103,8 @@ async function getExistingLedgerNumbers(): Promise<Set<string>> {
 export default function TrainingNotificationClient() {
   const [form] = Form.useForm()
   const watchedNames = Form.useWatch('employee_names', form) as string[] | undefined
+  const watchedTrainingMethod = Form.useWatch('training_method', form)
+  const isDualMode = watchedTrainingMethod === '面授+自学'
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])
   const [allDeptEmployees, setAllDeptEmployees] = useState<any[]>([]) // 完整员工列表（含品种），用于品种筛选
@@ -262,30 +263,41 @@ export default function TrainingNotificationClient() {
     setVarieties(Array.from(varietySet))
   }
 
+  const buildTimeFields = (values: any) => {
+    if (isDualMode) {
+      return {
+        face_date: values.face_date ? values.face_date.format('YYYY-MM-DD') : undefined,
+        face_to_face_time_start: values.face_time?.[0] ? dayjs(values.face_time[0]).format('HH:mm') : '',
+        face_to_face_time_end: values.face_time?.[1] ? dayjs(values.face_time[1]).format('HH:mm') : '',
+        self_study_date: values.self_date ? values.self_date.format('YYYY-MM-DD') : undefined,
+        self_study_time_start: values.self_time?.[0] ? dayjs(values.self_time[0]).format('HH:mm') : '',
+        self_study_time_end: values.self_time?.[1] ? dayjs(values.self_time[1]).format('HH:mm') : '',
+      }
+    }
+    const slots = (values.time_slots || [])
+      .filter((s: any) => s?.date)
+      .map((s: any) => ({
+        date: s.date.format('YYYY-MM-DD'),
+        start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
+        end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
+      }))
+    return { time_slots: slots }
+  }
+
   const handleExportWord = async () => {
     const values = await form.validateFields()
     const traineeDepts: string[] = values.trainee_departments || []
     const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
-
     const firstSlot = timeSlots[0]
-    const firstDate = firstSlot?.date
+    const firstDate = isDualMode ? values.face_date : firstSlot?.date
 
     setSubmittingWord(true)
     try {
-      // 构建 time_slots 数组发送到后端
-      const timeSlotsPayload = timeSlots
-        .filter((s: any) => s?.date)
-        .map((s: any) => ({
-          date: s.date.format('YYYY-MM-DD'),
-          start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
-          end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
-        }))
-
       const payload = {
         department: values.department,
         training_date: firstDate ? firstDate.format('YYYY-MM-DD') : new Date().toISOString().slice(0, 10),
         subject: values.subject,
-        time_slots: timeSlotsPayload,
+        ...buildTimeFields(values),
         location: values.location,
         trainer: values.trainer,
         training_method: values.training_method,
@@ -316,20 +328,14 @@ export default function TrainingNotificationClient() {
 
     setSubmittingExcel(true)
     try {
-      const trainDate = firstDate ? firstDate.format('YYYY-MM-DD') : ''
+      const trainDate = isDualMode
+        ? (values.face_date ? values.face_date.format('YYYY-MM-DD') : '')
+        : (firstDate ? firstDate.format('YYYY-MM-DD') : '')
       if (!trainDate) throw new Error('请选择培训日期')
       const topic = [values.subject, values.content].filter(Boolean).join(' ')
-      // 构建 time_slots payload
-      const timeSlotsPayload = timeSlots
-        .filter((s: any) => s?.date)
-        .map((s: any) => ({
-          date: s.date.format('YYYY-MM-DD'),
-          start: s.time?.[0] ? dayjs(s.time[0]).format('HH:mm') : '',
-          end: s.time?.[1] ? dayjs(s.time[1]).format('HH:mm') : '',
-        }))
       const payload = {
         training_date: trainDate,
-        time_slots: timeSlotsPayload,
+        ...buildTimeFields(values),
         department: traineeDepts[0] || values.department,
         topic,
         instructor: values.trainer,
@@ -674,50 +680,92 @@ export default function TrainingNotificationClient() {
               <Input placeholder="请输入培训主题，如：安全生产规范培训" />
             </Form.Item>
 
-            {/* 多时段选择 */}
-            <Form.List name="time_slots" initialValue={[{ date: null, time: [dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')] }]}>
-              {(fields, { add, remove }) => (
-                <div className="md:col-span-2 space-y-2">
-                  {fields.map(({ key, name, ...rest }, index) => (
-                    <Space key={key} className="w-full" align="start" wrap>
-                      <Form.Item
-                        name={[name, 'date']}
-                        label={fields.length > 1 ? `时段${index + 1}日期` : '培训日期'}
-                        rules={[{ required: true, message: '请选择日期' }]}
-                        style={{ marginBottom: 0 }}
-                      >
-                        <DatePicker placeholder="选择日期" style={{ width: 160 }} />
-                      </Form.Item>
-                      <Form.Item
-                        name={[name, 'time']}
-                        label={fields.length > 1 ? `时段${index + 1}时间` : '培训时间'}
-                        rules={[{ required: true, message: '请选择时间' }]}
-                        style={{ marginBottom: 0 }}
-                      >
-                        <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
-                      </Form.Item>
-                      {fields.length > 1 && (
-                        <Button
-                          type="text"
-                          icon={<MinusCircleOutlined />}
-                          onClick={() => remove(name)}
-                          style={{ marginTop: 30 }}
-                          danger
-                        />
-                      )}
-                    </Space>
-                  ))}
-                  <Button
-                    type="dashed"
-                    onClick={() => add({ date: null, time: [dayjs('09:00', 'HH:mm'), dayjs('10:00', 'HH:mm')] })}
-                    icon={<PlusOutlined />}
-                    block
+            {/* 双模式：面授/自学分别选择日期时间；单模式：多时段选择 */}
+            {isDualMode ? (
+              <div className="md:col-span-2 space-y-2">
+                <Space className="w-full" align="start" wrap>
+                  <Form.Item
+                    name="face_date"
+                    label="面授日期"
+                    rules={[{ required: true, message: '请选择面授日期' }]}
+                    style={{ marginBottom: 0 }}
                   >
-                    添加时段
-                  </Button>
-                </div>
-              )}
-            </Form.List>
+                    <DatePicker placeholder="选择面授日期" style={{ width: 160 }} />
+                  </Form.Item>
+                  <Form.Item
+                    name="face_time"
+                    label="面授时间"
+                    rules={[{ required: true, message: '请选择面授时间' }]}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
+                  </Form.Item>
+                </Space>
+                <Space className="w-full" align="start" wrap>
+                  <Form.Item
+                    name="self_date"
+                    label="自学日期"
+                    rules={[{ required: true, message: '请选择自学日期' }]}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <DatePicker placeholder="选择自学日期" style={{ width: 160 }} />
+                  </Form.Item>
+                  <Form.Item
+                    name="self_time"
+                    label="自学时间"
+                    rules={[{ required: true, message: '请选择自学时间' }]}
+                    style={{ marginBottom: 0 }}
+                  >
+                    <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
+                  </Form.Item>
+                </Space>
+                <p className="text-xs text-gray-400">面授+自学模式：面授与自学分别记录日期时间，课时按面授时间计算</p>
+              </div>
+            ) : (
+              <Form.List name="time_slots" initialValue={[{ date: null, time: [dayjs('08:00', 'HH:mm'), dayjs('12:00', 'HH:mm')] }]}>
+                {(fields, { add, remove }) => (
+                  <div className="md:col-span-2 space-y-2">
+                    {fields.map(({ key, name, ...rest }, index) => (
+                      <Space key={key} className="w-full" align="start" wrap>
+                        <Form.Item
+                          name={[name, 'date']}
+                          label={fields.length > 1 ? `时段${index + 1}日期` : '培训日期'}
+                          rules={[{ required: true, message: '请选择日期' }]}
+                          style={{ marginBottom: 0 }}
+                        >
+                          <DatePicker placeholder="选择日期" style={{ width: 160 }} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[name, 'time']}
+                          label={fields.length > 1 ? `时段${index + 1}时间` : '培训时间'}
+                          rules={[{ required: true, message: '请选择时间' }]}
+                          style={{ marginBottom: 0 }}
+                        >
+                          <TimePicker.RangePicker format="HH:mm" style={{ width: 200 }} />
+                        </Form.Item>
+                        {fields.length > 1 && (
+                          <Button
+                            type="text"
+                            icon={<MinusCircleOutlined />}
+                            onClick={() => remove(name)}
+                            style={{ marginTop: 30 }}
+                            danger
+                          />
+                        )}
+                      </Space>
+                    ))}
+                    <Button
+                      type="dashed"
+                      onClick={() => add({ date: null, time: [dayjs('09:00', 'HH:mm'), dayjs('10:00', 'HH:mm')] })}
+                      icon={<PlusOutlined />}
+                      block
+                    >
+                      添加时段
+                    </Button>
+                  </div>
+                )}
+              </Form.List>
+            )}
 
             <Form.Item name="location" label="培训地点">
               <Input placeholder="请输入培训地点" />
