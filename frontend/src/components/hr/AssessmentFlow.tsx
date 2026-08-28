@@ -6,6 +6,7 @@ import {
   Button,
   DatePicker,
   Input,
+  InputNumber,
   Modal,
   Space,
   Table,
@@ -76,6 +77,10 @@ export default function AssessmentFlow({
   const [scoreRows, setScoreRows] = useState<ScoreRow[]>([])
   const [assessedDate, setAssessedDate] = useState<dayjs.Dayjs | null>(null)
   const [saving, setSaving] = useState(false)
+  // 随机赋分弹窗
+  const [randomOpen, setRandomOpen] = useState(false)
+  const [randomRatio, setRandomRatio] = useState(0.3)
+  const [randomizing, setRandomizing] = useState(false)
 
   // 历史列表
 
@@ -209,6 +214,24 @@ export default function AssessmentFlow({
     finally { setSaving(false) }
   }
 
+  const handleRandomize = async () => {
+    if (!assessmentId) { message.warning('请先创建考核场次'); return }
+    setRandomizing(true)
+    try {
+      const res = await randomizeQaScores(assessmentId, { excellent_ratio: randomRatio })
+      const generated = res.data?.scores || []
+      // 直接回填矩阵，可继续点击格子调整随机结果
+      setScoreRows((rows) => rows.map((r) => {
+        const g = generated.find((s) => s.employee_name === r.employee_name)
+        return g ? { ...r, employee_number: g.employee_number || r.employee_number, wrong: new Set(g.wrong_questions || []) } : r
+      }))
+      if (!assessedDate) setAssessedDate(dayjs())
+      setRandomOpen(false)
+      message.success(res.message || `已随机生成 ${generated.length} 人成绩`)
+    } catch (e: any) { message.error(e.message || '随机赋分失败') }
+    finally { setRandomizing(false) }
+  }
+
   const questionCount = assessment?.question_count || pickedQuestions.length || 0
   const scoreColumns = useMemo(() => {
     const cols: any[] = [
@@ -305,23 +328,7 @@ export default function AssessmentFlow({
                 <Button size="small" icon={<DownloadOutlined />}
                   loading={exporting === `scores-${assessmentId}`}
                   onClick={() => handleExport('scores')}>导出成绩单</Button>
-                <Button size="small"
-                  onClick={async () => {
-                    const ratio = parseFloat(prompt('输入优秀比例（0-1，默认0.3）', '0.3') || '0.3')
-                    if (isNaN(ratio) || ratio < 0 || ratio > 1) return
-                    try {
-                      const res = await randomizeQaScores(assessmentId, { excellent_ratio: ratio })
-                      const generated = res.data?.scores || []
-                      // 直接回填矩阵，可继续点击格子调整随机结果
-                      setScoreRows((rows) => rows.map((r) => {
-                        const g = generated.find((s) => s.employee_name === r.employee_name)
-                        return g ? { ...r, employee_number: g.employee_number || r.employee_number, wrong: new Set(g.wrong_questions || []) } : r
-                      }))
-                      if (!assessedDate) setAssessedDate(dayjs())
-                      message.success(res.message || `已随机生成 ${generated.length} 人成绩`)
-                    } catch (e: any) { message.error(e.message || '随机赋分失败') }
-                  }}
-                >随机赋分</Button>
+                <Button size="small" onClick={() => setRandomOpen(true)}>随机赋分</Button>
                 <Button size="small" icon={<DatabaseOutlined />} type="primary"
                   loading={saving}
                   onClick={handleSyncLedger}>同步到台账</Button>
@@ -355,6 +362,34 @@ export default function AssessmentFlow({
           rowSelection={{ selectedRowKeys: pickedIds, onChange: (keys) => setPickedIds(keys as string[]), preserveSelectedRowKeys: true }}
           pagination={{ current: bankPage, pageSize: 50, total: bankTotal, onChange: (p) => loadBank(p) }}
           columns={bankColumns} scroll={{ y: 380 }} />
+      </Modal>
+
+      {/* 随机赋分弹窗 */}
+      <Modal
+        title="随机赋分"
+        open={randomOpen}
+        onCancel={() => setRandomOpen(false)}
+        onOk={handleRandomize}
+        okText="生成随机成绩"
+        confirmLoading={randomizing}
+        width={420}
+      >
+        <div className="space-y-3 py-2">
+          <p className="text-sm text-gray-600">
+            按比例随机选取「优秀」，其余为「合格」；错题位置随机分布。
+            生成后可继续在矩阵中点击格子微调，最后「同步到台账」保存。
+          </p>
+          <div className="flex items-center gap-3">
+            <span className="text-sm">优秀比例：</span>
+            <InputNumber
+              min={0} max={1} step={0.05}
+              value={randomRatio}
+              onChange={(v) => setRandomRatio(v ?? 0.3)}
+              style={{ width: 120 }}
+            />
+            <span className="text-xs text-gray-400">0-1，默认 0.3</span>
+          </div>
+        </div>
       </Modal>
     </div>
   )

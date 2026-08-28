@@ -491,7 +491,7 @@ async def update_sop_entry(
 
 
 async def _do_transfer(session: AsyncSession, e, operator: str) -> None:
-    """单条转培训：自动带出该部门当前培训师。"""
+    """单条转培训：自动带出该部门当前培训师，并把涉及人员自动关联到该条分类标签。"""
     if e.status == "已转训":
         return
     trainer = await _lookup_level1_trainer(session, e.department)
@@ -499,6 +499,50 @@ async def _do_transfer(session: AsyncSession, e, operator: str) -> None:
     e.status = "已转训"
     e.transferred_by = operator
     e.transferred_at = datetime.now(UTC)
+    await _link_classification_tags(session, e, operator)
+
+
+async def _link_classification_tags(session: AsyncSession, e, operator: str) -> None:
+    """转训自动关联分类：二级表涉及人员的自定义分类写入员工标签（幂等）。
+
+    之后「员工档案-分类」与「二级表按分类拉人」会自动包含这些人。
+    """
+    import json as _json
+
+    from app.modules.hr.models import EmployeeTag
+
+    if not e.classification:
+        return
+    personnel = e.personnel or []
+    if isinstance(personnel, str):
+        try:
+            personnel = _json.loads(personnel)
+        except ValueError:
+            return
+    if not isinstance(personnel, list):
+        return
+    numbers = {
+        str(p.get("employee_number") or "").strip()
+        for p in personnel
+        if isinstance(p, dict) and (p.get("employee_number") or "").strip()
+    }
+    if not numbers:
+        return
+    existing = (await session.execute(
+        select(EmployeeTag).where(
+            EmployeeTag.is_deleted == False,  # noqa: E712
+            EmployeeTag.tag_name == e.classification,
+            EmployeeTag.employee_number.in_(numbers),
+        )
+    )).scalars().all()
+    have = {(t.employee_number, t.tag_name) for t in existing}
+    for num in numbers:
+        if (num, e.classification) in have:
+            continue
+        session.add(EmployeeTag(
+            employee_number=num, tag_name=e.classification, created_by=operator,
+        ))
+    await session.flush()
 
 
 @router.post("/sop-training-entries/{entry_id}/transfer", summary="转培训")

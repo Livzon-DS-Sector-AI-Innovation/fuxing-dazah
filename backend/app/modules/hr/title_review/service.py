@@ -169,14 +169,18 @@ def _as_bool_text(value: Any) -> bool:
 
 
 def _image_list_to_text(value: Any) -> str | None:
-    """审批图片控件值（[{url,name,...}]）→ 「名称 链接」逐行文本。"""
+    """审批图片控件值（[{url,name,...}]）→ 「名称 链接」逐行文本。
+
+    兼容两种附件结构：图片控件 [{name,url}] 与审批附件对象
+    [{name,link}]（镜像表中单附件可能为单个 dict，调用方包一层 list）。
+    """
     if not isinstance(value, list):
         return None
     lines: list[str] = []
     for item in value:
         if isinstance(item, dict):
             name = str(item.get("name") or "")
-            url = str(item.get("url") or "")
+            url = str(item.get("url") or item.get("link") or "")
             lines.append(f"{name} {url}".strip())
         else:
             lines.append(str(item))
@@ -1894,9 +1898,11 @@ class TitleReviewService:
                             else:
                                 lines.append(str(item))
                         value = "\n".join(line for line in lines if line)
-                if col in IMAGE_EVIDENCE_FIELDS and isinstance(value, list):
-                    # 图片控件：下载转存本地（飞书签名链接约 1 天过期），本地路径永久可看
-                    text = _image_list_to_text(value) or ""
+                if col in IMAGE_EVIDENCE_FIELDS and (isinstance(value, (list, dict))):
+                    # 图片/附件控件：下载转存本地（飞书签名链接约 1 天过期），本地路径永久可看
+                    # 镜像表中单附件可能是单个 dict（{name,link}），包一层 list 统一处理
+                    items = value if isinstance(value, list) else [value]
+                    text = _image_list_to_text(items) or ""
                     value = await _image_text_to_local(text)
                 if col in row:
                     existing = _as_str(row[col]) or ""

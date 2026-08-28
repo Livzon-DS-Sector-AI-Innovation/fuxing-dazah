@@ -158,7 +158,14 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       if (s.applications_removed) parts.push(`移除申报 ${s.applications_removed} 条`)
       if (s.votes_updated) parts.push(`票数更新 ${s.votes_updated} 条`)
       if (s.errors?.length) parts.push(`失败 ${s.errors.length} 项`)
-      message.success(parts.length ? `对账完成：${parts.join('，')}` : '对账完成：本次无变化')
+      const msg = parts.length ? `对账完成：${parts.join('，')}` : '对账完成：本次无变化'
+      if (s.errors?.length) {
+        // 失败时把第一条错误原因直接展示（截断，避免超长 URL 刷屏）
+        const reason = String(s.errors[0]).slice(0, 150)
+        message.warning(`${msg}；原因：${reason}`, 8)
+      } else {
+        message.success(msg)
+      }
       onRefresh()
     } catch (err: any) {
       message.error(err.message || '对账失败')
@@ -244,7 +251,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
       render: (_: unknown, r: TitleReviewActivityListItem) => (
         <Space size={4} wrap>
           {r.status === 'draft' && canManage && <Button size="small" onClick={() => openEdit(r)}>编辑</Button>}
-          {r.status !== 'closed' && canManage && (
+          {r.status === 'draft' && canManage && (
             <Button size="small" icon={<ReloadOutlined />} onClick={() => runAction(bindTitleTables, r.id, '绑定成功')}>绑定表格</Button>
           )}
           {r.status === 'draft' && canManage && (
@@ -258,9 +265,6 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           )}
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
             <Button size="small" danger onClick={() => runAction(closeTitleActivity, r.id, '活动已结束')}>结束</Button>
-          )}
-          {(r.status === 'open' || r.status === 'reviewing') && (
-            <Button size="small" onClick={() => onSelectActivity(r.id)}>管理申报</Button>
           )}
           {canManage && (
             <Popconfirm
