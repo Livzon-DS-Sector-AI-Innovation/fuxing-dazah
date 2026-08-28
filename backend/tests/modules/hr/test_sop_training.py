@@ -1,9 +1,10 @@
 """SOP 培训文件登记表 + 二级表接口测试"""
 
+import json
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 
 class TestSopRegisterFlow:
@@ -115,6 +116,42 @@ class TestSopRegisterFlow:
         assert e1.status == "已转训" and e1.trainer == "张培训师"
         assert e2.status == "已转训" and e2.trainer == "李培训师"
         assert e3.status == "待转训"
+
+    @pytest.mark.asyncio
+    async def test_transfer_auto_links_classification_tags(self, db_session, client):
+        """转训自动关联分类：涉及人员写入员工标签（幂等）。"""
+        from app.modules.hr.models import EmployeeTag, SopTrainingEntry
+
+        e = SopTrainingEntry(
+            record_id=None, department="甲部门",
+            classification="新员工",
+            personnel=json.dumps([{"employee_number": "T001", "name": "张三"},
+                                  {"employee_number": "T002", "name": "李四"}]),
+        )
+        db_session.add(e)
+        await db_session.flush()
+
+        res = await client.post(f"/api/v1/hr/sop-training-entries/{e.id}/transfer")
+        assert res.status_code == 200, res.text
+
+        tags = (await db_session.execute(
+            select(EmployeeTag).where(
+                EmployeeTag.tag_name == "新员工",
+                EmployeeTag.is_deleted == False,  # noqa: E712
+            )
+        )).scalars().all()
+        assert {t.employee_number for t in tags} == {"T001", "T002"}
+
+        # 幂等：再次转训不重复打标（状态已转训直接返回，标签数不变）
+        res = await client.post(f"/api/v1/hr/sop-training-entries/{e.id}/transfer")
+        assert res.status_code == 200
+        tags2 = (await db_session.execute(
+            select(EmployeeTag).where(
+                EmployeeTag.tag_name == "新员工",
+                EmployeeTag.is_deleted == False,  # noqa: E712
+            )
+        )).scalars().all()
+        assert len(tags2) == len(tags)
 
     @pytest.mark.asyncio
     async def test_update_entry_complete_time(self, db_session, client):
