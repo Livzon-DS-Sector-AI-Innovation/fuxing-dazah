@@ -2099,7 +2099,9 @@ class CandidateReviewService:
             if is_onboarding:
                 if c.status != "待入职审批":
                     raise ValueError(f"候选人状态为「{c.status}」，与入职审批不匹配")
-                new_status = "已入职" if decision == "已同意" else "已录用"
+                # 同意后保持「待入职审批」：实际入职由 HR 执行 onboard()
+                # （创建入职记录/工号/子任务），避免状态直接跳「已入职」导致入职链断裂
+                new_status = None if decision == "已同意" else "已录用"
             else:
                 if c.status not in ("待部门审核", "面试中"):
                     raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
@@ -2170,6 +2172,10 @@ class CandidateReviewService:
             to_status="待入职审批",
             remark=f"发起入职审批，审批人：{reviewer}",
         ))
+
+        # 通知审批人（与部门审核 push 行为一致）
+        jd = await self.jd_repo.get_by_id(c.job_requirement_id) if c.job_requirement_id else None
+        await self._send_review_card(result, c, jd, push_note)
 
         return result
 
@@ -2250,8 +2256,10 @@ class PerformanceEvaluationService:
         e = await self.repo.get_by_id(evaluation_id)
         if e is None:
             raise ValueError("考核记录不存在")
-        if e.status not in ("draft",):
-            raise ValueError("仅草稿状态可编辑")
+        if e.status not in ("draft", "self_submitted"):
+            # 自评提交后进入领导评分阶段，允许继续编辑指标项（leader_score）；
+            # leader_scored 终态后不可再改
+            raise ValueError("仅草稿或待领导评分状态可编辑")
 
         if data.department_head is not None:
             e.department_head = data.department_head
@@ -2275,7 +2283,9 @@ class PerformanceEvaluationService:
             raise ValueError("考核记录不存在")
         if e.status != "draft":
             raise ValueError("仅草稿状态可提交自评")
-        if user_name and e.department_head and user_name != e.department_head:
+        if not e.department_head:
+            raise PermissionError("考核未配置部门负责人，无法提交自评")
+        if user_name and user_name != e.department_head:
             raise PermissionError("仅部门负责人可提交自评")
         e.status = "self_submitted"
         e.self_submitted_at = datetime.now(UTC)
@@ -2292,7 +2302,9 @@ class PerformanceEvaluationService:
             raise ValueError("考核记录不存在")
         if e.status not in ("draft", "self_submitted"):
             raise ValueError("仅草稿或已自评状态可提交领导评分")
-        if user_name and e.evaluator_leader and user_name != e.evaluator_leader:
+        if not e.evaluator_leader:
+            raise PermissionError("考核未配置分管领导，无法提交领导评分")
+        if user_name and user_name != e.evaluator_leader:
             raise PermissionError("仅分管领导可提交领导评分")
         e.status = "leader_scored"
         e.leader_submitted_at = datetime.now(UTC)

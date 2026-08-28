@@ -278,6 +278,7 @@ class TestFlowAndVotes:
         activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
+        await service.start_review(activity.id)
         emp = await _create_employee(db_session, "申报人", f"A{_rand()}")
         application = m.TitleReviewApplication(
             activity_id=activity.id,
@@ -381,6 +382,7 @@ class TestJudgeVote:
         activity.vote_table_id = "tbl12345678902"
         await db_session.flush()
         await service.open_activity(activity.id)
+        await service.start_review(activity.id)
         emp = await _create_employee(db_session, "申报人", f"A{_rand()}")
         application = m.TitleReviewApplication(
             activity_id=activity.id,

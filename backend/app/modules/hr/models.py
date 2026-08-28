@@ -1053,7 +1053,7 @@ class QaAssessmentScore(BaseModel):
     wrong_questions: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="错题序号（1-indexed）")
     total_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default="100", comment="总分")
     grade: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="等级：优秀/合格/不合格")
-    result_text: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="成绩说明")
+    result_text: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="成绩说明")
     assessed_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="考核日期")
 
 

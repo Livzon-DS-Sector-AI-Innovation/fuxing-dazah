@@ -1,7 +1,7 @@
 """候选人管理接口"""
 
 import os
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
 from app.modules.hr.schemas import (
     CandidateAnalysisReportOut,
     CandidateCreate,
@@ -43,7 +44,8 @@ async def parse_cv(file: UploadFile = Form(..., alias="resume")):
     from app.modules.hr.resume_parser import parse_resume_pdf
     os.makedirs("uploads/resumes", exist_ok=True)
     content = bytes(await file.read())
-    path = f"uploads/resumes/{file.filename}"
+    # 文件名加 uuid 前缀，避免同名简历互相覆盖
+    path = f"uploads/resumes/{uuid4().hex[:8]}_{file.filename}"
     open(path, "wb").write(content)
     r = parse_resume_pdf(content)
     r["resume_file_path"] = path
@@ -133,11 +135,15 @@ async def list_pending_review(
     reviewer: str | None = Query(None, description="审核人姓名"),
     service: CandidateService = Depends(get_service),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
-    rows = await rv_service.list_pending(reviewer=reviewer)
+    # 缺省按当前用户过滤（“待我审核”语义），显式传 reviewer 时按指定人查询
+    rows = await rv_service.list_pending(
+        reviewer=reviewer or hr_scope.user.name or None
+    )
     return success_response(data=[{
         "review": CandidateReviewResponse.model_validate(row["review"]).model_dump(mode="json"),
         "candidate": CandidateResponse.model_validate(row["candidate"]).model_dump(mode="json"),
@@ -270,9 +276,12 @@ async def decide_review(
     cid: UUID,
     payload: DecideReviewRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
+    from app.platform.permission.deps import get_user_permissions
+
     rv_service = CandidateReviewService(session)
     try:
         # 支持通过 review_id 或自动按 candidate_id 查找待审核记录
@@ -280,6 +289,12 @@ async def decide_review(
             review_id = UUID(payload.review_id)
         else:
             review_id = await rv_service.find_pending_review_id(cid)
+        # 仅审核人（或管理权限）可做审核决策
+        rv = await rv_service.repo.get_by_id(review_id)
+        perms = await get_user_permissions(str(hr_scope.user.id), session)
+        is_manager = "hr:recruitment:manage" in perms
+        if not is_manager and rv and rv.reviewer and rv.reviewer != hr_scope.user.name:
+            raise HTTPException(403, f"该审核由 {rv.reviewer} 负责，您无权操作")
         r = await rv_service.decide(review_id, payload.decision, payload.review_comment)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
     except ValueError as e:

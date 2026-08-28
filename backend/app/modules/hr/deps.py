@@ -372,6 +372,7 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
                           "DELETE": "hr:training:manage"}),
     # 笔试试卷
     (r"/exam-papers", "hr:training:exam"),
+    (r"/exam", {"POST": "hr:training:exam"}),
     # 培训文档生成 & AI 出题
     (r"/training-sign-in-sheet", "hr:training:document"),
     (r"/training-notification/generate-assessment", "hr:training:manage"),

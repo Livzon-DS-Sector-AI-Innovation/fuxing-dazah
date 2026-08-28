@@ -3188,7 +3188,7 @@ async def save_qa_scores(
         if existing:
             await session.execute(
                 text("UPDATE hr.qa_assessment_scores SET wrong_questions=:wq, total_score=:ts, assessed_date=:ad, grade=:g, result_text=:rt WHERE id=:id"),
-                {"wq": _json.dumps(wrong), "ts": score, "ad": _d(payload.assessed_date), "g": grade, "rt": result_text[:16], "id": existing[0]},
+                {"wq": _json.dumps(wrong), "ts": score, "ad": _d(payload.assessed_date), "g": grade, "rt": result_text, "id": existing[0]},
             )
         else:
             await session.execute(
@@ -3197,7 +3197,7 @@ async def save_qa_scores(
                     "aid": assessment_id, "nm": name,
                     "en": s.get("employee_number", ""),
                     "wq": _json.dumps(wrong), "ts": score,
-                    "g": grade, "rt": result_text[:16],
+                    "g": grade, "rt": result_text,
                     "ad": _d(payload.assessed_date),
                 },
             )
@@ -3347,7 +3347,7 @@ async def random_qa_scores(
             "wrong_questions": wrong,
             "total_score": score,
             "grade": "优秀" if score >= el else ("合格" if score >= pl else "不合格"),
-            "result_text": result_text[:16],
+            "result_text": result_text,
             "assessed_date": today,
         })
 
@@ -3525,6 +3525,23 @@ async def export_training_qa_record_with_scores(
         )).fetchone()
         if existing_row:
             assessment_id = existing_row[0]
+            # 复用已有场次时同样把本次成绩写入（幂等：按姓名 upsert，不静默丢成绩）
+            for s in scores_raw:
+                name = s.get("name", "")
+                prev = (await session.execute(
+                    text("SELECT id FROM hr.qa_assessment_scores WHERE assessment_id = :aid AND employee_name = :nm"),
+                    {"aid": str(assessment_id), "nm": name},
+                )).fetchone()
+                if prev:
+                    await session.execute(
+                        text("UPDATE hr.qa_assessment_scores SET wrong_questions = :wrong, total_score = :score, assessed_date = :date WHERE id = :id"),
+                        {"wrong": _json.dumps(s.get("wrong_questions", [])), "score": s.get("total_score", 0), "date": training_date_val, "id": prev[0]},
+                    )
+                else:
+                    await session.execute(
+                        text("INSERT INTO hr.qa_assessment_scores (id, assessment_id, employee_name, wrong_questions, total_score, assessed_date) VALUES (gen_random_uuid(), :aid, :name, :wrong, :score, :date)"),
+                        {"aid": assessment_id, "name": name, "wrong": _json.dumps(s.get("wrong_questions", [])), "score": s.get("total_score", 0), "date": training_date_val},
+                    )
         else:
             assessment_id = _uuid.uuid4()
             await session.execute(
@@ -3575,9 +3592,9 @@ async def export_score_report(body: QaRecordExportRequest, session: AsyncSession
         score = s.get("total_score", 0)
         if not name:
             continue
-        # 查找该员工的工号
+        # 查找该员工的工号（与其他成绩路径统一走 hr.employees）
         emp_row = (await session.execute(
-            text("SELECT employee_number FROM hr.onboarding_records WHERE name = :n AND is_deleted = false AND is_employed = '是' LIMIT 1"),
+            text("SELECT employee_number FROM hr.employees WHERE name = :n AND is_deleted = false LIMIT 1"),
             {"n": name},
         )).fetchone()
         emp_no = emp_row[0] if emp_row else None
@@ -3719,7 +3736,7 @@ async def export_qa_evaluation(
     )
 
     row = (await session.execute(
-        text("SELECT subject, department, training_date, training_method, trainer, assessment_method FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
+        text("SELECT subject, department, training_date, training_method, trainer, assessment_method, excellent_line, pass_line FROM hr.qa_assessments WHERE id = :id AND is_deleted = false"),
         {"id": assessment_id},
     )).fetchone()
     if not row:
@@ -3731,11 +3748,13 @@ async def export_qa_evaluation(
         {"aid": assessment_id},
     )).fetchall()
 
-    # 从成绩汇总统计
+    # 从成绩汇总统计（等级线取场次配置，缺省 90/80）
+    excellent_line = row[6] or 90
+    pass_line = row[7] or 80
     total = len(scores)
-    excellent = sum(1 for s in scores if (s[1] or 0) >= 90)
-    qualified = sum(1 for s in scores if 80 <= (s[1] or 0) < 90)
-    unqualified = sum(1 for s in scores if (s[1] or 0) < 80)
+    excellent = sum(1 for s in scores if (s[1] or 0) >= excellent_line)
+    qualified = sum(1 for s in scores if pass_line <= (s[1] or 0) < excellent_line)
+    unqualified = sum(1 for s in scores if (s[1] or 0) < pass_line)
 
     # 应到人数 = 部门总人数
     dept_count = (await session.execute(
@@ -5074,9 +5093,11 @@ async def save_employee_tag(
     if not emp_no or not tag_name:
         raise HTTPException(400, "员工工号和标签名不能为空")
     if action == "remove":
+        # 删除该工号+标签的全部行（不限创建人）：转训自动打上的标签
+        # 在员工档案中必须能被移除，否则删了又出现
         await session.execute(
-            text("UPDATE hr.employee_tags SET is_deleted = true WHERE employee_number = :en AND tag_name = :tn AND created_by = :cb AND is_deleted = false"),
-            {"en": emp_no, "tn": tag_name, "cb": creator},
+            text("UPDATE hr.employee_tags SET is_deleted = true WHERE employee_number = :en AND tag_name = :tn AND is_deleted = false"),
+            {"en": emp_no, "tn": tag_name},
         )
     else:
         exist = (await session.execute(
@@ -5084,7 +5105,6 @@ async def save_employee_tag(
                 EmployeeTag.is_deleted == False,
                 EmployeeTag.employee_number == emp_no,
                 EmployeeTag.tag_name == tag_name,
-                EmployeeTag.created_by == creator,
             )
         )).scalar_one_or_none()
         if not exist:
@@ -5645,9 +5665,11 @@ def _safe_sheet_name(name: str) -> str:
 async def export_performance_report(
     month: str = Query(..., description="考核月份 YYYY-MM"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """汇总报表：一个工作簿，每个考核项目一个工作表（行=部门评分明细），
-    另有「部门总分」总表。适配多人评分模型：部门×项目子集各不相同。"""
+    另有「部门总分」总表。适配多人评分模型：部门×项目子集各不相同。
+    数据范围受限用户只导出授权部门。"""
     from io import BytesIO
 
     from openpyxl import Workbook
@@ -5658,12 +5680,12 @@ async def export_performance_report(
         PerformanceCategoryScore,
     )
 
-    evs = (await session.execute(
-        select(MonthlyPerformanceEvaluation).where(
-            MonthlyPerformanceEvaluation.evaluation_month == month,
-            MonthlyPerformanceEvaluation.is_deleted == False,  # noqa: E712
-        )
-    )).scalars().all()
+    stmt = select(MonthlyPerformanceEvaluation).where(
+        MonthlyPerformanceEvaluation.evaluation_month == month,
+        MonthlyPerformanceEvaluation.is_deleted == False,  # noqa: E712
+    )
+    stmt = hr_scope.apply_list_scope(stmt, MonthlyPerformanceEvaluation)
+    evs = (await session.execute(stmt)).scalars().all()
     if not evs:
         raise HTTPException(404, f"{month} 无考核数据")
     ev_by_id = {e.id: e for e in evs}

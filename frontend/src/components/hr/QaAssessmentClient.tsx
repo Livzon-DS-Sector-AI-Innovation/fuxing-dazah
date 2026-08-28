@@ -92,7 +92,7 @@ export default function QaAssessmentClient() {
               render: (v: number[] | null) => (v && v.length > 0) ? v.join(', ') : '全对' },
             { title: '总分', dataIndex: 'total_score', width: 70, align: 'center' as const },
             { title: '等级', dataIndex: 'grade', width: 80, align: 'center' as const,
-              render: (v: string) => <Tag color={v === '优' ? 'green' : v === '合格' ? 'blue' : 'red'}>{v}</Tag> },
+              render: (v: string) => <Tag color={v === '优秀' ? 'green' : v === '合格' ? 'blue' : 'red'}>{v}</Tag> },
             { title: '得分情况', dataIndex: 'result_text', ellipsis: true },
             { title: '考核日期', dataIndex: 'assessed_date', width: 110 },
           ]}

@@ -405,7 +405,7 @@ async def export_results(
 async def export_roster(
     activity_id: UUID,
     payload: dict[str, Any],
-    ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:scores:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> StreamingResponse:
     """HR 勾选评审合格人员 → 生成表格名单（序号/职务/姓名/职级认定结果）。"""

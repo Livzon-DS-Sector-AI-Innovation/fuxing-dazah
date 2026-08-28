@@ -31,7 +31,7 @@ def get_ai_service(session: AsyncSession = Depends(get_db)) -> AiEvaluationServi
 
 
 @router.get("/candidates/{cid}/interviews", summary="候选人面试列表")
-async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
+async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read"))):
     rows = await service.list_by_candidate(cid)
     return success_response(data=[InterviewResponse.model_validate(r).model_dump(mode="json") for r in rows])
 
@@ -44,7 +44,7 @@ async def create_interview(payload: InterviewCreate, service: InterviewService =
 
 
 @router.get("/interviews/{interview_id}", summary="面试详情")
-async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
+async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read"))):
     r = await service.get(interview_id)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"))
 

@@ -173,7 +173,11 @@ class TestCandidate:
         ))
         await db_session.flush()
 
+        # 缺省按当前用户过滤（HR测试员非审核人 → 空）；显式传 reviewer 可查
         resp = await client.get("/api/v1/hr/candidates/pending-review")
+        assert resp.status_code == 200
+        assert not any(r["candidate"]["id"] == str(c.id) for r in resp.json()["data"])
+        resp = await client.get("/api/v1/hr/candidates/pending-review?reviewer=李四")
         assert resp.status_code == 200
         assert any(r["candidate"]["id"] == str(c.id) for r in resp.json()["data"])
 

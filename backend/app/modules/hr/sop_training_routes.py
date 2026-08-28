@@ -796,10 +796,14 @@ async def batch_generate_materials(
     ids = payload.get("ids") or []
     if not ids:
         raise HTTPException(400, "请选择记录")
+    try:
+        entry_ids = [UUID(i) for i in ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "记录 ID 格式不正确")
     rows = (await session.execute(
         select(SopTrainingEntry).where(
             SopTrainingEntry.is_deleted == False,  # noqa: E712
-            SopTrainingEntry.id.in_([UUID(i) for i in ids]),
+            SopTrainingEntry.id.in_(entry_ids),
         )
     )).scalars().all()
     if not rows:

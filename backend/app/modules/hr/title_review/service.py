@@ -958,6 +958,17 @@ class TitleReviewService:
         existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
         if existing:
             return None
+        # 申报截止：超期的新申报不再落库（已存在记录的更新不受影响）
+        if activity.apply_deadline:
+            deadline = activity.apply_deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.astimezone()
+            if datetime.now().astimezone() > deadline:
+                logger.warning(
+                    "申报已过截止时间，跳过落库: activity=%s record=%s",
+                    activity.id, record_id,
+                )
+                return None
         parsed = _apply_fields_to_dict(fields)
         employee = await self._match_employee(parsed["employee_no"], parsed["name"])
         profile = None
@@ -1769,6 +1780,8 @@ class TitleReviewService:
         if application.status not in (m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED):
             raise HTTPException(400, f"当前状态不可投票：{application.status}")
         activity = await self.activity_repo.get_by_id(application.activity_id)
+        if activity and activity.status != m.ACTIVITY_REVIEWING:
+            raise HTTPException(400, f"活动当前状态不可投票：{activity.status}")
         if activity and activity.review_deadline:
             deadline = activity.review_deadline
             if deadline.tzinfo is None:
@@ -1776,6 +1789,23 @@ class TitleReviewService:
                 deadline = deadline.astimezone()
             if datetime.now().astimezone() > deadline:
                 raise HTTPException(400, "评审已截止，不可再投票")
+
+        # 弃权：显式选择，不参与 7 维计算与票数分母
+        if data.vote_result == m.VOTE_ABSTAIN:
+            judge.vote_result = m.VOTE_ABSTAIN
+            judge.comprehensive_grade = None
+            judge.review_comment = data.review_comment
+            judge.voted_at = datetime.now().astimezone()
+            judge = await self.judge_repo.update(judge)
+            await _audit(
+                self.session,
+                action="hr.title.judge_vote",
+                resource_type="title_review_judge",
+                resource_id=judge.id,
+                extra={"judge_code": judge.judge_code, "vote_result": m.VOTE_ABSTAIN},
+            )
+            await self._maybe_finalize(application.id)
+            return judge
 
         dims = await self.dimension_repo.list_by_activity(application.activity_id)
         grades = [(data.dimension_grades or {}).get(d.name) for d in dims]
@@ -2189,6 +2219,21 @@ class TitleReviewService:
                     if existing.status in TERMINAL_APPLICATION_STATUSES:
                         # 终态申报仅申报信息放开更新，票数/判定结果仍冻结
                         stats["terminal_applications_updated"] += 1
+                # 对账同样重跑员工匹配：invalid 申报在员工档案补全后自动转正，
+                # 与事件编辑路径能力对齐
+                employee = await self._match_employee(
+                    parsed["employee_no"], parsed["name"]
+                )
+                if employee:
+                    existing.employee_id = employee.id
+                    if not existing.department:
+                        existing.department = (
+                            employee.actual_department or employee.department
+                        )
+                    if existing.status == m.APPLICATION_INVALID:
+                        existing.status = m.APPLICATION_SUBMITTED
+                        await self._promote_and_assign_if_reviewing(activity, existing)
+                        changed = True
                 profile_stale = (
                     existing.profile is None
                     or existing.profile_refreshed_at is None
@@ -2210,8 +2255,11 @@ class TitleReviewService:
                     await self.application_repo.update(existing)
             else:
                 try:
-                    await self.sync_apply_record_added(activity.id, record_id, fields)
-                    stats["applications_created"] += 1
+                    created_app = await self.sync_apply_record_added(
+                        activity.id, record_id, fields
+                    )
+                    if created_app is not None:
+                        stats["applications_created"] += 1
                 except IntegrityError:
                     # 审批实例编号全局唯一：申报行已归属其他活动时记入 errors 而非 500
                     logger.warning(

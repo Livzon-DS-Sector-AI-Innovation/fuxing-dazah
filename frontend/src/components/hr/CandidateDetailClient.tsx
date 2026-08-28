@@ -151,6 +151,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       const r = await fetchCandidateInterviews(candidate.id)
       setInterviews(r.data || [])
+      // 已有胜任度报告随页面加载展示（自动生成的历史报告不再隐藏）
+      fetchCandidateAnalysisReports(candidate.id)
+        .then((d) => setAnalysisReports(d.data || []))
+        .catch(() => {})
       for (const iv of (r.data || [])) {
         try {
           const er = await fetchInterviewEvaluation(iv.id)

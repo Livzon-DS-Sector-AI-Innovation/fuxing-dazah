@@ -6,8 +6,8 @@ import { SaveOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { fetchPerformanceEvaluations, fetchPerformanceCategories, fetchCategoryScores, saveCategoryScores } from '@/actions/hr'
 
-export default function PerformanceCategoryScoreClient() {
-  const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
+export default function PerformanceCategoryScoreClient({ initialMonth }: { initialMonth?: string }) {
+  const [month, setMonth] = useState(initialMonth || dayjs().format('YYYY-MM'))
   const [evaluations, setEvaluations] = useState<any[]>([])
   const [categories, setCategories] = useState<any[]>([])
   const [scores, setScores] = useState<Record<string, Record<string, { score: number | null; weight: number }>>>({})
@@ -88,8 +88,7 @@ export default function PerformanceCategoryScoreClient() {
               style={{ width: '100%' }}
             />
             <InputNumber size="small" min={0} max={100} placeholder="权重%"
-              value={v?.weight ?? c.weight} disabled={!editable}
-              onChange={(val) => handleWeight(record.id, c.id, val || 0)}
+              value={v?.weight ?? c.weight} disabled
               style={{ width: '100%' }}
               addonAfter="%"
             />

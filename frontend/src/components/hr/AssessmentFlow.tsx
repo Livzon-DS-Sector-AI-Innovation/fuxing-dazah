@@ -21,6 +21,7 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchQuestionBank,
+  fetchQaAssessmentDetail,
   createQaAssessment,
   saveQaAssessmentScores,
   syncQaAssessmentLedger,
@@ -118,6 +119,10 @@ export default function AssessmentFlow({
       const id = data.data?.id
       if (!id) throw new Error('创建失败：未返回ID')
       setAssessmentId(id)
+      // 加载场次配置（优秀/合格线、满分），前端等级判定与后端一致
+      fetchQaAssessmentDetail(id)
+        .then((d) => setAssessment((d.data as any)?.assessment || null))
+        .catch(() => {})
       // 初始化成绩行
       setScoreRows(employeeNames.map((name) => ({
         employee_name: name,
