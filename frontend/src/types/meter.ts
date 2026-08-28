@@ -222,6 +222,7 @@ export interface ReportResponse {
   file_name: string
   file_size?: number
   content_type?: string
+  certificate_no?: string | null
   report_date?: string
   remark?: string
   download_url?: string
@@ -264,60 +265,45 @@ export interface BatchUploadItem {
   instrument_id?: string | null
   gas_detector_id?: string | null
   report_date?: string | null
+  certificate_no?: string | null
+  calibration_date?: string | null
 }
 
 export interface BatchUploadResult {
   success: number
   failed: number
   errors: string[]
+  notes: string[]
   report_ids: string[]
 }
 
-// ── 批量 AI 日期提取 ──
+// ── 报告内容识别 + 匹配 ──
 
-export interface BatchExtractRequest {
-  report_ids: string[]
-}
-
-export interface BatchExtractItem {
-  report_id: string
-  file_name: string
-  success: boolean
+export interface ReportFieldExtraction {
+  instrument_name?: string | null
+  serial_number?: string | null
+  certificate_no?: string | null
   calibration_date?: string | null
-  next_calibration_date?: string | null
+  method?: 'text' | 'vision' | 'failed' | null
   error?: string | null
 }
 
-export interface BatchExtractResponse {
-  total: number
-  success: number
-  failed: number
-  results: BatchExtractItem[]
+export interface ReportMatchCandidate {
+  type: 'instrument' | 'gas_detector'
+  id: string
+  name: string
+  code?: string | null
+  department?: string | null
 }
 
-// ── SSE 流式进度事件 ──
-
-export interface ExtractProgressEvent {
-  current: number
-  total: number
-  report_id: string
-  file_name: string
-}
-
-export interface ExtractResultEvent {
-  report_id: string
-  file_name: string
-  status: 'success' | 'failed'
-  calibration_date?: string
-  next_calibration_date?: string
-  error?: string
-}
-
-export interface ExtractCompleteEvent {
-  total: number
-  success: number
-  failed: number
-  interrupted: boolean
+export interface ReportAnalyzeItem {
+  filename: string
+  extraction: ReportFieldExtraction
+  matched_type?: 'instrument' | 'gas_detector' | null
+  matched_id?: string | null
+  matched_name?: string | null
+  matched_department?: string | null
+  candidates: ReportMatchCandidate[]
 }
 
 // ── 筛选选项 ──
@@ -516,6 +502,7 @@ export interface LedgerImportSheetDetail {
 export interface LedgerImportResult {
   deleted_count: number
   imported_count: number
+  updated_count: number
   sheet_count: number
   sheet_details: LedgerImportSheetDetail[]
   warnings: LedgerImportError[]

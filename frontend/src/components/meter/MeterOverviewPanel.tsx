@@ -32,7 +32,11 @@ export function MeterOverviewPanel() {
     }
   }, [source])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
+  useEffect(() => {
+    const t = setTimeout(fetchData, 0)
+    return () => clearTimeout(t)
+  }, [fetchData])
 
   return (
     <div style={{ padding: 24 }}>

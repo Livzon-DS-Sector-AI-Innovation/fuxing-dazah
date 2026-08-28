@@ -102,10 +102,12 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
   // 弹窗打开或 dateField 变化时加载数据
   useEffect(() => {
     if (!open) return
-    setDateField(initialField)
-    setCheckedKeys([])
-    setSearchText('')
-    setLoading(true)
+    // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
+    const timer = setTimeout(() => {
+      setDateField(initialField)
+      setCheckedKeys([])
+      setSearchText('')
+      setLoading(true)
     const filters: InstrumentFilter = {}
     if (keyword) filters.keyword = keyword
     for (const [field, value] of Object.entries(columnFilters)) {
@@ -115,6 +117,8 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
       .then((res) => setStats(res))
       .catch(() => message.error('获取日期统计失败'))
       .finally(() => setLoading(false))
+    }, 0)
+    return () => clearTimeout(timer)
   }, [open, initialField, columnFilters, keyword, message])
 
   // 切换日期字段时重新加载

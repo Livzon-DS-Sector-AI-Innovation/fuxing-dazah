@@ -83,7 +83,11 @@ export function CalibrationAlertPanel({ source }: Props) {
     }
   }, [daysBefore, deptFilter, source])
 
-  useEffect(() => { fetchAlerts() }, [fetchAlerts])
+  // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
+  useEffect(() => {
+    const t = setTimeout(fetchAlerts, 0)
+    return () => clearTimeout(t)
+  }, [fetchAlerts])
 
   // 根据来源动态列标题
   const serialColTitle = source === 'instrument' ? '器具编号' : source === 'gas_detector' ? '产品编号' : '编号'

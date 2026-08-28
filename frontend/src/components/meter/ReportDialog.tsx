@@ -1,15 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
-import { App, Modal, Tabs, Table, Button, Space, Upload, Tag, Popconfirm, Image, Tooltip } from 'antd'
-import { UploadOutlined, DownloadOutlined, DeleteOutlined, InboxOutlined, EyeOutlined, CalendarOutlined } from '@ant-design/icons'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { App, Modal, Tabs, Table, Button, Space, Upload, Popconfirm, Image, Tooltip, Input } from 'antd'
+import { UploadOutlined, DownloadOutlined, DeleteOutlined, InboxOutlined, EyeOutlined, CalendarOutlined, EditOutlined } from '@ant-design/icons'
 import type { TableColumnsType, UploadFile } from 'antd'
-import { ReportResponse, FileMatchItem, InstrumentRecord, GasDetectorRecord } from '@/types/meter'
+import { ReportResponse, ReportAnalyzeItem, InstrumentRecord, GasDetectorRecord } from '@/types/meter'
 import {
   getReportsByInstrument, getReportsByGasDetector,
-  deleteReport, uploadReport, matchReportFiles, batchUploadReports, extractDate,
+  deleteReport, uploadReport, extractDate, updateReport,
 } from '@/actions/meter'
-import { reportDownloadUrl, reportPreviewUrl } from '@/lib/api/meter'
+import { reportDownloadUrl, reportPreviewUrl, analyzeReportFilesClient, batchUploadReportsClient } from '@/lib/api/meter'
+import { ReportMatchTable, ReportMatchRow } from '@/components/meter/ReportMatchTable'
 import dayjs from 'dayjs'
 import dynamic from 'next/dynamic'
 
@@ -26,16 +28,40 @@ interface Props {
 
 export function ReportDialog({ open, record, source, onClose }: Props) {
   const { message } = App.useApp()
+  const router = useRouter()
   const [reports, setReports] = useState<ReportResponse[]>([])
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('history')
 
   // 批量上传状态
   const [batchFiles, setBatchFiles] = useState<UploadFile[]>([])
-  const [matchResults, setMatchResults] = useState<FileMatchItem[]>([])
+  const [matchResults, setMatchResults] = useState<ReportMatchRow[]>([])
   const [matching, setMatching] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [previewImage, setPreviewImage] = useState<string | null>(null)
+
+  // 请求序号：关闭时递增使 in-flight 响应失效
+  const seqRef = useRef(0)
+
+  // 编辑证书编号
+  const [certEdit, setCertEdit] = useState<ReportResponse | null>(null)
+  const [certValue, setCertValue] = useState('')
+  const [certSaving, setCertSaving] = useState(false)
+
+  const handleSaveCertificateNo = async () => {
+    if (!certEdit || certSaving) return
+    setCertSaving(true)
+    try {
+      await updateReport(certEdit.id, certValue.trim() || null)
+      message.success('证书编号已更新')
+      setCertEdit(null)
+      fetchReports()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '更新失败')
+    } finally {
+      setCertSaving(false)
+    }
+  }
 
   // PDF 预览
   const [pdfModalOpen, setPdfModalOpen] = useState(false)
@@ -58,8 +84,19 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
   }, [record, source, message])
 
   useEffect(() => {
-    if (open && record) { fetchReports(); setActiveTab('history') }
+    if (open && record) { fetchReports() }
   }, [open, record, fetchReports])
+
+  // 关闭重置：防止上一台器具的批量上传状态泄漏到下一台器具的弹窗
+  const handleClose = () => {
+    seqRef.current++
+    setBatchFiles([])
+    setMatchResults([])
+    setCertEdit(null)
+    setPreviewImage(null)
+    setActiveTab('history')
+    onClose()
+  }
 
   const handleDelete = async (id: string) => {
     try {
@@ -100,8 +137,8 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
               } else {
                 message.warning(extractRes.error || '未识别到日期')
               }
-            } catch (e: any) {
-              message.error(e?.message || '识别失败')
+            } catch (e: unknown) {
+              message.error(e instanceof Error ? e.message : '识别失败')
             }
           },
         })
@@ -112,26 +149,46 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
     return false
   }
 
-  // 批量上传：选择文件后触发匹配
+  // 批量上传：选择文件后识别报告内容并匹配
   const handleBatchSelect = async (files: UploadFile[]) => {
+    if (files.length === 0) return
+    const names = files.map(f => f.name)
+    if (names.length !== new Set(names).size) {
+      message.error('存在同名文件，请重命名后重新选择')
+      return
+    }
+    const seq = ++seqRef.current
     setBatchFiles(files)
     setMatchResults([])
     setMatching(true)
     try {
-      const filenames = files.map(f => f.name)
-      const results = await matchReportFiles(filenames)
-      setMatchResults(results)
-    } catch {
-      message.error('文件匹配失败')
+      const formData = new FormData()
+      files.forEach(f => {
+        if (f.originFileObj) {
+          formData.append('files', f.originFileObj)
+        }
+      })
+      const results = await analyzeReportFilesClient(formData, source)
+      if (seq !== seqRef.current) return
+      setMatchResults(results.map((d, i) => ({ ...d, _key: `${i}-${d.filename}` })))
+    } catch (e) {
+      if (seq !== seqRef.current) return
+      message.error(e instanceof Error ? `报告识别失败：${e.message}` : '报告识别失败，请重试')
     } finally {
-      setMatching(false)
+      if (seq === seqRef.current) setMatching(false)
     }
+  }
+
+  const handleRowChange = (key: string, patch: Partial<ReportAnalyzeItem>) => {
+    setMatchResults(prev => prev.map(r => r._key === key ? { ...r, ...patch } : r))
   }
 
   // 确认批量上传
   const handleBatchConfirm = async () => {
-    if (!matchResults.length) return
+    const matched = matchResults.filter(r => r.matched_id)
+    if (!matched.length) return
     setUploading(true)
+    const seq = ++seqRef.current
     try {
       const formData = new FormData()
       batchFiles.forEach(f => {
@@ -139,25 +196,33 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
           formData.append('files', f.originFileObj)
         }
       })
-      const items = matchResults.map(r => ({
+      const items = matched.map(r => ({
         filename: r.filename,
         instrument_id: r.matched_type === 'instrument' ? r.matched_id : null,
         gas_detector_id: r.matched_type === 'gas_detector' ? r.matched_id : null,
+        certificate_no: r.extraction.certificate_no ?? null,
+        calibration_date: r.extraction.calibration_date ?? null,
       }))
       formData.append('items_json', JSON.stringify(items))
 
-      const result = await batchUploadReports(formData)
+      const result = await batchUploadReportsClient(formData)
+      if (seq !== seqRef.current) return
       message.success(`上传完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
       if (result.errors.length > 0) {
         message.warning(result.errors.slice(0, 5).join('; '))
       }
+      if (result.notes?.length > 0) {
+        message.info(result.notes.slice(0, 5).join('; '))
+      }
       setBatchFiles([])
       setMatchResults([])
       fetchReports()
-    } catch {
-      message.error('批量上传失败')
+      router.refresh()
+    } catch (e) {
+      if (seq !== seqRef.current) return
+      message.error(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
     } finally {
-      setUploading(false)
+      if (seq === seqRef.current) setUploading(false)
     }
   }
 
@@ -186,16 +251,31 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
       const result = await extractDate(r.id)
       if (result.success) {
         message.success(`已更新检定日期: ${result.calibration_date}，下次检定: ${result.next_calibration_date || '—'}`)
+        fetchReports()
       } else {
         message.warning(result.error || '未识别到日期')
       }
-    } catch (e: any) {
-      message.error(e?.message || '提取日期失败')
+    } catch (e: unknown) {
+      message.error(e instanceof Error ? e.message : '提取日期失败')
     }
   }
 
   const columns: TableColumnsType<ReportResponse> = [
     { title: '文件名', dataIndex: 'file_name', ellipsis: true },
+    {
+      title: '证书编号', dataIndex: 'certificate_no', width: 170, ellipsis: true,
+      render: (v: string | null, r: ReportResponse) => (
+        <Space size="small">
+          <span>{v || '-'}</span>
+          <Button
+            size="small"
+            type="text"
+            icon={<EditOutlined />}
+            onClick={() => { setCertEdit(r); setCertValue(v ?? '') }}
+          />
+        </Space>
+      ),
+    },
     { title: '大小', dataIndex: 'file_size', width: 80, render: (v: number) => v ? `${(v / 1024).toFixed(0)} KB` : '-' },
     {
       title: '报告日期', dataIndex: 'report_date', width: 110,
@@ -238,24 +318,14 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
     },
   ]
 
-  const matchColumns: TableColumnsType<FileMatchItem> = [
-    { title: '文件名', dataIndex: 'filename', ellipsis: true },
-    {
-      title: '匹配结果', dataIndex: 'matched_name', width: 220, ellipsis: true,
-      render: (v: string | null | undefined, r: FileMatchItem) => {
-        if (v) return <Tag color="green">{v}</Tag>
-        return <Tag color="red">未匹配</Tag>
-      },
-    },
-    { title: '部门', dataIndex: 'matched_department', width: 120, ellipsis: true },
-  ]
+  const matchedCount = matchResults.filter(r => r.matched_id).length
 
   return (
     <>
     <Modal
       title={`报告管理 — ${recordLabel}`}
       open={open}
-      onCancel={onClose}
+      onCancel={handleClose}
       width={900}
       footer={null}
       destroyOnHidden
@@ -291,6 +361,7 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
                 <Dragger
                   multiple
                   beforeUpload={() => false}
+                  fileList={batchFiles}
                   onChange={(info) => handleBatchSelect(info.fileList)}
                   showUploadList={false}
                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
@@ -298,23 +369,25 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
                   <p className="ant-upload-drag-icon"><InboxOutlined /></p>
                   <p className="ant-upload-text">点击或拖拽文件到此区域</p>
                   <p className="ant-upload-hint">支持 PDF、图片、Word 文档，单文件最大 50MB</p>
-                  <p className="ant-upload-hint">文件名格式：{source === 'instrument' ? '器具名称_器具编号' : '器具名称_产品编号'}.pdf</p>
+                  <p className="ant-upload-hint">系统将自动识别报告内容（仪器名称、出厂编号、校准日期、证书编号）并匹配台账</p>
                 </Dragger>
 
-                {matching && <div style={{ marginTop: 12 }}>正在匹配文件...</div>}
+                {matching && <div style={{ marginTop: 12 }}>正在识别报告内容并匹配...</div>}
 
                 {matchResults.length > 0 && (
                   <div style={{ marginTop: 16 }}>
                     <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>匹配结果（{matchResults.filter(r => r.matched_id).length}/{matchResults.length} 已匹配）</span>
-                      <Button type="primary" loading={uploading} onClick={handleBatchConfirm}>
-                        确认批量上传
+                      <span>匹配结果（{matchedCount}/{matchResults.length} 已匹配）</span>
+                      <Button
+                        type="primary"
+                        loading={uploading}
+                        disabled={matchedCount === 0}
+                        onClick={handleBatchConfirm}
+                      >
+                        确认批量上传（{matchedCount} 个）
                       </Button>
                     </div>
-                    <Table
-                      rowKey="filename" columns={matchColumns} dataSource={matchResults}
-                      size="small" pagination={false} scroll={{ y: 300 }}
-                    />
+                    <ReportMatchTable rows={matchResults} loading={matching} source={source} onRowChange={handleRowChange} />
                   </div>
                 )}
               </div>
@@ -322,6 +395,25 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
           },
         ]}
       />
+
+      {/* 证书编号编辑弹窗 */}
+      <Modal
+        title="编辑证书编号"
+        open={!!certEdit}
+        onCancel={() => setCertEdit(null)}
+        onOk={handleSaveCertificateNo}
+        confirmLoading={certSaving}
+        okText="保存"
+        width={420}
+        destroyOnHidden
+      >
+        <Input
+          placeholder="证书编号（留空清除）"
+          value={certValue}
+          onChange={(e) => setCertValue(e.target.value)}
+          onPressEnter={handleSaveCertificateNo}
+        />
+      </Modal>
 
       <Image
         style={{ display: 'none' }}

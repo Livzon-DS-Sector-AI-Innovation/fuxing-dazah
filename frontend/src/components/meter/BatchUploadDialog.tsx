@@ -2,73 +2,95 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { App, Modal, Table, Button, Upload, Tag, Space, Progress } from 'antd'
+import { App, Modal, Button, Upload, Tag, Space, Progress } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
-import type { TableColumnsType } from 'antd'
-import { FileMatchItem, BatchUploadResult, ExtractResultEvent, ExtractCompleteEvent } from '@/types/meter'
-import { matchReportFiles } from '@/actions/meter'
-import { batchUploadReportsClient, fetchBatchExtractDatesStream } from '@/lib/api/meter'
+import { ReportAnalyzeItem, BatchUploadResult } from '@/types/meter'
+import { analyzeReportFilesClient, batchUploadReportsClient } from '@/lib/api/meter'
+import { ReportMatchTable, ReportMatchRow } from '@/components/meter/ReportMatchTable'
 import type { UploadFile } from 'antd/es/upload/interface'
 
 const { Dragger } = Upload
 
+// 识别分批大小：与后端 analyze 并发数对齐，批间串行推进进度条
+const ANALYZE_BATCH_SIZE = 10
+
 interface Props {
   open: boolean
   source: 'instrument' | 'gas_detector'
-  uploadHint: string
   onClose: () => void
 }
 
-type MatchRow = FileMatchItem & { _key: string }
-
-interface ExtractState {
-  phase: 'idle' | 'running' | 'interrupted' | 'done'
-  current: number
-  total: number
-  currentFileName: string
-  completedIds: Set<string>       // 已处理完成的 report_id
-  results: ExtractResultEvent[]    // 所有结果
-}
-
-export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) {
+export function BatchUploadDialog({ open, source, onClose }: Props) {
   const { message } = App.useApp()
   const router = useRouter()
 
   const [step, setStep] = useState<'select' | 'preview' | 'result'>('select')
   const [files, setFiles] = useState<UploadFile[]>([])
-  const [matches, setMatches] = useState<MatchRow[]>([])
+  const [matches, setMatches] = useState<ReportMatchRow[]>([])
   const [matching, setMatching] = useState(false)
+  const [analyzeProgress, setAnalyzeProgress] = useState<{ processed: number; total: number } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [result, setResult] = useState<BatchUploadResult | null>(null)
 
-  // ── AI 识别进度状态 ──
-  const [extract, setExtract] = useState<ExtractState>({
-    phase: 'idle', current: 0, total: 0, currentFileName: '',
-    completedIds: new Set(), results: [],
-  })
-  const controllerRef = useRef<AbortController | null>(null)
+  // 请求序号：关闭/重置时递增使 in-flight 响应失效；onChange 连发时丢弃过期响应
+  const seqRef = useRef(0)
 
-  // ── 步骤1：选择文件 → 自动匹配 ──
+  // ── 步骤1：选择文件 → 报告内容识别 + 匹配 ──
   const handleFileSelect = async (fileList: UploadFile[]) => {
     if (fileList.length === 0) return
+    // 同名文件会互相覆盖（归档按文件名定位），直接拒绝
+    const names = fileList.map(f => f.name)
+    if (names.length !== new Set(names).size) {
+      message.error('存在同名文件，请重命名后重新选择')
+      return
+    }
+    const seq = ++seqRef.current
     setFiles(fileList)
     setMatching(true)
     setStep('preview')
+    setAnalyzeProgress({ processed: 0, total: fileList.length })
     try {
-      const filenames = fileList.map(f => f.name)
-      const data = await matchReportFiles(filenames)
-      setMatches(data.map(d => ({ ...d, _key: d.filename })))
-    } catch {
-      message.error('文件匹配失败，请重试')
+      // 分批识别：每批 ANALYZE_BATCH_SIZE 个，批间串行推进进度条。
+      // 好处：进度可视化、可取消、绕过单次 200 文件上限、单批失败可整体重试。
+      const accumulated: ReportMatchRow[] = []
+      for (let start = 0; start < fileList.length; start += ANALYZE_BATCH_SIZE) {
+        if (seq !== seqRef.current) return  // 已取消/重置
+        const batch = fileList.slice(start, start + ANALYZE_BATCH_SIZE)
+        const formData = new FormData()
+        batch.forEach(f => {
+          if (f.originFileObj) {
+            formData.append('files', f.originFileObj)
+          }
+        })
+        const data = await analyzeReportFilesClient(formData, source)
+        if (seq !== seqRef.current) return
+        accumulated.push(
+          ...data.map((d, i) => ({ ...d, _key: `${start + i}-${d.filename}` })),
+        )
+        // 逐批展示已识别的匹配结果，进度条同步推进
+        setMatches([...accumulated])
+        setAnalyzeProgress({ processed: start + batch.length, total: fileList.length })
+      }
+    } catch (e) {
+      if (seq !== seqRef.current) return
+      message.error(e instanceof Error ? `报告识别失败：${e.message}` : '报告识别失败，请重试')
       setStep('select')
     } finally {
-      setMatching(false)
+      if (seq === seqRef.current) {
+        setMatching(false)
+        setAnalyzeProgress(null)
+      }
     }
+  }
+
+  const handleRowChange = (key: string, patch: Partial<ReportAnalyzeItem>) => {
+    setMatches(prev => prev.map(m => m._key === key ? { ...m, ...patch } : m))
   }
 
   // ── 步骤2：确认上传 ──
   const handleConfirmUpload = async () => {
     setUploading(true)
+    const seq = ++seqRef.current
     try {
       const formData = new FormData()
       files.forEach(f => {
@@ -76,139 +98,54 @@ export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) 
           formData.append('files', f.originFileObj)
         }
       })
-      const items = matches.map(m => ({
+      // 只提交已匹配的行；未匹配/识别失败的行按 UI 提示不会上传
+      const matched = matches.filter(m => m.matched_id)
+      const items = matched.map(m => ({
         filename: m.filename,
         instrument_id: m.matched_type === 'instrument' ? m.matched_id : null,
         gas_detector_id: m.matched_type === 'gas_detector' ? m.matched_id : null,
+        certificate_no: m.extraction.certificate_no ?? null,
+        calibration_date: m.extraction.calibration_date ?? null,
       }))
       formData.append('items_json', JSON.stringify(items))
 
       const res = await batchUploadReportsClient(formData)
+      if (seq !== seqRef.current) return
       setResult(res)
       setStep('result')
       router.refresh()
-      // 重置 AI 识别状态
-      setExtract({ phase: 'idle', current: 0, total: 0, currentFileName: '', completedIds: new Set(), results: [] })
-    } catch {
-      message.error('批量上传失败')
+    } catch (e) {
+      if (seq !== seqRef.current) return
+      message.error(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
     } finally {
-      setUploading(false)
+      if (seq === seqRef.current) setUploading(false)
     }
-  }
-
-  // ── 批量 AI 识别（SSE 流式） ──
-  const handleBatchExtract = () => {
-    if (!result || result.report_ids.length === 0) return
-
-    // 断点续传：排除已完成的 ID
-    const { completedIds } = extract
-    const remainingIds =
-      extract.phase === 'interrupted'
-        ? result.report_ids.filter(id => !completedIds.has(id))
-        : result.report_ids
-
-    if (remainingIds.length === 0) {
-      message.info('所有报告已处理完毕')
-      return
-    }
-
-    // 初始化进度
-    setExtract(prev => ({
-      ...prev,
-      phase: 'running',
-      current: prev.phase === 'interrupted' ? prev.current : 0,
-      total: result.report_ids.length,
-      currentFileName: remainingIds[0] ? '准备中...' : '',
-      // 保留已完成的结果
-    }))
-
-    const controller = fetchBatchExtractDatesStream(remainingIds, {
-      onProgress: (e) => {
-        setExtract(prev => ({
-          ...prev,
-          current: prev.current + 1,
-          currentFileName: e.file_name,
-        }))
-      },
-      onResult: (e) => {
-        setExtract(prev => {
-          const newCompleted = new Set(prev.completedIds)
-          newCompleted.add(e.report_id)
-          return {
-            ...prev,
-            completedIds: newCompleted,
-            results: [...prev.results, e],
-          }
-        })
-      },
-      onError: (msg) => {
-        message.error(msg)
-        setExtract(prev => ({ ...prev, phase: 'done' }))
-      },
-      onComplete: (e) => {
-        if (e.interrupted) {
-          setExtract(prev => ({ ...prev, phase: 'interrupted' }))
-          message.warning('任务已中断，可继续处理剩余报告')
-        } else {
-          setExtract(prev => ({ ...prev, phase: 'done' }))
-          message.success(`识别完成：成功 ${e.success} 个，失败 ${e.failed} 个`)
-        }
-      },
-    })
-    controllerRef.current = controller
-  }
-
-  // ── 中断 AI 识别 ──
-  const handleInterrupt = () => {
-    controllerRef.current?.abort()
-    controllerRef.current = null
   }
 
   // ── 关闭重置 ──
   const handleClose = () => {
-    controllerRef.current?.abort()
-    controllerRef.current = null
+    seqRef.current++
     setStep('select')
     setFiles([])
     setMatches([])
     setResult(null)
-    setExtract({ phase: 'idle', current: 0, total: 0, currentFileName: '', completedIds: new Set(), results: [] })
+    setMatching(false)
+    setAnalyzeProgress(null)
     onClose()
   }
-
-  // ── 预览表格列 ──
-  const matchColumns: TableColumnsType<MatchRow> = [
-    { title: '文件名', dataIndex: 'filename', key: 'filename', ellipsis: true },
-    {
-      title: '匹配结果', dataIndex: 'matched_name', key: 'matched_name', width: 240, ellipsis: true,
-      render: (v: string | null | undefined) => {
-        if (v) return <Tag color="green">{v}</Tag>
-        return <Tag color="red">未匹配</Tag>
-      },
-    },
-    {
-      title: '部门', dataIndex: 'matched_department', key: 'matched_department', width: 140, ellipsis: true,
-      render: (v: string | null | undefined) => v || '-',
-    },
-  ]
 
   const matchedCount = matches.filter(m => m.matched_id).length
   const unmatchedCount = matches.length - matchedCount
 
   const handleReset = () => {
-    controllerRef.current?.abort()
-    controllerRef.current = null
+    seqRef.current++
     setStep('select')
     setFiles([])
     setMatches([])
     setResult(null)
-    setExtract({ phase: 'idle', current: 0, total: 0, currentFileName: '', completedIds: new Set(), results: [] })
+    setMatching(false)
+    setAnalyzeProgress(null)
   }
-
-  const isExtracting = extract.phase === 'running'
-  const extractPercent = extract.total > 0 ? Math.round((extract.completedIds.size / extract.total) * 100) : 0
-  const successCount = extract.results.filter(r => r.status === 'success').length
-  const failedCount = extract.results.filter(r => r.status === 'failed').length
 
   return (
     <Modal
@@ -231,42 +168,61 @@ export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) 
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">点击或拖拽文件到此区域</p>
           <p className="ant-upload-hint">支持 PDF、图片、Word 文档，单文件最大 50MB</p>
-          <p className="ant-upload-hint">文件名格式：{uploadHint}</p>
+          <p className="ant-upload-hint">系统将自动识别报告内容（仪器名称、出厂编号、校准日期、证书编号）并匹配台账</p>
         </Dragger>
       )}
 
       {/* ── 步骤2：匹配预览 ── */}
       {step === 'preview' && (
         <div>
-          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>
-              已匹配 <b>{matchedCount}</b> / {matches.length} 个文件
-              {unmatchedCount > 0 && <Tag color="orange" style={{ marginLeft: 8 }}>{unmatchedCount} 个未匹配</Tag>}
-            </span>
-            <Space>
-              <Button onClick={handleReset}>重新选择</Button>
-              <Button
-                type="primary"
-                loading={uploading}
-                disabled={matchedCount === 0}
-                onClick={handleConfirmUpload}
+          {matching && analyzeProgress ? (
+            <div style={{ marginBottom: 16 }}>
+              <Progress
+                percent={Math.round((analyzeProgress.processed / analyzeProgress.total) * 100)}
+                status="active"
+                format={() =>
+                  `已识别 ${analyzeProgress.processed}/${analyzeProgress.total} 个文件`
+                }
+              />
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginTop: 8,
+                }}
               >
-                确认上传（{matchedCount} 个）
-              </Button>
-            </Space>
-          </div>
-          <Table
-            rowKey="_key"
-            columns={matchColumns}
-            dataSource={matches}
-            loading={matching}
-            size="small"
-            pagination={matches.length > 20 ? { pageSize: 20 } : false}
-            scroll={{ y: 400 }}
-          />
+                <span style={{ color: '#999', fontSize: 13 }}>
+                  正在识别报告内容并匹配台账，可随时取消…
+                </span>
+                <Button size="small" onClick={handleReset}>
+                  取消识别
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>
+                已匹配 <b>{matchedCount}</b> / {matches.length} 个文件
+                {unmatchedCount > 0 && <Tag color="orange" style={{ marginLeft: 8 }}>{unmatchedCount} 个未匹配</Tag>}
+              </span>
+              <Space>
+                <Button onClick={handleReset}>重新选择</Button>
+                <Button
+                  type="primary"
+                  loading={uploading}
+                  disabled={matchedCount === 0}
+                  onClick={handleConfirmUpload}
+                >
+                  确认上传（{matchedCount} 个）
+                </Button>
+              </Space>
+            </div>
+          )}
+          <ReportMatchTable rows={matches} loading={matching} source={source} onRowChange={handleRowChange} />
           {unmatchedCount > 0 && (
             <div style={{ marginTop: 8, color: '#999', fontSize: 13 }}>
-              未匹配的文件不会上传。请检查文件名是否符合格式："{uploadHint}"
+              未关联的文件不会上传，请修正名称/编号后点「重新关联」，或在下拉中选择台账记录。
             </div>
           )}
         </div>
@@ -289,104 +245,11 @@ export function BatchUploadDialog({ open, source, uploadHint, onClose }: Props) 
               ))}
             </div>
           )}
-
-          {/* ── AI 识别区域 ── */}
-          {result.success > 0 && result.report_ids.length > 0 && (
-            <div style={{ marginTop: 24 }}>
-              {/* 进度条 */}
-              {isExtracting && (
-                <div style={{ marginBottom: 16 }}>
-                  <Progress
-                    percent={extractPercent}
-                    status="active"
-                    format={() => `${extract.completedIds.size} / ${extract.total}`}
-                  />
-                  <div style={{ color: '#888', fontSize: 13, marginTop: 4 }}>
-                    正在识别：{extract.currentFileName}
-                  </div>
-                </div>
-              )}
-
-              {/* 中断状态提示 */}
-              {extract.phase === 'interrupted' && (
-                <div style={{
-                  marginBottom: 16, padding: 12, background: '#fff7e6',
-                  border: '1px solid #ffd591', borderRadius: 8, textAlign: 'left',
-                }}>
-                  <p style={{ margin: 0, color: '#d46b08', fontWeight: 500 }}>
-                    ⚠️ 任务已中断
-                  </p>
-                  <p style={{ margin: '4px 0 0', color: '#888', fontSize: 13 }}>
-                    已完成 {extract.completedIds.size} / {extract.total} 个报告，
-                    未处理的 {extract.total - extract.completedIds.size} 个可继续识别。
-                  </p>
-                  <Progress
-                    percent={extractPercent}
-                    style={{ marginTop: 8 }}
-                    size="small"
-                  />
-                </div>
-              )}
-
-              {/* 完成状态 */}
-              {extract.phase === 'done' && successCount + failedCount > 0 && (
-                <div style={{ marginBottom: 16, textAlign: 'left' }}>
-                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>
-                    AI 识别完成：成功 <b style={{ color: '#52c41a' }}>{successCount}</b> 个
-                    {failedCount > 0 && <span>，失败 <b style={{ color: '#ff4d4f' }}>{failedCount}</b> 个</span>}
-                  </div>
-                  <Progress
-                    percent={extractPercent}
-                    status={failedCount > 0 ? 'exception' : 'success'}
-                    size="small"
-                  />
-                </div>
-              )}
-
-              {/* 操作按钮 */}
-              <Space>
-                {!isExtracting && extract.phase !== 'done' && (
-                  <Button
-                    type="primary"
-                    icon={<span>🔍</span>}
-                    onClick={handleBatchExtract}
-                  >
-                    {extract.phase === 'interrupted'
-                      ? `继续 AI 识别（剩余 ${extract.total - extract.completedIds.size} 个）`
-                      : '批量 AI 识别日期'}
-                  </Button>
-                )}
-                {isExtracting && (
-                  <Button danger onClick={handleInterrupt}>
-                    中断识别
-                  </Button>
-                )}
-                {extract.phase === 'done' && extract.total > 0 && (
-                  <Button onClick={handleBatchExtract} disabled={extract.completedIds.size >= extract.total}>
-                    重新识别全部
-                  </Button>
-                )}
-              </Space>
-
-              {/* 结果列表 */}
-              {extract.results.length > 0 && (
-                <div style={{ textAlign: 'left', marginTop: 16 }}>
-                  <div style={{ maxHeight: 240, overflow: 'auto', background: '#fafafa', padding: 12, borderRadius: 8 }}>
-                    {extract.results.map((item, i) => (
-                      <p key={i} style={{ margin: '4px 0', fontSize: 13, color: item.status === 'success' ? '#333' : '#ff4d4f' }}>
-                        {item.status === 'success' ? '✅' : '❌'} {item.file_name}
-                        {item.status === 'success' && (
-                          <span style={{ color: '#52c41a' }}>
-                            &nbsp;→ 检定日期: {item.calibration_date}
-                            {item.next_calibration_date && `，下次检定: ${item.next_calibration_date}`}
-                          </span>
-                        )}
-                        {item.status === 'failed' && item.error && <span> — {item.error}</span>}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              )}
+          {result.notes?.length > 0 && (
+            <div style={{ textAlign: 'left', maxHeight: 200, overflow: 'auto', background: '#e6f4ff', padding: 12, borderRadius: 8, marginTop: 12 }}>
+              {result.notes.map((note, i) => (
+                <p key={i} style={{ color: '#1677ff', margin: '4px 0', fontSize: 13 }}>ℹ️ {note}</p>
+              ))}
             </div>
           )}
 

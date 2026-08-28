@@ -130,6 +130,13 @@ class CalibrationReport(BaseModel):
         ),
         Index("ix_calibration_reports_instrument_id", "instrument_id"),
         Index("ix_calibration_reports_gas_detector_id", "gas_detector_id"),
+        # 证书编号在未删除报告中全局唯一（软删除记录不占唯一性，可重新上传同编号报告）
+        Index(
+            "ix_calibration_reports_certificate_no_active",
+            "certificate_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": SCHEMA},
     )
 
@@ -141,6 +148,9 @@ class CalibrationReport(BaseModel):
     )
     file_name: Mapped[str] = mapped_column(String(255), nullable=False, comment="原始文件名")
     file_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="MinIO 对象路径")
+    certificate_no: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="证书编号（未删除报告中全局唯一）"
+    )
     file_size: Mapped[int | None] = mapped_column(BigInteger, comment="文件字节数")
     content_type: Mapped[str | None] = mapped_column(String(100), comment="MIME 类型")
     report_date: Mapped[date | None] = mapped_column(Date, comment="报告日期")
