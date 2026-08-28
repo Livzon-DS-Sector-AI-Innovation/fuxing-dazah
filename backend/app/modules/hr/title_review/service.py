@@ -1525,23 +1525,8 @@ class TitleReviewService:
             },
         )
 
-        # 判定完成 → 飞书结果卡通知申报人（仅首次发送，失败不阻断判定）
-        if application.result_notified_at is None:
-            try:
-                from app.modules.hr.title_review.notify import send_result_card
-
-                activity = await self.get_activity(application.activity_id)
-                ok = await send_result_card(
-                    applicant_name=application.name,
-                    activity_name=activity.name,
-                    level_name=application.apply_level or "职级评定",
-                    passed=passed,
-                )
-                if ok:
-                    application.result_notified_at = datetime.now().astimezone()
-                    application = await self.application_repo.update(application)
-            except Exception:  # noqa: BLE001
-                logger.warning("结果卡发送失败: application=%s", application.id)
+        # 小组评审结果并非最终结果（最终名单须经总经理确认后由 HR 线下公示），
+        # 不直接通知申报人。
         return application
 
     async def _writeback_votes(
