@@ -24,6 +24,7 @@ import {
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
+  fetchEmployeesAction,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
@@ -307,6 +308,21 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     '已录用': ['待入职审批', '已拒绝'],
     '待入职审批': ['已录用', '已入职', '已拒绝'],
   }
+  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
+  const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
+  const [reviewerSearching, setReviewerSearching] = useState(false)
+  const searchReviewerOptions = async (keyword: string) => {
+    setReviewerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      setReviewerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
+        value: e.name,
+        label: `${e.name}（${e.employee_number || ''}）`,
+      })))
+    } catch { /* 搜索失败静默 */ }
+    finally { setReviewerSearching(false) }
+  }
+
   // 补传/更新简历：解析 PDF → 更新 resume_url → 刷新预览
   const handleResumeUpload = async (file: File) => {
     const fd = new FormData()
@@ -655,8 +671,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <div className="text-sm text-gray-500 mb-3">
             推送至「{candidate.department}」用人部门负责人
           </div>
-          <Form.Item name="reviewer" label="审核人姓名" rules={[{ required: true, message: '请输入用人部门负责人姓名' }]}>
-            <Input placeholder="输入姓名，系统将发送飞书通知" />
+          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              loading={reviewerSearching}
+              placeholder="搜索并选择员工（姓名），将发送飞书通知"
+              options={reviewerOptions}
+              onSearch={searchReviewerOptions}
+            />
           </Form.Item>
           <Form.Item name="push_note" label="推送备注（选填）">
             <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />

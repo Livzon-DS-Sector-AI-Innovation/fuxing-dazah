@@ -12,6 +12,7 @@ import {
   fetchPositions, fetchCandidates, fetchJobRequirements, fetchPendingReviews,
   fetchCandidateComparison, fetchRecruitmentStats, previewOffer,
   uploadCandidates, downloadCandidateTemplate, decideCandidateReview,
+  fetchEmployeesAction,
 } from '@/actions/hr'
 import type { Candidate, JobRequirement, RecruitmentStats } from '@/types/hr'
 
@@ -86,6 +87,21 @@ export default function RecruitmentClient() {
       msg.success(decision === '已同意' ? '已同意' : '已驳回')
       loadPendingReviews()
     } catch (err: any) { msg.error(err.message || '操作失败') }
+  }
+
+  // 用人部门负责人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
+  const [ownerOptions, setOwnerOptions] = useState<{ value: string; label: string }[]>([])
+  const [ownerSearching, setOwnerSearching] = useState(false)
+  const searchOwnerOptions = async (keyword: string) => {
+    setOwnerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      setOwnerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
+        value: e.name,
+        label: `${e.name}（${e.employee_number || ''}）`,
+      })))
+    } catch { /* 搜索失败静默 */ }
+    finally { setOwnerSearching(false) }
   }
 
   useEffect(() => { setMounted(true) }, [])
@@ -502,7 +518,7 @@ export default function RecruitmentClient() {
                   <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                     <Button size="small" onClick={() => loadCompare(j.id)}>对比</Button>
                     <Button size="small" icon={<UploadOutlined />} onClick={() => { setResumeFile(null); setResumeResult(null); resumeJobIdRef.current = j.id; setResumeOpen(true) }} />
-                    <a className="text-xs leading-8" onClick={() => { setEditingReq(j); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</a>
+                    <a className="text-xs leading-8" onClick={() => { setEditingReq(j); if (j.owner) setOwnerOptions([{ value: j.owner, label: j.owner }]); reqForm.setFieldsValue({ ...j, position_name: `${j.department}|||${j.position_name}`, deadline: j.deadline ? dayjs(j.deadline) : undefined }); setReqOpen(true) }}>编辑</a>
                   </div>
                 }
               >
@@ -569,7 +585,17 @@ export default function RecruitmentClient() {
           <Form.Item name="headcount" label="招聘人数"><InputNumber min={1} /></Form.Item>
           <Form.Item name="requirements" label="岗位要求"><Input.TextArea rows={4} /></Form.Item>
           <Form.Item name="duties" label="岗位职责"><Input.TextArea rows={3} placeholder="可选，胜任度分析报告「岗位要求回顾」使用" /></Form.Item>
-          <Form.Item name="owner" label="招聘负责人"><Input placeholder="可选" /></Form.Item>
+          <Form.Item name="owner" label="用人部门负责人" tooltip="推送审核时默认发给此人">
+            <Select
+              showSearch
+              filterOption={false}
+              allowClear
+              loading={ownerSearching}
+              placeholder="搜索并选择员工（姓名）"
+              options={ownerOptions}
+              onSearch={searchOwnerOptions}
+            />
+          </Form.Item>
           <Form.Item name="urgency" label="紧急程度">
             <Select options={[{ label: '普通', value: '普通' }, { label: '紧急', value: '紧急' }]} allowClear />
           </Form.Item>

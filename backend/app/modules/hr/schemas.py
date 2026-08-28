@@ -927,7 +927,7 @@ class JobRequirementCreate(BaseModel):
     requirements: str | None = None
     duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     urgency: str | None = Field(None, max_length=8, description="紧急/普通")
-    owner: str | None = Field(None, max_length=64)
+    owner: str | None = Field(None, max_length=64, description="用人部门负责人姓名（推送审核默认发给此人）")
     deadline: date | None = None
 
 
@@ -939,7 +939,7 @@ class JobRequirementUpdate(BaseModel):
     duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     status: str | None = Field(None, max_length=16)
     urgency: str | None = Field(None, max_length=8)
-    owner: str | None = Field(None, max_length=64)
+    owner: str | None = Field(None, max_length=64, description="用人部门负责人姓名（推送审核默认发给此人）")
     deadline: date | None = None
 
 

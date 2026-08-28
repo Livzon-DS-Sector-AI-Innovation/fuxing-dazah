@@ -1131,7 +1131,7 @@ class JobRequirement(BaseModel):
     duties: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位职责描述（胜任度报告「岗位要求回顾」用）")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="招聘中", server_default="招聘中", comment="招聘中/已关闭")
     urgency: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="紧急程度")
-    owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="招聘负责人")
+    owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="用人部门负责人姓名")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True, comment="期望到岗日期")
 
 
