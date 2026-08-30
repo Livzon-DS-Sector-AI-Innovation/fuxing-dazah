@@ -203,6 +203,18 @@ class TitleReviewApplicationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_update(self, application_id: UUID) -> TitleReviewApplication | None:
+        """SELECT ... FOR UPDATE：并发分配评委时串行化，保证匿名编号不重号。"""
+        result = await self.session.execute(
+            select(TitleReviewApplication)
+            .where(
+                TitleReviewApplication.id == application_id,
+                TitleReviewApplication.is_deleted == False,  # noqa: E712
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_feishu_record(
         self, activity_id: UUID, record_id: str
     ) -> TitleReviewApplication | None:
@@ -210,6 +222,19 @@ class TitleReviewApplicationRepository:
             select(TitleReviewApplication).where(
                 TitleReviewApplication.activity_id == activity_id,
                 TitleReviewApplication.feishu_record_id == record_id,
+                TitleReviewApplication.is_deleted == False,  # noqa: E712
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_activity_employee(
+        self, activity_id: UUID, employee_no: str
+    ) -> TitleReviewApplication | None:
+        """同一员工在某活动内的申报（用于重复申报幂等复用）。"""
+        result = await self.session.execute(
+            select(TitleReviewApplication).where(
+                TitleReviewApplication.activity_id == activity_id,
+                TitleReviewApplication.employee_no == employee_no,
                 TitleReviewApplication.is_deleted == False,  # noqa: E712
             )
         )
@@ -322,6 +347,21 @@ class TitleReviewScoreRepository:
             )
         )
         return list(result.scalars().all())
+
+    async def soft_delete_by_judge(self, judge_id: UUID) -> int:
+        """软删除某评委的全部维度评分（改票为弃权/作废时清空旧评分）。"""
+        from sqlalchemy import update as sa_update
+
+        result = await self.session.execute(
+            sa_update(TitleReviewScore)
+            .where(
+                TitleReviewScore.judge_id == judge_id,
+                TitleReviewScore.is_deleted == False,  # noqa: E712
+            )
+            .values(is_deleted=True)
+        )
+        await self.session.flush()
+        return result.rowcount or 0
 
     async def list_by_application(self, application_id: UUID) -> list[TitleReviewScore]:
         result = await self.session.execute(

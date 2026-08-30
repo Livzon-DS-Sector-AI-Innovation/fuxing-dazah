@@ -42,8 +42,18 @@ def active_app_id() -> str:
 
 
 async def subscribe_bitable(app_token: str) -> None:
-    app_id, app_secret = _hr_creds()
-    await _pb.subscribe_bitable(_clean(app_token), app_id=app_id, app_secret=app_secret)
+    """订阅多维表格变更事件。
+
+    必须用全局应用订阅：平台 WS 事件长连接只挂全局 FEISHU_APP_ID，
+    用 HR 独立应用订阅会把事件送到无人监听的端点（实时同步静默失效，
+    只剩 5 分钟对账兜底）。要求该 Base 已共享给全局应用。
+    """
+    settings = get_settings()
+    await _pb.subscribe_bitable(
+        _clean(app_token),
+        app_id=settings.FEISHU_APP_ID,
+        app_secret=settings.FEISHU_APP_SECRET,
+    )
 
 
 async def batch_create_records(

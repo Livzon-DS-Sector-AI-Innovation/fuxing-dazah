@@ -266,9 +266,6 @@ class TestFlowAndVotes:
             "app.modules.hr.title_review.bitable_client.update_record", AsyncMock()
         )
         monkeypatch.setattr(
-            "app.modules.hr.title_review.notify.send_result_card", AsyncMock(return_value=True)
-        )
-        monkeypatch.setattr(
             "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
         )
         service = TitleReviewService(db_session)
@@ -369,9 +366,6 @@ class TestJudgeVote:
     @pytest.fixture
     async def setup(self, db_session: AsyncSession, monkeypatch):
         """活动 + 申报(voting) + 2 位评委（无飞书投票表行）。"""
-        monkeypatch.setattr(
-            "app.modules.hr.title_review.notify.send_result_card", AsyncMock(return_value=True)
-        )
         monkeypatch.setattr(
             "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
         )

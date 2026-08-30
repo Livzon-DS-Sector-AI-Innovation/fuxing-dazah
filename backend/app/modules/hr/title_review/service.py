@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -203,6 +204,7 @@ async def _image_text_to_local(text: str) -> str:
     """图片证据文本：把飞书远程链接下载转存本地 /uploads，返回本地路径行。
 
     下载失败保留原链接（下次对账重试，签名有效期内仍可转存）。
+    仅允许飞书域名的链接（防止用内网地址探测 SSRF）。
     """
     from app.core.config import get_settings
 
@@ -217,6 +219,10 @@ async def _image_text_to_local(text: str) -> str:
             out.append(line)
             continue
         url = line[idx:].strip()
+        host = urlparse(url).netloc.lower()
+        if not (host.endswith(".feishu.cn") or host.endswith(".feishucdn.com") or host.endswith(".larksuite.com")):
+            out.append(line)
+            continue
         try:
             data = await _download_image_bytes(url)
         except Exception as exc:  # noqa: BLE001
@@ -952,21 +958,32 @@ class TitleReviewService:
     # ═══ 申报同步（飞书申报表事件 → 落库） ═══
 
     async def sync_apply_record_added(
-        self, activity_id: UUID, record_id: str, fields: dict[str, Any]
+        self,
+        activity_id: UUID,
+        record_id: str,
+        fields: dict[str, Any],
+        record_created_at: int | None = None,
     ) -> m.TitleReviewApplication | None:
         activity = await self.get_activity(activity_id)
         existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
         if existing:
             return None
-        # 申报截止：超期的新申报不再落库（已存在记录的更新不受影响）
+        # 申报截止：按申报行创建时间判定（截止前提交、截止后审批通过的
+        # 申报不应被静默丢弃；无创建时间时退化为按同步时刻判定）
         if activity.apply_deadline:
             deadline = activity.apply_deadline
             if deadline.tzinfo is None:
                 deadline = deadline.astimezone()
-            if datetime.now().astimezone() > deadline:
+            if record_created_at:
+                created_at = datetime.fromtimestamp(
+                    int(record_created_at) / 1000
+                ).astimezone()
+            else:
+                created_at = datetime.now().astimezone()
+            if created_at > deadline:
                 logger.warning(
-                    "申报已过截止时间，跳过落库: activity=%s record=%s",
-                    activity.id, record_id,
+                    "申报行创建于截止时间之后，跳过落库: activity=%s record=%s created=%s",
+                    activity.id, record_id, created_at,
                 )
                 return None
         parsed = _apply_fields_to_dict(fields)
@@ -1009,10 +1026,29 @@ class TitleReviewService:
         except IntegrityError:
             # WS 事件与 5 分钟对账并发时唯一约束竞态：对方已建，按已存在处理
             existing = await self.application_repo.get_by_feishu_record(activity.id, record_id)
-            if not existing:
-                raise
-            logger.warning("申报并发创建冲突，按已存在处理: record_id=%s", record_id)
-            return existing
+            if existing:
+                logger.warning("申报并发创建冲突，按已存在处理: record_id=%s", record_id)
+                return existing
+            # 同一员工重复申报（审批自动化写第二行触发 uq_tapp_activity_employee）：
+            # 幂等复用已有申报并指向新行，二次申报不再报错/丢失
+            existing = await self.application_repo.get_by_activity_employee(
+                activity.id, parsed["employee_no"]
+            )
+            if existing:
+                logger.warning(
+                    "员工重复申报，复用已有申报并指向新行: employee_no=%s old_record=%s new_record=%s",
+                    parsed["employee_no"], existing.feishu_record_id, record_id,
+                )
+                _apply_synced_fields(existing, parsed, fields)
+                existing.feishu_record_id = record_id
+                if existing.status == m.APPLICATION_INVALID and employee:
+                    existing.employee_id = employee.id
+                    existing.department = employee.actual_department or employee.department
+                    existing.status = m.APPLICATION_SUBMITTED
+                    await self._promote_and_assign_if_reviewing(activity, existing)
+                await self.application_repo.update(existing)
+                return existing
+            raise
         # 活动已进入评审期 → 自动流转到投票并按部门分配评委
         await self._promote_and_assign_if_reviewing(activity, application)
         await _audit(
@@ -1135,6 +1171,8 @@ class TitleReviewService:
         application = await self.application_repo.get_by_id(application_id)
         if not application or not application.department:
             return []
+        if not self._scope_applications([application]):
+            raise HTTPException(403, "数据范围限制：无权访问该申报")
         committee = await self.committee_repo.get_by_department(application.department)
         if not committee or not committee.committee_members:
             return []
@@ -1280,9 +1318,12 @@ class TitleReviewService:
         self, application_id: UUID, data: TitleReviewJudgeAssignIn, user: Any = None
     ) -> list[m.TitleReviewJudge]:
         """指定/调整评委（幂等 upsert，匿名编号）→ 提醒评委登录内网投票。"""
-        application = await self.application_repo.get_by_id(application_id)
+        # 行级锁串行化并发分配，保证 _next_judge_code 的 P{n} 编号不重号
+        application = await self.application_repo.get_by_id_for_update(application_id)
         if not application:
             raise HTTPException(404, "申报记录不存在")
+        if not self._scope_applications([application]):
+            raise HTTPException(403, "数据范围限制：无权访问该申报")
         activity = await self.get_activity(application.activity_id)
         if activity.status not in (m.ACTIVITY_OPEN, m.ACTIVITY_REVIEWING):
             raise HTTPException(400, f"活动状态不可指定评委：{activity.status}")
@@ -1385,41 +1426,69 @@ class TitleReviewService:
         if not application:
             return
 
-        vote_result = _as_str(fields.get("投票结果"))
-        judge.vote_result = vote_result
-        judge.comprehensive_grade = _as_str(fields.get("综合等级"))
-        judge.review_comment = _as_str(fields.get("评审意见"))
-        if vote_result:
-            judge.voted_at = _as_ts(fields.get("投票时间")) or datetime.now().astimezone()
-        elif _as_str(fields.get("投票状态")) == "已作废":
+        vote_raw = fields.get("投票结果")
+        # 仅显式携带投票信息的记录才动票值：字段缺失/为空（部分列编辑事件、
+        # HR 手工建行占位）时保留内网已投的票，避免对账每 5 分钟把票清空
+        old_signature = (
+            judge.vote_result, judge.comprehensive_grade,
+            judge.review_comment, judge.voted_at,
+        )
+        voided = False
+        if _as_str(fields.get("投票状态")) == "已作废":
             judge.vote_result = None
+            judge.comprehensive_grade = None
+            judge.review_comment = None
             judge.voted_at = None
+            voided = True
+        elif vote_raw is not None and str(vote_raw).strip() != "":
+            judge.vote_result = _as_str(vote_raw)
+            judge.comprehensive_grade = _as_str(fields.get("综合等级"))
+            judge.review_comment = _as_str(fields.get("评审意见"))
+            voted_at = _as_ts(fields.get("投票时间"))
+            if voted_at is None and judge.vote_result != old_signature[0]:
+                voted_at = datetime.now().astimezone()
+            judge.voted_at = voted_at or old_signature[3]
+        else:
+            # 无投票信息：不改票值、不回写、不触发判定
+            return
+        if (judge.vote_result, judge.comprehensive_grade,
+                judge.review_comment, judge.voted_at) == old_signature:
+            # 值无变化：不落库、不审计、不回写（对账高频重放不再放大写入）
+            return
         judge = await self.judge_repo.update(judge)
 
-        dims = await self.dimension_repo.list_by_activity(activity.id)
-        grades = {
-            dim.name: _as_str(fields.get(dim.feishu_field_name)) for dim in dims
-        }
-        await self._upsert_dimension_scores(
-            activity.id, application.id, judge.id, dims, grades, judge.voted_at
-        )
+        if voided:
+            # 作废同步清空既有维度评分，避免残留旧分
+            await self.score_repo.soft_delete_by_judge(judge.id)
+        else:
+            dims = await self.dimension_repo.list_by_activity(activity.id)
+            grades = {
+                dim.name: _as_str(fields.get(dim.feishu_field_name)) for dim in dims
+            }
+            await self._upsert_dimension_scores(
+                activity.id, application.id, judge.id, dims, grades, judge.voted_at
+            )
         await _audit(
             self.session,
             action="hr.title.vote_sync",
             resource_type="title_review_judge",
             resource_id=judge.id,
-            extra={"judge_code": judge.judge_code, "vote_result": vote_result},
+            extra={"judge_code": judge.judge_code, "vote_result": judge.vote_result},
         )
-        # 回写投票表“投票状态”列
+        # 回写投票表“投票状态”列（已作废保持“已作废”，不写“未投票”）
         if activity.feishu_app_token and activity.vote_table_id:
             from app.modules.hr.title_review import bitable_client as bc
 
+            vote_status = (
+                "已投票" if judge.vote_result
+                else ("已作废" if _as_str(fields.get("投票状态")) == "已作废" else "未投票")
+            )
             try:
                 await bc.update_record(
                     activity.feishu_app_token,
                     activity.vote_table_id,
                     record_id,
-                    {"投票状态": "已投票" if vote_result else "未投票"},
+                    {"投票状态": vote_status},
                 )
             except bc.TitleReviewBitableError as exc:
                 logger.warning("回写投票状态失败: record_id=%s error=%s", record_id, exc)
@@ -1480,6 +1549,8 @@ class TitleReviewService:
         application = await self.application_repo.get_by_id(application_id)
         if not application:
             raise HTTPException(404, "申报记录不存在")
+        if not self._scope_applications([application]):
+            raise HTTPException(403, "数据范围限制：无权访问该申报")
         if application.status not in (m.APPLICATION_VOTING, m.APPLICATION_PASSED, m.APPLICATION_FAILED):
             raise HTTPException(400, f"当前状态不可判定：{application.status}")
         judges = await self.judge_repo.list_by_application(application.id)
@@ -1782,6 +1853,8 @@ class TitleReviewService:
             judge.review_comment = data.review_comment
             judge.voted_at = datetime.now().astimezone()
             judge = await self.judge_repo.update(judge)
+            # 改票为弃权时清空既有维度评分，避免「弃权+全套维度分」矛盾明细
+            await self.score_repo.soft_delete_by_judge(judge.id)
             await _audit(
                 self.session,
                 action="hr.title.judge_vote",
@@ -1858,6 +1931,7 @@ class TitleReviewService:
             )
         except bc.TitleReviewBitableError as exc:
             logger.warning("拉取申报表失败: %s", exc)
+            stats["approval_error"] = f"拉取申报表失败: {exc}"
             return stats
         for item in records:
             fields = item.get("fields") or {}
@@ -1886,6 +1960,8 @@ class TitleReviewService:
         if fetched is None:
             fetched = await self._pending_approval_rows_from_api(activity, existing_map)
         if fetched is None:
+            # 两个数据源都不可用：显式报错，避免对账“绿屏”却静默丢审批实例
+            stats["approval_error"] = "审批同步数据源不可用（镜像表与审批 API 均失败）"
             return stats
         pending, skipped = fetched
         stats["approval_skipped"] += skipped
@@ -2035,7 +2111,11 @@ class TitleReviewService:
             return None
         table_id = _approval_table_cache.get(app_token)
         if table_id is None:
-            tables = await bc.list_tables(app_token)
+            try:
+                tables = await bc.list_tables(app_token)
+            except bc.TitleReviewBitableError as exc:
+                logger.warning("拉取 Base 表列表失败，回退审批 API: %s", exc)
+                return None
             approval_table = next(
                 (t for t in tables if t.get("name") == APPROVAL_TABLE_NAME), None
             )
@@ -2047,7 +2127,15 @@ class TitleReviewService:
                 return None
             table_id = str(approval_table.get("table_id") or "")
             _approval_table_cache[app_token] = table_id
-        rows = await bc.list_all_records(app_token, table_id)
+        try:
+            # 服务端过滤：只拉「已通过」行，避免镜像表逐年累积后的全量扫描
+            rows = await bc.list_all_records(
+                app_token, table_id,
+                filter_expr='CurrentValue.[申请状态]="已通过"',
+            )
+        except Exception:
+            # 过滤表达式不被支持时退化为全量拉取（下方仍按状态内存过滤）
+            rows = await bc.list_all_records(app_token, table_id)
         pending: list[tuple[str, dict[str, Any]]] = []
         skipped = 0
         for item in rows:
@@ -2175,6 +2263,9 @@ class TitleReviewService:
         # 审批先行：先同步审批通过的实例 → 写入申报表（随后本对账立即拉取落库）
         # 镜像表数据源不依赖审批定义编码（API 兜底路径才需要），无条件执行
         approval_stats = await self.sync_approval_instances(activity.id)
+        if approval_stats.get("approval_error"):
+            stats["errors"].append(approval_stats["approval_error"])
+            approval_stats = {k: v for k, v in approval_stats.items() if k != "approval_error"}
         stats.update(approval_stats)
         if not (activity.feishu_app_token and activity.apply_table_id):
             return stats
@@ -2241,10 +2332,16 @@ class TitleReviewService:
             else:
                 try:
                     created_app = await self.sync_apply_record_added(
-                        activity.id, record_id, fields
+                        activity.id, record_id, fields,
+                        record_created_at=item.get("created_time"),
                     )
                     if created_app is not None:
                         stats["applications_created"] += 1
+                    else:
+                        # 落库被跳过（超截止时间）：显式计数，避免“绿屏”却缺申报
+                        stats["skipped_after_deadline"] = (
+                            stats.get("skipped_after_deadline", 0) + 1
+                        )
                 except IntegrityError:
                     # 审批实例编号全局唯一：申报行已归属其他活动时记入 errors 而非 500
                     logger.warning(
