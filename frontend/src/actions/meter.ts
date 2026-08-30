@@ -28,10 +28,7 @@ import {
   fetchReportsByGasDetector,
   uploadReport as apiUploadReport,
   deleteReport as apiDeleteReport,
-  matchFiles,
-  batchUploadReports as apiBatchUploadReports,
   extractDateFromReport,
-  batchExtractDates as apiBatchExtractDates,
   batchCreateInstruments as apiBatchCreateInstruments,
   batchCreateGasDetectors as apiBatchCreateGasDetectors,
   fetchMeterDepartments,
@@ -181,16 +178,23 @@ export async function getReportsByGasDetector(detectorId: string) {
   return fetchReportsByGasDetector(detectorId)
 }
 
-export async function matchReportFiles(filenames: string[]) {
-  return matchFiles(filenames)
-}
-
-export async function batchUploadReports(formData: FormData) {
-  const result = await apiBatchUploadReports(formData)
+export async function updateReport(reportId: string, certificateNo: string | null) {
+  const { getServerToken } = await import('@/lib/auth')
+  const token = await getServerToken()
+  const res = await fetch(`${process.env.API_BASE_URL}/api/v1/meter/reports/${reportId}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ certificate_no: certificateNo }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.message || `更新失败: ${res.status}`)
+  }
   revalidatePath('/meter/instruments')
   revalidatePath('/meter/gas-detectors')
-  return result
+  return res.json()
 }
+
 export async function extractDate(reportId: string) {
   const res = await extractDateFromReport(reportId)
   if (!res.success && res.error) throw new Error(res.error)
@@ -337,15 +341,6 @@ export async function exportGasDetectorsExcel(filters: GasDetectorFilter = {}): 
   const base64 = Buffer.from(arrayBuffer).toString('base64')
   return { blob: base64, filename: '有毒有害可燃探测器台账.xlsx' }
 }
-
-// AI 批量提取
-export async function batchExtractDates(reportIds: string[]) {
-  const res = await apiBatchExtractDates(reportIds)
-  revalidatePath('/meter/instruments')
-  revalidatePath('/meter/gas-detectors')
-  return res
-}
-
 
 // ═══════════════════════════════════════════
 // 仪表总览

@@ -36,6 +36,6 @@ uploads
 .superpowers
 docs
 uploads/
-
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
+temp/

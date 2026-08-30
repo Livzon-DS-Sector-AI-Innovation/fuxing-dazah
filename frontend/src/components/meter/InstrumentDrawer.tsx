@@ -63,9 +63,9 @@ export function InstrumentDrawer({ open, record, onClose }: Props) {
         message.success('创建成功')
       }
       onClose()
-    } catch (e: any) {
-      if (e?.errorFields) return // form validation
-      message.error(e?.message || '操作失败')
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'errorFields' in e) return // form validation
+      message.error(e instanceof Error ? e.message : '操作失败')
     } finally {
       setLoading(false)
     }

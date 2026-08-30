@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useState, type Key } from 'react'
+import { useCallback, useEffect, useRef, useState, type Key } from 'react'
 import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm, Radio } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
+import type { FilterDropdownProps } from 'antd/es/table/interface'
 import { InstrumentRecord, InstrumentFilter, InstrumentFilterOptions } from '@/types/meter'
 import { deleteInstrument, getInstruments, exportInstrumentReports, exportInstrumentsExcel, getInstrumentFilterOptions, batchDeleteInstruments, getInstrumentIds } from '@/actions/meter'
 import { InstrumentDrawer } from './InstrumentDrawer'
@@ -22,7 +23,7 @@ function renderFilterDropdown(
   placeholder: string,
 ) {
   const selectedArr = selectedValue ? selectedValue.split(',').filter(Boolean) : []
-  return ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: { setSelectedKeys: (keys: Key[]) => void; selectedKeys: Key[]; confirm: () => void; clearFilters?: () => void }) => (
+  const FilterDropdown = ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: FilterDropdownProps) => (
     <div style={{ padding: 8, minWidth: 220 }}>
       <Select
         mode="multiple"
@@ -45,6 +46,8 @@ function renderFilterDropdown(
       />
     </div>
   )
+  FilterDropdown.displayName = 'FilterDropdown'
+  return FilterDropdown
 }
 
 /** 筛选字段名 → InstrumentFilter 参数 key 的映射 */
@@ -77,6 +80,8 @@ export function InstrumentTable() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
+  const [inputValue, setInputValue] = useState('')
+  const kwTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editingRecord, setEditingRecord] = useState<InstrumentRecord | null>(null)
   const [reportDialogOpen, setReportDialogOpen] = useState(false)
@@ -147,7 +152,11 @@ export function InstrumentTable() {
     }
   }, [page, pageSize, keyword, columnFilters, dateFilters])
 
-  useEffect(() => { fetchData() }, [fetchData])
+  // setTimeout 延后到下一 tick，避免 effect 内同步 setState 链（react-hooks/set-state-in-effect）
+  useEffect(() => {
+    const t = setTimeout(fetchData, 0)
+    return () => clearTimeout(t)
+  }, [fetchData])
 
   const handleDelete = async (id: string) => {
     try {
@@ -479,7 +488,7 @@ export function InstrumentTable() {
       title: '报告', dataIndex: 'report_count', width: 80,
       filteredValue: columnFilters.report_count ? columnFilters.report_count.split(',') : null,
       render: (v: number) => v > 0 ? <Tag color="blue">有</Tag> : <Tag>无</Tag>,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: any) => (
+      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: FilterDropdownProps) => (
         <div style={{ padding: 8 }}>
           <Radio.Group
             value={selectedKeys[0]}
@@ -522,8 +531,12 @@ export function InstrumentTable() {
           <Input
             placeholder="搜索资产编号/名称/型号"
             prefix={<SearchOutlined />}
-            value={keyword}
-            onChange={(e) => { setKeyword(e.target.value); setPage(1) }}
+            value={inputValue}
+            onChange={(e) => {
+              setInputValue(e.target.value)
+              if (kwTimer.current) clearTimeout(kwTimer.current)
+              kwTimer.current = setTimeout(() => { setKeyword(e.target.value); setPage(1) }, 400)
+            }}
             style={{ width: 260 }}
             allowClear
           />
@@ -627,7 +640,6 @@ export function InstrumentTable() {
       <BatchUploadDialog
         open={batchUploadOpen}
         source="instrument"
-        uploadHint="器具名称_器具编号.pdf"
         onClose={() => { setBatchUploadOpen(false); fetchData() }}
       />
 

@@ -1,9 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, params
 
 from app.shared.module_registry import ModuleDefinition
 
 
-def create_module_router(module: ModuleDefinition, dependencies: list | None = None) -> APIRouter:
+def create_module_router(
+    module: ModuleDefinition, dependencies: list[params.Depends] | None = None
+) -> APIRouter:
     router = APIRouter(dependencies=dependencies or [])
 
     @router.get("/", summary=f"{module.name}模块信息")

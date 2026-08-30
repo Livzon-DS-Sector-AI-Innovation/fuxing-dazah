@@ -36,9 +36,9 @@ export function LedgerImportModal({ open, source, onClose }: Props) {
       setResult(res)
       const warnCount = res.warnings?.length ?? 0
       if (warnCount > 0) {
-        message.success(`导入完成：新增 ${res.imported_count} 条，${warnCount} 条字段缺失提醒`)
+        message.success(`导入完成：更新 ${res.updated_count ?? 0} 条，新增 ${res.imported_count} 条，${warnCount} 条字段缺失提醒`)
       } else {
-        message.success(`导入完成：新增 ${res.imported_count} 条记录`)
+        message.success(`导入完成：更新 ${res.updated_count ?? 0} 条，新增 ${res.imported_count} 条记录`)
       }
     } catch (e: unknown) {
       message.error(e instanceof Error ? e.message : '导入失败')
@@ -109,9 +109,10 @@ export function LedgerImportModal({ open, source, onClose }: Props) {
 
       {result && (
         <div style={{ marginTop: 16 }}>
-          <Descriptions column={3} size="small" bordered>
-            <Descriptions.Item label="清空旧记录">{result.deleted_count} 条</Descriptions.Item>
-            <Descriptions.Item label="成功导入">{result.imported_count} 条</Descriptions.Item>
+          <Descriptions column={4} size="small" bordered>
+            <Descriptions.Item label="更新已有">{result.updated_count ?? 0} 条</Descriptions.Item>
+            <Descriptions.Item label="新增导入">{result.imported_count} 条</Descriptions.Item>
+            <Descriptions.Item label="移除旧记录">{result.deleted_count} 条</Descriptions.Item>
             <Descriptions.Item label="处理 Sheet">{result.sheet_count} 个</Descriptions.Item>
           </Descriptions>
 

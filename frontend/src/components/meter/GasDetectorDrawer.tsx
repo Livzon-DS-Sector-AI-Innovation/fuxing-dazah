@@ -63,9 +63,9 @@ export function GasDetectorDrawer({ open, record, onClose }: Props) {
         message.success('创建成功')
       }
       onClose()
-    } catch (e: any) {
-      if (e?.errorFields) return
-      message.error(e?.message || '操作失败')
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'errorFields' in e) return // 表单校验错误，antd 已在表单内展示
+      message.error(e instanceof Error ? e.message : '操作失败')
     } finally {
       setLoading(false)
     }

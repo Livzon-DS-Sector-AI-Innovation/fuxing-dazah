@@ -15,11 +15,9 @@ import {
   FileMatchItem,
   BatchUploadResult,
   BatchUploadItem,
+  ReportAnalyzeItem,
+  ReportMatchCandidate,
   ExtractDateResponse,
-  BatchExtractResponse,
-  ExtractProgressEvent,
-  ExtractResultEvent,
-  ExtractCompleteEvent,
   InstrumentFilterOptions,
   GasDetectorFilterOptions,
   MeterOverview,
@@ -40,7 +38,10 @@ import { PaginatedResponse } from '@/types/energy'
 import { apiGet, apiPost, apiPut, apiDelete, apiFetchPaginated } from '@/lib/http-client'
 
 const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-const CLIENT_API = ''
+/** 浏览器端 API base：优先 NEXT_PUBLIC_API_BASE_URL（直连后端）；
+ *  未配置时回退相对路径（开发走 next.config rewrites，生产需在构建时配置该变量）。
+ *  不再硬编码 localhost:8000 —— standalone 部署时会把请求打到每个用户的本机。 */
+const CLIENT_API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 const BASE = '/api/v1/meter'
 
 // ═══════════════════════════════════════════
@@ -304,25 +305,10 @@ export async function fetchReportsByGasDetector(detectorId: string): Promise<Rep
   return apiGet<ReportResponse[]>(`${SERVER_API}${BASE}/gas-detectors/${detectorId}/reports`)
 }
 
-export async function matchFiles(filenames: string[]): Promise<FileMatchItem[]> {
-  return apiPost<FileMatchItem[]>(`${SERVER_API}${BASE}/reports/match`, { filenames })
-}
-
-export async function batchUploadReports(formData: FormData): Promise<BatchUploadResult> {
-  const res = await fetch(`${SERVER_API}${BASE}/reports/batch`, {
-    method: 'POST',
-    body: formData,
-    credentials: 'include',
-  })
-  if (!res.ok) throw new Error(`批量上传失败: ${res.status}`)
-  const json = await res.json()
-  return json.data ?? json
-}
-
-/** 客户端直连批量上传：绕过 Next.js rewrite 代理和 Server Action，直连后端避免大文件代理超时。 */
+/** 客户端直连批量上传：绕过 Next.js rewrite 代理和 Server Action，直连后端避免大文件代理超时。
+ *  （Server Action 有 1MB body 限制，大文件批量上传只能客户端直连——规范例外，已注释说明。） */
 export async function batchUploadReportsClient(formData: FormData): Promise<BatchUploadResult> {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
-  const res = await fetch(`${API_BASE}${BASE}/reports/batch`, {
+  const res = await fetch(`${CLIENT_API}${BASE}/reports/batch`, {
     method: 'POST',
     body: formData,
     credentials: 'include',
@@ -335,6 +321,45 @@ export async function batchUploadReportsClient(formData: FormData): Promise<Batc
   return json.data ?? json
 }
 
+/** 客户端直连报告内容识别：上传文件 → 后端提取 4 字段并匹配台账（耗时 30–120s，含 AI 视觉）。
+ *  同批量上传：大文件 + 长耗时，走客户端直连。 */
+export async function analyzeReportFilesClient(
+  formData: FormData,
+  source?: 'instrument' | 'gas_detector',
+): Promise<ReportAnalyzeItem[]> {
+  if (source) formData.append('source', source)
+  const res = await fetch(`${CLIENT_API}${BASE}/reports/analyze`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: `报告识别失败: ${res.status}` }))
+    throw new Error(err.message || `报告识别失败: ${res.status}`)
+  }
+  const json = await res.json()
+  return json.data ?? json
+}
+
+/** 按名称+编号匹配台账（人工修正提取字段后重新关联）。 */
+export async function matchOne(
+  instrumentName?: string | null,
+  serialNumber?: string | null,
+  source?: 'instrument' | 'gas_detector',
+): Promise<{
+  matched_type: 'instrument' | 'gas_detector' | null
+  matched_id: string | null
+  matched_name: string | null
+  matched_department: string | null
+  candidates: ReportMatchCandidate[]
+}> {
+  const params = new URLSearchParams()
+  if (instrumentName) params.set('instrument_name', instrumentName)
+  if (serialNumber) params.set('serial_number', serialNumber)
+  if (source) params.set('source', source)
+  return apiGet(`${CLIENT_API}${BASE}/reports/match-one?${params.toString()}`)
+}
+
 export async function fetchCalibrationAlerts(daysBefore: number = 30, department?: string): Promise<CalibrationAlertItem[]> {
   let url = `${SERVER_API}${BASE}/calibration/alerts?days_before=${daysBefore}`
   if (department) url += `&department=${encodeURIComponent(department)}`
@@ -343,91 +368,6 @@ export async function fetchCalibrationAlerts(daysBefore: number = 30, department
 
 export async function extractDateFromReport(reportId: string): Promise<ExtractDateResponse> {
   return apiPost<ExtractDateResponse>(`${SERVER_API}${BASE}/reports/${reportId}/extract-date`)
-}
-
-export async function batchExtractDates(reportIds: string[]): Promise<BatchExtractResponse> {
-  return apiPost<BatchExtractResponse>(`${SERVER_API}${BASE}/reports/batch-extract-dates`, { report_ids: reportIds })
-}
-
-/** SSE 流式批量 AI 识别。
- *  通过 POST + ReadableStream 解析 SSE 事件。
- *  返回 AbortController 供中断使用。
- */
-export function fetchBatchExtractDatesStream(
-  reportIds: string[],
-  callbacks: {
-    onProgress: (e: ExtractProgressEvent) => void
-    onResult: (e: ExtractResultEvent) => void
-    onError: (message: string) => void
-    onComplete: (e: ExtractCompleteEvent) => void
-  },
-): AbortController {
-  const controller = new AbortController()
-
-  const url = `${SERVER_API}${BASE}/reports/batch-extract-dates/stream`
-
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ report_ids: reportIds }),
-    signal: controller.signal,
-  })
-    .then(async (response) => {
-      if (!response.ok || !response.body) {
-        callbacks.onError(`请求失败: ${response.status}`)
-        return
-      }
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        // 最后一行可能不完整，保留在 buffer
-        buffer = lines.pop() || ''
-
-        let currentEvent = ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ')) {
-            const raw = line.slice(6)
-            try {
-              const data = JSON.parse(raw)
-              switch (currentEvent) {
-                case 'progress':
-                  callbacks.onProgress(data as ExtractProgressEvent)
-                  break
-                case 'result':
-                  callbacks.onResult(data as ExtractResultEvent)
-                  break
-                case 'error':
-                  callbacks.onError(data.message || '未知错误')
-                  break
-                case 'complete':
-                  callbacks.onComplete(data as ExtractCompleteEvent)
-                  break
-              }
-            } catch {
-              // 忽略非 JSON 行
-            }
-          }
-        }
-      }
-    })
-    .catch((err) => {
-      if (err.name === 'AbortError') {
-        callbacks.onComplete({ total: reportIds.length, success: 0, failed: 0, interrupted: true })
-      } else {
-        callbacks.onError(err.message || '网络错误')
-      }
-    })
-
-  return controller
 }
 
 // ═══════════════════════════════════════════

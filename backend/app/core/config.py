@@ -114,6 +114,11 @@ class Settings(BaseSettings):
     # Meter — 检定到期飞书自动提醒
     METER_CALIBRATION_AUTO_NOTIFY_ENABLED: bool = False
 
+    # Meter AI — DeepSeek 视觉识别报告字段（校准报告 PDF 内容识别）
+    METER_AI_BASE_URL: str = ""
+    METER_AI_API_KEY: str = ""
+    METER_AI_MODEL: str = "deepseek-v4-flash-vision-exp"
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

@@ -11,28 +11,29 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import uuid
 import sys
+import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-import xlrd
+import xlrd  # type: ignore[import-untyped]
+from sqlalchemy.ext.asyncio import AsyncSession
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from app.core.database import async_session_factory
-
 
 # ═══════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════
 
 
-def excel_serial_to_date(serial) -> date | None:
+def excel_serial_to_date(serial: object) -> date | None:
     if serial is None or serial == "":
         return None
     try:
-        f = float(serial)
+        f = float(str(serial))
         if f < 1:
             return None
         return (datetime(1899, 12, 30) + timedelta(days=f)).date()
@@ -40,8 +41,8 @@ def excel_serial_to_date(serial) -> date | None:
         return None
 
 
-def detect_anomalies(row: dict, sheet_name: str) -> dict:
-    flags: dict = {}
+def detect_anomalies(row: dict[str, Any], sheet_name: str) -> dict[str, Any]:
+    flags: dict[str, Any] = {}
     cm = row.get("color_marking", "")
     if cm and cm != "":
         try:
@@ -83,17 +84,18 @@ def detect_anomalies(row: dict, sheet_name: str) -> dict:
 BATCH_SIZE = 500
 
 
-async def import_sheet_0(db, sh: xlrd.sheet.Sheet):
+async def import_sheet_0(db: AsyncSession, sh: xlrd.sheet.Sheet) -> None:
     """导入 Sheet 0（有毒有害可燃探测器台账）- 批量写入，按 product_number 去重。"""
     from sqlalchemy import insert
+
     from app.modules.meter.models import GasDetectorRecord
 
     sheet_name = sh.name.strip()
     data_rows = sh.nrows - 4
     print(f"  [DETECTOR] {sheet_name}: {data_rows} rows")
 
-    seen_product_numbers: set = set()
-    all_rows = []
+    seen_product_numbers: set[str] = set()
+    all_rows: list[dict[str, Any]] = []
     for r in range(4, sh.nrows):
         row_data = {
             "instrument_name": str(sh.cell_value(r, 1)).strip(),
@@ -140,15 +142,18 @@ async def import_sheet_0(db, sh: xlrd.sheet.Sheet):
     print(f"    [OK] {sheet_name}: {count} rows (skipped {data_rows - len(all_rows)} dups)")
 
 
-async def import_standard_sheets(db, sheets: list[tuple[int, xlrd.sheet.Sheet]]):
+async def import_standard_sheets(
+    db: AsyncSession, sheets: list[tuple[int, xlrd.sheet.Sheet]]
+) -> None:
     """导入标准计量器具台账 sheets — 先收集全部行，全局按 asset_number 去重后批量写入。"""
     from sqlalchemy import insert
+
     from app.modules.meter.models import InstrumentRecord
 
     # Phase 1: 收集所有 sheet 的所有行
-    seen_asset_numbers: set = set()
-    all_rows = []
-    sheet_stats: dict[str, dict] = {}
+    seen_asset_numbers: set[str] = set()
+    all_rows: list[dict[str, Any]] = []
+    sheet_stats: dict[str, dict[str, Any]] = {}
 
     for idx, sh in sheets:
         sheet_name = sh.name.strip()
@@ -292,8 +297,9 @@ async def import_standard_sheets(db, sheets: list[tuple[int, xlrd.sheet.Sheet]])
 # ═══════════════════════════════════════════
 
 
-async def main(filepath: str):
+async def main(filepath: str) -> None:
     import sys
+
     from app.core.database import engine
 
     path = Path(filepath)

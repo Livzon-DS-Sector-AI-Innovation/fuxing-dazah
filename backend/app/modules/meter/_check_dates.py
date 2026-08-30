@@ -1,5 +1,6 @@
-import sys, json
-from datetime import datetime, timezone, timedelta
+import json
+import sys
+from datetime import datetime, timedelta, timezone
 
 CST = timezone(timedelta(hours=8))
 data = json.load(sys.stdin)
