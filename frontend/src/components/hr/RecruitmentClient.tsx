@@ -25,7 +25,8 @@ const CANDIDATE_TRANSITIONS: Record<string, string[]> = {
   '已面试': ['录用中', '已拒绝'],
   '录用中': ['已录用', '已拒绝'],
   '已录用': ['待入职审批', '已拒绝'],
-  '待入职审批': ['已录用', '已入职', '已拒绝'],
+  // 已入职只能通过「入职操作」完成（创建入职记录/工号/子任务），不放裸流转
+  '待入职审批': ['已录用', '已拒绝'],
   '已拒绝': [],
 }
 
@@ -92,16 +93,19 @@ export default function RecruitmentClient() {
   // 用人部门负责人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
   const [ownerOptions, setOwnerOptions] = useState<{ value: string; label: string }[]>([])
   const [ownerSearching, setOwnerSearching] = useState(false)
+  const ownerSearchSeq = useRef(0)
   const searchOwnerOptions = async (keyword: string) => {
+    const seq = ++ownerSearchSeq.current
     setOwnerSearching(true)
     try {
       const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== ownerSearchSeq.current) return  // 过期响应丢弃
       setOwnerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
         value: e.name,
         label: `${e.name}（${e.employee_number || ''}）`,
       })))
     } catch { /* 搜索失败静默 */ }
-    finally { setOwnerSearching(false) }
+    finally { if (seq === ownerSearchSeq.current) setOwnerSearching(false) }
   }
 
   useEffect(() => { setMounted(true) }, [])

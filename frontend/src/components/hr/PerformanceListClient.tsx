@@ -54,10 +54,15 @@ export default function PerformanceListClient() {
     }
   }, [mode, month, status, page])
 
-  useEffect(() => { loadData() }, [loadData])
-
-  // 切换筛选条件时重置页码
-  useEffect(() => { setPage(1) }, [mode, month, status])
+  // 筛选变化先重置页码再加载（单次请求，避免旧页请求与新页请求竞态覆盖）
+  useEffect(() => {
+    if (page !== 1) {
+      setPage(1)
+      return
+    }
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, month, status, page, loadData])
 
   const handleAutoCreate = async () => {
     Modal.confirm({

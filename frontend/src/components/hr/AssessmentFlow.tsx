@@ -152,11 +152,11 @@ export default function AssessmentFlow({
       const per = pickedQuestions.reduce((s, q) => s + (q.score || 0), 0) / Math.max(1, pickedQuestions.length)
       const deduction = [...row.wrong].reduce((s, n) => s + (pickedQuestions[n - 1]?.score || per || 0), 0)
       const total = Math.max(0, pickedQuestions.reduce((s, q) => s + (q.score || 0), 0) - deduction)
-      return { total, grade: total >= 90 ? '优' : total >= 80 ? '合格' : '不合格' }
+      return { total, grade: total >= 90 ? '优秀' : total >= 80 ? '合格' : '不合格' }
     }
     const deduction = [...row.wrong].reduce((s, n) => s + (questionScores[n] || 0), 0)
     const total = Math.max(0, assessment.full_score - deduction)
-    const grade = total >= assessment.excellent_line ? '优' : total >= assessment.pass_line ? '合格' : '不合格'
+    const grade = total >= assessment.excellent_line ? '优秀' : total >= assessment.pass_line ? '合格' : '不合格'
     return { total, grade }
   }
 
@@ -180,7 +180,8 @@ export default function AssessmentFlow({
         const r = await downloadQaAssessmentEvaluation(assessmentId)
         downloadBase64File(r.base64, r.filename)
       } else {
-        // 先保存成绩（含台账同步）
+        // 先保存成绩（含台账同步）：保存失败即中止，不下载
+        // 否则用户拿到成绩单但台账实际未同步、且毫不知情
         const saveData = await saveQaAssessmentScores(assessmentId, {
           assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
           scores: scoreRows.map((r) => ({
@@ -188,7 +189,7 @@ export default function AssessmentFlow({
             employee_number: r.employee_number,
             wrong_questions: [...r.wrong].sort((a, b) => a - b),
           })),
-        }).catch(() => ({} as any))
+        })
         // 再下载成绩单
         const r = await downloadQaAssessmentScores(assessmentId)
         downloadBase64File(r.base64, r.filename)

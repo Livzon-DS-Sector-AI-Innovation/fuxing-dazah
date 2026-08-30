@@ -25,6 +25,7 @@ export default function SopMasterClient() {
   const { message } = App.useApp()
   const { hasPermission } = usePermission()
   const canGenerateDoc = hasPermission('hr:training:document')
+  const canManage = hasPermission('hr:training:manage')
   const [years, setYears] = useState<string[]>([])
   const [year, setYear] = useState<string>(String(new Date().getFullYear()))
   const [color, setColor] = useState<string | undefined>()
@@ -212,7 +213,7 @@ export default function SopMasterClient() {
     {
       title: '操作', width: 260, fixed: 'right' as const, render: (_: any, r: SopTrainingRecord) => (
         <Space size={4}>
-          {r.status !== '已提交' && (
+          {canManage && r.status !== '已提交' && (
             <Button type="text" size="small" icon={<SendOutlined />}
               loading={submitting === r.id}
               onClick={() => handleSubmit(r)}>提交/通知</Button>
@@ -222,10 +223,12 @@ export default function SopMasterClient() {
               loading={generating === r.id}
               onClick={() => handleGenerateMaterials(r)}>全套材料</Button>
           )}
-          <Button type="text" size="small" onClick={() => openEdit(r)}>编辑</Button>
-          <Popconfirm title="确定删除该登记？未转训的二级表记录将一并删除" onConfirm={() => handleDelete(r.id)}>
-            <Button type="text" size="small" danger>删除</Button>
-          </Popconfirm>
+          {canManage && <Button type="text" size="small" onClick={() => openEdit(r)}>编辑</Button>}
+          {canManage && (
+            <Popconfirm title="确定删除该登记？未转训的二级表记录将一并删除" onConfirm={() => handleDelete(r.id)}>
+              <Button type="text" size="small" danger>删除</Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -243,7 +246,7 @@ export default function SopMasterClient() {
         <Space>
           <Button icon={<DownloadOutlined />} loading={exporting} onClick={handleExport}>导出登记表</Button>
           <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增登记</Button>
+          {canManage && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增登记</Button>}
         </Space>
       </div>
       <Card>

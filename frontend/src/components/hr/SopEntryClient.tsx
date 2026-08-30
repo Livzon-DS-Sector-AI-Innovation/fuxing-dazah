@@ -118,17 +118,20 @@ export default function SopEntryClient() {
       setClassOptions((cls.data || []).map((c) => ({ label: `${c.tag_name}（${c.count}人）`, value: c.tag_name })))
     } catch { setClassOptions([]) }
     if (e.classification) {
-      await loadPersonnel(e.department, e.classification)
+      // 已有保存人员时只加载选项不覆盖；无保存人员时才默认全选分类下人员
+      await loadPersonnel(e.department, e.classification, (e.personnel || []).length === 0)
     }
   }
 
-  const loadPersonnel = async (department: string, classification: string) => {
+  const loadPersonnel = async (department: string, classification: string, selectAll = true) => {
     setPersonnelLoading(true)
     try {
       const res = await fetchSopPersonnel(department, classification)
       setPersonnelOptions(res.data || [])
-      // 默认全选分类下人员，可自由调整
-      form.setFieldsValue({ personnel: (res.data || []).map((p) => p.employee_number) })
+      if (selectAll) {
+        // 默认全选分类下人员，可自由调整
+        form.setFieldsValue({ personnel: (res.data || []).map((p) => p.employee_number) })
+      }
     } catch (err: any) {
       message.error(err.message || '获取分类人员失败')
     } finally { setPersonnelLoading(false) }
@@ -195,7 +198,7 @@ export default function SopEntryClient() {
         ) : '-'
       ),
     },
-  ], [transferring, canManage])
+  ], [transferring, canManage, load, handleTransfer])
 
   return (
     <div className="space-y-4">

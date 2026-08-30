@@ -11,7 +11,8 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
   const [evaluations, setEvaluations] = useState<any[]>([])
   const [categories, setCategories] = useState<any[]>([])
   const [scores, setScores] = useState<Record<string, Record<string, { score: number | null; weight: number }>>>({})
-  const [catEditable, setCatEditable] = useState<Record<string, boolean>>({})
+  // 可编辑状态按「考核 × 项目」维度保存（同一项目在不同考核的负责人权限可能不同）
+  const [editableByEval, setEditableByEval] = useState<Record<string, Record<string, boolean>>>({})
   const [saving, setSaving] = useState(false)
 
   const load = async () => {
@@ -26,18 +27,20 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
       setEvaluations(evals)
       // 加载所有考核的评分 + 各项目是否可编辑（负责人校验由后端返回）
       const scoreMap: Record<string, Record<string, { score: number | null; weight: number }>> = {}
-      const editableMap: Record<string, boolean> = {}
+      const editMap: Record<string, Record<string, boolean>> = {}
       for (const ev of evals) {
         const sRes = await fetchCategoryScores(ev.id)
         const entry: Record<string, { score: number | null; weight: number }> = {}
+        const editEntry: Record<string, boolean> = {}
         for (const s of sRes.data || []) {
           entry[s.category_id] = { score: s.score, weight: s.weight || (cats.find((c: any) => c.id === s.category_id)?.weight || 0) }
-          editableMap[s.category_id] = s.can_edit !== false
+          editEntry[s.category_id] = s.can_edit !== false
         }
         scoreMap[ev.id] = entry
+        editMap[ev.id] = editEntry
       }
       setScores(scoreMap)
-      setCatEditable(editableMap)
+      setEditableByEval(editMap)
     } catch (e: any) { message.error('加载失败: ' + (e?.message || String(e))) }
   }
   useEffect(() => { load() }, [month])
@@ -59,7 +62,7 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
     setSaving(true)
     try {
       const batch = categories
-        .filter(c => catEditable[c.id] !== false)
+        .filter(c => editableByEval[evalId]?.[c.id] !== false)
         .map(c => ({
           evaluation_id: evalId,
           category_id: c.id,
@@ -74,11 +77,11 @@ export default function PerformanceCategoryScoreClient({ initialMonth }: { initi
 
   // 用于表格的列定义：部门 + 各考核项目列（非负责人项目禁用输入）
   const catCols = categories.map(c => {
-    const editable = catEditable[c.id] !== false
     return {
-      title: editable ? c.name : `${c.name}（${(c as any).evaluator || '非负责人'}）`,
+      title: c.name,
       dataIndex: c.id, key: c.id, width: 170,
       render: (_: any, record: any) => {
+        const editable = editableByEval[record.id]?.[c.id] !== false
         const v = scores[record.id]?.[c.id]
         return (
           <Space direction="vertical" size={2} style={{ width: '100%' }}>

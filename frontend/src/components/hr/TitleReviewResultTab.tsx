@@ -47,8 +47,8 @@ export default function TitleReviewResultTab({ activityId, canViewScores }: Prop
   }, [load, canViewScores, activityId])
 
   const passedRows = results.filter((r) => r.application.status === 'passed')
-  // 名单候选：排除评审未通过/信息异常，其余均可勾选（默认勾评审合格）
-  const rosterRows = results.filter((r) => !['failed', 'final_failed', 'invalid'].includes(r.application.status))
+  // 名单候选：仅已通过评审的申报可勾选（投票中/待评审不可进最终名单）
+  const rosterRows = results.filter((r) => ['passed', 'final_passed'].includes(r.application.status))
 
   const openRoster = () => {
     setRosterIds(passedRows.map((r) => r.application.id))

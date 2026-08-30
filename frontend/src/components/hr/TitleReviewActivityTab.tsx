@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
 } from 'antd'
@@ -52,6 +52,8 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
   const [editing, setEditing] = useState<TitleReviewActivityListItem | null>(null)
   const [levels, setLevels] = useState<TitleReviewLevel[]>(DEFAULT_LEVELS)
   const [saving, setSaving] = useState(false)
+  // 远程搜索竞态防护：慢的旧响应不得覆盖新关键词结果
+  const searchSeq = useRef(0)
 
   const [committeeOpen, setCommitteeOpen] = useState(false)
   const [committees, setCommittees] = useState<TitleReviewDeptCommittee[]>([])
@@ -100,8 +102,9 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
     const payload = {
       name: values.name,
       pass_ratio: values.pass_ratio,
-      apply_deadline: values.apply_deadline ? (values.apply_deadline as Dayjs).toISOString() : undefined,
-      review_deadline: values.review_deadline ? (values.review_deadline as Dayjs).toISOString() : undefined,
+      // 清空截止时间显式传 null（undefined 会被 JSON 序列化丢弃，后端不更新）
+      apply_deadline: values.apply_deadline ? (values.apply_deadline as Dayjs).toISOString() : null,
+      review_deadline: values.review_deadline ? (values.review_deadline as Dayjs).toISOString() : null,
       feishu_app_token: values.feishu_app_token,
       apply_table_id: values.apply_table_id,
       approval_code: values.approval_code,
@@ -191,6 +194,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
   // 员工远程搜索（在职员工 1200+，仅前端过滤前 200 条会搜不到）
   const [employeeSearching, setEmployeeSearching] = useState(false)
   const searchEmployees = async (keyword: string) => {
+    const seq = ++searchSeq.current
     setEmployeeSearching(true)
     try {
       const d = await fetchEmployeesAction({
@@ -199,11 +203,13 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
         page: 1,
         page_size: keyword ? 50 : 200,
       })
+      if (seq !== searchSeq.current) return  // 过期响应丢弃
       setEmployeeOptions(d?.data || [])
     } catch (err: any) {
+      if (seq !== searchSeq.current) return
       message.error(err.message || '搜索员工失败')
     } finally {
-      setEmployeeSearching(false)
+      if (seq === searchSeq.current) setEmployeeSearching(false)
     }
   }
 
@@ -266,7 +272,7 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
             <Button size="small" danger onClick={() => runAction(closeTitleActivity, r.id, '活动已结束')}>结束</Button>
           )}
-          {canManage && (
+          {canManage && r.status === 'draft' && (
             <Popconfirm
               title="确认删除该活动？"
               onConfirm={async () => {

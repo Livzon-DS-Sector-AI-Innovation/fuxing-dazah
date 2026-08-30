@@ -2,7 +2,7 @@
 
 import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
@@ -94,14 +94,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   // 入职任务状态
   const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
-  const [tasksLoaded, setTasksLoaded] = useState(false)
+  const tasksLoadedRef = useRef(false)
 
-  const loadOnboardingTasks = useCallback(async () => {
-    if (tasksLoaded) return
+  // force=true 时跳过「已加载」短路（点「刷新」强制重拉）
+  const loadOnboardingTasks = useCallback(async (force = false) => {
+    if (tasksLoadedRef.current && !force) return
     setTasksLoading(true)
     try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
-    finally { setTasksLoading(false); setTasksLoaded(true) }
-  }, [candidate.id, tasksLoaded])
+    finally { setTasksLoading(false); tasksLoadedRef.current = true }
+  }, [candidate.id])
   const [evaluations, setEvaluations] = useState<Record<string, AiEvaluation>>({})
 
   // 状态流转
@@ -306,21 +307,25 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     '已面试': ['录用中', '已拒绝'],
     '录用中': ['已录用', '已拒绝'],
     '已录用': ['待入职审批', '已拒绝'],
-    '待入职审批': ['已录用', '已入职', '已拒绝'],
+    // 已入职只能通过「入职操作」完成（创建入职记录/工号/子任务），不放裸流转
+    '待入职审批': ['已录用', '已拒绝'],
   }
   // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
   const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
   const [reviewerSearching, setReviewerSearching] = useState(false)
+  const reviewerSearchSeq = useRef(0)
   const searchReviewerOptions = async (keyword: string) => {
+    const seq = ++reviewerSearchSeq.current
     setReviewerSearching(true)
     try {
       const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== reviewerSearchSeq.current) return  // 过期响应丢弃
       setReviewerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
         value: e.name,
         label: `${e.name}（${e.employee_number || ''}）`,
       })))
     } catch { /* 搜索失败静默 */ }
-    finally { setReviewerSearching(false) }
+    finally { if (seq === reviewerSearchSeq.current) setReviewerSearching(false) }
   }
 
   // 补传/更新简历：解析 PDF → 更新 resume_url → 刷新预览
@@ -694,7 +699,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-medium">入职任务</h3>
-        <Button size="small" onClick={() => { setTasksLoaded(false); loadOnboardingTasks() }}>刷新</Button>
+        <Button size="small" onClick={() => loadOnboardingTasks(true)}>刷新</Button>
       </div>
       {tasksLoading ? <Spin className="flex justify-center py-12" /> :
         onboardingTasks.length === 0 ? <Empty description="暂无入职任务（入职审批通过后自动创建）" className="py-12" /> :

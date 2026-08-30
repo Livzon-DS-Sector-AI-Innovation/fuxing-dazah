@@ -105,6 +105,9 @@ export default function TrainingNotificationClient() {
   const watchedNames = Form.useWatch('employee_names', form) as string[] | undefined
   const watchedTrainingMethod = Form.useWatch('training_method', form)
   const isDualMode = watchedTrainingMethod === '面授+自学'
+  // 双模式下面授日期（预览/台账/导出统一取此值；单模式走 time_slots）
+  const watchedFaceDate = Form.useWatch('face_date', form) as any
+  const watchedFaceTime = Form.useWatch('face_time', form) as any
   const [departments, setDepartments] = useState<{ value: string; label: string }[]>([])
   const [employees, setEmployees] = useState<{ value: string; label: string }[]>([])
   const [allDeptEmployees, setAllDeptEmployees] = useState<any[]>([]) // 完整员工列表（含品种），用于品种筛选
@@ -295,7 +298,7 @@ export default function TrainingNotificationClient() {
     try {
       const payload = {
         department: values.department,
-        training_date: firstDate ? firstDate.format('YYYY-MM-DD') : new Date().toISOString().slice(0, 10),
+        training_date: firstDate ? firstDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
         subject: values.subject,
         ...buildTimeFields(values),
         location: values.location,
@@ -362,7 +365,7 @@ export default function TrainingNotificationClient() {
     try {
     await form.validateFields([
         'department',
-        ['time_slots', 0, 'date'],
+        ...(isDualMode ? ['face_date'] : [['time_slots', 0, 'date']]),
         'subject',
         'employee_names',
       ])
@@ -410,9 +413,10 @@ export default function TrainingNotificationClient() {
       onOk: async () => {
         setAddingToLedger(true)
         try {
-          const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
-          const firstDate = timeSlots[0]?.date
-          const trainingDate = firstDate ? firstDate.format('YYYY-MM-DD') : ''
+          // 双模式：台账取面授日期与面授时段；单模式：取 time_slots 首个日期与全部时段
+          const trainingDate = isDualMode
+            ? (values.face_date ? values.face_date.format('YYYY-MM-DD') : '')
+            : (values.time_slots?.[0]?.date ? values.time_slots[0].date.format('YYYY-MM-DD') : '')
           const subject = values.subject
           const method = values.training_method || ''
           const department = values.department || ''
@@ -422,10 +426,12 @@ export default function TrainingNotificationClient() {
             : department
 
           let durationHours: number | undefined = undefined
-          if (timeSlots.length > 0) {
+          const slotRanges: any[] = isDualMode
+            ? (values.face_time ? [values.face_time] : [])
+            : (values.time_slots || []).map((s: any) => s?.time).filter(Boolean)
+          if (slotRanges.length > 0) {
             let totalMin = 0
-            timeSlots.forEach((s: any) => {
-              const t = s?.time
+            slotRanges.forEach((t: any) => {
               if (t && t.length === 2) {
                 const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
                 if (diff > 0) totalMin += diff
@@ -529,10 +535,16 @@ export default function TrainingNotificationClient() {
     }
   }
 
+  // 统一取培训日期：双模式取面授日期，单模式取 time_slots 首个日期
+  const getTrainingDate = (values: any): string => {
+    const d = isDualMode ? values.face_date : values.time_slots?.[0]?.date
+    return d ? d.format('YYYY-MM-DD') : ''
+  }
+
   const handleExportQaRecord = async () => {
     const values = form.getFieldsValue()
-    const timeSlots: Array<{ date: any; time: any }> = values.time_slots || []
-    const firstDate = timeSlots[0]?.date
+    // 双模式：记录表取面授日期；单模式：time_slots 首个日期
+    const firstDate = isDualMode ? values.face_date : (values.time_slots || [])[0]?.date
     // 表头信息取自培训通知表单；已用 AI 出题则带上题目，否则考题区留空手写
     const qs = (assessmentQuestions?.questions || []).map((q: any) => ({
       file_no: q.file_no || '',
@@ -574,11 +586,19 @@ export default function TrainingNotificationClient() {
   const locationValue = formValues?.location || ''
   const contentValue = formValues?.content || ''
   const issuerValue = formValues?.issuer_department || deptValue
-  const firstSlotDate = timeSlotsValue?.[0]?.date || null
+  const firstSlotDate = isDualMode ? (watchedFaceDate || null) : (timeSlotsValue?.[0]?.date || null)
   const issueDateValue = formValues?.issue_date || firstSlotDate
 
-  // 从 time_slots 计算日期字符串
+  // 从 time_slots（或双模式的面授时段）计算日期字符串
   const dateStr = (() => {
+    if (isDualMode) {
+      if (!watchedFaceDate) return '____年__月__日'
+      const datePart = watchedFaceDate.format('YYYY年MM月DD日')
+      if (watchedFaceTime && watchedFaceTime.length === 2) {
+        return `${datePart} ${dayjs(watchedFaceTime[0]).format('HH:mm')} ~ ${dayjs(watchedFaceTime[1]).format('HH:mm')}`
+      }
+      return datePart
+    }
     if (!timeSlotsValue || timeSlotsValue.length === 0) return '____年__月__日'
     const parts = timeSlotsValue.map((s: any) => {
       const d = s?.date
@@ -607,12 +627,14 @@ export default function TrainingNotificationClient() {
     : []
 
   const hasBasicInfo = !!deptValue && !!firstSlotDate && !!subjectValue
-  // Compute duration hours from time_slots (sum of all slots)
+  // Compute duration hours from time_slots（双模式取面授时段）
   const evalHours = (() => {
-    if (!timeSlotsValue || timeSlotsValue.length === 0) return ''
+    const ranges: any[] = isDualMode
+      ? (watchedFaceTime ? [watchedFaceTime] : [])
+      : (timeSlotsValue || []).map((s: any) => s?.time).filter(Boolean)
+    if (ranges.length === 0) return ''
     let totalMin = 0
-    timeSlotsValue.forEach((s: any) => {
-      const t = s?.time
+    ranges.forEach((t: any) => {
       if (t && t.length === 2) {
         const diff = dayjs(t[1]).diff(dayjs(t[0]), 'minute')
         if (diff > 0) totalMin += diff
@@ -1459,7 +1481,7 @@ export default function TrainingNotificationClient() {
                       const questions = (assessmentQuestions?.questions || []).map((q: any) => ({ type: q.type || 'choice', question: q.question || q.content || '', options: q.options || [], answer: q.answer || '', score: q.score || 5 }))
                       const counts: Record<string, number> = {}
                       questions.forEach((q: any) => { counts[q.type] = (counts[q.type] || 0) + 1 })
-                      await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : ''), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
+                      await saveExamPaper({ subject: [v.subject, v.content].filter(Boolean).join(' - ') || '笔试试卷', department: v.department || undefined, training_date: getTrainingDate(v), training_method: v.training_method, questions, full_score: assessmentQuestions?.total_score || 100, choice_count: counts.choice || 0, true_false_count: counts.true_false || 0, multi_choice_count: counts.multi_choice || 0, fill_blank_count: counts.fill_blank || 0 })
                       message.success('考卷已保存，可在资料下载中查看')
                     } catch (err: any) { message.error(err.message || '保存考卷失败') }
                   }}>保存考卷</Button>
@@ -1476,7 +1498,7 @@ export default function TrainingNotificationClient() {
                   try {
                     const r = await exportScoreReport({
                       training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                      training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : '') || '',
+                      training_date: getTrainingDate(v) || '',
                       training_department: v.department || '',
                       scores_json: JSON.stringify(scores),
                     })
@@ -1497,7 +1519,7 @@ export default function TrainingNotificationClient() {
                   try {
                     const r = await exportQaRecordWithScores({
                       training_content: [v.subject, v.content].filter(Boolean).join(' - '),
-                      training_date: (v.time_slots?.[0]?.date ? v.time_slots[0].date.format('YYYY-MM-DD') : '') || '',
+                      training_date: getTrainingDate(v) || '',
                       training_method: v.training_method || '问答',
                       training_department: v.department || '',
                       questions_json: JSON.stringify(questions),
