@@ -307,6 +307,9 @@ _HR_PATH_PERMISSIONS: list[tuple[str, str | dict[str, str] | None]] = [
     # 评分保存不设路由级权限码：负责人由 handler 内按项目负责人校验，
     # 评分人只需任意 hr: 权限即可（否则非管理员的负责人无法评分）
     (r"/performance-evaluations/.*/category-scores", None),
+    # 自评/领导评分提交同理：由 handler 内按部门负责人/分管领导校验
+    (r"/performance-evaluations/.*/submit-self", None),
+    (r"/performance-evaluations/.*/submit-leader", None),
     (r"/performance-reports", {"GET": "hr:performance:read"}),
     (r"/performance-evaluations", {"GET": "hr:performance:read",
                                    "POST": "hr:performance:manage",

@@ -129,7 +129,12 @@ def _generate_offer_pdf_fallback(**kwargs) -> BytesIO:
 
 def generate_offer_html(**kwargs) -> str:
     """生成 Offer HTML（用于前端预览和 WeasyPrint 转 PDF）。"""
+    import html
+
     vals = _build_vals(**kwargs)
+    # 候选人姓名/岗位/条款等来源不可信，插值前统一转义防 XSS
+    # （fpdf2 兜底 PDF 不走此路径，不受影响）
+    vals = {k: html.escape(v) for k, v in vals.items()}
 
     stamp_path = find_hr_template("company_stamp.png")
     logo_path = find_hr_template("company_logo.png")

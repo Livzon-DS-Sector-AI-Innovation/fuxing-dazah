@@ -4,7 +4,7 @@ import os
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,16 +39,35 @@ def get_candidate_analysis_service(session: AsyncSession = Depends(get_db)) -> C
 
 @router.post("/candidates/parse-resume", summary="解析简历")
 async def parse_cv(file: UploadFile = Form(..., alias="resume")):
-    if not file.filename or not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "仅支持PDF")
+    from app.core.storage import is_enabled, upload_object
     from app.modules.hr.resume_parser import parse_resume_pdf
-    os.makedirs("uploads/resumes", exist_ok=True)
+
     content = bytes(await file.read())
+    if not content:
+        raise HTTPException(400, "文件内容为空")
+    # 文件名白名单化：只保留纯文件名，防止 ../ 路径穿越
+    safe_name = os.path.basename(file.filename).replace("\\", "_").replace("/", "_")
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = "resume.pdf"
+    # 先解析后存储：畸形/加密 PDF 直接 400，不落垃圾文件
+    try:
+        r = parse_resume_pdf(content)
+    except Exception as e:
+        raise HTTPException(400, f"简历解析失败（文件损坏或格式不支持）: {e}") from e
     # 文件名加 uuid 前缀，避免同名简历互相覆盖
-    path = f"uploads/resumes/{uuid4().hex[:8]}_{file.filename}"
-    open(path, "wb").write(content)
-    r = parse_resume_pdf(content)
-    r["resume_file_path"] = path
+    object_key = f"resumes/{uuid4().hex[:8]}_{safe_name}"
+    if is_enabled():
+        # 服务器部署：存 MinIO（模块 bucket：hr），本地不落盘
+        upload_object("hr", object_key, content, len(content), "application/pdf")
+        r["resume_file_path"] = f"minio://hr/{object_key}"
+    else:
+        # 本地开发兜底：存 uploads/resumes（该目录已 gitignore）
+        os.makedirs("uploads/resumes", exist_ok=True)
+        path = f"uploads/resumes/{uuid4().hex[:8]}_{safe_name}"
+        open(path, "wb").write(content)
+        r["resume_file_path"] = path
     return success_response(data=r)
 
 
@@ -306,12 +325,17 @@ async def push_onboarding_review(
     cid: UUID,
     payload: PushReviewRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.push_onboarding(cid, payload.pushed_by or "HR", payload.push_note)
+        # 发起人取当前用户（前端占位 'HR' 时用真实姓名，保证审核卡/结果通知能找到人）
+        pushed_by = payload.pushed_by
+        if not pushed_by or pushed_by == "HR":
+            pushed_by = hr_scope.user.name or "HR"
+        r = await rv_service.push_onboarding(cid, pushed_by, payload.push_note)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="入职审批已发起")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -337,7 +361,7 @@ async def update_onboarding_task(
 ):
     from app.modules.hr.schemas import OnboardingTaskResponse
     from app.modules.hr.service import OnboardingTaskService
-    task = await OnboardingTaskService(session).update(task_id, payload)
+    task = await OnboardingTaskService(session).update(task_id, payload, cid)
     return success_response(data=OnboardingTaskResponse.model_validate(task).model_dump(mode="json"), message="任务已更新")
 
 
@@ -369,9 +393,25 @@ async def get_status_logs(cid: UUID, service: CandidateService = Depends(get_ser
 @router.get("/candidates/{cid}/resume-preview", summary="简历预览")
 async def resume_preview(cid: UUID, service: CandidateService = Depends(get_service)):
     r = await service.get(cid)
-    if not r.resume_url or not os.path.exists(r.resume_url):
+    if not r.resume_url:
         raise HTTPException(404, "无简历文件")
-    return FileResponse(r.resume_url, media_type="application/pdf")
+    if r.resume_url.startswith("minio://"):
+        # 服务器部署：从 MinIO 读取（模块 bucket：hr）
+        from app.core.storage import get_object
+
+        object_key = r.resume_url[len("minio://"):]
+        obj = get_object("hr", object_key)
+        if obj is None:
+            raise HTTPException(404, "简历文件不存在")
+        data, content_type = obj
+        return Response(content=data, media_type=content_type or "application/pdf")
+    # 本地路径：只允许 uploads/resumes 下，防任意文件读取
+    path = os.path.normpath(r.resume_url)
+    if not path.startswith("uploads/resumes/"):
+        raise HTTPException(404, "无简历文件")
+    if not os.path.exists(path):
+        raise HTTPException(404, "无简历文件")
+    return FileResponse(path, media_type="application/pdf")
 
 
 # ─── Offer 发送与预览 ───

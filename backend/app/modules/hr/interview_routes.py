@@ -100,5 +100,8 @@ async def _auto_generate_analysis(service: InterviewService, interview) -> None:
         analysis = CandidateAnalysisService(service.session)
         await analysis.generate(interview.candidate_id, interview.id)
     except Exception:
-        # AI 生成失败不阻断面试保存
-        pass
+        # AI 生成失败不阻断面试保存，但记录日志便于排障
+        import logging
+        logging.getLogger(__name__).warning(
+            "面试 %s 自动生成胜任度报告失败", interview.id, exc_info=True
+        )

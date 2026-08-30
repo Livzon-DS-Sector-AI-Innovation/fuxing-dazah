@@ -18,19 +18,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # 成绩说明列加长（错题多时不再截断）
+    # 成绩说明列改为不限长文本（错题多时不再截断）
     op.alter_column(
         'qa_assessment_scores', 'result_text',
         existing_type=sa.String(length=16),
-        type_=sa.String(length=128),
+        type_=sa.Text(),
         existing_nullable=True,
         schema='hr',
     )
-    # 员工标签去重（同一工号+标签仅保留最早一条）
+    # 员工标签去重（同一工号+标签仅保留最早一条；去首尾空格后比较，
+    # 防止「A」与「A 」这类伪重复在随后建唯一索引时失败）
     op.execute(
         "DELETE FROM hr.employee_tags WHERE is_deleted = false AND id NOT IN "
         "(SELECT MIN(id::text)::uuid FROM hr.employee_tags WHERE is_deleted = false "
-        "GROUP BY employee_number, tag_name)"
+        "GROUP BY employee_number, btrim(tag_name))"
     )
     # 活跃行唯一（并发转训/批量打标防重复）
     op.create_index(
@@ -47,7 +48,7 @@ def downgrade() -> None:
     op.drop_index('uq_employee_tags_active', table_name='employee_tags', schema='hr')
     op.alter_column(
         'qa_assessment_scores', 'result_text',
-        existing_type=sa.String(length=128),
+        existing_type=sa.Text(),
         type_=sa.String(length=16),
         existing_nullable=True,
         schema='hr',

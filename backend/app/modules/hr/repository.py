@@ -84,6 +84,7 @@ class EmployeeRepository:
         work_start_date_after: date | None = None,
         work_start_date_before: date | None = None,
         include_uncategorized: bool = False,
+        departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
         sort_by: str = "department",
@@ -91,7 +92,13 @@ class EmployeeRepository:
     ) -> tuple[list[Employee], int]:
         stmt = select(Employee).where(Employee.is_deleted.is_(False))
 
-        if department:
+        if departments:
+            # 多部门数据范围：SQL 层过滤（先过滤后分页，避免页内容稀疏/为空）
+            conds = [Employee.department.in_(departments)]
+            if include_uncategorized:
+                conds.append(and_(Employee.department == "未分类", Employee.actual_department.in_(departments)))
+            stmt = stmt.where(or_(*conds))
+        elif department:
             # 体现部门 + 兼任部门；include_uncategorized 时额外纳入「未分类」人员按实际部门归属
             conds = [
                 Employee.department.ilike(f"{department}%"),
@@ -250,7 +257,10 @@ class EmployeeRepository:
         )
 
         try:
-            await conn.execute(sql_insert, insert_data)
+            # SAVEPOINT 包裹 INSERT：唯一约束冲突后事务仍是可用状态，
+            # 兜底 UPDATE 才能在已中止事务之外正常执行
+            async with self.session.begin_nested():
+                await conn.execute(sql_insert, insert_data)
             return True
         except IntegrityError:
             # 竞态或工号属于软删除员工：回退到 UPDATE（仅限未删除行）
@@ -639,6 +649,7 @@ class DepartureRecordRepository:
         self,
         *,
         department: str | None = None,
+        departments: set[str] | None = None,
         offboarding_type: str | None = None,
         keyword: str | None = None,
         page: int = 1,
@@ -648,7 +659,10 @@ class DepartureRecordRepository:
     ) -> tuple[list[DepartureRecord], int]:
         stmt = select(DepartureRecord).where(DepartureRecord.is_deleted.is_(False))
 
-        if department:
+        if departments:
+            # 多部门数据范围：SQL 层过滤（先过滤后分页）
+            stmt = stmt.where(DepartureRecord.department.in_(departments))
+        elif department:
             stmt = stmt.where(DepartureRecord.department == department)
         if offboarding_type:
             stmt = stmt.where(DepartureRecord.offboarding_type == offboarding_type)
@@ -1016,25 +1030,33 @@ class CandidateRepository:
         result = await self.session.execute(select(Candidate).where(Candidate.id == candidate.id))
         return result.scalar_one()
 
-    async def upsert(self, name: str, phone: str | None, email: str | None, data: dict) -> Candidate:
-        """按姓名+手机/邮箱查重 upsert，返回候选人与是否新增。"""
+    async def upsert(self, name: str, phone: str | None, email: str | None, data: dict) -> tuple[Candidate, bool]:
+        """按姓名+手机/邮箱查重 upsert，返回 (候选人, 是否新增)。
+
+        更新分支跳过 name/status/candidate_type：重复导入不重命名、不回退已有流程状态。
+        """
         conditions = [Candidate.name == name, Candidate.is_deleted == False]
         if phone:
             conditions.append(Candidate.phone == phone)
         if email:
             conditions.append(Candidate.email == email)
 
-        stmt = select(Candidate).where(and_(*conditions))
-        result = await self.session.execute(stmt)
-        existing = result.scalar_one_or_none()
+        rows = list((await self.session.execute(
+            select(Candidate).where(and_(*conditions)).order_by(Candidate.created_at)
+        )).scalars().all())
+        if len(rows) > 1:
+            raise ValueError("按姓名+手机/邮箱命中多条候选人记录，无法唯一定位，请补充电话或邮箱后重试")
 
-        if existing:
+        if rows:
+            existing = rows[0]
             for k, v in data.items():
+                if k in ("name", "status", "candidate_type"):
+                    continue
                 setattr(existing, k, v)
-            return await self.update(existing)
+            return await self.update(existing), False
         else:
             obj = Candidate(name=name, **data)
-            return await self.create(obj)
+            return await self.create(obj), True
 
     async def soft_delete(self, candidate_id: UUID) -> None:
         await self.session.execute(text("UPDATE hr.candidates SET is_deleted = true WHERE id = :id"), {"id": candidate_id})
@@ -1070,22 +1092,41 @@ class CandidateRepository:
         return result.scalar() or 0
 
     async def count_monthly_hires(self, months: int = 12) -> list[dict]:
-        """统计近N个月每月入职人数（按 updated_at 统计「已入职」候选人）。"""
+        """统计近N个月每月入职人数。
+
+        入职时间取「状态变更为已入职」的状态日志时间（备注/简历编辑不再干扰统计）；
+        无日志的历史数据回退用 updated_at。
+        """
         from datetime import timedelta
         cutoff = date.today() - timedelta(days=months * 31)
+        hired_at = (
+            select(
+                CandidateStatusLog.candidate_id,
+                func.min(CandidateStatusLog.created_at).label("hired_at"),
+            )
+            .where(
+                CandidateStatusLog.to_status == "已入职",
+                CandidateStatusLog.is_deleted == False,
+            )
+            .group_by(CandidateStatusLog.candidate_id)
+            .subquery()
+        )
+        event_time = func.coalesce(hired_at.c.hired_at, Candidate.updated_at)
         stmt = (
             select(
-                func.extract('year', Candidate.updated_at).label('year'),
-                func.extract('month', Candidate.updated_at).label('month'),
+                func.extract('year', event_time).label('year'),
+                func.extract('month', event_time).label('month'),
                 func.count().label('count'),
             )
+            .select_from(Candidate)
+            .outerjoin(hired_at, hired_at.c.candidate_id == Candidate.id)
             .where(
                 Candidate.status == '已入职',
                 Candidate.is_deleted == False,
-                Candidate.updated_at >= cutoff,
+                event_time >= cutoff,
             )
-            .group_by(func.extract('year', Candidate.updated_at), func.extract('month', Candidate.updated_at))
-            .order_by(func.extract('year', Candidate.updated_at), func.extract('month', Candidate.updated_at))
+            .group_by(func.extract('year', event_time), func.extract('month', event_time))
+            .order_by(func.extract('year', event_time), func.extract('month', event_time))
         )
         result = await self.session.execute(stmt)
         return [

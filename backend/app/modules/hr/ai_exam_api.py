@@ -43,14 +43,19 @@ async def api_generate_exam(
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"AI 出题失败: {e}")
-    # 写入共享题库（AI生成来源）
+    # 写入共享题库（AI生成来源）；题库写入失败不连累出题结果
     from app.modules.hr.ai_exam_service import EXAM_QUESTION_KEYS, save_questions_to_bank
 
     questions: list[dict] = []
     for key in EXAM_QUESTION_KEYS:
         questions.extend(result.get(key, []))
     file_no = file.filename.rsplit(".", 1)[0] if "." in file.filename else file.filename
-    bank_inserted = await save_questions_to_bank(session, questions, file_no)
+    try:
+        bank_inserted = await save_questions_to_bank(session, questions, file_no)
+    except Exception:
+        logging.getLogger(__name__).warning("题库写入失败，不影响出题结果", exc_info=True)
+        await session.rollback()
+        bank_inserted = 0
     return success_response(data={**result, "bank_inserted": bank_inserted}, message=f"出题完成，{bank_inserted} 题已入题库")
 
 
