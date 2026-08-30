@@ -296,6 +296,7 @@ export const moduleMenus: ModuleMenu[] = [
         ],
       },
       { key: "performance", label: "📋 绩效考核", path: "/hr/performance",
+        permissions: ["hr:performance:read"],
         children: [
           { key: "performance-list", label: "考核列表", path: "/hr/performance" },
           { key: "performance-categories", label: "项目配置", path: "/hr/performance/categories" },
