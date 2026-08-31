@@ -78,27 +78,38 @@ async def _lookup_level1_trainer(session: AsyncSession, department: str) -> str 
     return trainer.name if trainer else None
 
 
-async def _notify_training_admins(session: AsyncSession, record, departments: list[str]) -> None:
-    """发送飞书卡片通知各涉及部门的培训管理员。"""
+async def _resolve_training_admins(
+    session: AsyncSession, record, departments: list[str]
+) -> list[str]:
+    """解析涉及部门的培训管理员姓名（去重、排序）。"""
+    from app.modules.hr.models import DeptTrainingPersonnel
+
+    if not departments:
+        return []
+    result = (await session.execute(
+        select(DeptTrainingPersonnel).where(
+            DeptTrainingPersonnel.is_deleted == False,  # noqa: E712
+            DeptTrainingPersonnel.display_department.in_(departments),
+        )
+    )).scalars().all()
+    admins: set[str] = set()
+    for r in result:
+        if r.training_admin:
+            for a in r.training_admin.split(","):
+                a = a.strip()
+                if a:
+                    admins.add(a)
+    return sorted(admins)
+
+
+async def _notify_training_admins(
+    session: AsyncSession, record, departments: list[str]
+) -> list[str]:
+    """发送飞书卡片通知各涉及部门的培训管理员，返回实际通知到的姓名列表。"""
     try:
-        from app.modules.hr.models import DeptTrainingPersonnel
-        if not departments:
-            return
-        result = (await session.execute(
-            select(DeptTrainingPersonnel).where(
-                DeptTrainingPersonnel.is_deleted == False,  # noqa: E712
-                DeptTrainingPersonnel.display_department.in_(departments),
-            )
-        )).scalars().all()
-        admins: set[str] = set()
-        for r in result:
-            if r.training_admin:
-                for a in r.training_admin.split(","):
-                    a = a.strip()
-                    if a:
-                        admins.add(a)
+        admins = await _resolve_training_admins(session, record, departments)
         if not admins:
-            return
+            return []
 
         from app.modules.hr.feishu_review_service import _lookup_open_id, _send_card
         dept_text = "、".join(departments)
@@ -112,12 +123,16 @@ async def _notify_training_admins(session: AsyncSession, record, departments: li
                 )}},
             ],
         }
+        notified: list[str] = []
         for name in admins:
             oid = await _lookup_open_id(name)
             if oid:
                 await _send_card(oid, card)
+                notified.append(name)
+        return notified
     except Exception:
         logger.exception("通知培训管理员失败: record_id=%s", getattr(record, "id", None))  # 记录失败，便于排查
+        return []
 
 
 async def _sync_entries(session: AsyncSession, record) -> None:
@@ -270,7 +285,7 @@ async def submit_sop_record(
     record_id: UUID,
     session: AsyncSession = Depends(get_db),
 ):
-    """提交/通知：自动关联到相关部门二级表，并飞书通知对应培训管理员。"""
+    """转培训：自动收录到相关部门二级表，并飞书通知对应培训管理员（返回通知名单）。"""
     from app.modules.hr.models import SopTrainingRecord
     r = await session.get(SopTrainingRecord, record_id)
     if not r or r.is_deleted:
@@ -284,9 +299,27 @@ async def submit_sop_record(
     await _sync_entries(session, r)
     await session.commit()
     if not was_submitted:
-        await _notify_training_admins(session, r, involved)
-        return success_response(message="已提交，二级表已生成并通知培训管理员")
-    return success_response(message="已提交过，二级表已同步")
+        notified = await _notify_training_admins(session, r, involved)
+        return success_response(
+            data={"notified_admins": notified},
+            message="已转培训，二级表已生成" + (f"并通知：{'、'.join(notified)}" if notified else "（未配置培训管理员，仅收录二级表）"),
+        )
+    return success_response(message="已转培训过，二级表已同步")
+
+
+@router.get("/sop-training-records/{record_id}/training-admins", summary="登记记录涉及的培训管理员预览")
+async def get_record_training_admins(
+    record_id: UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """转培训前的确认清单：返回涉及部门的培训管理员姓名列表。"""
+    from app.modules.hr.models import SopTrainingRecord
+    r = await session.get(SopTrainingRecord, record_id)
+    if not r or r.is_deleted:
+        raise HTTPException(404, "记录不存在")
+    involved = _json_loads(r.involved_departments)
+    admins = await _resolve_training_admins(session, r, involved)
+    return success_response(data={"admins": admins})
 
 
 @router.put("/sop-training-records/{record_id}", summary="编辑登记记录")
@@ -757,6 +790,10 @@ async def generate_record_materials(
     trainer = record.trainer
     initiator = (record.initiator_department or "").strip()
     if not initiator:
+        # 历史记录未填发起部门：兜底取第一个涉及部门作为主办部门
+        initiator = str(departments[0]).strip()
+        logger.warning("登记记录 %s 未配置发起部门，兜底使用涉及部门「%s」", record.id, initiator)
+    if not initiator:
         raise HTTPException(400, "该记录未配置发起部门（主办部门）")
 
     # ── 人员口径：主办部门全体在职员工 + 各涉及部门的一级培训师（去重）──
@@ -769,18 +806,21 @@ async def generate_record_materials(
         ),
         {"dept": initiator},
     )).fetchall()
-    names = [r[0] for r in emp_rows]
-    trainer_names: set[str] = set()
+    # 姓名 → 显示部门：主办部门员工显示主办部门，涉及部门培训师显示其实际部门
+    name_depts: dict[str, str] = {r[0]: initiator for r in emp_rows}
+    trainer_map: dict[str, str] = {}
     for dept in departments:
-        level1 = await _lookup_level1_trainer(session, str(dept).strip())
+        dept = str(dept).strip()
+        level1 = await _lookup_level1_trainer(session, dept)
         if level1:
-            trainer_names.add(level1)
-    # 主办部门一级培训师作为授课讲师（如涉及部门有则其一；兜底登记表填写的培训师）
+            trainer_map.setdefault(level1, dept)
+    # 主办部门一级培训师作为授课讲师（涉及部门有则取其一；兜底登记表填写的培训师）
     initiator_trainer = await _lookup_level1_trainer(session, initiator)
-    lead_trainer = initiator_trainer or (sorted(trainer_names)[0] if trainer_names else (trainer or ""))
-    for t in sorted(trainer_names):
-        if t and t not in names:
-            names.append(t)
+    lead_trainer = initiator_trainer or (sorted(trainer_map)[0] if trainer_map else (trainer or ""))
+    for t, tdept in sorted(trainer_map.items()):
+        if t not in name_depts:
+            name_depts[t] = tdept or initiator
+    names = list(name_depts.keys())
     sick, maternity = await _query_leave_counts(session, initiator)
 
     questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
@@ -797,20 +837,28 @@ async def generate_record_materials(
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=initiator, training_subject=subject,
                 topic=record.change_note or subject, instructor=lead_trainer,
-                employee_names=names, employee_departments={n: initiator for n in names},
+                employee_names=names, employee_departments=name_depts,
                 sick_count=sick, maternity_count=maternity,
             ))
             zf.writestr("培训通知.docx", notif_buf.getvalue())
             zf.writestr("培训签到表.docx", sign_buf.getvalue())
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
+            # 第四份文件：培训效果评估表（7.11 模板）
+            from app.modules.hr.evaluation_document_generator import (
+                TrainingEvaluationInput,
+                generate_training_evaluation,
+            )
+
             zf.writestr(
-                "培训登记表.docx",
-                _generate_register_docx(
+                "培训效果评估表.docx",
+                generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=initiator,
-                    trainer=lead_trainer, method=record.method or "",
-                    trainee_names=names, sick=sick, maternity=maternity,
-                ).getvalue(),
+                    trainer=lead_trainer or None,
+                    training_method=record.method or None,
+                    trainee_names=names,
+                    expected_count=len(names),
+                )).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
@@ -927,15 +975,21 @@ async def batch_generate_materials(
             questions = await _lookup_exam_questions(session, file_nos)
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-            # 培训登记表
-            method = rows[0].complete_time or ""
+            # 第四份文件：培训效果评估表（7.11 模板）
+            from app.modules.hr.evaluation_document_generator import (
+                TrainingEvaluationInput,
+                generate_training_evaluation,
+            )
+
             zf.writestr(
-                "培训登记表.docx",
-                _generate_register_docx(
+                "培训效果评估表.docx",
+                generate_training_evaluation(TrainingEvaluationInput(
                     subject=subject, training_date=today, department=dept,
-                    trainer=trainer or "", method=method, trainee_names=names,
-                    sick=sick, maternity=maternity,
-                ).getvalue(),
+                    trainer=trainer or None,
+                    training_method=(rows[0].method or None),
+                    trainee_names=names,
+                    expected_count=len(names),
+                )).getvalue(),
             )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")

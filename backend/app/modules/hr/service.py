@@ -1459,12 +1459,14 @@ class AnnualTrainingPlanService:
         *,
         year: int | None = None,
         department: str | None = None,
+        departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[AnnualTrainingPlan], int]:
         return await self.repo.list_plans(
             year=year,
             department=department,
+            departments=departments,
             page=page,
             page_size=page_size,
         )

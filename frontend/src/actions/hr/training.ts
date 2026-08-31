@@ -471,8 +471,15 @@ export async function updateSopTrainingRecord(id: string, data: Partial<SopTrain
   return res
 }
 
-/** 提交并通知：自动生成二级表并飞书通知各部门培训管理员 */
-export async function submitSopTrainingRecord(id: string): Promise<{ code: number; message: string }> {
+/** 转培训前预览：登记记录涉及的培训管理员姓名列表 */
+export async function fetchSopTrainingAdmins(id: string): Promise<{ data: { admins: string[] } }> {
+  return fetchHrApi(`/hr/sop-training-records/${id}/training-admins`, {
+    errorMessage: '获取培训管理员失败',
+  })
+}
+
+/** 转培训：自动收录二级表并飞书通知各部门培训管理员（返回通知名单） */
+export async function submitSopTrainingRecord(id: string): Promise<{ code: number; message: string; data?: { notified_admins?: string[] } }> {
   const res = await fetchHrApi(`/hr/sop-training-records/${id}/submit`, {
     method: 'POST',
     errorMessage: '提交失败',

@@ -843,6 +843,7 @@ class AnnualTrainingPlanRepository:
         *,
         year: int | None = None,
         department: str | None = None,
+        departments: set[str] | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[AnnualTrainingPlan], int]:
@@ -850,7 +851,10 @@ class AnnualTrainingPlanRepository:
 
         if year is not None:
             stmt = stmt.where(AnnualTrainingPlan.year == year)
-        if department:
+        if departments:
+            # 数据范围：授权部门 + 「厂级」（厂级培训所有部门可见）
+            stmt = stmt.where(AnnualTrainingPlan.department.in_(departments))
+        elif department:
             stmt = stmt.where(AnnualTrainingPlan.department.ilike(f"%{department}%"))
 
         count_stmt = select(func.count()).select_from(stmt.subquery())

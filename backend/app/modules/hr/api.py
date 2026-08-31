@@ -4046,30 +4046,21 @@ async def list_annual_training_plans(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
+    scoped_departments: set[str] | None = None
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             # 年度计划按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        if len(hr_scope.scoped_departments) == 1:
-            department = next(iter(hr_scope.scoped_departments))
-        # 多部门：department 保持 None，service 不过滤，由下方 post-filter 处理
+        # 授权部门 + 「厂级」培训（厂级培训所有部门可见可操作）
+        scoped_departments = set(hr_scope.scoped_departments) | {"厂级"}
+        department = None
     plans, total = await service.list_plans(
         year=year,
         department=department,
+        departments=scoped_departments,
         page=page_params.page,
         page_size=page_params.page_size,
     )
-    if not hr_scope.is_unrestricted and len(hr_scope.scoped_departments) > 1:
-        plans = [p for p in plans if p.department in hr_scope.scoped_departments]
-        # 分页总数按范围统计全局数量（不能用过滤后的本页长度，否则翻页失效）
-        from app.modules.hr.models import AnnualTrainingPlan
-        count_stmt = select(func.count()).select_from(AnnualTrainingPlan).where(
-            AnnualTrainingPlan.department.in_(hr_scope.scoped_departments),
-            AnnualTrainingPlan.is_deleted == False,  # noqa: E712
-        )
-        if year is not None:
-            count_stmt = count_stmt.where(AnnualTrainingPlan.year == year)
-        total = (await session.execute(count_stmt)).scalar() or 0
     # 批量查每个计划的培训完成进度
     plan_ids = [p.id for p in plans]
     progress_map: dict = {}
@@ -4156,20 +4147,19 @@ async def list_all_annual_plan_items(
         if not hr_scope.scoped_departments:
             # 年度计划按部门归属，self_only 无对应数据
             raise ForbiddenException("数据范围限制：仅可访问本人相关数据")
-        if len(hr_scope.scoped_departments) == 1:
-            department = next(iter(hr_scope.scoped_departments))
-        # 多部门：department 保持 None，参数在下方用 IN 子句处理
+        # 授权部门 + 「厂级」培训（所有部门可见）
+        depts = sorted(set(hr_scope.scoped_departments) | {"厂级"})
+        placeholders = ", ".join(f":dept_{i}" for i in range(len(depts)))
+        conditions.append(f"p.department IN ({placeholders})")
+        for i, d in enumerate(depts):
+            params[f"dept_{i}"] = d
+        department = None
     if year is not None:
         conditions.append("p.year = :year")
         params["year"] = year
     if department:
         conditions.append("p.department ILIKE :dept")
         params["dept"] = f"%{department}%"
-    elif not hr_scope.is_unrestricted and hr_scope.scoped_departments and len(hr_scope.scoped_departments) > 1:
-        placeholders = ", ".join(f":dept_{i}" for i in range(len(hr_scope.scoped_departments)))
-        conditions.append(f"p.department IN ({placeholders})")
-        for i, d in enumerate(hr_scope.scoped_departments):
-            params[f"dept_{i}"] = d
     if keyword:
         conditions.append("i.content_and_textbook ILIKE :kw")
         params["kw"] = f"%{keyword}%"

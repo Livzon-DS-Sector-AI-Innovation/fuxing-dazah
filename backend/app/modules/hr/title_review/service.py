@@ -111,6 +111,9 @@ IMAGE_EVIDENCE_FIELDS = [
     "参加过两项以上本专业或相关专业技术工作、技术管理，技术服务工作的业绩证明材料",
     "两项以上担任项目技术负责人的业绩证明材料",
 ]
+# 图片转存覆盖的全部列：证据图片字段 + 附件列（用户实际配置均为图片形式）。
+# 附件列同时保留 _parse_attachments 解析（兼容真附件文件对象），两者共存。
+IMAGE_CONVERT_FIELDS = IMAGE_EVIDENCE_FIELDS + APPLY_ATTACHMENT_FIELDS
 # 员工信息表自动带出的个人档案字段（申报表/审批表单未体现的信息由此补充展示）
 # 评定职级按年度滚动：近 5 个已评定年份 + 当前年度最高可申报
 def _build_profile_fields() -> list[str]:
@@ -344,7 +347,7 @@ def _apply_fields_to_dict(fields: dict[str, Any]) -> dict[str, Any]:
     )
     if external_cert:
         work_statements["是否具备外部专业技术职称或职业/执业技能证书"] = external_cert
-    for img_key in IMAGE_EVIDENCE_FIELDS:
+    for img_key in IMAGE_CONVERT_FIELDS:
         img_text = _as_str(fields.get(img_key))
         if img_text:
             work_statements[img_key] = img_text
@@ -2032,7 +2035,7 @@ class TitleReviewService:
                             else:
                                 lines.append(str(item))
                         value = "\n".join(line for line in lines if line)
-                if col in IMAGE_EVIDENCE_FIELDS and (isinstance(value, (list, dict))):
+                if col in IMAGE_CONVERT_FIELDS and (isinstance(value, (list, dict))):
                     # 图片/附件控件：下载转存本地（飞书签名链接约 1 天过期），本地路径永久可看
                     # 镜像表中单附件可能是单个 dict（{name,link}），包一层 list 统一处理
                     items = value if isinstance(value, list) else [value]
@@ -2231,6 +2234,40 @@ class TitleReviewService:
             pending.append((code, fields))
         return pending, skipped
 
+    async def refresh_record_images(
+        self, activity_id: UUID, record_id: str, fields: dict[str, Any]
+    ) -> bool:
+        """事件路径实时图片转存：申报行新增/编辑后立即把证据图片下载转存本地。
+
+        在飞书签名链接有效期内完成转存，内网展示走本地文件不再过期；
+        对账兜底（_refresh_image_urls）保留，处理事件丢失的场景。
+        """
+        from app.modules.hr.title_review import bitable_client as bc
+
+        activity = await self.get_activity(activity_id)
+        if not (activity.feishu_app_token and activity.apply_table_id):
+            return False
+        update: dict[str, Any] = {}
+        for col in IMAGE_CONVERT_FIELDS:
+            text = _as_str(fields.get(col)) or ""
+            if not _cell_has_remote_url(text):
+                continue
+            local = await _image_text_to_local(text)
+            if local != text:
+                update[col] = local
+        if not update:
+            return False
+        try:
+            await bc.update_record(
+                activity.feishu_app_token, activity.apply_table_id,
+                record_id, update,
+            )
+            logger.info("事件实时图片转存: record=%s cols=%s", record_id, list(update))
+            return True
+        except bc.TitleReviewBitableError as exc:
+            logger.warning("事件实时图片转存写表失败: %s", exc)
+            return False
+
     async def _refresh_image_urls(
         self,
         activity: m.TitleReviewActivity,
@@ -2247,7 +2284,7 @@ class TitleReviewService:
         for item in records:
             fields = item.get("fields") or {}
             update: dict[str, Any] = {}
-            for col in IMAGE_EVIDENCE_FIELDS:
+            for col in IMAGE_CONVERT_FIELDS:
                 text = _as_str(fields.get(col)) or ""
                 if not _cell_has_remote_url(text):
                     continue

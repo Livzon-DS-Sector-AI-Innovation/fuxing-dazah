@@ -9,7 +9,7 @@ import dayjs, { type Dayjs } from 'dayjs'
 import {
   fetchSopTrainingRecords, fetchSopRecordYears, createSopTrainingRecord,
   updateSopTrainingRecord, deleteSopTrainingRecord, exportSopTrainingRecords,
-  submitSopTrainingRecord, fetchDepartmentsAction, fetchSopDeptTrainers,
+  submitSopTrainingRecord, fetchSopTrainingAdmins, fetchDepartmentsAction, fetchSopDeptTrainers,
   downloadSopMasterMaterials,
 } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
@@ -154,9 +154,37 @@ export default function SopMasterClient() {
   const handleSubmit = async (r: SopTrainingRecord) => {
     setSubmitting(r.id)
     try {
-      const res = await submitSopTrainingRecord(r.id)
-      message.success(res.message || '已转培训，内容已收录到各部门二级表')
-      load()
+      // 先取涉及的培训管理员清单，确认后发送
+      const adminsRes = await fetchSopTrainingAdmins(r.id)
+      const admins: string[] = adminsRes.data?.admins || []
+      Modal.confirm({
+        title: '确认转培训',
+        content: (
+          <div>
+            <p className="mb-2">点击确认后，以下培训管理员将收到飞书通知：</p>
+            {admins.length > 0 ? (
+              <ul className="pl-4 list-disc">
+                {admins.map((n) => <li key={n}>{n}</li>)}
+              </ul>
+            ) : (
+              <p className="text-gray-400">未配置培训管理员，仅收录到各部门二级表（不发通知）</p>
+            )}
+          </div>
+        ),
+        okText: '确认发送',
+        cancelText: '取消',
+        onOk: async () => {
+          const res = await submitSopTrainingRecord(r.id)
+          const notified: string[] = res.data?.notified_admins || []
+          Modal.success({
+            title: '已转培训',
+            content: notified.length
+              ? `内容已收录到各部门二级表，已通知：${notified.join('、')}`
+              : '内容已收录到各部门二级表（未配置培训管理员，未发送通知）',
+          })
+          load()
+        },
+      })
     } catch (e: any) { message.error(e.message || '转培训失败') }
     finally { setSubmitting(null) }
   }
