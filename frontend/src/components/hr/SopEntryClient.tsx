@@ -85,7 +85,6 @@ export default function SopEntryClient() {
     form.setFieldsValue({
       classification: e.classification || undefined,
       personnel: (e.personnel || []).map((p) => p.employee_number),
-      complete_time: e.complete_time || undefined,
     })
     setPersonnelOptions([])
     setModalOpen(true)
@@ -133,7 +132,6 @@ export default function SopEntryClient() {
       await updateSopTrainingEntry(current.id, {
         classification: v.classification,
         personnel,
-        complete_time: v.complete_time || undefined,
       })
       message.success('已保存')
       setModalOpen(false)
@@ -209,7 +207,7 @@ export default function SopEntryClient() {
           pagination={{ pageSize: 20 }} />
       </Card>
 
-      <Modal title={`分类人员与完成时间（${current?.department || ''}）`} open={modalOpen}
+      <Modal title={`分类人员（${current?.department || ''}）`} open={modalOpen}
         onCancel={() => setModalOpen(false)} onOk={handleSavePersonnel} width={560}
         okText="保存">
         <Form form={form} layout="vertical" className="mt-2">
@@ -222,9 +220,6 @@ export default function SopEntryClient() {
             <Select mode="multiple" placeholder={current?.classification ? '选择人员' : '请先选择分类'} loading={personnelLoading}
               options={personnelOptions.map((p) => ({ label: `${p.name}（${p.employee_number}${p.position ? ` / ${p.position}` : ''}）`, value: p.employee_number }))}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
-          </Form.Item>
-          <Form.Item name="complete_time" label="完成时间/课时">
-            <Input placeholder="R：2026.01.05；T：2026.01.05(14:00-15:00)" />
           </Form.Item>
         </Form>
       </Modal>
