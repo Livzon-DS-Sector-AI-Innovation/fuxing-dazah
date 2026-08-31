@@ -332,6 +332,73 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict[str, Any]
     return result
 
 
+async def generate_qa_via_ai(
+    file_bytes: bytes,
+    filename: str,
+    subject: str = "",
+    question_count: int = 4,
+) -> dict[str, Any]:
+    """AI 问答考核出题：简短题目 + 简短答案。
+
+    不落题库——由前端「同步到题库大全」按钮显式调用 sync 接口入库。
+    """
+    from app.modules.hr.ai_service import AiChatService
+
+    content = _parse_file(file_bytes, filename)
+    text = content["full_text"].strip()
+    if not text:
+        raise ValueError("文件中未检测到文本内容")
+    text = text[:8000]
+    if not hr_config.HR_AI_API_KEY:
+        raise ValueError("服务端未配置 HR_AI_API_KEY，无法生成问答题目")
+
+    prompt = f"""你是一个药厂培训考核出题人。根据以下培训材料生成{question_count}道简答考核题：
+
+风格要求（非常重要）：
+1. 题目简短精炼，10-20字以内，直接问操作要点或关键知识
+2. 答案简洁明了，15字以内，一句话说清
+3. 每题10分，总计{question_count * 10}分
+4. 题目必须基于材料内容，不要编造
+
+请以JSON格式返回：
+{{
+  "title": "考核标题",
+  "total_score": {question_count * 10},
+  "questions": [
+    {{"type": "问答", "question": "简短题目", "answer": "简短答案", "score": 10}}
+  ]
+}}
+
+培训主题：{subject or "培训考核"}
+培训材料：
+{text}"""
+
+    service = AiChatService(
+        api_key=hr_config.HR_AI_API_KEY,
+        model=hr_config.HR_AI_MODEL or "deepseek-chat",
+    )
+    full_response = ""
+    async for chunk in service.stream_chat([{"role": "user", "content": prompt}]):
+        if chunk.get("type") == "content":
+            full_response += chunk["text"]
+
+    import json as _json
+
+    json_start = full_response.find("{")
+    json_end = full_response.rfind("}") + 1
+    if json_start < 0 or json_end <= json_start:
+        raise ValueError("AI 返回格式无法解析")
+    result = _json.loads(full_response[json_start:json_end])
+    questions = result.get("questions") or []
+    if not questions:
+        raise ValueError("AI 未生成题目")
+    return {
+        "title": result.get("title") or (subject or "培训考核"),
+        "total_score": result.get("total_score") or question_count * 10,
+        "questions": questions,
+    }
+
+
 async def save_questions_to_bank(
     session,
     questions: list[dict[str, Any]],

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.hr.ai_exam_schemas import ExamExportRequest
-from app.modules.hr.ai_exam_service import export_exam, generate_exam
+from app.modules.hr.ai_exam_service import export_exam, generate_exam, generate_qa_via_ai
 from app.modules.hr.deps import require_hr_basic
 
 router = APIRouter(prefix="/exam", tags=["AI 出题"], dependencies=[Depends(require_hr_basic)])
@@ -64,6 +64,58 @@ async def api_generate_exam(
         else f"出题完成，{bank_inserted} 题已入题库"
     )
     return success_response(data={**result, "bank_inserted": bank_inserted}, message=message)
+
+
+@router.post("/generate-qa", summary="AI 问答考核出题（简短问答）")
+async def api_generate_qa(
+    file: UploadFile,
+    subject: str = Form(""),
+    question_count: int = Form(4),
+):
+    """上传培训材料，AI 生成简短问答考核题（不落题库，由「同步到题库」按钮入库）。"""
+    if not file.filename:
+        raise HTTPException(400, "请上传文件")
+    if not file.filename.lower().endswith((".docx", ".txt")):
+        raise HTTPException(400, "仅支持 .docx / .txt 格式")
+    try:
+        content = await file.read()
+        result = await generate_qa_via_ai(content, file.filename, subject, question_count)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("AI 问答出题失败", exc_info=True)
+        raise HTTPException(500, f"AI 问答出题失败: {e}")
+    return success_response(
+        data=result, message=f"已生成 {len(result['questions'])} 道问答题"
+    )
+
+
+@router.post("/sync-qa-to-bank", summary="问答题目同步到题库大全")
+async def api_sync_qa_to_bank(
+    payload: dict,
+    session: AsyncSession = Depends(get_db),
+):
+    """把问答出题结果同步进共享题库（去重：同 file_no + 同题干不重复入库）。"""
+    from app.modules.hr.ai_exam_service import save_questions_to_bank
+
+    questions = payload.get("questions") or []
+    if not questions:
+        raise HTTPException(400, "没有可同步的题目")
+    file_no = str(payload.get("file_no") or payload.get("subject") or "问答考核")
+    try:
+        inserted = await save_questions_to_bank(
+            session, questions, file_no,
+            subject=str(payload.get("subject") or ""),
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("问答题目同步题库失败", exc_info=True)
+        await session.rollback()
+        raise HTTPException(500, "同步题库失败")
+    return success_response(
+        data={"inserted": inserted}, message=f"已同步 {inserted} 题到题库大全"
+    )
 
 
 @router.post("/export", summary="导出考试试卷")

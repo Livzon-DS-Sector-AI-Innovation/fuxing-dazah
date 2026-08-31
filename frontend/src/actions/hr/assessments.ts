@@ -178,6 +178,35 @@ export async function generateExamQuestions(formData: FormData): Promise<ExamGen
   return res.json()
 }
 
+/** AI 问答考核出题（简短问答，不落题库） */
+export async function generateQaQuestions(formData: FormData): Promise<{
+  data: { title: string; total_score: number; questions: { type: string; question: string; answer: string; score: number }[] }
+}> {
+  const headers = await getAuthHeaders()
+  delete headers['Content-Type']
+  const res = await fetch(`${API_BASE}/hr/exam/generate-qa`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`问答出题失败: ${res.status} ${text}`)
+  }
+  return res.json()
+}
+
+/** 问答题目同步到题库大全 */
+export async function syncQaToBank(payload: {
+  file_no?: string; subject?: string; questions: { question: string; answer: string; score?: number }[]
+}): Promise<{ data: { inserted: number }; message?: string }> {
+  return fetchHrApi('/hr/exam/sync-qa-to-bank', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    errorMessage: '同步题库失败',
+  })
+}
+
 /** 导出试卷（docx） */
 export async function exportExam(data: ExamExportData): Promise<{ base64: string; filename: string }> {
   const headers = await getAuthHeaders()

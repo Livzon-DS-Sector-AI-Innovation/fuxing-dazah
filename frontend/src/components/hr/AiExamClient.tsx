@@ -13,6 +13,7 @@ import {
   Typography,
   Spin,
   Switch,
+  Segmented,
 } from 'antd'
 import {
   UploadOutlined,
@@ -30,7 +31,7 @@ import {
   ExamExportData,
   TrueFalseQuestion,
 } from '@/types/hr'
-import { generateExamQuestions, exportExam, saveExamPaper } from '@/actions/hr'
+import { generateExamQuestions, exportExam, saveExamPaper, generateQaQuestions, syncQaToBank } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
 
 const { Title, Text } = Typography
@@ -40,6 +41,19 @@ const BORDER_STYLE = { border: '1px solid #1f2937', padding: '8px' } as React.CS
 const BORDER_STYLE_CENTER = { border: '1px solid #1f2937', padding: '8px', textAlign: 'center' } as React.CSSProperties
 
 export default function AiExamClient() {
+  // 出题模式：笔试组卷 / 问答考核
+  const [mode, setMode] = useState<'exam' | 'qa'>('exam')
+
+  // ── 问答考核出题状态 ──
+  const [qaFileList, setQaFileList] = useState<UploadFile[]>([])
+  const [qaSubject, setQaSubject] = useState('')
+  const [qaCount, setQaCount] = useState(4)
+  const [qaGenerating, setQaGenerating] = useState(false)
+  const [qaQuestions, setQaQuestions] = useState<{ type?: string; question: string; answer: string; score?: number }[]>([])
+  const [qaTitle, setQaTitle] = useState('')
+  const [qaTotalScore, setQaTotalScore] = useState(0)
+  const [qaSyncing, setQaSyncing] = useState(false)
+
   // 手动输入字段
   const [title, setTitle] = useState('')
   const [assessmentDate, setAssessmentDate] = useState('')
@@ -199,8 +213,136 @@ export default function AiExamClient() {
     })
   }
 
+  // ── 问答考核出题 ──
+  const handleQaGenerate = async () => {
+    if (qaFileList.length === 0 || !qaFileList[0].originFileObj) {
+      message.warning('请先上传培训文件')
+      return
+    }
+    setQaGenerating(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', qaFileList[0].originFileObj)
+      fd.append('subject', qaSubject || qaFileList[0].name.replace(/\.[^.]+$/, ''))
+      fd.append('question_count', String(qaCount))
+      const res = await generateQaQuestions(fd)
+      setQaQuestions(res.data?.questions || [])
+      setQaTitle(res.data?.title || '')
+      setQaTotalScore(res.data?.total_score || 0)
+      message.success(`已生成 ${res.data?.questions?.length || 0} 道问答题`)
+    } catch (err: any) {
+      message.error(err.message || '问答出题失败')
+    } finally {
+      setQaGenerating(false)
+    }
+  }
+
+  const handleQaSync = async () => {
+    if (qaQuestions.length === 0) {
+      message.warning('请先生成题目')
+      return
+    }
+    setQaSyncing(true)
+    try {
+      const res = await syncQaToBank({
+        subject: qaSubject || qaTitle || (qaFileList[0]?.name || '问答考核').replace(/\.[^.]+$/, ''),
+        questions: qaQuestions,
+      })
+      message.success(res.message || `已同步 ${res.data?.inserted ?? 0} 题到题库大全`)
+    } catch (err: any) {
+      message.error(err.message || '同步失败')
+    } finally {
+      setQaSyncing(false)
+    }
+  }
+
+  const updateQaQuestion = (index: number, field: 'question' | 'answer', value: string) => {
+    setQaQuestions((prev) => {
+      const next = [...prev]
+      next[index] = { ...next[index], [field]: value }
+      return next
+    })
+  }
+
   return (
     <div className="space-y-6">
+      <Segmented
+        value={mode}
+        onChange={(v) => setMode(v as 'exam' | 'qa')}
+        options={[
+          { label: '📝 笔试组卷', value: 'exam' },
+          { label: '💬 问答出题', value: 'qa' },
+        ]}
+      />
+      {mode === 'qa' ? (
+        <div className="space-y-4">
+          <Card title="问答考核出题（简短问答，可同步到题库大全）" className="shadow-sm">
+            <Space direction="vertical" size="middle" className="w-full">
+              <Space wrap>
+                <Text>考核主题：</Text>
+                <Input
+                  placeholder="可留空，默认取文件名"
+                  value={qaSubject}
+                  onChange={(e) => setQaSubject(e.target.value)}
+                  style={{ width: 320 }}
+                />
+                <Text>题数：</Text>
+                <InputNumber min={1} max={10} value={qaCount} onChange={(v) => setQaCount(v ?? 4)} />
+              </Space>
+              <Upload
+                fileList={qaFileList}
+                onChange={(info) => setQaFileList(info.fileList.slice(-1))}
+                beforeUpload={() => false}
+                accept=".docx,.txt"
+                maxCount={1}
+              >
+                <Button icon={<UploadOutlined />}>选择培训文件</Button>
+              </Upload>
+              <Text type="secondary">支持 .docx 和 .txt 格式；生成 10-20 字题目 + 15 字内答案的简短问答</Text>
+              <Button type="primary" icon={<RobotOutlined />} loading={qaGenerating} onClick={handleQaGenerate}>
+                AI 生成问答
+              </Button>
+            </Space>
+          </Card>
+
+          {qaQuestions.length > 0 && (
+            <Card
+              title={`${qaTitle}（共 ${qaQuestions.length} 题 / ${qaTotalScore} 分）`}
+              className="shadow-sm"
+              extra={
+                <Button type="primary" loading={qaSyncing} onClick={handleQaSync}>
+                  同步到题库大全
+                </Button>
+              }
+            >
+              <div className="space-y-3">
+                {qaQuestions.map((q, i) => (
+                  <div key={i} style={BORDER_STYLE}>
+                    <div className="font-medium mb-1">
+                      {i + 1}. {q.question}
+                    </div>
+                    <div className="text-gray-600 text-sm mb-1">答：{q.answer}</div>
+                    <Input
+                      size="small"
+                      placeholder="可修改题目"
+                      value={q.question}
+                      onChange={(e) => updateQaQuestion(i, 'question', e.target.value)}
+                    />
+                    <Input
+                      size="small"
+                      className="mt-1"
+                      placeholder="可修改答案"
+                      value={q.answer}
+                      onChange={(e) => updateQaQuestion(i, 'answer', e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      ) : (
+        <>
       {/* ─── 手动输入区域 ─── */}
       <Card title="试卷基本信息" className="shadow-sm">
         <div>
@@ -474,6 +616,8 @@ export default function AiExamClient() {
           <FileTextOutlined className="text-5xl mb-4" />
           <p>上传培训文件并点击「AI 出题」生成试卷</p>
         </div>
+      )}
+        </>
       )}
     </div>
   )
