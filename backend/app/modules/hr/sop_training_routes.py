@@ -755,54 +755,63 @@ async def generate_record_materials(
     today = date.today()
     subject = record.file_name or "SOP培训"
     trainer = record.trainer
+    initiator = (record.initiator_department or "").strip()
+    if not initiator:
+        raise HTTPException(400, "该记录未配置发起部门（主办部门）")
+
+    # ── 人员口径：主办部门全体在职员工 + 各涉及部门的一级培训师（去重）──
+    emp_rows = (await session.execute(
+        text(
+            "SELECT name, status FROM hr.employees "
+            "WHERE (department = :dept OR actual_department = :dept) "
+            "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
+            "ORDER BY name"
+        ),
+        {"dept": initiator},
+    )).fetchall()
+    names = [r[0] for r in emp_rows]
+    trainer_names: set[str] = set()
+    for dept in departments:
+        level1 = await _lookup_level1_trainer(session, str(dept).strip())
+        if level1:
+            trainer_names.add(level1)
+    # 主办部门一级培训师作为授课讲师（如涉及部门有则其一；兜底登记表填写的培训师）
+    initiator_trainer = await _lookup_level1_trainer(session, initiator)
+    lead_trainer = initiator_trainer or (sorted(trainer_names)[0] if trainer_names else (trainer or ""))
+    for t in sorted(trainer_names):
+        if t and t not in names:
+            names.append(t)
+    sick, maternity = await _query_leave_counts(session, initiator)
+
     questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for dept in departments:
-                dept = str(dept).strip()
-                if not dept:
-                    continue
-                # 部门全体在职员工（排除离职/待审批）+ 对应部门一级培训师
-                emp_rows = (await session.execute(
-                    text(
-                        "SELECT name, status FROM hr.employees "
-                        "WHERE (department = :dept OR actual_department = :dept) "
-                        "AND is_deleted = false AND status NOT IN ('离职', '待审批', '病假', '产假') "
-                        "ORDER BY name"
-                    ),
-                    {"dept": dept},
-                )).fetchall()
-                names = [r[0] for r in emp_rows]
-                level1 = await _lookup_level1_trainer(session, dept)
-                if level1 and level1 not in names:
-                    names.append(level1)
-                sick, maternity = await _query_leave_counts(session, dept)
-                notif_buf = generate_training_notification(TrainingNotificationInput(
-                    department=dept, training_date=today, subject=subject,
-                    trainer=level1 or trainer or "", content=record.change_note or "",
-                    trainee_names=names, issuer_department=record.initiator_department if hasattr(record, "initiator_department") else dept,
-                    issue_date=today, sick_count=sick, maternity_count=maternity,
-                    training_method=record.method or "",
-                ))
-                sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
-                    training_date=today, department=dept, training_subject=subject,
-                    topic=record.change_note or subject, instructor=level1 or trainer or "",
-                    employee_names=names, employee_departments={n: dept for n in names},
-                    sick_count=sick, maternity_count=maternity,
-                ))
-                zf.writestr(f"{dept}/培训通知.docx", notif_buf.getvalue())
-                zf.writestr(f"{dept}/培训签到表.docx", sign_buf.getvalue())
-                if questions:
-                    zf.writestr(f"{dept}/培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-                zf.writestr(
-                    f"{dept}/培训登记表.docx",
-                    _generate_register_docx(
-                        subject=subject, training_date=today, department=dept,
-                        trainer=level1 or trainer or "", method=record.method or "",
-                        trainee_names=names, sick=sick, maternity=maternity,
-                    ).getvalue(),
-                )
+            notif_buf = generate_training_notification(TrainingNotificationInput(
+                department=initiator, training_date=today, subject=subject,
+                trainer=lead_trainer, content=record.change_note or "",
+                trainee_names=names, issuer_department=initiator,
+                issue_date=today, sick_count=sick, maternity_count=maternity,
+                training_method=record.method or "",
+            ))
+            sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
+                training_date=today, department=initiator, training_subject=subject,
+                topic=record.change_note or subject, instructor=lead_trainer,
+                employee_names=names, employee_departments={n: initiator for n in names},
+                sick_count=sick, maternity_count=maternity,
+            ))
+            zf.writestr("培训通知.docx", notif_buf.getvalue())
+            zf.writestr("培训签到表.docx", sign_buf.getvalue())
+            if questions:
+                zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
+            zf.writestr(
+                "培训登记表.docx",
+                _generate_register_docx(
+                    subject=subject, training_date=today, department=initiator,
+                    trainer=lead_trainer, method=record.method or "",
+                    trainee_names=names, sick=sick, maternity=maternity,
+                ).getvalue(),
+            )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
     buf.seek(0)
@@ -818,7 +827,11 @@ async def batch_generate_materials(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """勾选多条二级表记录，按部门合并生成一套材料（每部门一份培训通知+签到表）。"""
+    """勾选二级表记录（1..n 条）生成**一套**培训材料。
+
+    人员 = 各选中条目「分类人员」的并集（条目未选分类人员时直接 400 提示先选人）；
+    选中多条时培训内容并列体现多个文件名称，共用同一套通知/签到表/试卷/登记表。
+    """
     from app.modules.hr.models import SopTrainingEntry
     ids = payload.get("ids") or []
     if not ids:
@@ -840,10 +853,31 @@ async def batch_generate_materials(
         _ensure_entry_in_scope(hr_scope, row)
     record_map = await _records_by_ids(session, [e.record_id for e in rows if e.record_id])
 
-    # 按部门分组
-    by_dept: dict[str, list] = {}
+    # 每条记录必须先选好分类人员（材料人员口径 = 分类人员）
+    file_names: list[str] = []
+    file_nos: list[str] = []
+    names: list[str] = []
+    emp_nos: list[str] = []
     for e in rows:
-        by_dept.setdefault(e.department, []).append(e)
+        rec = record_map.get(e.record_id or "")
+        fname = (rec.file_name if rec else None) or e.file_name or "SOP培训"
+        if fname not in file_names:
+            file_names.append(fname)
+        if rec and rec.file_no and rec.file_no not in file_nos:
+            file_nos.append(rec.file_no)
+        personnel = _json_loads(e.personnel)
+        if not personnel:
+            raise HTTPException(400, f"「{fname}」尚未选择分类人员，请先在该条目选择分类人员后再生成材料")
+        for p in personnel:
+            nm = str(p.get("name", "")).strip()
+            no = str(p.get("employee_number", "")).strip()
+            if nm and nm not in names:
+                names.append(nm)
+                emp_nos.append(no)
+
+    dept = str(rows[0].department or "").strip()
+    subject = file_names[0] if len(file_names) == 1 else "；".join(file_names)
+    content = "；".join(file_names)
 
     from app.modules.hr.notification_document_generator import (
         generate_training_notification,
@@ -855,76 +889,54 @@ async def batch_generate_materials(
     from app.modules.hr.signin_document_generator import generate_training_sign_in_sheet
 
     today = date.today()
+    # 该部门培训师
+    trainer = next((e.trainer for e in rows if e.trainer), None) or await _lookup_level1_trainer(session, dept)
+    # 分类人员并集（过滤病假/产假/离职/待审批）
+    if emp_nos:
+        leave_rows = (await session.execute(
+            text(
+                "SELECT employee_number, status FROM hr.employees "
+                "WHERE employee_number = ANY(:nos) AND is_deleted = false "
+                "AND status IN ('病假', '产假', '离职', '待审批')"
+            ),
+            {"nos": emp_nos},
+        )).fetchall()
+        excluded = {r[0] for r in leave_rows}
+        keep = [(no, nm) for no, nm in zip(emp_nos, names) if no not in excluded]
+        names = [nm for _, nm in keep]
+    sick, maternity = await _query_leave_counts(session, dept)
+
     buf = BytesIO()
     try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for dept, entries in by_dept.items():
-                file_names: list[str] = []
-                file_nos: list[str] = []
-                for e in entries:
-                    rec = record_map.get(e.record_id or "")
-                    if rec and rec.file_name and rec.file_name not in file_names:
-                        file_names.append(rec.file_name)
-                    if rec and rec.file_no and rec.file_no not in file_nos:
-                        file_nos.append(rec.file_no)
-                if not file_names:
-                    file_names = ["SOP培训"]
-                subject = file_names[0] if len(file_names) == 1 else f"SOP培训（{len(file_names)}份文件）"
-                content = "、".join(file_names)
-                # 该部门培训师 + 分类人员并集（过滤病假/产假）
-                trainer = next((e.trainer for e in entries if e.trainer), None) or await _lookup_level1_trainer(session, dept)
-                names: list[str] = []
-                emp_nos: list[str] = []
-                for e in entries:
-                    for p in _json_loads(e.personnel):
-                        nm = str(p.get("name", "")).strip()
-                        no = str(p.get("employee_number", "")).strip()
-                        if nm and nm not in names:
-                            names.append(nm)
-                            emp_nos.append(no)
-                if emp_nos:
-                    leave_rows = (await session.execute(
-                        text(
-                            "SELECT employee_number, status FROM hr.employees "
-                            "WHERE employee_number = ANY(:nos) AND is_deleted = false "
-                            "AND status IN ('病假', '产假', '离职', '待审批')"
-                        ),
-                        {"nos": emp_nos},
-                    )).fetchall()
-                    excluded = {r[0] for r in leave_rows}
-                    keep_nos = [no for no, nm in zip(emp_nos, names) if no not in excluded]
-                    keep_names = [nm for no, nm in zip(emp_nos, names) if no not in excluded]
-                    names, emp_nos = keep_names, keep_nos
-                sick, maternity = await _query_leave_counts(session, dept)
-                # 通知/签到表部门修正：使用二级表部门（受训部门）
-                notif_buf = generate_training_notification(TrainingNotificationInput(
-                    department=dept, training_date=today, subject=subject,
-                    trainer=trainer, content=content, trainee_names=names,
-                    issuer_department=dept, issue_date=today,
-                    sick_count=sick, maternity_count=maternity,
-                ))
-                sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
-                    training_date=today, department=dept, training_subject=subject,
-                    topic=content, instructor=trainer,
-                    employee_names=names, employee_departments={n: dept for n in names},
-                    sick_count=sick, maternity_count=maternity,
-                ))
-                zf.writestr(f"{dept}/培训通知.docx", notif_buf.getvalue())
-                zf.writestr(f"{dept}/培训签到表.docx", sign_buf.getvalue())
-                # 试卷：按 SOP 编号匹配题库，有题才打包
-                questions = await _lookup_exam_questions(session, file_nos)
-                if questions:
-                    zf.writestr(f"{dept}/培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
-                # 培训登记表
-                method = entries[0].complete_time or ""
-                zf.writestr(
-                    f"{dept}/培训登记表.docx",
-                    _generate_register_docx(
-                        subject=subject, training_date=today, department=dept,
-                        trainer=trainer or "", method=method, trainee_names=names,
-                        sick=sick, maternity=maternity,
-                    ).getvalue(),
-                )
+            notif_buf = generate_training_notification(TrainingNotificationInput(
+                department=dept, training_date=today, subject=subject,
+                trainer=trainer or "", content=content, trainee_names=names,
+                issuer_department=dept, issue_date=today,
+                sick_count=sick, maternity_count=maternity,
+            ))
+            sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
+                training_date=today, department=dept, training_subject=subject,
+                topic=content, instructor=trainer or "",
+                employee_names=names, employee_departments={n: dept for n in names},
+                sick_count=sick, maternity_count=maternity,
+            ))
+            zf.writestr("培训通知.docx", notif_buf.getvalue())
+            zf.writestr("培训签到表.docx", sign_buf.getvalue())
+            # 试卷：按 SOP 编号匹配题库，有题才打包
+            questions = await _lookup_exam_questions(session, file_nos)
+            if questions:
+                zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
+            # 培训登记表
+            method = rows[0].complete_time or ""
+            zf.writestr(
+                "培训登记表.docx",
+                _generate_register_docx(
+                    subject=subject, training_date=today, department=dept,
+                    trainer=trainer or "", method=method, trainee_names=names,
+                    sick=sick, maternity=maternity,
+                ).getvalue(),
+            )
     except FileNotFoundError as e:
         raise HTTPException(400, f"生成失败（模板缺失）: {e}")
     buf.seek(0)
@@ -942,25 +954,56 @@ async def sop_entry_classifications(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """该部门员工被打上的全部标签（所有创建人汇总），作为二级表分类选项。"""
+    """二级表分类选项 = 当前用户在员工档案里的分类（清单 + 打过的标签）。
+
+    员工档案「分类管理」建的清单即使尚未给本部门员工打标签（0 人）也展示；
+    直接在员工行上打的标签（如「分类1/分类2」）同样出现——都是本人创建的
+    分类，按创建人过滤，看不到别人的分类/测试数据。
+    人数按本部门实际标签统计。
+    """
     # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    rows = (await session.execute(
+    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    # ① 本人的分类清单（员工档案「分类管理」）
+    catalog = (await session.execute(
+        text(
+            "SELECT name FROM hr.employee_classifications "
+            "WHERE is_deleted = false AND created_by = :creator ORDER BY created_at"
+        ),
+        {"creator": creator},
+    )).fetchall()
+    # ② 本人在该部门打过的标签计数（直接打标签没建清单的分类也在这里）
+    tag_rows = (await session.execute(
         text("""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
             JOIN hr.employees e ON e.employee_number = t.employee_number
             WHERE t.is_deleted = false AND e.is_deleted = false
+              AND t.created_by = :creator
               AND (e.department = :dept OR e.actual_department = :dept)
-            GROUP BY t.tag_name ORDER BY t.tag_name
+            GROUP BY t.tag_name
         """),
-        {"dept": department},
+        {"dept": department, "creator": creator},
     )).fetchall()
-    return success_response(data=[{"tag_name": r[0], "count": r[1]} for r in rows])
+    counts = {r[0]: r[1] for r in tag_rows}
+    result: list[dict] = []
+    seen: set[str] = set()
+    for r in catalog:
+        name = r[0]
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tag_name": name, "count": counts.get(name, 0)})
+    for name, cnt in sorted(counts.items()):
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tag_name": name, "count": cnt})
+    return success_response(data=result)
 
 
 @router.get("/sop-training-entries/personnel", summary="分类人员查询")

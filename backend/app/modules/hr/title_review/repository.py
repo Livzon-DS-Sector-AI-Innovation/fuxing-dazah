@@ -240,6 +240,28 @@ class TitleReviewApplicationRepository:
         )
         return result.scalar_one_or_none()
 
+    async def find_by_approval_codes(
+        self, codes: list[str]
+    ) -> TitleReviewApplication | None:
+        """按审批实例编号查找持有该编号的存活申报（编号列可逗号累积存储）。"""
+        if not codes:
+            return None
+        from sqlalchemy import or_
+
+        conds = [
+            TitleReviewApplication.approval_instance_code.like(f"%{c}%")
+            for c in codes
+        ]
+        result = await self.session.execute(
+            select(TitleReviewApplication)
+            .where(
+                TitleReviewApplication.is_deleted == False,  # noqa: E712
+                or_(*conds),
+            )
+            .order_by(TitleReviewApplication.created_at)
+        )
+        return result.scalars().first()
+
     async def count_by_activity(self, activity_id: UUID) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(TitleReviewApplication).where(

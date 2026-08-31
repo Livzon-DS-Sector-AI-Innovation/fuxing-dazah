@@ -113,12 +113,15 @@ async def test_get_employee_not_found_raises(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_update_employee(db_session: AsyncSession):
-    """更新员工信息。"""
+    """更新员工信息：身份标识字段（工号/姓名/性别/身份证号）不可改，其余照常。"""
     emp = await _make_employee(db_session, name="原名")
     svc = EmployeeService(db_session)
-    data = EmployeeUpdate(name="新名字")
+    # 姓名/工号为受保护字段：更新时被忽略
+    data = EmployeeUpdate(name="新名字", employee_number="999999", position="新岗位")
     updated = await svc.update_employee(emp.id, data)
-    assert updated.name == "新名字"
+    assert updated.name == "原名"
+    assert updated.employee_number == emp.employee_number
+    assert updated.position == "新岗位"
 
 
 @pytest.mark.asyncio

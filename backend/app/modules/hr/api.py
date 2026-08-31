@@ -1085,6 +1085,54 @@ class PrejobTrainingItems(BaseModel):
     training_items: list[dict] = []
 
 
+async def _sync_prejob_plan_to_ledger(
+    session: AsyncSession, emp_no: str, training_items: list[dict]
+) -> int:
+    """岗前培训计划导出时同步到培训台账。
+
+    幂等：同员工 + 同课程 + 来源 prejob 只建一条（重复导出不重复建）。
+    计划日期不可解析时用当天。
+    """
+    synced = 0
+    for item in training_items:
+        subject = str(item.get("training_category") or "").strip()
+        if not subject:
+            continue
+        exist = (await session.execute(
+            text(
+                "SELECT 1 FROM hr.training_ledgers "
+                "WHERE employee_number = :en AND training_subject = :sub "
+                "AND source_type = 'prejob' AND is_deleted = false LIMIT 1"
+            ),
+            {"en": emp_no, "sub": subject},
+        )).first()
+        if exist:
+            continue
+        plan_date_raw = str(item.get("plan_date") or "").strip()
+        try:
+            train_date = date.fromisoformat(plan_date_raw[:10])
+        except ValueError:
+            train_date = date.today()
+        await session.execute(
+            text(
+                "INSERT INTO hr.training_ledgers "
+                "(id, employee_number, training_date, training_subject, training_method, trainer, source_type) "
+                "VALUES (gen_random_uuid(), :en, :d, :sub, :method, :trainer, 'prejob')"
+            ),
+            {
+                "en": emp_no,
+                "d": train_date,
+                "sub": subject,
+                "method": str(item.get("training_method") or "") or None,
+                "trainer": str(item.get("trainer") or "") or None,
+            },
+        )
+        synced += 1
+    if synced:
+        await session.commit()
+    return synced
+
+
 @router.post(
     "/employees/{employee_id}/prejob-training-plan",
     summary="导出员工岗前培训计划",
@@ -1170,6 +1218,11 @@ async def export_prejob_training_plan(
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # 导出时自动同步培训台账（幂等：同员工同课程同来源只建一条）
+    synced = await _sync_prejob_plan_to_ledger(
+        session, emp_no, training_items
+    )
+
     def _iterfile():
         buffer.seek(0)
         yield buffer.read()
@@ -1178,7 +1231,10 @@ async def export_prejob_training_plan(
     return StreamingResponse(
         _iterfile(),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Synced-Count": str(synced),
+        },
     )
 
 

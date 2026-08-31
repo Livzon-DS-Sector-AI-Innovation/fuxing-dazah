@@ -272,9 +272,10 @@ export default function TitleReviewActivityTab({ activities, onRefresh, onSelect
           {(r.status === 'open' || r.status === 'reviewing') && canManage && (
             <Button size="small" danger onClick={() => runAction(closeTitleActivity, r.id, '活动已结束')}>结束</Button>
           )}
-          {canManage && r.status === 'draft' && (
+          {canManage && (
             <Popconfirm
               title="确认删除该活动？"
+              description="将同时删除活动下的申报、评委与评分数据（测试数据清理场景）。"
               onConfirm={async () => {
                 try {
                   await deleteTitleActivity(r.id)
