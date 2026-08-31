@@ -1048,6 +1048,34 @@ class TitleReviewService:
                     await self._promote_and_assign_if_reviewing(activity, existing)
                 await self.application_repo.update(existing)
                 return existing
+            # 孤儿申报占用审批实例编号（其活动已被数据管理硬删）：
+            # 自动软删孤儿并重试一次，实现自愈
+            codes = [
+                c.strip()
+                for c in (parsed.get("approval_instance_code") or "").replace("，", ",").split(",")
+                if c.strip()
+            ]
+            holder = await self.application_repo.find_by_approval_codes(codes)
+            if holder and holder.activity_id != activity.id:
+                holder_act = await self.session.get(m.TitleReviewActivity, holder.activity_id)
+                if holder_act is None or holder_act.is_deleted:
+                    logger.warning(
+                        "孤儿申报占用审批实例编号，自动软删并重试: holder=%s holder_activity=%s",
+                        holder.id, holder.activity_id,
+                    )
+                    holder.is_deleted = True
+                    await self.application_repo.update(holder)
+                    async with self.session.begin_nested():
+                        await self.application_repo.create(application)
+                    await self._promote_and_assign_if_reviewing(activity, application)
+                    await _audit(
+                        self.session,
+                        action="hr.title.application_sync",
+                        resource_type="title_review_application",
+                        resource_id=application.id,
+                        extra={"record_id": record_id, "orphan_recovered": str(holder.id)},
+                    )
+                    return application
             raise
         # 活动已进入评审期 → 自动流转到投票并按部门分配评委
         await self._promote_and_assign_if_reviewing(activity, application)

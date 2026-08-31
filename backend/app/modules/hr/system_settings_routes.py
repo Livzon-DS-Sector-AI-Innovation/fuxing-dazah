@@ -114,15 +114,32 @@ async def list_data_tables(session: AsyncSession = Depends(get_db), ctx: HrAcces
 
 @router.post("/data-management/clear", summary="清除指定表数据")
 async def clear_data_tables(tables: list[str], session: AsyncSession = Depends(get_db), ctx: HrAccessContext = Depends(require_hr_access("hr:settings:manage"))):
-    """清空指定 HR 数据表（自动排除岗位相关表）。"""
+    """清空指定 HR 数据表（自动排除岗位相关表）。
+
+    清空职称评审活动表时先清申报表：否则硬删活动会留下孤儿申报
+    占用审批实例编号（全局唯一索引），后续同步报「已绑定其他活动」
+    且界面上永远无法删除。评委/评分/职级组/评价项的孤儿行无害，
+    不级联（职级组/评价项会在新活动创建时自动重新生成）。
+    """
     from sqlalchemy import text
     r = await session.execute(
             text(
         "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = 'hr'"
     ))
     allowed = {row[0] for row in r.all()} - _SKIP_TABLES
-    cleared = []
+    _TITLE_REVIEW_DEPS = [
+        "title_review_applications",
+    ]
+    # 展开依赖表（先删依赖、再删主表；避免重复）
+    expanded: list[str] = []
     for table in tables:
+        if table == "title_review_activities":
+            for dep in _TITLE_REVIEW_DEPS:
+                if dep in allowed and dep not in tables and dep not in expanded:
+                    expanded.append(dep)
+        expanded.append(table)
+    cleared = []
+    for table in expanded:
         if table not in allowed:
             raise HTTPException(400, f"不允许操作表: {table}")
         await session.execute(text(f"DELETE FROM hr.{table}"))
