@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef, useLayoutEffect } from "react"
+import { useState, useEffect, useRef, useLayoutEffect, useMemo } from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { Dropdown, Avatar } from "antd"
-import { LogoutOutlined, UserOutlined } from "@ant-design/icons"
+import { LogoutOutlined, UserOutlined, EllipsisOutlined } from "@ant-design/icons"
 import { moduleMenus } from "@/lib/menu-config"
 import { ModuleIcon, SearchIcon, BellIcon } from "@/components/icons"
 import { logout, getCurrentUser, getImpersonationStatus } from "@/actions/auth"
@@ -14,15 +14,33 @@ import { MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons"
 import { ImpersonateBanner } from "@/components/permission/ImpersonateBanner"
 import type { User, ImpersonationStatus } from "@/types/user"
 
+// 顶栏折叠参数
+const GAP = 2          // gap-0.5 → 0.125rem ≈ 2px
+const MORE_W = 40      // 更多按钮固定宽度 w-10
+const RESERVE = MORE_W + GAP + 2 // 更多按钮占位 + 间距 + 微调安全余量
+
+const LOGOUT_MENU_ITEMS = [
+  {
+    key: "logout",
+    label: "退出登录",
+    icon: <LogoutOutlined />,
+    danger: true,
+  },
+]
+
 export function TopNav() {
   const pathname = usePathname()
+  const router = useRouter()
   const activeModule = pathname.split("/")[1] || "production"
   const [loggingOut, setLoggingOut] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const { hasPermission, isLoaded } = usePermission()
   const { collapsed, toggle: toggleSidebar } = useSidebarStore()
   const navRef = useRef<HTMLElement>(null)
+  const measureItems = useRef<Map<string, HTMLElement>>(new Map())
+  const moreRef = useRef<HTMLButtonElement>(null)
   const [indicator, setIndicator] = useState({ left: 0, width: 0 })
+  const [folded, setFolded] = useState<string[]>([])
 
   const [impersonation, setImpersonation] = useState<ImpersonationStatus | null>(null)
 
@@ -39,21 +57,92 @@ export function TopNav() {
   const avatarSrc = user?.avatar_url || undefined
   const displayName = user?.name || "API"
 
-  // 指示条跟随激活 tab 滑动
+  const visibleMenus = useMemo(() => {
+    if (!isLoaded) return moduleMenus
+    return moduleMenus.filter((mod) => {
+      if (!mod.permissions || mod.permissions.length === 0) return true
+      return hasPermission(...mod.permissions)
+    })
+  }, [isLoaded, hasPermission])
+
+  // 测量每个 tab 宽度，计算哪些模块需要折叠进「更多」
   useLayoutEffect(() => {
     const nav = navRef.current
     if (!nav) return
+
+    const computeFold = () => {
+      const containerWidth = nav.clientWidth
+      if (containerWidth <= 0) return
+      const widths = visibleMenus.map((m) => measureItems.current.get(m.key)?.offsetWidth ?? 0)
+      const total = widths.reduce((a, b) => a + b, 0) + GAP * Math.max(0, widths.length - 1)
+      if (total <= containerWidth) {
+        setFolded([])
+        return
+      }
+      const limit = containerWidth - RESERVE
+      let sum = 0
+      const foldKeys: string[] = []
+      let cut = false
+      for (let i = 0; i < widths.length; i++) {
+        const next = sum + (i > 0 ? GAP : 0) + widths[i]
+        if (!cut && next <= limit) {
+          sum = next
+        } else {
+          cut = true
+          foldKeys.push(visibleMenus[i].key)
+        }
+      }
+      setFolded(foldKeys)
+    }
+
+    computeFold()
+    const ro = new ResizeObserver(computeFold)
+    ro.observe(nav)
+    return () => ro.disconnect()
+  }, [visibleMenus, isLoaded])
+
+  // 指示条跟随激活 tab；激活模块在「更多」里时收回到更多按钮
+  useLayoutEffect(() => {
+    const nav = navRef.current
+    if (!nav) return
+    if (folded.includes(activeModule)) {
+      const more = moreRef.current
+      if (more) {
+        setIndicator({ left: more.offsetLeft + 12, width: more.offsetWidth - 24 })
+        return
+      }
+    }
     const link = nav.querySelector<HTMLAnchorElement>(`[data-module="${activeModule}"]`)
     if (!link) return
     setIndicator({ left: link.offsetLeft + 12, width: link.offsetWidth - 24 })
-  }, [activeModule, isLoaded])
+  }, [activeModule, isLoaded, folded])
 
-  const visibleMenus = isLoaded
-    ? moduleMenus.filter((mod) => {
-        if (!mod.permissions || mod.permissions.length === 0) return true
-        return hasPermission(...mod.permissions)
-      })
-    : moduleMenus
+  const foldedSet = useMemo(() => new Set(folded), [folded])
+  const visibleTabs = visibleMenus.filter((m) => !foldedSet.has(m.key))
+  const foldedTabs = visibleMenus.filter((m) => foldedSet.has(m.key))
+  const activeInMore = folded.includes(activeModule)
+
+  const moreMenuItems = useMemo(
+    () =>
+      foldedTabs.map((m) => ({
+        key: m.key,
+        label: (
+          <span className="flex items-center gap-1.5">
+            <ModuleIcon name={m.icon} className="w-4 h-4" />
+            <span
+              className={
+                activeModule === m.key
+                  ? "text-[var(--color-primary)] font-medium"
+                  : "text-[var(--color-ink)]"
+              }
+            >
+              {m.label}
+            </span>
+          </span>
+        ),
+      })),
+    [foldedTabs, activeModule],
+  )
 
   return (
     <>
@@ -61,6 +150,25 @@ export function TopNav() {
         <ImpersonateBanner targetUser={impersonation.target_user} />
       )}
     <header className="h-16 bg-[var(--color-canvas)] border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0">
+      {/* 离屏测量容器：渲染全部可见模块用于宽度测量 */}
+      <div
+        aria-hidden
+        className="absolute -left-[9999px] top-0 flex items-center gap-0.5 h-16 w-max pointer-events-none invisible"
+      >
+        {visibleMenus.map((mod) => (
+          <span
+            key={mod.key}
+            ref={(el) => {
+              if (el) measureItems.current.set(mod.key, el)
+            }}
+            className="flex shrink-0 items-center gap-1.5 px-3 h-full text-[14px] font-medium whitespace-nowrap"
+          >
+            <ModuleIcon name={mod.icon} className="w-4 h-4" />
+            {mod.label}
+          </span>
+        ))}
+      </div>
+
       {/* Logo */}
       <div className="flex items-center gap-2.5 mr-10 shrink-0">
         <div className="w-7 h-7 rounded-[var(--rounded-md)] bg-[var(--color-primary)] flex items-center justify-center">
@@ -72,8 +180,8 @@ export function TopNav() {
       </div>
 
       {/* Module Tabs */}
-      <nav ref={navRef} className="relative flex items-center gap-0.5 flex-1 overflow-x-auto scrollbar-hide h-full">
-        {visibleMenus.map((mod) => {
+      <nav ref={navRef} className="relative flex items-center gap-0.5 flex-1 overflow-hidden h-full">
+        {visibleTabs.map((mod) => {
           const isActive = activeModule === mod.key
           return (
             <Link
@@ -93,6 +201,37 @@ export function TopNav() {
             </Link>
           )
         })}
+
+        {/* 更多：溢出模块折叠进下拉 */}
+        {foldedTabs.length > 0 && (
+          <Dropdown
+            menu={{
+              items: moreMenuItems,
+              selectedKeys: activeInMore ? [activeModule] : [],
+              selectable: true,
+              onClick: ({ key }) => {
+                const mod = foldedTabs.find((m) => m.key === key)
+                if (mod) router.push(mod.path)
+              },
+            }}
+            placement="bottomRight"
+          >
+            <button
+              ref={moreRef}
+              className={`
+                flex items-center justify-center h-full w-10 shrink-0 transition-colors
+                ${activeInMore
+                  ? "text-[var(--color-primary)]"
+                  : "text-[var(--color-steel)] hover:text-[var(--color-charcoal)]"
+                }
+              `}
+              title="更多模块"
+            >
+              <EllipsisOutlined style={{ fontSize: 18 }} />
+            </button>
+          </Dropdown>
+        )}
+
         <span
           className="absolute bottom-0 left-0 h-[2px] bg-[var(--color-primary)] rounded-full pointer-events-none transition-[transform,width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
           style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
@@ -117,16 +256,9 @@ export function TopNav() {
         </button>
         <Dropdown
           menu={{
-            items: [
-              {
-                key: 'logout',
-                label: '退出登录',
-                icon: <LogoutOutlined />,
-                danger: true,
-              },
-            ],
+            items: LOGOUT_MENU_ITEMS,
             onClick: (info) => {
-              if (info.key === 'logout') handleLogout()
+              if (info.key === "logout") handleLogout()
             },
           }}
           placement="bottomRight"
