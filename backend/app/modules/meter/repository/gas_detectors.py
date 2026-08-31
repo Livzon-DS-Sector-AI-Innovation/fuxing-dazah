@@ -21,6 +21,18 @@ from app.modules.meter.repository._utils import (
     _parse_multi,
 )
 
+# 文本列（部分匹配/typeahead 允许的列；不含 department/status，二者单独处理）
+_GAS_DETECTOR_TEXT_COLUMNS = [
+    "instrument_name", "detection_model", "product_number", "measurement_range",
+    "installation_type", "installation_location", "medium", "calibration_factor",
+    "manufacturer_supplier", "manufacturer", "detection_unit", "calibration_result",
+]
+# typeahead 允许的列 → ORM 列（文本列 + status）
+_GAS_DETECTOR_SEARCHABLE: dict[str, Any] = {
+    name: getattr(GasDetectorRecord, name) for name in _GAS_DETECTOR_TEXT_COLUMNS
+}
+_GAS_DETECTOR_SEARCHABLE["status"] = GasDetectorRecord.status
+
 
 async def create_gas_detector(
     db: AsyncSession, data: dict[str, Any]
@@ -82,6 +94,7 @@ async def list_gas_detectors(
     calibration_date_after: date | None = None,
     keyword: str | None = None,
     has_report: bool | None = None,
+    like_filters: dict[str, str] | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[GasDetectorRecord], int]:
@@ -107,6 +120,13 @@ async def list_gas_detectors(
         parts = _parse_multi(value)
         if parts:
             query = query.where(col.in_(parts))
+
+    # 文本列部分匹配（输入即过滤）：col ILIKE %text%
+    for col_name in _GAS_DETECTOR_TEXT_COLUMNS:
+        text = (like_filters or {}).get(col_name)
+        if text:
+            col_attr = getattr(GasDetectorRecord, col_name)
+            query = query.where(col_attr.ilike(f"%{_escape_like(text)}%"))
 
     if department:
         parts = _parse_multi(department)
@@ -155,6 +175,7 @@ async def list_gas_detectors(
             | GasDetectorRecord.detection_model.ilike(f"%{_escape_like(keyword)}%", escape="\\")
             | GasDetectorRecord.product_number.ilike(f"%{_escape_like(keyword)}%", escape="\\")
             | GasDetectorRecord.installation_location.ilike(f"%{_escape_like(keyword)}%", escape="\\")
+            | GasDetectorRecord.manufacturer.ilike(f"%{_escape_like(keyword)}%", escape="\\")
         )
     if has_report is not None:
         sub = select(CalibrationReport.id).where(
@@ -253,6 +274,7 @@ async def get_all_gas_detector_ids(
     calibration_date_after: date | None = None,
     keyword: str | None = None,
     has_report: bool | None = None,
+    like_filters: dict[str, str] | None = None,
 ) -> list[UUID]:
     """获取当前筛选条件下所有记录 ID（用于跨页全选）。"""
     query = select(GasDetectorRecord.id).where(
@@ -276,6 +298,13 @@ async def get_all_gas_detector_ids(
         parts = _parse_multi(value)
         if parts:
             query = query.where(col.in_(parts))
+
+    # 文本列部分匹配（输入即过滤）：col ILIKE %text%
+    for col_name in _GAS_DETECTOR_TEXT_COLUMNS:
+        text = (like_filters or {}).get(col_name)
+        if text:
+            col_attr = getattr(GasDetectorRecord, col_name)
+            query = query.where(col_attr.ilike(f"%{_escape_like(text)}%"))
 
     if department:
         parts = _parse_multi(department)
@@ -324,6 +353,7 @@ async def get_all_gas_detector_ids(
             | GasDetectorRecord.detection_model.ilike(f"%{_escape_like(keyword)}%", escape="\\")
             | GasDetectorRecord.product_number.ilike(f"%{_escape_like(keyword)}%", escape="\\")
             | GasDetectorRecord.installation_location.ilike(f"%{_escape_like(keyword)}%", escape="\\")
+            | GasDetectorRecord.manufacturer.ilike(f"%{_escape_like(keyword)}%", escape="\\")
         )
     if has_report is not None:
         sub = select(CalibrationReport.id).where(
@@ -395,3 +425,71 @@ async def get_gas_detector_filter_options(
         rows = await db.execute(stmt)
         result[col] = sorted([row[0] for row in rows.all() if row[0] and str(row[0]).strip()])
     return result
+
+
+async def search_gas_detector_filter_options(
+    db: AsyncSession,
+    *,
+    field: str,
+    q: str | None = None,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """按字段名 + 关键字搜索 distinct 值（typeahead）。
+
+    - 允许的字段由 `_GAS_DETECTOR_SEARCHABLE` + department 白名单决定。
+    - `q` 为空返回前 `limit` 个 distinct；非空则按 ILIKE 部分匹配。
+    - `department` 从 departments 表读取；`status` 并入动态计算的「超期」。
+    """
+    if field == "department":
+        conds = [Department.source == "gas_detector", Department.is_deleted == False]  # noqa: E712
+        if q:
+            conds.append(Department.name.ilike(f"%{_escape_like(q)}%"))
+        count_stmt = select(func.count()).select_from(
+            select(Department.name).where(*conds).distinct().subquery()
+        )
+        total = (await db.execute(count_stmt)).scalar() or 0
+        items_stmt = (
+            select(Department.name)
+            .where(*conds)
+            .distinct()
+            .order_by(Department.name)
+            .limit(limit)
+        )
+        rows = await db.execute(items_stmt)
+        items = sorted({r[0] for r in rows.all() if r[0] and str(r[0]).strip()})
+        return {"items": items, "total": total}
+
+    if field == "status":
+        # 状态是动态计算状态，「超期」不在库里。用全量候选（DB 状态 + 超期）在 Python 侧按 q 过滤。
+        stmt = select(GasDetectorRecord.status).where(
+            GasDetectorRecord.is_deleted == False,  # noqa: E712
+            GasDetectorRecord.status.isnot(None),
+            GasDetectorRecord.status != "",
+        ).distinct()
+        rows = await db.execute(stmt)
+        candidates = sorted(
+            {r[0] for r in rows.all() if r[0] and str(r[0]).strip()} | {"超期"}
+        )
+        if q:
+            candidates = [c for c in candidates if q.lower() in c.lower()]
+        return {"items": candidates[:limit], "total": len(candidates)}
+
+    col = _GAS_DETECTOR_SEARCHABLE.get(field)
+    if col is None:
+        raise ValueError(f"不支持的筛选字段: {field}")
+
+    col_conditions: list[Any] = [
+        GasDetectorRecord.is_deleted == False,  # noqa: E712
+        col.isnot(None),
+        col != "",
+    ]
+    if q:
+        col_conditions.append(col.ilike(f"%{_escape_like(q)}%"))
+
+    count_stmt = select(func.count()).select_from(select(col).where(*col_conditions).distinct().subquery())
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    items_stmt = select(col).where(*col_conditions).distinct().order_by(col).limit(limit)
+    rows = await db.execute(items_stmt)
+    items = sorted({r[0] for r in rows.all() if r[0] and str(r[0]).strip()})
+    return {"items": items, "total": total}

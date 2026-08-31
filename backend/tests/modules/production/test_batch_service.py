@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException
-from app.modules.production.models import Batch, NodeExecution
+from app.core.exceptions import AppException, ForbiddenException
+from app.modules.production.models import Batch, NodeExecution, StageAssignment
 from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
@@ -27,6 +27,7 @@ from app.modules.production.schemas import (
     MergeParentIn,
 )
 from app.modules.production.service import batch_service
+from app.platform.identity.models import User
 from tests.modules.production.conftest import rand_code
 
 
@@ -206,6 +207,89 @@ class TestDerive:
                     ],
                 ),
                 user=None,
+            )
+
+
+class TestBoundaryPermission:
+    """批次边界接收权限：to 工段负责人可通过，from 工段负责人拒绝。"""
+
+    async def _make_user(self, db: AsyncSession, name: str) -> User:
+        user = User(name=name, employee_no=rand_code("E"))
+        db.add(user)
+        await db.flush()
+        return user
+
+    async def _grant_stage(
+        self, db: AsyncSession, user_id: uuid.UUID,
+        route_id: uuid.UUID, stage_name: str,
+    ) -> None:
+        db.add(StageAssignment(user_id=user_id, route_id=route_id, stage_name=stage_name))
+        await db.flush()
+
+    async def _ready_parent(
+        self, db: AsyncSession, published_route: dict[str, Any]
+    ) -> Batch:
+        """父批次 in_progress 且边界边起点工序已完成，满足派生前提。"""
+        parent = await _make_batch(db, published_route)
+        await _set_in_progress(db, parent)
+        await _insert_completed_execution(db, parent, published_route["node_a"].id)
+        return parent
+
+    async def test_derive_allowed_for_to_stage_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """接收工段（to_node 所在工段）负责人可派生子批次。"""
+        user = await self._make_user(db_session, "提炼负责人")
+        await self._grant_stage(
+            db_session, user.id, published_route["route"].id, "提炼"
+        )
+        parent = await self._ready_parent(db_session, published_route)
+        children = await batch_service.derive_batches(
+            db_session,
+            parent.id,
+            DeriveIn(
+                edge_id=published_route["edge_ab"].id,
+                children=[ChildBatchIn(batch_no=rand_code("B"))],
+            ),
+            user=user,
+        )
+        assert len(children) == 1
+
+    async def test_derive_rejected_for_from_stage_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """起点工段（from_node 所在工段）负责人不能派生后续工段批次。"""
+        user = await self._make_user(db_session, "发酵负责人")
+        await self._grant_stage(
+            db_session, user.id, published_route["route"].id, "发酵"
+        )
+        parent = await self._ready_parent(db_session, published_route)
+        with pytest.raises(ForbiddenException):
+            await batch_service.derive_batches(
+                db_session,
+                parent.id,
+                DeriveIn(
+                    edge_id=published_route["edge_ab"].id,
+                    children=[ChildBatchIn(batch_no=rand_code("B"))],
+                ),
+                user=user,
+            )
+
+    async def test_derive_rejected_for_unassigned_user(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """无任何工段/工序分配的用户派生被拒。"""
+        user = await self._make_user(db_session, "无关用户")
+        parent = await self._ready_parent(db_session, published_route)
+        with pytest.raises(ForbiddenException):
+            await batch_service.derive_batches(
+                db_session,
+                parent.id,
+                DeriveIn(
+                    edge_id=published_route["edge_ab"].id,
+                    children=[ChildBatchIn(batch_no=rand_code("B"))],
+                ),
+                user=user,
             )
 
 

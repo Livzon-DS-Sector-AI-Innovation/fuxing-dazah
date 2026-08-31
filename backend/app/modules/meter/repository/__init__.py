@@ -38,6 +38,7 @@ from app.modules.meter.repository.gas_detectors import (
     get_gas_detector_filter_options,
     get_max_gas_detector_sort_order,
     list_gas_detectors,
+    search_gas_detector_filter_options,
     soft_delete_gas_detector,
     update_gas_detector,
 )
@@ -52,6 +53,7 @@ from app.modules.meter.repository.instruments import (
     get_instrument_filter_options,
     get_max_instrument_sort_order,
     list_instruments,
+    search_instrument_filter_options,
     soft_delete_instrument,
     update_instrument,
 )
@@ -124,7 +126,9 @@ __all__ = [
     "list_reports_by_gas_detector",
     "list_reports_by_instrument",
     "rename_department_in_records",
+    "search_gas_detector_filter_options",
     "search_gas_detectors_by_name",
+    "search_instrument_filter_options",
     "search_instruments_by_name",
     "soft_delete_department",
     "soft_delete_gas_detector",

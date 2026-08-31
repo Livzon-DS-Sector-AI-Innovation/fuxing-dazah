@@ -195,3 +195,68 @@ class TestInstrumentDepartmentsEndpoint:
         resp = await client.get("/api/v1/meter/departments/instruments")
         assert resp.status_code == 200
         assert name in resp.json()["data"]
+
+
+class TestInstrumentFilterLikeAndTypeahead:
+    async def test_list_by_manufacturer_like(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """按 manufacturer_like（部分匹配）应筛出包含关键词的记录。"""
+        client, db = api_context
+        mfr = f"上岭{uuid4().hex[:4]}"
+        await create_instrument(db, asset_number=f"AL-{uuid4().hex[:6]}", manufacturer=mfr, instrument_name="压力表")
+        resp = await client.get("/api/v1/meter/instruments", params={"manufacturer_like": "上岭"})
+        assert resp.status_code == 200
+        body = resp.json()
+        # 命中至少包含「上岭」的记录
+        assert any("上岭" in (i.get("manufacturer") or "") for i in body["data"])
+        assert body["meta"]["total"] >= 1
+
+    async def test_typeahead_search_manufacturer(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """typeahead：按字段 + 关键字返回 distinct 命中值。"""
+        client, db = api_context
+        await create_instrument(db, asset_number=f"TA-{uuid4().hex[:6]}", manufacturer="上岭仪表", instrument_name="表")
+        resp = await client.get(
+            "/api/v1/meter/instruments/filter-options/search",
+            params={"field": "manufacturer", "q": "上岭"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert any("上岭" in v for v in data["items"])
+
+    async def test_typeahead_empty_q_returns_capped(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """typeahead：空 q 返回前 limit 个 distinct 值。"""
+        client, db = api_context
+        await create_instrument(db, asset_number=f"TB-{uuid4().hex[:6]}", manufacturer="测试制造商A", instrument_name="表")
+        resp = await client.get(
+            "/api/v1/meter/instruments/filter-options/search",
+            params={"field": "manufacturer", "limit": 5},
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["data"]["items"]) <= 5
+
+    async def test_typeahead_invalid_field_returns_400(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """typeahead：非法字段应返回 400。"""
+        client, _ = api_context
+        resp = await client.get(
+            "/api/v1/meter/instruments/filter-options/search",
+            params={"field": "__hack__"},
+        )
+        assert resp.status_code == 400
+
+    async def test_typeahead_status_merges_overdue(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """typeahead：status 应并入动态计算的「超期」。"""
+        client, _ = api_context
+        resp = await client.get(
+            "/api/v1/meter/instruments/filter-options/search",
+            params={"field": "status", "q": "超"},
+        )
+        assert resp.status_code == 200
+        assert "超期" in resp.json()["data"]["items"]
+
+    async def test_keyword_hits_manufacturer(self, api_context: tuple[AsyncClient, Any]) -> None:
+        """全局 keyword 应能命中制造商字段。"""
+        client, db = api_context
+        mfr = f"KW制造商{uuid4().hex[:4]}"
+        await create_instrument(db, asset_number=f"KW-{uuid4().hex[:6]}", manufacturer=mfr, instrument_name="压力表")
+        resp = await client.get("/api/v1/meter/instruments", params={"keyword": mfr})
+        assert resp.status_code == 200
+        assert any("KW制造商" in (i.get("manufacturer") or "") for i in resp.json()["data"])

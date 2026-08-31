@@ -254,6 +254,11 @@ def _map_and_convert_rows(
                 col_mapping[idx] = column_map[header]
 
         if not col_mapping:
+            warnings.append({
+                "sheet": sheet_name, "type": "warning",
+                "department": dept,
+                "message": "表头列名无法匹配，已跳过该 sheet 的数据",
+            })
             continue
 
         for row_idx, row_data in enumerate(rows):

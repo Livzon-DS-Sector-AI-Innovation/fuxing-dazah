@@ -1,12 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, type Key } from 'react'
-import { App, Table, Button, Space, Input, Select, Tag, Tooltip, Popconfirm, Radio } from 'antd'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { App, Table, Button, Space, Input, Tag, Tooltip, Popconfirm, Radio } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, FileTextOutlined, UploadOutlined, DownloadOutlined, FileExcelOutlined, ImportOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import type { FilterDropdownProps } from 'antd/es/table/interface'
-import { InstrumentRecord, InstrumentFilter, InstrumentFilterOptions } from '@/types/meter'
-import { deleteInstrument, getInstruments, exportInstrumentReports, exportInstrumentsExcel, getInstrumentFilterOptions, batchDeleteInstruments, getInstrumentIds } from '@/actions/meter'
+import { InstrumentRecord, InstrumentFilter } from '@/types/meter'
+import { deleteInstrument, getInstruments, exportInstrumentReports, exportInstrumentsExcel, searchInstrumentTypeahead, batchDeleteInstruments, getInstrumentIds } from '@/actions/meter'
+import { renderTextFilterDropdown, renderMultiSelectFilterDropdown } from './FilterDropdown'
 import { InstrumentDrawer } from './InstrumentDrawer'
 import { ReportDialog } from './ReportDialog'
 import { BatchUploadDialog } from './BatchUploadDialog'
@@ -15,62 +16,34 @@ import { LedgerImportModal } from './LedgerImportModal'
 import { InstrumentDateFilterModal } from './InstrumentDateFilterModal'
 import dayjs from 'dayjs'
 
-/** 筛选下拉框通用渲染 — 多选模式 */
-function renderFilterDropdown(
-  options: string[],
-  selectedValue: string | undefined,
-  setValue: (v: string | undefined) => void,
-  placeholder: string,
-) {
-  const selectedArr = selectedValue ? selectedValue.split(',').filter(Boolean) : []
-  const FilterDropdown = ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: FilterDropdownProps) => (
-    <div style={{ padding: 8, minWidth: 220 }}>
-      <Select
-        mode="multiple"
-        allowClear
-        showSearch
-        placeholder={placeholder}
-        value={selectedArr}
-        onChange={(values) => {
-          const arr = values as string[]
-          const joined = arr.length > 0 ? arr.join(',') : undefined
-          setSelectedKeys(arr)
-          setValue(joined ?? undefined)
-        }}
-        style={{ width: '100%' }}
-        maxTagCount="responsive"
-        options={options.map(v => ({ label: v, value: v }))}
-        filterOption={(input, option) =>
-          (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-        }
-      />
-    </div>
-  )
-  FilterDropdown.displayName = 'FilterDropdown'
-  return FilterDropdown
-}
-
-/** 筛选字段名 → InstrumentFilter 参数 key 的映射 */
+/** 筛选字段名 → InstrumentFilter 参数 key 的映射。
+ *  文本列映射到 `*_like`（部分匹配，输入即过滤）；部门/状态走精确多选；日期/报告各走原逻辑。 */
 const INSTRUMENT_FILTER_KEY: Record<string, keyof InstrumentFilter> = {
   department: 'department',
-  asset_number: 'asset_number',
-  instrument_name: 'instrument_name',
-  model_spec: 'model_spec',
-  measurement_range: 'measurement_range',
-  accuracy_grade: 'accuracy_grade',
-  serial_number: 'serial_number',
-  location: 'location',
-  manufacturer: 'manufacturer',
+  asset_number: 'asset_number_like',
+  instrument_name: 'instrument_name_like',
+  model_spec: 'model_spec_like',
+  measurement_range: 'measurement_range_like',
+  accuracy_grade: 'accuracy_grade_like',
+  serial_number: 'serial_number_like',
+  location: 'location_like',
+  manufacturer: 'manufacturer_like',
   status: 'status',
-  calibration_unit: 'calibration_unit',
-  calibration_result: 'calibration_result',
-  color_marking: 'color_marking',
+  calibration_unit: 'calibration_unit_like',
+  calibration_result: 'calibration_result_like',
+  color_marking: 'color_marking_like',
   calibration_date_before: 'calibration_date_before',
   calibration_date_after: 'calibration_date_after',
   next_calibration_before: 'next_calibration_before',
   next_calibration_after: 'next_calibration_after',
   report_count: 'has_report',
 }
+
+/** 部门/状态等分类列的选项，通过 typeahead（空关键字=全集）按需拉取，避免全量预载。 */
+const fetchInstrumentDeptOptions = async () =>
+  (await searchInstrumentTypeahead('department', '', 200)).items
+const fetchInstrumentStatusOptions = async () =>
+  (await searchInstrumentTypeahead('status', '', 200)).items
 
 export function InstrumentTable() {
   const { message, modal } = App.useApp()
@@ -100,19 +73,6 @@ export function InstrumentTable() {
   // 列头筛选状态（服务端筛选）
   const [columnFilters, setColumnFilters] = useState<Record<string, string | undefined>>({})
   const [dateFilters, setDateFilters] = useState<Record<string, string | undefined>>({})
-  const [filterOptions, setFilterOptions] = useState<InstrumentFilterOptions>({
-    department: [], asset_number: [], instrument_name: [], model_spec: [],
-    measurement_range: [],
-    accuracy_grade: [], serial_number: [], location: [], manufacturer: [],
-    status: [], calibration_unit: [], calibration_result: [], color_marking: [],
-  })
-
-  // 首次加载时获取全表筛选选项
-  useEffect(() => {
-    getInstrumentFilterOptions()
-      .then(opts => setFilterOptions(opts))
-      .catch(() => message.error('获取筛选选项失败'))
-  }, [message])
 
   const setColumnFilter = useCallback((field: string, value: string | undefined) => {
     setColumnFilters(prev => ({ ...prev, [field]: value }))
@@ -304,126 +264,91 @@ export function InstrumentTable() {
     return <Tag>{status || '-'}</Tag>
   }
 
+  // 文本列：输入即过滤（部分匹配）
+  const textFilter = (field: string, label: string) =>
+    renderTextFilterDropdown({
+      value: columnFilters[field],
+      onChange: (v) => setColumnFilter(field, v),
+      field,
+      placeholder: `输入${label}搜索`,
+      fetchTypeahead: (q) => searchInstrumentTypeahead(field, q),
+    })
+
+  // 分类列：按需拉取选项的多选
+  const multiFilter = (field: string, label: string, fetch: () => Promise<string[]>) =>
+    renderMultiSelectFilterDropdown({
+      value: columnFilters[field],
+      onChange: (v) => setColumnFilter(field, v),
+      field,
+      placeholder: `选择${label}`,
+      fetchOptions: fetch,
+    })
+
   const columns: TableColumnsType<InstrumentRecord> = [
     {
       title: '部门', dataIndex: 'department', width: 120, ellipsis: true,
       filteredValue: columnFilters.department ? columnFilters.department.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.department,
-        columnFilters.department,
-        (v) => setColumnFilter('department', v),
-        '选择部门',
-      ),
+      filterDropdown: multiFilter('department', '部门', fetchInstrumentDeptOptions),
       onFilter: () => true,
     },
     {
       title: '资产编号', dataIndex: 'asset_number', width: 120,
       filteredValue: columnFilters.asset_number ? columnFilters.asset_number.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.asset_number,
-        columnFilters.asset_number,
-        (v) => setColumnFilter('asset_number', v),
-        '选择资产编号',
-      ),
+      filterDropdown: textFilter('asset_number', '资产编号'),
       onFilter: () => true,
     },
     {
       title: '器具名称', dataIndex: 'instrument_name', width: 160, ellipsis: true,
       filteredValue: columnFilters.instrument_name ? columnFilters.instrument_name.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.instrument_name,
-        columnFilters.instrument_name,
-        (v) => setColumnFilter('instrument_name', v),
-        '选择器具名称',
-      ),
+      filterDropdown: textFilter('instrument_name', '器具名称'),
       onFilter: () => true,
     },
     {
       title: '型号规格', dataIndex: 'model_spec', width: 100, ellipsis: true,
       filteredValue: columnFilters.model_spec ? columnFilters.model_spec.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.model_spec,
-        columnFilters.model_spec,
-        (v) => setColumnFilter('model_spec', v),
-        '选择型号规格',
-      ),
+      filterDropdown: textFilter('model_spec', '型号规格'),
       onFilter: () => true,
     },
     { title: '测量范围', dataIndex: 'measurement_range', width: 120, ellipsis: true,
       filteredValue: columnFilters.measurement_range ? columnFilters.measurement_range.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.measurement_range,
-        columnFilters.measurement_range,
-        (v) => setColumnFilter('measurement_range', v),
-        '选择测量范围',
-      ),
+      filterDropdown: textFilter('measurement_range', '测量范围'),
       onFilter: () => true,
     },
     {
       title: '精度等级', dataIndex: 'accuracy_grade', width: 80,
       filteredValue: columnFilters.accuracy_grade ? columnFilters.accuracy_grade.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.accuracy_grade,
-        columnFilters.accuracy_grade,
-        (v) => setColumnFilter('accuracy_grade', v),
-        '选择精度等级',
-      ),
+      filterDropdown: textFilter('accuracy_grade', '精度等级'),
       onFilter: () => true,
     },
     { title: '检定周期(月)', dataIndex: 'calibration_cycle_months', width: 90 },
     {
       title: '彩色标志', dataIndex: 'color_marking', width: 80,
       filteredValue: columnFilters.color_marking ? columnFilters.color_marking.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.color_marking,
-        columnFilters.color_marking,
-        (v) => setColumnFilter('color_marking', v),
-        '选择彩色标志',
-      ),
+      filterDropdown: textFilter('color_marking', '彩色标志'),
       onFilter: () => true,
     },
     {
       title: '器具编号', dataIndex: 'serial_number', width: 110, ellipsis: true,
       filteredValue: columnFilters.serial_number ? columnFilters.serial_number.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.serial_number,
-        columnFilters.serial_number,
-        (v) => setColumnFilter('serial_number', v),
-        '选择器具编号',
-      ),
+      filterDropdown: textFilter('serial_number', '器具编号'),
       onFilter: () => true,
     },
     {
       title: '使用地点', dataIndex: 'location', width: 200, ellipsis: true,
       filteredValue: columnFilters.location ? columnFilters.location.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.location,
-        columnFilters.location,
-        (v) => setColumnFilter('location', v),
-        '选择使用地点',
-      ),
+      filterDropdown: textFilter('location', '使用地点'),
       onFilter: () => true,
     },
     {
       title: '制造商', dataIndex: 'manufacturer', width: 120, ellipsis: true,
       filteredValue: columnFilters.manufacturer ? columnFilters.manufacturer.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.manufacturer,
-        columnFilters.manufacturer,
-        (v) => setColumnFilter('manufacturer', v),
-        '选择制造商',
-      ),
+      filterDropdown: textFilter('manufacturer', '制造商'),
       onFilter: () => true,
     },
     {
       title: '状态', dataIndex: 'status', width: 80,
       filteredValue: columnFilters.status ? columnFilters.status.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.status,
-        columnFilters.status,
-        (v) => setColumnFilter('status', v),
-        '选择状态',
-      ),
+      filterDropdown: multiFilter('status', '状态', fetchInstrumentStatusOptions),
       onFilter: () => true,
       render: (_: unknown, r: InstrumentRecord) => statusTag(r.status),
     },
@@ -461,23 +386,13 @@ export function InstrumentTable() {
     {
       title: '检定单位', dataIndex: 'calibration_unit', width: 100, ellipsis: true,
       filteredValue: columnFilters.calibration_unit ? columnFilters.calibration_unit.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.calibration_unit,
-        columnFilters.calibration_unit,
-        (v) => setColumnFilter('calibration_unit', v),
-        '选择检定单位',
-      ),
+      filterDropdown: textFilter('calibration_unit', '检定单位'),
       onFilter: () => true,
     },
     {
       title: '检定结论', dataIndex: 'calibration_result', width: 80,
       filteredValue: columnFilters.calibration_result ? columnFilters.calibration_result.split(',') : null,
-      filterDropdown: renderFilterDropdown(
-        filterOptions.calibration_result,
-        columnFilters.calibration_result,
-        (v) => setColumnFilter('calibration_result', v),
-        '选择检定结论',
-      ),
+      filterDropdown: textFilter('calibration_result', '检定结论'),
       onFilter: () => true,
     },
     {
@@ -488,7 +403,7 @@ export function InstrumentTable() {
       title: '报告', dataIndex: 'report_count', width: 80,
       filteredValue: columnFilters.report_count ? columnFilters.report_count.split(',') : null,
       render: (v: number) => v > 0 ? <Tag color="blue">有</Tag> : <Tag>无</Tag>,
-      filterDropdown: ({ setSelectedKeys, selectedKeys, confirm }: FilterDropdownProps) => (
+      filterDropdown: ({ setSelectedKeys, selectedKeys }: FilterDropdownProps) => (
         <div style={{ padding: 8 }}>
           <Radio.Group
             value={selectedKeys[0]}
@@ -529,7 +444,7 @@ export function InstrumentTable() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <Space wrap>
           <Input
-            placeholder="搜索资产编号/名称/型号"
+            placeholder="搜索资产编号/名称/型号/制造商"
             prefix={<SearchOutlined />}
             value={inputValue}
             onChange={(e) => {
@@ -548,7 +463,9 @@ export function InstrumentTable() {
               serial_number: '器具编号', location: '地点', manufacturer: '制造商', status: '状态',
               calibration_unit: '检定单位', calibration_result: '检定结论', color_marking: '彩色标志',
             }
-            const values = value!.split(',').filter(Boolean)
+            // 仅部门/状态为逗号分隔的多选；文本列是自由输入，含逗号也不能拆
+            const key = INSTRUMENT_FILTER_KEY[field]
+            const values = (key === 'department' || key === 'status' ? value!.split(',') : [value!]).filter(Boolean)
             return values.map((v) => (
               <Tag
                 key={`${field}-${v}`}
@@ -578,9 +495,11 @@ export function InstrumentTable() {
           <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>新增器具</Button>
           <Button icon={<PlusOutlined />} onClick={() => setBatchCreateOpen(true)}>批量新增</Button>
           <Button icon={<UploadOutlined />} onClick={() => setBatchUploadOpen(true)}>批量上传报告</Button>
-          <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0} onClick={handleExportReports}>
-            批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
-          </Button>
+          <Popconfirm title={`确定导出选中的 ${selectedRowKeys.length} 份报告？`} onConfirm={handleExportReports}>
+            <Button icon={<DownloadOutlined />} loading={exporting} disabled={selectedRowKeys.length === 0}>
+              批量导出报告{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
+            </Button>
+          </Popconfirm>
           <Button
             danger
             icon={<DeleteOutlined />}
@@ -594,7 +513,9 @@ export function InstrumentTable() {
               {selectAllAcrossPages ? `取消全选 (${selectedRowKeys.length})` : `全选所有 ${total} 条`}
             </Button>
           )}
-          <Button icon={<FileExcelOutlined />} loading={exportingExcel} onClick={handleExportExcel}>导出Excel</Button>
+          <Popconfirm title="确定导出当前筛选结果？" onConfirm={handleExportExcel}>
+            <Button icon={<FileExcelOutlined />} loading={exportingExcel}>导出Excel</Button>
+          </Popconfirm>
           <Button icon={<ImportOutlined />} onClick={() => setImportModalOpen(true)}>导入台账</Button>
           <BatchCreateModal open={batchCreateOpen} onClose={() => setBatchCreateOpen(false)} source="instrument" />
         </Space>

@@ -144,6 +144,18 @@ class InstrumentFilter(PageParams):
     calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索（匹配资产编号、器具名称、型号）")
     has_report: bool | None = Field(default=None, description="是否有检测报告（True=有, False=无, None=不限）")
+    # ── 文本列部分匹配（输入即过滤） ──
+    asset_number_like: str | None = Field(default=None, max_length=100, description="资产编号（包含匹配）")
+    instrument_name_like: str | None = Field(default=None, max_length=200, description="器具名称（包含匹配）")
+    model_spec_like: str | None = Field(default=None, max_length=200, description="型号规格（包含匹配）")
+    measurement_range_like: str | None = Field(default=None, max_length=100, description="测量范围（包含匹配）")
+    accuracy_grade_like: str | None = Field(default=None, max_length=50, description="精度等级（包含匹配）")
+    serial_number_like: str | None = Field(default=None, max_length=100, description="器具编号（包含匹配）")
+    location_like: str | None = Field(default=None, max_length=100, description="使用地点（包含匹配）")
+    manufacturer_like: str | None = Field(default=None, max_length=100, description="制造商（包含匹配）")
+    calibration_unit_like: str | None = Field(default=None, max_length=100, description="检定单位（包含匹配）")
+    calibration_result_like: str | None = Field(default=None, max_length=50, description="检定结论（包含匹配）")
+    color_marking_like: str | None = Field(default=None, max_length=50, description="彩色标志（包含匹配）")
 
 
 # ═══════════════════════════════════════════

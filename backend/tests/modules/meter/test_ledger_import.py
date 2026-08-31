@@ -45,3 +45,21 @@ def test_no_required_fields_imports_all():
     )
     # 不传 required_fields 时保持旧行为：全部导入
     assert len(mapped) == 2
+
+
+def test_unmatched_headers_warned():
+    """表头完全匹配不上时跳过该 sheet 并记一条警告，用户可感知。"""
+    sheet = {
+        "name": "测试部门",
+        "dept": "测试部门",
+        "headers": ["其他列A", "其他列B"],
+        "rows": [["x", "y"]],
+    }
+    mapped, warnings, _skipped = _map_and_convert_rows(
+        [sheet], COLUMN_MAP, use_sheet_name_as_dept=True,
+    )
+    assert mapped == []
+    assert len(warnings) == 1
+    assert "表头列名无法匹配" in warnings[0]["message"]
+    assert warnings[0]["sheet"] == "测试部门"
+    assert "row" not in warnings[0]

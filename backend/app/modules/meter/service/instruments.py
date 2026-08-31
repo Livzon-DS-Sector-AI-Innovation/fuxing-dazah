@@ -18,6 +18,27 @@ from app.modules.meter.schemas import (
 from app.modules.meter.service.common import _auto_calc_next_calibration_date
 
 
+def _instrument_like_filters(filters: InstrumentFilter) -> dict[str, str]:
+    """从筛选对象提取「文本列部分匹配」参数，供 repo 转成 ILIKE 查询。"""
+    return {
+        k: v
+        for k, v in {
+            "asset_number": filters.asset_number_like,
+            "instrument_name": filters.instrument_name_like,
+            "model_spec": filters.model_spec_like,
+            "measurement_range": filters.measurement_range_like,
+            "accuracy_grade": filters.accuracy_grade_like,
+            "serial_number": filters.serial_number_like,
+            "location": filters.location_like,
+            "manufacturer": filters.manufacturer_like,
+            "calibration_unit": filters.calibration_unit_like,
+            "calibration_result": filters.calibration_result_like,
+            "color_marking": filters.color_marking_like,
+        }.items()
+        if v
+    }
+
+
 async def create_instrument(
     db: AsyncSession, data: InstrumentCreate
 ) -> InstrumentRecord:
@@ -123,6 +144,7 @@ async def list_instruments(
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
         has_report=filters.has_report,
+        like_filters=_instrument_like_filters(filters),
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -197,11 +219,19 @@ async def get_all_instrument_ids(
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
         has_report=filters.has_report,
+        like_filters=_instrument_like_filters(filters),
     )
 
 
 async def get_instrument_departments(db: AsyncSession) -> list[str]:
     return await repo.get_instrument_departments(db)
+
+
+async def search_instrument_filter_options(
+    db: AsyncSession, *, field: str, q: str | None = None, limit: int = 50
+) -> dict[str, Any]:
+    """按字段 + 关键字搜索筛选项（typeahead）。"""
+    return await repo.search_instrument_filter_options(db, field=field, q=q, limit=limit)
 
 
 # ═══════════════════════════════════════════

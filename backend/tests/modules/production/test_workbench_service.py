@@ -210,7 +210,7 @@ class TestReceiveAndStart:
         await assignment_service.create_stage_assignment(
             db_session,
             user_id=user.id,
-            stage_name="发酵",
+            stage_name="提炼",
             route_id=route_id,
             created_by=user.id,
         )
@@ -515,7 +515,9 @@ class TestBatchOwnerIsolation:
         from app.modules.production.schemas import DeriveIn
 
         route_id = published_route["route"].id
+        # 发酵工段用于执行 node_a，提炼工段用于边界接收（新规则：接收工段负责人）
         user_up = await self._make_owner(db_session, "OWN-UP", route_id, "发酵")
+        await self._make_owner(db_session, "OWN-UP", route_id, "提炼")
         parent = await self._make_batch(db_session, published_route)
         ex = await execution_service.start_execution(
             db_session, parent.id,

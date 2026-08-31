@@ -162,6 +162,25 @@ class TestDateStats:
         )
         assert stats["years"][0]["year"] == 2026
 
+    async def test_instrument_date_stats_honors_like_filters(self, db_session: AsyncSession) -> None:
+        """文本列 _like 部分匹配应参与日期统计（与列表口径一致）。"""
+        from app.modules.meter.schemas import InstrumentFilter
+
+        dept = f"TEST-DSL-{uuid4().hex[:8]}"
+        await create_instrument(
+            db_session, department=dept, manufacturer="上岭仪表A", calibration_date=date(2026, 2, 1)
+        )
+        await create_instrument(
+            db_session, department=dept, manufacturer="其他厂商", calibration_date=date(2026, 3, 1)
+        )
+        stats = await service.get_instrument_date_stats(
+            db_session, InstrumentFilter(department=dept, manufacturer_like="上岭"), "calibration_date"
+        )
+        years = stats["years"]
+        assert [y["year"] for y in years] == [2026]
+        assert years[0]["months"][0]["month"] == 2
+        assert years[0]["count"] == 1
+
 
 class TestBuildDateStatsTree:
     def test_empty_rows(self) -> None:

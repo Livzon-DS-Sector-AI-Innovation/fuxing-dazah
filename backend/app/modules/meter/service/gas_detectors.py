@@ -17,6 +17,28 @@ from app.modules.meter.schemas import (
 )
 
 
+def _gas_detector_like_filters(filters: GasDetectorFilter) -> dict[str, str]:
+    """从筛选对象提取「文本列部分匹配」参数，供 repo 转成 ILIKE 查询。"""
+    return {
+        k: v
+        for k, v in {
+            "instrument_name": filters.instrument_name_like,
+            "detection_model": filters.detection_model_like,
+            "product_number": filters.product_number_like,
+            "measurement_range": filters.measurement_range_like,
+            "installation_type": filters.installation_type_like,
+            "installation_location": filters.installation_location_like,
+            "medium": filters.medium_like,
+            "calibration_factor": filters.calibration_factor_like,
+            "manufacturer_supplier": filters.manufacturer_supplier_like,
+            "manufacturer": filters.manufacturer_like,
+            "detection_unit": filters.detection_unit_like,
+            "calibration_result": filters.calibration_result_like,
+        }.items()
+        if v
+    }
+
+
 async def batch_create_gas_detectors(
     db: AsyncSession, items: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -104,6 +126,7 @@ async def list_gas_detectors(
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
         has_report=filters.has_report,
+        like_filters=_gas_detector_like_filters(filters),
         page=filters.page,
         page_size=filters.page_size,
     )
@@ -173,11 +196,19 @@ async def get_all_gas_detector_ids(
         calibration_date_after=filters.calibration_date_after,
         keyword=filters.keyword,
         has_report=filters.has_report,
+        like_filters=_gas_detector_like_filters(filters),
     )
 
 
 async def get_gas_detector_departments(db: AsyncSession) -> list[str]:
     return await repo.get_gas_detector_departments(db)
+
+
+async def search_gas_detector_filter_options(
+    db: AsyncSession, *, field: str, q: str | None = None, limit: int = 50
+) -> dict[str, Any]:
+    """按字段 + 关键字搜索筛选项（typeahead）。"""
+    return await repo.search_gas_detector_filter_options(db, field=field, q=q, limit=limit)
 
 
 async def get_gas_detector_filter_options(db: AsyncSession) -> dict[str, list[str]]:

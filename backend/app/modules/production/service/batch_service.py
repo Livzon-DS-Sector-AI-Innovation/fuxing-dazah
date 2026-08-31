@@ -4,7 +4,12 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch, BatchLink
 from app.modules.production.schemas import (
@@ -19,7 +24,6 @@ from app.modules.production.schemas import (
 from app.modules.production.service.assignment_service import (
     require_batch_owner_access,
     require_operator_access,
-    require_stage_permission,
 )
 from app.modules.production.service.computed_service import expand_computed_fields
 from app.modules.production.service.execution_service import (
@@ -37,20 +41,25 @@ async def _check_boundary_stage_permission(
     edge_id: uuid.UUID,
     route_id: uuid.UUID,
 ) -> None:
-    """校验用户对边界边起点工段的操作权限。
+    """校验用户对边界边接收工段（终点工序）的操作权限。
 
-    边界边的 from_node 即父批次最后完成的工序节点，
-    只有该工段或该节点的负责人才能从此边界派生/合并子批次。
+    边界边的 to_node 即子批次接收工段的首个工序，
+    只有该工段或该节点的负责人才有权从此边界派生/合并子批次，
+    与工作台 pending_receive 的显示口径一致（共享认领池）。
     使用 repository 层查询而非原始 select，保持架构一致性。
     """
     edge = await repo.get_edge(db, edge_id)
     if not edge:
         return
-    nodes = await repo.get_nodes_by_ids(db, [edge.from_node_id])
-    from_node = nodes[0] if nodes else None
-    if from_node and from_node.stage_name:
-        await require_stage_permission(
-            db, user.id, from_node.id, route_id, from_node.stage_name,
+    nodes = await repo.get_nodes_by_ids(db, [edge.to_node_id])
+    to_node = nodes[0] if nodes else None
+    if to_node is None:
+        # 接收节点已被删除（路线重发布后残留边）：不放行，防止绕过工段权限
+        raise ForbiddenException("接收工段不存在，无权操作")
+    # 历史图豁免：接收工段未分组时跳过（与旧 from_node 豁免同语义）
+    if to_node.stage_name:
+        await require_operator_access(
+            db, user.id, to_node.id, route_id, to_node.stage_name, batch=None,
         )
 
 

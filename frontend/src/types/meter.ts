@@ -115,6 +115,18 @@ export interface InstrumentFilter {
   has_report?: boolean
   page?: number
   page_size?: number
+  // ── 文本列部分匹配（输入即过滤） ──
+  asset_number_like?: string
+  instrument_name_like?: string
+  model_spec_like?: string
+  measurement_range_like?: string
+  accuracy_grade_like?: string
+  serial_number_like?: string
+  location_like?: string
+  manufacturer_like?: string
+  calibration_unit_like?: string
+  calibration_result_like?: string
+  color_marking_like?: string
 }
 
 // ── 有毒有害可燃探测器 ──
@@ -211,6 +223,25 @@ export interface GasDetectorFilter {
   has_report?: boolean
   page?: number
   page_size?: number
+  // ── 文本列部分匹配（输入即过滤） ──
+  instrument_name_like?: string
+  detection_model_like?: string
+  product_number_like?: string
+  measurement_range_like?: string
+  installation_type_like?: string
+  installation_location_like?: string
+  medium_like?: string
+  calibration_factor_like?: string
+  manufacturer_supplier_like?: string
+  manufacturer_like?: string
+  detection_unit_like?: string
+  calibration_result_like?: string
+}
+
+/** 筛选项 typeahead 检索结果 */
+export interface FilterTypeaheadResult {
+  items: string[]
+  total: number
 }
 
 // ── 检测报告 ──

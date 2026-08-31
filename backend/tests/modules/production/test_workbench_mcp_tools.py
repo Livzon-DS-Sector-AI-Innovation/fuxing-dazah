@@ -207,11 +207,11 @@ class TestWorkbenchMcpTools:
     ) -> None:
         """分裂接收成功：创建子批次，返回状态表。
 
-        边界接收的工段权限校验在 service 内（边界边起点工段负责人），
+        边界接收的工段权限校验在 service 内（边界边终点工段负责人），
         与 test_workbench_service.py 的 receive 用例同口径。
         """
         route_id = published_route["route"].id
-        user = await _make_stage_owner(db_session, "RCV-OWN", route_id, "发酵")
+        user = await _make_stage_owner(db_session, "RCV-OWN", route_id, "提炼")
         batch = await _make_batch(db_session, published_route)
         await _complete_node_a(db_session, batch, published_route)
         child_no = f"{batch.batch_no}-T1"

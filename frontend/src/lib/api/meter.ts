@@ -20,6 +20,7 @@ import {
   ExtractDateResponse,
   InstrumentFilterOptions,
   GasDetectorFilterOptions,
+  FilterTypeaheadResult,
   MeterOverview,
   BatchCreateItem,
   BatchCreateResult,
@@ -43,6 +44,43 @@ const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_
  *  不再硬编码 localhost:8000 —— standalone 部署时会把请求打到每个用户的本机。 */
 const CLIENT_API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 const BASE = '/api/v1/meter'
+
+/** 把标准计量器具的「文本列部分匹配」参数写入 URLSearchParams。 */
+export function setInstrumentLike(sp: URLSearchParams, p: InstrumentFilter) {
+  const map: Record<string, string | undefined> = {
+    asset_number_like: p.asset_number_like,
+    instrument_name_like: p.instrument_name_like,
+    model_spec_like: p.model_spec_like,
+    measurement_range_like: p.measurement_range_like,
+    accuracy_grade_like: p.accuracy_grade_like,
+    serial_number_like: p.serial_number_like,
+    location_like: p.location_like,
+    manufacturer_like: p.manufacturer_like,
+    calibration_unit_like: p.calibration_unit_like,
+    calibration_result_like: p.calibration_result_like,
+    color_marking_like: p.color_marking_like,
+  }
+  for (const [k, v] of Object.entries(map)) if (v) sp.set(k, v)
+}
+
+/** 把探测器的「文本列部分匹配」参数写入 URLSearchParams。 */
+export function setGasDetectorLike(sp: URLSearchParams, p: GasDetectorFilter) {
+  const map: Record<string, string | undefined> = {
+    instrument_name_like: p.instrument_name_like,
+    detection_model_like: p.detection_model_like,
+    product_number_like: p.product_number_like,
+    measurement_range_like: p.measurement_range_like,
+    installation_type_like: p.installation_type_like,
+    installation_location_like: p.installation_location_like,
+    medium_like: p.medium_like,
+    calibration_factor_like: p.calibration_factor_like,
+    manufacturer_supplier_like: p.manufacturer_supplier_like,
+    manufacturer_like: p.manufacturer_like,
+    detection_unit_like: p.detection_unit_like,
+    calibration_result_like: p.calibration_result_like,
+  }
+  for (const [k, v] of Object.entries(map)) if (v) sp.set(k, v)
+}
 
 // ═══════════════════════════════════════════
 // 标准计量器具
@@ -73,6 +111,7 @@ export async function fetchInstruments(
   if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
+  setInstrumentLike(sp, params)
   const qs = sp.toString()
   return apiFetchPaginated<InstrumentRecord>(`${SERVER_API}${BASE}/instruments${qs ? `?${qs}` : ''}`)
 }
@@ -102,6 +141,7 @@ export async function fetchInstrumentsClient(
   if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
+  setInstrumentLike(sp, params)
   const qs = sp.toString()
   return apiFetchPaginated<InstrumentRecord>(`${CLIENT_API}${BASE}/instruments${qs ? `?${qs}` : ''}`)
 }
@@ -146,6 +186,7 @@ export async function fetchInstrumentIds(params: InstrumentFilter = {}): Promise
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  setInstrumentLike(sp, params)
   return apiGet<string[]>(`${SERVER_API}${BASE}/instruments/ids?${sp.toString()}`)
 }
 
@@ -183,6 +224,7 @@ export async function fetchGasDetectors(
   if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
+  setGasDetectorLike(sp, params)
   const qs = sp.toString()
   return apiFetchPaginated<GasDetectorRecord>(`${SERVER_API}${BASE}/gas-detectors${qs ? `?${qs}` : ''}`)
 }
@@ -213,6 +255,7 @@ export async function fetchGasDetectorsClient(
   if (params.has_report !== undefined) sp.set('has_report', String(params.has_report))
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
+  setGasDetectorLike(sp, params)
   const qs = sp.toString()
   return apiFetchPaginated<GasDetectorRecord>(`${CLIENT_API}${BASE}/gas-detectors${qs ? `?${qs}` : ''}`)
 }
@@ -258,6 +301,7 @@ export async function fetchGasDetectorIds(params: GasDetectorFilter = {}): Promi
   if (params.calibration_date_before) sp.set('calibration_date_before', params.calibration_date_before)
   if (params.calibration_date_after) sp.set('calibration_date_after', params.calibration_date_after)
   if (params.keyword) sp.set('keyword', params.keyword)
+  setGasDetectorLike(sp, params)
   return apiGet<string[]>(`${SERVER_API}${BASE}/gas-detectors/ids?${sp.toString()}`)
 }
 
@@ -382,6 +426,28 @@ export async function fetchGasDetectorFilterOptions(): Promise<GasDetectorFilter
   return apiGet<GasDetectorFilterOptions>(`${SERVER_API}${BASE}/gas-detectors/filter-options`)
 }
 
+/** 按字段 + 关键字搜索标准计量器具筛选项（typeahead）。 */
+export async function fetchInstrumentTypeahead(
+  field: string,
+  q?: string,
+  limit = 50,
+): Promise<FilterTypeaheadResult> {
+  const sp = new URLSearchParams({ field, limit: String(limit) })
+  if (q) sp.set('q', q)
+  return apiGet<FilterTypeaheadResult>(`${SERVER_API}${BASE}/instruments/filter-options/search?${sp.toString()}`)
+}
+
+/** 按字段 + 关键字搜索探测器筛选项（typeahead）。 */
+export async function fetchGasDetectorTypeahead(
+  field: string,
+  q?: string,
+  limit = 50,
+): Promise<FilterTypeaheadResult> {
+  const sp = new URLSearchParams({ field, limit: String(limit) })
+  if (q) sp.set('q', q)
+  return apiGet<FilterTypeaheadResult>(`${SERVER_API}${BASE}/gas-detectors/filter-options/search?${sp.toString()}`)
+}
+
 
 // ── 日期聚合统计 ──
 
@@ -405,6 +471,7 @@ export async function fetchInstrumentDateStats(
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.color_marking) sp.set('color_marking', params.color_marking)
   if (params.keyword) sp.set('keyword', params.keyword)
+  setInstrumentLike(sp, params)
   const qs = sp.toString()
   return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/instruments/date-stats?${qs}`)
 }
@@ -430,6 +497,7 @@ export async function fetchGasDetectorDateStats(
   if (params.detection_unit) sp.set('detection_unit', params.detection_unit)
   if (params.calibration_result) sp.set('calibration_result', params.calibration_result)
   if (params.keyword) sp.set('keyword', params.keyword)
+  setGasDetectorLike(sp, params)
   const qs = sp.toString()
   return apiGet<DateStatsResponse>(`${SERVER_API}${BASE}/gas-detectors/date-stats?${qs}`)
 }

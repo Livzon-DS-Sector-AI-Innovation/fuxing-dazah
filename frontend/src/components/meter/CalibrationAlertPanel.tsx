@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { App, Table, Tag, Select, Button } from 'antd'
+import { App, Table, Tag, Select, Button, Popconfirm } from 'antd'
 import { WarningOutlined, DownloadOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
 import { CalibrationAlertItem } from '@/types/meter'
@@ -144,13 +144,14 @@ export function CalibrationAlertPanel({ source }: Props) {
           options={departments.map(d => ({ label: d, value: d }))}
         />
         <Tag color="processing">{alerts.length} 条</Tag>
-        <Button
-          icon={<DownloadOutlined />}
-          loading={exporting}
-          onClick={handleExport}
-        >
-          导出 Excel
-        </Button>
+        <Popconfirm title="确定导出当前筛选结果？" onConfirm={handleExport}>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exporting}
+          >
+            导出 Excel
+          </Button>
+        </Popconfirm>
       </div>
 
       <Table

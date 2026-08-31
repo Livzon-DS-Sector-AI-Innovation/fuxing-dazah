@@ -137,7 +137,7 @@ export function LedgerImportModal({ open, source, onClose }: Props) {
               </Text>
               {result.warnings.slice(0, 20).map((w, i) => (
                 <div key={i} style={{ fontSize: 12, color: '#fa8c16', marginTop: 4, lineHeight: '18px' }}>
-                  [{w.sheet}] 第{w.row}行：{w.message}
+                  {w.sheet ? `[${w.sheet}] ` : ''}{w.row != null ? `第${w.row}行：` : ''}{w.message}
                 </div>
               ))}
               {result.warnings.length > 20 && (

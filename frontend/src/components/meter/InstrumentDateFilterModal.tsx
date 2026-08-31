@@ -89,6 +89,24 @@ function buildTreeData(
     .filter(Boolean) as TreeDataNode[]
 }
 
+/** 文本列在列表页走 `*_like` 部分匹配，统计/导出也必须用同一口径（后端 date-stats/export 已支持 _like）。 */
+const TEXT_LIKE_FIELDS = new Set([
+  'asset_number', 'instrument_name', 'model_spec', 'measurement_range',
+  'accuracy_grade', 'serial_number', 'location', 'manufacturer',
+  'calibration_unit', 'calibration_result', 'color_marking',
+])
+
+function buildStatsFilters(keyword: string, columnFilters: Record<string, string | undefined>): InstrumentFilter {
+  const filters: InstrumentFilter = {}
+  if (keyword) filters.keyword = keyword
+  for (const [field, value] of Object.entries(columnFilters)) {
+    if (!value) continue
+    const key = TEXT_LIKE_FIELDS.has(field) ? `${field}_like` : field
+    ;(filters as Record<string, unknown>)[key] = value
+  }
+  return filters
+}
+
 export function InstrumentDateFilterModal({ open, initialField, columnFilters, keyword, onClose, onConfirm }: Props) {
   const { message } = App.useApp()
   const [dateField, setDateField] = useState<'calibration_date' | 'next_calibration_date'>(initialField)
@@ -108,11 +126,7 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
       setCheckedKeys([])
       setSearchText('')
       setLoading(true)
-    const filters: InstrumentFilter = {}
-    if (keyword) filters.keyword = keyword
-    for (const [field, value] of Object.entries(columnFilters)) {
-      if (value) (filters as Record<string, unknown>)[field] = value
-    }
+    const filters = buildStatsFilters(keyword, columnFilters)
     fetchInstrumentDateStats(initialField, filters)
       .then((res) => setStats(res))
       .catch(() => message.error('获取日期统计失败'))
@@ -127,11 +141,7 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
       setDateField(val)
       setCheckedKeys([])
       setLoading(true)
-      const filters: InstrumentFilter = {}
-      if (keyword) filters.keyword = keyword
-      for (const [field, value] of Object.entries(columnFilters)) {
-        if (value) (filters as Record<string, unknown>)[field] = value
-      }
+      const filters = buildStatsFilters(keyword, columnFilters)
       fetchInstrumentDateStats(val, filters)
         .then((res) => setStats(res))
         .catch(() => message.error('获取日期统计失败'))
@@ -158,23 +168,6 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
     }
     return keys
   }, [stats])
-
-  // 当前可见的叶子节点 key（受搜索过滤影响）
-  const visibleLeafKeys = useMemo(() => {
-    const keys: React.Key[] = []
-    for (const node of treeData) {
-      if (node.children) {
-        for (const monthNode of node.children) {
-          if (monthNode.children) {
-            for (const dayNode of monthNode.children) {
-              if (dayNode.isLeaf) keys.push(dayNode.key)
-            }
-          }
-        }
-      }
-    }
-    return keys
-  }, [treeData])
 
   const totalCount = stats?.years?.reduce((sum, y) => sum + y.count, 0) || 0
 
@@ -226,11 +219,7 @@ export function InstrumentDateFilterModal({ open, initialField, columnFilters, k
 
     setExporting(true)
     try {
-      const filterParams: InstrumentFilter = {}
-      if (keyword) filterParams.keyword = keyword
-      for (const [field, value] of Object.entries(columnFilters)) {
-        if (value) (filterParams as Record<string, unknown>)[field] = value
-      }
+      const filterParams = buildStatsFilters(keyword, columnFilters)
       if (after && dateField === 'calibration_date') {
         filterParams.calibration_date_after = after
         filterParams.calibration_date_before = before

@@ -84,6 +84,24 @@ function buildTreeData(
     .filter(Boolean) as TreeDataNode[]
 }
 
+/** 文本列在列表页走 `*_like` 部分匹配，统计/导出也必须用同一口径（后端 date-stats/export 已支持 _like）。 */
+const TEXT_LIKE_FIELDS = new Set([
+  'instrument_name', 'detection_model', 'product_number', 'measurement_range',
+  'installation_type', 'installation_location', 'medium', 'calibration_factor',
+  'manufacturer_supplier', 'manufacturer', 'detection_unit', 'calibration_result',
+])
+
+function buildStatsFilters(keyword: string, columnFilters: Record<string, string | undefined>): GasDetectorFilter {
+  const filters: GasDetectorFilter = {}
+  if (keyword) filters.keyword = keyword
+  for (const [field, value] of Object.entries(columnFilters)) {
+    if (!value) continue
+    const key = TEXT_LIKE_FIELDS.has(field) ? `${field}_like` : field
+    ;(filters as Record<string, unknown>)[key] = value
+  }
+  return filters
+}
+
 export function GasDetectorDateFilterModal({ open, initialField, columnFilters, keyword, onClose, onConfirm }: Props) {
   const { message } = App.useApp()
   const [dateField, setDateField] = useState<'calibration_date' | 'next_calibration_date'>(initialField)
@@ -102,11 +120,7 @@ export function GasDetectorDateFilterModal({ open, initialField, columnFilters, 
       setCheckedKeys([])
       setSearchText('')
       setLoading(true)
-    const filters: GasDetectorFilter = {}
-    if (keyword) filters.keyword = keyword
-    for (const [field, value] of Object.entries(columnFilters)) {
-      if (value) (filters as Record<string, unknown>)[field] = value
-    }
+    const filters = buildStatsFilters(keyword, columnFilters)
     fetchGasDetectorDateStats(initialField, filters)
       .then((res) => setStats(res))
       .catch(() => message.error('获取日期统计失败'))
@@ -120,11 +134,7 @@ export function GasDetectorDateFilterModal({ open, initialField, columnFilters, 
       setDateField(val)
       setCheckedKeys([])
       setLoading(true)
-      const filters: GasDetectorFilter = {}
-      if (keyword) filters.keyword = keyword
-      for (const [field, value] of Object.entries(columnFilters)) {
-        if (value) (filters as Record<string, unknown>)[field] = value
-      }
+      const filters = buildStatsFilters(keyword, columnFilters)
       fetchGasDetectorDateStats(val, filters)
         .then((res) => setStats(res))
         .catch(() => message.error('获取日期统计失败'))
@@ -199,11 +209,7 @@ export function GasDetectorDateFilterModal({ open, initialField, columnFilters, 
 
     setExporting(true)
     try {
-      const filterParams: GasDetectorFilter = {}
-      if (keyword) filterParams.keyword = keyword
-      for (const [field, value] of Object.entries(columnFilters)) {
-        if (value) (filterParams as Record<string, unknown>)[field] = value
-      }
+      const filterParams = buildStatsFilters(keyword, columnFilters)
       if (after && dateField === 'calibration_date') {
         filterParams.calibration_date_after = after
         filterParams.calibration_date_before = before

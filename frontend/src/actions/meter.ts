@@ -12,6 +12,7 @@ import {
   fetchInstrumentIds as apiFetchInstrumentIds,
   fetchInstrumentDepartments,
   fetchInstrumentFilterOptions,
+  fetchInstrumentTypeahead,
   fetchGasDetectors,
   fetchGasDetectorById,
   createGasDetector as apiCreateGasDetector,
@@ -21,6 +22,7 @@ import {
   fetchGasDetectorIds as apiFetchGasDetectorIds,
   fetchGasDetectorDepartments,
   fetchGasDetectorFilterOptions,
+  fetchGasDetectorTypeahead,
   fetchMeterOverview,
   fetchCalibrationAlerts,
   fetchReports,
@@ -39,6 +41,8 @@ import {
   toggleDepartmentAutoNotify as apiToggleDepartmentAutoNotify,
   fetchMeterSettings,
   updateMeterSettings as apiUpdateMeterSettings,
+  setInstrumentLike,
+  setGasDetectorLike,
 } from '@/lib/api/meter'
 import {
   InstrumentCreate,
@@ -147,6 +151,14 @@ export async function getInstrumentFilterOptions() {
 
 export async function getGasDetectorFilterOptions() {
   return fetchGasDetectorFilterOptions()
+}
+
+export async function searchInstrumentTypeahead(field: string, q?: string, limit = 50) {
+  return fetchInstrumentTypeahead(field, q, limit)
+}
+
+export async function searchGasDetectorTypeahead(field: string, q?: string, limit = 50) {
+  return fetchGasDetectorTypeahead(field, q, limit)
 }
 
 // ═══════════════════════════════════════════
@@ -299,6 +311,7 @@ export async function exportInstrumentsExcel(filters: InstrumentFilter = {}): Pr
   if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
   if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
+  setInstrumentLike(sp, filters)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())
   const res = await fetch(`${process.env.API_BASE_URL}/api/v1/meter/instruments/export-excel?${sp.toString()}`, {
@@ -331,6 +344,7 @@ export async function exportGasDetectorsExcel(filters: GasDetectorFilter = {}): 
   if (filters.calibration_date_before) sp.set('calibration_date_before', filters.calibration_date_before)
   if (filters.calibration_date_after) sp.set('calibration_date_after', filters.calibration_date_after)
   if (filters.keyword) sp.set('keyword', filters.keyword)
+  setGasDetectorLike(sp, filters)
 
   const token = await import('@/lib/auth').then(m => m.getServerToken())
   const res = await fetch(`${process.env.API_BASE_URL}/api/v1/meter/gas-detectors/export-excel?${sp.toString()}`, {
