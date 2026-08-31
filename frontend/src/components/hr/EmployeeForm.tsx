@@ -96,15 +96,15 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
 
   const departmentOptions = departments.map((d) => ({ value: d.name, label: d.name }))
 
-  const commonInput = (name: string, label: string, required?: boolean, rest?: any) => (
+  const commonInput = (name: string, label: string, required?: boolean, rest?: any, disabled = false) => (
     <Form.Item name={name} label={label} rules={required ? [{ required: true, message: `请输入${label}` }] : undefined} {...rest}>
-      <Input placeholder={`请输入${label}`} autoComplete="off" />
+      <Input placeholder={`请输入${label}`} autoComplete="off" disabled={disabled} />
     </Form.Item>
   )
 
-  const commonSelect = (name: string, label: string, options: { value: string; label: string }[], required?: boolean, showSearch?: boolean) => (
+  const commonSelect = (name: string, label: string, options: { value: string; label: string }[], required?: boolean, showSearch?: boolean, disabled = false) => (
     <Form.Item name={name} label={label} rules={required ? [{ required: true, message: `请选择${label}` }] : undefined}>
-      <Select placeholder={`请选择${label}`} allowClear showSearch={showSearch} options={options}
+      <Select placeholder={`请选择${label}`} allowClear showSearch={showSearch} disabled={disabled} options={options}
         filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
     </Form.Item>
   )
@@ -129,8 +129,8 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
         <Tabs defaultActiveKey="basic" items={[
           { key: 'basic', label: '基本信息', children: (
             <div className="grid grid-cols-3 gap-4">
-              {commonInput('employee_number', '工号', true)}
-              {commonInput('name', '姓名', true)}
+              {commonInput('employee_number', '工号', true, undefined, isEdit)}
+              {commonInput('name', '姓名', true, undefined, isEdit)}
               {commonInput('domain_account', '域账号')}
               {commonSelect('department', '体现部门', departmentOptions, true)}
               {commonInput('team', '班组')}
@@ -167,7 +167,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               ])}
               {commonSelect('gender', '性别', [
                 { value: '男', label: '男' }, { value: '女', label: '女' },
-              ])}
+              ], undefined, undefined, isEdit)}
               {commonSelect('status', '状态', [
                 { value: '在职', label: '在职' }, { value: '试用期', label: '试用期' },
                 { value: '离职', label: '离职' }, { value: '待审批', label: '待审批' },
@@ -205,7 +205,7 @@ export default function EmployeeForm({ open, employee, onClose, onSuccess }: Emp
               <Form.Item name="birth_day" label="出生日期">
                 <Input type="number" placeholder="如: 15" />
               </Form.Item>
-              {commonInput('id_card', '身份证号')}
+              {commonInput('id_card', '身份证号', undefined, undefined, isEdit)}
               {commonInput('id_card_expiry', '身份证到期日')}
             </div>
           )},

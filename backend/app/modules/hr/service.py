@@ -696,12 +696,10 @@ class EmployeeService:
         employee = await self.get_employee(employee_id)
         update_data = data.model_dump(exclude_unset=True)
 
-        if "employee_number" in update_data:
-            existing = await self.repo.get_by_employee_number(
-                update_data["employee_number"], include_deleted=True
-            )
-            if existing and existing.id != employee_id:
-                raise DuplicateException("工号", update_data["employee_number"])
+        # 工号/姓名/性别/身份证号为身份标识字段，仅创建时允许填写；
+        # 更新接口直接忽略（前端已禁用输入，此处防止绕过界面直接调 API 修改）
+        for protected in ("employee_number", "name", "gender", "id_card"):
+            update_data.pop(protected, None)
 
         for field, value in update_data.items():
             setattr(employee, field, value)
