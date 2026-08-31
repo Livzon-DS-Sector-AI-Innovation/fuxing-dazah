@@ -242,8 +242,11 @@ async def _handle_apply_action(
 ) -> None:
     if act == EVENT_ADDED:
         await service.sync_apply_record_added(activity_id, record_id, fields)
+        # 事件实时转存证据图片（签名链接有效期内转存，内网展示不再过期）
+        await service.refresh_record_images(activity_id, record_id, fields)
     elif act == EVENT_EDITED:
         await service.sync_apply_record_edited(activity_id, record_id, fields)
+        await service.refresh_record_images(activity_id, record_id, fields)
     elif act == EVENT_DELETED:
         await service.sync_apply_record_deleted(activity_id, record_id)
 

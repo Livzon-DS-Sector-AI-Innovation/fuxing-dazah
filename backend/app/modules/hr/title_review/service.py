@@ -2231,6 +2231,40 @@ class TitleReviewService:
             pending.append((code, fields))
         return pending, skipped
 
+    async def refresh_record_images(
+        self, activity_id: UUID, record_id: str, fields: dict[str, Any]
+    ) -> bool:
+        """事件路径实时图片转存：申报行新增/编辑后立即把证据图片下载转存本地。
+
+        在飞书签名链接有效期内完成转存，内网展示走本地文件不再过期；
+        对账兜底（_refresh_image_urls）保留，处理事件丢失的场景。
+        """
+        from app.modules.hr.title_review import bitable_client as bc
+
+        activity = await self.get_activity(activity_id)
+        if not (activity.feishu_app_token and activity.apply_table_id):
+            return False
+        update: dict[str, Any] = {}
+        for col in IMAGE_EVIDENCE_FIELDS:
+            text = _as_str(fields.get(col)) or ""
+            if not _cell_has_remote_url(text):
+                continue
+            local = await _image_text_to_local(text)
+            if local != text:
+                update[col] = local
+        if not update:
+            return False
+        try:
+            await bc.update_record(
+                activity.feishu_app_token, activity.apply_table_id,
+                record_id, update,
+            )
+            logger.info("事件实时图片转存: record=%s cols=%s", record_id, list(update))
+            return True
+        except bc.TitleReviewBitableError as exc:
+            logger.warning("事件实时图片转存写表失败: %s", exc)
+            return False
+
     async def _refresh_image_urls(
         self,
         activity: m.TitleReviewActivity,
