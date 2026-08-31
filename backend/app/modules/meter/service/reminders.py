@@ -14,6 +14,8 @@ from app.modules.meter.schemas import (
     InstrumentFilter,
     _normalize_department,
 )
+from app.modules.meter.service.gas_detectors import _gas_detector_like_filters
+from app.modules.meter.service.instruments import _instrument_like_filters
 
 
 async def get_calibration_alerts(
@@ -141,6 +143,7 @@ async def get_instrument_date_stats(
         calibration_result=filters.calibration_result,
         color_marking=filters.color_marking,
         keyword=filters.keyword,
+        like_filters=_instrument_like_filters(filters),
     )
     return {"field": field, "years": _build_date_stats_tree(rows)}
 
@@ -167,6 +170,7 @@ async def get_gas_detector_date_stats(
         manufacturer=filters.manufacturer,
         status=filters.status,
         keyword=filters.keyword,
+        like_filters=_gas_detector_like_filters(filters),
     )
     return {"field": field, "years": _build_date_stats_tree(rows)}
 

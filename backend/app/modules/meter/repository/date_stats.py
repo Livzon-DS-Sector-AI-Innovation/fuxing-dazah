@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import today as time_today
 from app.modules.meter.models import GasDetectorRecord, InstrumentRecord
-from app.modules.meter.repository._utils import _parse_multi
+from app.modules.meter.repository._utils import _escape_like, _parse_multi
 
 
 async def get_instrument_date_stats(
@@ -30,6 +30,7 @@ async def get_instrument_date_stats(
     calibration_result: str | None = None,
     color_marking: str | None = None,
     keyword: str | None = None,
+    like_filters: dict[str, str] | None = None,
 ) -> list[dict[str, int]]:
     """按日期字段的年/月/日三级聚合统计标准计量器具数量。
 
@@ -62,6 +63,12 @@ async def get_instrument_date_stats(
         if parts:
             col = getattr(InstrumentRecord, col_name)
             query = query.where(col.in_(parts))
+
+    # 文本列部分匹配（与 list_instruments 的 like_filters 同口径）
+    for col_name, text in (like_filters or {}).items():
+        if text:
+            col = getattr(InstrumentRecord, col_name)
+            query = query.where(col.ilike(f"%{_escape_like(text)}%"))
 
     if department:
         parts = _parse_multi(department)
@@ -139,6 +146,7 @@ async def get_gas_detector_date_stats(
     manufacturer: str | None = None,
     status: str | None = None,
     keyword: str | None = None,
+    like_filters: dict[str, str] | None = None,
 ) -> list[dict[str, int]]:
     """按日期字段的年/月/日三级聚合统计探测器数量。
 
@@ -171,6 +179,12 @@ async def get_gas_detector_date_stats(
         if parts:
             col = getattr(GasDetectorRecord, col_name)
             query = query.where(col.in_(parts))
+
+    # 文本列部分匹配（与 list_gas_detectors 的 like_filters 同口径）
+    for col_name, text in (like_filters or {}).items():
+        if text:
+            col = getattr(GasDetectorRecord, col_name)
+            query = query.where(col.ilike(f"%{_escape_like(text)}%"))
 
     if department:
         parts = _parse_multi(department)

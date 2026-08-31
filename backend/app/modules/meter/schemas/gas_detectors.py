@@ -145,6 +145,19 @@ class GasDetectorFilter(PageParams):
     calibration_date_after: date | None = Field(default=None, description="检定日期在此日期之后")
     keyword: str | None = Field(default=None, description="全局关键词搜索")
     has_report: bool | None = Field(default=None, description="是否有检测报告（True=有, False=无, None=不限）")
+    # ── 文本列部分匹配（输入即过滤） ──
+    instrument_name_like: str | None = Field(default=None, max_length=200, description="器具名称（包含匹配）")
+    detection_model_like: str | None = Field(default=None, max_length=200, description="检测型号（包含匹配）")
+    product_number_like: str | None = Field(default=None, max_length=100, description="产品编号（包含匹配）")
+    measurement_range_like: str | None = Field(default=None, max_length=100, description="量程（包含匹配）")
+    installation_type_like: str | None = Field(default=None, max_length=50, description="安装方式（包含匹配）")
+    installation_location_like: str | None = Field(default=None, max_length=200, description="安装位置（包含匹配）")
+    medium_like: str | None = Field(default=None, max_length=200, description="使用介质（包含匹配）")
+    calibration_factor_like: str | None = Field(default=None, max_length=100, description="标定系数（包含匹配）")
+    manufacturer_supplier_like: str | None = Field(default=None, max_length=200, description="制造商/供应商（包含匹配）")
+    manufacturer_like: str | None = Field(default=None, max_length=200, description="制造单位（包含匹配）")
+    detection_unit_like: str | None = Field(default=None, max_length=200, description="检测单位（包含匹配）")
+    calibration_result_like: str | None = Field(default=None, max_length=50, description="检定结论（包含匹配）")
 
 
 # ═══════════════════════════════════════════

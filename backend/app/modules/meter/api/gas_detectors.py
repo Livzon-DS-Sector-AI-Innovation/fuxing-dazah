@@ -95,11 +95,11 @@ async def import_gas_detector_ledger(
             status_code=400,
             content={"code": 400, "message": str(e)},
         )
-    except Exception as e:
+    except Exception:
         logger.exception("import_gas_detector_ledger failed")
         return JSONResponse(
             status_code=500,
-            content={"code": 500, "message": f"导入失败: {e}"},
+            content={"code": 500, "message": "导入失败，请检查文件格式是否正确"},
         )
 
     return success_response(
@@ -171,6 +171,19 @@ async def get_gas_detector_filter_options(
         options["department"] = [d for d in (_normalize_department(x) for x in options["department"]) if d is not None]
     return success_response(GasDetectorFilterOptions(**options).model_dump(mode="json"))
 
+
+@router.get("/gas-detectors/filter-options/search", summary="按字段搜索探测器筛选项（typeahead）")
+async def search_gas_detector_filter_options(
+    field: str = Query(..., description="字段名（白名单）"),
+    q: str | None = Query(default=None, max_length=200, description="搜索关键字，空则返回前 limit 个"),
+    limit: int = Query(default=50, ge=1, le=200, description="返回上限"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    try:
+        data = await service.search_gas_detector_filter_options(db, field=field, q=q, limit=limit)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"code": 400, "message": str(e)})
+    return success_response(data)
 
 
 @router.get("/gas-detectors/date-stats", summary="有毒有害可燃探测器日期聚合统计")

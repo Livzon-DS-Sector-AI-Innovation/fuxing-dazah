@@ -26,6 +26,7 @@ from app.modules.meter.service.gas_detectors import (
     get_gas_detector_departments,
     get_gas_detector_filter_options,
     list_gas_detectors,
+    search_gas_detector_filter_options,
     update_gas_detector,
 )
 from app.modules.meter.service.instruments import (
@@ -38,6 +39,7 @@ from app.modules.meter.service.instruments import (
     get_instrument_departments,
     get_instrument_filter_options,
     list_instruments,
+    search_instrument_filter_options,
     update_instrument,
 )
 from app.modules.meter.service.ledger_import import (
@@ -132,6 +134,8 @@ __all__ = [
     "list_instruments",
     "match_filenames",
     "match_one",
+    "search_gas_detector_filter_options",
+    "search_instrument_filter_options",
     "send_calibration_reminders",
     "update_department",
     "update_gas_detector",

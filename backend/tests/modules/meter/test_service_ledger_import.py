@@ -342,6 +342,55 @@ class TestImportInstrumentLedger:
         with pytest.raises(ValueError):
             await service.import_instrument_ledger(db_session, b"", "台账.doc")
 
+    async def test_unmatched_header_sheet_preserves_existing_records(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """表头无法匹配的 sheet 其旧记录不能被「文件未出现即软删除」清理误删。"""
+        from sqlalchemy import select as sa_select
+
+        from app.modules.meter.models import InstrumentRecord
+
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        marker = uuid4().hex[:8]
+        # 旧记录：一条属于表头正常的 sheet 部门，一条属于表头漂移的 sheet 部门
+        await create_instrument(
+            db_session, department=f"正常部门{marker}", asset_number=f"GOOD-{marker}"
+        )
+        bad = await create_instrument(
+            db_session, department=f"坏表头部门{marker}", asset_number=f"BAD-{marker}"
+        )
+        xlsx = build_xlsx(
+            [
+                {
+                    "name": f"正常部门{marker}",
+                    "rows": [
+                        [f"标准计量器具台账{marker}"],
+                        ["部门："],
+                        ["资产编号", "器具名称", "器具编号"],
+                        [f"GOOD-{marker}", "压力表", "SN-1"],
+                    ],
+                },
+                {
+                    "name": f"坏表头部门{marker}",
+                    "rows": [
+                        ["其他台账"],
+                        ["部门："],
+                        ["其他列A", "其他列B"],
+                        ["x", "y"],
+                    ],
+                },
+            ]
+        )
+        result = await service.import_instrument_ledger(db_session, xlsx, "台账.xlsx")
+        # 其他旧记录按「文件未出现」清理是导入语义本身，这里只关心坏表头 sheet 的旧记录不被误删
+        bad_row = (
+            await db_session.execute(
+                sa_select(InstrumentRecord).where(InstrumentRecord.id == bad.id)
+            )
+        ).scalar_one()
+        assert bad_row.is_deleted is False
+        assert any("表头列名无法匹配" in w.get("message", "") for w in result["warnings"])
+
     async def test_no_instrument_sheet_rejected(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -363,6 +412,16 @@ class TestImportInstrumentLedger:
         )
         with pytest.raises(ValueError):
             await service.import_instrument_ledger(db_session, xlsx, "台账.xlsx")
+
+    async def test_corrupted_xlsx_raises_parse_error(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """伪造的 .xlsx（内容不是 Excel）应抛携带解析原因的 ValueError。"""
+        monkeypatch.setattr(db_session, "commit", AsyncMock())
+        with pytest.raises(ValueError, match="无法打开文件"):
+            await service.import_instrument_ledger(
+                db_session, b"this is not a real excel file", "台账.xlsx"
+            )
 
 
 class TestImportGasDetectorLedger:

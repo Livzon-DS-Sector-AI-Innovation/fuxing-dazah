@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import Any
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.meter import repository as repo
@@ -20,6 +20,7 @@ from app.modules.meter.service.ledger_parsing import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 async def _upsert_ledger_rows(
     db: AsyncSession,
@@ -110,6 +111,9 @@ async def import_instrument_ledger(
 
     if parse_errors:
         logger.warning(f"Parse errors during file import: {parse_errors}")
+        if not sheets_data:
+            # 文件完全无法解析（如伪造扩展名）：把真实原因报给用户
+            raise ValueError(parse_errors[0])
 
     # 2. 过滤：跳过探测器 sheet
     instrument_sheets = []
@@ -128,6 +132,21 @@ async def import_instrument_ledger(
         instrument_sheets, INSTRUMENT_COLUMN_MAP, datemode, use_sheet_name_as_dept=True,
         required_fields=("instrument_name", "asset_number", "serial_number"),
     )
+
+    # 表头无法匹配的 sheet 提供不了 key，其旧记录会被「文件未出现即软删除」误删；
+    # 按部门兜底保留这些 sheet 的旧记录 key。
+    unmatched_depts = {
+        w["department"] for w in map_warnings
+        if w.get("department")
+    }
+    if unmatched_depts:
+        dept_key_rows = await db.execute(
+            select(InstrumentRecord.asset_number).where(
+                InstrumentRecord.is_deleted == False,  # noqa: E712
+                InstrumentRecord.department.in_(unmatched_depts),
+            )
+        )
+        skipped_keys |= {key for key in dept_key_rows.scalars() if key}
 
     if not mapped_rows:
         raise ValueError("文件中未找到有效的计量器具数据")
@@ -210,6 +229,9 @@ async def import_gas_detector_ledger(
 
     if parse_errors:
         logger.warning(f"Parse errors during detector import: {parse_errors}")
+        if not sheets_data:
+            # 文件完全无法解析（如伪造扩展名）：把真实原因报给用户
+            raise ValueError(parse_errors[0])
 
     # 2. 找到探测器 sheet
     detector_keywords = ["可燃", "有毒", "探测器", "气体检测"]
