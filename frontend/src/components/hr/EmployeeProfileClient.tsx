@@ -60,8 +60,9 @@ export default function EmployeeProfileClient({
         status: filterStatus || undefined,
         page,
         page_size: pageSize,
-        // 员工档案视角：未分类人员按实际部门归属展示
-        include_uncategorized: true,
+        // 仅「全部」tab 按实际部门归属并入未分类；具体部门 tab 不混入未分类
+        // （未分类人员有独立 tab）
+        include_uncategorized: activeDepartment === '',
       })
       if (seq !== seqRef.current) return // 过期响应丢弃，防止旧页数据覆盖新页
       setEmployees(res.data)
@@ -142,6 +143,8 @@ export default function EmployeeProfileClient({
     () => [
       { key: 'all', label: '全部', value: '' },
       ...departments.map((d) => ({ key: d.id, label: d.name, value: d.name })),
+      // 未分类人员独立版面（不与有体现部门的人员混排）
+      { key: 'uncategorized', label: '未分类', value: '未分类' },
     ],
     [departments]
   )

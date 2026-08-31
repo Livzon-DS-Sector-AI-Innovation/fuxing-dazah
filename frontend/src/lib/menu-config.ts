@@ -275,7 +275,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "dashboard", label: "📊 人事看板", path: "/hr/dashboard" },
       { key: "departments", label: "部门管理", path: "/hr/departments" },
       { key: "profile", label: "员工档案", path: "/hr/profile" },
-      { key: "recruitment", label: "招聘管理", path: "/hr/recruitment" },
+      { key: "recruitment", label: "招聘管理", path: "/hr/recruitment", permissions: ["hr:recruitment:read"] },
       { key: "onboarding", label: "入职台账", path: "/hr/onboarding" },
       { key: "departure", label: "离职台账", path: "/hr/departure" },
       {
