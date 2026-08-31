@@ -757,6 +757,10 @@ async def generate_record_materials(
     trainer = record.trainer
     initiator = (record.initiator_department or "").strip()
     if not initiator:
+        # 历史记录未填发起部门：兜底取第一个涉及部门作为主办部门
+        initiator = str(departments[0]).strip()
+        logger.warning("登记记录 %s 未配置发起部门，兜底使用涉及部门「%s」", record.id, initiator)
+    if not initiator:
         raise HTTPException(400, "该记录未配置发起部门（主办部门）")
 
     # ── 人员口径：主办部门全体在职员工 + 各涉及部门的一级培训师（去重）──
