@@ -806,7 +806,7 @@ async def generate_record_materials(
         ),
         {"dept": initiator},
     )).fetchall()
-    # 姓名 → 显示部门（培训师显式标注「部门·培训师」，与普通员工区分）
+    # 姓名 → 显示部门：主办部门员工显示主办部门，涉及部门培训师显示其实际部门
     name_depts: dict[str, str] = {r[0]: initiator for r in emp_rows}
     trainer_map: dict[str, str] = {}
     for dept in departments:
@@ -818,9 +818,8 @@ async def generate_record_materials(
     initiator_trainer = await _lookup_level1_trainer(session, initiator)
     lead_trainer = initiator_trainer or (sorted(trainer_map)[0] if trainer_map else (trainer or ""))
     for t, tdept in sorted(trainer_map.items()):
-        label = f"{t}（{tdept}·培训师）"
-        if label not in name_depts:
-            name_depts[label] = tdept or initiator
+        if t not in name_depts:
+            name_depts[t] = tdept or initiator
     names = list(name_depts.keys())
     sick, maternity = await _query_leave_counts(session, initiator)
 
