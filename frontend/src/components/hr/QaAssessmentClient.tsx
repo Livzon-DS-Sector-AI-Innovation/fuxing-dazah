@@ -62,9 +62,9 @@ export default function QaAssessmentClient() {
             { title: '日期', dataIndex: 'training_date', width: 110 },
             { title: '方式', dataIndex: 'training_method', width: 80 },
             { title: '题数', dataIndex: 'question_count', width: 60, align: 'center' as const },
-            { title: '操作', width: 180,
+            { title: '操作', width: 230,
               render: (_: any, a: QaAssessment) => (
-                <Space size="small">
+                <Space size="small" wrap>
                   <Button size="small" icon={<SearchOutlined />} onClick={() => viewDetail(a)}>成绩</Button>
                   {canExport && (
                     <Button size="small" icon={<EditOutlined />}
