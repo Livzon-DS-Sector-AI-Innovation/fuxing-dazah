@@ -954,11 +954,12 @@ async def sop_entry_classifications(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """二级表分类选项 = 员工档案「分类管理」清单（employee_classifications）。
+    """二级表分类选项 = 当前用户在员工档案里的分类（清单 + 打过的标签）。
 
-    只显示清单里创建过的分类，清单外的野标签不出现；即使尚未给本部门
-    员工打标签（0 人）也展示，人数按本部门实际标签统计。
-    不按创建人隔离——二级表按部门收人，需看到所有清单分类。
+    员工档案「分类管理」建的清单即使尚未给本部门员工打标签（0 人）也展示；
+    直接在员工行上打的标签（如「分类1/分类2」）同样出现——都是本人创建的
+    分类，按创建人过滤，看不到别人的分类/测试数据。
+    人数按本部门实际标签统计。
     """
     # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
     if not hr_scope.is_unrestricted:
@@ -966,24 +967,27 @@ async def sop_entry_classifications(
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    # ① 员工档案分类清单（全量）
+    creator = hr_scope.user.name or hr_scope.user.employee_number or ""
+    # ① 本人的分类清单（员工档案「分类管理」）
     catalog = (await session.execute(
         text(
             "SELECT name FROM hr.employee_classifications "
-            "WHERE is_deleted = false ORDER BY created_at"
-        )
+            "WHERE is_deleted = false AND created_by = :creator ORDER BY created_at"
+        ),
+        {"creator": creator},
     )).fetchall()
-    # ② 清单内各分类在该部门的实际标签计数
+    # ② 本人在该部门打过的标签计数（直接打标签没建清单的分类也在这里）
     tag_rows = (await session.execute(
         text("""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
             JOIN hr.employees e ON e.employee_number = t.employee_number
             WHERE t.is_deleted = false AND e.is_deleted = false
+              AND t.created_by = :creator
               AND (e.department = :dept OR e.actual_department = :dept)
             GROUP BY t.tag_name
         """),
-        {"dept": department},
+        {"dept": department, "creator": creator},
     )).fetchall()
     counts = {r[0]: r[1] for r in tag_rows}
     result: list[dict] = []
@@ -994,6 +998,11 @@ async def sop_entry_classifications(
             continue
         seen.add(name)
         result.append({"tag_name": name, "count": counts.get(name, 0)})
+    for name, cnt in sorted(counts.items()):
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tag_name": name, "count": cnt})
     return success_response(data=result)
 
 

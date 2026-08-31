@@ -171,21 +171,31 @@ class TestSopRegisterFlow:
 
     @pytest.mark.asyncio
     async def test_classifications_and_personnel(self, db_session, client):
-        """部门自定义分类选项 + 按分类拉取人员"""
+        """部门自定义分类选项 + 按分类拉取人员（选项 = 当前用户的清单 ∪ 标签）"""
         from datetime import date as _date
-        from app.modules.hr.models import Employee, EmployeeTag
+        from app.modules.hr.models import Employee, EmployeeClassification, EmployeeTag
         db_session.add(Employee(
             employee_number="SOP001", name="员工甲", department="甲部门",
             position="操作工", status="在职", hire_date=_date.today(),
         ))
-        db_session.add(EmployeeTag(employee_number="SOP001", tag_name="新员工", created_by="测试"))
+        # 当前用户（HR测试员）建的清单 + 打的标签
+        db_session.add(EmployeeClassification(name="新员工", created_by="HR测试员"))
+        db_session.add(EmployeeTag(employee_number="SOP001", tag_name="新员工", created_by="HR测试员"))
+        # 直接打标签（无清单）的分类：同样出现
+        db_session.add(EmployeeTag(employee_number="SOP001", tag_name="分类1", created_by="HR测试员"))
+        # 他人创建的：不出现
+        db_session.add(EmployeeClassification(name="别人的分类", created_by="其他人"))
+        db_session.add(EmployeeTag(employee_number="SOP001", tag_name="别人的标签", created_by="其他人"))
         await db_session.flush()
 
         res = await client.get("/api/v1/hr/sop-training-entries/classifications", params={"department": "甲部门"})
         assert res.status_code == 200, res.text
         names = [d["tag_name"] for d in res.json()["data"]]
-        # 分类选项 = 员工档案分类清单 ∪ 实际标签（本部门计数）
+        # 本人的清单 + 本人打的标签都出现；他人的不出现
         assert "新员工" in names
+        assert "分类1" in names
+        assert "别人的分类" not in names
+        assert "别人的标签" not in names
         assert any(d["tag_name"] == "新员工" and d["count"] == 1 for d in res.json()["data"])
 
         res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"department": "甲部门", "classification": "新员工"})
