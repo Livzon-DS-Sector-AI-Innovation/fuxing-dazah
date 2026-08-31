@@ -230,12 +230,20 @@ async def create_sop_record(
     from app.modules.hr.models import SopTrainingRecord
     if not payload.get("file_name"):
         raise HTTPException(400, "请填写文件名称")
+    # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
+    year_val = str(payload.get("year") or date.today().year).strip()
+    if len(year_val) != 4 or not year_val.isdigit():
+        raise HTTPException(400, "年份格式不正确（应为 4 位数字年份）")
+    if payload.get("method") and len(str(payload["method"]).strip()) > 4:
+        raise HTTPException(400, "培训方式应为 R / T")
+    if payload.get("color") and len(str(payload["color"]).strip()) > 8:
+        raise HTTPException(400, "标记颜色值过长")
     involved = list(dict.fromkeys(
         str(d).strip() for d in _json_loads(payload.get("involved_departments")) if str(d).strip()
     ))
     initiator = payload.get("initiator_department") or ""
     r = SopTrainingRecord(
-        year=str(payload.get("year") or date.today().year),
+        year=year_val,
         training_date=payload.get("training_date"),
         file_name=payload["file_name"],
         file_no=payload.get("file_no"),
@@ -291,6 +299,16 @@ async def update_sop_record(
     r = await session.get(SopTrainingRecord, record_id)
     if not r or r.is_deleted:
         raise HTTPException(404, "记录不存在")
+    # 列宽校验：非法值直接 400，而不是落库时 PG DataError 500
+    if "year" in payload:
+        year_val = str(payload["year"]).strip()
+        if len(year_val) != 4 or not year_val.isdigit():
+            raise HTTPException(400, "年份格式不正确（应为 4 位数字年份）")
+        payload["year"] = year_val
+    if payload.get("method") and len(str(payload["method"]).strip()) > 4:
+        raise HTTPException(400, "培训方式应为 R / T")
+    if payload.get("color") and len(str(payload["color"]).strip()) > 8:
+        raise HTTPException(400, "标记颜色值过长")
     for key in ("year", "training_date", "file_name", "file_no", "effective_date",
                 "method", "complete_time", "trainer", "trainees", "change_note",
                 "color", "initiator_department"):
@@ -528,20 +546,18 @@ async def _link_classification_tags(session: AsyncSession, e, operator: str) -> 
     }
     if not numbers:
         return
-    existing = (await session.execute(
-        select(EmployeeTag).where(
-            EmployeeTag.is_deleted == False,  # noqa: E712
-            EmployeeTag.tag_name == e.classification,
-            EmployeeTag.employee_number.in_(numbers),
-        )
-    )).scalars().all()
-    have = {(t.employee_number, t.tag_name) for t in existing}
+    # ON CONFLICT DO NOTHING：与活跃行部分唯一索引配合，并发转训/批量打标不 500
+    # （部分索引推断必须显式给出 index_where）
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     for num in numbers:
-        if (num, e.classification) in have:
-            continue
-        session.add(EmployeeTag(
-            employee_number=num, tag_name=e.classification, created_by=operator,
-        ))
+        await session.execute(
+            pg_insert(EmployeeTag)
+            .values(employee_number=num, tag_name=e.classification, created_by=operator)
+            .on_conflict_do_nothing(
+                index_elements=["employee_number", "tag_name"],
+                index_where=text("is_deleted = false"),
+            ),
+        )
     await session.flush()
 
 
@@ -596,14 +612,15 @@ async def batch_transfer_sop_entries(
 
 
 async def _query_leave_counts(session: AsyncSession, department: str) -> tuple[int, int]:
-    """统计部门病假/产假人数（无则 0）。"""
+    """统计部门病假/产假人数（无则 0）；与员工查询口径一致：
+    部门匹配 department 或（未分类员工的 actual_department）。"""
     sick = maternity = 0
     try:
         result = await session.execute(
             text(
                 "SELECT status, count(*) FROM hr.employees "
-                "WHERE department = :dept AND is_deleted = false "
-                "AND status IN ('病假', '产假') GROUP BY status"
+                "WHERE (department = :dept OR (department = '未分类' AND actual_department = :dept)) "
+                "AND is_deleted = false AND status IN ('病假', '产假') GROUP BY status"
             ),
             {"dept": department},
         )
@@ -700,6 +717,7 @@ def _generate_register_docx(
 async def generate_record_materials(
     record_id: UUID,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按登记表涉及部门生成全套材料 zip：每部门 培训通知+签到表+试卷（有题则含）+培训登记表。"""
     from app.modules.hr.models import SopTrainingRecord
@@ -717,6 +735,13 @@ async def generate_record_materials(
     departments = _json_loads(record.involved_departments) or []
     if not departments:
         raise HTTPException(400, "该记录未配置涉及部门")
+    # 数据范围：涉及部门必须全部在授权范围内（防止导出其他部门员工名单）
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+        out_of_scope = [d for d in departments if d not in hr_scope.scoped_departments]
+        if out_of_scope:
+            raise HTTPException(403, f"数据范围限制：涉及部门超出授权范围（{', '.join(map(str, out_of_scope))}）")
 
     from app.modules.hr.notification_document_generator import (
         generate_training_notification,
@@ -758,6 +783,7 @@ async def generate_record_materials(
                     trainer=level1 or trainer or "", content=record.change_note or "",
                     trainee_names=names, issuer_department=record.initiator_department if hasattr(record, "initiator_department") else dept,
                     issue_date=today, sick_count=sick, maternity_count=maternity,
+                    training_method=record.method or "",
                 ))
                 sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                     training_date=today, department=dept, training_subject=subject,
@@ -790,20 +816,28 @@ async def generate_record_materials(
 async def batch_generate_materials(
     payload: dict,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """勾选多条二级表记录，按部门合并生成一套材料（每部门一份培训通知+签到表）。"""
     from app.modules.hr.models import SopTrainingEntry
     ids = payload.get("ids") or []
     if not ids:
         raise HTTPException(400, "请选择记录")
+    try:
+        entry_ids = [UUID(i) for i in ids]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "记录 ID 格式不正确")
     rows = (await session.execute(
         select(SopTrainingEntry).where(
             SopTrainingEntry.is_deleted == False,  # noqa: E712
-            SopTrainingEntry.id.in_([UUID(i) for i in ids]),
+            SopTrainingEntry.id.in_(entry_ids),
         )
     )).scalars().all()
     if not rows:
         raise HTTPException(404, "记录不存在")
+    # 数据范围：逐条校验（防止受限用户导出其他部门员工名单）
+    for row in rows:
+        _ensure_entry_in_scope(hr_scope, row)
     record_map = await _records_by_ids(session, [e.record_id for e in rows if e.record_id])
 
     # 按部门分组
@@ -906,8 +940,15 @@ async def batch_generate_materials(
 async def sop_entry_classifications(
     department: str = Query(..., description="部门"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """该部门员工被打上的全部标签（所有创建人汇总），作为二级表分类选项。"""
+    # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+        if department not in hr_scope.scoped_departments:
+            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
     rows = (await session.execute(
         text("""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
@@ -927,8 +968,15 @@ async def sop_entry_personnel(
     department: str = Query(..., description="部门"),
     classification: str = Query(..., description="自定义分类"),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     """按部门 + 自定义分类拉取人员（标签可多打，人员可重复分类）。"""
+    # 数据范围：受限用户只能查授权部门（员工姓名/工号/岗位/状态属于 PII）
+    if not hr_scope.is_unrestricted:
+        if not hr_scope.scoped_departments:
+            raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
+        if department not in hr_scope.scoped_departments:
+            raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
     rows = (await session.execute(
         text("""
             SELECT e.employee_number, e.name, e.position, e.status

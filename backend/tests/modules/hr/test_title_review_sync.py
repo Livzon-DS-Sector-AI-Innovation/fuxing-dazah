@@ -239,9 +239,6 @@ class TestVoteSync:
             "app.modules.hr.title_review.bitable_client.update_record", AsyncMock()
         )
         monkeypatch.setattr(
-            "app.modules.hr.title_review.notify.send_result_card", AsyncMock(return_value=True)
-        )
-        monkeypatch.setattr(
             "app.modules.hr.title_review.notify.send_judge_reminder", AsyncMock(return_value=True)
         )
         service = TitleReviewService(db_session)
@@ -331,6 +328,47 @@ class TestVoteSync:
         assert row.vote_result == m.VOTE_AGREE
         assert row.comprehensive_grade == "合格"
         assert row.review_comment == "同意推荐"
+
+    async def test_partial_fields_do_not_clear_vote(self, setup):
+        """部分列编辑事件（无「投票结果」字段）不得清空内网已投的票。"""
+        service, activity, application, judges = setup
+        rows = await service.judge_repo.list_by_application(application.id)
+        row_by_emp = {r.judge_employee_id: r for r in rows}
+        judge = row_by_emp[judges[0].id]
+        # 评委已投票
+        await service.sync_vote_record(
+            activity.id,
+            judge.feishu_record_id,
+            self._vote_fields(judge.judge_code, m.VOTE_AGREE),
+        )
+        # 之后飞书只改了其他列（事件不含「投票结果」）
+        await service.sync_vote_record(
+            activity.id,
+            judge.feishu_record_id,
+            {"评审人编号": judge.judge_code, "评审意见": "补充说明"},
+        )
+        row = await service.judge_repo.get_by_id(judge.id)
+        assert row.vote_result == m.VOTE_AGREE
+        assert row.voted_at is not None
+
+    async def test_empty_vote_value_does_not_clear_vote(self, setup):
+        """投票结果列为空（HR 手工建行占位）不得清空内网已投的票。"""
+        service, activity, application, judges = setup
+        rows = await service.judge_repo.list_by_application(application.id)
+        row_by_emp = {r.judge_employee_id: r for r in rows}
+        judge = row_by_emp[judges[0].id]
+        await service.sync_vote_record(
+            activity.id,
+            judge.feishu_record_id,
+            self._vote_fields(judge.judge_code, m.VOTE_AGREE),
+        )
+        await service.sync_vote_record(
+            activity.id,
+            judge.feishu_record_id,
+            {"评审人编号": judge.judge_code, "投票结果": "", "投票状态": "未投票"},
+        )
+        row = await service.judge_repo.get_by_id(judge.id)
+        assert row.vote_result == m.VOTE_AGREE
 
 
 # ─── 事件处理器路由 ───

@@ -1,15 +1,16 @@
 """候选人管理接口"""
 
 import os
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
+from app.modules.hr.deps import HrAccessContext, get_hr_scope
 from app.modules.hr.schemas import (
     CandidateAnalysisReportOut,
     CandidateCreate,
@@ -38,15 +39,35 @@ def get_candidate_analysis_service(session: AsyncSession = Depends(get_db)) -> C
 
 @router.post("/candidates/parse-resume", summary="解析简历")
 async def parse_cv(file: UploadFile = Form(..., alias="resume")):
-    if not file.filename or not file.filename.endswith(".pdf"):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "仅支持PDF")
+    from app.core.storage import is_enabled, upload_object
     from app.modules.hr.resume_parser import parse_resume_pdf
-    os.makedirs("uploads/resumes", exist_ok=True)
+
     content = bytes(await file.read())
-    path = f"uploads/resumes/{file.filename}"
-    open(path, "wb").write(content)
-    r = parse_resume_pdf(content)
-    r["resume_file_path"] = path
+    if not content:
+        raise HTTPException(400, "文件内容为空")
+    # 文件名白名单化：只保留纯文件名，防止 ../ 路径穿越
+    safe_name = os.path.basename(file.filename).replace("\\", "_").replace("/", "_")
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = "resume.pdf"
+    # 先解析后存储：畸形/加密 PDF 直接 400，不落垃圾文件
+    try:
+        r = parse_resume_pdf(content)
+    except Exception as e:
+        raise HTTPException(400, f"简历解析失败（文件损坏或格式不支持）: {e}") from e
+    # 文件名加 uuid 前缀，避免同名简历互相覆盖
+    object_key = f"resumes/{uuid4().hex[:8]}_{safe_name}"
+    if is_enabled():
+        # 服务器部署：存 MinIO（模块 bucket：hr），本地不落盘
+        upload_object("hr", object_key, content, len(content), "application/pdf")
+        r["resume_file_path"] = f"minio://hr/{object_key}"
+    else:
+        # 本地开发兜底：存 uploads/resumes（该目录已 gitignore）
+        os.makedirs("uploads/resumes", exist_ok=True)
+        path = f"uploads/resumes/{uuid4().hex[:8]}_{safe_name}"
+        open(path, "wb").write(content)
+        r["resume_file_path"] = path
     return success_response(data=r)
 
 
@@ -133,11 +154,15 @@ async def list_pending_review(
     reviewer: str | None = Query(None, description="审核人姓名"),
     service: CandidateService = Depends(get_service),
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
-    rows = await rv_service.list_pending(reviewer=reviewer)
+    # 缺省按当前用户过滤（“待我审核”语义），显式传 reviewer 时按指定人查询
+    rows = await rv_service.list_pending(
+        reviewer=reviewer or hr_scope.user.name or None
+    )
     return success_response(data=[{
         "review": CandidateReviewResponse.model_validate(row["review"]).model_dump(mode="json"),
         "candidate": CandidateResponse.model_validate(row["candidate"]).model_dump(mode="json"),
@@ -270,9 +295,12 @@ async def decide_review(
     cid: UUID,
     payload: DecideReviewRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
+    from app.platform.permission.deps import get_user_permissions
+
     rv_service = CandidateReviewService(session)
     try:
         # 支持通过 review_id 或自动按 candidate_id 查找待审核记录
@@ -280,6 +308,12 @@ async def decide_review(
             review_id = UUID(payload.review_id)
         else:
             review_id = await rv_service.find_pending_review_id(cid)
+        # 仅审核人（或管理权限）可做审核决策
+        rv = await rv_service.repo.get_by_id(review_id)
+        perms = await get_user_permissions(str(hr_scope.user.id), session)
+        is_manager = "hr:recruitment:manage" in perms
+        if not is_manager and rv and rv.reviewer and rv.reviewer != hr_scope.user.name:
+            raise HTTPException(403, f"该审核由 {rv.reviewer} 负责，您无权操作")
         r = await rv_service.decide(review_id, payload.decision, payload.review_comment)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="审核完成")
     except ValueError as e:
@@ -291,12 +325,17 @@ async def push_onboarding_review(
     cid: UUID,
     payload: PushReviewRequest,
     session: AsyncSession = Depends(get_db),
+    hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
     from app.modules.hr.schemas import CandidateReviewResponse
     from app.modules.hr.service import CandidateReviewService
     rv_service = CandidateReviewService(session)
     try:
-        r = await rv_service.push_onboarding(cid, payload.pushed_by or "HR", payload.push_note)
+        # 发起人取当前用户（前端占位 'HR' 时用真实姓名，保证审核卡/结果通知能找到人）
+        pushed_by = payload.pushed_by
+        if not pushed_by or pushed_by == "HR":
+            pushed_by = hr_scope.user.name or "HR"
+        r = await rv_service.push_onboarding(cid, pushed_by, payload.push_note)
         return success_response(data=CandidateReviewResponse.model_validate(r).model_dump(mode="json"), message="入职审批已发起")
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -322,7 +361,7 @@ async def update_onboarding_task(
 ):
     from app.modules.hr.schemas import OnboardingTaskResponse
     from app.modules.hr.service import OnboardingTaskService
-    task = await OnboardingTaskService(session).update(task_id, payload)
+    task = await OnboardingTaskService(session).update(task_id, payload, cid)
     return success_response(data=OnboardingTaskResponse.model_validate(task).model_dump(mode="json"), message="任务已更新")
 
 
@@ -354,9 +393,25 @@ async def get_status_logs(cid: UUID, service: CandidateService = Depends(get_ser
 @router.get("/candidates/{cid}/resume-preview", summary="简历预览")
 async def resume_preview(cid: UUID, service: CandidateService = Depends(get_service)):
     r = await service.get(cid)
-    if not r.resume_url or not os.path.exists(r.resume_url):
+    if not r.resume_url:
         raise HTTPException(404, "无简历文件")
-    return FileResponse(r.resume_url, media_type="application/pdf")
+    if r.resume_url.startswith("minio://"):
+        # 服务器部署：从 MinIO 读取（模块 bucket：hr）
+        from app.core.storage import get_object
+
+        object_key = r.resume_url[len("minio://"):]
+        obj = get_object("hr", object_key)
+        if obj is None:
+            raise HTTPException(404, "简历文件不存在")
+        data, content_type = obj
+        return Response(content=data, media_type=content_type or "application/pdf")
+    # 本地路径：只允许 uploads/resumes 下，防任意文件读取
+    path = os.path.normpath(r.resume_url)
+    if not path.startswith("uploads/resumes/"):
+        raise HTTPException(404, "无简历文件")
+    if not os.path.exists(path):
+        raise HTTPException(404, "无简历文件")
+    return FileResponse(path, media_type="application/pdf")
 
 
 # ─── Offer 发送与预览 ───

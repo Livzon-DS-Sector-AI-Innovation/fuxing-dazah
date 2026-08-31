@@ -21,6 +21,7 @@ import {
 import dayjs from 'dayjs'
 import {
   fetchQuestionBank,
+  fetchQaAssessmentDetail,
   createQaAssessment,
   saveQaAssessmentScores,
   syncQaAssessmentLedger,
@@ -80,6 +81,7 @@ export default function AssessmentFlow({
   // 随机赋分弹窗
   const [randomOpen, setRandomOpen] = useState(false)
   const [randomRatio, setRandomRatio] = useState(0.3)
+  const [randomPassRatio, setRandomPassRatio] = useState(0.7)
   const [randomizing, setRandomizing] = useState(false)
 
   // 历史列表
@@ -117,6 +119,10 @@ export default function AssessmentFlow({
       const id = data.data?.id
       if (!id) throw new Error('创建失败：未返回ID')
       setAssessmentId(id)
+      // 加载场次配置（优秀/合格线、满分），前端等级判定与后端一致
+      fetchQaAssessmentDetail(id)
+        .then((d) => setAssessment((d.data as any)?.assessment || null))
+        .catch(() => {})
       // 初始化成绩行
       setScoreRows(employeeNames.map((name) => ({
         employee_name: name,
@@ -146,11 +152,11 @@ export default function AssessmentFlow({
       const per = pickedQuestions.reduce((s, q) => s + (q.score || 0), 0) / Math.max(1, pickedQuestions.length)
       const deduction = [...row.wrong].reduce((s, n) => s + (pickedQuestions[n - 1]?.score || per || 0), 0)
       const total = Math.max(0, pickedQuestions.reduce((s, q) => s + (q.score || 0), 0) - deduction)
-      return { total, grade: total >= 90 ? '优' : total >= 80 ? '合格' : '不合格' }
+      return { total, grade: total >= 90 ? '优秀' : total >= 80 ? '合格' : '不合格' }
     }
     const deduction = [...row.wrong].reduce((s, n) => s + (questionScores[n] || 0), 0)
     const total = Math.max(0, assessment.full_score - deduction)
-    const grade = total >= assessment.excellent_line ? '优' : total >= assessment.pass_line ? '合格' : '不合格'
+    const grade = total >= assessment.excellent_line ? '优秀' : total >= assessment.pass_line ? '合格' : '不合格'
     return { total, grade }
   }
 
@@ -174,7 +180,8 @@ export default function AssessmentFlow({
         const r = await downloadQaAssessmentEvaluation(assessmentId)
         downloadBase64File(r.base64, r.filename)
       } else {
-        // 先保存成绩（含台账同步）
+        // 先保存成绩（含台账同步）：保存失败即中止，不下载
+        // 否则用户拿到成绩单但台账实际未同步、且毫不知情
         const saveData = await saveQaAssessmentScores(assessmentId, {
           assessed_date: assessedDate ? assessedDate.format('YYYY-MM-DD') : undefined,
           scores: scoreRows.map((r) => ({
@@ -182,7 +189,7 @@ export default function AssessmentFlow({
             employee_number: r.employee_number,
             wrong_questions: [...r.wrong].sort((a, b) => a - b),
           })),
-        }).catch(() => ({} as any))
+        })
         // 再下载成绩单
         const r = await downloadQaAssessmentScores(assessmentId)
         downloadBase64File(r.base64, r.filename)
@@ -216,9 +223,16 @@ export default function AssessmentFlow({
 
   const handleRandomize = async () => {
     if (!assessmentId) { message.warning('请先创建考核场次'); return }
+    if (randomRatio + randomPassRatio > 1) {
+      message.error('优秀率与合格率之和不能超过 1')
+      return
+    }
     setRandomizing(true)
     try {
-      const res = await randomizeQaScores(assessmentId, { excellent_ratio: randomRatio })
+      const res = await randomizeQaScores(assessmentId, {
+        excellent_ratio: randomRatio,
+        pass_ratio: randomPassRatio,
+      })
       const generated = res.data?.scores || []
       // 直接回填矩阵，可继续点击格子调整随机结果
       setScoreRows((rows) => rows.map((r) => {
@@ -376,19 +390,32 @@ export default function AssessmentFlow({
       >
         <div className="space-y-3 py-2">
           <p className="text-sm text-gray-600">
-            按比例随机选取「优秀」，其余为「合格」；错题位置随机分布。
+            按比例随机分配「优秀 / 合格 / 不合格」三档成绩，错题位置随机分布。
             生成后可继续在矩阵中点击格子微调，最后「同步到台账」保存。
           </p>
           <div className="flex items-center gap-3">
-            <span className="text-sm">优秀比例：</span>
+            <span className="text-sm">优秀率：</span>
             <InputNumber
               min={0} max={1} step={0.05}
               value={randomRatio}
-              onChange={(v) => setRandomRatio(v ?? 0.3)}
+              onChange={(v) => setRandomRatio(v ?? 0)}
               style={{ width: 120 }}
             />
-            <span className="text-xs text-gray-400">0-1，默认 0.3</span>
+            <span className="text-xs text-gray-400">0-1</span>
           </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm">合格率：</span>
+            <InputNumber
+              min={0} max={1} step={0.05}
+              value={randomPassRatio}
+              onChange={(v) => setRandomPassRatio(v ?? 0)}
+              style={{ width: 120 }}
+            />
+            <span className="text-xs text-gray-400">0-1</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            剩余比例（{Math.max(0, Math.round((1 - randomRatio - randomPassRatio) * 100))}%）自动为「不合格」
+          </p>
         </div>
       </Modal>
     </div>

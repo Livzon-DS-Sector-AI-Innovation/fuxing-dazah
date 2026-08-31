@@ -31,7 +31,7 @@ def get_ai_service(session: AsyncSession = Depends(get_db)) -> AiEvaluationServi
 
 
 @router.get("/candidates/{cid}/interviews", summary="候选人面试列表")
-async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
+async def list_interviews(cid: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read"))):
     rows = await service.list_by_candidate(cid)
     return success_response(data=[InterviewResponse.model_validate(r).model_dump(mode="json") for r in rows])
 
@@ -44,7 +44,7 @@ async def create_interview(payload: InterviewCreate, service: InterviewService =
 
 
 @router.get("/interviews/{interview_id}", summary="面试详情")
-async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:manage"))):
+async def get_interview(interview_id: UUID, service: InterviewService = Depends(get_interview_service), ctx: HrAccessContext = Depends(require_hr_access("hr:recruitment:read"))):
     r = await service.get(interview_id)
     return success_response(data=InterviewResponse.model_validate(r).model_dump(mode="json"))
 
@@ -100,5 +100,8 @@ async def _auto_generate_analysis(service: InterviewService, interview) -> None:
         analysis = CandidateAnalysisService(service.session)
         await analysis.generate(interview.candidate_id, interview.id)
     except Exception:
-        # AI 生成失败不阻断面试保存
-        pass
+        # AI 生成失败不阻断面试保存，但记录日志便于排障
+        import logging
+        logging.getLogger(__name__).warning(
+            "面试 %s 自动生成胜任度报告失败", interview.id, exc_info=True
+        )

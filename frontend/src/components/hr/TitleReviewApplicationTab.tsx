@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Button, Descriptions, Drawer, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { ReloadOutlined, TeamOutlined } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
@@ -44,6 +44,8 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
   const [employeeOptions, setEmployeeOptions] = useState<Employee[]>([])
   const [employeeSearching, setEmployeeSearching] = useState(false)
   const [saving, setSaving] = useState(false)
+  // 远程搜索竞态防护：慢的旧响应不得覆盖新关键词结果
+  const searchSeq = useRef(0)
 
   const canManage = hasPermission('hr:title:manage')
   const reviewOpen = activityStatus === 'open' || activityStatus === 'reviewing'
@@ -62,6 +64,11 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
   useEffect(() => {
     load()
   }, [load])
+
+  // 切换活动重置分页：活动 B 不足 3 页时避免展示空列表
+  useEffect(() => {
+    setPage(1)
+  }, [activityId])
 
   const openDetail = async (application: TitleReviewApplication) => {
     try {
@@ -104,6 +111,7 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
 
   // 员工远程搜索（在职员工 1200+，仅前端过滤前 200 条会搜不到）
   const searchEmployees = async (keyword: string) => {
+    const seq = ++searchSeq.current
     setEmployeeSearching(true)
     try {
       const d = await fetchEmployeesAction({
@@ -112,11 +120,13 @@ export default function TitleReviewApplicationTab({ activityId, activityStatus }
         page: 1,
         page_size: keyword ? 50 : 200,
       })
+      if (seq !== searchSeq.current) return  // 过期响应丢弃
       setEmployeeOptions(d?.data || [])
     } catch (err: any) {
+      if (seq !== searchSeq.current) return
       message.error(err.message || '搜索员工失败')
     } finally {
-      setEmployeeSearching(false)
+      if (seq === searchSeq.current) setEmployeeSearching(false)
     }
   }
 

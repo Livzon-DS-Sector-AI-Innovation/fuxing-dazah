@@ -16,7 +16,6 @@ const STATUS_MAP: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
   self_submitted: { color: 'blue', label: '待领导评分' },
   leader_scored: { color: 'green', label: '已完成' },
-  confirmed: { color: 'purple', label: '已确认' },
 }
 
 export default function PerformanceFormClient() {
@@ -93,12 +92,16 @@ export default function PerformanceFormClient() {
   const handleSaveCatScores = async () => {
     setSaving(true)
     try {
-      const batch = categoryScores.map((s: any) => ({
-        evaluation_id: evalId,
-        category_id: s.category_id,
-        score: s.score,
-        weight: s.weight,
-      }))
+      // 仅提交当前用户负责的项目（can_edit），避免批量 403
+      const batch = categoryScores
+        .filter((s: any) => s.can_edit !== false)
+        .map((s: any) => ({
+          evaluation_id: evalId,
+          category_id: s.category_id,
+          score: s.score,
+          weight: s.weight,
+        }))
+      if (batch.length === 0) { message.warning('没有您负责的考核项目可保存'); return }
       await saveCategoryScores(evalId, batch)
       message.success('项目评分已保存')
     } catch (err: any) { message.error(err.message || '保存失败') }
@@ -142,7 +145,7 @@ export default function PerformanceFormClient() {
               { title: '考核项目', dataIndex: 'category_name', width: 140 },
               { title: '权重(%)', dataIndex: 'weight', width: 80, render: (v: number) => `${v}%` },
               { title: '得分', dataIndex: 'score', width: 90,
-                render: (v: any, r: any) => <InputNumber size="small" value={v} min={0} max={100} placeholder="打分" onChange={(val) => updateCatScore(r.category_id, val)} style={{ width: '100%' }} />,
+                render: (v: any, r: any) => <InputNumber size="small" value={v} min={0} max={100} placeholder="打分" disabled={r.can_edit === false} onChange={(val) => updateCatScore(r.category_id, val)} style={{ width: '100%' }} />,
               },
               { title: '加权', width: 70, render: (_: any, r: any) => r.score != null ? <strong style={{ color: '#1677ff' }}>{(r.score * r.weight / 100).toFixed(1)}</strong> : '—' },
               { title: '评分人', dataIndex: 'scored_by', width: 80, render: (v: any) => v || '—' },
@@ -157,7 +160,7 @@ export default function PerformanceFormClient() {
       </Card>
 
       <Card title="考核指标" extra={editable && <Space><Button icon={<PlusOutlined />} onClick={addItem}>添加</Button><Button icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button></Space>}>
-        <Table rowKey="sort_order" dataSource={items.map((it: any, i: number) => ({ ...it, _i: i }))} pagination={false} size="small" bordered scroll={{ x: 1100 }}
+        <Table rowKey="_i" dataSource={items.map((it: any, i: number) => ({ ...it, _i: i }))} pagination={false} size="small" bordered scroll={{ x: 1100 }}
           columns={[
             { title: '#', width: 40, render: (_: any, __: any, i: number) => i + 1 },
             { title: '类别', dataIndex: 'category', width: 110, render: (v: string, _: any, i: number) => editable ? <Select size="small" value={v} onChange={(val) => updateItem(i, 'category', val)} options={CATEGORY_OPTIONS} style={{ width: '100%' }} /> : CATEGORY_OPTIONS.find(o => o.value === v)?.label || v },
@@ -165,7 +168,7 @@ export default function PerformanceFormClient() {
             { title: '标准/目标', dataIndex: 'standard', width: 160, render: (v: string, _: any, i: number) => editable ? <Input size="small" value={v || ''} onChange={(e) => updateItem(i, 'standard', e.target.value)} /> : <span>{v || '—'}</span> },
             { title: '权重%', dataIndex: 'weight', width: 70, render: (v: number, _: any, i: number) => editable ? <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'weight', val || 0)} style={{ width: '100%' }} /> : <span>{v}%</span> },
             { title: '自评分', dataIndex: 'self_score', width: 70, render: (v: number, _: any, i: number) => editable ? <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'self_score', val)} style={{ width: '100%' }} /> : <span>{v != null ? v : '—'}</span> },
-            { title: '领导评分', dataIndex: 'leader_score', width: 80, render: (v: number, _: any, i: number) => <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'leader_score', val)} disabled={evaluation?.status === 'leader_scored'} style={{ width: '100%' }} /> },
+            { title: '领导评分', dataIndex: 'leader_score', width: 80, render: (v: number, _: any, i: number) => <InputNumber size="small" value={v} min={0} max={100} onChange={(val) => updateItem(i, 'leader_score', val)} disabled={evaluation?.status === 'leader_scored' || (evaluation as any)?.can_edit_leader === false} style={{ width: '100%' }} /> },
             { title: '核定分', dataIndex: 'final_score', width: 70, render: (v: number) => <span style={{ fontWeight: 'bold', color: '#1677ff' }}>{v != null ? v : '—'}</span> },
             { title: '完成情况', dataIndex: 'completion', width: 160, render: (v: string, _: any, i: number) => editable ? <Input size="small" value={v || ''} onChange={(e) => updateItem(i, 'completion', e.target.value)} /> : <span>{v || '—'}</span> },
             ...(editable ? [{ title: '', width: 40, render: (_: any, r: any) => <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => setItems((p: any[]) => p.filter((_, j) => j !== r._i))} /> }] : []),
@@ -190,10 +193,10 @@ export default function PerformanceFormClient() {
           </div>
           <Space>
             {editable && <Popconfirm title="提交后不可修改自评，确认？" onConfirm={handleSubmitSelf}><Button type="primary" icon={<SendOutlined />} loading={submitting}>提交自评</Button></Popconfirm>}
-            {(evaluation?.status === 'draft' || evaluation?.status === 'self_submitted') && (
+            {(evaluation?.status === 'draft' || evaluation?.status === 'self_submitted') && (evaluation as any)?.can_edit_leader && (
               <Popconfirm title="确认提交领导评分？" onConfirm={handleSubmitLeader}><Button type="primary" icon={<SendOutlined />} loading={submitting} style={{ background: '#52c41a' }}>提交领导评分</Button></Popconfirm>
             )}
-            {!editable && evaluation?.status !== 'leader_scored' && <Button icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>}
+            {!editable && evaluation?.status !== 'leader_scored' && (evaluation as any)?.can_edit_leader !== false && <Button icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>}
           </Space>
         </div>
       </Card>

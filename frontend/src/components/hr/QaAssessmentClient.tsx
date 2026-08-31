@@ -5,10 +5,15 @@ import { App, Button, Card, Popconfirm, Space, Table, Tag } from 'antd'
 import { EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons'
 import { fetchQaAssessments, fetchQaAssessmentDetail, downloadQaAssessmentRecord, deleteQaAssessment } from '@/actions/hr'
 import { downloadBase64File } from '@/lib/hr'
+import { usePermission } from '@/hooks/usePermission'
 import { QaAssessment, QaAssessmentScore } from '@/types/hr'
 
 export default function QaAssessmentClient() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  // 仅「考核历史」权限的用户不展示必然 403 的记录表下载与删除入口
+  const canExport = hasPermission('hr:training:export')
+  const canManage = hasPermission('hr:training:manage')
   const [list, setList] = useState<QaAssessment[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -61,16 +66,20 @@ export default function QaAssessmentClient() {
               render: (_: any, a: QaAssessment) => (
                 <Space size="small">
                   <Button size="small" icon={<SearchOutlined />} onClick={() => viewDetail(a)}>成绩</Button>
-                  <Button size="small" icon={<EditOutlined />}
-                    onClick={async () => { try { const r = await downloadQaAssessmentRecord(a.id); downloadBase64File(r.base64, r.filename); message.success('已下载') } catch (err: any) { message.error(err.message || '下载失败') } }}>
-                    记录表
-                  </Button>
-                  <Popconfirm title="确认删除？" onConfirm={async () => {
-                    try { await deleteQaAssessment(a.id); message.success('已删除'); loadList(page) }
-                    catch (err: any) { message.error(err.message || '删除失败') }
-                  }}>
-                    <Button size="small" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
+                  {canExport && (
+                    <Button size="small" icon={<EditOutlined />}
+                      onClick={async () => { try { const r = await downloadQaAssessmentRecord(a.id); downloadBase64File(r.base64, r.filename); message.success('已下载') } catch (err: any) { message.error(err.message || '下载失败') } }}>
+                      记录表
+                    </Button>
+                  )}
+                  {canManage && (
+                    <Popconfirm title="确认删除？" onConfirm={async () => {
+                      try { await deleteQaAssessment(a.id); message.success('已删除'); loadList(page) }
+                      catch (err: any) { message.error(err.message || '删除失败') }
+                    }}>
+                      <Button size="small" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  )}
                 </Space>
               ),
             },
@@ -92,7 +101,7 @@ export default function QaAssessmentClient() {
               render: (v: number[] | null) => (v && v.length > 0) ? v.join(', ') : '全对' },
             { title: '总分', dataIndex: 'total_score', width: 70, align: 'center' as const },
             { title: '等级', dataIndex: 'grade', width: 80, align: 'center' as const,
-              render: (v: string) => <Tag color={v === '优' ? 'green' : v === '合格' ? 'blue' : 'red'}>{v}</Tag> },
+              render: (v: string) => <Tag color={v === '优秀' ? 'green' : v === '合格' ? 'blue' : 'red'}>{v}</Tag> },
             { title: '得分情况', dataIndex: 'result_text', ellipsis: true },
             { title: '考核日期', dataIndex: 'assessed_date', width: 110 },
           ]}

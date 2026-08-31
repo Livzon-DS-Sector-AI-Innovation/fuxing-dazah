@@ -65,13 +65,14 @@ export async function syncQaAssessmentLedger(id: string) {
 /** 按优秀/合格比例随机赋分（返回生成结果，供矩阵内继续调整） */
 export async function randomizeQaScores(
   id: string,
-  params?: { excellent_ratio?: number; excellent_line?: number; pass_line?: number }
+  params?: { excellent_ratio?: number; pass_ratio?: number; excellent_line?: number; pass_line?: number }
 ): Promise<{
   code: number; message: string
   data: { generated: number; scores: { employee_name: string; employee_number: string; wrong_questions: number[]; total_score: number; grade: string; result_text: string; assessed_date: string }[] }
 }> {
   const qs = buildQueryString({
     excellent_ratio: params?.excellent_ratio,
+    pass_ratio: params?.pass_ratio,
     excellent_line: params?.excellent_line,
     pass_line: params?.pass_line,
   })

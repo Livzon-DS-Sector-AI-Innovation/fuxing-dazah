@@ -68,6 +68,10 @@ class FeishuCalendarService:
             attendees.append(
                 {"type": "user", "user_id": interviewer_open_id}
             )
+        else:
+            # organizer 为飞书必填项：面试官 open_id 解析不到时无法创建有效日程，
+            # 显式报错由上层提示，而不是静默建出无主人的日程
+            raise RuntimeError(f"无法解析面试官 {interviewer_name} 的 open_id，日程未创建")
 
         event = (
             CalendarEvent.builder()
@@ -93,7 +97,7 @@ class FeishuCalendarService:
                 .build()
             )
             .organizer(
-                EventOrganizer.builder().open_id("").build()
+                EventOrganizer.builder().open_id(interviewer_open_id).build()
             )
             .attendees(attendees if attendees else None)
             .location(location)
@@ -162,6 +166,9 @@ class FeishuCalendarService:
                 event_builder.attendees(
                     [{"type": "user", "user_id": open_id}]
                 )
+            else:
+                # 新面试官解析不到：显式清空参会人，避免日程残留旧面试官
+                event_builder.attendees([])
 
         request = (
             PatchCalendarEventRequest.builder()

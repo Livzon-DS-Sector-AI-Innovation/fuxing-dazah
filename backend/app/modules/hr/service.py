@@ -289,7 +289,7 @@ class EmployeeService:
         "emergency_contact_name", "emergency_contact_phone",
         "emergency_contact_relation",
         "bank_account", "training_id", "transfer_history", "remarks",
-        "status", "certificates", "concurrent_variety",
+        "certificates", "concurrent_variety",
         # Excel 扩展字段
         "duty", "dept_manager", "additional_manager", "report_grade",
         "dept_head_trainer", "safety_training_date", "safety_training_score",
@@ -530,8 +530,10 @@ class EmployeeService:
                         v = self._parse_date_value(v)
                     data[fn] = v
                 if "name" not in data or "department" not in data:
+                    await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                     errors.append(f"第{row_idx}行: 缺少姓名或部门"); continue
                 if allowed_departments is not None and data.get("department") not in allowed_departments:
+                    await conn.execute(sql_text(f"RELEASE SAVEPOINT {sp_name}"))
                     skipped += 1
                     continue
 
@@ -725,10 +727,12 @@ class EmployeeService:
         sort_by: str = "department",
         sort_order: str = "asc",
         include_uncategorized: bool = False,
+        departments: set[str] | None = None,
     ) -> tuple[list[Employee], int]:
         return await self.repo.list_employees(
             department=department,
             include_uncategorized=include_uncategorized,
+            departments=departments,
             status=status,
             keyword=keyword,
             page=page,
@@ -1239,6 +1243,7 @@ class DepartureRecordService:
         self,
         *,
         department: str | None = None,
+        departments: set[str] | None = None,
         offboarding_type: str | None = None,
         keyword: str | None = None,
         page: int = 1,
@@ -1248,6 +1253,7 @@ class DepartureRecordService:
     ) -> tuple[list[DepartureRecord], int]:
         return await self.repo.list_records(
             department=department,
+            departments=departments,
             offboarding_type=offboarding_type,
             keyword=keyword,
             page=page,
@@ -1507,7 +1513,9 @@ _CANDIDATE_TRANSITIONS: dict[str, set[str]] = {
     "已面试": {"录用中", "已拒绝"},
     "录用中": {"已录用", "已拒绝"},
     "已录用": {"待入职审批", "已拒绝"},
-    "待入职审批": {"已录用", "已入职", "已拒绝"},
+    # 已入职只能由 onboard() 完成（创建入职记录/工号/子任务），
+    # 不允许裸状态流转绕过入职链
+    "待入职审批": {"已录用", "已拒绝"},
     "已拒绝": set(),
 }
 
@@ -1656,6 +1664,7 @@ class CandidateService:
                         val = val.strip()
                     if field_name == "name":
                         name = str(val)
+                        continue  # name 单独传参，不写入 data（否则 Candidate(name=name, **data) 会重复传参）
                     elif field_name == "phone":
                         phone = str(val)
                     elif field_name == "email":
@@ -1678,9 +1687,15 @@ class CandidateService:
                 data.setdefault("status", "待筛选")
                 data.setdefault("candidate_type", "职能")
 
-                await self.repo.upsert(name, phone, email, data)
-                # 如果是新候选人也记录初始状态日志（upsert 内部 create 不会记 log）
-                created += 1  # 简化：不做精确 is_new 判断，统一计数
+                obj, is_new = await self.repo.upsert(name, phone, email, data)
+                if is_new:
+                    created += 1
+                    # 新候选人记录初始状态日志（与手工创建行为一致）
+                    self.repo.session.add(CandidateStatusLog(
+                        candidate_id=obj.id, from_status=None, to_status=obj.status, remark="Excel 导入"
+                    ))
+                else:
+                    updated += 1
                 await conn.execute(sa_text(f"RELEASE SAVEPOINT {sp_name}"))
             except Exception as e:
                 await conn.execute(sa_text(f"ROLLBACK TO SAVEPOINT {sp_name}"))
@@ -2099,7 +2114,9 @@ class CandidateReviewService:
             if is_onboarding:
                 if c.status != "待入职审批":
                     raise ValueError(f"候选人状态为「{c.status}」，与入职审批不匹配")
-                new_status = "已入职" if decision == "已同意" else "已录用"
+                # 同意后保持「待入职审批」：实际入职由 HR 执行 onboard()
+                # （创建入职记录/工号/子任务），避免状态直接跳「已入职」导致入职链断裂
+                new_status = None if decision == "已同意" else "已录用"
             else:
                 if c.status not in ("待部门审核", "面试中"):
                     raise ValueError(f"候选人状态为「{c.status}」，与当前审核不匹配，无法更新状态")
@@ -2170,6 +2187,10 @@ class CandidateReviewService:
             to_status="待入职审批",
             remark=f"发起入职审批，审批人：{reviewer}",
         ))
+
+        # 通知审批人（与部门审核 push 行为一致）
+        jd = await self.jd_repo.get_by_id(c.job_requirement_id) if c.job_requirement_id else None
+        await self._send_review_card(result, c, jd, push_note)
 
         return result
 
@@ -2250,8 +2271,10 @@ class PerformanceEvaluationService:
         e = await self.repo.get_by_id(evaluation_id)
         if e is None:
             raise ValueError("考核记录不存在")
-        if e.status not in ("draft",):
-            raise ValueError("仅草稿状态可编辑")
+        if e.status not in ("draft", "self_submitted"):
+            # 自评提交后进入领导评分阶段，允许继续编辑指标项（leader_score）；
+            # leader_scored 终态后不可再改
+            raise ValueError("仅草稿或待领导评分状态可编辑")
 
         if data.department_head is not None:
             e.department_head = data.department_head
@@ -2275,7 +2298,9 @@ class PerformanceEvaluationService:
             raise ValueError("考核记录不存在")
         if e.status != "draft":
             raise ValueError("仅草稿状态可提交自评")
-        if user_name and e.department_head and user_name != e.department_head:
+        if not e.department_head:
+            raise PermissionError("考核未配置部门负责人，无法提交自评")
+        if user_name and user_name != e.department_head:
             raise PermissionError("仅部门负责人可提交自评")
         e.status = "self_submitted"
         e.self_submitted_at = datetime.now(UTC)
@@ -2292,7 +2317,9 @@ class PerformanceEvaluationService:
             raise ValueError("考核记录不存在")
         if e.status not in ("draft", "self_submitted"):
             raise ValueError("仅草稿或已自评状态可提交领导评分")
-        if user_name and e.evaluator_leader and user_name != e.evaluator_leader:
+        if not e.evaluator_leader:
+            raise PermissionError("考核未配置分管领导，无法提交领导评分")
+        if user_name and user_name != e.evaluator_leader:
             raise PermissionError("仅分管领导可提交领导评分")
         e.status = "leader_scored"
         e.leader_submitted_at = datetime.now(UTC)
@@ -2376,7 +2403,7 @@ class PerformanceEvaluationService:
                         "elements": [
                             {"tag": "markdown", "content": f"您负责的考核项目需要为 **{len(unique_depts)}** 个部门评分：\n\n" + "\n".join(f"• {d}" for d in unique_depts[:10]) + ("\n..." if len(unique_depts) > 10 else "")},
                             {"tag": "hr"},
-                            {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/score?month={month}"}]},
+                            *([{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/score?month={month}"}]}] if _get_base_url() else []),
                         ],
                     }
                     await _send_card(open_id, card)
@@ -2394,7 +2421,7 @@ class PerformanceEvaluationService:
                     "elements": [
                         {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 月度绩效考核已生成，请及时完成自评。\n\n部门：{evaluation.department}\n负责人：{evaluation.department_head}"},
                         {"tag": "hr"},
-                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往填写自评"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                        *([{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往填写自评"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]}] if _get_base_url() else []),
                     ],
                 }
                 await _send_card(open_id, card)
@@ -2414,7 +2441,7 @@ class PerformanceEvaluationService:
                     "elements": [
                         {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 部门负责人已完成自评，请进行分管领导评分。\n\n部门：{evaluation.department}\n负责人：{evaluation.department_head}"},
                         {"tag": "hr"},
-                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                        *([{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "前往评分"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]}] if _get_base_url() else []),
                     ],
                 }
                 await _send_card(open_id, card)
@@ -2432,7 +2459,7 @@ class PerformanceEvaluationService:
                     "elements": [
                         {"tag": "markdown", "content": f"**{evaluation.evaluation_month}** 绩效考核领导评分已完成，请查看结果。\n\n部门：{evaluation.department}"},
                         {"tag": "hr"},
-                        {"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "查看考核结果"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]},
+                        *([{"tag": "action", "actions": [{"tag": "button", "text": {"tag": "plain_text", "content": "查看考核结果"}, "type": "primary", "url": f"{_get_base_url()}/hr/performance/{evaluation.id}"}]}] if _get_base_url() else []),
                     ],
                 }
                 await _send_card(open_id, card)
@@ -2473,8 +2500,13 @@ class PerformanceEvaluationService:
 
 
 def _get_base_url() -> str:
+    """卡片按钮链接前缀：取 Settings.FRONTEND_URL（生产已配置项）。
+
+    未配置时返回空串，调用方跳过按钮渲染——不再回退 localhost
+    （收件人点开会打开自己的本机，纯属误导）。
+    """
     from app.core.config import get_settings
-    return getattr(get_settings(), "APP_BASE_URL", "http://localhost:3000")
+    return (get_settings().FRONTEND_URL or "").strip().rstrip("/")
 
 
 class OnboardingTaskService:
@@ -2492,7 +2524,7 @@ class OnboardingTaskService:
         )
         return list(result.scalars().all())
 
-    async def update(self, task_id: UUID, data: dict) -> OnboardingTask:
+    async def update(self, task_id: UUID, data: dict, candidate_id: UUID) -> OnboardingTask:
         from app.core.exceptions import NotFoundException as _NF
         result = await self.session.execute(
             select(OnboardingTask).where(OnboardingTask.id == task_id, OnboardingTask.is_deleted == False)  # noqa: E712
@@ -2500,7 +2532,14 @@ class OnboardingTaskService:
         task = result.scalar_one_or_none()
         if not task:
             raise _NF("入职任务", str(task_id))
+        # 任务必须归属路径中的候选人，防止把任务挪到别的候选人名下
+        if task.candidate_id != candidate_id:
+            raise _NF("入职任务", str(task_id))
+        # 字段白名单：只允许更新状态/完成人/备注，防客户端覆盖归属等内部字段
+        allowed = {"status", "completed_by", "notes"}
         for k, v in data.items():
+            if k not in allowed:
+                continue
             setattr(task, k, v)
         if data.get("status") == "已完成" and not task.completed_at:
             task.completed_at = datetime.now()

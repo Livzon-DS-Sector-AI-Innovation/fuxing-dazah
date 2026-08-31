@@ -656,7 +656,11 @@ function TagCell({ employeeNumber, employeeName, disabled, options, onChanged }:
       }
       // 分类人数变化后刷新选项上的（N人）计数
       onChanged?.()
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      // 失败回滚乐观更新并提示，避免界面与实际数据分叉
+      setTags(prev)
+      message.error(e?.message || '标签保存失败，已还原')
+    }
   }
 
   const [editing, setEditing] = useState(false)

@@ -1141,19 +1141,11 @@ export interface TitleReviewCommitteeMember {
 export interface TitleReviewDeptCommittee {
   id: string
   department: string
-  manager_employee_id?: string
-  manager_name?: string
-  leader_employee_id?: string
-  leader_name?: string
   committee_members?: TitleReviewCommitteeMember[]
 }
 
 export interface TitleReviewDeptCommitteeInput {
   department: string
-  manager_employee_id?: string
-  manager_name?: string
-  leader_employee_id?: string
-  leader_name?: string
   committee_members: TitleReviewCommitteeMember[]
 }
 

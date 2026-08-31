@@ -246,6 +246,10 @@ def _validate_exam(result: dict[str, Any], config: dict[str, Any] | None) -> Exa
             if not isinstance(q, dict) or not str(q.get("question", "")).strip():
                 raise ValueError(f"AI 生成的{key}缺少题干")
             item: dict[str, Any] = {"question": str(q["question"]).strip()}
+            # 保留 AI 返回的分值（缺失时入库用缺省 10 分）
+            raw_score = q.get("score")
+            if isinstance(raw_score, (int, float)) and raw_score > 0:
+                item["score"] = int(raw_score)
             answer = str(q.get("answer", "")).strip()
             if not answer:
                 raise ValueError(f"AI 生成的{key}缺少答案")
@@ -320,6 +324,65 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict[str, Any]
             q["number"] = i + 1
 
     return result
+
+
+async def save_questions_to_bank(
+    session,
+    questions: list[dict[str, Any]],
+    file_no: str,
+    source: str = "AI生成",
+    subject: str = "",
+) -> int:
+    """把出题结果写入共享题库（question_bank），后续考核矩阵/题库选题可复用。
+
+    选择题把选项并入题干多行文本，保证题库详情信息完整。
+    按 (file_no, question) 去重：同一材料重复出题不重复入库。
+    """
+    from sqlalchemy import text
+
+    inserted = 0
+    for q in questions:
+        question = str(q.get("question") or "").strip()
+        if not question:
+            continue
+        options = q.get("options")
+        if isinstance(options, list):
+            lines = [question]
+            lines += [
+                f"{o.get('label')}. {o.get('text')}"
+                for o in options
+                if isinstance(o, dict) and str(o.get("text") or "").strip()
+            ]
+            question = "\n".join(lines)
+        dup = (await session.execute(
+            text(
+                "SELECT 1 FROM hr.question_bank "
+                "WHERE file_no = :fn AND question = :q AND is_deleted = false LIMIT 1"
+            ),
+            {"fn": file_no, "q": question},
+        )).first()
+        if dup:
+            continue
+        raw_score = q.get("score")
+        score = int(raw_score) if isinstance(raw_score, (int, float)) and raw_score > 0 else 10
+        await session.execute(
+            text(
+                "INSERT INTO hr.question_bank (id, file_no, question, answer, score, source, subject) "
+                "VALUES (gen_random_uuid(), :fn, :q, :a, :s, :src, :sub)"
+            ),
+            {
+                "fn": file_no,
+                "q": question,
+                "a": str(q.get("answer") or ""),
+                "s": score,
+                "src": source,
+                "sub": subject or None,
+            },
+        )
+        inserted += 1
+    if inserted:
+        await session.commit()
+    return inserted
 
 
 def _find_exam_template() -> str:

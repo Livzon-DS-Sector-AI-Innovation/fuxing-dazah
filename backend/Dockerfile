@@ -4,6 +4,8 @@ WORKDIR /app
 
 ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV UV_PYTHON_PREFERENCE=only-system
+# 业务日期/`date.today()` 按中国时区计算（容器默认 UTC 会整体偏移一天）
+ENV TZ=Asia/Shanghai
 
 # WeasyPrint 系统依赖（渲染 HTML→PDF）+ CJK 字体在 assets/fonts/ 随代码打包
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \

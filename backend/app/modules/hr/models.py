@@ -1053,7 +1053,7 @@ class QaAssessmentScore(BaseModel):
     wrong_questions: Mapped[list | None] = mapped_column(JSON, nullable=True, comment="错题序号（1-indexed）")
     total_score: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default="100", comment="总分")
     grade: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="等级：优秀/合格/不合格")
-    result_text: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="成绩说明")
+    result_text: Mapped[str | None] = mapped_column(Text, nullable=True, comment="成绩说明（错题多时长文本，不限长）")
     assessed_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="考核日期")
 
 
@@ -1131,7 +1131,7 @@ class JobRequirement(BaseModel):
     duties: Mapped[str | None] = mapped_column(Text, nullable=True, comment="岗位职责描述（胜任度报告「岗位要求回顾」用）")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="招聘中", server_default="招聘中", comment="招聘中/已关闭")
     urgency: Mapped[str | None] = mapped_column(String(8), nullable=True, comment="紧急程度")
-    owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="招聘负责人")
+    owner: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="用人部门负责人姓名")
     deadline: Mapped[date | None] = mapped_column(Date, nullable=True, comment="期望到岗日期")
 
 
@@ -1351,6 +1351,14 @@ class EmployeeTag(BaseModel):
     __table_args__ = (
         Index("ix_employee_tags_employee", "employee_number"),
         Index("ix_employee_tags_creator", "created_by"),
+        # 活跃行唯一（与 fix_batch2_manual 迁移一致，防 autogenerate 误删）
+        Index(
+            "uq_employee_tags_active",
+            "employee_number",
+            "tag_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
         {"schema": "hr"},
     )
 

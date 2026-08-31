@@ -15,36 +15,11 @@ import { buildQueryString } from './_utils'
 
 // ─── 简历解析 ───
 
-export async function parseResumePreviewAction(formData: FormData): Promise<{ data: any }> {
-  return fetchHrApi('/hr/candidates/parse-resume', {
-    method: 'POST',
-    body: formData,
-    errorMessage: '简历解析失败',
-  })
-}
-
 export async function parseResumeAction(formData: FormData) {
   return fetchHrApi('/hr/candidates/parse-resume', {
     method: 'POST',
     body: formData,
     errorMessage: '简历解析失败',
-  })
-}
-
-// ─── 候选人（弹窗表单版，FormData 入参） ───
-
-export async function createCandidateAction(formData: FormData): Promise<{ data: unknown }> {
-  // Construct JSON from FormData fields (as originally sent by CreateCandidateModal)
-  const data: Record<string, unknown> = {}
-  const keys = ['name', 'phone', 'email', 'position', 'department', 'gender', 'school', 'education', 'major', 'status', 'recommendation_level', 'match_report', 'resume_file_path']
-  for (const k of keys) {
-    const v = formData.get(k)
-    if (v) data[k] = v
-  }
-  return fetchHrApi('/hr/candidates', {
-    method: 'POST',
-    body: JSON.stringify(data),
-    errorMessage: '创建失败',
   })
 }
 

@@ -3,7 +3,7 @@
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,10 +35,15 @@ def get_service(session: AsyncSession = Depends(get_db)) -> TitleReviewService:
 
 
 def _apply_scope(service: TitleReviewService, ctx: HrAccessContext) -> None:
-    """把数据范围注入服务：受限用户仅能访问授权部门（或本人）的申报数据。"""
+    """把数据范围注入服务：受限用户仅能访问授权部门（或本人）的申报数据。
+
+    self_only 且身份无工号时 fail-closed：无法定位本人即拒绝，而不是放开全部。
+    """
     if ctx.is_unrestricted:
         service.set_scope(None, None)
     elif ctx.data_scope == "self_only":
+        if not ctx.employee_number:
+            raise HTTPException(403, "数据范围限制：无法定位本人对应的员工档案，请联系管理员")
         service.set_scope(None, ctx.employee_number)
     else:
         service.set_scope(set(ctx.scoped_departments), None)
@@ -405,14 +410,17 @@ async def export_results(
 async def export_roster(
     activity_id: UUID,
     payload: dict[str, Any],
-    ctx: HrAccessContext = Depends(require_hr_access("hr:title:manage")),
+    ctx: HrAccessContext = Depends(require_hr_access("hr:title:scores:read")),
     service: TitleReviewService = Depends(get_service),
 ) -> StreamingResponse:
     """HR 勾选评审合格人员 → 生成表格名单（序号/职务/姓名/职级认定结果）。"""
     from urllib.parse import quote
 
     _apply_scope(service, ctx)
-    ids = [UUID(str(i)) for i in (payload.get("application_ids") or [])]
+    try:
+        ids = [UUID(str(i)) for i in (payload.get("application_ids") or [])]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "申报 ID 格式不正确")
     content, filename = await service.generate_roster_docx(activity_id, ids)
     return StreamingResponse(
         iter([content]),

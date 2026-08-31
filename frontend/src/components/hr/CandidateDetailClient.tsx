@@ -2,11 +2,11 @@
 
 import CandidateAnalysisReportCard from './CandidateAnalysisReportCard'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   App, Button, Descriptions, Tag, Spin, Select, Input, Tabs,
-  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox,
+  Form, DatePicker, Modal, Card, InputNumber, Empty, Space, Checkbox, Upload,
 } from 'antd'
 import {
   ArrowLeftOutlined, ArrowUpOutlined, ArrowDownOutlined,
@@ -16,13 +16,15 @@ import {
 import type { Candidate, Interview, AiEvaluation, OnboardingTask } from '@/types/hr'
 import {
   updateCandidateAction, updateCandidateRecommendationLevelAction,
+  parseResumeAction,
   transitionCandidateStatus,
   createInterview, updateInterview, deleteInterview, evaluateInterview,
-  pushCandidateReview, decideCandidateReview,
+  pushCandidateReview, decideCandidateReview, pushOnboardingReview,
   fetchCandidateInterviews, fetchInterviewEvaluation, fetchPendingReviews,
   onboardCandidate, fetchResumePreview,
   fetchOnboardingTasks, updateOnboardingTask,
   fetchCandidateAnalysisReports, generateCandidateAnalysisReport,
+  fetchEmployeesAction,
 } from '@/actions/hr'
 import { base64ToObjectUrl } from '@/lib/hr'
 import AIScoreCard from './AIScoreCard'
@@ -92,14 +94,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   // 入职任务状态
   const [onboardingTasks, setOnboardingTasks] = useState<OnboardingTask[]>([])
   const [tasksLoading, setTasksLoading] = useState(false)
-  const [tasksLoaded, setTasksLoaded] = useState(false)
+  const tasksLoadedRef = useRef(false)
 
-  const loadOnboardingTasks = useCallback(async () => {
-    if (tasksLoaded) return
+  // force=true 时跳过「已加载」短路（点「刷新」强制重拉）
+  const loadOnboardingTasks = useCallback(async (force = false) => {
+    if (tasksLoadedRef.current && !force) return
     setTasksLoading(true)
     try { const r = await fetchOnboardingTasks(candidate.id); setOnboardingTasks(r.data || []) } catch { /* 仅已入职候选人有任务 */ }
-    finally { setTasksLoading(false); setTasksLoaded(true) }
-  }, [candidate.id, tasksLoaded])
+    finally { setTasksLoading(false); tasksLoadedRef.current = true }
+  }, [candidate.id])
   const [evaluations, setEvaluations] = useState<Record<string, AiEvaluation>>({})
 
   // 状态流转
@@ -150,6 +153,10 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     try {
       const r = await fetchCandidateInterviews(candidate.id)
       setInterviews(r.data || [])
+      // 已有胜任度报告随页面加载展示（自动生成的历史报告不再隐藏）
+      fetchCandidateAnalysisReports(candidate.id)
+        .then((d) => setAnalysisReports(d.data || []))
+        .catch(() => {})
       for (const iv of (r.data || [])) {
         try {
           const er = await fetchInterviewEvaluation(iv.id)
@@ -294,13 +301,64 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
   const recommendationColors: Record<string, string> = { '强烈推荐': 'green', '推荐': 'blue', '待定': 'orange', '不推荐': 'red' }
   const statusTransitions: Record<string, string[]> = {
     '待筛选': ['已筛选', '已拒绝'],
-    '已筛选': ['面试中', '已拒绝'],
+    '已筛选': ['待部门审核', '已拒绝'],
+    '待部门审核': ['面试中', '已拒绝'],
     '面试中': ['已面试', '已拒绝'],
     '已面试': ['录用中', '已拒绝'],
     '录用中': ['已录用', '已拒绝'],
     '已录用': ['待入职审批', '已拒绝'],
-    '待入职审批': ['已录用', '已入职', '已拒绝'],
+    // 已入职只能通过「入职操作」完成（创建入职记录/工号/子任务），不放裸流转
+    '待入职审批': ['已录用', '已拒绝'],
   }
+  // 审核人选择器：远程搜索在职员工（值存姓名，发卡按姓名查人）
+  const [reviewerOptions, setReviewerOptions] = useState<{ value: string; label: string }[]>([])
+  const [reviewerSearching, setReviewerSearching] = useState(false)
+  const reviewerSearchSeq = useRef(0)
+  const searchReviewerOptions = async (keyword: string) => {
+    const seq = ++reviewerSearchSeq.current
+    setReviewerSearching(true)
+    try {
+      const d = await fetchEmployeesAction({ status: '在职', keyword, page: 1, page_size: 20 })
+      if (seq !== reviewerSearchSeq.current) return  // 过期响应丢弃
+      setReviewerOptions(((d?.data as any)?.items || (d?.data as any) || []).map((e: any) => ({
+        value: e.name,
+        label: `${e.name}（${e.employee_number || ''}）`,
+      })))
+    } catch { /* 搜索失败静默 */ }
+    finally { if (seq === reviewerSearchSeq.current) setReviewerSearching(false) }
+  }
+
+  // 补传/更新简历：解析 PDF → 更新 resume_url → 刷新预览
+  const handleResumeUpload = async (file: File) => {
+    const fd = new FormData()
+    fd.append('resume', file)
+    try {
+      const r = await parseResumeAction(fd)
+      const path = (r?.data as any)?.resume_file_path || (r as any)?.resume_file_path
+      if (!path) throw new Error('简历解析失败，未返回文件路径')
+      await updateCandidateAction(candidate.id, { resume_url: path })
+      message.success('简历已更新')
+      window.location.reload()
+    } catch (err: any) { message.error(err.message || '上传失败') }
+    return false // 阻止 Upload 默认上传
+  }
+
+  // 发起入职审批（已录用状态 → 推送入职审批，审核人同意后由 HR 转为入职员工）
+  const handlePushOnboarding = () => {
+    Modal.confirm({
+      title: '发起入职审批',
+      content: '将把该候选人推送至入职审批流程，确认？',
+      okText: '确认发起',
+      onOk: async () => {
+        try {
+          await pushOnboardingReview(candidate.id, { pushed_by: 'HR' })
+          message.success('已发起入职审批')
+          router.refresh()
+        } catch (err: any) { message.error(err.message || '发起失败') }
+      },
+    })
+  }
+
   // 推送审核操作
   const handlePushReview = async () => {
     const v = await pushForm.validateFields()
@@ -358,7 +416,16 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
         {pdfError && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white">
             <p className="text-gray-500 mb-4">{pdfErrorMsg || '简历加载失败'}</p>
-            <Button onClick={() => window.location.reload()}>刷新页面</Button>
+            <Space>
+              <Upload
+                accept=".pdf"
+                showUploadList={false}
+                beforeUpload={handleResumeUpload}
+              >
+                <Button type="primary">上传简历</Button>
+              </Upload>
+              <Button onClick={() => window.location.reload()}>刷新页面</Button>
+            </Space>
           </div>
         )}
         {pdfUrl && (
@@ -417,7 +484,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <Descriptions.Item label="Offer状态">{candidate.offer_status ? <Tag color={candidate.offer_status === '已接受' ? 'green' : candidate.offer_status === '已拒绝' ? 'red' : 'blue'}>{candidate.offer_status}</Tag> : <span className="text-gray-400">未发送</span>}</Descriptions.Item>
           {candidate.status === '已录用' && (
             <Descriptions.Item label="入职操作">
-              <Button type="primary" onClick={() => setPushModalOpen(true)}>
+              <Button type="primary" onClick={handlePushOnboarding}>
                 📋 发起入职审批
               </Button>
             </Descriptions.Item>
@@ -609,8 +676,15 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
           <div className="text-sm text-gray-500 mb-3">
             推送至「{candidate.department}」用人部门负责人
           </div>
-          <Form.Item name="reviewer" label="审核人姓名" rules={[{ required: true, message: '请输入用人部门负责人姓名' }]}>
-            <Input placeholder="输入姓名，系统将发送飞书通知" />
+          <Form.Item name="reviewer" label="用人部门负责人" rules={[{ required: true, message: '请选择用人部门负责人' }]}>
+            <Select
+              showSearch
+              filterOption={false}
+              loading={reviewerSearching}
+              placeholder="搜索并选择员工（姓名），将发送飞书通知"
+              options={reviewerOptions}
+              onSearch={searchReviewerOptions}
+            />
           </Form.Item>
           <Form.Item name="push_note" label="推送备注（选填）">
             <Input.TextArea rows={3} placeholder="写给用人部门的话，如：GMP经验对口，建议面试" />
@@ -625,7 +699,7 @@ export default function CandidateDetailClient({ candidate }: CandidateDetailClie
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-medium">入职任务</h3>
-        <Button size="small" onClick={() => { setTasksLoaded(false); loadOnboardingTasks() }}>刷新</Button>
+        <Button size="small" onClick={() => loadOnboardingTasks(true)}>刷新</Button>
       </div>
       {tasksLoading ? <Spin className="flex justify-center py-12" /> :
         onboardingTasks.length === 0 ? <Empty description="暂无入职任务（入职审批通过后自动创建）" className="py-12" /> :

@@ -12,19 +12,47 @@ logger = logging.getLogger(__name__)
 
 
 async def _lookup_open_id(name: str) -> str | None:
-    """通过姓名查找飞书open_id（仅查 identity.users，系统登录过的用户）。"""
+    """通过姓名查找飞书open_id。
+
+    优先 identity.users（SSO 登录，全局应用域）；同名多人返回 None
+    （无法唯一定位，宁可不发也不发错人）；identity 无记录时兜底查
+    hr.employees.feishu_open_id（覆盖从未登录内网的培训管理员）。
+    """
     try:
         from sqlalchemy import text
         from app.core.database import async_session_factory
         async with async_session_factory() as db:
             r = await db.execute(
-                text("SELECT feishu_open_id FROM identity.users WHERE name = :name AND is_deleted = false LIMIT 1"),
+                text(
+                    "SELECT DISTINCT feishu_open_id FROM identity.users "
+                    "WHERE name = :name AND is_deleted = false "
+                    "AND feishu_open_id IS NOT NULL"
+                ),
                 {"name": name},
             )
-            row = r.fetchone()
-            if row and row[0]:
-                return row[0]
-        logger.warning(f"未找到系统用户: {name}（未登录过系统，无法推送）")
+            rows = r.fetchall()
+            if len(rows) == 1 and rows[0][0]:
+                return rows[0][0]
+            if len(rows) > 1:
+                logger.warning(f"同名系统用户 {name} 有 {len(rows)} 个，无法唯一定位，跳过推送")
+                return None
+            # 兜底：从未登录过内网的员工用档案 open_id（可能非全局应用域）
+            r = await db.execute(
+                text(
+                    "SELECT DISTINCT feishu_open_id FROM hr.employees "
+                    "WHERE name = :name AND is_deleted = false "
+                    "AND feishu_open_id IS NOT NULL"
+                ),
+                {"name": name},
+            )
+            rows = r.fetchall()
+            if len(rows) == 1 and rows[0][0]:
+                logger.warning(f"{name} 仅命中员工档案 open_id（可能非全局应用域）")
+                return rows[0][0]
+            if len(rows) > 1:
+                logger.warning(f"同名员工 {name} 有 {len(rows)} 个，无法唯一定位，跳过推送")
+                return None
+        logger.warning(f"未找到用户 {name} 的飞书open_id（未登录过系统，无法推送）")
         return None
     except Exception as e:
         logger.warning(f"查找open_id失败({name}): {e}")
@@ -73,27 +101,30 @@ async def send_review_card(review, candidate, jd, push_note: str | None) -> bool
 
     jd_name = jd.position_name if jd else candidate.position or "未知岗位"
 
+    elements: list = [
+        {"tag": "markdown", "content": md_content},
+        {"tag": "hr"},
+    ]
+    base_url = _get_base_url()
+    if base_url:
+        elements.append({
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "查看详情并审核"},
+                    "type": "primary",
+                    "url": f"{base_url}/hr/recruitment/{candidate.id}",
+                }
+            ],
+        })
     card = {
         "config": {"wide_screen_mode": True},
         "header": {
             "title": {"tag": "plain_text", "content": f"📋 候选人推送 — {jd_name}"},
             "template": "blue",
         },
-        "elements": [
-            {"tag": "markdown", "content": md_content},
-            {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "查看详情并审核"},
-                        "type": "primary",
-                        "url": f"{_get_base_url()}/hr/recruitment/{candidate.id}",
-                    }
-                ],
-            },
-        ],
+        "elements": elements,
     }
 
     return await _send_card(open_id, card)
@@ -132,6 +163,9 @@ async def send_decision_notification(review, candidate, decision: str, comment: 
 
 
 def _get_base_url() -> str:
-    """获取系统前端地址"""
+    """系统前端地址（Settings.FRONTEND_URL）；未配置返回空串，调用方跳过按钮。
+
+    不再回退 localhost——生产未配置时按钮会指向收件人本机，纯属误导。
+    """
     settings = get_settings()
-    return getattr(settings, "APP_BASE_URL", "http://localhost:3000")
+    return (settings.FRONTEND_URL or "").strip().rstrip("/")

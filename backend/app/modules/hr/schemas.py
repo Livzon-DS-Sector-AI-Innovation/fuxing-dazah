@@ -257,10 +257,10 @@ class EmployeeResponse(EmployeeBase):
 
 
 def mask_sensitive_fields(data: dict, has_sensitive: bool) -> dict:
-    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证"""
+    """根据权限脱敏：无 hr:profile:sensitive 权限时屏蔽身份证/手写签名"""
     if has_sensitive:
         return data
-    for key in ("id_card", "id_card_address"):
+    for key in ("id_card", "id_card_address", "cert_sign_image"):
         if data.get(key):
             data[key] = "*" * len(str(data[key]))
     return data
@@ -927,7 +927,7 @@ class JobRequirementCreate(BaseModel):
     requirements: str | None = None
     duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     urgency: str | None = Field(None, max_length=8, description="紧急/普通")
-    owner: str | None = Field(None, max_length=64)
+    owner: str | None = Field(None, max_length=64, description="用人部门负责人姓名（推送审核默认发给此人）")
     deadline: date | None = None
 
 
@@ -939,7 +939,7 @@ class JobRequirementUpdate(BaseModel):
     duties: str | None = Field(None, description="岗位职责（胜任度报告用）")
     status: str | None = Field(None, max_length=16)
     urgency: str | None = Field(None, max_length=8)
-    owner: str | None = Field(None, max_length=64)
+    owner: str | None = Field(None, max_length=64, description="用人部门负责人姓名（推送审核默认发给此人）")
     deadline: date | None = None
 
 
@@ -1008,6 +1008,7 @@ class CandidateUpdate(BaseModel):
     work_years: int | None = None
     match_report: str | None = None
     notes: str | None = None
+    resume_url: str | None = Field(None, max_length=512, description="简历文件路径（补传/更新简历）")
 
 
 class CandidateResponse(BaseModel):
@@ -1068,7 +1069,7 @@ class InterviewUpdate(BaseModel):
     status: str | None = Field(None, max_length=16, description="待安排/已安排/已完成/已取消")
     transcript_text: str | None = None
     notes: str | None = None
-    calendar_event_id: str | None = Field(None, max_length=128)
+    # calendar_event_id 为服务端日历集成内部字段，只读（响应专用），不接受客户端写入
 
 
 class InterviewResponse(BaseModel):

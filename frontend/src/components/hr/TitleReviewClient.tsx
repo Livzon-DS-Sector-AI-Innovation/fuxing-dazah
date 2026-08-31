@@ -39,6 +39,21 @@ export default function TitleReviewClient() {
 
   const selected = activities.find((a) => a.id === selectedId)
 
+  // 纯评委（无管理/查看权限）引导到投票页面，避免看到一堆权限报错
+  if (!hasPermission('hr:title:read')) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审</h1>
+          <p className="text-[14px] text-[var(--color-steel)]">您以评委身份进入，请前往「职称评审投票」页面完成投票任务。</p>
+        </div>
+        <Card>
+          <a className="text-[var(--color-primary)]" href="/hr/title-judge">前往我的投票 →</a>
+        </Card>
+      </div>
+    )
+  }
+
   const items = [
     {
       key: 'activity',
@@ -74,21 +89,6 @@ export default function TitleReviewClient() {
       ) : null,
     },
   ]
-
-  if (!hasPermission('hr:title:read')) {
-    // 纯评委：引导到投票页面
-    return (
-      <div className="space-y-4">
-        <div>
-          <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-1">职称评审</h1>
-          <p className="text-[14px] text-[var(--color-steel)]">您以评委身份进入，请前往「职称评审投票」页面完成投票任务。</p>
-        </div>
-        <Card>
-          <a className="text-[var(--color-primary)]" href="/hr/title-judge">前往我的投票 →</a>
-        </Card>
-      </div>
-    )
-  }
 
   return (
     <div className="space-y-4">
