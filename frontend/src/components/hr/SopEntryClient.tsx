@@ -2,11 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Tooltip } from 'antd'
-import { DownloadOutlined, FileZipOutlined, ReloadOutlined, SendOutlined, TagsOutlined } from '@ant-design/icons'
+import { DownloadOutlined, FileZipOutlined, ReloadOutlined, TagsOutlined } from '@ant-design/icons'
 
 import {
-  fetchSopTrainingEntries, transferSopTrainingEntry, batchTransferSopEntries,
-  generateSopTrainingMaterials, updateSopTrainingEntry,
+  fetchSopTrainingEntries, generateSopTrainingMaterials, updateSopTrainingEntry,
   fetchSopClassifications, fetchSopPersonnel, exportSopTrainingEntries,
   fetchSopTrainingRecords, fetchDepartmentsAction,
 } from '@/actions/hr'
@@ -29,7 +28,6 @@ export default function SopEntryClient() {
   const [deptOptions, setDeptOptions] = useState<{ label: string; value: string }[]>([])
   const [recordOptions, setRecordOptions] = useState<{ label: string; value: string }[]>([])
   const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([])
-  const [transferring, setTransferring] = useState(false)
   const [generating, setGenerating] = useState(false)
 
   // 分类人员弹窗
@@ -61,37 +59,15 @@ export default function SopEntryClient() {
     ).catch(() => {})
   }, [load])
 
-  const handleBatchTransfer = async () => {
-    if (!selectedKeys.length) { message.warning('请先勾选要转训的记录'); return }
-    setTransferring(true)
-    try {
-      const res = await batchTransferSopEntries(selectedKeys.map(String))
-      message.success(res.message || '批量转培训完成')
-      setSelectedKeys([])
-      load()
-    } catch (e: any) { message.error(e.message || '批量转培训失败') }
-    finally { setTransferring(false) }
-  }
-
   const handleBatchMaterials = async () => {
     if (!selectedKeys.length) { message.warning('请先勾选记录（多条SOP合并生成一套材料）'); return }
     setGenerating(true)
     try {
       const { base64, filename } = await generateSopTrainingMaterials(selectedKeys.map(String))
       downloadBase64File(base64, filename)
-      message.success('一套培训材料已生成（每部门一份通知+签到表）')
+      message.success('一套培训材料已生成（按分类人员）')
     } catch (e: any) { message.error(e.message || '生成失败') }
     finally { setGenerating(false) }
-  }
-
-  const handleTransfer = async (e: SopTrainingEntry) => {
-    setTransferring(true)
-    try {
-      const res = await transferSopTrainingEntry(e.id)
-      message.success(res.data?.trainer ? `已转培训，培训师：${res.data.trainer}` : '已转培训')
-      load()
-    } catch (err: any) { message.error(err.message || '转培训失败') }
-    finally { setTransferring(false) }
   }
 
   const handleExport = async () => {
@@ -189,16 +165,12 @@ export default function SopEntryClient() {
       title: '操作', width: 150, render: (_: any, r: SopTrainingEntry) => (
         canManage ? (
           <Space size={4}>
-            {r.status !== '已转训' && (
-              <Button type="text" size="small" icon={<SendOutlined />}
-                loading={transferring} onClick={() => handleTransfer(r)}>转培训</Button>
-            )}
             <Button type="text" size="small" icon={<TagsOutlined />} onClick={() => openPersonnelModal(r)}>分类人员</Button>
           </Space>
         ) : '-'
       ),
     },
-  ], [transferring, canManage, load, handleTransfer])
+  ], [canManage, load])
 
   return (
     <div className="space-y-4">
@@ -206,7 +178,7 @@ export default function SopEntryClient() {
         <div>
           <h1 className="text-[22px] font-semibold">SOP培训二级表</h1>
           <p className="text-[13px] text-[var(--color-steel)]">
-            登记提交后按涉及部门自动生成；勾选多条可一起转训、合并生成一套材料
+            登记表「转培训」后按涉及部门自动收录；先「分类人员」再勾选生成一套材料（多选合并，内容并列体现）
           </p>
         </div>
         <Space>
@@ -224,10 +196,6 @@ export default function SopEntryClient() {
             filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())} />
           <Select allowClear style={{ width: 130 }} placeholder="按状态筛选" value={status} onChange={(v) => setStatus(v)}
             options={[{ label: '待转训', value: '待转训' }, { label: '已转训', value: '已转训' }]} />
-          {canManage && (
-            <Button icon={<SendOutlined />} loading={transferring}
-              onClick={handleBatchTransfer}>批量转培训</Button>
-          )}
           {canGenerateDoc && (
             <Button type="primary" icon={<FileZipOutlined />} loading={generating}
               onClick={handleBatchMaterials}>生成一套材料</Button>

@@ -136,7 +136,7 @@ export default function SopMasterClient() {
         message.success('已更新')
       } else {
         await createSopTrainingRecord(payload)
-        message.success('已保存草稿，点「提交/通知」后生成二级表并通知培训管理员')
+        message.success('已保存草稿，点「转培训」后收录到各部门二级表并通知培训管理员')
       }
       setModalOpen(false)
       load()
@@ -155,9 +155,9 @@ export default function SopMasterClient() {
     setSubmitting(r.id)
     try {
       const res = await submitSopTrainingRecord(r.id)
-      message.success(res.message || '已提交')
+      message.success(res.message || '已转培训，内容已收录到各部门二级表')
       load()
-    } catch (e: any) { message.error(e.message || '提交失败') }
+    } catch (e: any) { message.error(e.message || '转培训失败') }
     finally { setSubmitting(null) }
   }
 
@@ -208,7 +208,7 @@ export default function SopMasterClient() {
     },
     {
       title: '进度', dataIndex: 'status', width: 80, fixed: 'right' as const,
-      render: (s: string) => <Tag color={s === '已提交' ? 'blue' : 'default'}>{s === '已提交' ? '已提交' : '草稿'}</Tag>,
+      render: (s: string) => <Tag color={s === '已提交' ? 'blue' : 'default'}>{s === '已提交' ? '已转训' : '草稿'}</Tag>,
     },
     {
       title: '操作', width: 260, fixed: 'right' as const, render: (_: any, r: SopTrainingRecord) => (
@@ -216,7 +216,7 @@ export default function SopMasterClient() {
           {canManage && r.status !== '已提交' && (
             <Button type="text" size="small" icon={<SendOutlined />}
               loading={submitting === r.id}
-              onClick={() => handleSubmit(r)}>提交/通知</Button>
+              onClick={() => handleSubmit(r)}>转培训</Button>
           )}
           {canGenerateDoc && (
             <Button type="text" size="small" icon={<DownloadOutlined />}
