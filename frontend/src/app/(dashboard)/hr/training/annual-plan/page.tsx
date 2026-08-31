@@ -153,7 +153,7 @@ function PlanDetailView({ planId }: { planId: string }) {
   // 加载部门选项和培训师选项
   useEffect(() => {
     fetchSopDepartments()
-      .then(d => setDeptOptions((d.data||[]).map((v:string)=>({value:v,label:v}))))
+      .then(d => setDeptOptions([...(d.data||[]).map((v:string)=>({value:v,label:v})), { value: '厂级', label: '厂级' }]))
       .catch(() => {})
     fetchTrainers({ page_size: 200 })
       .then(d => setTrainerOptions((d.data||[]).map((t:any)=>({value:t.name,label:`${t.name}(${t.department})`}))))

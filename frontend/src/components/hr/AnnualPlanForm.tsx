@@ -80,7 +80,7 @@ export default function AnnualPlanForm() {
           <Select
             showSearch
             placeholder="选择部门"
-            options={departments.map((d) => ({ label: d, value: d }))}
+            options={[...departments.map((d) => ({ label: d, value: d })), { label: '厂级', value: '厂级' }]}
             filterOption={(input, option) =>
               (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
             }
