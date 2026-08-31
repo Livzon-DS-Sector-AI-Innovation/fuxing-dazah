@@ -806,18 +806,22 @@ async def generate_record_materials(
         ),
         {"dept": initiator},
     )).fetchall()
-    names = [r[0] for r in emp_rows]
-    trainer_names: set[str] = set()
+    # 姓名 → 显示部门（培训师显式标注「部门·培训师」，与普通员工区分）
+    name_depts: dict[str, str] = {r[0]: initiator for r in emp_rows}
+    trainer_map: dict[str, str] = {}
     for dept in departments:
-        level1 = await _lookup_level1_trainer(session, str(dept).strip())
+        dept = str(dept).strip()
+        level1 = await _lookup_level1_trainer(session, dept)
         if level1:
-            trainer_names.add(level1)
-    # 主办部门一级培训师作为授课讲师（如涉及部门有则其一；兜底登记表填写的培训师）
+            trainer_map.setdefault(level1, dept)
+    # 主办部门一级培训师作为授课讲师（涉及部门有则取其一；兜底登记表填写的培训师）
     initiator_trainer = await _lookup_level1_trainer(session, initiator)
-    lead_trainer = initiator_trainer or (sorted(trainer_names)[0] if trainer_names else (trainer or ""))
-    for t in sorted(trainer_names):
-        if t and t not in names:
-            names.append(t)
+    lead_trainer = initiator_trainer or (sorted(trainer_map)[0] if trainer_map else (trainer or ""))
+    for t, tdept in sorted(trainer_map.items()):
+        label = f"{t}（{tdept}·培训师）"
+        if label not in name_depts:
+            name_depts[label] = tdept or initiator
+    names = list(name_depts.keys())
     sick, maternity = await _query_leave_counts(session, initiator)
 
     questions = await _lookup_exam_questions(session, [record.file_no] if record.file_no else [])
@@ -834,7 +838,7 @@ async def generate_record_materials(
             sign_buf = generate_training_sign_in_sheet(TrainingSignInSheetInput(
                 training_date=today, department=initiator, training_subject=subject,
                 topic=record.change_note or subject, instructor=lead_trainer,
-                employee_names=names, employee_departments={n: initiator for n in names},
+                employee_names=names, employee_departments=name_depts,
                 sick_count=sick, maternity_count=maternity,
             ))
             zf.writestr("培训通知.docx", notif_buf.getvalue())
