@@ -845,8 +845,10 @@ async def generate_record_materials(
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
             # 第四份文件：培训效果评估表（7.11 模板）
-            from app.modules.hr.evaluation_document_generator import generate_training_evaluation
-            from app.modules.hr.schemas import TrainingEvaluationInput
+            from app.modules.hr.evaluation_document_generator import (
+                TrainingEvaluationInput,
+                generate_training_evaluation,
+            )
 
             zf.writestr(
                 "培训效果评估表.docx",
@@ -855,6 +857,7 @@ async def generate_record_materials(
                     trainer=lead_trainer or None,
                     training_method=record.method or None,
                     trainee_names=names,
+                    expected_count=len(names),
                 )).getvalue(),
             )
     except FileNotFoundError as e:
@@ -973,8 +976,10 @@ async def batch_generate_materials(
             if questions:
                 zf.writestr("培训试卷.docx", _generate_exam_docx(subject, questions).getvalue())
             # 第四份文件：培训效果评估表（7.11 模板）
-            from app.modules.hr.evaluation_document_generator import generate_training_evaluation
-            from app.modules.hr.schemas import TrainingEvaluationInput
+            from app.modules.hr.evaluation_document_generator import (
+                TrainingEvaluationInput,
+                generate_training_evaluation,
+            )
 
             zf.writestr(
                 "培训效果评估表.docx",
@@ -983,6 +988,7 @@ async def batch_generate_materials(
                     trainer=trainer or None,
                     training_method=(rows[0].method or None),
                     trainee_names=names,
+                    expected_count=len(names),
                 )).getvalue(),
             )
     except FileNotFoundError as e:
