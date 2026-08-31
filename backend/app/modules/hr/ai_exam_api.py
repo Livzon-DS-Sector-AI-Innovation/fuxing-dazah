@@ -56,7 +56,14 @@ async def api_generate_exam(
         logging.getLogger(__name__).warning("题库写入失败，不影响出题结果", exc_info=True)
         await session.rollback()
         bank_inserted = 0
-    return success_response(data={**result, "bank_inserted": bank_inserted}, message=f"出题完成，{bank_inserted} 题已入题库")
+    degraded = bool(result.get("degraded"))
+    message = (
+        "出题完成，但 AI 出题失败已降级为本地规则出题（题目质量有限）；"
+        "请检查服务器 HR_AI_API_KEY 配置与 api.deepseek.com 网络连通性"
+        if degraded
+        else f"出题完成，{bank_inserted} 题已入题库"
+    )
+    return success_response(data={**result, "bank_inserted": bank_inserted}, message=message)
 
 
 @router.post("/export", summary="导出考试试卷")

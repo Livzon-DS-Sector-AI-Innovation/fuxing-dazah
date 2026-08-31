@@ -311,17 +311,23 @@ async def generate_exam(file_bytes: bytes, filename: str, config: dict[str, Any]
         raise ValueError("文件中未检测到文本内容")
 
     result: ExamQuestions | None = None
+    degraded = False
     if hr_config.HR_AI_API_KEY:
         try:
             result = await _generate_via_ai(content, config)
         except Exception:
             logger.exception("AI 出题失败，降级为本地规则出题")
+            degraded = True
     if result is None:
+        degraded = True
         result = _generate_local(content, config)
 
     for key in EXAM_QUESTION_KEYS:
         for i, q in enumerate(result.get(key, [])):
             q["number"] = i + 1
+    # 显式标记降级：API 层据此在响应里提示用户「题目为本地规则生成」
+    if degraded:
+        result["degraded"] = True  # type: ignore[assignment]
 
     return result
 
