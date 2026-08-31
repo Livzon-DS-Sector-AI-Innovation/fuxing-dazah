@@ -954,25 +954,51 @@ async def sop_entry_classifications(
     session: AsyncSession = Depends(get_db),
     hr_scope: HrAccessContext = Depends(get_hr_scope),
 ):
-    """该部门员工被打上的全部标签（所有创建人汇总），作为二级表分类选项。"""
+    """二级表分类选项 = 员工档案分类清单 ∪ 该部门员工实际标签（所有创建人汇总）。
+
+    员工档案「分类管理」建的清单即使尚未给本部门员工打标签（0 人）也展示，
+    人数按本部门实际标签统计——保证与员工档案的分类完全关联。
+    """
     # 数据范围：受限用户只能查授权部门（员工标签/分类属于员工 PII）
     if not hr_scope.is_unrestricted:
         if not hr_scope.scoped_departments:
             raise HTTPException(403, "数据范围限制：仅可访问本人相关数据")
         if department not in hr_scope.scoped_departments:
             raise HTTPException(403, f"数据范围限制：仅可访问授权部门（{department}）")
-    rows = (await session.execute(
+    # ① 员工档案分类清单（全量，不按创建人隔离——二级表按部门收人，需跨创建人）
+    catalog = (await session.execute(
+        text(
+            "SELECT name FROM hr.employee_classifications "
+            "WHERE is_deleted = false ORDER BY created_at"
+        )
+    )).fetchall()
+    # ② 该部门员工实际标签计数
+    tag_rows = (await session.execute(
         text("""
             SELECT t.tag_name, count(DISTINCT t.employee_number)
             FROM hr.employee_tags t
             JOIN hr.employees e ON e.employee_number = t.employee_number
             WHERE t.is_deleted = false AND e.is_deleted = false
               AND (e.department = :dept OR e.actual_department = :dept)
-            GROUP BY t.tag_name ORDER BY t.tag_name
+            GROUP BY t.tag_name
         """),
         {"dept": department},
     )).fetchall()
-    return success_response(data=[{"tag_name": r[0], "count": r[1]} for r in rows])
+    counts = {r[0]: r[1] for r in tag_rows}
+    seen: set[str] = set()
+    result: list[dict] = []
+    for r in catalog:
+        name = r[0]
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tag_name": name, "count": counts.get(name, 0)})
+    for name, cnt in sorted(counts.items()):
+        if name in seen:
+            continue
+        seen.add(name)
+        result.append({"tag_name": name, "count": cnt})
+    return success_response(data=result)
 
 
 @router.get("/sop-training-entries/personnel", summary="分类人员查询")

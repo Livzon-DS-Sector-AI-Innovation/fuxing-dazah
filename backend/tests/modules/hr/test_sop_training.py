@@ -183,7 +183,10 @@ class TestSopRegisterFlow:
 
         res = await client.get("/api/v1/hr/sop-training-entries/classifications", params={"department": "甲部门"})
         assert res.status_code == 200, res.text
-        assert res.json()["data"][0]["tag_name"] == "新员工"
+        names = [d["tag_name"] for d in res.json()["data"]]
+        # 分类选项 = 员工档案分类清单 ∪ 实际标签（本部门计数）
+        assert "新员工" in names
+        assert any(d["tag_name"] == "新员工" and d["count"] == 1 for d in res.json()["data"])
 
         res2 = await client.get("/api/v1/hr/sop-training-entries/personnel", params={"department": "甲部门", "classification": "新员工"})
         assert res2.status_code == 200, res2.text
