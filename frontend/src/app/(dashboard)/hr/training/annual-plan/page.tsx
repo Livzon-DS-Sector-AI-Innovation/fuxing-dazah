@@ -50,6 +50,10 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
     return Object.values(map).sort((a, b) => a.dept.localeCompare(b.dept, 'zh'))
   }, [data])
 
+  // 厂级计划单独归类：固定卡片常显，与部门计划分开展示
+  const factoryPlans = plans.filter((p) => p.dept === '厂级')
+  const deptPlans = plans.filter((p) => p.dept !== '厂级')
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -83,30 +87,62 @@ function PlanListView({ year, keyword, onYearChange, onKeywordChange, onReload }
 
       {loading ? (
         <div className="flex justify-center py-20"><Spin size="large" /></div>
-      ) : plans.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-          <p>{year}年暂无年度培训计划</p>
-          <p className="text-sm mt-2">点击上方按钮上传 Excel 导入</p>
-        </div>
       ) : (
-        <Row gutter={[16, 16]}>
-          {plans.map((plan) => (
-            <Col xs={24} sm={12} lg={8} key={plan.planId}>
-              <Card hoverable className="h-full"
-                onClick={() => router.push(`/hr/training/annual-plan?id=${plan.planId}`)}>
+        <>
+          {/* 厂级培训：固定卡片常显（无计划时点击进入创建） */}
+          <div className="mb-2 text-sm font-medium text-[var(--color-charcoal)]">厂级培训（全体员工，所有部门可见）</div>
+          <Row gutter={[16, 16]} className="mb-6">
+            <Col xs={24} sm={12} lg={8}>
+              <Card hoverable className="h-full border-blue-300"
+                onClick={() => {
+                  if (factoryPlans.length > 0) {
+                    router.push(`/hr/training/annual-plan?id=${factoryPlans[0].planId}`)
+                  } else {
+                    router.push('/hr/training/annual-plan/new')
+                  }
+                }}>
                 <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-500 text-lg font-bold shrink-0">
-                    {plan.dept.charAt(0)}
-                  </div>
+                  <div className="w-10 h-10 rounded-lg bg-blue-500 flex items-center justify-center text-white text-lg font-bold shrink-0">厂</div>
                   <div className="min-w-0">
-                    <h3 className="text-[16px] font-semibold text-[var(--color-charcoal)] mb-1 truncate">{plan.dept}</h3>
-                    <p className="text-[14px] text-[var(--color-steel)]">{plan.year} 年度 · {plan.count} 条培训计划</p>
+                    <h3 className="text-[16px] font-semibold text-[var(--color-charcoal)] mb-1">厂级培训</h3>
+                    <p className="text-[14px] text-[var(--color-steel)]">
+                      {factoryPlans.length > 0
+                        ? `${year} 年度 · ${factoryPlans[0].count} 条培训计划`
+                        : '暂无厂级计划，点击新建'}
+                    </p>
                   </div>
                 </div>
               </Card>
             </Col>
-          ))}
-        </Row>
+          </Row>
+
+          <div className="mb-2 text-sm font-medium text-[var(--color-charcoal)]">部门计划</div>
+          {deptPlans.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+              <p>{year}年暂无部门培训计划</p>
+              <p className="text-sm mt-2">点击上方按钮上传 Excel 导入</p>
+            </div>
+          ) : (
+            <Row gutter={[16, 16]}>
+              {deptPlans.map((plan) => (
+                <Col xs={24} sm={12} lg={8} key={plan.planId}>
+                  <Card hoverable className="h-full"
+                    onClick={() => router.push(`/hr/training/annual-plan?id=${plan.planId}`)}>
+                    <div className="flex items-start gap-4">
+                      <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center text-blue-500 text-lg font-bold shrink-0">
+                        {plan.dept.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <h3 className="text-[16px] font-semibold text-[var(--color-charcoal)] mb-1 truncate">{plan.dept}</h3>
+                        <p className="text-[14px] text-[var(--color-steel)]">{plan.year} 年度 · {plan.count} 条培训计划</p>
+                      </div>
+                    </div>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          )}
+        </>
       )}
     </div>
   )
