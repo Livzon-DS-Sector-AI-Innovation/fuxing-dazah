@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Typography, Divider, Empty } from 'antd'
-import { ExperimentOutlined } from '@ant-design/icons'
+import { Typography, Divider, Empty, Button, Space } from 'antd'
+import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
+import Link from 'next/link'
 import { LcUploader, LcReportView } from '@/components/quality'
 import type { UploadLcResponse } from '@/types/quality'
 
@@ -21,6 +22,19 @@ export default function QualityPage() {
       </Paragraph>
 
       <LcUploader onResult={setResult} />
+
+      {result && result.record_id && (
+        <Space style={{ marginTop: 12 }}>
+          <Link href={`/quality/history/${result.record_id}`}>
+            <Button type="primary" icon={<FileTextOutlined />}>
+              生成报告单
+            </Button>
+          </Link>
+          <Link href="/quality/history">
+            <Button icon={<HistoryOutlined />}>历史记录</Button>
+          </Link>
+        </Space>
+      )}
 
       {result && (
         <>
