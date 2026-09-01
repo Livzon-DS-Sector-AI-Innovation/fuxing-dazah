@@ -89,4 +89,56 @@ export interface LcReportData {
 export interface UploadLcResponse {
   filename: string
   report: LcReportData
+  record_id: string | null
+}
+
+// ─── 检验记录列表/详情 ───
+
+export interface InspectionRecordListItem {
+  id: string
+  product_name: string
+  batch_number: string
+  form_id: string | null
+  standard_type: string | null
+  all_pass: boolean
+  has_oot: boolean
+  excel_filename: string | null
+  created_at: string | null
+}
+
+export interface InspectionRecordDetail extends InspectionRecordListItem {
+  impurities: ImpurityResult[]
+  report: LcReportData
+}
+
+// ─── 报告单记录 ───
+
+export interface ReportRecord {
+  id: string
+  inspection_record_id: string
+  template_path: string
+  product_name: string
+  batch_number: string
+  file_path: string
+  file_size: number | null
+  created_at: string | null
+}
+
+// ─── 汇总统计 ───
+
+export interface ProductSummary {
+  product_name: string
+  total: number
+  pass_count: number
+  fail_count: number
+  oot_count: number
+}
+
+export interface HistorySummary {
+  total: number
+  pass_count: number
+  fail_count: number
+  oot_count: number
+  pass_rate: number
+  products: ProductSummary[]
 }

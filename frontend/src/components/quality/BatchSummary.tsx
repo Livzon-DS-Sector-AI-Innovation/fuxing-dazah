@@ -55,7 +55,7 @@ export default function BatchSummary({ detail, summaryText }: Props) {
                     <Space>
                       <Text>第一份: {(imp.first_percent ?? 0) * 100}%</Text>
                       <Text>第二份: {(imp.second_percent ?? 0) * 100}%</Text>
-                      <Text type="secondary">限度: {imp.limit_value != null ? `${imp.limit_value * 100}%` : '-'}</Text>
+                      <Text type="secondary">限度: {imp.limit != null ? `${imp.limit * 100}%` : '-'}</Text>
                     </Space>
                   }
                 />
