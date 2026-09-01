@@ -17,7 +17,7 @@ from fastapi import (
     Query,
     UploadFile,
 )
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -691,19 +691,33 @@ async def upload_document(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    dest = DOCS_STORAGE_DIR / product_name / str(category_id)
-    dest.mkdir(parents=True, exist_ok=True)
-    stored_name = f"{uuid.uuid4()}{Path(file.filename or 'unknown').suffix}"
-    file_path = dest / stored_name
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="文件为空")
-    file_path.write_bytes(content)
+
+    from app.core.storage import is_enabled, upload_object
+
+    stored_name = f"{uuid.uuid4()}{Path(file.filename or 'unknown').suffix}"
+    object_key = f"docs/{product_name}/{category_id}/{stored_name}"
+    if is_enabled():
+        # 服务器部署：存 MinIO（模块 bucket：quality），本地不落盘
+        upload_object(
+            "quality", object_key, content, len(content),
+            file.content_type or "application/octet-stream",
+        )
+        stored_path = f"minio://quality/{object_key}"
+    else:
+        # 本地开发兜底：存本地目录
+        dest = DOCS_STORAGE_DIR / product_name / str(category_id)
+        dest.mkdir(parents=True, exist_ok=True)
+        file_path = dest / stored_name
+        file_path.write_bytes(content)
+        stored_path = str(file_path)
 
     doc = await create_document(
         db, category_id=category_id, product_name=product_name,
         original_filename=file.filename or "unknown",
-        file_path=str(file_path), file_size=len(content),
+        file_path=stored_path, file_size=len(content),
     )
     return success_response(data={"id": str(doc.id), "original_filename": doc.original_filename})
 
@@ -715,6 +729,22 @@ async def download_document(
     doc = await get_document(db, doc_id)
     if not doc or not doc.file_path:
         raise HTTPException(status_code=404, detail="文件不存在")
+    if doc.file_path.startswith("minio://"):
+        # 服务器部署：从 MinIO 读取
+        from app.core.storage import get_object
+
+        object_key = doc.file_path[len("minio://"):]
+        obj = get_object("quality", object_key)
+        if obj is None:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        data, content_type = obj
+        return Response(
+            content=data,
+            media_type=content_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{doc.original_filename}"'
+            },
+        )
     fp = Path(doc.file_path)
     if not fp.exists():
         raise HTTPException(status_code=404, detail="文件已被清理")
@@ -728,4 +758,18 @@ async def delete_doc(
     doc = await delete_document(db, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="文件不存在")
+    # 同步删除存储对象（MinIO 或本地文件），失败仅记日志不影响软删
+    try:
+        if doc.file_path and doc.file_path.startswith("minio://"):
+            from app.core.storage import delete_object
+
+            delete_object("quality", doc.file_path[len("minio://"):])
+        elif doc.file_path:
+            fp = Path(doc.file_path)
+            if fp.exists():
+                fp.unlink()
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning("删除标准文档存储对象失败: %s", doc.id, exc_info=True)
     return success_response(message="已删除")
