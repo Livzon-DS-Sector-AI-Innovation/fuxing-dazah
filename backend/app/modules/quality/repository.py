@@ -7,10 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
+    DocumentCategory,
     InspectionImpurity,
     InspectionRecord,
     ProductStandard,
     ReportRecord,
+    StandardDocument,
 )
 
 # ─── 检验记录 ───
@@ -402,3 +404,94 @@ async def get_standards_by_product(
         ProductStandard.is_deleted == False,  # noqa: E712
     ).order_by(ProductStandard.item_name)
     return list((await db.execute(stmt)).scalars())
+
+
+# ─── 标准文档库 ───
+
+
+async def list_document_categories(
+    db: AsyncSession, product_name: str | None = None
+) -> list[DocumentCategory]:
+    stmt = select(DocumentCategory).where(
+        DocumentCategory.is_deleted == False  # noqa: E712
+    )
+    if product_name:
+        stmt = stmt.where(DocumentCategory.product_name == product_name)
+    stmt = stmt.order_by(DocumentCategory.product_name, DocumentCategory.sort_order)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def create_category(
+    db: AsyncSession, product_name: str, category_name: str, sort_order: int = 0
+) -> DocumentCategory:
+    cat = DocumentCategory(
+        product_name=product_name, category_name=category_name, sort_order=sort_order,
+    )
+    db.add(cat)
+    await db.flush()
+    return cat
+
+
+async def delete_category(db: AsyncSession, category_id: uuid.UUID) -> DocumentCategory | None:
+    cat = await db.get(DocumentCategory, category_id)
+    if not cat:
+        return None
+    cat.is_deleted = True
+    docs = await _get_docs_by_category(db, category_id)
+    for d in docs:
+        d.is_deleted = True
+    await db.flush()
+    return cat
+
+
+async def _get_docs_by_category(db: AsyncSession, category_id: uuid.UUID) -> list[StandardDocument]:
+    stmt = select(StandardDocument).where(
+        StandardDocument.category_id == category_id,
+        StandardDocument.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def create_document(
+    db: AsyncSession,
+    category_id: uuid.UUID,
+    product_name: str,
+    original_filename: str,
+    file_path: str,
+    file_size: int | None = None,
+) -> StandardDocument:
+    doc = StandardDocument(
+        category_id=category_id,
+        product_name=product_name,
+        original_filename=original_filename,
+        file_path=file_path,
+        file_size=file_size,
+    )
+    db.add(doc)
+    await db.flush()
+    return doc
+
+
+async def list_documents(db: AsyncSession, category_id: uuid.UUID) -> list[StandardDocument]:
+    stmt = select(StandardDocument).where(
+        StandardDocument.category_id == category_id,
+        StandardDocument.is_deleted == False,  # noqa: E712
+    ).order_by(StandardDocument.original_filename)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_document(db: AsyncSession, doc_id: uuid.UUID) -> StandardDocument | None:
+    stmt = select(StandardDocument).where(
+        StandardDocument.id == doc_id,
+        StandardDocument.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_document(db: AsyncSession, doc_id: uuid.UUID) -> StandardDocument | None:
+    doc = await get_document(db, doc_id)
+    if not doc:
+        return None
+    doc.is_deleted = True
+    await db.flush()
+    return doc

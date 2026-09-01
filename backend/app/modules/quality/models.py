@@ -180,3 +180,54 @@ class ProductStandard(BaseModel):
     oot_haa: Mapped[float | None] = mapped_column(
         Float, nullable=True, comment="OOT 阈值（HAA 产品线）"
     )
+
+
+class DocumentCategory(BaseModel):
+    """标准文档大类（产品→大类层级）。"""
+
+    __tablename__ = "document_categories"
+    __table_args__ = (
+        Index(
+            "uq_quality_doc_cats",
+            "product_name",
+            "category_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
+    category_name: Mapped[str] = mapped_column(String(200), comment="大类名称")
+    sort_order: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", comment="排序"
+    )
+
+
+class StandardDocument(BaseModel):
+    """标准文件记录。"""
+
+    __tablename__ = "standard_documents"
+    __table_args__ = (
+        Index("ix_quality_std_docs_cat", "category_id"),
+        Index(
+            "uq_quality_std_docs_file",
+            "category_id",
+            "original_filename",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        comment="所属大类，逻辑引用 quality.document_categories.id"
+    )
+    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称（冗余便于查询）")
+    original_filename: Mapped[str] = mapped_column(String(500), comment="原始文件名")
+    file_path: Mapped[str] = mapped_column(
+        String(1000), comment="文件存储路径"
+    )
+    file_size: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="文件大小（字节）"
+    )

@@ -24,13 +24,20 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.quality.report_generator import extract_template_placeholders
 from app.modules.quality.repository import (
+    create_category,
+    create_document,
     create_product_standard,
     create_report_record,
+    delete_category,
+    delete_document,
     delete_inspection_record,
     delete_product_standard,
+    get_document,
     get_product_names,
     get_report_record,
     get_summary_by_product,
+    list_document_categories,
+    list_documents,
     list_inspection_records,
     list_product_standards,
     list_report_records,
@@ -550,4 +557,175 @@ async def delete_standard(
     std = await delete_product_standard(db, standard_id)
     if not std:
         raise HTTPException(status_code=404, detail="标准配置不存在")
+    return success_response(message="已删除")
+
+
+@router.post("/standards/upload", summary="批量导入产品标准配置（Excel）")
+async def upload_standards(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """上传 Excel 文件批量导入产品标准配置。
+
+    表头：产品名称 | 指标名称 | 标准类型 | 运算符 | 限度值 | OOT(HAF) | OOT(HAA)
+    标准类型和运算符可选，默认分别为空和 ≤。
+    """
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 或 .xls 格式")
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="文件为空")
+
+    import openpyxl
+    wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
+    ws = wb.active if wb.active else wb[wb.sheetnames[0]]
+
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if not row or not row[0]:
+            continue  # 跳过空行
+
+        product_name = str(row[0]).strip() if row[0] else ""
+        item_name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+
+        if not product_name or not item_name:
+            errors.append(f"第{row_idx}行：产品名称或指标名称为空，跳过")
+            skipped += 1
+            continue
+
+        standard_type = str(row[2]).strip() if len(row) > 2 and row[2] else None
+        operator = str(row[3]).strip() if len(row) > 3 and row[3] else "≤"
+
+        def _safe_float(val) -> float | None:
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
+
+        limit_value = _safe_float(row[4]) if len(row) > 4 else None
+        oot_haf = _safe_float(row[5]) if len(row) > 5 else None
+        oot_haa = _safe_float(row[6]) if len(row) > 6 else None
+
+        try:
+            await create_product_standard(
+                db,
+                product_name=product_name,
+                item_name=item_name,
+                standard_type=standard_type,
+                operator=operator,
+                limit_value=limit_value,
+                oot_haf=oot_haf,
+                oot_haa=oot_haa,
+            )
+            created += 1
+        except Exception:
+            errors.append(f"第{row_idx}行：{product_name}/{item_name} 创建失败（可能已存在）")
+            skipped += 1
+
+    return success_response(data={
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "total": created + skipped,
+    })
+
+
+# ─── 标准文档库 ───
+
+DOCS_STORAGE_DIR = Path(__file__).resolve().parent.parent.parent.parent / "标准文件库"
+
+
+@router.get("/docs/categories", summary="列出文档大类")
+async def list_categories(
+    product_name: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    cats = await list_document_categories(db, product_name=product_name)
+    return success_response(data=[
+        {"id": str(c.id), "product_name": c.product_name, "category_name": c.category_name}
+        for c in cats
+    ])
+
+
+@router.post("/docs/categories", summary="创建文档大类")
+async def create_doc_category(
+    product_name: str = Body(...),
+    category_name: str = Body(...),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    cat = await create_category(db, product_name, category_name)
+    return success_response(data={"id": str(cat.id)})
+
+
+@router.delete("/docs/categories/{category_id}", summary="删除文档大类")
+async def delete_doc_category(
+    category_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    cat = await delete_category(db, category_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="大类不存在")
+    return success_response(message="已删除")
+
+
+@router.get("/docs/categories/{category_id}/files", summary="列出某大类下的文件")
+async def list_docs(
+    category_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    docs = await list_documents(db, category_id)
+    return success_response(data=[
+        {"id": str(d.id), "original_filename": d.original_filename,
+         "file_size": d.file_size, "created_at": d.created_at.isoformat() if d.created_at else None}
+        for d in docs
+    ])
+
+
+@router.post("/docs/upload", summary="上传标准文档")
+async def upload_document(
+    category_id: uuid.UUID = Form(...),
+    product_name: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    dest = DOCS_STORAGE_DIR / product_name / str(category_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{uuid.uuid4()}{Path(file.filename or 'unknown').suffix}"
+    file_path = dest / stored_name
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    file_path.write_bytes(content)
+
+    doc = await create_document(
+        db, category_id=category_id, product_name=product_name,
+        original_filename=file.filename or "unknown",
+        file_path=str(file_path), file_size=len(content),
+    )
+    return success_response(data={"id": str(doc.id), "original_filename": doc.original_filename})
+
+
+@router.get("/docs/{doc_id}/download", summary="下载标准文档")
+async def download_document(
+    doc_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+):
+    doc = await get_document(db, doc_id)
+    if not doc or not doc.file_path:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    fp = Path(doc.file_path)
+    if not fp.exists():
+        raise HTTPException(status_code=404, detail="文件已被清理")
+    return FileResponse(str(fp), filename=doc.original_filename)
+
+
+@router.delete("/docs/{doc_id}", summary="删除标准文档")
+async def delete_doc(
+    doc_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    doc = await delete_document(db, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="文件不存在")
     return success_response(message="已删除")
