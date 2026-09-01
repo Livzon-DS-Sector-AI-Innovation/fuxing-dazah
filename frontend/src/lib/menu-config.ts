@@ -246,7 +246,6 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["quality:*:read"],
     children: [
       { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
-      { key: "lc-calc", label: "📊 计算表", path: "/quality/calculator" },
       { key: "lc-history", label: "📜 检验历史", path: "/quality/history" },
       { key: "quality-summary", label: "📈 汇总统计", path: "/quality/summary" },
       { key: "quality-standards", label: "🎯 产品标准", path: "/quality/standards" },
