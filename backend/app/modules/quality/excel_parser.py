@@ -10,8 +10,6 @@ from io import BytesIO
 from typing import Any
 
 import openpyxl
-from openpyxl.utils import get_column_letter
-
 
 # ─── 解析结果数据结构 ───
 
@@ -283,14 +281,14 @@ class _UsrVancomycinParser:
         - 第一份值：标签行 Col 12/13
         - 第二份值：标签行+2 Col 12（可能无 Col 13）
         """
-        COL_RAW = 12  # L列：精确值
-        COL_RND = 13  # M列：报告取整值
+        col_raw = 12  # L列：精确值
+        col_rnd = 13  # M列：报告取整值
 
         # 万古霉素B（R21-R24）
-        vb_first_raw = self._safe_float(ws.cell(21, COL_RAW).value)
-        vb_second_raw = self._safe_float(ws.cell(23, COL_RAW).value)
-        vb_first_rnd = self._safe_float(ws.cell(21, COL_RND).value)
-        vb_second_rnd = self._safe_float(ws.cell(23, COL_RND).value)
+        vb_first_raw = self._safe_float(ws.cell(21, col_raw).value)
+        vb_second_raw = self._safe_float(ws.cell(23, col_raw).value)
+        vb_first_rnd = self._safe_float(ws.cell(21, col_rnd).value)
+        vb_second_rnd = self._safe_float(ws.cell(23, col_rnd).value)
 
         vb_std = self._find_standard(data, "万古霉素B")
         data.vancomycin_b = CalculatedResult(
@@ -305,7 +303,7 @@ class _UsrVancomycinParser:
         )
 
         # 总杂质（R77，K列=11 是 "＝"，L列=12 是值）
-        total_first_raw = self._safe_float(ws.cell(77, COL_RAW).value)
+        total_first_raw = self._safe_float(ws.cell(77, col_raw).value)
         total_second = 0.0  # 总杂质只有一份
         ts = self._find_standard(data, "总杂质")
         data.total_impurities = CalculatedResult(
@@ -330,8 +328,7 @@ class _UsrVancomycinParser:
 
         列映射：Col 11(K)="＝", Col 12(L)=精确值, Col 13(M)=报告取整值
         """
-        COL_RAW = 12  # L列：精确值
-        COL_RND = 13  # M列：报告取整值
+        col_raw = 12  # L列：精确值
 
         row = 25
         while row <= 76:
@@ -346,12 +343,10 @@ class _UsrVancomycinParser:
                 row += 1
                 continue
 
-            # 第一份结果：标签行本身就有值（Col 12=精确值, Col 13=取整值）
-            first_raw = self._safe_float(ws.cell(row, COL_RAW).value)
-            first_rnd = self._safe_float(ws.cell(row, COL_RND).value)
+            # 第一份结果：标签行本身就有值（Col 12=精确值）
+            first_raw = self._safe_float(ws.cell(row, col_raw).value)
             # 第二份结果：标签行+2
-            second_raw = self._safe_float(ws.cell(row + 2, COL_RAW).value)
-            second_rnd = self._safe_float(ws.cell(row + 2, COL_RND).value)
+            second_raw = self._safe_float(ws.cell(row + 2, col_raw).value)
 
             # 保持小数形式，与限度值单位一致（0.00203 = 0.203%）
             first_pct = first_raw
