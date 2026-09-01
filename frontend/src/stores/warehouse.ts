@@ -1,3 +1,1 @@
-import { create } from 'zustand'
-
-// warehouse module Zustand store
+// 仓储模块暂无客户端全局状态需求；页面数据均为组件内局部状态
