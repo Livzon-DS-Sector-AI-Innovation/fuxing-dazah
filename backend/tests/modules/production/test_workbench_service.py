@@ -752,3 +752,75 @@ class TestReceiveSuggestion:
         ]
         assert len(receives) == 1
         assert receives[0].suggested_batch_no is None
+
+
+class TestExecutionOwnerWorkbench:
+    """单次执行负责人（开始工序时指定的 owner）的工作台可见性。
+
+    无工段/工序身份的执行负责人：能看到自己进行中执行的待结束卡片
+    （can_operate=True，批次归属他人也可见），不出现开始/接收类卡片。
+    """
+
+    async def test_owner_sees_pending_complete_for_others_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        user_id = uuid.uuid4()  # 无任何工段/工序身份
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            ),
+            user=None,
+        )
+        batch.owner_user_id = uuid.uuid4()  # 批次归属他人
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=user_id,
+                owner_name="执行人",
+            ),
+            user=None,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        completes = [it for it in result.items if it.type == "pending_complete"]
+        assert len(completes) == 1
+        assert completes[0].execution_id == ex.id
+        assert completes[0].can_operate is True
+        # 执行负责人不能开始任何工序，也不出现开始/接收卡片
+        assert not [it for it in result.items if it.type == "pending_start"]
+        assert not [it for it in result.items if it.type == "pending_receive"]
+
+    async def test_owner_card_gone_after_complete(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """执行结束后卡片消失：单次执行负责人的权限随执行结束自然到期。"""
+        user_id = uuid.uuid4()
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            ),
+            user=None,
+        )
+        batch.owner_user_id = uuid.uuid4()
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=user_id,
+                owner_name="执行人",
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        assert result.items == []

@@ -105,12 +105,26 @@ async def query_user_active_batches(operator_id: str, view_all: bool = False) ->
     # XOR 权限模型（与工作台 query_workbench 一致）
     permitted = await _get_user_permitted_nodes_xor(db, user.id)
 
-    if not permitted:
+    # 单次执行负责人：被指定 owner 的进行中执行所在批次并入可见范围。
+    # 节点责任按执行粒度（仅该执行所在批次）并入——不把节点写进路线级 permitted，
+    # 否则该路线其他批次同一工序会被当成"你负责"并诱导 Agent 发起必然 403 的开始操作
+    owned_execs = await repo.list_owned_in_progress_executions(db, user.id)
+    owned_node_ids_by_batch: dict[uuid.UUID, set[uuid.UUID]] = defaultdict(set)
+    owned_route_ids: set[uuid.UUID] = set()
+    if owned_execs:
+        for b in await repo.get_batches_by_ids(
+            db, list({e.batch_id for e in owned_execs})
+        ):
+            owned_route_ids.add(b.route_id)
+        for e in owned_execs:
+            owned_node_ids_by_batch[e.batch_id].add(e.node_id)
+
+    if not permitted and not owned_route_ids:
         return ToolResult(
             content=f"用户 **{user.name}** 目前没有负责任何工序，无进行中批次。",
         )
 
-    route_ids = list(permitted.keys())
+    route_ids = list(set(permitted.keys()) | owned_route_ids)
 
     # 查找活跃批次
     batch_stmt = (
@@ -156,7 +170,7 @@ async def query_user_active_batches(operator_id: str, view_all: bool = False) ->
 
         nodes = nodes_cache[batch.route_id]
         executions = exec_cache[batch.id]
-        permitted_set = permitted.get(batch.route_id, set())
+        permitted_set = permitted.get(batch.route_id, set()) | owned_node_ids_by_batch.get(batch.id, set())
 
         # 构建每节点最新执行快照
         latest: dict[uuid.UUID, NodeExecution] = {}
@@ -170,6 +184,7 @@ async def query_user_active_batches(operator_id: str, view_all: bool = False) ->
 
         # 归属过滤：归属他人的批次，仅当用户有工序级分配（NodeAssignment）
         # 且对应工序待开始/进行中时可见——工序负责人跨归属获取数据；
+        # 单次执行负责人（自己有进行中的执行）同样豁免归属隔离；
         # 工段级负责人（StageAssignment）保持归属隔离。view_all 时全量返回并标注归属人。
         if not view_all and batch.owner_user_id is not None and batch.owner_user_id != user.id:
             if node_assigned is None:
@@ -177,11 +192,18 @@ async def query_user_active_batches(operator_id: str, view_all: bool = False) ->
                 for na in await get_user_node_assignments(db, user.id):
                     node_assigned[na.route_id].add(na.node_id)
             na_nodes = node_assigned.get(batch.route_id, set())
-            if not any(
+            na_visible = any(
                 n.id in na_nodes
                 and (latest.get(n.id) is None or latest[n.id].status == "in_progress")
                 for n in scope_nodes
-            ):
+            )
+            owned_visible = any(
+                latest.get(n.id) is not None
+                and latest[n.id].status == "in_progress"
+                and latest[n.id].owner_id == user.id
+                for n in scope_nodes
+            )
+            if not na_visible and not owned_visible:
                 continue
 
         # 筛选用户在本次批次范围内负责的节点（按 sort_order 排序）

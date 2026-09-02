@@ -269,3 +269,27 @@ class TestWorkbenchMcpTools:
             [{"batch_no": rand_code("MERGED")}],
         )
         assert "接收失败" in content
+
+    async def test_query_todo_shows_pending_complete_for_execution_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """单次执行负责人（无工段/工序身份）也能在待办中看到待结束工序。"""
+        plain = await _get_or_create_user_named(db_session, "OWN-PLAIN")
+        batch = await _make_batch(db_session, published_route)
+        batch.owner_user_id = uuid.uuid4()  # 批次归属他人
+        await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=plain.id,
+                owner_name=plain.name,
+            ),
+            user=None,
+        )
+        content = await _call(
+            db_session, query_workbench_todo, str(plain.id),
+        )
+        assert "四、待结束工序" in content
+        assert batch.batch_no in content
+        assert published_route["node_a"].name in content

@@ -503,6 +503,169 @@ class TestCompleteAndRework:
         assert aborted.status == "aborted"
 
 
+class TestExecutionOwnerAndUpsert:
+    """单次执行负责人权限 + 结束字段值 upsert。
+
+    背景：结束工序曾直接插入 end 字段值且插入先于权限校验，MCP 工具
+    吞掉 403 后中间件仍提交会话，脏字段值行落库，后续结束工序撞
+    (execution_id, field_def_id) 唯一索引 500。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock 权限查询为空集：被测用户无任何权限码，聚焦执行级豁免。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", fake_perms)
+
+    async def _make_plain_user(self, db: AsyncSession) -> User:
+        """无任何工段/工序身份的用户（单次执行负责人）。"""
+        user = User(name=f"执行人-{rand_code('U')}", employee_no=rand_code("EMP"))
+        db.add(user)
+        await db.flush()
+        return user
+
+    async def test_owner_completes_execution_on_others_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次归属他人时，开始工序时被指定的执行负责人仍可结束自己的执行。"""
+        owner = await self._make_plain_user(db_session)
+        batch = await _make_batch(db_session, published_route)
+        batch.owner_user_id = uuid.uuid4()  # 批次归属他人
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=owner.id,
+                owner_name=owner.name,
+            ),
+            user=None,
+        )
+        completed = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=owner,
+        )
+        assert completed.status == "completed"
+
+    async def test_owner_cannot_complete_others_execution(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """无身份用户不能结束别人的执行（执行负责人豁免仅限自己的执行）。"""
+        from app.core.exceptions import ForbiddenException
+
+        owner = await self._make_plain_user(db_session)
+        batch = await _make_batch(db_session, published_route)
+        batch.owner_user_id = uuid.uuid4()
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=uuid.uuid4(),  # 执行负责人是别人
+            ),
+            user=None,
+        )
+        with pytest.raises(ForbiddenException):
+            await execution_service.complete_execution(
+                db_session, ex.id, ExecutionCompleteIn(), user=owner,
+            )
+
+    async def test_complete_upserts_existing_end_field_values(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """库里已有同 (execution_id, field_def_id) 行时，结束工序更新而非撞唯一索引。"""
+        from app.modules.production.models import NodeFieldValue
+
+        batch = await _make_batch(db_session, published_route)
+        # 直开 node_b（偏离），使执行带 end 阶段字段 yield_qty
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                deviation_reason="测试直开",
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        defs = await repo.get_field_defs_by_nodes(
+            db_session, [published_route["node_b"].id]
+        )
+        yield_def = next(d for d in defs if d.phase == "end")
+        # 模拟事故脏数据：上一条结束请求已把同键行写入
+        db_session.add(
+            NodeFieldValue(
+                execution_id=ex.id,
+                field_def_id=yield_def.id,
+                field_key=yield_def.field_key,
+                field_label=yield_def.field_label,
+                unit=yield_def.unit,
+                phase="end",
+                value_numeric=99,
+            )
+        )
+        await db_session.flush()
+
+        completed = await execution_service.complete_execution(
+            db_session,
+            ex.id,
+            ExecutionCompleteIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=12.5)]
+            ),
+            user=None,
+        )
+        assert completed.status == "completed"
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        yq = [v for v in values if v.field_key == "yield_qty"]
+        assert len(yq) == 1
+        assert yq[0].value_numeric == 12.5
+
+    async def test_complete_without_values_keeps_existing_rows(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """空字段值结束工序（事故批次的解卡路径）：已有行保留，不新增不报错。"""
+        from app.modules.production.models import NodeFieldValue
+
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                deviation_reason="测试直开",
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        defs = await repo.get_field_defs_by_nodes(
+            db_session, [published_route["node_b"].id]
+        )
+        yield_def = next(d for d in defs if d.phase == "end")
+        db_session.add(
+            NodeFieldValue(
+                execution_id=ex.id,
+                field_def_id=yield_def.id,
+                field_key=yield_def.field_key,
+                field_label=yield_def.field_label,
+                unit=yield_def.unit,
+                phase="end",
+                value_numeric=8,
+            )
+        )
+        await db_session.flush()
+
+        completed = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        assert completed.status == "completed"
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        yq = [v for v in values if v.field_key == "yield_qty"]
+        assert len(yq) == 1
+        assert yq[0].value_numeric == 8
+
+
 async def _make_line(db: AsyncSession) -> Any:
     """辅助：创建一条测试产线。"""
     return await line_service.create_line(

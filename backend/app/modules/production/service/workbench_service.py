@@ -504,9 +504,20 @@ async def query_workbench(
     stages = await repo.get_user_stages(db, user_id)
     node_assignments = await repo.get_user_node_assignments(db, user_id)
 
+    # 单次执行负责人：开始工序时被指定 owner 的进行中执行——
+    # 无工段/工序身份也可结束自己这一次执行，工作台需为其生成待结束卡片
+    owned_execs = await repo.list_owned_in_progress_executions(db, user_id)
+    owned_route_ids: set[uuid.UUID] = set()
+    if owned_execs:
+        owned_batches = await repo.get_batches_by_ids(
+            db, list({ex.batch_id for ex in owned_execs})
+        )
+        owned_route_ids = {b.route_id for b in owned_batches}
+
     def _can_operate_batch(b: Batch, node_id: uuid.UUID | None = None) -> bool:
         """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人时，
-        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。"""
+        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。
+        单次执行负责人的豁免按执行粒度在 pending_complete 循环中单独判定。"""
         if b.owner_user_id is None or b.owner_user_id == user_id:
             return True
         return (
@@ -525,7 +536,7 @@ async def query_workbench(
     for na in node_assignments:
         route_nodes[na.route_id].add(na.node_id)
 
-    all_route_ids = set(route_stages) | set(route_nodes)
+    all_route_ids = set(route_stages) | set(route_nodes) | owned_route_ids
     if not all_route_ids:
         return WorkbenchOut(role=role, stage_names=stage_names, assigned_routes=[], items=[])
 
@@ -687,7 +698,9 @@ async def query_workbench(
         else:
             permitted_node_ids = route_nodes.get(route_id, set())
 
-        if not permitted_node_ids:
+        # 无授权节点时，仅当用户在该路线有自己负责的进行中执行才继续
+        # （单次执行负责人：只为该执行生成待结束卡片，不开放开始/接收）
+        if not permitted_node_ids and route_id not in owned_route_ids:
             continue
 
         batches = active_by_route.get(route_id, [])
@@ -822,12 +835,15 @@ async def query_workbench(
                     ))
 
         # ── pending_complete：用户权限节点上有进行中的执行 ──
+        # 单次执行负责人（execution.owner_id）的执行不受授权节点与批次归属限制，
+        # 可结束自己这一次执行（与 require_operator_access 的执行级豁免同口径）
         in_progress_execs = [
             ex for b in batches
             for ex in in_progress_execs_by_batch.get(b.id, [])
         ]
         for ex in in_progress_execs:
-            if ex.node_id not in permitted_node_ids:
+            is_exec_owner = ex.owner_id == user_id
+            if ex.node_id not in permitted_node_ids and not is_exec_owner:
                 continue
             node = node_map.get(ex.node_id)
             if not node:
@@ -835,7 +851,7 @@ async def query_workbench(
             b = next((b for b in batches if b.id == ex.batch_id), None)
             if not b:
                 continue
-            can_operate = _can_operate_batch(b, ex.node_id)
+            can_operate = is_exec_owner or _can_operate_batch(b, ex.node_id)
             if view_mode == "mine" and not can_operate:
                 continue
             # 检查是否是工段内最后一个节点
@@ -1011,16 +1027,22 @@ async def query_workbench(
         if not entry:
             continue
         node, route = entry
-        # 权限过滤
+        # 权限过滤（单次执行负责人可见自己负责的执行）
         user_stages = route_stages.get(route.id, set())
         user_nodes = route_nodes.get(route.id, set())
-        if node.stage_name not in user_stages and ex.node_id not in user_nodes:
+        if (
+            node.stage_name not in user_stages
+            and ex.node_id not in user_nodes
+            and ex.owner_id != user_id
+        ):
             continue
         b = recent_batches_map.get(ex.batch_id)
         if not b:
             continue
         # mine 模式按归属过滤：只显示自己/无主的完成记录
-        if view_mode == "mine" and not _can_operate_batch(b, ex.node_id):
+        if view_mode == "mine" and not (
+            _can_operate_batch(b, ex.node_id) or ex.owner_id == user_id
+        ):
             continue
         p = product_map.get(route.product_id)
         recent.append(RecentCompletedItem(

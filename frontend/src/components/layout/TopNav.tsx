@@ -7,6 +7,7 @@ import { Dropdown, Avatar } from "antd"
 import { LogoutOutlined, UserOutlined, EllipsisOutlined } from "@ant-design/icons"
 import { moduleMenus } from "@/lib/menu-config"
 import { ModuleIcon, SearchIcon, BellIcon } from "@/components/icons"
+import styles from "./TopNav.module.css"
 import { logout, getCurrentUser, getImpersonationStatus } from "@/actions/auth"
 import { usePermission } from "@/hooks/usePermission"
 import { useSidebarStore } from "@/stores/sidebar"
@@ -219,11 +220,8 @@ export function TopNav() {
             <button
               ref={moreRef}
               className={`
-                flex items-center justify-center h-full w-10 shrink-0 transition-colors
-                ${activeInMore
-                  ? "text-[var(--color-primary)]"
-                  : "text-[var(--color-steel)] hover:text-[var(--color-charcoal)]"
-                }
+                ${styles.moreBtn} flex items-center justify-center h-full w-10 shrink-0 transition-colors
+                ${activeInMore ? styles.isActive : ""}
               `}
               title="更多模块"
             >

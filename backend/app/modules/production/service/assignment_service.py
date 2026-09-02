@@ -21,6 +21,7 @@ from app.platform.permission.deps import get_user_permissions
 
 if TYPE_CHECKING:
     from app.modules.production.models.batch import Batch
+    from app.modules.production.models.execution import NodeExecution
 
 # ── 工段负责人 ──
 
@@ -200,13 +201,26 @@ async def require_operator_access(
     route_id: uuid.UUID,
     stage_name: str | None,
     batch: "Batch | None",
+    execution: "NodeExecution | None" = None,
 ) -> None:
-    """执行层工序操作权限：工段/工序负责人校验 + 归属他人批次的工序级豁免。
+    """执行层工序操作权限：工段/工序负责人校验 + 归属他人批次的豁免。
 
     合并 require_stage_permission 与 has_node_assignment 的两次
     NodeAssignment 查询为一次：工段不匹配时用于权限兜底，归属他人批次时
     用于豁免判定。归属规则复用 require_batch_owner_access。
+
+    单次执行负责人（开始工序时指定的 execution.owner_id）直接放行：
+    实际执行人可结束/补录/中止自己这一次执行，不受批次归属隔离限制；
+    该豁免不授予任何其他批次或工序的操作权。
     """
+    if (
+        execution is not None
+        and execution.owner_id == user_id
+        # 豁免仅对"操作对象就是该执行"生效，防止调用方误传其他执行绕过工段/归属校验
+        and execution.node_id == node_id
+        and (batch is None or execution.batch_id == batch.id)
+    ):
+        return
     if stage_name is None:
         raise ForbiddenException("您没有该工段的操作权限")
     has_stage = any(

@@ -8,8 +8,8 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   allowedDevOrigins: ['*', '127.0.0.1'],
 
-  // 内部部署阶段：启用 sourcemap 方便定位错误
-  productionBrowserSourceMaps: true,
+  // 内部部署阶段：默认启用 sourcemap 方便定位错误；用 ENABLE_SOURCEMAPS=false 可关闭以加速构建/减小镜像
+  productionBrowserSourceMaps: process.env.ENABLE_SOURCEMAPS !== 'false',
 
   // 记录 fetch 请求详情，方便排查后端接口问题
   logging: {

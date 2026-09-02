@@ -1,0 +1,21 @@
+/* ═══════════════════════════════════════════════════
+   TopNav module styles
+
+   「更多」按钮颜色需显式接管：antd reset.css 的
+   button { color: inherit } 为未分层样式，会压过
+   Tailwind utilities layer 里的 text-* 颜色类，
+   故激活态与 hover 态在此用类选择器直接声明。
+   ═══════════════════════════════════════════════════ */
+
+.moreBtn {
+  color: var(--color-steel);
+}
+
+.moreBtn:hover {
+  color: var(--color-charcoal);
+}
+
+.moreBtn.isActive,
+.moreBtn.isActive:hover {
+  color: var(--color-primary);
+}

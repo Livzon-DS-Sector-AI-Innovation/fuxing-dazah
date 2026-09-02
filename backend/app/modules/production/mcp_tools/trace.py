@@ -34,7 +34,7 @@ async def query_batch_trace(batch_no: str) -> ToolResult:
     db = get_db()
     root_batch = await repo.get_batch_by_no(db, batch_no)
     if not root_batch:
-        return ToolResult(content=f"未找到批次：{batch_no}")
+        return ToolResult(content=f"未找到批次：{batch_no}", is_error=True)
 
     trace = await trace_service.get_trace(db, root_batch.id)
     batches_by_id = {batch.id: batch for batch in trace.batches}

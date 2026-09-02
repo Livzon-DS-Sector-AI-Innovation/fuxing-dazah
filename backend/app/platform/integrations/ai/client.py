@@ -120,6 +120,7 @@ class AIService:
         image_urls: list[str],
         temperature: float = 0.1,
         max_tokens: int = 16384,
+        extra_body: dict[str, Any] | None = None,
     ) -> str:
         """Send a multimodal chat request with images (vision-capable model).
 
@@ -143,6 +144,8 @@ class AIService:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if extra_body:
+            body.update(extra_body)
 
         resp = await self._client.post("/chat/completions", json=body)
         resp.raise_for_status()

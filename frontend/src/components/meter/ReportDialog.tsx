@@ -11,13 +11,17 @@ import {
   deleteReport, uploadReport, extractDate, updateReport,
 } from '@/actions/meter'
 import { reportDownloadUrl, reportPreviewUrl, analyzeReportFilesClient, batchUploadReportsClient } from '@/lib/api/meter'
-import { ReportMatchTable, ReportMatchRow } from '@/components/meter/ReportMatchTable'
+import { ReportMatchTable, ReportMatchRow, isCalibrationDateValid } from '@/components/meter/ReportMatchTable'
 import dayjs from 'dayjs'
 import dynamic from 'next/dynamic'
 
 const PdfViewer = dynamic(() => import('./PdfViewer'), { ssr: false })
 
 const { Dragger } = Upload
+
+// 识别分批大小：与后端 analyze 并发数对齐；上传分批避免单请求体过大
+const ANALYZE_BATCH_SIZE = 10
+const UPLOAD_BATCH_SIZE = 50
 
 interface Props {
   open: boolean
@@ -162,15 +166,22 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
     setMatchResults([])
     setMatching(true)
     try {
-      const formData = new FormData()
-      files.forEach(f => {
-        if (f.originFileObj) {
-          formData.append('files', f.originFileObj)
-        }
-      })
-      const results = await analyzeReportFilesClient(formData, source)
-      if (seq !== seqRef.current) return
-      setMatchResults(results.map((d, i) => ({ ...d, _key: `${i}-${d.filename}` })))
+      // 分批识别：避免单请求体过大，批间检查 seq 支持关闭时中止
+      const accumulated: ReportMatchRow[] = []
+      for (let start = 0; start < files.length; start += ANALYZE_BATCH_SIZE) {
+        if (seq !== seqRef.current) return
+        const batch = files.slice(start, start + ANALYZE_BATCH_SIZE)
+        const formData = new FormData()
+        batch.forEach(f => {
+          if (f.originFileObj) {
+            formData.append('files', f.originFileObj)
+          }
+        })
+        const results = await analyzeReportFilesClient(formData, source)
+        if (seq !== seqRef.current) return
+        accumulated.push(...results.map((d, i) => ({ ...d, _key: `${start + i}-${d.filename}` })))
+        setMatchResults([...accumulated])
+      }
     } catch (e) {
       if (seq !== seqRef.current) return
       message.error(e instanceof Error ? `报告识别失败：${e.message}` : '报告识别失败，请重试')
@@ -187,40 +198,64 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
   const handleBatchConfirm = async () => {
     const matched = matchResults.filter(r => r.matched_id)
     if (!matched.length) return
+    const invalidDates = matched.filter(r => !isCalibrationDateValid(r.extraction.calibration_date))
+    if (invalidDates.length > 0) {
+      message.error(
+        `以下文件校准日期格式不正确（需 YYYY-MM-DD，如 2024-03-05）：${invalidDates.map(r => r.filename).join('、')}`
+      )
+      return
+    }
     setUploading(true)
     const seq = ++seqRef.current
     try {
-      const formData = new FormData()
-      batchFiles.forEach(f => {
-        if (f.originFileObj) {
-          formData.append('files', f.originFileObj)
-        }
-      })
-      const items = matched.map(r => ({
-        filename: r.filename,
-        instrument_id: r.matched_type === 'instrument' ? r.matched_id : null,
-        gas_detector_id: r.matched_type === 'gas_detector' ? r.matched_id : null,
-        certificate_no: r.extraction.certificate_no ?? null,
-        calibration_date: r.extraction.calibration_date ?? null,
-      }))
-      formData.append('items_json', JSON.stringify(items))
+      // 分批提交：每批只带本批文件（后端按文件名与 items 配对），聚合各批结果
+      const fileByName = new Map(batchFiles.map(f => [f.name, f.originFileObj]))
+      let success = 0
+      let failed = 0
+      const allErrors: string[] = []
+      const allNotes: string[] = []
+      for (let start = 0; start < matched.length; start += UPLOAD_BATCH_SIZE) {
+        if (seq !== seqRef.current) return
+        const batch = matched.slice(start, start + UPLOAD_BATCH_SIZE)
+        const formData = new FormData()
+        batch.forEach(r => {
+          const f = fileByName.get(r.filename)
+          if (f) formData.append('files', f)
+        })
+        const items = batch.map(r => ({
+          filename: r.filename,
+          instrument_id: r.matched_type === 'instrument' ? r.matched_id : null,
+          gas_detector_id: r.matched_type === 'gas_detector' ? r.matched_id : null,
+          certificate_no: r.extraction.certificate_no ?? null,
+          calibration_date: r.extraction.calibration_date ?? null,
+        }))
+        formData.append('items_json', JSON.stringify(items))
 
-      const result = await batchUploadReportsClient(formData)
-      if (seq !== seqRef.current) return
-      message.success(`上传完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
-      if (result.errors.length > 0) {
-        message.warning(result.errors.slice(0, 5).join('; '))
+        try {
+          const result = await batchUploadReportsClient(formData)
+          if (seq !== seqRef.current) return
+          success += result.success
+          failed += result.failed
+          allErrors.push(...result.errors)
+          allNotes.push(...(result.notes ?? []))
+        } catch (e) {
+          if (seq !== seqRef.current) return
+          failed += batch.length
+          allErrors.push(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
+        }
       }
-      if (result.notes?.length > 0) {
-        message.info(result.notes.slice(0, 5).join('; '))
+
+      message.success(`上传完成：成功 ${success} 个，失败 ${failed} 个`)
+      if (allErrors.length > 0) {
+        message.warning(allErrors.slice(0, 5).join('; '))
+      }
+      if (allNotes.length > 0) {
+        message.info(allNotes.slice(0, 5).join('; '))
       }
       setBatchFiles([])
       setMatchResults([])
       fetchReports()
       router.refresh()
-    } catch (e) {
-      if (seq !== seqRef.current) return
-      message.error(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
     } finally {
       if (seq === seqRef.current) setUploading(false)
     }
@@ -319,6 +354,9 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
   ]
 
   const matchedCount = matchResults.filter(r => r.matched_id).length
+  const invalidDateKeys = new Set(
+    matchResults.filter(r => !isCalibrationDateValid(r.extraction.calibration_date)).map(r => r._key)
+  )
 
   return (
     <>
@@ -387,7 +425,7 @@ export function ReportDialog({ open, record, source, onClose }: Props) {
                         确认批量上传（{matchedCount} 个）
                       </Button>
                     </div>
-                    <ReportMatchTable rows={matchResults} loading={matching} source={source} onRowChange={handleRowChange} />
+                    <ReportMatchTable rows={matchResults} loading={matching} source={source} onRowChange={handleRowChange} invalidDateKeys={invalidDateKeys} />
                   </div>
                 )}
               </div>

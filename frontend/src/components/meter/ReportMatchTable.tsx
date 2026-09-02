@@ -9,11 +9,25 @@ import { matchOne } from '@/lib/api/meter'
 /** 行数据：文件名可能重复，统一使用父组件生成的 _key 作为行标识。 */
 export type ReportMatchRow = ReportAnalyzeItem & { _key: string }
 
+/**
+ * 校准日期是否合法：空值合法（不回写台账日期）；非空必须是真实存在的
+ * YYYY-MM-DD（正则 + 原生 Date 双重校验，拦住 2024-02-30 这类不存在的日期）。
+ */
+export function isCalibrationDateValid(v: string | null | undefined): boolean {
+  if (!v) return true
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false
+  const [y, m, d] = v.split('-').map(Number)
+  const dt = new Date(y, m - 1, d)
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d
+}
+
 interface Props {
   rows: ReportMatchRow[]
   loading?: boolean
   source: 'instrument' | 'gas_detector'
   onRowChange: (key: string, patch: Partial<ReportAnalyzeItem>) => void
+  /** 日期非法的行 key 集合，对应输入框标红 */
+  invalidDateKeys?: Set<string>
 }
 
 /** 候选值编码：`type:id`（type = instrument / gas_detector）。 */
@@ -31,7 +45,7 @@ const methodTag = (method: string | null | undefined) => {
  * 名称/编号/校准日期可编辑（含识别失败行——失败最需要人工补录）；
  * 未匹配行可从候选中手动选择关联，或修正字段后点"重新关联"。
  */
-export function ReportMatchTable({ rows, loading, source, onRowChange }: Props) {
+export function ReportMatchTable({ rows, loading, source, onRowChange, invalidDateKeys }: Props) {
   const { message } = App.useApp()
   const [rematching, setRematching] = useState<string | null>(null)
 
@@ -113,6 +127,7 @@ export function ReportMatchTable({ rows, loading, source, onRowChange }: Props) 
       render: (_, r) => (
         <Input
           size="small"
+          status={invalidDateKeys?.has(r._key) ? 'error' : undefined}
           value={r.extraction.calibration_date ?? ''}
           placeholder="YYYY-MM-DD"
           onChange={(e) => onRowChange(r._key, {
