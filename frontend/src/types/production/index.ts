@@ -28,4 +28,5 @@ export type {
   PlannedBatchItem,
   PlannedBatchData,
   PlannedStageInfo,
+  CreatableRouteInfo,
 } from './workbench'

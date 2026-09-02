@@ -51,6 +51,7 @@ export {
   receiveAndStart,
   fetchPlannedBatches,
   activatePlannedBatch,
+  startBatch,
   fetchMyStageSuffixes,
   setStageSuffix,
 } from './workbench'

@@ -17,6 +17,7 @@ from app.modules.production.schemas.assignment import (
     AssignedNodeInfo,
     AssignedRouteInfo,
     AssignedStageInfo,
+    CreatableRouteInfo,
     MissingExecutionOut,
     NodeAssigneeInfo,
     PlannedBatchItem,
@@ -27,8 +28,8 @@ from app.modules.production.schemas.assignment import (
     WorkbenchItem,
     WorkbenchOut,
 )
-from app.modules.production.schemas.batch import DeriveIn, MergeIn, MergeParentIn
-from app.modules.production.service.batch_service import derive_batches, merge_batches
+from app.modules.production.schemas.batch import BatchCreate, DeriveIn, MergeIn, MergeParentIn
+from app.modules.production.service.batch_service import create_batch, derive_batches, merge_batches
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
     start_execution,
@@ -173,6 +174,22 @@ def _calc_current_progress(
 # ── 计划批次查询 ──
 
 
+async def _require_first_stage_owner(
+    db: AsyncSession, route_id: uuid.UUID, user: User, action: str,
+) -> None:
+    """校验用户是指定路线第一工段的负责人（StageAssignment 口径）。"""
+    user_stages = await repo.get_user_stages(db, user.id)
+    user_route_stages = {
+        s.stage_name for s in user_stages if s.route_id == route_id
+    }
+    if not user_route_stages:
+        raise AppException(status_code=403, message=f"您无权{action}此路线的批次")
+    nodes = await repo.get_route_nodes(db, route_id)
+    stage_order = _build_stage_order(nodes)
+    if not stage_order or stage_order[0] not in user_route_stages:
+        raise AppException(status_code=403, message=f"仅路线第一工段负责人可{action}批次")
+
+
 async def activate_planned_batch(
     db: AsyncSession, batch_id: uuid.UUID, user: User,
 ) -> Batch:
@@ -185,17 +202,7 @@ async def activate_planned_batch(
     if batch.creation_type != "plan":
         raise AppException(status_code=400, message="仅计划批次可激活")
 
-    # verify user owns the first stage of this batch's route
-    user_stages = await repo.get_user_stages(db, user.id)
-    user_route_stages = {
-        s.stage_name for s in user_stages if s.route_id == batch.route_id
-    }
-    if not user_route_stages:
-        raise AppException(status_code=403, message="您无权激活此批次")
-    nodes = await repo.get_route_nodes(db, batch.route_id)
-    stage_order = _build_stage_order(nodes)
-    if not stage_order or stage_order[0] not in user_route_stages:
-        raise AppException(status_code=403, message="仅路线第一工段负责人可激活批次")
+    await _require_first_stage_owner(db, batch.route_id, user, action="激活")
 
     batch.status = "pending"
     batch.updated_by = user.id if user else None
@@ -204,6 +211,20 @@ async def activate_planned_batch(
     refreshed = await repo.get_batch(db, batch_id)
     assert refreshed is not None
     return refreshed
+
+
+async def start_batch(
+    db: AsyncSession, payload: BatchCreate, user: User,
+) -> Batch:
+    """工作台手动建批：仅路线第一工段负责人可创建，批次无主待首开工认领。
+
+    校验（published、产品归属、批号查重）复用 batch_service.create_batch。
+    """
+    route = await repo.get_route(db, payload.route_id)
+    if not route:
+        raise AppException(status_code=404, message=f"工艺路线 {payload.route_id} 不存在")
+    await _require_first_stage_owner(db, payload.route_id, user, action="创建")
+    return await create_batch(db, payload, user)
 
 
 async def query_planned_batches(
@@ -594,6 +615,25 @@ async def query_workbench(
             route_name=r.route_name,
             product_name=p.product_name if p else None,
             stages=stages_info,
+        ))
+
+    # ── 可建批路线：用户是第一工段负责人的已发布路线（复用已缓存的节点，零额外查询）──
+    creatable_routes: list[CreatableRouteInfo] = []
+    for route_id in sorted(route_map):
+        user_stage_set = route_stages.get(route_id, set())
+        if not user_stage_set:
+            continue
+        stage_order = _build_stage_order(route_nodes_cache[route_id])
+        if not stage_order or stage_order[0] not in user_stage_set:
+            continue
+        r = route_map[route_id]
+        p = product_map.get(r.product_id)
+        creatable_routes.append(CreatableRouteInfo(
+            route_id=route_id,
+            route_name=r.route_name,
+            product_id=r.product_id,
+            product_name=p.product_name if p else None,
+            first_stage_name=stage_order[0],
         ))
 
     # ── 批量查询：所有路线的活跃/已完成批次、节点状态、已派生链接 ──
@@ -1059,7 +1099,9 @@ async def query_workbench(
     items.sort(key=lambda x: x.batch_no or "")
     return WorkbenchOut(
         role=role, stage_names=stage_names,
-        assigned_routes=assigned_routes, items=items,
+        assigned_routes=assigned_routes,
+        creatable_routes=creatable_routes,
+        items=items,
         recent_completed=recent,
     )
 

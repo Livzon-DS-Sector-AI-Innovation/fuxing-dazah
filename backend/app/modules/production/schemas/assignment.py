@@ -145,10 +145,20 @@ class RecentCompletedItem(BaseModel):
     finished_at: str | None = None
 
 
+class CreatableRouteInfo(BaseModel):
+    """当前用户可手动建批的路线（用户是该路线第一工段负责人）。"""
+    route_id: uuid.UUID
+    route_name: str
+    product_id: uuid.UUID
+    product_name: str | None = None
+    first_stage_name: str
+
+
 class WorkbenchOut(BaseModel):
     role: str  # stage_owner | node_owner
     stage_names: list[str] = []
     assigned_routes: list[AssignedRouteInfo] = []
+    creatable_routes: list[CreatableRouteInfo] = []
     items: list[WorkbenchItem] = []
     recent_completed: list[RecentCompletedItem] = []
 

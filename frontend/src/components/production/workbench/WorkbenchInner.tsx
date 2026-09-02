@@ -16,6 +16,7 @@ import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
 import { StageSuffixConfig } from './StageSuffixConfig'
 import { PlannedSection } from './PlannedSection'
+import { StartBatchModal } from './StartBatchModal'
 import { StartExecutionModal } from '../batches/StartExecutionModal'
 import { CompleteExecutionModal } from '../batches/CompleteExecutionModal'
 import { BackfillFieldsModal, type BackfillExecution } from '../batches/BackfillFieldsModal'
@@ -515,6 +516,8 @@ export function WorkbenchInner() {
   const [recentConsumptions, setRecentConsumptions] = useState<IntermediateConsumption[]>([])
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [startNodeId, setStartNodeId] = useState<string | undefined>(undefined)
+  // 工作台手动建批：记录从哪个工段头点开（null=关闭）
+  const [startBatchStage, setStartBatchStage] = useState<string | null>(null)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string; onSuccess?: () => void } | null>(null)
   const [backfillExec, setBackfillExec] = useState<{ executions: BackfillExecution[]; routeId: string } | null>(null)
 
@@ -587,9 +590,14 @@ export function WorkbenchInner() {
     return items
   }, [data, filterProduct, filterRoute, filterStatus])
 
-  const stageGroups = useMemo(() => {
-    if (!filteredItems.length) return []
+  // 可建批路线（第一工段负责人）与可建批工段名集合
+  const creatableRoutes = useMemo(() => data?.creatable_routes ?? [], [data])
+  const creatableFirstStages = useMemo(
+    () => new Set(creatableRoutes.map(r => r.first_stage_name)),
+    [creatableRoutes],
+  )
 
+  const stageGroups = useMemo(() => {
     // 按状态类型分组的顺序和标签
     const typeOrder: Record<string, { label: string; order: number }> = {
       pending_complete: { label: '进行中', order: 1 },
@@ -637,6 +645,19 @@ export function WorkbenchInner() {
       byStage[stage][gk]!.push(item)
     }
 
+    // 追加可建批但暂无待办的工段（路线下一个批次都没有时仍可手动新建）
+    // status 筛选时不追加：空工段没有可匹配的状态项
+    if (!filterStatus) {
+      for (const stage of creatableFirstStages) {
+        if (byStage[stage]) continue
+        const routes = creatableRoutes.filter(r => r.first_stage_name === stage)
+        const matchesFilter =
+          (!filterProduct || routes.some(r => r.product_name === filterProduct)) &&
+          (!filterRoute || routes.some(r => r.route_id === filterRoute))
+        if (matchesFilter) byStage[stage] = {}
+      }
+    }
+
     return Object.entries(byStage)
       .map(([stage, groups]) => ({
         stage,
@@ -651,7 +672,7 @@ export function WorkbenchInner() {
           .sort((a, b) => a.order - b.order),
       }))
       .sort((a, b) => a.stage.localeCompare(b.stage))
-  }, [filteredItems])
+  }, [filteredItems, creatableFirstStages, creatableRoutes, filterProduct, filterRoute, filterStatus])
 
   const openCompleteModal = async (item: WorkbenchItem, onSuccess?: () => void) => {
     if (!item.batch_id || !item.execution_id) return
@@ -864,18 +885,34 @@ export function WorkbenchInner() {
                             background: group.color, flexShrink: 0,
                           }}
                         />
+                        {creatableFirstStages.has(group.stage) && (
+                          <Button
+                            size="small"
+                            icon={<PlayCircleOutlined />}
+                            style={{ borderRadius: 6 }}
+                            onClick={() => setStartBatchStage(group.stage)}
+                          >
+                            新建批次
+                          </Button>
+                        )}
                         <h3 style={{
                           margin: 0, fontSize: 16, fontWeight: 600, color: '#1a1a1a',
                           lineHeight: 1.3,
                         }}>
                           {group.stage}
                         </h3>
-                        <span style={{
-                          fontSize: 12, color: '#a4a097',
-                          background: '#f6f5f4', padding: '2px 10px', borderRadius: 10,
-                        }}>
-                          {allItems.length} 项
-                        </span>
+                        {allItems.length > 0 ? (
+                          <span style={{
+                            fontSize: 12, color: '#a4a097',
+                            background: '#f6f5f4', padding: '2px 10px', borderRadius: 10,
+                          }}>
+                            {allItems.length} 项
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 12, color: '#b5b1a8' }}>
+                            暂无批次
+                          </span>
+                        )}
 
                         {mergeGroups.map(([nodeId, items]) => (
                           <Button
@@ -1069,6 +1106,20 @@ export function WorkbenchInner() {
               .map(c => ({ value: c.batch_id!, label: c.batch_no }))}
           />
         </Modal>
+      )}
+
+      {/* ── 工作台手动建批 ── */}
+      {startBatchStage && (
+        <StartBatchModal
+          stage={startBatchStage}
+          creatableRoutes={creatableRoutes}
+          onClose={() => setStartBatchStage(null)}
+          onCreated={(batchId, _batchNo, nodeId) => {
+            setStartBatchStage(null)
+            setStartBatchId(batchId)
+            setStartNodeId(nodeId)
+          }}
+        />
       )}
 
       {startBatchId && (

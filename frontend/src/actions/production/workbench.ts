@@ -10,6 +10,7 @@ import type {
   ReceiveAndStartResult,
   PlannedBatchData,
   StageSuffixItem,
+  CreateBatchInput,
 } from '@/types/production'
 
 export async function fetchWorkbench(
@@ -104,6 +105,17 @@ export async function activatePlannedBatch(
   const result = await actionFetch<{ id: string; batch_no: string; status: string }>(
     `${API_BASE}/production/workbench/activate-planned/${batchId}`,
     { method: 'POST' },
+  )
+  if (result.success) revalidatePath('/production/workbench')
+  return result
+}
+
+export async function startBatch(
+  data: CreateBatchInput,
+): Promise<ActionResult<{ id: string; batch_no: string; status: string }>> {
+  const result = await actionFetch<{ id: string; batch_no: string; status: string }>(
+    `${API_BASE}/production/workbench/start-batch`,
+    { method: 'POST', body: JSON.stringify(data) },
   )
   if (result.success) revalidatePath('/production/workbench')
   return result
