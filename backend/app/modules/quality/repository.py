@@ -7,12 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.quality.models import (
-    DocumentCategory,
     InspectionImpurity,
     InspectionRecord,
-    ProductStandard,
+    QualityStandardDocument,
+    QualityStandardItem,
     ReportRecord,
-    StandardDocument,
 )
 
 # ─── 检验记录 ───
@@ -153,10 +152,7 @@ async def create_impurities(
             first_percent=imp_data.get("first_percent"),
             second_percent=imp_data.get("second_percent"),
             limit_value=imp_data.get("limit"),
-            oot_haf=imp_data.get("oot_haf"),
-            oot_haa=imp_data.get("oot_haa"),
             is_pass=imp_data.get("is_pass", True),
-            is_oot=imp_data.get("is_oot", False),
         )
         db.add(imp)
         items.append(imp)
@@ -316,186 +312,125 @@ async def get_summary_by_product(
     }
 
 
-# ─── 产品标准配置 ───
+# ─── 质量标准文档 / 项目行（SOP 号为匹配键）───
 
 
-async def list_product_standards(
+async def list_standard_documents(
     db: AsyncSession,
     product_name: str | None = None,
-) -> list[ProductStandard]:
-    """查询产品标准列表（可按产品名过滤）。"""
-    stmt = select(ProductStandard).where(
-        ProductStandard.is_deleted == False  # noqa: E712
+) -> list[QualityStandardDocument]:
+    stmt = select(QualityStandardDocument).where(
+        QualityStandardDocument.is_deleted == False  # noqa: E712
     )
     if product_name:
-        stmt = stmt.where(ProductStandard.product_name == product_name)
-    stmt = stmt.order_by(ProductStandard.product_name, ProductStandard.item_name)
+        stmt = stmt.where(QualityStandardDocument.product_name.ilike(f"%{product_name}%"))
+    stmt = stmt.order_by(QualityStandardDocument.product_name, QualityStandardDocument.file_no)
     return list((await db.execute(stmt)).scalars())
 
 
-async def get_product_standard(
-    db: AsyncSession, standard_id: uuid.UUID
-) -> ProductStandard | None:
-    stmt = select(ProductStandard).where(
-        ProductStandard.id == standard_id,
-        ProductStandard.is_deleted == False,  # noqa: E712
+async def get_standard_document(
+    db: AsyncSession, doc_id: uuid.UUID
+) -> QualityStandardDocument | None:
+    stmt = select(QualityStandardDocument).where(
+        QualityStandardDocument.id == doc_id,
+        QualityStandardDocument.is_deleted == False,  # noqa: E712
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def create_product_standard(
-    db: AsyncSession,
-    product_name: str,
-    item_name: str,
-    standard_type: str | None = None,
-    operator: str = "≤",
-    limit_value: float | None = None,
-    oot_haf: float | None = None,
-    oot_haa: float | None = None,
-    form_id: str | None = None,
-    sop_no: str | None = None,
-) -> ProductStandard:
-    std = ProductStandard(
-        product_name=product_name,
-        item_name=item_name,
-        form_id=form_id,
-        sop_no=sop_no,
-        standard_type=standard_type,
-        operator=operator,
-        limit_value=limit_value,
-        oot_haf=oot_haf,
-        oot_haa=oot_haa,
-    )
-    db.add(std)
-    await db.flush()
-    return std
-
-
-async def update_product_standard(
-    db: AsyncSession,
-    standard_id: uuid.UUID,
-    **kwargs,
-) -> ProductStandard | None:
-    std = await get_product_standard(db, standard_id)
-    if not std:
-        return None
-    for key, val in kwargs.items():
-        if hasattr(std, key) and val is not None:
-            setattr(std, key, val)
-    await db.flush()
-    return await get_product_standard(db, standard_id)
-
-
-async def delete_product_standard(
-    db: AsyncSession, standard_id: uuid.UUID
-) -> ProductStandard | None:
-    std = await get_product_standard(db, standard_id)
-    if not std:
-        return None
-    std.is_deleted = True
-    await db.flush()
-    # UPDATE 后 re-fetch（不过滤 is_deleted，确保软删除后也能查到）
-    stmt = select(ProductStandard).where(ProductStandard.id == standard_id)
-    return (await db.execute(stmt)).scalar_one_or_none()
-
-
-async def get_standards_by_product(
-    db: AsyncSession, product_name: str
-) -> list[ProductStandard]:
-    """获取某个产品的所有标准配置（供解析器使用）。"""
-    stmt = select(ProductStandard).where(
-        ProductStandard.product_name == product_name,
-        ProductStandard.is_deleted == False,  # noqa: E712
-    ).order_by(ProductStandard.item_name)
-    return list((await db.execute(stmt)).scalars())
-
-
-# ─── 标准文档库 ───
-
-
-async def list_document_categories(
-    db: AsyncSession, product_name: str | None = None
-) -> list[DocumentCategory]:
-    stmt = select(DocumentCategory).where(
-        DocumentCategory.is_deleted == False  # noqa: E712
-    )
-    if product_name:
-        stmt = stmt.where(DocumentCategory.product_name == product_name)
-    stmt = stmt.order_by(DocumentCategory.product_name, DocumentCategory.sort_order)
-    return list((await db.execute(stmt)).scalars())
-
-
-async def create_category(
-    db: AsyncSession, product_name: str, category_name: str, sort_order: int = 0
-) -> DocumentCategory:
-    cat = DocumentCategory(
-        product_name=product_name, category_name=category_name, sort_order=sort_order,
-    )
-    db.add(cat)
-    await db.flush()
-    return cat
-
-
-async def delete_category(db: AsyncSession, category_id: uuid.UUID) -> DocumentCategory | None:
-    cat = await db.get(DocumentCategory, category_id)
-    if not cat:
-        return None
-    cat.is_deleted = True
-    docs = await _get_docs_by_category(db, category_id)
-    for d in docs:
-        d.is_deleted = True
-    await db.flush()
-    return cat
-
-
-async def _get_docs_by_category(db: AsyncSession, category_id: uuid.UUID) -> list[StandardDocument]:
-    stmt = select(StandardDocument).where(
-        StandardDocument.category_id == category_id,
-        StandardDocument.is_deleted == False,  # noqa: E712
-    )
-    return list((await db.execute(stmt)).scalars())
-
-
-async def create_document(
-    db: AsyncSession,
-    category_id: uuid.UUID,
-    product_name: str,
-    original_filename: str,
-    file_path: str,
-    file_size: int | None = None,
-) -> StandardDocument:
-    doc = StandardDocument(
-        category_id=category_id,
-        product_name=product_name,
-        original_filename=original_filename,
-        file_path=file_path,
-        file_size=file_size,
-    )
+async def create_standard_document(
+    db: AsyncSession, data: dict
+) -> QualityStandardDocument:
+    doc = QualityStandardDocument(**data)
     db.add(doc)
     await db.flush()
     return doc
 
 
-async def list_documents(db: AsyncSession, category_id: uuid.UUID) -> list[StandardDocument]:
-    stmt = select(StandardDocument).where(
-        StandardDocument.category_id == category_id,
-        StandardDocument.is_deleted == False,  # noqa: E712
-    ).order_by(StandardDocument.original_filename)
-    return list((await db.execute(stmt)).scalars())
+async def update_standard_document(
+    db: AsyncSession, doc_id: uuid.UUID, **kwargs
+) -> QualityStandardDocument | None:
+    doc = await get_standard_document(db, doc_id)
+    if not doc:
+        return None
+    for key, val in kwargs.items():
+        if hasattr(doc, key) and val is not None:
+            setattr(doc, key, val)
+    await db.flush()
+    return doc
 
 
-async def get_document(db: AsyncSession, doc_id: uuid.UUID) -> StandardDocument | None:
-    stmt = select(StandardDocument).where(
-        StandardDocument.id == doc_id,
-        StandardDocument.is_deleted == False,  # noqa: E712
-    )
-    return (await db.execute(stmt)).scalar_one_or_none()
-
-
-async def delete_document(db: AsyncSession, doc_id: uuid.UUID) -> StandardDocument | None:
-    doc = await get_document(db, doc_id)
+async def delete_standard_document(
+    db: AsyncSession, doc_id: uuid.UUID
+) -> QualityStandardDocument | None:
+    doc = await get_standard_document(db, doc_id)
     if not doc:
         return None
     doc.is_deleted = True
+    items = await list_standard_items(db, doc_id)
+    for it in items:
+        it.is_deleted = True
     await db.flush()
     return doc
+
+
+async def list_standard_items(
+    db: AsyncSession, doc_id: uuid.UUID
+) -> list[QualityStandardItem]:
+    stmt = select(QualityStandardItem).where(
+        QualityStandardItem.document_id == doc_id,
+        QualityStandardItem.is_deleted == False,  # noqa: E712
+    ).order_by(QualityStandardItem.seq, QualityStandardItem.created_at)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def create_standard_item(
+    db: AsyncSession, doc_id: uuid.UUID, data: dict
+) -> QualityStandardItem:
+    item = QualityStandardItem(document_id=doc_id, **data)
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def update_standard_item(
+    db: AsyncSession, item_id: uuid.UUID, **kwargs
+) -> QualityStandardItem | None:
+    stmt = select(QualityStandardItem).where(
+        QualityStandardItem.id == item_id,
+        QualityStandardItem.is_deleted == False,  # noqa: E712
+    )
+    item = (await db.execute(stmt)).scalar_one_or_none()
+    if not item:
+        return None
+    for key, val in kwargs.items():
+        if hasattr(item, key) and val is not None:
+            setattr(item, key, val)
+    await db.flush()
+    return item
+
+
+async def delete_standard_item(
+    db: AsyncSession, item_id: uuid.UUID
+) -> QualityStandardItem | None:
+    stmt = select(QualityStandardItem).where(
+        QualityStandardItem.id == item_id,
+        QualityStandardItem.is_deleted == False,  # noqa: E712
+    )
+    item = (await db.execute(stmt)).scalar_one_or_none()
+    if not item:
+        return None
+    item.is_deleted = True
+    await db.flush()
+    return item
+
+
+async def get_standard_item_by_sop(
+    db: AsyncSession, sop_no: str
+) -> list[QualityStandardItem]:
+    """按 SOP 号查标准行（同名项目不同 SOP 的匹配入口）。"""
+    stmt = select(QualityStandardItem).where(
+        QualityStandardItem.sop_no == sop_no,
+        QualityStandardItem.is_deleted == False,  # noqa: E712
+    )
+    return list((await db.execute(stmt)).scalars())

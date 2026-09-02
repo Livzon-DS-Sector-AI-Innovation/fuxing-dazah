@@ -5,8 +5,6 @@
 export interface QualityStandard {
   name: string
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   operator: string // "≤" | "≥"
 }
 
@@ -25,10 +23,7 @@ export interface ImpurityResult {
   first_percent: number
   second_percent: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 主计算结果（万古霉素B、总杂质等）───
@@ -40,10 +35,7 @@ export interface CalculatedResult {
   rounded_first: number
   rounded_second: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 完整解析结果 ───
@@ -81,7 +73,6 @@ export interface LcReportData {
 
   // 汇总
   all_pass: boolean
-  has_oot: boolean
 }
 
 // ─── 上传响应 ───
@@ -101,7 +92,6 @@ export interface InspectionRecordListItem {
   form_id: string | null
   standard_type: string | null
   all_pass: boolean
-  has_oot: boolean
   excel_filename: string | null
   created_at: string | null
 }
@@ -131,14 +121,12 @@ export interface ProductSummary {
   total: number
   pass_count: number
   fail_count: number
-  oot_count: number
 }
 
 export interface HistorySummary {
   total: number
   pass_count: number
   fail_count: number
-  oot_count: number
   pass_rate: number
   products: ProductSummary[]
 }

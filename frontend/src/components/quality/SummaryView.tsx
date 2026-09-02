@@ -50,7 +50,6 @@ export default function SummaryView() {
     { title: '合格/不合格', key: 'pass_fail',
       render: (_: any, r: ProductSummary) =>
         `${r.pass_count} / ${r.fail_count}` },
-    { title: 'OOT 次数', dataIndex: 'oot_count', key: 'oot_count' },
   ]
 
   return (
@@ -91,13 +90,6 @@ export default function SummaryView() {
                 <Statistic title="不合格" value={summary.fail_count}
                   valueStyle={{ color: summary.fail_count > 0 ? '#ff4d4f' : '#52c41a' }}
                   prefix={<CloseCircleOutlined />} />
-              </Card>
-            </Col>
-            <Col span={6}>
-              <Card size="small">
-                <Statistic title="OOT 次数" value={summary.oot_count}
-                  valueStyle={{ color: summary.oot_count > 0 ? '#faad14' : '#52c41a' }}
-                  prefix={<WarningOutlined />} />
               </Card>
             </Col>
           </Row>

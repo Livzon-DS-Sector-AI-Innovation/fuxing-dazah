@@ -148,16 +148,54 @@ class ReportRecord(BaseModel):
     )
 
 
-class ProductStandard(BaseModel):
-    """产品标准配置 —— 每个产品的各项指标限度值。"""
+class QualityStandardDocument(BaseModel):
+    """质量标准文档（一个产品代号一份，如 SOP.02.3292.003 ↔ 代号 HAS）。"""
 
-    __tablename__ = "product_standards"
+    __tablename__ = "quality_standard_documents"
     __table_args__ = (
         Index(
-            "uq_quality_product_standards_item",
-            "product_name",
-            "form_id",
-            "item_name",
+            "uq_quality_std_doc_file_no",
+            "file_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_quality_std_doc_product", "product_name"),
+        {"schema": "quality"},
+    )
+
+    file_no: Mapped[str] = mapped_column(
+        String(100), comment="文件编号，如 SOP.02.3292.003"
+    )
+    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
+    product_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="产品代号，如 HAS"
+    )
+    product_internal_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="产品代码，如 30205"
+    )
+    specification: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="产品规格，如 5kg/听"
+    )
+    valid_years: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="有效期，如 36个月"
+    )
+    effective_date: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="生效日期"
+    )
+    version: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="版本号，如 003"
+    )
+
+
+class QualityStandardItem(BaseModel):
+    """标准项目行：以 SOP 号为匹配键；合格标准为数值型（纯文字标准不收录）。"""
+
+    __tablename__ = "quality_standard_items"
+    __table_args__ = (
+        Index("ix_quality_std_item_doc", "document_id"),
+        Index(
+            "uq_quality_std_item_sop",
+            "document_id",
             "sop_no",
             unique=True,
             postgresql_where=text("is_deleted = false"),
@@ -165,77 +203,38 @@ class ProductStandard(BaseModel):
         {"schema": "quality"},
     )
 
-    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
-    form_id: Mapped[str | None] = mapped_column(
-        String(100), nullable=True, comment="代号/表号（同一产品不同制剂/工艺的细分，如 3229）"
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        comment="关联标准文档，逻辑引用 quality.quality_standard_documents.id"
     )
-    sop_no: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, comment="检验项目绑定的 SOP 编号（同名项目按 SOP 号区分匹配）"
+    seq: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="序号（文档中的检验项目序号）"
     )
-    standard_type: Mapped[str | None] = mapped_column(
-        String(20), nullable=True, comment="标准类型：USP、EP、CP"
+    category: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="检验项目大类，如 性状/有关物质"
     )
-    item_name: Mapped[str] = mapped_column(String(100), comment="指标名称（如 万古霉素B、总杂质、RS1）")
-    operator: Mapped[str] = mapped_column(
-        String(10), default="≤", server_default="'≤'", comment="比较运算符"
+    item_name: Mapped[str] = mapped_column(
+        String(200), comment="子项目名称（仅展示参考，匹配以 SOP 号为准）"
     )
-    limit_value: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="合格限度值"
+    sop_no: Mapped[str] = mapped_column(
+        String(64), comment="检验方法 SOP 编号（匹配键）"
     )
-    oot_haf: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="OOT 阈值（HAF 产品线）"
+    standard_text: Mapped[str] = mapped_column(
+        String(300), comment="合格标准原文，如 ≤3.0%"
     )
-    oot_haa: Mapped[float | None] = mapped_column(
-        Float, nullable=True, comment="OOT 阈值（HAA 产品线）"
+    operator: Mapped[str | None] = mapped_column(
+        String(10), nullable=True, comment="比较运算符：≤ ≥ < > 范围"
     )
-
-
-class DocumentCategory(BaseModel):
-    """标准文档大类（产品→大类层级）。"""
-
-    __tablename__ = "document_categories"
-    __table_args__ = (
-        Index(
-            "uq_quality_doc_cats",
-            "product_name",
-            "category_name",
-            unique=True,
-            postgresql_where=text("is_deleted = false"),
-        ),
-        {"schema": "quality"},
+    limit_min: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="限度下限（范围时使用）"
     )
-
-    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
-    category_name: Mapped[str] = mapped_column(String(200), comment="大类名称")
-    sort_order: Mapped[int] = mapped_column(
-        Integer, default=0, server_default="0", comment="排序"
+    limit_max: Mapped[float | None] = mapped_column(
+        Float, nullable=True, comment="限度上限"
+    )
+    method_source: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="方法来源：IP / Ph.Eur. / USP / 内部"
+    )
+    remark: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="备注，如 加*每年仅1批"
     )
 
 
-class StandardDocument(BaseModel):
-    """标准文件记录。"""
-
-    __tablename__ = "standard_documents"
-    __table_args__ = (
-        Index("ix_quality_std_docs_cat", "category_id"),
-        Index(
-            "uq_quality_std_docs_file",
-            "category_id",
-            "original_filename",
-            unique=True,
-            postgresql_where=text("is_deleted = false"),
-        ),
-        {"schema": "quality"},
-    )
-
-    category_id: Mapped[uuid.UUID] = mapped_column(
-        comment="所属大类，逻辑引用 quality.document_categories.id"
-    )
-    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称（冗余便于查询）")
-    original_filename: Mapped[str] = mapped_column(String(500), comment="原始文件名")
-    file_path: Mapped[str] = mapped_column(
-        String(1000), comment="文件存储路径"
-    )
-    file_size: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="文件大小（字节）"
-    )

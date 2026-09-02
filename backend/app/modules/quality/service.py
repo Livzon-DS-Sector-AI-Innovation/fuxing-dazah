@@ -85,7 +85,7 @@ class LcReportService:
             form_id=record.form_id,
             standard_type=record.standard_type,
             all_pass=record.all_pass,
-            has_oot=record.has_oot,
+
             excel_filename=record.excel_filename,
             created_at=record.created_at,
             report=report or LcReportOut(),
@@ -99,7 +99,7 @@ class LcReportService:
                     oot_haf=imp.oot_haf,
                     oot_haa=imp.oot_haa,
                     is_pass=imp.is_pass,
-                    is_oot=imp.is_oot,
+
                 )
                 for imp in impurities
             ],
@@ -129,7 +129,6 @@ class LcReportService:
             existing.main_peak_area_b_first = raw.main_peak_area_b_first or None
             existing.main_peak_area_b_second = raw.main_peak_area_b_second or None
             existing.all_pass = report.all_pass
-            existing.has_oot = report.has_oot
             existing.raw_data = report.model_dump(mode="json")
             existing.excel_filename = filename
             await db.flush()
@@ -150,7 +149,7 @@ class LcReportService:
                     "oot_haf": imp.oot_haf,
                     "oot_haa": imp.oot_haa,
                     "is_pass": imp.is_pass,
-                    "is_oot": imp.is_oot,
+
                 })
             if impurity_data:
                 await create_impurities(db, record_id, impurity_data)
@@ -173,7 +172,7 @@ class LcReportService:
             main_peak_area_b_first=raw.main_peak_area_b_first or None,
             main_peak_area_b_second=raw.main_peak_area_b_second or None,
             all_pass=report.all_pass,
-            has_oot=report.has_oot,
+
             raw_data=report.model_dump(mode="json"),
             excel_filename=filename,
         )
@@ -189,7 +188,7 @@ class LcReportService:
                 "oot_haf": imp.oot_haf,
                 "oot_haa": imp.oot_haa,
                 "is_pass": imp.is_pass,
-                "is_oot": imp.is_oot,
+
             })
         if impurity_data:
             await create_impurities(db, record.id, impurity_data)
@@ -199,13 +198,10 @@ class LcReportService:
     @staticmethod
     def _build_report(raw: LcReportData) -> LcReportOut:
         all_pass = True
-        has_oot = False
         standards = [
             QualityStandardOut(
                 name=s.name,
                 limit=s.limit,
-                oot_haf=s.oot_haf,
-                oot_haa=s.oot_haa,
                 operator=s.operator,
             )
             for s in raw.standards
@@ -215,21 +211,18 @@ class LcReportService:
             for p in raw.impurity_peaks
         ]
 
-        def judge(val, op, limit, oh, oa):
+        def judge(val, op, limit):
             ok = True
             if limit and limit > 0:
                 ok = val >= limit if op == "≥" else val <= limit
-            oot = (oh and val > oh) or (oa and val > oa)
-            return ok, oot
+            return ok
 
         vb = None
         if raw.vancomycin_b:
             v = raw.vancomycin_b
-            vb_ok, vb_oot = judge(v.rounded_first, "≥", v.limit, v.oot_haf, v.oot_haa)
+            vb_ok = judge(v.rounded_first, "≥", v.limit)
             if not vb_ok:
                 all_pass = False
-            if vb_oot:
-                has_oot = True
             vb = CalculatedResultOut(
                 name=v.name,
                 first_percent=v.first_percent,
@@ -237,20 +230,15 @@ class LcReportService:
                 rounded_first=v.rounded_first,
                 rounded_second=v.rounded_second,
                 limit=v.limit,
-                oot_haf=v.oot_haf,
-                oot_haa=v.oot_haa,
                 is_pass=vb_ok,
-                is_oot=vb_oot,
             )
 
         ti = None
         if raw.total_impurities:
             t = raw.total_impurities
-            ti_ok, ti_oot = judge(t.rounded_first, "≤", t.limit, t.oot_haf, t.oot_haa)
+            ti_ok = judge(t.rounded_first, "≤", t.limit)
             if not ti_ok:
                 all_pass = False
-            if ti_oot:
-                has_oot = True
             ti = CalculatedResultOut(
                 name=t.name,
                 first_percent=t.first_percent,
@@ -258,35 +246,21 @@ class LcReportService:
                 rounded_first=t.rounded_first,
                 rounded_second=t.rounded_second,
                 limit=t.limit,
-                oot_haf=t.oot_haf,
-                oot_haa=t.oot_haa,
                 is_pass=ti_ok,
-                is_oot=ti_oot,
             )
 
         imps = []
         for imp in raw.impurity_results:
-            ok, oot = judge(
-                imp.second_percent or imp.first_percent,
-                "≤",
-                imp.limit,
-                imp.oot_haf,
-                imp.oot_haa,
-            )
+            ok = judge(imp.second_percent or imp.first_percent, "≤", imp.limit)
             if not ok:
                 all_pass = False
-            if oot:
-                has_oot = True
             imps.append(
                 ImpurityResultOut(
                     name=imp.name,
                     first_percent=imp.first_percent,
                     second_percent=imp.second_percent,
                     limit=imp.limit,
-                    oot_haf=imp.oot_haf,
-                    oot_haa=imp.oot_haa,
                     is_pass=ok,
-                    is_oot=oot,
                 )
             )
 
@@ -311,10 +285,8 @@ class LcReportService:
             impurity_results=imps,
             standards=standards,
             all_pass=all_pass,
-            has_oot=has_oot,
         )
 
-    @staticmethod
     def build_report_data(report: LcReportOut) -> dict:
         """将 LcReportOut 转为模板填充所需的字段字典。
 

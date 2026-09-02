@@ -26,11 +26,6 @@ export default function BatchSummary({ detail, summaryText }: Props) {
               ? <Tag color="success">合格</Tag>
               : <Tag color="error">不合格</Tag>}
           </Descriptions.Item>
-          <Descriptions.Item label="超趋势">
-            {detail.has_oot
-              ? <Tag color="warning">OOT</Tag>
-              : <Tag color="default">无</Tag>}
-          </Descriptions.Item>
         </Descriptions>
       </Card>
 
@@ -63,7 +58,6 @@ export default function BatchSummary({ detail, summaryText }: Props) {
                   {imp.is_pass
                     ? <Tag color="success">合格</Tag>
                     : <Tag color="error">不合格</Tag>}
-                  {imp.is_oot && <Tag color="warning">OOT</Tag>}
                 </Space>
               </List.Item>
             )}

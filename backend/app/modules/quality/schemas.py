@@ -11,8 +11,6 @@ from pydantic import BaseModel, Field
 class QualityStandardOut(BaseModel):
     name: str
     limit: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
     operator: str = "≤"
 
 
@@ -27,10 +25,7 @@ class ImpurityResultOut(BaseModel):
     first_percent: float
     second_percent: float
     limit: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
     is_pass: bool = True
-    is_oot: bool = False
 
 
 class CalculatedResultOut(BaseModel):
@@ -40,10 +35,7 @@ class CalculatedResultOut(BaseModel):
     rounded_first: float
     rounded_second: float
     limit: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
     is_pass: bool = True
-    is_oot: bool = False
 
 
 class LcReportOut(BaseModel):
@@ -67,7 +59,6 @@ class LcReportOut(BaseModel):
     impurity_results: list[ImpurityResultOut] = Field(default_factory=list)
     standards: list[QualityStandardOut] = Field(default_factory=list)
     all_pass: bool = True
-    has_oot: bool = False
 
 
 class UploadLcResponse(BaseModel):
@@ -97,7 +88,6 @@ class InspectionRecordListItem(BaseModel):
     form_id: str | None = None
     standard_type: str | None = None
     all_pass: bool
-    has_oot: bool
     excel_filename: str | None = None
     created_at: datetime | None = None
 
@@ -111,7 +101,6 @@ class InspectionRecordDetail(BaseModel):
     form_id: str | None = None
     standard_type: str | None = None
     all_pass: bool
-    has_oot: bool
     excel_filename: str | None = None
     created_at: datetime | None = None
     report: LcReportOut
@@ -126,10 +115,7 @@ class ImpurityDetailOut(BaseModel):
     first_percent: float | None = None
     second_percent: float | None = None
     limit_value: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
     is_pass: bool = True
-    is_oot: bool = False
 
 
 # ─── 报告单 ───
@@ -177,7 +163,6 @@ class ProductSummaryOut(BaseModel):
     total: int
     pass_count: int
     fail_count: int
-    oot_count: int
 
 
 class HistorySummaryOut(BaseModel):
@@ -186,7 +171,6 @@ class HistorySummaryOut(BaseModel):
     total: int
     pass_count: int
     fail_count: int
-    oot_count: int
     pass_rate: float
     products: list[ProductSummaryOut]
 
@@ -194,44 +178,59 @@ class HistorySummaryOut(BaseModel):
 # ─── 产品标准配置 ───
 
 
-class ProductStandardCreate(BaseModel):
-    """创建产品标准配置。"""
+class StandardDocumentCreate(BaseModel):
+    """创建质量标准文档。"""
 
+    file_no: str = Field(max_length=100)
     product_name: str = Field(max_length=200)
-    item_name: str = Field(max_length=100)
-    form_id: str | None = Field(default=None, max_length=100, description="代号/表号")
-    sop_no: str | None = Field(default=None, max_length=64, description="SOP 编号")
-    standard_type: str | None = Field(default=None, max_length=20)
-    operator: str = Field(default="≤", max_length=10)
-    limit_value: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
+    product_code: str | None = Field(default=None, max_length=64)
+    product_internal_code: str | None = Field(default=None, max_length=64)
+    specification: str | None = Field(default=None, max_length=200)
+    valid_years: str | None = Field(default=None, max_length=32)
+    effective_date: str | None = Field(default=None, max_length=32)
+    version: str | None = Field(default=None, max_length=32)
 
 
-class ProductStandardUpdate(BaseModel):
-    """更新产品标准配置。"""
+class StandardDocumentUpdate(BaseModel):
+    """更新质量标准文档。"""
 
+    file_no: str | None = Field(default=None, max_length=100)
     product_name: str | None = Field(default=None, max_length=200)
-    item_name: str | None = Field(default=None, max_length=100)
-    form_id: str | None = Field(default=None, max_length=100, description="代号/表号")
-    sop_no: str | None = Field(default=None, max_length=64, description="SOP 编号")
-    standard_type: str | None = Field(default=None, max_length=20)
+    product_code: str | None = Field(default=None, max_length=64)
+    product_internal_code: str | None = Field(default=None, max_length=64)
+    specification: str | None = Field(default=None, max_length=200)
+    valid_years: str | None = Field(default=None, max_length=32)
+    effective_date: str | None = Field(default=None, max_length=32)
+    version: str | None = Field(default=None, max_length=32)
+
+
+class StandardItemCreate(BaseModel):
+    """创建标准项目行（SOP 号为匹配键；纯文字标准不收录）。"""
+
+    seq: int | None = None
+    category: str | None = Field(default=None, max_length=100)
+    item_name: str = Field(max_length=200)
+    sop_no: str = Field(max_length=64)
+    standard_text: str = Field(max_length=300)
     operator: str | None = Field(default=None, max_length=10)
-    limit_value: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
+    limit_min: float | None = None
+    limit_max: float | None = None
+    method_source: str | None = Field(default=None, max_length=64)
+    remark: str | None = Field(default=None, max_length=200)
 
 
-class ProductStandardOut(BaseModel):
-    """产品标准配置输出。"""
+class StandardItemUpdate(BaseModel):
+    """更新标准项目行。"""
 
-    id: uuid.UUID
-    product_name: str
-    item_name: str
-    standard_type: str | None = None
-    operator: str = "≤"
-    limit_value: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    seq: int | None = None
+    category: str | None = Field(default=None, max_length=100)
+    item_name: str | None = Field(default=None, max_length=200)
+    sop_no: str | None = Field(default=None, max_length=64)
+    standard_text: str | None = Field(default=None, max_length=300)
+    operator: str | None = Field(default=None, max_length=10)
+    limit_min: float | None = None
+    limit_max: float | None = None
+    method_source: str | None = Field(default=None, max_length=64)
+    remark: str | None = Field(default=None, max_length=200)
+
+

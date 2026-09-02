@@ -60,7 +60,6 @@ export default function LcHistoryList() {
         : <Tag color="error">不合格</Tag>,
     },
     {
-      title: 'OOT', dataIndex: 'has_oot', key: 'has_oot', width: 70,
       render: (v: boolean) => v ? <Tag color="warning">OOT</Tag> : null,
     },
     { title: '文件名', dataIndex: 'excel_filename', key: 'excel_filename', ellipsis: true },
