@@ -156,7 +156,9 @@ class ProductStandard(BaseModel):
         Index(
             "uq_quality_product_standards_item",
             "product_name",
+            "form_id",
             "item_name",
+            "sop_no",
             unique=True,
             postgresql_where=text("is_deleted = false"),
         ),
@@ -164,6 +166,12 @@ class ProductStandard(BaseModel):
     )
 
     product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
+    form_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, comment="代号/表号（同一产品不同制剂/工艺的细分，如 3229）"
+    )
+    sop_no: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="检验项目绑定的 SOP 编号（同名项目按 SOP 号区分匹配）"
+    )
     standard_type: Mapped[str | None] = mapped_column(
         String(20), nullable=True, comment="标准类型：USP、EP、CP"
     )

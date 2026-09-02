@@ -199,6 +199,8 @@ class ProductStandardCreate(BaseModel):
 
     product_name: str = Field(max_length=200)
     item_name: str = Field(max_length=100)
+    form_id: str | None = Field(default=None, max_length=100, description="代号/表号")
+    sop_no: str | None = Field(default=None, max_length=64, description="SOP 编号")
     standard_type: str | None = Field(default=None, max_length=20)
     operator: str = Field(default="≤", max_length=10)
     limit_value: float | None = None
@@ -211,6 +213,8 @@ class ProductStandardUpdate(BaseModel):
 
     product_name: str | None = Field(default=None, max_length=200)
     item_name: str | None = Field(default=None, max_length=100)
+    form_id: str | None = Field(default=None, max_length=100, description="代号/表号")
+    sop_no: str | None = Field(default=None, max_length=64, description="SOP 编号")
     standard_type: str | None = Field(default=None, max_length=20)
     operator: str | None = Field(default=None, max_length=10)
     limit_value: float | None = None

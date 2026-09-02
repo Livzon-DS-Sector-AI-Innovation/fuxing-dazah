@@ -14,6 +14,8 @@ interface ProductStandard {
   id: string
   product_name: string
   item_name: string
+  form_id: string | null
+  sop_no: string | null
   standard_type: string | null
   operator: string
   limit_value: number | null
@@ -103,7 +105,11 @@ export default function StandardsPage() {
 
   const columns: ColumnsType<ProductStandard> = [
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name', width: 150 },
+    { title: '代号', dataIndex: 'form_id', key: 'form_id', width: 80,
+      render: (v: string | null) => v || '-' },
     { title: '指标名称', dataIndex: 'item_name', key: 'item_name', width: 130 },
+    { title: 'SOP号', dataIndex: 'sop_no', key: 'sop_no', width: 90,
+      render: (v: string | null) => v || '-' },
     { title: '标准类型', dataIndex: 'standard_type', key: 'standard_type', width: 80,
       render: (v: string) => v ? <Tag color="blue">{v}</Tag> : '-' },
     { title: '运算符', dataIndex: 'operator', key: 'operator', width: 70 },
@@ -154,6 +160,12 @@ export default function StandardsPage() {
         <Form form={form} layout="vertical">
           <Form.Item name="product_name" label="产品名称" rules={[{ required: true }]}>
             <Input placeholder="如 盐酸万古霉素" />
+          </Form.Item>
+          <Form.Item name="form_id" label="代号/表号">
+            <Input placeholder="如 3229（可留空）" />
+          </Form.Item>
+          <Form.Item name="sop_no" label="SOP号">
+            <Input placeholder="项目绑定的 SOP 编号（可留空）" />
           </Form.Item>
           <Form.Item name="item_name" label="指标名称" rules={[{ required: true }]}>
             <Input placeholder="如 万古霉素B、总杂质、RS1" />

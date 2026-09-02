@@ -352,10 +352,14 @@ async def create_product_standard(
     limit_value: float | None = None,
     oot_haf: float | None = None,
     oot_haa: float | None = None,
+    form_id: str | None = None,
+    sop_no: str | None = None,
 ) -> ProductStandard:
     std = ProductStandard(
         product_name=product_name,
         item_name=item_name,
+        form_id=form_id,
+        sop_no=sop_no,
         standard_type=standard_type,
         operator=operator,
         limit_value=limit_value,

@@ -523,6 +523,8 @@ async def create_standard(
         db,
         product_name=payload.product_name,
         item_name=payload.item_name,
+        form_id=payload.form_id,
+        sop_no=payload.sop_no,
         standard_type=payload.standard_type,
         operator=payload.operator,
         limit_value=payload.limit_value,
