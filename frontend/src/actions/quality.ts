@@ -145,3 +145,113 @@ export async function fetchSummaryProducts(): Promise<string[]> {
   const body = await res.json()
   return body.data as string[]
 }
+
+
+// ─── 质量标准文档 / 项目行 ───
+
+export interface StandardDocument {
+  id: string
+  file_no: string
+  product_name: string
+  product_code: string | null
+  product_internal_code: string | null
+  specification: string | null
+  valid_years: string | null
+  effective_date: string | null
+  version: string | null
+}
+
+export interface StandardItem {
+  id: string
+  seq: number | null
+  category: string | null
+  item_name: string
+  sop_no: string
+  standard_text: string
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  remark: string | null
+}
+
+export async function fetchStandardDocuments(): Promise<{ data: StandardDocument[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取标准文档失败')
+  return res.json()
+}
+
+export async function createStandardDocument(data: Partial<StandardDocument>): Promise<{ data: { id: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('创建标准文档失败')
+  return res.json()
+}
+
+export async function updateStandardDocument(id: string, data: Partial<StandardDocument>): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('更新标准文档失败')
+  return res.json()
+}
+
+export async function deleteStandardDocument(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除标准文档失败')
+  return res.json()
+}
+
+export async function fetchStandardItems(docId: string): Promise<{ data: StandardItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${docId}/items`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取标准行失败')
+  return res.json()
+}
+
+export async function createStandardItem(docId: string, data: Partial<StandardItem>): Promise<{ data: { id: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/documents/${docId}/items`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('新增标准行失败')
+  return res.json()
+}
+
+export async function updateStandardItem(id: string, data: Partial<StandardItem>): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/items/${id}`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('更新标准行失败')
+  return res.json()
+}
+
+export async function deleteStandardItem(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/items/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除标准行失败')
+  return res.json()
+}
+
+export async function importStandardDoc(formData: FormData): Promise<{ message: string; data: { id: string; created_items: number; parsed_items: number } }> {
+  const headers = await _authHeaders()
+  delete headers['Content-Type']
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/import-doc`, {
+    method: 'POST', headers, body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '导入失败')
+  }
+  return res.json()
+}
