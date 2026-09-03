@@ -36,6 +36,23 @@ class FieldTrendPoint(BaseModel):
     value: float
 
 
+class FieldTrendSeries(BaseModel):
+    """单字段趋势序列：节点下一个数值字段的全部数据点。"""
+
+    field_key: str
+    field_label: str
+    unit: str | None
+    data_points: list[FieldTrendPoint]
+
+
+class FieldTrendResponse(BaseModel):
+    """字段趋势响应：节点下全部有数据的数值字段。"""
+
+    series: list[FieldTrendSeries]
+    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    merged_routes: list[str] = []
+
+
 class StageSummaryColumn(BaseModel):
     """工段汇总平铺矩阵列定义（工序字段或计算字段）。"""
 
@@ -63,3 +80,5 @@ class StageSummaryOut(BaseModel):
 
     columns: list[StageSummaryColumn]
     rows: list[StageSummaryRow]
+    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    merged_routes: list[str] = []

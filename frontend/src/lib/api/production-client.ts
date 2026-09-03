@@ -3,7 +3,7 @@
 import type {
   BatchDetail,
   ChildrenAggregateResult,
-  FieldTrendPoint,
+  FieldTrendResponse,
   IntermediateType,
   MaterialMovements,
   MixingContainer,
@@ -284,10 +284,9 @@ export async function fetchChildrenAggregateClient(
 export async function fetchFieldTrendClient(
   routeId: string,
   nodeCode: string,
-  fieldKey: string,
-): Promise<FieldTrendPoint[]> {
-  const s = qs({ route_id: routeId, node_code: nodeCode, field_key: fieldKey })
-  return apiGet<FieldTrendPoint[]>(`${API_BASE}/api/v1/production/analytics/field-trend?${s}`)
+): Promise<FieldTrendResponse> {
+  const s = qs({ route_id: routeId, node_code: nodeCode })
+  return apiGet<FieldTrendResponse>(`${API_BASE}/api/v1/production/analytics/field-trend?${s}`)
 }
 
 export async function fetchStageSummaryClient(params: {
