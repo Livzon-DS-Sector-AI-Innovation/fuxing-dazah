@@ -57,10 +57,10 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         doc = Document(BytesIO(file_bytes))
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
-    # .doc 旧格式：textutil(macOS) → antiword → catdoc → 纯文本尝试
-    import asyncio
+    # .doc 旧格式：textutil(macOS) → antiword → catdoc（同步 subprocess，线程安全）
     import os
     import shutil
+    import subprocess
     import tempfile
 
     with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
@@ -70,30 +70,23 @@ def extract_text(file_bytes: bytes, filename: str) -> str:
         text = ""
         if shutil.which("textutil"):
             out_path = tmp_path + ".txt"
-            proc = asyncio.create_subprocess_exec(
-                "textutil", "-convert", "txt", tmp_path, "-output", out_path,
-                stdout=asyncio.PIPE, stderr=asyncio.PIPE,
+            r = subprocess.run(
+                ["textutil", "-convert", "txt", tmp_path, "-output", out_path],
+                capture_output=True, timeout=60,
             )
-            asyncio.get_event_loop().run_until_complete(proc.communicate())
-            if proc.returncode == 0 and os.path.exists(out_path):
-                with open(out_path) as f:
+            if r.returncode == 0 and os.path.exists(out_path):
+                with open(out_path, encoding="utf-8", errors="ignore") as f:
                     text = f.read()
             if os.path.exists(out_path):
                 os.unlink(out_path)
         if not text and shutil.which("antiword"):
-            proc = asyncio.create_subprocess_exec(
-                "antiword", tmp_path, stdout=asyncio.PIPE, stderr=asyncio.PIPE,
-            )
-            stdout, _ = asyncio.get_event_loop().run_until_complete(proc.communicate())
-            if proc.returncode == 0:
-                text = stdout.decode("utf-8", errors="ignore")
+            r = subprocess.run(["antiword", tmp_path], capture_output=True, timeout=60)
+            if r.returncode == 0:
+                text = r.stdout.decode("utf-8", errors="ignore")
         if not text and shutil.which("catdoc"):
-            proc = asyncio.create_subprocess_exec(
-                "catdoc", tmp_path, stdout=asyncio.PIPE, stderr=asyncio.PIPE,
-            )
-            stdout, _ = asyncio.get_event_loop().run_until_complete(proc.communicate())
-            if proc.returncode == 0:
-                text = stdout.decode("utf-8", errors="ignore")
+            r = subprocess.run(["catdoc", tmp_path], capture_output=True, timeout=60)
+            if r.returncode == 0:
+                text = r.stdout.decode("utf-8", errors="ignore")
         return text
     finally:
         os.unlink(tmp_path)
