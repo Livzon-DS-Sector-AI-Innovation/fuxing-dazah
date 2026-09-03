@@ -490,6 +490,69 @@ async def list_summary_products(
 # ─── 质量标准文档 / 项目行（SOP 号为匹配键）───
 
 
+@router.post("/standards/import-doc", summary="上传标准文档解析导入")
+async def import_standard_doc(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """上传 .doc/.docx 质量标准文件：解析文件头+项目行，纯文字标准自动过滤。
+
+    返回解析草稿与落库结果，前端可继续在明细表格中校正。
+    """
+    from app.modules.quality.standard_doc_parser import extract_text_async, parse_standard_doc
+
+    filename = file.filename or "standard.doc"
+    if not filename.lower().endswith((".doc", ".docx")):
+        raise HTTPException(status_code=400, detail="仅支持 .doc / .docx 格式")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    try:
+        text = await extract_text_async(content, filename)
+    except Exception:
+        raise HTTPException(status_code=500, detail="文档文本提取失败")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="未能从文档中提取文本")
+
+    parsed = parse_standard_doc(text)
+    if not parsed.product_name and not parsed.file_no:
+        raise HTTPException(status_code=400, detail="解析失败：未识别出标准文件头信息")
+
+    doc = await create_standard_document(db, {
+        "file_no": parsed.file_no or filename,
+        "product_name": parsed.product_name or filename,
+        "product_code": parsed.product_code,
+        "product_internal_code": parsed.product_internal_code,
+        "specification": parsed.specification,
+        "valid_years": parsed.valid_years,
+        "effective_date": parsed.effective_date,
+        "version": parsed.version,
+    })
+    created = 0
+    for it in parsed.items:
+        try:
+            await create_standard_item(db, doc.id, {
+                "seq": it.seq,
+                "category": it.category,
+                "item_name": it.item_name,
+                "sop_no": it.sop_no,
+                "standard_text": it.standard_text,
+                "operator": it.operator,
+                "limit_min": it.limit_min,
+                "limit_max": it.limit_max,
+                "method_source": it.method_source,
+                "remark": it.remark,
+            })
+            created += 1
+        except Exception:
+            continue
+    return success_response(
+        data={"id": str(doc.id), "created_items": created, "parsed_items": len(parsed.items)},
+        message=f"解析导入完成：{created}/{len(parsed.items)} 条标准行（纯文字标准已过滤）",
+        status_code=201,
+    )
+
+
 @router.get("/standards/documents", summary="质量标准文档列表")
 async def list_standard_docs(
     product_name: str | None = Query(default=None),
