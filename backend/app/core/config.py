@@ -119,6 +119,20 @@ class Settings(BaseSettings):
     METER_AI_API_KEY: str = ""
     METER_AI_MODEL: str = "deepseek-v4-flash-vision-exp"
 
+    # Warehouse — 仓储模块专属飞书应用（仓库管理机器人）与 Agent 模型
+    WAREHOUSE_FEISHU_APP_ID: str = ""
+    WAREHOUSE_FEISHU_APP_SECRET: str = ""
+    # V1.0 数据面：4 个测试版 Base token
+    WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN: str = ""
+    WAREHOUSE_FEISHU_BITABLE_GMP_APP_TOKEN: str = ""
+    WAREHOUSE_FEISHU_BITABLE_PROD_APP_TOKEN: str = ""
+    WAREHOUSE_FEISHU_BITABLE_SALES_APP_TOKEN: str = ""
+    # Agent 单模型位（视觉 + function calling，DeepSeek 兼容网关）
+    WAREHOUSE_AGENT_BASE_URL: str = ""
+    WAREHOUSE_AGENT_API_KEY: str = ""
+    WAREHOUSE_AGENT_MODEL: str = ""
+    WAREHOUSE_AGENT_TIMEOUT: int = 120
+
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
 

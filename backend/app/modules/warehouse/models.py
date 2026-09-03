@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 from decimal import Decimal
 
 from sqlalchemy import (
     CheckConstraint,
+    Integer,
     DateTime,
     Index,
     Numeric,
@@ -16,6 +18,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.base_model import BaseModel
@@ -234,3 +237,137 @@ class WarehouseStocktakeItem(BaseModel):
         Numeric(18, 4), nullable=True, comment="实盘数量，空表示未盘"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
+class WarehouseAgentDraft(BaseModel):
+    """Agent 识别草稿：识别→对齐→人工确认→写 Base 的两段式载体。"""
+
+    __tablename__ = "warehouse_agent_drafts"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_agent_drafts_no",
+            "draft_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_agent_drafts_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    draft_no: Mapped[str] = mapped_column(String(50), nullable=False, comment="草稿编号")
+    scene: Mapped[str] = mapped_column(String(50), nullable=False, comment="场景: receipt/gmp_outbound/finished_outbound")
+    source_image: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="来源图片 file token")
+    recognized: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="模型原始识别结果"
+    )
+    aligned: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="主数据对齐后字段+置信度"
+    )
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="created", server_default="created",
+        comment="created/aligned/pending_confirm/confirmed/submitted/expired/cancelled",
+    )
+    target_base: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="目标 Base token")
+    target_table: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="目标表 table_id")
+    target_record_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="写入成功后回填的 record_id")
+    created_by_open_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="发起人飞书 open_id")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="草稿过期时间")
+
+
+class WarehouseAgentSession(BaseModel):
+    """Agent 会话上下文：对话历史裁剪与草稿摘要注入的依据。"""
+
+    __tablename__ = "warehouse_agent_sessions"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_agent_sessions_key",
+            "chat_id",
+            "user_open_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    chat_id: Mapped[str] = mapped_column(String(60), nullable=False, comment="飞书 chat_id（私聊为 p2p 标识）")
+    user_open_id: Mapped[str] = mapped_column(String(60), nullable=False, comment="用户飞书 open_id")
+    history: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="最近消息与轮次摘要"
+    )
+
+
+class WarehouseAgentAudit(BaseModel):
+    """Agent 工具调用审计：每次工具调用的参数摘要/结果状态/耗时。"""
+
+    __tablename__ = "warehouse_agent_audit"
+    __table_args__ = (
+        Index("ix_warehouse_agent_audit_tool", "tool_name"),
+        Index("ix_warehouse_agent_audit_draft", "draft_id"),
+        {"schema": "warehouse"},
+    )
+
+    tool_name: Mapped[str] = mapped_column(String(60), nullable=False, comment="工具名")
+    args_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="参数摘要（截断）"
+    )
+    result_status: Mapped[str] = mapped_column(String(30), nullable=False, comment="ok/error/denied")
+    error_code: Mapped[str | None] = mapped_column(String(30), nullable=True, comment="错误码分类（如 1254062）")
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="耗时毫秒"
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="关联会话"
+    )
+    draft_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="关联草稿"
+    )
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="关联计划"
+    )
+
+
+class WarehouseAgentPlan(BaseModel):
+    """Agent 任务计划：多步任务分解与中断恢复的持久化载体。"""
+
+    __tablename__ = "warehouse_agent_plans"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_agent_plans_no",
+            "plan_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    plan_no: Mapped[str] = mapped_column(String(50), nullable=False, comment="计划编号")
+    title: Mapped[str] = mapped_column(String(200), nullable=False, comment="任务标题")
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]", comment="[{no,desc,status,note}]"
+    )
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="active", server_default="active",
+        comment="active/done/abandoned",
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="所属会话"
+    )
+    created_by_open_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="发起人飞书 open_id")
+
+
+class WarehouseAgentMemory(BaseModel):
+    """Agent 长期记忆：用户偏好/业务惯例/术语别名，跨会话。"""
+
+    __tablename__ = "warehouse_agent_memories"
+    __table_args__ = (
+        Index("ix_warehouse_agent_memories_scope", "scope", "owner_open_id"),
+        {"schema": "warehouse"},
+    )
+
+    scope: Mapped[str] = mapped_column(String(20), nullable=False, comment="user/global")
+    owner_open_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="用户 open_id（global 时为空）")
+    memory_type: Mapped[str] = mapped_column(String(30), nullable=False, comment="preference/convention/alias")
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="记忆内容")
+    hit_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="注入命中计数（淘汰用）"
+    )
