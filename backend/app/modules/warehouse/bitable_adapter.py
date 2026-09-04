@@ -55,7 +55,7 @@ def _parse_code(exc: BaseException) -> int | None:
 
 
 class WarehouseBitableAdapter:
-    """仓储 Agent 专用 Base 读写适配器（7 张核心表，测试版坐标）。
+    """仓储 Agent 专用 Base 读写适配器（10 张核心表，测试版坐标）。
 
     凭证默认读 Settings 的 WAREHOUSE_FEISHU_APP_ID/SECRET 与
     WAREHOUSE_FEISHU_BITABLE_*_APP_TOKEN；构造参数 ``app_id``/``app_secret``/
@@ -159,6 +159,58 @@ class WarehouseBitableAdapter:
             }
             for item in items
         ]
+
+    async def search_records_page(
+        self,
+        table_key: str,
+        filter_json: dict[str, Any] | None = None,
+        field_names: list[str] | None = None,
+        limit: int = 20,
+        page_token: str | None = None,
+        sort: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """``query_records`` 的分页版（S1 ticket 03 查询工具用）。
+
+        走同一 records/search 接口，但保留响应的 total 与 page_token：
+        返回 {"records": [...], "total": int | None, "page_token": str | None}。
+        total 为服务端 filter 命中的总条数（无 filter 时即全表条数）；
+        page_token 非空表示还有后续页。
+
+        实测限制（V1.0 测试版 Base）：datetime 字段的比较过滤（is/isGreater/
+        isLess 等）一律 1254018 InvalidFilter（select 过滤正常），日期范围
+        过滤需调用方拉取后本地做——本适配器支持 ``sort``（如
+        ``[{"field_name": "入库日期", "desc": True}]``）配合分页拉最近数据。
+        """
+        meta = self._table(table_key)
+        body: dict[str, Any] = {}
+        if field_names:
+            body["field_names"] = list(field_names)
+        if filter_json:
+            body["filter"] = filter_json
+        if sort:
+            body["sort"] = list(sort)
+        params: dict[str, Any] = {"page_size": max(1, min(int(limit), 500))}
+        if page_token:
+            params["page_token"] = page_token
+        data = await self._call(
+            "POST",
+            f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
+            f"/tables/{meta.table_id}/records/search",
+            json_body=body,
+            params=params,
+        )
+        items = data.get("items") or []
+        return {
+            "records": [
+                {
+                    "record_id": str(item.get("record_id", "")),
+                    "fields": dict(item.get("fields") or {}),
+                }
+                for item in items
+            ],
+            "total": data.get("total") if isinstance(data.get("total"), int) else None,
+            "page_token": str(data.get("page_token")) if data.get("page_token") else None,
+        }
 
     async def get_record(self, table_key: str, record_id: str) -> dict[str, Any]:
         """按 record_id 取单条记录，返回 {"record_id": str, "fields": {...}}。

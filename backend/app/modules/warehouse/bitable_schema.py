@@ -5,7 +5,10 @@
   结构相同；table_id 以测试版为准）；
 - gmp_* 取自 GMP 测试版 RJGcbTCHQaIm3wsSEZrcDRFDnLb；
 - finished_outbound 取自成品产销存 L2O2bNm3SaqzdVse6q5cCi8Anbe（prod_fields.txt）；
-- sales_detail 取自成品销售汇总测试版 MtxPbT0xAaVAQHs8ixoctousnif。
+- sales_detail 取自成品销售汇总测试版 MtxPbT0xAaVAQHs8ixoctousnif；
+- material_master / dead_stock / unqualified_stock 取自物料系统工作版快照
+  base_scan/material/fields/（S1 ticket 03 查询工具需要；单选选项集快照
+  未收录、为空，校验时放行），table_id 以测试版实测坐标为准。
 
 写契约（全部来自实测，见 docs/warehouse-module-design.md V1.0-5）：
 - 单选字段（type 3）写入必须传**纯字符串**（读取返回数组，读写不对称）；
@@ -329,9 +332,87 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '400十亿黏杆换算成kg': FieldMeta(type=20),
         '出库错误判断': FieldMeta(type=20),
     },
+
+    # ── S1 ticket 03 新增（查询工具需要；字段/类型来自 base_scan 快照，选项集快照为空） ──
+
+    'material_master': {  # 25 fields 物料名称代码一览表
+        '实际物料：请检后出报天数': FieldMeta(type=2),
+        '代码': FieldMeta(type=3),
+        '复验期': FieldMeta(type=2),
+        '供应商': FieldMeta(type=3),
+        '使用品种': FieldMeta(type=1),
+        '包装规格': FieldMeta(type=3),
+        'ERP代码': FieldMeta(type=1),
+        'ERP规格': FieldMeta(type=1),
+        'ERP编码': FieldMeta(type=1),
+        'ERP名称': FieldMeta(type=1),
+        '件数换算': FieldMeta(type=2),
+        '有效期': FieldMeta(type=2),
+        '免检物料': FieldMeta(type=3),
+        '备注': FieldMeta(type=1),
+        '父记录': FieldMeta(type=18),
+        '体现物料：请检后出报天数': FieldMeta(type=2),
+        '级别': FieldMeta(type=3),
+        '飞书规格': FieldMeta(type=3),
+        '物料名称': FieldMeta(type=3),
+        '单位换算': FieldMeta(type=3),
+        '法规危险性分类': FieldMeta(type=3),
+        '生产商': FieldMeta(type=3),
+        '数量换算': FieldMeta(type=2),
+        '物料大类': FieldMeta(type=3),
+        '物料细分类': FieldMeta(type=3),
+    },
+
+    'dead_stock': {  # 18 fields 原辅料及危化品呆料汇总（测试版实测结构）
+        # 测试版该表为月度出库汇总形态，无工作版快照的呆料核心字段
+        # （产生呆料数量/处理方式/处理进度/使用部门/登记日期）——
+        # query_report(dead) 因此改查入库总账「呆料判断=是」，见 tools/query.py
+        '单位': FieldMeta(type=1),
+        '物料名称': FieldMeta(type=3),
+        '级别': FieldMeta(type=3),
+        '规格': FieldMeta(type=3),
+        '1月': FieldMeta(type=20),
+        '2月': FieldMeta(type=20),
+        '3月': FieldMeta(type=20),
+        '4月': FieldMeta(type=20),
+        '5月': FieldMeta(type=20),
+        '6月': FieldMeta(type=20),
+        '7月': FieldMeta(type=20),
+        '8月': FieldMeta(type=20),
+        '9月': FieldMeta(type=20),
+        '10月': FieldMeta(type=20),
+        '11月': FieldMeta(type=20),
+        '12月': FieldMeta(type=20),
+        '2026年': FieldMeta(type=20),
+        '备注': FieldMeta(type=1),
+    },
+
+    'unqualified_stock': {  # 21 fields 不合格物料汇总
+        '序号': FieldMeta(type=1005),
+        'SourceID': FieldMeta(type=1),
+        '级别/型号': FieldMeta(type=1),
+        '供应商': FieldMeta(type=1),
+        '计量单位': FieldMeta(type=3),
+        '登记时间': FieldMeta(type=5),
+        '不合格项目': FieldMeta(type=1),
+        '处理日期': FieldMeta(type=5),
+        '物料大类': FieldMeta(type=3),
+        '生产商': FieldMeta(type=1),
+        '到货日期': FieldMeta(type=5),
+        '登记人': FieldMeta(type=11),
+        '到货数量': FieldMeta(type=2),
+        '处理方式': FieldMeta(type=1),
+        '物料名称': FieldMeta(type=1),
+        '外包装/标签照片': FieldMeta(type=17),
+        '质量状态': FieldMeta(type=19),
+        '备注': FieldMeta(type=1),
+        'QC报告单': FieldMeta(type=17),
+        '内部批号': FieldMeta(type=1),
+        '厂家批号': FieldMeta(type=1),
+    },
 }
 
-# ── 表坐标（7 张核心表，table_id 以测试版 Base 为准） ──
+# ── 表坐标（10 张核心表，table_id 以测试版 Base 为准） ──
 
 TABLES: dict[str, TableMeta] = {
     "material_receipt": TableMeta(
@@ -382,6 +463,28 @@ TABLES: dict[str, TableMeta] = {
         table_id="tblv2mhOHvZiepMa",
         name_cn="成品销售明细表",
         fields=_TABLE_FIELDS["sales_detail"],
+    ),
+    # ── S1 ticket 03 新增（只读查询；table_id 为测试版实测坐标） ──
+    "material_master": TableMeta(
+        base_key="MATERIAL",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN",
+        table_id="tblTcAG2qQWGa5R3",
+        name_cn="物料名称代码一览表",
+        fields=_TABLE_FIELDS["material_master"],
+    ),
+    "dead_stock": TableMeta(
+        base_key="MATERIAL",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN",
+        table_id="tblLxUJN0rtW49zT",
+        name_cn="原辅料及危化品呆料汇总",
+        fields=_TABLE_FIELDS["dead_stock"],
+    ),
+    "unqualified_stock": TableMeta(
+        base_key="MATERIAL",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN",
+        table_id="tblPPgtpbMU9aRsD",
+        name_cn="不合格物料汇总",
+        fields=_TABLE_FIELDS["unqualified_stock"],
     ),
 }
 

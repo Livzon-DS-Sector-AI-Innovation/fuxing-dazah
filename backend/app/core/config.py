@@ -122,6 +122,8 @@ class Settings(BaseSettings):
     # Warehouse — 仓储模块专属飞书应用（仓库管理机器人）与 Agent 模型
     WAREHOUSE_FEISHU_APP_ID: str = ""
     WAREHOUSE_FEISHU_APP_SECRET: str = ""
+    # 仓储机器人专属飞书事件 WS 长连接开关（main.py 门控，独立于平台/安全模块连接）
+    WAREHOUSE_FEISHU_WS_ENABLED: bool = False
     # V1.0 数据面：4 个测试版 Base token
     WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN: str = ""
     WAREHOUSE_FEISHU_BITABLE_GMP_APP_TOKEN: str = ""
@@ -132,6 +134,11 @@ class Settings(BaseSettings):
     WAREHOUSE_AGENT_API_KEY: str = ""
     WAREHOUSE_AGENT_MODEL: str = ""
     WAREHOUSE_AGENT_TIMEOUT: int = 120
+    # 冒烟测试目标群（可选；配置后 test_live_smoke 真发一条卡片）
+    WAREHOUSE_TEST_CHAT_ID: str = ""
+    # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）
+    WAREHOUSE_AGENT_MAX_TURNS: int = 10
+    WAREHOUSE_AGENT_SESSION_ROUNDS: int = 12
 
     # JWT
     JWT_EXPIRE_SECONDS: int = 86400  # 24 hours
