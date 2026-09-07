@@ -1,8 +1,11 @@
-"""识别 Pipeline（S2）：recognizer → aligner → draft_flow → submit（S2 ticket 04 完整链）。
+"""识别/登记 Pipeline（S2：recognizer → aligner → draft_flow → submit；
+S3：SCENE_CONFIG 场景配置 + 对话收集 create_dialog_draft + submit_gmp/
+submit_outbound）。
 
 对外 re-export 稳定接口，内部模块经 ``warehouse.agent.pipeline`` 引入。
-draft_flow 导入即注册 scene=receipt 确认回调（submit_receipt 真身，
-draft_flow 注册处薄包装延迟 import 解 cards↔submit 模块环）。
+draft_flow 导入即注册 scene=receipt/gmp_outbound/finished_outbound 确认
+回调（submit_receipt/submit_gmp/submit_outbound 真身，draft_flow 注册处
+薄包装延迟 import 解 cards↔submit 模块环）。
 """
 
 from app.modules.warehouse.agent.pipeline.aligner import (
@@ -20,9 +23,14 @@ from app.modules.warehouse.agent.pipeline.draft_flow import (
     ACTIVE_STATUSES,
     DRAFT_NO_RETRIES,
     DRAFT_TTL_SECONDS,
+    FINISHED_OUTBOUND_SCENE,
+    GMP_OUTBOUND_SCENE,
     RECEIPT_SCENE,
+    SCENE_CONFIG,
     DraftFlowError,
+    SceneConfig,
     cancel_draft,
+    create_dialog_draft,
     create_receipt_draft,
     expire_stale,
     mark_aligned,
@@ -46,9 +54,18 @@ from app.modules.warehouse.agent.pipeline.submit import (
     ARRIVAL_STATUS_VALUE,
     ATTACHMENT_FIELD,
     CHECK_FIELDS,
+    FINISHED_CHECK_FIELDS,
+    FINISHED_OUTBOUND_TABLE,
+    GMP_CHECK_FIELDS,
+    GMP_OUTBOUND_TABLE,
     RECEIPT_TABLE,
+    SUBMIT_FINISHED_EXPRESS_ENABLED,
     SUBMIT_MATERIAL_NAME_ENABLED,
+    build_finished_fields,
+    build_gmp_fields,
     build_receipt_fields,
+    submit_gmp,
+    submit_outbound,
     submit_receipt,
 )
 
@@ -61,7 +78,13 @@ __all__ = [
     "DRAFT_NO_RETRIES",
     "DRAFT_TTL_SECONDS",
     "DraftFlowError",
+    "FINISHED_CHECK_FIELDS",
+    "FINISHED_OUTBOUND_SCENE",
+    "FINISHED_OUTBOUND_TABLE",
     "FUZZY_MIN_RATIO",
+    "GMP_CHECK_FIELDS",
+    "GMP_OUTBOUND_SCENE",
+    "GMP_OUTBOUND_TABLE",
     "MASTER_CACHE_TTL",
     "MaterialMasterEntry",
     "OPTIONAL_FIELDS",
@@ -71,15 +94,21 @@ __all__ = [
     "RECOGNIZE_PROMPT",
     "RECOGNIZE_TEMPERATURE",
     "REQUIRED_FIELDS",
+    "SCENE_CONFIG",
+    "SUBMIT_FINISHED_EXPRESS_ENABLED",
     "SUBMIT_MATERIAL_NAME_ENABLED",
+    "SceneConfig",
     "RecognizedField",
     "RecognizedReceipt",
     "align_batch",
     "align_receipt",
+    "build_finished_fields",
+    "build_gmp_fields",
     "build_receipt",
     "build_receipt_fields",
     "build_vision_message",
     "cancel_draft",
+    "create_dialog_draft",
     "create_receipt_draft",
     "expire_stale",
     "get_master_entries",
@@ -90,5 +119,7 @@ __all__ = [
     "recognize_receipt",
     "required_all_missing",
     "send_confirm_card",
+    "submit_gmp",
+    "submit_outbound",
     "submit_receipt",
 ]

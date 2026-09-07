@@ -111,7 +111,9 @@ class Runner:
 
             settings = get_settings()
             max_turns = (
-                max_turns if max_turns is not None else int(settings.WAREHOUSE_AGENT_MAX_TURNS)
+                max_turns
+                if max_turns is not None
+                else int(settings.WAREHOUSE_AGENT_MAX_TURNS)
             )
             session_rounds = (
                 session_rounds
@@ -130,7 +132,9 @@ class Runner:
         """汇总该用户待处理的确认/提醒（spec 决策 5：pending 草稿摘要）。"""
         try:
             async with _db_session() as db:
-                drafts = await repository.list_actionable_drafts(db, session.user_open_id)
+                drafts = await repository.list_actionable_drafts(
+                    db, session.user_open_id
+                )
         except Exception:
             logger.warning("待处理事项查询失败，跳过注入", exc_info=True)
             return ""
@@ -143,18 +147,35 @@ class Runner:
                         f"- 有一张入库识别单待确认（草稿 {d.draft_no}），"
                         "用户可能要修改字段或确认入库"
                     )
+                elif scene == "gmp_outbound":
+                    lines.append(
+                        f"- 有一张 GMP 出库登记单待确认（草稿 {d.draft_no}），"
+                        "用户可能要修改字段或确认登记"
+                    )
                 else:
-                    lines.append(f"- 有一个待你确认的{scene}事项（草稿 {d.draft_no}），尚未执行")
+                    lines.append(
+                        f"- 有一个待你确认的{scene}事项（草稿 {d.draft_no}），尚未执行"
+                    )
             elif d.status == "aligned":
-                # S2 修5：识别对齐后的入库草稿（确认卡片待发/发送失败）——
+                # S2 修5：识别/收集后尚未发确认卡片的草稿——
                 # update_draft 靠本摘要获知 draft_no
-                lines.append(
-                    f"- 有一张已识别的入库单（草稿 {d.draft_no}），"
-                    "用户可能要修改字段（用 update_draft）"
-                )
+                if d.scene == "receipt":
+                    lines.append(
+                        f"- 有一张已识别的入库单（草稿 {d.draft_no}），"
+                        "用户可能要修改字段（用 update_draft）"
+                    )
+                else:
+                    lines.append(
+                        f"- 有一张已收集信息的登记单（草稿 {d.draft_no}），"
+                        "用户可能要修改字段（用 update_draft）"
+                    )
             elif d.status == "scheduled":
-                trigger = d.expires_at.strftime("%m-%d %H:%M") if d.expires_at else "待定"
-                lines.append(f"- 有一个定时提醒（{trigger}）尚未触发（草稿 {d.draft_no}）")
+                trigger = (
+                    d.expires_at.strftime("%m-%d %H:%M") if d.expires_at else "待定"
+                )
+                lines.append(
+                    f"- 有一个定时提醒（{trigger}）尚未触发（草稿 {d.draft_no}）"
+                )
         return "\n".join(lines)
 
     # ── 主循环 ──
@@ -162,11 +183,13 @@ class Runner:
     async def run(self, session: WarehouseAgentSession, text: str) -> Reply:
         llm = self._ensure_llm()
         history_messages = list((session.history or {}).get("messages") or [])
-        trimmed = history_messages[-(self._session_rounds * 2):]
+        trimmed = history_messages[-(self._session_rounds * 2) :]
         system_text = await build_system_prompt(session.user_open_id)
         pending_note = await self._pending_summary(session)
         if pending_note:
-            system_text += "\n\n## 六、当前待处理事项（用户可能追问进展）\n" + pending_note
+            system_text += (
+                "\n\n## 六、当前待处理事项（用户可能追问进展）\n" + pending_note
+            )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_text},
             *trimmed,
@@ -187,11 +210,13 @@ class Runner:
                     if "error" not in executed["result"]:
                         # 记录最后一次成功的工具名+结果（卡片渲染输入，ticket 04）
                         reply_data = {"tool": tc.name, "result": executed["result"]}
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": executed["content"],
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": executed["content"],
+                        }
+                    )
                 continue  # 工具结果已回填，进入下一轮
 
             if (msg.content or "").strip():
@@ -202,7 +227,9 @@ class Runner:
         if final_text is None:
             logger.warning(
                 "仓库 Runner 达到最大轮次: session_id=%s turns=%s tools=%s",
-                session.id, self._max_turns, [log["tool"] for log in tool_logs],
+                session.id,
+                self._max_turns,
+                [log["tool"] for log in tool_logs],
             )
             final_text = FALLBACK_REPLY
             reply_data = None  # 兜底话术不携带数据卡片

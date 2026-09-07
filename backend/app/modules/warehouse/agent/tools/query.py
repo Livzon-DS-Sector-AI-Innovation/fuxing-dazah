@@ -35,6 +35,14 @@ from app.modules.warehouse.agent.tools.draft_update import (
     DRAFT_UPDATE_TOOL_FUNCS,
     DRAFT_UPDATE_TOOLS_SCHEMA,
 )
+from app.modules.warehouse.agent.tools.finished import (
+    FINISHED_TOOL_FUNCS,
+    FINISHED_TOOLS_SCHEMA,
+)
+from app.modules.warehouse.agent.tools.gmp import (
+    GMP_TOOL_FUNCS,
+    GMP_TOOLS_SCHEMA,
+)
 from app.modules.warehouse.agent.tools.memory import (
     MEMORY_TOOL_FUNCS,
     MEMORY_TOOLS_SCHEMA,
@@ -205,10 +213,7 @@ def _date_range_ms(
         except ValueError:
             return None, None, f"日期参数 {arg!r} 格式应为 YYYY-MM-DD"
         target = int(
-            (base + timedelta(days=offset_days))
-            .replace(tzinfo=UTC)
-            .timestamp()
-            * 1000
+            (base + timedelta(days=offset_days)).replace(tzinfo=UTC).timestamp() * 1000
         )
         if is_lower:
             lower = target
@@ -217,7 +222,9 @@ def _date_range_ms(
     return lower, upper, None
 
 
-def _in_date_range(fields: dict[str, Any], date_field: str, lower: int | None, upper: int | None) -> bool:
+def _in_date_range(
+    fields: dict[str, Any], date_field: str, lower: int | None, upper: int | None
+) -> bool:
     """记录的日期字段是否落在 [lower, upper) 毫秒区间；无日期值视为不匹配。"""
     ms = _cell_ms(fields.get(date_field))
     if ms is None:
@@ -257,9 +264,7 @@ async def _fetch_all(
     return records, server_total, page_token is not None
 
 
-def _pick(
-    fields: dict[str, Any], mapping: list[tuple[str, Any]]
-) -> dict[str, str]:
+def _pick(fields: dict[str, Any], mapping: list[tuple[str, Any]]) -> dict[str, str]:
     """按 (输出键, 值格式化函数) 列表抽取记录字段，缺失字段输出空串。"""
     out: dict[str, str] = {}
     for key, formatter in mapping:
@@ -289,9 +294,17 @@ async def query_stock(
 ) -> dict[str, Any]:
     """查物料库存明细（material_stock）：按关键词/QA放行状态/临期天数过滤。"""
     field_names = [
-        "物料名称", "物料批号", "厂家批号", "剩余数量", "单位",
-        "贮存/槽车取样点", "QA放行", "入库日期", "有效期至/复验期至",
-        "物料大类", "级别/型号",
+        "物料名称",
+        "物料批号",
+        "厂家批号",
+        "剩余数量",
+        "单位",
+        "贮存/槽车取样点",
+        "QA放行",
+        "入库日期",
+        "有效期至/复验期至",
+        "物料大类",
+        "级别/型号",
     ]
     records, _server_total, truncated = await _fetch_all(
         "material_stock", None, field_names
@@ -346,12 +359,17 @@ async def query_stock(
         for f in [row["fields"]]
     ]
 
-    notes = [n for n in [
-        _truncation_note(truncated),
-        f"{unparseable_expiry} 条记录的有效期无法解析、未纳入临期过滤"
-        if unparseable_expiry else "",
-        f"qc_status 仅支持 {'/'.join(QC_STATUSES)}" if qc_status else "",
-    ] if n]
+    notes = [
+        n
+        for n in [
+            _truncation_note(truncated),
+            f"{unparseable_expiry} 条记录的有效期无法解析、未纳入临期过滤"
+            if unparseable_expiry
+            else "",
+            f"qc_status 仅支持 {'/'.join(QC_STATUSES)}" if qc_status else "",
+        ]
+        if n
+    ]
     return {
         "total": len(matched),
         "records": detail,
@@ -365,15 +383,27 @@ async def query_stock(
 async def query_material(keyword: str) -> dict[str, Any]:
     """查物料主数据（material_master）：按名称/代码/ERP名称模糊匹配。"""
     field_names = [
-        "代码", "物料名称", "级别", "飞书规格", "物料大类", "单位换算",
-        "生产商", "免检物料", "复验期", "有效期", "包装规格", "物料细分类",
-        "ERP名称", "使用品种",
+        "代码",
+        "物料名称",
+        "级别",
+        "飞书规格",
+        "物料大类",
+        "单位换算",
+        "生产商",
+        "免检物料",
+        "复验期",
+        "有效期",
+        "包装规格",
+        "物料细分类",
+        "ERP名称",
+        "使用品种",
     ]
     records, _server_total, truncated = await _fetch_all(
         "material_master", None, field_names
     )
     matched = [
-        row for row in records
+        row
+        for row in records
         if _match_keyword(
             row["fields"], ["物料名称", "代码", "ERP名称", "使用品种"], keyword
         )
@@ -394,10 +424,14 @@ async def query_material(keyword: str) -> dict[str, Any]:
         for row in matched[:DETAIL_LIMIT]
         for f in [row["fields"]]
     ]
-    notes = [n for n in [
-        _truncation_note(truncated),
-        "一览表无「单位」列，单位信息见「单位换算」列",
-    ] if n]
+    notes = [
+        n
+        for n in [
+            _truncation_note(truncated),
+            "一览表无「单位」列，单位信息见「单位换算」列",
+        ]
+        if n
+    ]
     return {"total": len(matched), "records": detail, "note": "；".join(notes)}
 
 
@@ -422,17 +456,39 @@ async def query_movements(
     plans: list[tuple[str, str, str, list[str]]] = []
     # (表key, 方向中文, 日期字段, 明细字段)
     if dir_norm in ("inbound", "both"):
-        plans.append((
-            "material_receipt", "入库", "入库日期",
-            ["物料名称", "物料批号", "入库数量", "单位", "入库日期",
-             "QA放行", "贮存/槽车取样点"],
-        ))
+        plans.append(
+            (
+                "material_receipt",
+                "入库",
+                "入库日期",
+                [
+                    "物料名称",
+                    "物料批号",
+                    "入库数量",
+                    "单位",
+                    "入库日期",
+                    "QA放行",
+                    "贮存/槽车取样点",
+                ],
+            )
+        )
     if dir_norm in ("outbound", "both"):
-        plans.append((
-            "material_outbound", "出库", "领用日期",
-            ["物料名称", "物料批号", "出库数量", "单位", "领用日期",
-             "领用部门", "领用类型"],
-        ))
+        plans.append(
+            (
+                "material_outbound",
+                "出库",
+                "领用日期",
+                [
+                    "物料名称",
+                    "物料批号",
+                    "出库数量",
+                    "单位",
+                    "领用日期",
+                    "领用部门",
+                    "领用类型",
+                ],
+            )
+        )
 
     result: dict[str, Any] = {"total": 0, "summary": [], "records": []}
     all_notes: list[str] = []
@@ -442,16 +498,22 @@ async def query_movements(
             return {"error": err}
         # 日期倒序拉最近数据（datetime 比较过滤实测不可用，日期范围本地过滤）
         records, _server_total, truncated = await _fetch_all(
-            table_key, None, field_names,
+            table_key,
+            None,
+            field_names,
             sort=[{"field_name": date_field, "desc": True}],
         )
         if truncated:
             all_notes.append(f"{dir_cn}数据超过拉取上限（1500 条），仅统计最近记录")
         matched = [
-            row for row in records
+            row
+            for row in records
             if (not material or _match_keyword(row["fields"], ["物料名称"], material))
-            and (lower is None and upper is None
-                 or _in_date_range(row["fields"], date_field, lower, upper))
+            and (
+                lower is None
+                and upper is None
+                or _in_date_range(row["fields"], date_field, lower, upper)
+            )
         ]
         # 按物料名称聚合数量（数量字段随方向不同）
         qty_key = "入库数量" if dir_cn == "入库" else "出库数量"
@@ -513,8 +575,13 @@ DEAD_RECEIPT_FILTER: dict[str, Any] = {
 }
 
 REPORT_UNQUALIFIED_FIELDS = [
-    "物料名称", "不合格项目", "处理方式", "到货日期", "登记人",
-    "计量单位", "物料大类",
+    "物料名称",
+    "不合格项目",
+    "处理方式",
+    "到货日期",
+    "登记人",
+    "计量单位",
+    "物料大类",
 ]
 
 
@@ -522,16 +589,21 @@ async def query_report(report_type: str = "dead") -> dict[str, Any]:
     """查汇总报表清单：dead=呆料批次清单 / unqualified=不合格物料（前10条+total）。"""
     key = (report_type or "dead").strip().lower()
     if key not in ("dead", "unqualified"):
-        return {
-            "error": f"report_type 仅支持 dead/unqualified，收到 {report_type!r}"
-        }
+        return {"error": f"report_type 仅支持 dead/unqualified，收到 {report_type!r}"}
 
     if key == "dead":
         records, _server_total, truncated = await _fetch_all(
             "material_receipt",
             DEAD_RECEIPT_FILTER,
-            ["物料名称", "物料批号", "入库数量", "单位", "入库日期",
-             "贮存/槽车取样点", "使用部门（槽车）"],
+            [
+                "物料名称",
+                "物料批号",
+                "入库数量",
+                "单位",
+                "入库日期",
+                "贮存/槽车取样点",
+                "使用部门（槽车）",
+            ],
         )
         detail = [
             {
@@ -582,6 +654,7 @@ async def query_report(report_type: str = "dead") -> dict[str, Any]:
 # ── 注册表（S3 套 MCP 壳的对接点）──
 # 查询工具 + Harness 计划工具（ticket 05）+ 长期记忆工具（ticket 06）+
 # 办公工具（ticket 07，send_card 确认门回调随模块导入注册）+
+# 草稿修改工具（S2 ticket 03）+ GMP 登记工具（S3 ticket 01，_ctx 会话上下文）+
 # 技能库工具（ticket 08，load_skill 拉取 SOP 全文）共用同一注册表；
 # 声明 `_ctx` 形参的工具由 execute_tool 自动注入会话上下文（见 execute_tool）。
 
@@ -603,6 +676,8 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     **MEMORY_TOOL_FUNCS,
     **OFFICE_TOOL_FUNCS,
     **DRAFT_UPDATE_TOOL_FUNCS,
+    **GMP_TOOL_FUNCS,
+    **FINISHED_TOOL_FUNCS,
     **SKILL_TOOL_FUNCS,
 }
 
@@ -718,6 +793,8 @@ TOOLS: list[dict[str, Any]] = [
     *MEMORY_TOOLS_SCHEMA,
     *OFFICE_TOOLS_SCHEMA,
     *DRAFT_UPDATE_TOOLS_SCHEMA,
+    *GMP_TOOLS_SCHEMA,
+    *FINISHED_TOOLS_SCHEMA,
     *SKILL_TOOLS_SCHEMA,
 ]
 

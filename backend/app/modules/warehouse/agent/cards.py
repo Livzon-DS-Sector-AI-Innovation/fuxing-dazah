@@ -182,9 +182,7 @@ def _generic_table(rows: list[dict[str, Any]], max_rows: int = MAX_DETAIL_ROWS) 
 
 def render_text_card(title: str, markdown: str) -> dict[str, Any]:
     """通用 markdown 文本卡片（无结构化数据/渲染降级时的兜底）。"""
-    return _build_card(
-        title=title, template="blue", elements=[_md(markdown or "")]
-    )
+    return _build_card(title=title, template="blue", elements=[_md(markdown or "")])
 
 
 # ── 1. 库存卡片 ──
@@ -256,12 +254,16 @@ def _material_block(index: int, rec: dict[str, Any]) -> str:
     return "\n".join([title, *lines])
 
 
-def render_material_card(data: dict[str, Any], *, reply_text: str = "") -> dict[str, Any]:
+def render_material_card(
+    data: dict[str, Any], *, reply_text: str = ""
+) -> dict[str, Any]:
     """物料主数据卡片：单条块式全字段，多条行式精选列表格。"""
     rows = _list_rows(data)
     elements = _summary_elements(reply_text)
     if not rows:
-        elements.append(_md("未查询到符合条件的物料主数据。\n可换个名称/代码关键词试试。"))
+        elements.append(
+            _md("未查询到符合条件的物料主数据。\n可换个名称/代码关键词试试。")
+        )
         return _build_card(title="🧪 物料信息", template="blue", elements=elements)
     elements.append({"tag": "hr"})
     if len(rows) == 1:
@@ -329,7 +331,9 @@ def _movement_detail_lines(heading: str, rows: Any) -> list[str]:
     return [f"{icon} **{heading}**", table]
 
 
-def render_movements_card(data: dict[str, Any], *, reply_text: str = "") -> dict[str, Any]:
+def render_movements_card(
+    data: dict[str, Any], *, reply_text: str = ""
+) -> dict[str, Any]:
     """出入库总账卡片：按方向的聚合汇总数字 + 明细表。"""
     elements = _summary_elements(reply_text)
     body: list[str] = []
@@ -344,7 +348,9 @@ def render_movements_card(data: dict[str, Any], *, reply_text: str = "") -> dict
             for heading, rows in section.items():
                 body.extend(_movement_detail_lines(str(heading), rows))
     if not body:
-        elements.append(_md("未查询到符合条件的出入库记录。\n可放宽日期范围或换物料关键词试试。"))
+        elements.append(
+            _md("未查询到符合条件的出入库记录。\n可放宽日期范围或换物料关键词试试。")
+        )
         return _build_card(title="🔄 出入库汇总", template="blue", elements=elements)
     total = _total_of(data)
     if total is not None and total > MAX_DETAIL_ROWS:
@@ -482,13 +488,19 @@ def render_confirm_preview_card(
                 "actions": [
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": CONFIRM_SEND_BUTTON_LABEL},
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CONFIRM_SEND_BUTTON_LABEL,
+                        },
                         "type": "primary",
                         "value": {**value_base, "action": "confirm"},
                     },
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": CANCEL_SEND_BUTTON_LABEL},
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CANCEL_SEND_BUTTON_LABEL,
+                        },
                         "value": {**value_base, "action": "cancel"},
                     },
                 ],
@@ -521,12 +533,27 @@ def render_reminder_card(reminder: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-# ── 7. 入库确认卡片（S2 ticket 03：识别草稿 confirm/cancel，对话修改重发）──
+# ── 7. 登记确认卡片（S2 ticket 03：识别草稿 confirm/cancel，对话修改重发；
+#      S3 ticket 01：按 draft.scene 分支——receipt 入库识别 / gmp_outbound
+#      GMP 出库对话登记 / finished_outbound 成品出库对话登记（ticket 02）；
+#      按钮 value.scene 分发到各自确认回调）──
 
-# 卡片标题与按钮文案（gateway 卡片回调路由按 value.scene=receipt 分发）
+# 卡片标题与按钮文案（gateway 卡片回调路由按 value.scene 分发）
 RECEIPT_CONFIRM_CARD_TITLE = "📋 入库确认"
 CONFIRM_RECEIPT_BUTTON_LABEL = "✅ 确认入库"
 CANCEL_RECEIPT_BUTTON_LABEL = "❌ 取消"
+
+# GMP 出库登记确认卡片（S3 ticket 01：scene=gmp_outbound 分支文案）
+GMP_OUTBOUND_SCENE = "gmp_outbound"
+GMP_CONFIRM_CARD_TITLE = "🧪 GMP 出库登记"
+CONFIRM_GMP_BUTTON_LABEL = "✅ 确认登记"
+CANCEL_GMP_BUTTON_LABEL = "❌ 取消"
+
+# 成品出库登记确认卡片（S3 ticket 02：scene=finished_outbound 分支文案）
+FINISHED_OUTBOUND_SCENE = "finished_outbound"
+FINISHED_CONFIRM_CARD_TITLE = "📦 成品出库登记"
+CONFIRM_FINISHED_BUTTON_LABEL = "✅ 确认登记"
+CANCEL_FINISHED_BUTTON_LABEL = "❌ 取消"
 
 # 识别置信度低于该阈值加 ⚠ 高亮（spec：低置信度字段提醒重点核对）
 RECEIPT_CONFIDENCE_WARN = 0.7
@@ -553,7 +580,49 @@ RECEIPT_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 # 对话修改引导（spec 决策 5：[修改] 无按钮，引导文本对话）
-RECEIPT_MODIFY_HINT = "💡 确认前请核对 ⚠ 字段；要修改可直接回复消息（如「数量改成 200」）。"
+RECEIPT_MODIFY_HINT = (
+    "💡 确认前请核对 ⚠ 字段；要修改可直接回复消息（如「数量改成 200」）。"
+)
+
+# GMP 必收 4 字段（展示名, aligned 键；顺序即卡片展示顺序）
+GMP_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("物料批号", "material_batch_no"),
+    ("领用数量", "quantity"),
+    ("单位", "unit"),
+    ("生产批号", "production_batch_no"),
+)
+
+# GMP 选填/展示字段（物料名称仅展示——lookup 拒写不落 Base）
+GMP_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("物料名称", "material_name"),
+    ("单据类型", "doc_type"),
+    ("领用品种", "category"),
+    ("领用部门", "department"),
+)
+
+GMP_MODIFY_HINT = "💡 确认前请核对以上信息；要修改可直接回复消息（如「数量改成 30」）。"
+
+# 成品出库必收 5 字段（S3 ticket 02；展示名, aligned 键；顺序即卡片展示顺序）
+FINISHED_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("产品名称", "product_name"),
+    ("产品批号", "product_batch_no"),
+    ("出库量", "quantity"),
+    ("单位", "unit"),
+    ("销售客户", "customer"),
+)
+
+# 成品出库选填字段（用途缺省「销售」；快递号为附件字段——submit 侧降级
+# 不落 Base，仅展示并用于推送卡片）
+FINISHED_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("用途", "purpose"),
+    ("快递号", "express_no"),
+    ("温度计", "thermometer"),
+    ("备注", "remark"),
+)
+
+FINISHED_MODIFY_HINT = (
+    "💡 确认前请核对以上信息；要修改可直接回复消息（如「出库量改成 200」）。"
+)
 
 
 def _field_line(
@@ -605,20 +674,146 @@ def _aligned_line(aligned: dict[str, Any]) -> str:
     return f"**物料对齐**：{name}（代码 {code}｜大类 {category}）"
 
 
-def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
-    """入库确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
+def _render_gmp_confirm_card(draft: Any) -> dict[str, Any]:
+    """GMP 出库登记确认卡片（scene=gmp_outbound 分支，S3 ticket 01）。
 
-    draft 为 warehouse_agent_drafts 行（或同构对象）：recognized JSONB
-    （13 字段 value/confidence）+ aligned JSONB（对齐字段+match_confidence）。
-    必提/选提分区 + 低置信度 ⚠ + 物料对齐行 + [✅ 确认入库][❌ 取消] 按钮
-    （value={scene, action, draft_id}，gateway 按 scene=receipt 分发到
+    draft.aligned = 对话收集字段（canonical 键；create_dialog_draft 落库，
+    update_draft 修改后覆盖），recognized 同内容留底（无识别置信度语义，
+    ⚠ 规则仅保留缺字段提醒）。物料名称仅展示（lookup 拒写不落 Base）。
+    渲染防御同主入口：字段缺失降级，不抛错。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or GMP_OUTBOUND_SCENE)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [f"**草稿**：{draft_no or '-'}", "", "**登记信息**"]
+    for index, (label, key) in enumerate(GMP_REQUIRED_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
+        )
+    lines.extend(["", "**补充信息（选填）**"])
+    for index, (label, key) in enumerate(GMP_OPTIONAL_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+        )
+    lines.extend(["", GMP_MODIFY_HINT])
+
+    value_base = {"scene": scene, "draft_id": draft_id}
+    return _build_card(
+        title=GMP_CONFIRM_CARD_TITLE,
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CONFIRM_GMP_BUTTON_LABEL,
+                        },
+                        "type": "primary",
+                        "value": {**value_base, "action": "confirm"},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CANCEL_GMP_BUTTON_LABEL,
+                        },
+                        "value": {**value_base, "action": "cancel"},
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def _render_finished_confirm_card(draft: Any) -> dict[str, Any]:
+    """成品出库登记确认卡片（scene=finished_outbound 分支，S3 ticket 02）。
+
+    与 GMP 确认卡片同构（对话收集字段、无识别置信度语义，⚠ 规则仅保留
+    缺字段提醒），字段集/文案换成成品口径。渲染防御同主入口：字段缺失
+    降级，不抛错。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or FINISHED_OUTBOUND_SCENE)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [f"**草稿**：{draft_no or '-'}", "", "**登记信息**"]
+    for index, (label, key) in enumerate(FINISHED_REQUIRED_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
+        )
+    lines.extend(["", "**补充信息（选填）**"])
+    for index, (label, key) in enumerate(FINISHED_OPTIONAL_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+        )
+    lines.extend(["", FINISHED_MODIFY_HINT])
+
+    value_base = {"scene": scene, "draft_id": draft_id}
+    return _build_card(
+        title=FINISHED_CONFIRM_CARD_TITLE,
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CONFIRM_FINISHED_BUTTON_LABEL,
+                        },
+                        "type": "primary",
+                        "value": {**value_base, "action": "confirm"},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CANCEL_FINISHED_BUTTON_LABEL,
+                        },
+                        "value": {**value_base, "action": "cancel"},
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
+    """登记确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
+
+    draft 为 warehouse_agent_drafts 行（或同构对象）。按 draft.scene 分发：
+    gmp_outbound → :func:`_render_gmp_confirm_card`（对话收集字段，无识别
+    置信度/物料对齐段）；finished_outbound →
+    :func:`_render_finished_confirm_card`（成品口径，同对话收集形态）；
+    其余（receipt 及缺省）→ 入库识别卡片（13 字段 value/confidence +
+    aligned 对齐字段）。
+
+    入库识别形态：必提/选提分区 + 低置信度 ⚠ + 物料对齐行 + [✅ 确认入库]
+    [❌ 取消] 按钮（value={scene, action, draft_id}，gateway 按 scene 分发到
     confirm.handle_action）。渲染防御：recognized/aligned 缺字段或整段缺失
     一律降级，不抛错。
     """
+    scene = str(getattr(draft, "scene", "") or "receipt")
+    if scene == GMP_OUTBOUND_SCENE:
+        return _render_gmp_confirm_card(draft)
+    if scene == FINISHED_OUTBOUND_SCENE:
+        return _render_finished_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
-    scene = str(getattr(draft, "scene", "") or "receipt")
     draft_id = str(getattr(draft, "id", ""))
 
     lines = [f"**草稿**：{draft_no or '-'}", ""]
@@ -650,13 +845,19 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
                 "actions": [
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": CONFIRM_RECEIPT_BUTTON_LABEL},
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CONFIRM_RECEIPT_BUTTON_LABEL,
+                        },
                         "type": "primary",
                         "value": {**value_base, "action": "confirm"},
                     },
                     {
                         "tag": "button",
-                        "text": {"tag": "plain_text", "content": CANCEL_RECEIPT_BUTTON_LABEL},
+                        "text": {
+                            "tag": "plain_text",
+                            "content": CANCEL_RECEIPT_BUTTON_LABEL,
+                        },
                         "value": {**value_base, "action": "cancel"},
                     },
                 ],
@@ -665,16 +866,44 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
-# ── 8. 入库回执卡片（S2 ticket 04：submit 结果 + 读回核对 + 降级提示）──
+# ── 8. 登记回执卡片（S2 ticket 04：submit 结果 + 读回核对 + 降级提示；
+#      S3 ticket 01：scene=gmp_outbound 分支标题/文案；S3 ticket 02：
+#      scene=finished_outbound 分支标题/文案）──
 
 # 卡片标题（submit 读回核对一致 / 不一致两种形态）
 RECEIPT_RESULT_CARD_TITLE_OK = "✅ 入库已登记"
 RECEIPT_RESULT_CARD_TITLE_MISMATCH = "⚠ 入库已登记（读回不一致）"
 
+# GMP 出库回执标题（scene=gmp_outbound 分支）
+GMP_RESULT_CARD_TITLE_OK = "✅ GMP 出库已登记"
+GMP_RESULT_CARD_TITLE_MISMATCH = "⚠ GMP 出库已登记（读回不一致）"
+
+# 成品出库回执标题（scene=finished_outbound 分支，S3 ticket 02）
+FINISHED_RESULT_CARD_TITLE_OK = "✅ 成品出库已登记"
+FINISHED_RESULT_CARD_TITLE_MISMATCH = "⚠ 成品出库已登记（读回不一致）"
+
+# 读回核对一致提示行（按 scene 的核对字段口径）
+RECEIPT_CHECK_OK_LINE = "✅ 数量/批号/单位/供应商 与 Base 读回一致"
+GMP_CHECK_OK_LINE = "✅ 批号/数量/单位 与 Base 读回一致"
+FINISHED_CHECK_OK_LINE = "✅ 批号/出库量/单位/客户 与 Base 读回一致"
+
+# GMP 物料批号降级提示（submit.SUBMIT_GMP_BATCH_ENABLED=False 时批号不写
+# 入——Base 侧字段编辑限制，放开后置 True 提示随之消失）
+GMP_DEGRADE_BATCH_HINT = (
+    "⚠ 物料批号需在 Base 人工补填（Base 侧字段编辑限制，放开后自动写入）"
+)
+
 # 物料名称降级提示（spec Implementation Decisions 6：测试版该字段重复选项
 # 未治理，submit 跳过写入——治理后移除降级，提示随之消失）
 RECEIPT_DEGRADE_MATERIAL_HINT = (
     "⚠ 物料名称需在 Base 人工补选（选项重复问题，治理后自动写入）"
+)
+
+# 成品快递号降级提示（S3 ticket 02：附件字段 type 17 写入需 file_token，
+# 文本快递单号无法自动写入——见 submit.SUBMIT_FINISHED_EXPRESS_ENABLED
+# 开关注释；快递号仍用于推送卡片内容）
+FINISHED_DEGRADE_EXPRESS_HINT = (
+    "⚠ 快递号需在 Base 人工补填（附件字段，文本快递单号无法自动写入）"
 )
 
 # 写入字段摘要/核对结果行的单元格截断
@@ -684,20 +913,40 @@ _RESULT_VALUE_MAX = 30
 def render_receipt_result_card(
     draft: Any, check_result: dict[str, Any]
 ) -> dict[str, Any]:
-    """入库回执卡片（pipeline.submit.submit_receipt 发送，dry-run 可捕获）。
+    """登记回执卡片（pipeline.submit.submit_receipt / submit_gmp /
+    submit_outbound 发送，dry-run 可捕获）。标题与核对文案按 draft.scene
+    分支（gmp_outbound → GMP 出库标题 / finished_outbound → 成品出库标题），
+    正文结构三场景共用。
 
-    check_result 由 submit_receipt 构造：
+    check_result 由 submit_receipt/submit_gmp/submit_outbound 构造：
     - consistent：bool，读回核对是否一致；
     - mismatches：[{field, written, read_back}]（规范化文本后的不一致项）；
     - written：{Base 字段名: 写入值}（展示摘要）；
     - record_id：Base 记录 id；degraded：[未写入字段名]（降级/选项集不匹配）。
 
-    渲染：标题按 consistent 分「✅ 入库已登记」（green）/「⚠ 入库已登记
+    渲染：标题按 consistent 分「✅ …已登记」（green）/「⚠ …已登记
     （读回不一致）」（red）；正文 = 草稿号 + Base 记录 id + 写入字段摘要 +
     读回核对结果（✅ 关键字段一致 / ⚠ 写入值 vs 读回值对照行）+ 降级提示。
     渲染防御同其他卡片：check_result 缺键/畸形一律按空值降级，不抛错。
     """
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or "receipt")
+    # 各 scene 分支配置：回执标题/核对一致行/专属降级字段与提示（receipt 缺省）
+    if scene == GMP_OUTBOUND_SCENE:
+        title_ok = GMP_RESULT_CARD_TITLE_OK
+        title_mismatch = GMP_RESULT_CARD_TITLE_MISMATCH
+        check_ok_line = GMP_CHECK_OK_LINE
+        special_field, special_hint = "物料批号", GMP_DEGRADE_BATCH_HINT
+    elif scene == FINISHED_OUTBOUND_SCENE:
+        title_ok = FINISHED_RESULT_CARD_TITLE_OK
+        title_mismatch = FINISHED_RESULT_CARD_TITLE_MISMATCH
+        check_ok_line = FINISHED_CHECK_OK_LINE
+        special_field, special_hint = "快递号", FINISHED_DEGRADE_EXPRESS_HINT
+    else:
+        title_ok = RECEIPT_RESULT_CARD_TITLE_OK
+        title_mismatch = RECEIPT_RESULT_CARD_TITLE_MISMATCH
+        check_ok_line = RECEIPT_CHECK_OK_LINE
+        special_field, special_hint = "物料名称", RECEIPT_DEGRADE_MATERIAL_HINT
     check = check_result if isinstance(check_result, dict) else {}
     consistent = bool(check.get("consistent"))
     record_id = _clean(check.get("record_id"), 40)
@@ -710,16 +959,16 @@ def render_receipt_result_card(
     if isinstance(written, dict) and written:
         lines.extend(["", "**写入字段**"])
         for index, (name, value) in enumerate(written.items(), 1):
-            lines.append(f"{index}. {_clean(name, 24)}：{_clean(value, _RESULT_VALUE_MAX)}")
+            lines.append(
+                f"{index}. {_clean(name, 24)}：{_clean(value, _RESULT_VALUE_MAX)}"
+            )
 
     lines.extend(["", "**读回核对**"])
     mismatches = [
-        item
-        for item in (check.get("mismatches") or [])
-        if isinstance(item, dict)
+        item for item in (check.get("mismatches") or []) if isinstance(item, dict)
     ]
     if consistent:
-        lines.append("✅ 数量/批号/单位/供应商 与 Base 读回一致")
+        lines.append(check_ok_line)
     elif mismatches:
         for item in mismatches:
             lines.append(
@@ -731,15 +980,17 @@ def render_receipt_result_card(
         lines.append("⚠ 读回核对异常（无明细）")
 
     degraded = [str(name) for name in (check.get("degraded") or [])]
-    if "物料名称" in degraded:
-        lines.extend(["", RECEIPT_DEGRADE_MATERIAL_HINT])
-    skipped = [name for name in degraded if name != "物料名称"]
+    # 场景专属降级字段（receipt=物料名称 / gmp=物料批号 / finished=快递号）
+    # 走专属提示行，不落入「选项集不匹配」通用行
+    if special_field in degraded:
+        lines.extend(["", special_hint])
+    skipped = [name for name in degraded if name != special_field]
     if skipped:
-        lines.append(f"ℹ️ 未写入（选项集不匹配，需人工补填）：{_clean('、'.join(skipped), 80)}")
+        lines.append(
+            f"ℹ️ 未写入（选项集不匹配，需人工补填）：{_clean('、'.join(skipped), 80)}"
+        )
 
-    title = (
-        RECEIPT_RESULT_CARD_TITLE_OK if consistent else RECEIPT_RESULT_CARD_TITLE_MISMATCH
-    )
+    title = title_ok if consistent else title_mismatch
     return _build_card(
         title=title,
         template="green" if consistent else "red",
@@ -777,6 +1028,7 @@ def render_reply_card(
                 return renderer(result, reply_text=reply.text or "")
             except Exception:  # noqa: BLE001 — 渲染兜底：任何异常降级文本卡片
                 logger.exception(
-                    "仓库 Agent 专用卡片渲染失败，降级文本卡片: tool=%s", data.get("tool")
+                    "仓库 Agent 专用卡片渲染失败，降级文本卡片: tool=%s",
+                    data.get("tool"),
                 )
     return render_text_card(TEXT_CARD_TITLE, reply.text or "")

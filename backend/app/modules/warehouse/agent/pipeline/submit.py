@@ -1,4 +1,5 @@
-"""入库提交（S2 ticket 04，spec Implementation Decisions 3/6——识别入库最后一公里）。
+"""入库/GMP 出库/成品出库提交（S2 ticket 04 + S3 ticket 01/02，spec
+Implementation Decisions 1/2/3/6）。
 
 scene=receipt 确认回调真身（draft_flow 注册薄包装，票03 桩退役）：
 confirmed 草稿 → aligned/recognized 值组装 material_receipt 写入字段 →
@@ -7,6 +8,24 @@ validate_write_fields（S0 写契约最后防线）→ 原图附件下载+上传
 单位/供应商）→ draft=submitted + target_record_id 回填 + audit（tool_name=
 "submit_receipt"）→ 回执卡片发送（发起人私聊，dry-run 可捕获）→ 返回回执
 note（confirm.handle_action 的用户可见消息）。
+
+scene=gmp_outbound 同款链路（S3 ticket 01）：submit_gmp 写 gmp_outbound
+（GMP 物料出库总账）——对话收集字段（aligned，canonical 键）→ 字段映射
+（日期=当天毫秒时间戳、单据类型默认出库）→ validate → create_record →
+读回核对（批号/数量/单位）→ submitted + audit（tool_name="submit_gmp"）；
+物料名称为 lookup 拒写（仅确认卡片展示）。
+
+scene=finished_outbound 同款链路（S3 ticket 02）：submit_outbound 写
+finished_outbound（成品出库台账）——读回核对（批号/出库量/单位/客户）+
+audit（tool_name="submit_outbound"）；快递号为附件字段（type 17）文本单号
+无法写入（SUBMIT_FINISHED_EXPRESS_ENABLED 降级开关，同批号降级机制）；
+登记了快递号时回执 note 附加推送引导（用户回复 group:/user: 目标后经
+send_card 确认门发送发货通知，spec 决策 3）。
+
+**物料批号降级**（``SUBMIT_GMP_BATCH_ENABLED`` 开关注释）：测试版 Base 对
+该字段存在编辑限制（任何合法选项值均 1254062），submit 跳过批号写入，
+回执卡片与 audit 标注「需人工在 Base 补填」；Base 放开后置 True 恢复
+自动写入。
 
 **物料名称降级**（spec 决策 6，``SUBMIT_MATERIAL_NAME_ENABLED`` 开关注释）：
 测试版「物料名称」单选字段选项重复未治理，按名写入必失败（业务方暂缓
@@ -32,7 +51,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,7 +161,13 @@ def _to_number(value: Any) -> int | float | None:
 def _parse_date_ms(text: str) -> int | None:
     """生产日期字符串 → 毫秒时间戳（飞书 datetime 字段写入契约）；失败 None。"""
     stripped = text.strip()
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y年%m月%d日", "%Y-%m-%d %H:%M:%S"):
+    for fmt in (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y年%m月%d日",
+        "%Y-%m-%d %H:%M:%S",
+    ):
         try:
             parsed = datetime.strptime(stripped, fmt).replace(tzinfo=UTC)
             return int(parsed.timestamp() * 1000)
@@ -175,7 +200,9 @@ def _select_or_skip(
     return None
 
 
-def build_receipt_fields(draft: WarehouseAgentDraft) -> tuple[dict[str, Any], list[str]]:
+def build_receipt_fields(
+    draft: WarehouseAgentDraft,
+) -> tuple[dict[str, Any], list[str]]:
     """draft（aligned 覆盖优先，recognized 兜底）→ material_receipt 写入字段。
 
     返回 (fields, degraded)：degraded 为未写入字段名（物料名称降级 / 数量
@@ -204,9 +231,7 @@ def build_receipt_fields(draft: WarehouseAgentDraft) -> tuple[dict[str, Any], li
     # 物料名称（spec 决策 6 降级：跳过写入，标注人工补选；开关见模块注释）
     name = value_of("material_name")
     if name and SUBMIT_MATERIAL_NAME_ENABLED:
-        adapted = _select_or_skip(
-            table_fields, "物料名称", str(name).strip(), degraded
-        )
+        adapted = _select_or_skip(table_fields, "物料名称", str(name).strip(), degraded)
         if adapted:
             fields["物料名称"] = adapted
     elif name:
@@ -250,16 +275,19 @@ async def _verify_record(
     adapter: WarehouseBitableAdapter,
     record_id: str,
     written_fields: dict[str, Any],
+    *,
+    table_key: str = RECEIPT_TABLE,
+    check_fields: tuple[str, ...] = CHECK_FIELDS,
 ) -> dict[str, Any]:
-    """get_record 读回核对（仅实际写入的 CHECK_FIELDS 字段参与）。
+    """get_record 读回核对（仅实际写入的 check_fields 字段参与）。
 
     返回 {"consistent": bool, "mismatches": [{field, written, read_back}]}
     （值经 _normalize_cell 规范化后字符串比对）。
     """
-    record = await adapter.get_record(RECEIPT_TABLE, record_id)
+    record = await adapter.get_record(table_key, record_id)
     read_fields = record.get("fields") or {}
     mismatches: list[dict[str, Any]] = []
-    for field_name in CHECK_FIELDS:
+    for field_name in check_fields:
         if field_name not in written_fields:
             continue  # 未写入（空值/降级跳过）不参与核对
         written = _normalize_cell(written_fields[field_name])
@@ -271,9 +299,9 @@ async def _verify_record(
     return {"consistent": not mismatches, "mismatches": mismatches}
 
 
-def get_table_meta() -> dict[str, str]:
+def get_table_meta(table_key: str = RECEIPT_TABLE) -> dict[str, str]:
     """目标表坐标（target_base/target_table 回填用）：app_token + table_id。"""
-    meta = TABLES[RECEIPT_TABLE]
+    meta = TABLES[table_key]
     return {
         "base_token": str(getattr(get_settings(), meta.base_token_setting, "") or ""),
         "table_id": meta.table_id,
@@ -283,9 +311,7 @@ def get_table_meta() -> dict[str, str]:
 # ── 确认回调真身（draft_flow 注册薄包装转发到这里）──
 
 
-async def submit_receipt(
-    db: AsyncSession, draft: WarehouseAgentDraft
-) -> str | None:
+async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
     """入库提交：写契约 → 附件 → create_record → 读回核对 → submitted + 回执。
 
     状态前置：confirm.handle_action 已先置 confirmed（S1 防重复点击语义）；
@@ -315,12 +341,15 @@ async def submit_receipt(
     if source_image:
         try:
             content = await media.download_attachment(source_image)
-            attachment_token = await media.upload_image(content, f"{draft.draft_no}.jpg")
+            attachment_token = await media.upload_image(
+                content, f"{draft.draft_no}.jpg"
+            )
             fields[ATTACHMENT_FIELD] = [{"file_token": attachment_token}]
         except WarehouseBitableError:
             logger.warning(
                 "原图下载失败，直接引用 source token 写附件列: draft_no=%s token=%s…",
-                draft.draft_no, source_image[:20],
+                draft.draft_no,
+                source_image[:20],
             )
             fields[ATTACHMENT_FIELD] = [{"file_token": source_image}]
 
@@ -374,19 +403,21 @@ async def submit_receipt(
         try:
             sent = await notification.send_card_to_user(open_id, card)
         except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
-            logger.exception(
-                "入库回执卡片发送异常: draft_no=%s", draft.draft_no
-            )
+            logger.exception("入库回执卡片发送异常: draft_no=%s", draft.draft_no)
             sent = False
         if not sent:
             logger.warning(
                 "入库回执卡片发送失败: draft_no=%s open_id=%s",
-                draft.draft_no, open_id[:20],
+                draft.draft_no,
+                open_id[:20],
             )
 
     logger.info(
         "入库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
-        draft.draft_no, record_id, check_result["consistent"], degraded,
+        draft.draft_no,
+        record_id,
+        check_result["consistent"],
+        degraded,
     )
     if check_result["consistent"]:
         return f"✅ 入库已登记：{draft.draft_no}（Base 记录 {record_id}）"
@@ -395,3 +426,424 @@ async def submit_receipt(
         f"⚠ 入库已登记：{draft.draft_no}（Base 记录 {record_id}），"
         f"{count} 个字段读回不一致，请到 Base 核对"
     )
+
+
+# ── GMP 出库提交（S3 ticket 01，spec Implementation Decisions 1）──
+# scene=gmp_outbound 确认回调真身（draft_flow._gmp_submit_callback 薄包装）：
+# aligned（对话收集字段，canonical 键）→ 组装 gmp_outbound 写入字段 →
+# validate → create_record → 读回核对（批号/数量/单位）→ submitted + 回执。
+# 日期=当天（毫秒时间戳）；物料名称是 lookup 拒写（仅确认卡片展示，不在
+# 映射表）；领用品种/部门为单选（空选项集快照放行原值，刷新后严格匹配）。
+
+GMP_OUTBOUND_TABLE = "gmp_outbound"
+
+# 读回核对关键字段（spec 决策 1：批号/数量/单位）
+GMP_CHECK_FIELDS: tuple[str, ...] = ("物料批号", "领用数量", "单位")
+
+# canonical 键 → (Base 字段名, 是否单选)；material_name（lookup 拒写）与
+# 日期（恒写当天）单独处理
+_GMP_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
+    ("material_batch_no", "物料批号", True),
+    ("doc_type", "单据类型", True),
+    ("category", "领用品种", True),
+    ("department", "领用部门", True),
+    ("unit", "单位", True),
+    ("quantity", "领用数量", False),
+    ("production_batch_no", "生产批号", False),
+)
+
+# 物料批号降级开关（spec 决策 1；S2 SUBMIT_MATERIAL_NAME_ENABLED 同款机制）：
+# 测试版 GMP Base 实测对「物料批号」单选字段存在字段级编辑限制——任何合法
+# 选项值的 create/update 写入均被拒（1254062 SingleSelectFieldConvFail；
+# 同表 单位/单据类型/领用部门 写入正常，同 Base gmp_receipt 整表拒写，
+# 疑似高级权限字段配置问题，需 Base 管理员在飞书侧放开）。置 False 跳过
+# 批号写入，回执卡片与 audit 标注「需人工在 Base 补填」；Base 放开后置
+# True 即恢复自动写入（代码无其他改动）。
+SUBMIT_GMP_BATCH_ENABLED = False
+
+
+def _today_ms(today: date | None = None) -> int:
+    """当天日期 → 毫秒时间戳（飞书 datetime 写入契约；UTC 零点即北京当天
+    08:00，日期显示不受时区影响）。"""
+    day = today or date.today()
+    return int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp() * 1000)
+
+
+async def _gmp_table_fields() -> dict[str, FieldMeta]:
+    """gmp_outbound 字段元数据（运行时选项集优先，静态快照兜底）。
+
+    静态快照批号选项仅 50 条而 Base 实测 1700+（快照滞后会误杀合法批号）——
+    先 refresh_table_fields 拉最新选项集（bitable_schema TTL 缓存内直用），
+    刷新失败回落静态快照（create_record 阶段仍会因网络失败暴露，不静默）。
+    """
+    try:
+        await get_adapter().refresh_table_fields(GMP_OUTBOUND_TABLE)
+    except Exception:  # noqa: BLE001 — 选项集刷新失败不阻断（回落静态快照）
+        logger.warning("gmp_outbound 选项集刷新失败，回落静态快照", exc_info=True)
+    return get_table_fields(GMP_OUTBOUND_TABLE)
+
+
+def build_gmp_fields(
+    draft: WarehouseAgentDraft,
+    *,
+    table_fields: dict[str, FieldMeta] | None = None,
+    today: date | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """draft.aligned（对话收集 working set）→ gmp_outbound 写入字段。
+
+    返回 (fields, degraded)：degraded 为未写入字段名（物料批号降级 / 单选
+    值不在选项集 / 数量非数字）。日期恒写当天毫秒时间戳；material_name 是
+    lookup 拒写，不进入映射（仅确认卡片展示）。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    fields: dict[str, Any] = {}
+    degraded: list[str] = []
+
+    for key, field_name, is_select in _GMP_FIELD_MAP:
+        value = aligned.get(key)
+        if value is None or not str(value).strip():
+            continue
+        if key == "quantity":
+            num = _to_number(value)
+            if num is None:
+                degraded.append(field_name)
+                continue
+            fields[field_name] = num
+            continue
+        text = str(value).strip()
+        if is_select:
+            adapted = _select_or_skip(
+                table_fields or get_table_fields(GMP_OUTBOUND_TABLE),
+                field_name,
+                text,
+                degraded,
+            )
+            if not adapted:
+                continue
+            text = adapted
+        if key == "material_batch_no" and not SUBMIT_GMP_BATCH_ENABLED:
+            degraded.append(field_name)  # Base 字段编辑限制（见开关注释）
+            continue
+        fields[field_name] = text
+
+    fields["日期"] = _today_ms(today)
+    return fields, degraded
+
+
+async def submit_gmp(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
+    """GMP 出库提交：写契约 → create_record → 读回核对 → submitted + 回执。
+
+    状态前置/异常语义与 submit_receipt 完全同款：非 confirmed 抛
+    :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
+    不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
+    """
+    started = time.monotonic()
+    if draft.status != "confirmed":
+        raise DraftFlowError(
+            f"草稿 {draft.draft_no} 状态为 {draft.status}，仅 confirmed 可提交"
+        )
+
+    adapter = get_adapter()
+    fields, degraded = await _build_and_validate_gmp(draft)
+
+    created = await adapter.create_record(GMP_OUTBOUND_TABLE, fields)
+    record_id = str(created.get("record_id") or "")
+    if not record_id:
+        raise WarehouseBitableError(
+            "create_record 未返回 record_id", code="no_record_id"
+        )
+
+    check_result = await _verify_record(
+        adapter,
+        record_id,
+        fields,
+        table_key=GMP_OUTBOUND_TABLE,
+        check_fields=GMP_CHECK_FIELDS,
+    )
+    check_result["written"] = dict(fields)
+    check_result["record_id"] = record_id
+    check_result["degraded"] = degraded
+
+    # draft → submitted + target 回填（状态机迁移表已含 confirmed → submitted）
+    from_status = draft.status
+    draft.status = "submitted"
+    meta = get_table_meta(GMP_OUTBOUND_TABLE)
+    draft.target_base = meta["base_token"]
+    draft.target_table = meta["table_id"]
+    draft.target_record_id = record_id
+    await db.flush()
+
+    await repository.insert_agent_audit(
+        db,
+        tool_name="submit_gmp",
+        args_summary={
+            "draft_no": draft.draft_no,
+            "record_id": record_id,
+            "fields": sorted(fields.keys()),
+            "degraded": degraded,
+            "from": from_status,
+            "to": "submitted",
+        },
+        result_status="ok",
+        error_code=None if check_result["consistent"] else "mismatch",
+        duration_ms=_elapsed_ms(started),
+        draft_id=draft.id,
+    )
+
+    # 回执卡片（scene 分支渲染 GMP 标题；cards 延迟 import 解模块环，同上）
+    from app.modules.warehouse.agent.cards import render_receipt_result_card
+
+    card = render_receipt_result_card(draft, check_result)
+    open_id = (draft.created_by_open_id or "").strip()
+    if open_id:
+        try:
+            sent = await notification.send_card_to_user(open_id, card)
+        except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
+            logger.exception("GMP 回执卡片发送异常: draft_no=%s", draft.draft_no)
+            sent = False
+        if not sent:
+            logger.warning(
+                "GMP 回执卡片发送失败: draft_no=%s open_id=%s",
+                draft.draft_no,
+                open_id[:20],
+            )
+
+    logger.info(
+        "GMP 出库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
+        draft.draft_no,
+        record_id,
+        check_result["consistent"],
+        degraded,
+    )
+    if check_result["consistent"]:
+        return f"✅ GMP 出库已登记：{draft.draft_no}（Base 记录 {record_id}）"
+    count = len(check_result["mismatches"])
+    return (
+        f"⚠ GMP 出库已登记：{draft.draft_no}（Base 记录 {record_id}），"
+        f"{count} 个字段读回不一致，请到 Base 核对"
+    )
+
+
+async def _build_and_validate_gmp(
+    draft: WarehouseAgentDraft,
+) -> tuple[dict[str, Any], list[str]]:
+    """组装 GMP 写入字段并跑写契约校验（刷新选项集后本地拦截）。"""
+    fields, degraded = build_gmp_fields(draft, table_fields=await _gmp_table_fields())
+    validate_write_fields(GMP_OUTBOUND_TABLE, fields)
+    return fields, degraded
+
+
+# ── 成品出库提交（S3 ticket 02，spec Implementation Decisions 2/3）──
+# scene=finished_outbound 确认回调真身（draft_flow._finished_submit_callback
+# 薄包装）：aligned（对话收集字段，canonical 键）→ 组装 finished_outbound
+# 写入字段 → validate → create_record → 读回核对（批号/出库量/单位/客户）→
+# submitted + 回执。出库日期=当天（毫秒时间戳）；品规/各品种库存/质量状态/
+# 库存数量/出库人 等为公式/lookup/created_user 拒写（不在映射表）；快递号
+# 为附件字段（type 17），文本单号无法写入——降级开关跳过（见下）。
+
+FINISHED_OUTBOUND_TABLE = "finished_outbound"
+
+# 读回核对关键字段（票02 验收：批号/出库量/单位/客户）
+FINISHED_CHECK_FIELDS: tuple[str, ...] = ("产品批号", "出库量", "单位", "销售客户")
+
+# canonical 键 → (Base 字段名, 是否单选)；quantity 数字化单独分支，出库日期
+# 恒写当天单独处理；express_no（快递号，附件字段）走降级开关
+_FINISHED_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
+    ("product_name", "产品名称", True),
+    ("product_batch_no", "产品批号", False),
+    ("unit", "单位", True),
+    ("customer", "销售客户", False),
+    ("purpose", "用途", True),
+    ("thermometer", "温度计", True),
+    ("express_no", "快递号", False),
+    ("remark", "备注", False),
+    ("quantity", "出库量", False),
+)
+
+# 快递号降级开关（S3 ticket 02；SUBMIT_GMP_BATCH_ENABLED 同款机制）：成品
+# 出库台账「快递号」字段为附件类型（bitable_schema type 17 =
+# FIELD_TYPE_ATTACHMENT，写入需 file_token 数组）——文本快递单号无法写入，
+# 置 False 跳过写入，回执卡片与 audit 标注「需人工在 Base 补填」；快递号
+# 本身保留在草稿/回执/推送卡片内容中（快递推送链正常使用）。若 Base 侧将
+# 该字段改为文本类型，置 True 即恢复自动写入（代码无其他改动）。
+SUBMIT_FINISHED_EXPRESS_ENABLED = False
+
+
+async def _finished_table_fields() -> dict[str, FieldMeta]:
+    """finished_outbound 字段元数据（运行时选项集优先，静态快照兜底）。
+
+    产品名称/单位/用途/温度计均单选且 Base 侧可能调整选项——先
+    refresh_table_fields 拉最新选项集（bitable_schema TTL 缓存内直用），
+    刷新失败回落静态快照（登记主链路不因选项集刷新抖动中断）。
+    """
+    try:
+        await get_adapter().refresh_table_fields(FINISHED_OUTBOUND_TABLE)
+    except Exception:  # noqa: BLE001 — 选项集刷新失败不阻断（回落静态快照）
+        logger.warning("finished_outbound 选项集刷新失败，回落静态快照", exc_info=True)
+    return get_table_fields(FINISHED_OUTBOUND_TABLE)
+
+
+def build_finished_fields(
+    draft: WarehouseAgentDraft,
+    *,
+    table_fields: dict[str, FieldMeta] | None = None,
+    today: date | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """draft.aligned（对话收集 working set）→ finished_outbound 写入字段。
+
+    返回 (fields, degraded)：degraded 为未写入字段名（快递号降级 / 单选值
+    不在选项集 / 出库量非数字）。出库日期恒写当天毫秒时间戳；品规/各品种
+    库存/质量状态/库存数量/出库人 等只读类型不进入映射（validate_write_fields
+    为最后防线）。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    fields: dict[str, Any] = {}
+    degraded: list[str] = []
+
+    for key, field_name, is_select in _FINISHED_FIELD_MAP:
+        value = aligned.get(key)
+        if value is None or not str(value).strip():
+            continue
+        if key == "quantity":
+            num = _to_number(value)
+            if num is None:
+                degraded.append(field_name)
+                continue
+            fields[field_name] = num
+            continue
+        text = str(value).strip()
+        if is_select:
+            adapted = _select_or_skip(
+                table_fields or get_table_fields(FINISHED_OUTBOUND_TABLE),
+                field_name,
+                text,
+                degraded,
+            )
+            if not adapted:
+                continue
+            text = adapted
+        if key == "express_no" and not SUBMIT_FINISHED_EXPRESS_ENABLED:
+            degraded.append(field_name)  # 附件字段（见开关注释）
+            continue
+        fields[field_name] = text
+
+    fields["出库日期"] = _today_ms(today)
+    return fields, degraded
+
+
+async def _build_and_validate_finished(
+    draft: WarehouseAgentDraft,
+) -> tuple[dict[str, Any], list[str]]:
+    """组装成品出库写入字段并跑写契约校验（刷新选项集后本地拦截）。"""
+    fields, degraded = build_finished_fields(
+        draft, table_fields=await _finished_table_fields()
+    )
+    validate_write_fields(FINISHED_OUTBOUND_TABLE, fields)
+    return fields, degraded
+
+
+async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
+    """成品出库提交：写契约 → create_record → 读回核对 → submitted + 回执。
+
+    状态前置/异常语义与 submit_gmp 完全同款：非 confirmed 抛
+    :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
+    不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
+    返回回执 note（confirm.handle_action 用户可见消息）：登记了快递号时
+    附加推送引导（spec 决策 3——用户回复 group:/user: 目标后 LLM 经
+    send_card 确认门发送发货通知，见 prompts 规则）。
+    """
+    started = time.monotonic()
+    if draft.status != "confirmed":
+        raise DraftFlowError(
+            f"草稿 {draft.draft_no} 状态为 {draft.status}，仅 confirmed 可提交"
+        )
+
+    adapter = get_adapter()
+    fields, degraded = await _build_and_validate_finished(draft)
+
+    created = await adapter.create_record(FINISHED_OUTBOUND_TABLE, fields)
+    record_id = str(created.get("record_id") or "")
+    if not record_id:
+        raise WarehouseBitableError(
+            "create_record 未返回 record_id", code="no_record_id"
+        )
+
+    check_result = await _verify_record(
+        adapter,
+        record_id,
+        fields,
+        table_key=FINISHED_OUTBOUND_TABLE,
+        check_fields=FINISHED_CHECK_FIELDS,
+    )
+    check_result["written"] = dict(fields)
+    check_result["record_id"] = record_id
+    check_result["degraded"] = degraded
+
+    # draft → submitted + target 回填（状态机迁移表已含 confirmed → submitted）
+    from_status = draft.status
+    draft.status = "submitted"
+    meta = get_table_meta(FINISHED_OUTBOUND_TABLE)
+    draft.target_base = meta["base_token"]
+    draft.target_table = meta["table_id"]
+    draft.target_record_id = record_id
+    await db.flush()
+
+    await repository.insert_agent_audit(
+        db,
+        tool_name="submit_outbound",
+        args_summary={
+            "draft_no": draft.draft_no,
+            "record_id": record_id,
+            "fields": sorted(fields.keys()),
+            "degraded": degraded,
+            "from": from_status,
+            "to": "submitted",
+        },
+        result_status="ok",
+        error_code=None if check_result["consistent"] else "mismatch",
+        duration_ms=_elapsed_ms(started),
+        draft_id=draft.id,
+    )
+
+    # 回执卡片（scene 分支渲染成品标题；cards 延迟 import 解模块环，同上）
+    from app.modules.warehouse.agent.cards import render_receipt_result_card
+
+    card = render_receipt_result_card(draft, check_result)
+    open_id = (draft.created_by_open_id or "").strip()
+    if open_id:
+        try:
+            sent = await notification.send_card_to_user(open_id, card)
+        except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
+            logger.exception("成品出库回执卡片发送异常: draft_no=%s", draft.draft_no)
+            sent = False
+        if not sent:
+            logger.warning(
+                "成品出库回执卡片发送失败: draft_no=%s open_id=%s",
+                draft.draft_no,
+                open_id[:20],
+            )
+
+    logger.info(
+        "成品出库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
+        draft.draft_no,
+        record_id,
+        check_result["consistent"],
+        degraded,
+    )
+    if check_result["consistent"]:
+        note = f"✅ 成品出库已登记：{draft.draft_no}（Base 记录 {record_id}）"
+    else:
+        count = len(check_result["mismatches"])
+        note = (
+            f"⚠ 成品出库已登记：{draft.draft_no}（Base 记录 {record_id}），"
+            f"{count} 个字段读回不一致，请到 Base 核对"
+        )
+    # 快递推送引导（spec 决策 3）：登记了快递号 → 回执附「要推送给谁？」
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    express_no = str(aligned.get("express_no") or "").strip()
+    if express_no:
+        note += (
+            f"\n📦 已登记快递号 {express_no}，要推送给谁？"
+            "回复 group:群ID 或 user:open_id 可发送发货通知"
+        )
+    return note
