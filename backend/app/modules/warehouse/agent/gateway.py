@@ -1,12 +1,13 @@
-"""仓储 Agent gateway — 事件入口与组装层（S1 ticket 02）。
+"""仓储 Agent gateway — 事件入口与组装层（S1 ticket 02 / S2 ticket 05）。
 
-职责（spec Implementation Decisions 4）：
+职责（spec Implementation Decisions 4/8）：
 - 事件去重（Redis SETNX，仿 platform/integrations/feishu/event_handler）
 - 机器人自身消息排除（sender_type=app / 机器人 open_id）
 - 群聊仅 @提及响应；私聊全响应
 - 会话定位（chat_id + open_id → warehouse_agent_sessions upsert）
-- 消息类型路由：文本 → Runner（占位/结果卡片两段式发送）；图片 → 友好引导；
-  其他类型忽略
+- 消息类型路由：文本 → Runner（占位/结果卡片两段式发送）；图片 → 识别
+  Pipeline（占位卡片 + create_task 后台：下载 im 原图 → vision 识别 →
+  主数据对齐 → 确认卡片，失败降级话术含失败阶段 + audit）；其他类型忽略
 - 卡片按钮回调路由（card.action.trigger → ConfirmService，按 scene 分发留扩展）
 - 异常兜底：任何处理异常 → 降级话术卡片 + audit 记 error
 
@@ -17,21 +18,32 @@ send_card / send_card_to_user），测试经模块级 dry_run 或 _db_session �
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.warehouse.agent import confirm
+from app.modules.warehouse.agent import (  # noqa: F401 — pipeline 导入即注册 scene=receipt 确认回调（票03 桩，票04 换 submit_receipt）；卡片回调路由依赖此注册
+    confirm,
+    pipeline,
+)
 from app.modules.warehouse.agent import repository as agent_repository
 from app.modules.warehouse.agent.cards import render_reply_card
+from app.modules.warehouse.agent.pipeline import (
+    align_receipt,
+    create_receipt_draft,
+    mark_aligned,
+    recognize_receipt,
+    send_confirm_card,
+)
 from app.modules.warehouse.agent.runner import get_runner
-from app.modules.warehouse.feishu import notification
+from app.modules.warehouse.feishu import media, notification
 from app.modules.warehouse.feishu.event_client import on_event
 from app.modules.warehouse.models import WarehouseAgentSession
 
@@ -90,22 +102,33 @@ def _mentioned_bot(mentions: list[dict[str, Any]] | None) -> bool:
     return False
 
 
-def _extract_text(message: dict[str, Any]) -> str:
-    """解析消息 content JSON 的 text 字段，并把 @占位符替换为可读名称。"""
+def _parse_content_dict(message: dict[str, Any]) -> dict[str, Any]:
+    """消息 content（JSON 字符串或 dict）→ dict；解析失败返回空 dict。"""
     content = message.get("content")
     try:
         data = json.loads(content) if isinstance(content, str) else (content or {})
     except json.JSONDecodeError:
         logger.warning("仓库网关消息 content 解析失败: %s", str(content)[:100])
-        return ""
-    if not isinstance(data, dict):
-        return ""
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_text(message: dict[str, Any]) -> str:
+    """解析消息 content JSON 的 text 字段，并把 @占位符替换为可读名称。"""
+    data = _parse_content_dict(message)
     text = str(data.get("text") or "")
     for mention in message.get("mentions") or []:
         key = str(mention.get("key") or "")
         if key:
             text = text.replace(key, f"@{mention.get('name') or ''}".strip())
     return text.strip()
+
+
+def _extract_image_key(message: dict[str, Any]) -> str:
+    """图片消息 content 中的图片 key（im.message.receive_v1 实测为
+    ``{"image_key": "img_v3_…"}``；download_im_image 的 file_key 参数）。"""
+    data = _parse_content_dict(message)
+    return str(data.get("image_key") or data.get("file_key") or "")
 
 
 async def _try_acquire_dedup(message_id: str) -> bool:
@@ -146,14 +169,35 @@ def _build_placeholder_card() -> dict[str, Any]:
     )
 
 
-def _build_image_guidance_card() -> dict[str, Any]:
+def _build_image_processing_card() -> dict[str, Any]:
+    """图片消息占位卡片（票05：识别 Pipeline 后台异步，完成后另发确认卡片）。"""
     return _build_card(
-        title="📷 图片消息",
+        title="🖼 正在识别，请稍候…",
+        template="blue",
+        markdown="已收到图片，正在识别送货单信息，完成后会发送确认卡片。",
+    )
+
+
+def _build_image_unsupported_card() -> dict[str, Any]:
+    """图片格式不支持降级卡片（手机拍照 HEIC 等格式嗅探命中）。"""
+    return _build_card(
+        title="📷 图片格式暂不支持",
         template="orange",
         markdown=(
-            "图片识别功能即将上线，敬请期待。\n\n"
-            "当前请直接用文字描述你的需求，例如：\n"
-            "「硫酸还有多少放行的」「查一下批号 A1 的库存」"
+            "目前仅支持 JPG / PNG 格式的送货单图片。\n"
+            "请用手机相机重新拍摄后发送，或将图片转换为 JPG / PNG 再试。"
+        ),
+    )
+
+
+def _build_receipt_failed_card(stage: str) -> dict[str, Any]:
+    """图片识别失败降级卡片（含失败阶段，spec 决策 8）。"""
+    return _build_card(
+        title="⚠️ 图片识别失败",
+        template="red",
+        markdown=(
+            f"图片处理在「{stage}」阶段失败，已记录并排查。\n"
+            "请稍后重试；也可直接用文字描述入库信息。"
         ),
     )
 
@@ -167,6 +211,19 @@ def _build_error_card() -> dict[str, Any]:
             "请稍后重试，或换个问法再试试。"
         ),
     )
+
+
+# ── 图片识别后台任务（票05：占位卡片即回，Pipeline 异步执行）──
+# 持强引用防 create_task 结果被 GC（asyncio 官方推荐模式）；完成自动移除。
+# 测试经 await asyncio.wait(gateway._background_tasks) 等待后台任务收尾。
+
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+def _spawn_receipt_task(coro: Coroutine[Any, Any, None]) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def _send_card_to(
@@ -247,28 +304,46 @@ async def handle_im_message(event: dict[str, Any]) -> None:
 
     # 4. 消息类型路由
     if msg_type == "image":
-        try:
-            await _send_card_to(
-                chat_id=chat_id,
-                chat_type=chat_type,
-                open_id=open_id,
-                card=_build_image_guidance_card(),
+        image_key = _extract_image_key(message)
+        if not message_id or not image_key:
+            # content 缺 image_key（或事件缺 message_id）：无法下载，直接降级
+            logger.warning(
+                "仓库网关图片事件缺少定位信息: message_id=%s image_key=%r",
+                message_id, image_key[:20],
             )
-            await _record_gateway_audit(
-                started=started,
-                tool_name="gateway",
-                args_summary={"chat_type": chat_type, "message_type": "image"},
-                result_status="ok",
-            )
-        except Exception as exc:
-            logger.exception("仓库网关图片引导失败")
+            try:
+                await _send_card_to(
+                    chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                    card=_build_receipt_failed_card("读取图片信息"),
+                )
+            except Exception:
+                logger.exception("仓库网关图片降级卡片发送失败")
             await _record_gateway_audit(
                 started=started,
                 tool_name="gateway",
                 args_summary={"chat_type": chat_type, "message_type": "image"},
                 result_status="error",
-                error_code=type(exc).__name__[:30],
+                error_code="missing_image_key",
             )
+            return
+        # 占位卡片先回（识别为分钟级耗时，Pipeline 后台异步跑）
+        try:
+            await _send_card_to(
+                chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                card=_build_image_processing_card(),
+            )
+        except Exception:
+            logger.exception("仓库网关图片占位卡片发送失败")
+        _spawn_receipt_task(
+            _process_receipt_image(
+                chat_id=chat_id,
+                chat_type=chat_type,
+                open_id=open_id,
+                message_id=message_id,
+                image_key=image_key,
+                started=started,
+            )
+        )
         return
 
     if msg_type != "text":
@@ -279,6 +354,127 @@ async def handle_im_message(event: dict[str, Any]) -> None:
         return
     await _handle_text_message(
         chat_id=chat_id, chat_type=chat_type, open_id=open_id, text=text, started=started
+    )
+
+
+async def _process_receipt_image(
+    *,
+    chat_id: str,
+    chat_type: str,
+    open_id: str,
+    message_id: str,
+    image_key: str,
+    started: float,
+) -> None:
+    """图片识别 Pipeline 后台任务（票05，spec 决策 8）。
+
+    下载 im 原图（格式嗅探，非 JPG/PNG 降级）→ vision 识别 → 对齐 →
+    草稿落库 → 确认卡片；原图先经 upload_image 挂到 material_receipt
+    Base 名下拿 file_token 存 draft.source_image（spec 决策 3：submit
+    时写附件列，上传失败不阻塞识别）。任何一步失败 → 降级话术卡片
+    （含失败阶段）+ audit error。
+    """
+    stage = "下载图片"
+    try:
+        content = await media.download_im_image(message_id, image_key)
+        fmt = media.sniff_image_format(content)
+        if fmt not in media.SUPPORTED_IMAGE_FORMATS:
+            logger.warning(
+                "仓库网关图片格式不支持: message_id=%s fmt=%s", message_id, fmt
+            )
+            await _send_card_to(
+                chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                card=_build_image_unsupported_card(),
+            )
+            await _record_gateway_audit(
+                started=started,
+                tool_name="gateway",
+                args_summary={
+                    "chat_type": chat_type,
+                    "message_type": "image",
+                    "stage": stage,
+                    "format": fmt,
+                },
+                result_status="error",
+                error_code="unsupported_image_format",
+            )
+            return
+
+        # 原图挂到 Base（submit 写附件列的 source_image）；失败仅降级为无附件
+        image_file_token: str | None = None
+        try:
+            image_file_token = await media.upload_image(
+                content, f"{message_id}.{'png' if fmt == 'png' else 'jpg'}"
+            )
+        except Exception:  # noqa: BLE001 — 附件上传失败不阻塞识别主链路
+            logger.exception("仓库网关原图上传失败（识别继续，无附件）: message_id=%s", message_id)
+
+        stage = "图片识别"
+        content_type = "image/png" if fmt == "png" else "image/jpeg"
+        image_b64 = base64.b64encode(content).decode()
+        recognized = await recognize_receipt(image_b64, content_type)
+
+        stage = "对齐与草稿"
+        draft_no = ""
+        match_confidence = ""
+        async with _db_session() as db:
+            draft = await create_receipt_draft(
+                db,
+                recognized=recognized,
+                image_file_token=image_file_token,
+                open_id=open_id,
+                chat_id=chat_id,
+            )
+            aligned = await align_receipt(recognized)
+            await mark_aligned(db, draft, aligned)
+            # 群聊发群卡片、私聊发发起人（与 _send_card_to 通道选择同口径）
+            await send_confirm_card(
+                db,
+                draft,
+                chat_id=chat_id if chat_type == "group" else None,
+                open_id=open_id if chat_type != "group" else None,
+            )
+            draft_no = draft.draft_no
+            match_confidence = aligned.match_confidence
+    except Exception as exc:
+        logger.exception(
+            "仓库网关图片识别处理失败: stage=%s message_id=%s", stage, message_id
+        )
+        try:
+            await _send_card_to(
+                chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                card=_build_receipt_failed_card(stage),
+            )
+        except Exception:
+            logger.exception("仓库网关图片失败降级卡片发送失败")
+        error_code = str(getattr(exc, "code", "") or type(exc).__name__)[:30]
+        await _record_gateway_audit(
+            started=started,
+            tool_name="gateway",
+            args_summary={
+                "chat_type": chat_type,
+                "message_type": "image",
+                "stage": stage,
+            },
+            result_status="error",
+            error_code=error_code,
+        )
+        return
+
+    logger.info(
+        "仓库网关图片识别完成: message_id=%s draft_no=%s match=%s",
+        message_id, draft_no, match_confidence,
+    )
+    await _record_gateway_audit(
+        started=started,
+        tool_name="gateway",
+        args_summary={
+            "chat_type": chat_type,
+            "message_type": "image",
+            "draft_no": draft_no,
+            "match": match_confidence,
+        },
+        result_status="ok",
     )
 
 

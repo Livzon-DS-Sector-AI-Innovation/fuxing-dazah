@@ -521,6 +521,232 @@ def render_reminder_card(reminder: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+# ── 7. 入库确认卡片（S2 ticket 03：识别草稿 confirm/cancel，对话修改重发）──
+
+# 卡片标题与按钮文案（gateway 卡片回调路由按 value.scene=receipt 分发）
+RECEIPT_CONFIRM_CARD_TITLE = "📋 入库确认"
+CONFIRM_RECEIPT_BUTTON_LABEL = "✅ 确认入库"
+CANCEL_RECEIPT_BUTTON_LABEL = "❌ 取消"
+
+# 识别置信度低于该阈值加 ⚠ 高亮（spec：低置信度字段提醒重点核对）
+RECEIPT_CONFIDENCE_WARN = 0.7
+
+# 必提 8 字段（展示名, recognized/aligned 键；顺序即卡片展示顺序）
+RECEIPT_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("物料名称", "material_name"),
+    ("厂家批号", "vendor_batch_no"),
+    ("数量", "quantity"),
+    ("单位", "unit"),
+    ("供应商", "supplier"),
+    ("生产商", "manufacturer"),
+    ("车牌", "plate_no"),
+    ("合同号", "contract_no"),
+)
+
+# 选提 5 字段（识别不到显示 —）
+RECEIPT_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("包装规格", "package_spec"),
+    ("生产日期", "produced_at"),
+    ("到货时间段", "arrival_period"),
+    ("备注", "remark"),
+    ("联系人", "contact"),
+)
+
+# 对话修改引导（spec 决策 5：[修改] 无按钮，引导文本对话）
+RECEIPT_MODIFY_HINT = "💡 确认前请核对 ⚠ 字段；要修改可直接回复消息（如「数量改成 200」）。"
+
+
+def _field_line(
+    index: int,
+    label: str,
+    key: str,
+    recognized: dict[str, Any],
+    aligned: dict[str, Any],
+    *,
+    warn_on_missing: bool,
+) -> str:
+    """单字段展示行：`1. 数量：200 ⚠`。
+
+    值来源：draft.aligned 覆盖优先（对话修改后的最新值；material_name 恒为
+    对齐标准名），否则 recognized 识别值。⚠ 规则：人工改过的字段不再提示
+    （用户自己填的）；未改过且 confidence < 0.7 加 ⚠；空值展示 —（选提字段
+    的正常缺省）时仅在 warn_on_missing（必提分区）下加 ⚠ 提醒缺识别。
+    """
+    override = aligned.get(key)
+    if override is not None and str(override).strip():
+        value_text = _clean(str(override), 60)
+        return f"{index}. {label}：{value_text}"
+    item = recognized.get(key)
+    value: Any = item.get("value") if isinstance(item, dict) else None
+    confidence = 0.0
+    if isinstance(item, dict):
+        try:
+            confidence = float(str(item.get("confidence")))
+        except (TypeError, ValueError):
+            confidence = 0.0  # 缺省/非数字按 0 处理
+    text = "" if value is None else str(value).strip()
+    if not text:
+        mark = " ⚠" if warn_on_missing else ""
+        return f"{index}. {label}：—{mark}"
+    mark = " ⚠" if confidence < RECEIPT_CONFIDENCE_WARN else ""
+    return f"{index}. {label}：{_clean(text, 60)}{mark}"
+
+
+def _aligned_line(aligned: dict[str, Any]) -> str:
+    """物料对齐行：none → 未匹配警告；非 none → 标准名+代码+大类（缺字段降级）。"""
+    match = str(aligned.get("match_confidence") or "")
+    if match == "none":
+        return "⚠ 物料名称未匹配主数据，请核对"
+    if not match and not aligned:
+        return ""  # aligned 缺失（防御）：整段降级省略
+    name = _clean(aligned.get("material_name"), 60)
+    code = _clean(aligned.get("code"), 30)
+    category = _clean(aligned.get("material_category"), 20)
+    return f"**物料对齐**：{name}（代码 {code}｜大类 {category}）"
+
+
+def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
+    """入库确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
+
+    draft 为 warehouse_agent_drafts 行（或同构对象）：recognized JSONB
+    （13 字段 value/confidence）+ aligned JSONB（对齐字段+match_confidence）。
+    必提/选提分区 + 低置信度 ⚠ + 物料对齐行 + [✅ 确认入库][❌ 取消] 按钮
+    （value={scene, action, draft_id}，gateway 按 scene=receipt 分发到
+    confirm.handle_action）。渲染防御：recognized/aligned 缺字段或整段缺失
+    一律降级，不抛错。
+    """
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or "receipt")
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [f"**草稿**：{draft_no or '-'}", ""]
+    lines.append("**必提信息**")
+    for index, (label, key) in enumerate(RECEIPT_REQUIRED_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
+        )
+    lines.append("")
+    lines.append("**选填信息**")
+    for index, (label, key) in enumerate(RECEIPT_OPTIONAL_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+        )
+    aligned_text = _aligned_line(aligned)
+    if aligned_text:
+        lines.extend(["", aligned_text])
+    lines.extend(["", RECEIPT_MODIFY_HINT])
+
+    value_base = {"scene": scene, "draft_id": draft_id}
+    return _build_card(
+        title=RECEIPT_CONFIRM_CARD_TITLE,
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": CONFIRM_RECEIPT_BUTTON_LABEL},
+                        "type": "primary",
+                        "value": {**value_base, "action": "confirm"},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": CANCEL_RECEIPT_BUTTON_LABEL},
+                        "value": {**value_base, "action": "cancel"},
+                    },
+                ],
+            },
+        ],
+    )
+
+
+# ── 8. 入库回执卡片（S2 ticket 04：submit 结果 + 读回核对 + 降级提示）──
+
+# 卡片标题（submit 读回核对一致 / 不一致两种形态）
+RECEIPT_RESULT_CARD_TITLE_OK = "✅ 入库已登记"
+RECEIPT_RESULT_CARD_TITLE_MISMATCH = "⚠ 入库已登记（读回不一致）"
+
+# 物料名称降级提示（spec Implementation Decisions 6：测试版该字段重复选项
+# 未治理，submit 跳过写入——治理后移除降级，提示随之消失）
+RECEIPT_DEGRADE_MATERIAL_HINT = (
+    "⚠ 物料名称需在 Base 人工补选（选项重复问题，治理后自动写入）"
+)
+
+# 写入字段摘要/核对结果行的单元格截断
+_RESULT_VALUE_MAX = 30
+
+
+def render_receipt_result_card(
+    draft: Any, check_result: dict[str, Any]
+) -> dict[str, Any]:
+    """入库回执卡片（pipeline.submit.submit_receipt 发送，dry-run 可捕获）。
+
+    check_result 由 submit_receipt 构造：
+    - consistent：bool，读回核对是否一致；
+    - mismatches：[{field, written, read_back}]（规范化文本后的不一致项）；
+    - written：{Base 字段名: 写入值}（展示摘要）；
+    - record_id：Base 记录 id；degraded：[未写入字段名]（降级/选项集不匹配）。
+
+    渲染：标题按 consistent 分「✅ 入库已登记」（green）/「⚠ 入库已登记
+    （读回不一致）」（red）；正文 = 草稿号 + Base 记录 id + 写入字段摘要 +
+    读回核对结果（✅ 关键字段一致 / ⚠ 写入值 vs 读回值对照行）+ 降级提示。
+    渲染防御同其他卡片：check_result 缺键/畸形一律按空值降级，不抛错。
+    """
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    check = check_result if isinstance(check_result, dict) else {}
+    consistent = bool(check.get("consistent"))
+    record_id = _clean(check.get("record_id"), 40)
+
+    lines = [f"**草稿**：{draft_no or '-'}"]
+    if record_id != "-":
+        lines.append(f"**Base 记录**：{record_id}")
+
+    written = check.get("written")
+    if isinstance(written, dict) and written:
+        lines.extend(["", "**写入字段**"])
+        for index, (name, value) in enumerate(written.items(), 1):
+            lines.append(f"{index}. {_clean(name, 24)}：{_clean(value, _RESULT_VALUE_MAX)}")
+
+    lines.extend(["", "**读回核对**"])
+    mismatches = [
+        item
+        for item in (check.get("mismatches") or [])
+        if isinstance(item, dict)
+    ]
+    if consistent:
+        lines.append("✅ 数量/批号/单位/供应商 与 Base 读回一致")
+    elif mismatches:
+        for item in mismatches:
+            lines.append(
+                f"⚠ {_clean(item.get('field'), 24)}："
+                f"写入 {_clean(item.get('written'), _RESULT_VALUE_MAX)}"
+                f" ≠ 读回 {_clean(item.get('read_back'), _RESULT_VALUE_MAX)}"
+            )
+    else:
+        lines.append("⚠ 读回核对异常（无明细）")
+
+    degraded = [str(name) for name in (check.get("degraded") or [])]
+    if "物料名称" in degraded:
+        lines.extend(["", RECEIPT_DEGRADE_MATERIAL_HINT])
+    skipped = [name for name in degraded if name != "物料名称"]
+    if skipped:
+        lines.append(f"ℹ️ 未写入（选项集不匹配，需人工补填）：{_clean('、'.join(skipped), 80)}")
+
+    title = (
+        RECEIPT_RESULT_CARD_TITLE_OK if consistent else RECEIPT_RESULT_CARD_TITLE_MISMATCH
+    )
+    return _build_card(
+        title=title,
+        template="green" if consistent else "red",
+        elements=[_md("\n".join(lines))],
+    )
+
+
 # ── 主入口：Reply → 卡片 ──
 
 _RENDERERS = {

@@ -138,7 +138,20 @@ class Runner:
         for d in drafts:
             if d.status == "pending_confirm":
                 scene = d.scene or "confirm"
-                lines.append(f"- 有一个待你确认的{scene}事项（草稿 {d.draft_no}），尚未执行")
+                if scene == "receipt":
+                    lines.append(
+                        f"- 有一张入库识别单待确认（草稿 {d.draft_no}），"
+                        "用户可能要修改字段或确认入库"
+                    )
+                else:
+                    lines.append(f"- 有一个待你确认的{scene}事项（草稿 {d.draft_no}），尚未执行")
+            elif d.status == "aligned":
+                # S2 修5：识别对齐后的入库草稿（确认卡片待发/发送失败）——
+                # update_draft 靠本摘要获知 draft_no
+                lines.append(
+                    f"- 有一张已识别的入库单（草稿 {d.draft_no}），"
+                    "用户可能要修改字段（用 update_draft）"
+                )
             elif d.status == "scheduled":
                 trigger = d.expires_at.strftime("%m-%d %H:%M") if d.expires_at else "待定"
                 lines.append(f"- 有一个定时提醒（{trigger}）尚未触发（草稿 {d.draft_no}）")

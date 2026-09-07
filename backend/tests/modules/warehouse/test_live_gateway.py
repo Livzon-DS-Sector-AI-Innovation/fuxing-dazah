@@ -14,6 +14,7 @@ Runner 真实现（票03 起 LLM 真调；异常用例 monkeypatch 桩）→ 卡
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -267,13 +268,23 @@ async def test_duplicate_message_deduped(
         await fresh_redis.delete(dedup_key)
 
 
-# ── 5. 图片消息引导 ──
+# ── 5. 图片消息 → 识别 Pipeline（票05：占位卡片 + 后台任务；此处 stub 隔离网络）──
 
 
-async def test_image_message_guidance(
-    gateway_db: AsyncSession, captured_sends: list[dict[str, str]]
+async def test_image_message_spawns_receipt_pipeline(
+    gateway_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """图片事件 → 友好引导卡片（单次发送，不进 Runner、不误报错误）。"""
+    """图片事件 → 占位卡片「正在识别」+ 后台 Pipeline 任务带图片定位信息启动。"""
+    spawned: list[dict[str, Any]] = []
+
+    async def fake_process(**kwargs: Any) -> None:
+        spawned.append(kwargs)
+
+    monkeypatch.setattr(
+        gateway, "_process_receipt_image", lambda **kw: fake_process(**kw)
+    )
     event = _im_message_event(
         chat_id=_unique_chat("oc_p2p"),
         sender_open_id="ou_user_e",
@@ -282,9 +293,18 @@ async def test_image_message_guidance(
     )
     await gateway.handle_im_message(event)
 
+    # 后台任务是 create_task 调度的：等它跑完（fake stub 立即完成）
+    tasks = [t for t in list(gateway._background_tasks) if not t.done()]
+    if tasks:
+        await asyncio.wait(tasks, timeout=10)
+
     assert len(captured_sends) == 1
     card = _card_of(captured_sends[0])
-    assert "图片识别" in card["elements"][0]["content"]
+    assert "正在识别" in card["header"]["title"]["content"]
+    assert len(spawned) == 1
+    assert spawned[0]["image_key"] == "img_v3_00s0_xxx"
+    assert spawned[0]["open_id"] == "ou_user_e"
+    assert spawned[0]["chat_type"] == "p2p"
 
 
 # ── 6. 会话持久化与复用 ──

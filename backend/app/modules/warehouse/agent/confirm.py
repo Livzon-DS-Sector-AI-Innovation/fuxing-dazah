@@ -217,7 +217,7 @@ async def handle_action(
         # 显式置 failed 而非回滚到 pending——pending 会让用户再次触发执行
         await agent_repository.set_agent_draft_status(db, draft, "failed")
         await _audit(draft_id, "error", "callback_error")
-        return ConfirmOutcome(ok=False, status="error", message="执行失败，请稍后重试")
+        return ConfirmOutcome(ok=False, status="error", message="执行失败（草稿已作废），请重新拍照发起识别")
 
     await _audit(draft_id, "ok")
     return ConfirmOutcome(ok=True, status="confirmed", message=note or "已确认执行")

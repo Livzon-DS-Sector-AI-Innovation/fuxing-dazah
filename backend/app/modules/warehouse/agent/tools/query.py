@@ -31,6 +31,10 @@ from app.modules.warehouse.agent.skills.registry import (
     SKILL_TOOL_FUNCS,
     SKILL_TOOLS_SCHEMA,
 )
+from app.modules.warehouse.agent.tools.draft_update import (
+    DRAFT_UPDATE_TOOL_FUNCS,
+    DRAFT_UPDATE_TOOLS_SCHEMA,
+)
 from app.modules.warehouse.agent.tools.memory import (
     MEMORY_TOOL_FUNCS,
     MEMORY_TOOLS_SCHEMA,
@@ -598,6 +602,7 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     **PLAN_TOOL_FUNCS,
     **MEMORY_TOOL_FUNCS,
     **OFFICE_TOOL_FUNCS,
+    **DRAFT_UPDATE_TOOL_FUNCS,
     **SKILL_TOOL_FUNCS,
 }
 
@@ -712,6 +717,7 @@ TOOLS: list[dict[str, Any]] = [
     *PLAN_TOOLS_SCHEMA,
     *MEMORY_TOOLS_SCHEMA,
     *OFFICE_TOOLS_SCHEMA,
+    *DRAFT_UPDATE_TOOLS_SCHEMA,
     *SKILL_TOOLS_SCHEMA,
 ]
 

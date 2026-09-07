@@ -39,3 +39,6 @@ uploads/
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
 temp/
+
+# 识别数据集图片（S2 ticket 01，不入库）
+.dataset/

@@ -140,6 +140,33 @@ async def get_agent_draft(
     return draft
 
 
+async def get_agent_draft_by_no(
+    db: AsyncSession, *, draft_no: str
+) -> WarehouseAgentDraft | None:
+    """按 draft_no 精确查草稿（update_draft 工具定位入口；软删视为不存在）。"""
+    stmt = select(WarehouseAgentDraft).where(
+        WarehouseAgentDraft.draft_no == draft_no,
+        WarehouseAgentDraft.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_latest_draft_no_on_prefix(
+    db: AsyncSession, *, prefix: str
+) -> str | None:
+    """同前缀（WR+日期）的最大 draft_no（draft_no 序号生成用，字典序=序号序）。"""
+    stmt = (
+        select(WarehouseAgentDraft.draft_no)
+        .where(
+            WarehouseAgentDraft.draft_no.like(f"{prefix}%"),
+            WarehouseAgentDraft.is_deleted == False,  # noqa: E712
+        )
+        .order_by(WarehouseAgentDraft.draft_no.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def set_agent_draft_status(
     db: AsyncSession, draft: WarehouseAgentDraft, status: str
 ) -> None:
@@ -147,8 +174,6 @@ async def set_agent_draft_status(
     draft.status = status
     await db.flush()
 
-
-# ── 任务计划（warehouse_agent_plans，ticket 05）──
 
 
 async def insert_plan(
@@ -177,13 +202,16 @@ async def insert_plan(
 async def list_actionable_drafts(
     db: AsyncSession, owner_open_id: str, limit: int = 5
 ) -> list[WarehouseAgentDraft]:
-    """某用户当前待处理事项：pending_confirm 确认草稿 + scheduled 未触发提醒。
+    """某用户当前待处理事项：aligned/pending_confirm 草稿 + scheduled 未触发提醒。
 
     供 Runner 注入「当前待处理」上下文（spec 决策 5：pending 草稿摘要），
-    让 Agent 感知「刚才那个发送」「明早的提醒」并自然回应追问。
+    让 Agent 感知「刚才那个发送」「明早的提醒」「那张识别出的入库单」并自然
+    回应追问。S2 修5：status 列表扩展 aligned（识别对齐后尚未发确认卡片的
+    入库草稿）——对话修改 update_draft 据此定位用户最近的可改草稿。
     """
-    from datetime import datetime as _dt
     from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
     from sqlalchemy import select as _select
 
     stmt = (
@@ -191,7 +219,7 @@ async def list_actionable_drafts(
         .where(
             WarehouseAgentDraft.created_by_open_id == owner_open_id,
             WarehouseAgentDraft.is_deleted.is_(False),
-            WarehouseAgentDraft.status.in_(["pending_confirm", "scheduled"]),
+            WarehouseAgentDraft.status.in_(["aligned", "pending_confirm", "scheduled"]),
         )
         .order_by(WarehouseAgentDraft.created_at.desc())
         .limit(limit)
