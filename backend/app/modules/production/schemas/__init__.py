@@ -72,6 +72,10 @@ from app.modules.production.schemas.line import (
     LineOut,
     LineUpdate,
 )
+from app.modules.production.schemas.notification import (
+    NotificationConfigOut,
+    NotificationConfigUpdateIn,
+)
 from app.modules.production.schemas.planning import (
     DemandAllocationCreate,
     DemandAllocationOut,
@@ -160,6 +164,8 @@ __all__ = [
     "LineCreate",
     "LineOut",
     "LineUpdate",
+    "NotificationConfigOut",
+    "NotificationConfigUpdateIn",
     "ContainerStockOut",
     "MaterialMovement",
     "MaterialMovementsOut",

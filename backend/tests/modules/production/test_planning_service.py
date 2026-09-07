@@ -431,6 +431,49 @@ class TestPlanOrder:
         )
         assert closed.status == "closed"
 
+    async def test_close_triggers_completed_notification(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """全部计划项非进行中/已分配时关闭 → 收集完成提醒并后台发送。"""
+        from app.modules.production.service import assignment_service
+
+        spawned: list = []
+        monkeypatch.setattr(
+            "app.modules.production.service.reminder_service._spawn",
+            lambda coro: (spawned.append(coro), coro.close()),
+        )
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+
+        # 计划项仍在已分配 → 关闭不产生完成提醒
+        await planning_service.close_plan_order(db_session, order.id, test_user)
+        assert spawned == []
+
+        # 重新走一单：工段负责人就位 + 计划项完成 → 触发提醒
+        order2 = await _make_order(db_session, published_route, test_user)
+        item2 = await _make_item(db_session, order2, published_route, test_user)
+        await _schedule_item(db_session, item2, test_user)
+        await planning_service.confirm_plan_order(db_session, order2.id, test_user)
+        await planning_service.release_plan_order(db_session, order2.id, test_user)
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=test_user.id, stage_name="发酵",
+            route_id=published_route["route"].id, created_by=test_user.id,
+        )
+        refreshed = await repo.get_plan_item(db_session, item2.id)
+        assert refreshed is not None
+        refreshed.status = "completed"
+        await db_session.flush()
+
+        closed = await planning_service.close_plan_order(
+            db_session, order2.id, test_user,
+        )
+        assert closed.status == "closed"
+        assert len(spawned) == 1
+
     async def test_delete_soft(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,

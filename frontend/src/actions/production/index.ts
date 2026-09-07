@@ -83,3 +83,7 @@ export {
   createDemandAllocation,
   deleteDemandAllocation,
 } from './planning'
+export {
+  fetchNotificationConfigs,
+  updateNotificationConfig,
+} from './notification'

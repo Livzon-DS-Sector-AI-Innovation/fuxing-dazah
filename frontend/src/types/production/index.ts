@@ -30,3 +30,4 @@ export type {
   PlannedStageInfo,
   CreatableRouteInfo,
 } from './workbench'
+export * from './notification'

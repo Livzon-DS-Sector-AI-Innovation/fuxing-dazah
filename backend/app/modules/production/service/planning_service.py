@@ -47,6 +47,7 @@ from app.modules.production.schemas.planning import (
     TraceNode,
 )
 from app.modules.production.service.reminder_service import (
+    schedule_plan_closed_notification,
     schedule_plan_released_notification,
 )
 from app.platform.identity.models import User
@@ -481,6 +482,10 @@ async def close_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User | N
     order.status = "closed"
     order.updated_by = user.id if user else None
     await db.flush()
+    # 飞书提醒：全部计划项非进行中/已分配时通知所涉路线工段负责人
+    # （收集在事务内，发送为后台尽力而为；内部判定不满足则静默跳过）
+    items = await repo.list_plan_items(db, order_id)
+    await schedule_plan_closed_notification(db, order, items)
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
     return refreshed

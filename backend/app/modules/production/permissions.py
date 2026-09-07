@@ -21,4 +21,7 @@ PERMISSIONS: list[PermissionDef] = [
     PermissionDef(
         "production:planning:submit", "提交计划中枢操作", "production", "planning", "submit"
     ),
+    PermissionDef(
+        "production:notification:manage", "管理生产通知配置", "production", "notification", "manage"
+    ),
 ]

@@ -1,2 +1,2 @@
-@CLAUDE.md
-@CLAUDE.local.md
+阅读同目录下的CLAUDE.md
+阅读同目录下的CLAUDE.local.md
