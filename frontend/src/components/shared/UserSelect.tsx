@@ -16,6 +16,7 @@ interface Props {
   size?: SelectProps['size']
   style?: React.CSSProperties
   excludeIds?: string[]
+  allowClear?: boolean
 }
 
 export function UserSelect({
@@ -28,6 +29,7 @@ export function UserSelect({
   size = 'middle',
   style,
   excludeIds = [],
+  allowClear = false,
 }: Props) {
   const { data } = useQuery({
     queryKey: ['identity-personnel'],
@@ -54,6 +56,7 @@ export function UserSelect({
       placeholder={placeholder}
       size={size}
       style={style}
+      allowClear={allowClear}
       showSearch
       filterOption={(input, option) =>
         (option?.label ?? '' as string).toLowerCase().includes(input.toLowerCase())

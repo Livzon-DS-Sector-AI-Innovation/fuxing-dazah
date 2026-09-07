@@ -27,6 +27,24 @@ function seriesName(s: FieldTrendSeries): string {
   return s.unit ? `${s.field_label}（${s.unit}）` : s.field_label
 }
 
+/**
+ * 图例用唯一系列名（field_key → 名）：同标签+单位的字段并列时追加 field_key 区分，
+ * 否则 ECharts 按名联动会同时开关两个系列、双轴索引也会错位。
+ */
+function uniqueSeriesNames(series: FieldTrendSeries[]): Map<string, string> {
+  const counts = new Map<string, number>()
+  for (const s of series) {
+    const base = seriesName(s)
+    counts.set(base, (counts.get(base) ?? 0) + 1)
+  }
+  return new Map(
+    series.map(s => {
+      const base = seriesName(s)
+      return [s.field_key, (counts.get(base) ?? 0) > 1 ? `${base}·${s.field_key}` : base]
+    }),
+  )
+}
+
 export function FieldTrendChart({ productId }: { productId: string }) {
   const [routeId, setRouteId] = useState<string | undefined>()
   const [nodeCode, setNodeCode] = useState<string | undefined>()
@@ -43,6 +61,7 @@ export function FieldTrendChart({ productId }: { productId: string }) {
     enabled: !!routeId && !!nodeCode,
   })
   const allSeries = useMemo(() => data?.series ?? [], [data])
+  const namesByKey = useMemo(() => uniqueSeriesNames(allSeries), [allSeries])
 
   // 按填写时间过滤各字段数据点，时间段内无数据的字段整条隐藏（图例不出现）。
   // filled_at 是带 +00:00 偏移的 ISO 串，用 dayjs 解析后按本地时区取日期，
@@ -63,8 +82,8 @@ export function FieldTrendChart({ productId }: { productId: string }) {
 
   // legend 取消的字段不参与 x 轴批次与坐标轴计算
   const visibleSeries = useMemo(
-    () => filteredSeries.filter(s => legendSelected[seriesName(s)] !== false),
-    [filteredSeries, legendSelected],
+    () => filteredSeries.filter(s => legendSelected[namesByKey.get(s.field_key)!] !== false),
+    [filteredSeries, legendSelected, namesByKey],
   )
 
   // x 轴批次：可见字段的批次并集，按各批最早填写时间排序（跨字段统一时间序）
@@ -134,7 +153,7 @@ export function FieldTrendChart({ productId }: { productId: string }) {
           ]
         : undefined,
       series: filteredSeries.map(s => {
-        const name = seriesName(s)
+        const name = namesByKey.get(s.field_key) ?? s.field_label
         const byBatch = new Map(s.data_points.map(p => [p.batch_no, p.value]))
         return {
           name,
@@ -148,7 +167,7 @@ export function FieldTrendChart({ productId }: { productId: string }) {
       }),
     }
     return option
-  }, [filteredSeries, visibleSeries, batchNos, dual, many, legendSelected])
+  }, [filteredSeries, visibleSeries, batchNos, dual, many, legendSelected, namesByKey])
 
   // ECharts legend 点击后同步选中态进 state，并写回 option.legend.selected 防止 setOption 重置
   const onEvents = useMemo(

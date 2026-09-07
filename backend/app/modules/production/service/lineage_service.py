@@ -71,16 +71,13 @@ class LineageGraph:
     def route_ids(self) -> set[uuid.UUID]:
         return {r.id for r in self.chain}
 
-    @property
-    def member_node_ids(self) -> list[uuid.UUID]:
-        return [n.id for f in self.families for n in f.members]
-
 
 async def get_route_chain(db: AsyncSession, route_id: uuid.UUID) -> list[ProcessRoute]:
     """沿 origin_route_id 上溯，返回"祖先 + 自己"，从旧到新排列。
 
-    起始路线本身不过滤状态（字段趋势允许任意路线）；祖先中跳过草稿/已删除
-    路线（无生产数据），跨产品即止（脏数据防护），visited 集合防环。
+    起始路线本身不过滤状态（字段趋势允许任意路线）；祖先中跳过草稿路线
+    （无生产数据，但继续上溯其前身——草稿中间版截断会导致已发布祖先的
+    历史批次丢失）；遇已删除路线或跨产品即止（脏数据防护），visited 集合防环。
     """
     route = await route_repo.get_route(db, route_id)
     if route is None:
@@ -97,12 +94,12 @@ async def get_route_chain(db: AsyncSession, route_id: uuid.UUID) -> list[Process
         if (
             ancestor is None
             or ancestor.is_deleted
-            or ancestor.status == "draft"
             or ancestor.product_id != route.product_id
         ):
             break
-        chain.append(ancestor)
         visited.add(ancestor.id)
+        if ancestor.status != "draft":
+            chain.append(ancestor)
         current = ancestor
     chain.reverse()
     return chain
@@ -118,16 +115,27 @@ def build_node_families(
         for node in nodes_by_route.get(route.id, []):
             if node.id in assigned:
                 continue
+            # origin 指针优先、node_code 兜底：两遍匹配。OR 链单遍匹配会让
+            # 家族遍历顺序决定结果——同名 node_code 的新家族排在指针家族前面时，
+            # 祖先节点会按弱规则并入错误家族（跨版本同码复用场景）
             target = next(
                 (
                     f
                     for f in families
                     if node.origin_node_id in f.member_id_set
                     or any(m.origin_node_id == node.id for m in f.members)
-                    or any(m.node_code == node.node_code for m in f.members)
                 ),
                 None,
             )
+            if target is None:
+                target = next(
+                    (
+                        f
+                        for f in families
+                        if any(m.node_code == node.node_code for m in f.members)
+                    ),
+                    None,
+                )
             if target is None:
                 families.append(NodeFamily(rep=node))
             else:

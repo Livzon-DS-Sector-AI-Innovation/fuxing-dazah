@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
+    ExecutionAmendIn,
     ExecutionBackfillIn,
     ExecutionCompleteIn,
     ExecutionOut,
@@ -21,6 +22,7 @@ from app.platform.permission.deps import RequireUser, require_permission
 
 router = APIRouter()
 _read = require_permission("production:batch:read")
+_amend = require_permission("production:batch:amend")
 
 
 @router.post("/batches/{batch_id}/executions", summary="开始工序")
@@ -63,6 +65,21 @@ async def backfill_field_values(
     )
     return success_response(
         [FieldValueOut.model_validate(v).model_dump(mode="json") for v in values]
+    )
+
+
+@router.patch("/executions/{execution_id}", summary="修改工序填报数据（需独立权限）")
+async def amend_execution(
+    execution_id: uuid.UUID,
+    payload: ExecutionAmendIn,
+    current_user: User = Depends(_amend),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    execution = await execution_service.amend_execution(
+        db, execution_id, payload, current_user
+    )
+    return success_response(
+        ExecutionOut.model_validate(execution).model_dump(mode="json")
     )
 
 

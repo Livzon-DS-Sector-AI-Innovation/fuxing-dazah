@@ -49,12 +49,22 @@ function FieldValuesBlock({ values }: { values: FieldValue[] }) {
 interface Props {
   executions: Execution[]
   canSubmit: boolean
+  canAmend?: boolean
   onComplete: (execution: Execution) => void
   onAbort: (execution: Execution) => void
   onBackfill?: (execution: Execution) => void
+  onAmend?: (execution: Execution) => void
 }
 
-export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort, onBackfill }: Props) {
+export function ExecutionTimeline({
+  executions,
+  canSubmit,
+  canAmend = false,
+  onComplete,
+  onAbort,
+  onBackfill,
+  onAmend,
+}: Props) {
   if (!executions.length) return <Empty description="该批次还没有工序执行记录" />
 
   return (
@@ -95,6 +105,11 @@ export function ExecutionTimeline({ executions, canSubmit, onComplete, onAbort, 
                 {canSubmit && e.status === 'completed' && onBackfill && (
                   <Button size="small" onClick={() => onBackfill(e)}>
                     补录字段
+                  </Button>
+                )}
+                {canAmend && (e.status === 'completed' || e.status === 'aborted') && onAmend && (
+                  <Button size="small" onClick={() => onAmend(e)}>
+                    修改数据
                   </Button>
                 )}
               </div>

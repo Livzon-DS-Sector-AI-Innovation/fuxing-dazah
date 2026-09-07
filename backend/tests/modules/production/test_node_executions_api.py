@@ -169,3 +169,90 @@ class TestChildrenAggregate:
         assert resp.json()["data"] == {
             "field_key": "A2", "node_code": "G2", "sum": None,
         }
+
+
+class TestAmendEndpoint:
+    """PATCH /executions/{id} 修改工序填报数据：独立权限门禁与正常路径。"""
+
+    async def _make_completed_execution(
+        self, db: AsyncSession, ctx: dict[str, Any],
+    ) -> uuid.UUID:
+        """辅助：完成 A 后开始并结束 B，返回 B 的执行 id。"""
+        batch = await batch_service.create_batch(
+            db,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=ctx["product"].id,
+                route_id=ctx["route"].id,
+            ),
+            user=None,
+        )
+        ex_a = await execution_service.start_execution(
+            db, batch.id, ExecutionStartIn(node_id=ctx["node_a"].id), user=None,
+        )
+        await execution_service.complete_execution(
+            db, ex_a.id, ExecutionCompleteIn(), user=None,
+        )
+        ex_b = await execution_service.start_execution(
+            db,
+            batch.id,
+            ExecutionStartIn(
+                node_id=ctx["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db, ex_b.id, ExecutionCompleteIn(), user=None,
+        )
+        return ex_b.id
+
+    async def test_patch_without_amend_permission_rejected(
+        self, client: AsyncClient, db_session: AsyncSession,
+        published_route: dict[str, Any],
+    ) -> None:
+        """client fixture 仅授予 read 权限 → 403。"""
+        ex_id = await self._make_completed_execution(db_session, published_route)
+        resp = await client.patch(
+            f"/api/v1/production/executions/{ex_id}",
+            json={"field_values": [{"field_key": "temp", "value": 26}]},
+        )
+        assert resp.status_code == 403, resp.text
+
+    async def test_patch_with_amend_permission_succeeds(
+        self, client: AsyncClient, db_session: AsyncSession,
+        published_route: dict[str, Any],
+    ) -> None:
+        """HTTP 层与 service 层同时授予 amend 权限 → 200，字段就地更新。"""
+        from unittest.mock import patch
+
+        ex_id = await self._make_completed_execution(db_session, published_route)
+
+        async def _grant_amend(_uid: str, _db: object) -> set[str]:
+            return {"production:batch:read", "production:batch:amend"}
+
+        with (
+            patch(
+                "app.platform.permission.deps.get_user_permissions",
+                new=_grant_amend,
+            ),
+            patch.object(
+                execution_service, "get_user_permissions", _grant_amend,
+            ),
+        ):
+            resp = await client.patch(
+                f"/api/v1/production/executions/{ex_id}",
+                json={"field_values": [{"field_key": "temp", "value": 26}]},
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["id"] == str(ex_id)
+        # 响应与 start/complete 端点同构（field_values 由详情接口另行组装），
+        # 字段更新从 DB 验证
+        from app.modules.production import repository as prod_repo
+
+        values = await prod_repo.get_field_values_by_executions(
+            db_session, [ex_id],
+        )
+        row = next(v for v in values if v.field_key == "temp")
+        assert row.value_numeric == 26

@@ -438,6 +438,9 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
         db.add(batch)
         await db.flush()
         item_batch_nos[item.id] = batch.batch_no
+        # 回写实际批号（含去重 -N 后缀）：allocated 项批号 = 实际批次号，
+        # 计划中心展示与 rename_batch_no 的同步回写都依赖此不变量
+        item.batch_no = batch.batch_no
         alloc = PlanAllocation(
             plan_item_id=item.id,
             batch_id=batch.id,
@@ -616,6 +619,8 @@ async def change_plan_order(
                 )
                 db.add(batch)
                 await db.flush()
+                # 与下达同口径：allocated 项批号回写为实际批次号（含去重后缀）
+                new_item.batch_no = new_batch_no
                 alloc = PlanAllocation(
                     plan_item_id=new_item.id,
                     batch_id=batch.id,

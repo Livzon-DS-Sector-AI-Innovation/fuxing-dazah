@@ -14,8 +14,16 @@ export {
   mergeBatches,
   completeBatch,
   cancelBatch,
+  transferBatchOwner,
+  renameBatchNo,
 } from './batch'
-export { startExecution, completeExecution, backfillExecutionFields, abortExecution } from './execution'
+export {
+  startExecution,
+  completeExecution,
+  backfillExecutionFields,
+  amendExecution,
+  abortExecution,
+} from './execution'
 export {
   createIntermediateType,
   updateIntermediateType,

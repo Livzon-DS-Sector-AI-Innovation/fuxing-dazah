@@ -83,6 +83,13 @@ export interface CompleteExecutionInput {
   finished_at?: string | null
 }
 
+export interface AmendExecutionInput {
+  started_at?: string | null      // 不传/undefined=不修改
+  finished_at?: string | null
+  field_values?: FieldValueInput[]  // value: null 表示清空该字段
+  remark?: string | null            // null=不修改；空串=清空
+}
+
 export interface NodeExecutionListItem {
   id: string
   batch_id: string

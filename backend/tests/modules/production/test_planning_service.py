@@ -389,6 +389,30 @@ class TestPlanOrder:
         refreshed_item = await repo.get_plan_item(db_session, item.id)
         assert refreshed_item is not None and refreshed_item.status == "allocated"
 
+    async def test_release_writes_back_actual_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """下达后计划项批号回写为实际生成批号（含去重 -N 后缀）。"""
+        order = await _make_order(db_session, published_route, test_user)
+        seed = rand_code("ITM")
+        item = (await _make_items(db_session, order, published_route, [seed], test_user))[0]
+        # 下达前直接插入占用 seed 的批次 → 下达去重生成 seed-2
+        db_session.add(
+            Batch(
+                batch_no=seed,
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            )
+        )
+        await db_session.flush()
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.batch_no == f"{seed}-2"
+
     async def test_close_status_restrictions(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
@@ -860,6 +884,43 @@ class TestChangePlanOrder:
         assert len(allocs) == 1
         batch = await repo.get_batch(db_session, allocs[0].batch_id)
         assert batch is not None and batch.status == "scheduled"
+
+    async def test_change_writes_back_actual_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """变更新增计划项：自动生成批号去重后回写计划项（= 实际批次号）。"""
+        order, _ = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        items_before = await repo.list_plan_items(db_session, order.id)
+        next_no = max(i.item_no for i in items_before) + 1
+        base_no = f"{order.order_no}-{next_no}"
+        # 预插占用自动生成号 base_no 的批次 → 变更时去重生成 base_no-2
+        db_session.add(
+            Batch(
+                batch_no=base_no,
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            )
+        )
+        await db_session.flush()
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="追加一个批次",
+                items_upsert=[PlanItemChangeItem(
+                    product_id=published_route["product"].id,
+                    product_name="追加品",
+                    route_id=published_route["route"].id,
+                    planned_quantity=30,
+                )],
+            ),
+            test_user,
+        )
+        items_after = await repo.list_plan_items(db_session, order.id)
+        new_item = max(items_after, key=lambda i: i.item_no)
+        assert new_item.batch_no == f"{base_no}-2"
 
     async def test_change_delete_blocks_batch_in_production(
         self, db_session: AsyncSession, published_route: dict[str, Any],

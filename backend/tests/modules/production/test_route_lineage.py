@@ -129,8 +129,8 @@ class TestRouteLineage:
     ) -> None:
         """A 跑批次 → 复刻 B（删 B1 增 C1）发布再跑 → 查 B 含两代批次，列挂 B 节点。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
-        await _fill_g1(db_session, ctx["route"].id, bA, {"A1": 10.0, "B1": 20.0}, _T1)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_g1(db_session, ctx["route"].id, ba, {"A1": 10.0, "B1": 20.0}, _T1)
 
         route_b = await route_service.copy_route(
             db_session, ctx["route"].id, rand_code("V"), user=None,
@@ -140,8 +140,8 @@ class TestRouteLineage:
         )
         await route_service.publish_route(db_session, route_b.id, user=None)
         b_g1 = await _node(db_session, route_b.id, "G1")
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_g1(db_session, route_b.id, bB, {"A1": 30.0, "C1": 40.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_g1(db_session, route_b.id, bb, {"A1": 30.0, "C1": 40.0}, _T2)
 
         resp = await client.get(
             "/api/v1/production/analytics/stage-summary",
@@ -151,33 +151,33 @@ class TestRouteLineage:
         data = resp.json()["data"]
         assert data["merged_routes"] == [ctx["route"].route_name]
         rows = {r["batch_no"]: r for r in data["rows"]}
-        assert set(rows) == {bA.batch_no, bB.batch_no}
+        assert set(rows) == {ba.batch_no, bb.batch_no}
         # G1 家族列：当前版本字段在前（A1、C1），旧版独有字段保留在后（B1）
         g1_cols = [c for c in data["columns"] if c["node_code"] == "G1"]
         assert [c["field_key"] for c in g1_cols] == ["A1", "C1", "B1"]
         assert all(c["node_id"] == str(b_g1.id) for c in g1_cols)
         # A 时代批次的值映射到 B 的列；B 删掉的字段值不丢、新字段列为空
-        assert rows[bA.batch_no]["values"][f"{b_g1.id}.A1"] == 10.0
-        assert rows[bA.batch_no]["values"][f"{b_g1.id}.B1"] == 20.0
-        assert f"{b_g1.id}.C1" not in rows[bA.batch_no]["values"]
-        assert rows[bB.batch_no]["values"][f"{b_g1.id}.A1"] == 30.0
-        assert rows[bB.batch_no]["values"][f"{b_g1.id}.C1"] == 40.0
+        assert rows[ba.batch_no]["values"][f"{b_g1.id}.A1"] == 10.0
+        assert rows[ba.batch_no]["values"][f"{b_g1.id}.B1"] == 20.0
+        assert f"{b_g1.id}.C1" not in rows[ba.batch_no]["values"]
+        assert rows[bb.batch_no]["values"][f"{b_g1.id}.A1"] == 30.0
+        assert rows[bb.batch_no]["values"][f"{b_g1.id}.C1"] == 40.0
 
     async def test_stage_summary_chain_three_versions(
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
         """A→B→C 链：看 C 含三批、看 B 不含 C 的批次、看 A 仅自身、A 无合并提示。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
-        await _fill_g1(db_session, ctx["route"].id, bA, {"A1": 1.0}, _T1)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_g1(db_session, ctx["route"].id, ba, {"A1": 1.0}, _T1)
 
         route_b = await _clone_published(db_session, ctx["route"].id, ctx["product"])
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_g1(db_session, route_b.id, bB, {"A1": 2.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_g1(db_session, route_b.id, bb, {"A1": 2.0}, _T2)
 
         route_c = await _clone_published(db_session, route_b.id, ctx["product"])
-        bC = await _make_batch(db_session, {"product": ctx["product"], "route": route_c})
-        await _fill_g1(db_session, route_c.id, bC, {"A1": 3.0}, _T3)
+        bc = await _make_batch(db_session, {"product": ctx["product"], "route": route_c})
+        await _fill_g1(db_session, route_c.id, bc, {"A1": 3.0}, _T3)
 
         async def view(route_id: uuid.UUID) -> tuple[set[str], list[str]]:
             resp = await client.get(
@@ -189,13 +189,13 @@ class TestRouteLineage:
             return {r["batch_no"] for r in data["rows"]}, data["merged_routes"]
 
         nos, merged = await view(route_c.id)
-        assert nos == {bA.batch_no, bB.batch_no, bC.batch_no}
+        assert nos == {ba.batch_no, bb.batch_no, bc.batch_no}
         assert merged == [ctx["route"].route_name, route_b.route_name]
         nos, merged = await view(route_b.id)
-        assert nos == {bA.batch_no, bB.batch_no}
+        assert nos == {ba.batch_no, bb.batch_no}
         assert merged == [ctx["route"].route_name]
         nos, merged = await view(ctx["route"].id)
-        assert nos == {bA.batch_no}
+        assert nos == {ba.batch_no}
         assert merged == []
 
     async def test_stage_summary_computed_from_ancestor_routes(
@@ -212,13 +212,13 @@ class TestRouteLineage:
                 ),
             ],
         )
-        bA = await _make_batch(db_session, ctx)
-        await _fill_g1(db_session, ctx["route"].id, bA, {"A1": 10.0, "B1": 20.0}, _T1)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_g1(db_session, ctx["route"].id, ba, {"A1": 10.0, "B1": 20.0}, _T1)
 
         route_b = await _clone_published(db_session, ctx["route"].id, ctx["product"])
         b_g1 = await _node(db_session, route_b.id, "G1")
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_g1(db_session, route_b.id, bB, {"A1": 1.0, "B1": 2.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_g1(db_session, route_b.id, bb, {"A1": 1.0, "B1": 2.0}, _T2)
 
         resp = await client.get(
             "/api/v1/production/analytics/stage-summary",
@@ -230,22 +230,22 @@ class TestRouteLineage:
         assert [c["field_key"] for c in computed_cols] == ["C1"]
         assert computed_cols[0]["node_id"] == str(b_g1.id)
         rows = {r["batch_no"]: r for r in data["rows"]}
-        assert rows[bA.batch_no]["computed"][f"{b_g1.id}.C1"] == 30.0
-        assert rows[bB.batch_no]["computed"] == {}
+        assert rows[ba.batch_no]["computed"][f"{b_g1.id}.C1"] == 30.0
+        assert rows[bb.batch_no]["computed"] == {}
 
     async def test_field_trend_merges_lineage(
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
         """字段趋势查 B 的 G2：series 含 A、B 两代批次的点，按填写时间排序。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
+        ba = await _make_batch(db_session, ctx)
         await _fill_fields(
-            db_session, bA.id, ctx["node_g2"].id, {"A2": 5.0}, _T1,
+            db_session, ba.id, ctx["node_g2"].id, {"A2": 5.0}, _T1,
         )
         route_b = await _clone_published(db_session, ctx["route"].id, ctx["product"])
         b_g2 = await _node(db_session, route_b.id, "G2")
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_fields(db_session, bB.id, b_g2.id, {"A2": 7.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_fields(db_session, bb.id, b_g2.id, {"A2": 7.0}, _T2)
 
         resp = await client.get(
             "/api/v1/production/analytics/field-trend",
@@ -256,7 +256,7 @@ class TestRouteLineage:
         assert data["merged_routes"] == [ctx["route"].route_name]
         assert [s["field_key"] for s in data["series"]] == ["A2"]
         points = data["series"][0]["data_points"]
-        assert [p["batch_no"] for p in points] == [bA.batch_no, bB.batch_no]
+        assert [p["batch_no"] for p in points] == [ba.batch_no, bb.batch_no]
         assert [p["value"] for p in points] == [5.0, 7.0]
 
     async def test_lineage_code_fallback_without_node_pointers(
@@ -264,9 +264,9 @@ class TestRouteLineage:
     ) -> None:
         """存量回填场景：仅路线级血缘、节点无指针 → 按 node_code 兜底对齐。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
+        ba = await _make_batch(db_session, ctx)
         await _fill_fields(
-            db_session, bA.id, ctx["node_g2"].id, {"A2": 5.0}, _T1,
+            db_session, ba.id, ctx["node_g2"].id, {"A2": 5.0}, _T1,
         )
         route_b = await _clone_published(db_session, ctx["route"].id, ctx["product"])
         # 模拟只回填了 origin_route_id、节点级指针缺失
@@ -274,8 +274,8 @@ class TestRouteLineage:
             n.origin_node_id = None
         await db_session.flush()
         b_g2 = await _node(db_session, route_b.id, "G2")
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_fields(db_session, bB.id, b_g2.id, {"A2": 7.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_fields(db_session, bb.id, b_g2.id, {"A2": 7.0}, _T2)
 
         resp = await client.get(
             "/api/v1/production/analytics/field-trend",
@@ -285,19 +285,19 @@ class TestRouteLineage:
         data = resp.json()["data"]
         assert data["merged_routes"] == [ctx["route"].route_name]
         points = data["series"][0]["data_points"]
-        assert [p["batch_no"] for p in points] == [bA.batch_no, bB.batch_no]
+        assert [p["batch_no"] for p in points] == [ba.batch_no, bb.batch_no]
 
     async def test_stage_summary_permission_extends_to_lineage(
         self, client: AsyncClient, db_session: AsyncSession, test_user: User,
     ) -> None:
         """权限锚定代表节点：仅在 B 上有工段分配的负责人，看 B 也能看到 A 的历史批次。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
-        await _fill_g1(db_session, ctx["route"].id, bA, {"A1": 10.0}, _T1)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_g1(db_session, ctx["route"].id, ba, {"A1": 10.0}, _T1)
 
         route_b = await _clone_published(db_session, ctx["route"].id, ctx["product"])
-        bB = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
-        await _fill_g1(db_session, route_b.id, bB, {"A1": 30.0}, _T2)
+        bb = await _make_batch(db_session, {"product": ctx["product"], "route": route_b})
+        await _fill_g1(db_session, route_b.id, bb, {"A1": 30.0}, _T2)
         # 只在 B 上分配工段一（A 上无任何分配）
         db_session.add(
             StageAssignment(
@@ -314,7 +314,7 @@ class TestRouteLineage:
         data = resp.json()["data"]
         # 两代批次都在；无分配的 G2 家族不出现
         rows = {r["batch_no"]: r for r in data["rows"]}
-        assert set(rows) == {bA.batch_no, bB.batch_no}
+        assert set(rows) == {ba.batch_no, bb.batch_no}
         assert {c["node_code"] for c in data["columns"]} == {"G1"}
 
     async def test_stage_summary_draft_clone_still_empty(
@@ -322,8 +322,8 @@ class TestRouteLineage:
     ) -> None:
         """未发布的复刻（draft）不进汇总，与原 exclude_draft_route 口径一致。"""
         ctx = await _make_route_ctx(db_session, publish=True)
-        bA = await _make_batch(db_session, ctx)
-        await _fill_g1(db_session, ctx["route"].id, bA, {"A1": 1.0}, _T1)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_g1(db_session, ctx["route"].id, ba, {"A1": 1.0}, _T1)
         route_b = await route_service.copy_route(
             db_session, ctx["route"].id, rand_code("V"), user=None,
         )
@@ -337,3 +337,36 @@ class TestRouteLineage:
         assert data["columns"] == []
         assert data["rows"] == []
         assert data["merged_routes"] == []
+
+    async def test_lineage_skips_draft_intermediate_route(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """A 发布跑批 → 复刻 B（未发布）→ 复刻 C 并发布：C 仍合并 A 的批次。
+
+        草稿中间版自身无生产数据，但跳过它时必须继续上溯其前身，
+        否则会截断血缘链、丢掉已发布祖先的历史批次。
+        """
+        ctx = await _make_route_ctx(db_session, publish=True)
+        ba = await _make_batch(db_session, ctx)
+        await _fill_fields(db_session, ba.id, ctx["node_g2"].id, {"A2": 5.0}, _T1)
+
+        route_b = await route_service.copy_route(
+            db_session, ctx["route"].id, rand_code("V"), user=None,
+        )
+        route_c = await route_service.copy_route(
+            db_session, route_b.id, rand_code("V"), user=None,
+        )
+        await route_service.publish_route(db_session, route_c.id, user=None)
+        b_g2 = await _node(db_session, route_c.id, "G2")
+        bc = await _make_batch(db_session, {"product": ctx["product"], "route": route_c})
+        await _fill_fields(db_session, bc.id, b_g2.id, {"A2": 7.0}, _T2)
+
+        resp = await client.get(
+            "/api/v1/production/analytics/field-trend",
+            params={"route_id": str(route_c.id), "node_code": "G2"},
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["merged_routes"] == [ctx["route"].route_name]
+        points = data["series"][0]["data_points"]
+        assert [p["batch_no"] for p in points] == [ba.batch_no, bc.batch_no]

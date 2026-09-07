@@ -28,8 +28,17 @@ from app.modules.production.schemas.assignment import (
     WorkbenchItem,
     WorkbenchOut,
 )
-from app.modules.production.schemas.batch import BatchCreate, DeriveIn, MergeIn, MergeParentIn
-from app.modules.production.service.batch_service import create_batch, derive_batches, merge_batches
+from app.modules.production.schemas.batch import (
+    BatchCreate,
+    DeriveIn,
+    MergeIn,
+    MergeParentIn,
+)
+from app.modules.production.service.batch_service import (
+    create_batch,
+    derive_batches,
+    merge_batches,
+)
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
     start_execution,

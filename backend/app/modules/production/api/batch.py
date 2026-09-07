@@ -10,7 +10,9 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.production.schemas import (
     BatchCreate,
+    BatchNoUpdateIn,
     BatchOut,
+    BatchOwnerTransferIn,
     DeriveIn,
     MergeIn,
 )
@@ -112,6 +114,28 @@ async def cancel_batch(
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     batch = await batch_service.cancel_batch(db, batch_id, user)
+    return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
+
+
+@router.patch("/batches/{batch_id}/owner", summary="转移批次负责人")
+async def transfer_batch_owner(
+    batch_id: uuid.UUID,
+    payload: BatchOwnerTransferIn,
+    user: User = Depends(_submit),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    batch = await batch_service.transfer_batch_owner(db, batch_id, payload, user)
+    return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
+
+
+@router.patch("/batches/{batch_id}/batch-no", summary="修改批次号")
+async def rename_batch_no(
+    batch_id: uuid.UUID,
+    payload: BatchNoUpdateIn,
+    user: User = Depends(_submit),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    batch = await batch_service.rename_batch_no(db, batch_id, payload, user)
     return success_response(BatchOut.model_validate(batch).model_dump(mode="json"))
 
 
