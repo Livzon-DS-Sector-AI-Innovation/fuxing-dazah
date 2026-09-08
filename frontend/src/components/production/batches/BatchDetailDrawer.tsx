@@ -211,7 +211,7 @@ export function BatchDetailDrawer({
           <Section
             title="工序执行时间线"
             extra={
-              canSubmit && detail?.status === 'in_progress' && (
+              detail?.can_complete && (
                 pendingBackfill > 0 ? (
                   <Popconfirm
                     title={`还有 ${pendingBackfill} 项必填字段待补录，批次完成后不可再补。确认完成？`}

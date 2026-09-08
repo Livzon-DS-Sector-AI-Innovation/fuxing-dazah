@@ -70,7 +70,7 @@ async def get_batch_detail(
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    detail = await batch_service.get_batch_detail(db, batch_id)
+    detail = await batch_service.get_batch_detail(db, batch_id, user)
     return success_response(detail.model_dump(mode="json"))
 
 

@@ -135,6 +135,9 @@ class ExecutionOut(BaseModel):
     equipments: list[EquipmentSnapshotOut] = []
     field_values: list[FieldValueOut] = []
     missing_required_fields: list[MissingFieldOut] = []  # service 组装：已结束工序缺填的必填字段
+    # service 组装批次详情时按当前用户填充（权限+状态，"现在就能补"语义）；
+    # None=未计算（complete/backfill 等单条返回场景不填），前端按 falsy 处理
+    can_backfill: bool | None = None
 
 
 class NodeExecutionListItem(BaseModel):

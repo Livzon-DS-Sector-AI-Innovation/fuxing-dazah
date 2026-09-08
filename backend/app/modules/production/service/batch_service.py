@@ -25,6 +25,7 @@ from app.modules.production.schemas import (
     MergeIn,
 )
 from app.modules.production.service.assignment_service import (
+    check_operator_access,
     require_batch_owner_access,
     require_operator_access,
 )
@@ -462,8 +463,16 @@ async def rename_batch_no(
     return refreshed
 
 
-async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetailOut:
-    """批次详情 = 批次 + 执行时间线（含设备快照、字段值、工序名）。"""
+async def get_batch_detail(
+    db: AsyncSession, batch_id: uuid.UUID, user: User | None = None,
+) -> BatchDetailOut:
+    """批次详情 = 批次 + 执行时间线（含设备快照、字段值、工序名）。
+
+    user 给定时按当前用户填充 can_complete / executions[].can_backfill
+    （权限 + 状态的"现在就能做"语义，与 complete_batch /
+    backfill_execution_fields 的授权口径一致）。前端据此显示按钮，
+    写接口仍各自校验兜底——标志只是 UI 预判，不是新的授权面。
+    """
     batch = await _get_batch_or_404(db, batch_id)
     executions = await repo.list_executions(db, batch_id)
     exec_ids = [e.id for e in executions]
@@ -471,6 +480,44 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
     values = await repo.get_field_values_by_executions(db, exec_ids)
     nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
     node_names = {n.id: n.name for n in nodes}
+    node_stage_names = {n.id: n.stage_name for n in nodes}
+
+    has_submit = False
+    if user is not None:
+        perms = await get_user_permissions(str(user.id), db)
+        has_submit = "production:batch:submit" in perms
+    # 补录仅批次结束前可用（completed/cancelled 均禁止，与 backfill_execution_fields 一致）
+    batch_backfillable = batch.status not in ("completed", "cancelled")
+
+    async def _can_backfill(e) -> bool:
+        if user is None or not batch_backfillable or e.status != "completed":
+            return False
+        if has_submit:
+            return True
+        return await check_operator_access(
+            db, user.id, e.node_id, batch.route_id,
+            node_stage_names.get(e.node_id), batch=batch, execution=e,
+        )
+
+    async def _can_complete() -> bool:
+        if user is None or batch.status != "in_progress":
+            return False
+        if has_submit:
+            return True
+        # 与 complete_batch 同口径：最后一个完成的执行的 node 做归属判定，
+        # 不传 execution——完成批次不吃单次执行负责人豁免
+        last_ex = max(
+            (e for e in executions
+             if e.status == "completed" and e.finished_at is not None),
+            key=lambda e: e.finished_at, default=None,
+        )
+        if last_ex is not None:
+            return await check_operator_access(
+                db, user.id, last_ex.node_id, batch.route_id,
+                node_stage_names.get(last_ex.node_id), batch=batch,
+            )
+        # 无已完成执行：退回归属判定（require_batch_owner_access 同口径）
+        return batch.owner_user_id is None or batch.owner_user_id == user.id
 
     eq_by_exec: dict[uuid.UUID, list[EquipmentSnapshotOut]] = {}
     for eq in equipments:
@@ -490,9 +537,11 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         out.equipments = eq_by_exec.get(e.id, [])
         out.field_values = val_by_exec.get(e.id, [])
         out.missing_required_fields = missing_by_exec.get(e.id, [])
+        out.can_backfill = await _can_backfill(e)
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
+    detail.can_complete = await _can_complete()
     # 填充路线名称
     route = await repo.get_route(db, batch.route_id)
     if route:

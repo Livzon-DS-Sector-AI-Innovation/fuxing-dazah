@@ -553,12 +553,16 @@ async def change_plan_order(
     if payload.items_upsert:
         for ci in payload.items_upsert:
             if ci.id is not None:
-                # 更新：批次生产中 → 跳过，不报错（删除仍会报错）
-                if ci.id in blocked_ids:
-                    continue
+                # 更新：批次生产中 → 生产性字段（数量/时间/批号等）跳过，不报错（删除仍会报错）
                 item = await repo.get_plan_item(db, ci.id)
                 if not item:
                     raise NotFoundException("计划项", str(ci.id))
+                if ci.id in blocked_ids:
+                    # 纯展示的备注不受批次生产状态限制，否则用户输入会被静默吞掉
+                    if "remark" in ci.model_fields_set:
+                        item.remark = ci.remark
+                        item.updated_by = user.id if user else None
+                    continue
                 if ci.batch_no is not None and ci.batch_no != item.batch_no:
                     await _check_batch_no_unique(db, ci.batch_no, ci.id)
                 update_data = ci.model_dump(exclude_unset=True, exclude={"id"})

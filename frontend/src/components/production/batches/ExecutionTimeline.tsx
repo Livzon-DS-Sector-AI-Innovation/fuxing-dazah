@@ -102,7 +102,7 @@ export function ExecutionTimeline({
                     </Popconfirm>
                   </Space>
                 )}
-                {canSubmit && e.status === 'completed' && onBackfill && (
+                {e.can_backfill && onBackfill && (
                   <Button size="small" onClick={() => onBackfill(e)}>
                     补录字段
                   </Button>

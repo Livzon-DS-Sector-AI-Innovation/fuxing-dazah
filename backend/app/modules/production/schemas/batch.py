@@ -110,3 +110,6 @@ class BatchNoUpdateIn(BaseModel):
 class BatchDetailOut(BatchOut):
     executions: list[ExecutionOut] = []
     computed_fields: list[ComputedFieldValueOut] = []
+    # service 组装时按当前用户填充（complete_batch 口径 + in_progress 状态）；
+    # 默认 False 兼容不传 user 的调用方
+    can_complete: bool = False

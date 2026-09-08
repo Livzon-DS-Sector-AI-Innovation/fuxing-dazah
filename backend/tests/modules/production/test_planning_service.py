@@ -1009,6 +1009,40 @@ class TestChangePlanOrder:
         assert batch is not None and batch.quantity == 99
         assert allocs[0].allocated_quantity == 99
 
+    async def test_change_blocked_item_still_updates_remark(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """批次已投产的计划项：生产性字段（数量）跳过，纯展示的备注仍可更新。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "in_progress"
+        await db_session.flush()
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="改备注",
+                items_upsert=[
+                    PlanItemChangeItem(
+                        id=item.id, planned_quantity=77, remark="投产后补的备注",
+                    ),
+                ],
+            ),
+            test_user,
+        )
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.remark == "投产后补的备注"
+        # 数量仍被生产状态拦下，批次/分配不受影响
+        assert refreshed.planned_quantity != 77
+        assert batch.quantity != 77
+        assert allocs[0].allocated_quantity != 77
+
 
 # ═══════════════════════════════════════════
 # 追溯与排程视图

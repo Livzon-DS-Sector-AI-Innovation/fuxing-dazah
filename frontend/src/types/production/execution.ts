@@ -37,6 +37,8 @@ export interface Execution {
   equipments: EquipmentSnapshot[]
   field_values: FieldValue[]
   missing_required_fields?: MissingField[]
+  /** 批次详情接口按当前用户填充（权限+状态）；单条执行接口不填 */
+  can_backfill?: boolean | null
 }
 
 export interface MissingField {

@@ -194,7 +194,7 @@ async def require_batch_owner_access(user_id: uuid.UUID, batch: "Batch") -> None
     raise ForbiddenException("该批次归属其他负责人，仅读")
 
 
-async def require_operator_access(
+async def _operator_access_denial_reason(
     db: AsyncSession,
     user_id: uuid.UUID,
     node_id: uuid.UUID,
@@ -202,8 +202,8 @@ async def require_operator_access(
     stage_name: str | None,
     batch: "Batch | None",
     execution: "NodeExecution | None" = None,
-) -> None:
-    """执行层工序操作权限：工段/工序负责人校验 + 归属他人批次的豁免。
+) -> str | None:
+    """执行层归属判定（唯一口径）：返回 None=有权限，否则返回拒绝原因。
 
     合并 require_stage_permission 与 has_node_assignment 的两次
     NodeAssignment 查询为一次：工段不匹配时用于权限兜底，归属他人批次时
@@ -212,6 +212,9 @@ async def require_operator_access(
     单次执行负责人（开始工序时指定的 execution.owner_id）直接放行：
     实际执行人可结束/补录/中止自己这一次执行，不受批次归属隔离限制；
     该豁免不授予任何其他批次或工序的操作权。
+
+    check_operator_access（bool）与 require_operator_access（抛异常）
+    都基于本函数，保证写接口校验与只读场景的 can_* 标志永远同口径。
     """
     if (
         execution is not None
@@ -220,9 +223,9 @@ async def require_operator_access(
         and execution.node_id == node_id
         and (batch is None or execution.batch_id == batch.id)
     ):
-        return
+        return None
     if stage_name is None:
-        raise ForbiddenException("您没有该工段的操作权限")
+        return "您没有该工段的操作权限"
     has_stage = any(
         s.stage_name == stage_name and s.route_id == route_id
         for s in await repo.get_user_stages(db, user_id)
@@ -239,6 +242,40 @@ async def require_operator_access(
             n.node_id == node_id and n.route_id == route_id for n in user_nodes
         )
     if not has_stage and not node_assigned:
-        raise ForbiddenException("您没有该工段的操作权限")
+        return "您没有该工段的操作权限"
     if owner_batch is not None and not node_assigned:
-        await require_batch_owner_access(user_id, owner_batch)
+        # 归属他人批次且无工序负责人豁免：与 require_batch_owner_access 同口径
+        return "该批次归属其他负责人，仅读"
+    return None
+
+
+async def check_operator_access(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    node_id: uuid.UUID,
+    route_id: uuid.UUID,
+    stage_name: str | None,
+    batch: "Batch | None",
+    execution: "NodeExecution | None" = None,
+) -> bool:
+    """require_operator_access 的 bool 版（详情标志等只读场景复用）。"""
+    return await _operator_access_denial_reason(
+        db, user_id, node_id, route_id, stage_name, batch, execution
+    ) is None
+
+
+async def require_operator_access(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    node_id: uuid.UUID,
+    route_id: uuid.UUID,
+    stage_name: str | None,
+    batch: "Batch | None",
+    execution: "NodeExecution | None" = None,
+) -> None:
+    """执行层工序操作权限：工段/工序负责人校验 + 归属他人批次的豁免。"""
+    reason = await _operator_access_denial_reason(
+        db, user_id, node_id, route_id, stage_name, batch, execution
+    )
+    if reason is not None:
+        raise ForbiddenException(reason)

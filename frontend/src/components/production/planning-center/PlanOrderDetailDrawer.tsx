@@ -806,13 +806,13 @@ export function PlanOrderDetailDrawer({ orderId, onClose, changeReason }: Props)
                     {
                       title: '数量',
                       dataIndex: 'planned_quantity',
-                      width: 60,
+                      width: 100,
                       render: (v: number | null, record: PlanItem) => (
                         <InputNumber
                           size="small"
                           value={v}
                           min={0}
-                          style={{ width: 72 }}
+                          style={{ width: 80 }}
                           onChange={val => updateLocalItem(record.id, { planned_quantity: val ?? undefined })}
                         />
                       ),
