@@ -11,7 +11,7 @@
   （无草稿落库）、产品名称不在选项集 → error 引导（product_not_found）、
   单位不在选项集 → error（unit_invalid）、齐全 → 草稿 + 用途默认「销售」
   + 单位归一 + 确认卡片（成品分支文案，dry-run 捕获）+ 用途/温度计选集
-  未命中附 warning（不阻断）+ 快递号人工补填预告；
+  未命中附 warning（不阻断）；
 - SCENE_CONFIG：finished_outbound 已注册确认回调（票02 落地）；
 - submit_outbound：状态前置（非 confirmed 拒绝）；快递号为空 → 回执 note
   无推送提示（FakeAdapter，不触网）；
@@ -25,8 +25,8 @@ live 主接缝 + 推送链（真 LLM + 真 Base，单会话串行两段）：
   成品分支）→ 点确认 → 写成品出库台账（record_id 精记 finally 删）→
   读回一致（批号/出库量/单位/客户/出库日期）→ 回执 note 含快递推送引导
   「要推送给谁？回复 group:群ID 或 user:open_id」；⚠ 快递号为附件字段
-  （type 17）降级不写入（SUBMIT_FINISHED_EXPRESS_ENABLED 降级开关 + 回执
-  标注人工补填，见 submit.py 开关注释）；
+  写入 API 专用文本字段「快递号(API)」（2026-09-07 新建，原字段为附件类型
+  type 17 无法写文本）；
 - 推送链：用户回复「推送给 group:oc_test_target」→ LLM 调 send_card
   （S1 确认门）→ 预览卡片（dry-run 捕获，内容含快递号）→ 点确认发送 →
   「📦 发货通知」外发卡片捕获（含快递号）。
@@ -77,7 +77,6 @@ from app.modules.warehouse.agent.pipeline.draft_flow import DraftFlowError
 from app.modules.warehouse.agent.pipeline.submit import (
     FINISHED_CHECK_FIELDS,
     FINISHED_OUTBOUND_TABLE,
-    SUBMIT_FINISHED_EXPRESS_ENABLED,
     _today_ms,
     build_finished_fields,
     submit_outbound,
@@ -197,7 +196,8 @@ def _finished_fields_for_test() -> dict[str, FieldMeta]:
         "温度计": FieldMeta(
             type=FIELD_TYPE_SELECT, options=("已开启", "未开启", "无")
         ),
-        "快递号": FieldMeta(type=FIELD_TYPE_ATTACHMENT),
+        "快递号(API)": FieldMeta(type=1),  # 2026-09-07 新建 API 专用文本字段
+        "快递号": FieldMeta(type=FIELD_TYPE_ATTACHMENT),  # 原附件字段（保留）
         "备注": FieldMeta(type=1),
     }
 
@@ -321,7 +321,6 @@ class FakeAdapter:
 
 def test_build_finished_fields_mapping_full(monkeypatch: pytest.MonkeyPatch) -> None:
     """全字段映射（快递号开关置 True）：数量数字化、只读字段拒写、日期=当天。"""
-    monkeypatch.setattr(submit_module, "SUBMIT_FINISHED_EXPRESS_ENABLED", True)
     draft = _finished_draft_row(
         {
             "product_name": "硫酸黏菌素",
@@ -348,7 +347,7 @@ def test_build_finished_fields_mapping_full(monkeypatch: pytest.MonkeyPatch) -> 
     assert fields["单位"] == "十亿"
     assert fields["销售客户"] == "can"
     assert fields["用途"] == "销售"
-    assert fields["快递号"] == "SF123456"  # 开关置 True：透传
+    assert fields["快递号(API)"] == "SF123456"  # 开关置 True：透传
     assert fields["温度计"] == "已开启"
     assert fields["备注"] == "备注文本"
     assert fields["出库日期"] == _today_ms(date(2026, 9, 7))
@@ -359,9 +358,8 @@ def test_build_finished_fields_mapping_full(monkeypatch: pytest.MonkeyPatch) -> 
     validate_write_fields(FINISHED_OUTBOUND_TABLE, fields)
 
 
-def test_build_finished_fields_express_degraded_by_default() -> None:
-    """快递号降级开关默认 False：附件字段不写入 + degraded 标注（其余正常）。"""
-    assert SUBMIT_FINISHED_EXPRESS_ENABLED is False
+def test_build_finished_fields_express_writes_new_text_field() -> None:
+    """快递号写入 API 专用文本字段「快递号(API)」（原字段为附件类型不可写文本）。"""
     draft = _finished_draft_row(
         {
             "product_name": "硫酸黏菌素",
@@ -375,10 +373,9 @@ def test_build_finished_fields_express_degraded_by_default() -> None:
     fields, degraded = build_finished_fields(
         draft, table_fields=_finished_fields_for_test(), today=date(2026, 9, 7)
     )
-    assert "快递号" in degraded
-    assert "快递号" not in fields
-    assert fields["出库量"] == 225000 and fields["单位"] == "十亿"
-    assert fields["销售客户"] == "can"
+    assert fields["快递号(API)"] == "SF123456"
+    assert "快递号(API)" not in degraded
+    assert degraded == []
     validate_write_fields(FINISHED_OUTBOUND_TABLE, fields)
 
 
@@ -531,7 +528,7 @@ async def test_create_finished_draft_success_with_card(
     assert result["fields"]["purpose"] == "销售"
     assert result["fields"]["thermometer"] == "不存在的档位"
     # 预告：快递号附件字段人工补填 + 温度计选集未命中（均不阻断登记）
-    assert any("快递号" in w for w in result["warnings"])
+    assert not any("快递号需在 Base 人工补填" in w for w in result["warnings"])
     assert any("温度计" in w for w in result["warnings"])
 
     drafts = await _finished_drafts(agent_db, "ou_fin_ok")
@@ -586,7 +583,7 @@ def test_scene_config_finished_registration() -> None:
         "unit",
         "customer",
     )
-    # 可写字段集：9 个（出库日期恒写 + 8 收集字段），排除 快递号（附件降级）
+    # 可写字段集：10 个（出库日期恒写 + 9 收集字段，含 快递号(API)）
     # 与 品规/各品种库存/质量状态/库存数量/出库人（公式/lookup/created_user）
     assert set(config.writable_fields) == {
         "出库日期",
@@ -598,6 +595,7 @@ def test_scene_config_finished_registration() -> None:
         "用途",
         "温度计",
         "备注",
+        "快递号(API)",
     }
 
 
@@ -646,14 +644,14 @@ def test_render_finished_result_card_titles() -> None:
             "销售客户": "can",
         },
         "record_id": "recFIN001",
-        "degraded": ["快递号"],
+        "degraded": [],
     }
     card = render_receipt_result_card(draft, check)
     assert card["header"]["title"]["content"] == FINISHED_RESULT_CARD_TITLE_OK
     assert card["header"]["template"] == "green"
     content = _card_content(card)
     assert FINISHED_CHECK_OK_LINE in content
-    assert "快递号需在 Base 人工补填" in content  # 附件字段专属降级提示
+    assert "快递号需在 Base 人工补填" not in content  # 新字段写入，无降级提示
 
     mismatch = render_receipt_result_card(
         draft,
@@ -701,9 +699,10 @@ async def test_submit_outbound_note_without_express_no_push_hint(
     assert "推送" not in note and "快递" not in note
     assert draft.status == "submitted"
     assert draft.target_record_id == FakeAdapter.record_id
+    # 快递号未收集 → 不写入（含新字段）
+    assert "快递号(API)" not in fake.created
     # 写入字段：出库日期 + 8 收集字段中的 5 必收；无快递号
     assert fake.created is not None
-    assert "快递号" not in fake.created
     assert fake.created["出库量"] == 225000
 
     # 审计 + 回执卡片
@@ -759,7 +758,9 @@ async def test_update_draft_finished_scene_fields_and_resend(
     assert "出库量：200" in _card_content(cards[-1])
 
     # submit 真身对应的 CHECK_FIELDS 口径（批号/出库量/单位/客户）
-    assert FINISHED_CHECK_FIELDS == ("产品批号", "出库量", "单位", "销售客户")
+    assert FINISHED_CHECK_FIELDS == (
+    ("产品批号", "出库量", "单位", "销售客户", "快递号(API)")
+)
 
 
 # ── 6. live 主接缝 + 推送链：对话 → 草稿 → 确认 → 写 Base → 推送 ──
@@ -843,7 +844,7 @@ async def test_live_finished_dialog_submit_push_full_flow(
 
     try:
         # 读回核对：批号/出库量/单位/客户/出库日期 落库且读回一致；
-        # 快递号为附件字段降级不写入（degraded 标注人工补填）
+        # 快递号写入 API 专用文本字段（新字段可写可读回）
         record = await adapter.get_record(FINISHED_OUTBOUND_TABLE, record_id)
         read_fields = record["fields"]
         assert "TEST-X2609" in str(read_fields.get("产品批号"))
@@ -851,7 +852,7 @@ async def test_live_finished_dialog_submit_push_full_flow(
         assert "十亿" in str(read_fields.get("单位"))
         assert "can" in str(read_fields.get("销售客户"))
         assert read_fields.get("出库日期") is not None
-        assert not read_fields.get("快递号")  # 降级：未写入
+        assert read_fields.get("快递号(API)"), "新字段应写入并可读回"
         # 读回一致（audit 无 mismatch + degraded 标注快递号）
         assert "不一致" not in outcome.message.split("\n")[0]
         submit_audits = await _list_audits(
@@ -863,7 +864,7 @@ async def test_live_finished_dialog_submit_push_full_flow(
         # 只读字段拒写：不进入写入字段
         assert "品规" not in submit_audits[0].args_summary["fields"]
         assert "出库人" not in submit_audits[0].args_summary["fields"]
-        assert "快递号" in submit_audits[0].args_summary["degraded"]  # 降级标注
+        assert "快递号" not in submit_audits[0].args_summary.get("degraded", [])  # 不再降级
         print(
             f"\n[live 成品出库] draft_no={draft.draft_no} record_id={record_id} "
             f"fields={submit_audits[0].args_summary['fields']} "
@@ -879,7 +880,7 @@ async def test_live_finished_dialog_submit_push_full_flow(
     assert result_cards, "成品回执卡片未被捕获"
     result_content = _card_content(result_cards[-1])
     assert record_id in result_content
-    assert "快递号需在 Base 人工补填" in result_content
+    assert "快递号需在 Base 人工补填" not in result_content
 
     # ── ② 推送链：用户回复目标 → send_card 确认门 → 确认发送 ──
     push_event = _im_message_event(

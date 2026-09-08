@@ -295,6 +295,9 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '单位': FieldMeta(type=3, options=('kg', '瓶', 'L',)),
         '领用数量': FieldMeta(type=2),
         '生产批号': FieldMeta(type=1),
+        # 2026-09-07 新建：原「物料批号」单选被 Base 侧字段级编辑限制拒写（1254062），
+        # API 专用文本字段绕开（fldv2oSe4I）
+        '物料批号(API)': FieldMeta(type=1),
         '物料大类': FieldMeta(type=19),
     },
 
@@ -315,6 +318,9 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '品规': FieldMeta(type=20),
         '各品种库存': FieldMeta(type=19),
         '产品批号': FieldMeta(type=1),
+        # 2026-09-07 新建：原「快递号」为附件类型（type 17）文本单号无法写入，
+        # API 专用文本字段绕开（fldIoeIRHI）
+        '快递号(API)': FieldMeta(type=1),
         '出库量': FieldMeta(type=2),
         '单位': FieldMeta(type=3, options=('kg', '十亿', 'g',)),
         '销售客户': FieldMeta(type=1),

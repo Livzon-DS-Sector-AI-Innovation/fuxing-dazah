@@ -33,7 +33,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.agent.pipeline import draft_flow
-from app.modules.warehouse.agent.pipeline.submit import SUBMIT_GMP_BATCH_ENABLED
 from app.modules.warehouse.agent.tools.draft_update import map_fields
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
 from app.modules.warehouse.bitable_schema import (
@@ -220,10 +219,6 @@ async def create_gmp_draft(
 
     # 5. 领用部门/领用品种（自由收集单选）：选集未命中附 warning（不阻断）
     warnings: list[str] = []
-    if not SUBMIT_GMP_BATCH_ENABLED:
-        # Base 侧字段编辑限制（见 submit.SUBMIT_GMP_BATCH_ENABLED 注释）——
-        # 提交时批号不落 Base，提前告知用户
-        warnings.append("物料批号需在 Base 人工补填（Base 侧字段编辑限制）")
     for key, field_name in GMP_SOFT_SELECT_FIELDS.items():
         value = mapped.get(key)
         if value is None:

@@ -20,8 +20,8 @@ live 主接缝（真 LLM + 真 Base，无数据集依赖）：
   MA-ET-2026-050A，领用部门提炼工程一部」→ 草稿 → 确认卡片（dry-run 捕获，
   GMP 分支）→ 点确认 → 写 GMP 出库总账（record_id 精记 finally 删）→
   读回一致（数量/单位/生产批号等）→ 回执卡片；
-  ⚠ 物料批号因 Base 侧字段编辑限制降级不写入（SUBMIT_GMP_BATCH_ENABLED
-  降级开关 + 回执标注人工补填，见 submit.py 开关注释）；
+  物料批号写入 API 专用文本字段「物料批号(API)」（2026-09-07 新建，
+  绕开原单选字段的 Base 编辑限制）；
 - 缺字段追问：「三氯甲烷 10423-260601 出库 25kg」（缺生产批号）→ 工具返回
   missing，LLM 追问而非硬写（无草稿落库、不写 Base）。
 
@@ -66,7 +66,6 @@ from app.modules.warehouse.agent.pipeline import (
     create_dialog_draft,
     send_confirm_card,
 )
-from app.modules.warehouse.agent.pipeline import submit as submit_module
 from app.modules.warehouse.agent.pipeline.draft_flow import DraftFlowError
 from app.modules.warehouse.agent.pipeline.submit import (
     GMP_CHECK_FIELDS,
@@ -166,9 +165,10 @@ def gmp_unit_env(
 def _gmp_fields_for_test() -> dict[str, FieldMeta]:
     """gmp_outbound 字段元数据（单测注入；批号选项集为受控子集）。"""
     return {
+        "物料批号(API)": FieldMeta(type=1),  # 2026-09-07 新建 API 专用文本字段
         "物料批号": FieldMeta(
             type=FIELD_TYPE_SELECT, options=("10407-260802", "10423-260601")
-        ),
+        ),  # 原单选字段（工具批号合法性校验仍用其选项集）
         "单据类型": FieldMeta(type=FIELD_TYPE_SELECT, options=("出库", "退库")),
         "领用品种": FieldMeta(type=FIELD_TYPE_SELECT, options=()),
         "领用部门": FieldMeta(
@@ -275,7 +275,6 @@ def test_build_gmp_fields_mapping_lookup_rejected_and_today(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """全字段映射（开关置 True）：数量数字化、lookup 拒写、日期=当天毫秒。"""
-    monkeypatch.setattr(submit_module, "SUBMIT_GMP_BATCH_ENABLED", True)
     draft = _gmp_draft_row(
         {
             "material_batch_no": "10407-260802",
@@ -294,7 +293,7 @@ def test_build_gmp_fields_mapping_lookup_rejected_and_today(
     )
 
     assert degraded == []
-    assert fields["物料批号"] == "10407-260802"
+    assert fields["物料批号(API)"] == "10407-260802"
     assert fields["领用数量"] == 25 and isinstance(fields["领用数量"], int)
     assert fields["单位"] == "kg"
     assert fields["生产批号"] == "MA-ET-2026-050A"
@@ -309,26 +308,11 @@ def test_build_gmp_fields_mapping_lookup_rejected_and_today(
     validate_write_fields(GMP_OUTBOUND_TABLE, fields)
 
 
-def test_build_gmp_fields_batch_degraded_by_default() -> None:
-    """批号降级开关默认 False：物料批号不写入 + degraded 标注（Base 字段限制）。"""
-    assert submit_module.SUBMIT_GMP_BATCH_ENABLED is False
-    draft = _gmp_draft_row(
-        {"material_batch_no": "10407-260802", "quantity": "25", "unit": "kg"}
-    )
-    fields, degraded = build_gmp_fields(
-        draft, table_fields=_gmp_fields_for_test(), today=date(2026, 9, 7)
-    )
-    assert "物料批号" in degraded
-    assert "物料批号" not in fields
-    assert fields["领用数量"] == 25 and fields["单位"] == "kg"
-    validate_write_fields(GMP_OUTBOUND_TABLE, fields)
-
 
 def test_build_gmp_fields_select_mismatch_and_bad_quantity_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """单位不在选项集 → 跳过 + degraded；数量非数字 → 跳过 + degraded。"""
-    monkeypatch.setattr(submit_module, "SUBMIT_GMP_BATCH_ENABLED", True)
     draft = _gmp_draft_row(
         {
             "material_batch_no": "10407-260802",
@@ -345,7 +329,7 @@ def test_build_gmp_fields_select_mismatch_and_bad_quantity_skipped(
 
     assert "单位" in degraded and "单位" not in fields
     assert "领用数量" in degraded and "领用数量" not in fields
-    assert fields["物料批号"] == "10407-260802"
+    assert fields["物料批号(API)"] == "10407-260802"
     assert fields["生产批号"] == "MA-1"
     assert fields["日期"] == _today_ms(date(2026, 9, 7))
     validate_write_fields(GMP_OUTBOUND_TABLE, fields)
@@ -443,7 +427,7 @@ async def test_create_gmp_draft_success_with_card(
     assert result["fields"]["doc_type"] == "出库"
     assert result["fields"]["unit"] == "kg"
     # 预告：批号 Base 编辑限制降级 + 领用部门选集未命中（均不阻断登记）
-    assert any("物料批号" in w for w in result["warnings"])
+    assert not any("物料批号需在 Base 人工补填" in w for w in result["warnings"])
     assert any("领用部门" in w for w in result["warnings"])
 
     drafts = await _gmp_drafts(agent_db, "ou_gmp_ok")
@@ -497,7 +481,7 @@ def test_scene_config_structure_and_registration() -> None:
     )
     # 可写字段集：含全部可写项，排除 lookup/创建人（拒写）
     assert set(gmp_config.writable_fields) == {
-        "物料批号",
+        "物料批号(API)",
         "日期",
         "单据类型",
         "领用品种",
@@ -557,7 +541,7 @@ def test_render_gmp_result_card_titles() -> None:
     check = {
         "consistent": True,
         "mismatches": [],
-        "written": {"物料批号": "10407-260802", "领用数量": 25, "单位": "kg"},
+        "written": {"物料批号(API)": "10407-260802", "领用数量": 25, "单位": "kg"},
         "record_id": "recGMP001",
         "degraded": [],
     }
@@ -625,7 +609,7 @@ async def test_update_draft_gmp_scene_fields_and_resend(
     assert "数量：30" in _card_content(cards[-1])
 
     # submit 真身对应的 CHECK_FIELDS 口径（批号/数量/单位）
-    assert GMP_CHECK_FIELDS == ("物料批号", "领用数量", "单位")
+    assert GMP_CHECK_FIELDS == ("物料批号(API)", "领用数量", "单位")
 
 
 # ── 6. live 主接缝：对话 → 草稿 → 确认 → 写 Base（record_id 精记 finally 删）──
@@ -694,7 +678,7 @@ async def test_live_gmp_dialog_submit_full_flow(
 
     try:
         # 读回核对：数量/单位/生产批号/日期/部门 落库且读回一致；
-        # 物料批号因 Base 侧字段编辑限制降级不写入（degraded 标注人工补填）
+        # 物料批号写入 API 专用文本字段「物料批号(API)」（2026-09-07 新建绕开 Base 限制）
         record = await adapter.get_record(GMP_OUTBOUND_TABLE, record_id)
         read_fields = record["fields"]
         assert float(read_fields.get("领用数量")) == 25
@@ -703,7 +687,7 @@ async def test_live_gmp_dialog_submit_full_flow(
         assert read_fields.get("日期") is not None
         assert "出库" in str(read_fields.get("单据类型"))
         assert "提炼工程一部" in str(read_fields.get("领用部门"))
-        assert not read_fields.get("物料批号")  # 降级：未写入
+        assert read_fields.get("物料批号(API)"), "新字段应写入并可读回"
         # 读回一致（回执无 ⚠ + audit 无 mismatch + degraded 标注批号）
         assert "不一致" not in outcome.message
         submit_audits = await _list_audits(
@@ -713,7 +697,7 @@ async def test_live_gmp_dialog_submit_full_flow(
         assert submit_audits[0].result_status == "ok"
         assert submit_audits[0].error_code is None
         assert "物料名称" not in submit_audits[0].args_summary["fields"]  # lookup 拒写
-        assert "物料批号" in submit_audits[0].args_summary["degraded"]  # 降级标注
+        assert "物料批号" not in submit_audits[0].args_summary.get("degraded", [])  # 不再降级
         print(
             f"\n[live GMP] draft_no={draft.draft_no} record_id={record_id} "
             f"fields={submit_audits[0].args_summary['fields']} "
@@ -729,7 +713,7 @@ async def test_live_gmp_dialog_submit_full_flow(
     assert result_cards, "GMP 回执卡片未被捕获"
     result_content = _card_content(result_cards[-1])
     assert record_id in result_content
-    assert "物料批号需在 Base 人工补填" in result_content
+    assert "物料批号(API)" in str(submit_audits) or "物料批号(API)" in result_content
 
 
 async def test_live_gmp_missing_field_asks(

@@ -17,12 +17,12 @@ scene=gmp_outbound 同款链路（S3 ticket 01）：submit_gmp 写 gmp_outbound
 
 scene=finished_outbound 同款链路（S3 ticket 02）：submit_outbound 写
 finished_outbound（成品出库台账）——读回核对（批号/出库量/单位/客户）+
-audit（tool_name="submit_outbound"）；快递号为附件字段（type 17）文本单号
-无法写入（SUBMIT_FINISHED_EXPRESS_ENABLED 降级开关，同批号降级机制）；
+audit（tool_name="submit_outbound"）；快递号写入 API 专用文本字段
+「快递号(API)」（原字段为附件类型 type 17 无法写文本）；
 登记了快递号时回执 note 附加推送引导（用户回复 group:/user: 目标后经
 send_card 确认门发送发货通知，spec 决策 3）。
 
-**物料批号降级**（``SUBMIT_GMP_BATCH_ENABLED`` 开关注释）：测试版 Base 对
+**物料批号写入 API 专用文本字段「物料批号(API)」**（原单选字段被 Base 侧：测试版 Base 对
 该字段存在编辑限制（任何合法选项值均 1254062），submit 跳过批号写入，
 回执卡片与 audit 标注「需人工在 Base 补填」；Base 放开后置 True 恢复
 自动写入。
@@ -438,12 +438,14 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
 GMP_OUTBOUND_TABLE = "gmp_outbound"
 
 # 读回核对关键字段（spec 决策 1：批号/数量/单位）
-GMP_CHECK_FIELDS: tuple[str, ...] = ("物料批号", "领用数量", "单位")
+GMP_CHECK_FIELDS: tuple[str, ...] = ("物料批号(API)", "领用数量", "单位")
 
 # canonical 键 → (Base 字段名, 是否单选)；material_name（lookup 拒写）与
 # 日期（恒写当天）单独处理
 _GMP_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
-    ("material_batch_no", "物料批号", True),
+    # 物料批号写入 API 专用文本字段（原「物料批号」单选被 Base 侧字段级
+    # 编辑限制拒写 1254062，2026-09-07 新建文本字段绕开，见 spec/记忆）
+    ("material_batch_no", "物料批号(API)", False),
     ("doc_type", "单据类型", True),
     ("category", "领用品种", True),
     ("department", "领用部门", True),
@@ -451,16 +453,6 @@ _GMP_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
     ("quantity", "领用数量", False),
     ("production_batch_no", "生产批号", False),
 )
-
-# 物料批号降级开关（spec 决策 1；S2 SUBMIT_MATERIAL_NAME_ENABLED 同款机制）：
-# 测试版 GMP Base 实测对「物料批号」单选字段存在字段级编辑限制——任何合法
-# 选项值的 create/update 写入均被拒（1254062 SingleSelectFieldConvFail；
-# 同表 单位/单据类型/领用部门 写入正常，同 Base gmp_receipt 整表拒写，
-# 疑似高级权限字段配置问题，需 Base 管理员在飞书侧放开）。置 False 跳过
-# 批号写入，回执卡片与 audit 标注「需人工在 Base 补填」；Base 放开后置
-# True 即恢复自动写入（代码无其他改动）。
-SUBMIT_GMP_BATCH_ENABLED = False
-
 
 def _today_ms(today: date | None = None) -> int:
     """当天日期 → 毫秒时间戳（飞书 datetime 写入契约；UTC 零点即北京当天
@@ -521,9 +513,6 @@ def build_gmp_fields(
             if not adapted:
                 continue
             text = adapted
-        if key == "material_batch_no" and not SUBMIT_GMP_BATCH_ENABLED:
-            degraded.append(field_name)  # Base 字段编辑限制（见开关注释）
-            continue
         fields[field_name] = text
 
     fields["日期"] = _today_ms(today)
@@ -644,7 +633,13 @@ async def _build_and_validate_gmp(
 FINISHED_OUTBOUND_TABLE = "finished_outbound"
 
 # 读回核对关键字段（票02 验收：批号/出库量/单位/客户）
-FINISHED_CHECK_FIELDS: tuple[str, ...] = ("产品批号", "出库量", "单位", "销售客户")
+FINISHED_CHECK_FIELDS: tuple[str, ...] = (
+    "产品批号",
+    "出库量",
+    "单位",
+    "销售客户",
+    "快递号(API)",
+)
 
 # canonical 键 → (Base 字段名, 是否单选)；quantity 数字化单独分支，出库日期
 # 恒写当天单独处理；express_no（快递号，附件字段）走降级开关
@@ -655,19 +650,12 @@ _FINISHED_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
     ("customer", "销售客户", False),
     ("purpose", "用途", True),
     ("thermometer", "温度计", True),
-    ("express_no", "快递号", False),
+    # 快递号写入 API 专用文本字段（原「快递号」为附件类型 type 17，
+    # 文本单号无法写入，2026-09-07 新建文本字段绕开）
+    ("express_no", "快递号(API)", False),
     ("remark", "备注", False),
     ("quantity", "出库量", False),
 )
-
-# 快递号降级开关（S3 ticket 02；SUBMIT_GMP_BATCH_ENABLED 同款机制）：成品
-# 出库台账「快递号」字段为附件类型（bitable_schema type 17 =
-# FIELD_TYPE_ATTACHMENT，写入需 file_token 数组）——文本快递单号无法写入，
-# 置 False 跳过写入，回执卡片与 audit 标注「需人工在 Base 补填」；快递号
-# 本身保留在草稿/回执/推送卡片内容中（快递推送链正常使用）。若 Base 侧将
-# 该字段改为文本类型，置 True 即恢复自动写入（代码无其他改动）。
-SUBMIT_FINISHED_EXPRESS_ENABLED = False
-
 
 async def _finished_table_fields() -> dict[str, FieldMeta]:
     """finished_outbound 字段元数据（运行时选项集优先，静态快照兜底）。
@@ -722,9 +710,6 @@ def build_finished_fields(
             if not adapted:
                 continue
             text = adapted
-        if key == "express_no" and not SUBMIT_FINISHED_EXPRESS_ENABLED:
-            degraded.append(field_name)  # 附件字段（见开关注释）
-            continue
         fields[field_name] = text
 
     fields["出库日期"] = _today_ms(today)

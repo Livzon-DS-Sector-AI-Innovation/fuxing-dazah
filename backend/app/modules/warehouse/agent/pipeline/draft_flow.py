@@ -497,7 +497,8 @@ async def _finished_submit_callback(
 # receipt 沿用识别必提集合；gmp_outbound 对话必收四件套 + 可写八字段
 # （物料名称为 lookup 拒写，不在此列——仅确认卡片展示）；finished_outbound
 # 对话必收五件套 + 可写九字段（品规/各品种库存/质量状态/库存数量为公式/
-# lookup、出库人为 created_user 拒写；快递号为附件字段走 submit 侧降级）。
+# lookup、出库人为 created_user 拒写；快递号写 API 专用文本字段
+# 「快递号(API)」（原字段为附件类型 type 17））。
 SCENE_CONFIG: dict[str, SceneConfig] = {
     RECEIPT_SCENE: SceneConfig(
         name_cn="入库识别",
@@ -527,7 +528,7 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "production_batch_no",
         ),
         writable_fields=(
-            "物料批号",
+            "物料批号(API)",
             "日期",
             "单据类型",
             "领用品种",
@@ -557,6 +558,7 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "用途",
             "温度计",
             "备注",
+            "快递号(API)",
         ),
         submit=_finished_submit_callback,
     ),

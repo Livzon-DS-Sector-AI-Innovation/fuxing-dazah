@@ -887,7 +887,7 @@ RECEIPT_CHECK_OK_LINE = "✅ 数量/批号/单位/供应商 与 Base 读回一�
 GMP_CHECK_OK_LINE = "✅ 批号/数量/单位 与 Base 读回一致"
 FINISHED_CHECK_OK_LINE = "✅ 批号/出库量/单位/客户 与 Base 读回一致"
 
-# GMP 物料批号降级提示（submit.SUBMIT_GMP_BATCH_ENABLED=False 时批号不写
+# GMP 物料批号写入 API 专用文本字段（2026-09-07 新建；原单选字段
 # 入——Base 侧字段编辑限制，放开后置 True 提示随之消失）
 GMP_DEGRADE_BATCH_HINT = (
     "⚠ 物料批号需在 Base 人工补填（Base 侧字段编辑限制，放开后自动写入）"
@@ -900,7 +900,7 @@ RECEIPT_DEGRADE_MATERIAL_HINT = (
 )
 
 # 成品快递号降级提示（S3 ticket 02：附件字段 type 17 写入需 file_token，
-# 文本快递单号无法自动写入——见 submit.SUBMIT_FINISHED_EXPRESS_ENABLED
+# 快递号写入 API 专用文本字段（原字段为附件类型 type 17）
 # 开关注释；快递号仍用于推送卡片内容）
 FINISHED_DEGRADE_EXPRESS_HINT = (
     "⚠ 快递号需在 Base 人工补填（附件字段，文本快递单号无法自动写入）"

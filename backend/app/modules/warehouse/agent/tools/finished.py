@@ -19,7 +19,7 @@ LLM 从对话收集字段后调用本工具（与 GMP ``create_gmp_draft`` 同�
 注意：快递号在成品出库台账为附件字段（type 17，写入需 file_token），
 文本快递单号无法写入 Base——收集值保留在草稿/确认卡片/回执/推送卡片中
 （快递推送链使用），submit 侧降级标注人工补填（见
-submit.SUBMIT_FINISHED_EXPRESS_ENABLED 开关注释）。
+写入 API 专用文本字段「快递号(API)」）。
 
 工具上下文/数据库访问模式与 gmp.py/draft_update.py 相同：``execute_tool``
 注入 ``_ctx``（{"session_id", "chat_id", "open_id"}）；工具内自开事务
@@ -36,9 +36,6 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.agent.pipeline import draft_flow
-from app.modules.warehouse.agent.pipeline.submit import (
-    SUBMIT_FINISHED_EXPRESS_ENABLED,
-)
 from app.modules.warehouse.agent.tools.draft_update import map_fields
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
 from app.modules.warehouse.bitable_schema import (
@@ -235,8 +232,6 @@ async def create_finished_outbound_draft(
     # 5. 用途/温度计（软校验单选）：选集未命中附 warning（不阻断）；快递号
     #    为附件字段——提前告知需人工补填（不阻断登记）
     warnings: list[str] = []
-    if mapped.get("express_no") and not SUBMIT_FINISHED_EXPRESS_ENABLED:
-        warnings.append("快递号需在 Base 人工补填（附件字段暂不支持自动写入）")
     for key, field_name in FINISHED_SOFT_SELECT_FIELDS.items():
         value = mapped.get(key)
         if value is None:
