@@ -392,16 +392,21 @@ async def send_confirm_card(
         return
     if confirm_message_id and confirm_message_id != "dry_run":
         try:
+            import asyncio as _asyncio
+
             from app.core.redis import redis_client
 
-            await redis_client.set(
-                f"wh:draft:card:{draft.id}",
-                confirm_message_id,
-                ex=600,
+            await _asyncio.wait_for(
+                redis_client.set(
+                    f"wh:draft:card:{draft.id}",
+                    confirm_message_id,
+                    ex=600,
+                ),
+                timeout=3.0,
             )
         except Exception:  # noqa: BLE001 — 存储失败仅影响卡片更新，不阻断
             logger.warning(
-                "确认卡片 message_id 存储失败: draft_no=%s", draft.draft_no
+                "确认卡片 message_id 存储失败/超时: draft_no=%s", draft.draft_no
             )
     logger.info(
         "入库确认卡片已发送: draft_no=%s chat_id=%s",

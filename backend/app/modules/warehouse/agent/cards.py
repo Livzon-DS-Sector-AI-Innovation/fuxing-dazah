@@ -810,12 +810,16 @@ def render_confirm_status_card(
     elements = [
         {"tag": "markdown", "content": status_line},
     ]
-    # 保留原卡片的字段清单（确认卡正文 index 0），去掉按钮与引导行
+    # 保留字段清单，移除确认/取消按钮（tag=action）与确认引导行——
+    # 状态卡不再提供操作入口，防止重复登记/取消（后端状态机同样拦截）
     for el in confirm_card.get("elements", []):
-        content = str(el.get("content") or "")
-        if "确认前请核对" in content or "确认登记" in content:
+        if el.get("tag") == "action":
             continue
-        elements.append(el)
+        content = str(el.get("content") or "")
+        if "💡 确认前请核对" in content:
+            content = content.split("💡 确认前请核对")[0].rstrip("；;。 \n")
+        if content:
+            elements.append({"tag": "markdown", "content": content})
     return {
         "config": {"update_multi": True},
         "header": {"title": {"tag": "plain_text", "content": title}, "template": "blue"},
