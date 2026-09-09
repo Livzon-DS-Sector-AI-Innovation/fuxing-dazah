@@ -376,3 +376,12 @@ async def test_get_runner_factory_contract() -> None:
     second = get_runner()
     assert isinstance(first, Runner)
     assert first is second
+
+
+async def test_query_stock_qc_status_note_only_on_invalid() -> None:
+    """2026-09-08 修复回归：合法 qc_status 的 note 不应出现「仅支持」提示。"""
+    ok = await query_tools.query_stock(keyword="硫酸", qc_status="放行")
+    assert "仅支持" not in (ok.get("note") or "")
+    invalid = await query_tools.query_stock(keyword="硫酸", qc_status="合格")
+    assert "仅支持" in (invalid.get("note") or "")
+    assert invalid.get("total") == 0  # 非法值过滤不到任何行

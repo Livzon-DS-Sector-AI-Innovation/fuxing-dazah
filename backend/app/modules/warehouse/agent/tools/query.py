@@ -312,6 +312,9 @@ async def query_stock(
 
     matched: list[dict[str, Any]] = []
     unparseable_expiry = 0
+    # qc_status 传了但不在合法选项集 → note 提示（行过滤匹配不到任何状态；
+    # 合法值如「放行」不应出现该提示——2026-09-08 修复 note 无条件拼接 bug）
+    invalid_qc_status = bool(qc_status and qc_status.strip() not in QC_STATUSES)
     for row in records:
         fields = row["fields"]
         if keyword and not _match_keyword(
@@ -366,7 +369,7 @@ async def query_stock(
             f"{unparseable_expiry} 条记录的有效期无法解析、未纳入临期过滤"
             if unparseable_expiry
             else "",
-            f"qc_status 仅支持 {'/'.join(QC_STATUSES)}" if qc_status else "",
+            f"qc_status 仅支持 {'/'.join(QC_STATUSES)}" if invalid_qc_status else "",
         ]
         if n
     ]
