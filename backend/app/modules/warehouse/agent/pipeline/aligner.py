@@ -170,10 +170,14 @@ def match_material(
     *,
     manufacturer: str = "",
     supplier: str = "",
+    code: str = "",
 ) -> tuple[MaterialMasterEntry | None, str, dict[str, Any]]:
-    """四级匹配：exact → prefix（双向）→ fuzzy → none。
+    """五级匹配：code → exact → prefix（双向，带防御）→ fuzzy → none。
 
     返回 (命中条目 | None, match_confidence, match_detail)。
+    - code：识别出物料代码时精确匹配主数据代码（最强锚点——手写名称 OCR
+      可能完全认错，但单据上的代码/批号前缀是可靠标识，2026-09-09 请验单
+      实测「纸箱(3#)」被认成「盐酸林可霉素」后由代码 20803 纠正）；
     - exact：归一化后精确相等；
     - prefix：识别名是主数据名前缀（forward，spec 例：'硫酸'→'硫酸铵'）
       或主数据名是识别名前缀（reverse，识别名带杂质后缀）——forward
@@ -216,6 +220,19 @@ def match_material(
     if exact:
         best = _pick_best(exact, lambda e: _aux_score(e, manu_norm, supp_norm))
         return _finalize(best, "exact")
+
+    # 0. code：识别出物料代码时最强锚点（精确匹配主数据代码）
+    code_norm = normalize_name(code) if code else ""
+    if code_norm:
+        code_hits = [
+            e for e in entries
+            if e.code and normalize_name(e.code) == code_norm
+        ]
+        if code_hits:
+            best = _pick_best(
+                code_hits, lambda e: _aux_score(e, manu_norm, supp_norm)
+            )
+            return _finalize(best, "code")
 
     # 2. prefix：双向（forward 优先，方向记入 detail）
     def _overlap(e: MaterialMasterEntry) -> float:
@@ -335,8 +352,16 @@ async def align_receipt(recognized: RecognizedReceipt) -> AlignedReceipt:
         "" if recognized.supplier is None or recognized.supplier.value is None
         else str(recognized.supplier.value)
     )
+    material_code = ""
+    mc_field = getattr(recognized, "material_code", None)
+    if mc_field is not None and mc_field.value is not None:
+        material_code = str(mc_field.value)
     entry, confidence, detail = match_material(
-        name_text, entries, manufacturer=manufacturer, supplier=supplier
+        name_text,
+        entries,
+        manufacturer=manufacturer,
+        supplier=supplier,
+        code=material_code,
     )
     aligned: dict[str, Any] = {
         "material_name": entry.name if entry is not None else name_text.strip(),
@@ -347,6 +372,9 @@ async def align_receipt(recognized: RecognizedReceipt) -> AlignedReceipt:
         "unit_suggestion": entry.unit if entry is not None else "",
         "supplier_matched": bool(detail.get("supplier_matched")),
         "manufacturer_matched": bool(detail.get("manufacturer_matched")),
+        # reverse 前缀匹配（识别名带后缀/幻觉扩展）标记——卡片提示人工核对
+        "match_direction": detail.get("direction") or "",
+        "matched_by": detail.get("matched_by") or "",
     }
     return AlignedReceipt(
         recognized=recognized,

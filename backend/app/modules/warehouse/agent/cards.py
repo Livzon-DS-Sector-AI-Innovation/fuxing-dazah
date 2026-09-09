@@ -662,7 +662,11 @@ def _field_line(
 
 
 def _aligned_line(aligned: dict[str, Any]) -> str:
-    """物料对齐行：none → 未匹配警告；非 none → 标准名+代码+大类（缺字段降级）。"""
+    """物料对齐行：none → 未匹配警告；非 none → 标准名+代码+大类+核对提示。
+
+    reverse/fuzzy 匹配（识别名带后缀或近似）附加「请核对」提示——名称
+    识别可能有误，代码/大类仅供参考。
+    """
     match = str(aligned.get("match_confidence") or "")
     if match == "none":
         return "⚠ 物料名称未匹配主数据，请核对"
@@ -671,7 +675,11 @@ def _aligned_line(aligned: dict[str, Any]) -> str:
     name = _clean(aligned.get("material_name"), 60)
     code = _clean(aligned.get("code"), 30)
     category = _clean(aligned.get("material_category"), 20)
-    return f"**物料对齐**：{name}（代码 {code}｜大类 {category}）"
+    line = f"**物料对齐**：{name}（代码 {code}｜大类 {category}）"
+    caveat = ""
+    if match == "fuzzy" or aligned.get("match_direction") == "reverse":
+        caveat = " ⚠ 按近似/前缀匹配，请核对物料名称"
+    return line + caveat
 
 
 def _render_gmp_confirm_card(draft: Any) -> dict[str, Any]:
