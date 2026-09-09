@@ -16,6 +16,7 @@ JSON 解析容错：剥 markdown 代码块与首尾杂文字；解析失败重�
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from typing import Any
@@ -241,6 +242,67 @@ async def _call_recognize(
         response.finish_reason,
     )
     return response.content or ""
+
+
+ROTATION_PROMPT = (
+    "这是一张单据/文件的照片。判断照片需要顺时针旋转多少度，"
+    "才能让单据上的文字变成正常横向可读（从左到右）。"
+    "只输出一个 JSON：{\"rotation\": 0}、{\"rotation\": 90}、"
+    "{\"rotation\": 180} 或 {\"rotation\": 270}（顺时针角度）。"
+    "如果文字已经是正常方向可读，输出 {\"rotation\": 0}。"
+)
+
+
+async def detect_rotation(
+    image_b64: str, content_type: str = "image/jpeg"
+) -> int:
+    """识别前方向预判：返回需要顺时针旋转的角度（0/90/180/270）。
+
+    背景：手机横持拍照且无 EXIF 方向标记时，像素数据本身是旋转的——
+    视觉模型对旋转单据的识别会大量幻觉（2026-09-09 实测：同一张手写
+    请验单，0° 识别为「羟苯磺酸钙」，矫正 90° 后正确识别「纸箱(3#)」）。
+    轻量调用（缩略图 + 小 max_tokens），失败/超时默认 0（不旋转）。
+    """
+    # 缩略图降成本：方向判断不需要原始分辨率（长边压到 768px）
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        raw = base64.b64decode(image_b64)
+        img = Image.open(BytesIO(raw))
+        img.thumbnail((768, 768))
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        thumb_b64 = base64.b64encode(buf.getvalue()).decode()
+        content_type = "image/jpeg"
+    except Exception:  # noqa: BLE001 — 缩略失败用原图
+        thumb_b64 = image_b64
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ROTATION_PROMPT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{content_type};base64,{thumb_b64}"},
+                },
+            ],
+        }
+    ]
+    try:
+        async with WarehouseLLMClient() as client:
+            msg = await client.chat_with_tools(
+                messages, tools=None, temperature=0.0, max_tokens=2000
+            )
+        content = msg.content or ""
+        data = parse_receipt_payload(content)
+        rotation = int(data.get("rotation") or 0)
+        return rotation if rotation in (0, 90, 180, 270) else 0
+    except Exception:  # noqa: BLE001 — 方向判断失败不阻断识别
+        logger.warning("方向预判失败，按 0° 处理", exc_info=True)
+        return 0
 
 
 async def recognize_receipt(

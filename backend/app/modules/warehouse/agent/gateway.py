@@ -523,6 +523,23 @@ async def _process_receipt_image(
         stage = "图片识别"
         content_type = "image/png" if fmt == "png" else "image/jpeg"
         image_b64 = base64.b64encode(content).decode()
+        # 方向预判+矫正（手机横拍无 EXIF 时像素本身旋转，模型识别大量幻觉）
+        from app.modules.warehouse.agent.pipeline.recognizer import detect_rotation
+
+        rotation = await detect_rotation(image_b64, content_type)
+        if rotation:
+            from io import BytesIO
+
+            from PIL import Image
+
+            img: Image.Image = Image.open(BytesIO(content))
+            img = img.rotate(rotation, expand=True)
+            buf = BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            content = buf.getvalue()
+            image_b64 = base64.b64encode(content).decode()
+            content_type = "image/jpeg"
+            logger.info("仓库网关图片方向矫正: rotation=%s", rotation)
         recognized = await recognize_receipt(image_b64, content_type)
 
         stage = "对齐与草稿"
