@@ -15,6 +15,8 @@ import logging
 from typing import Any
 from uuid import UUID
 
+import httpx
+
 from app.modules.warehouse.feishu.client import (
     get_warehouse_feishu_client,
     get_warehouse_tenant_token,
@@ -171,3 +173,55 @@ async def send_card_to_user(
         )
         return True
     return await _send_create(payload) is not None
+
+
+async def add_reaction(
+    message_id: str, emoji_type: str = "OK", dry_run: bool | None = None
+) -> bool:
+    """给指定消息回复表情（收到确认）。
+
+    PUT /open-apis/im/v1/messages/{message_id}/reactions（仓储专属凭证）。
+    失败内部吞掉（记日志返回 False），调用方无需兜底——表情确认不阻断主流程。
+
+    Args:
+        message_id: 消息 ID（om_xxx）
+        emoji_type: 飞书表情 key（默认 "OK"）
+        dry_run: None=跟随模块级开关；True=只记录日志；False=真发送
+    """
+    if not message_id:
+        return False
+    if _is_dry_run(dry_run):
+        logger.info(
+            "[dry_run] 仓库飞书表情回复: message_id=%s emoji=%s",
+            message_id, emoji_type,
+        )
+        return True
+    try:
+        client = await get_warehouse_feishu_client()
+        token = await get_warehouse_tenant_token(client)
+        http = httpx.AsyncClient(timeout=15.0)
+        try:
+            resp = await http.post(
+                f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reactions",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"reaction_type": {"emoji_type": emoji_type}},
+            )
+        finally:
+            await http.aclose()
+        data = resp.json()
+        if resp.status_code == 200 and data.get("code") == 0:
+            return True
+        logger.warning(
+            "仓库飞书表情回复失败: message_id=%s emoji=%s status=%s resp=%s",
+            message_id, emoji_type, resp.status_code, str(data)[:200],
+        )
+        return False
+    except Exception:  # noqa: BLE001 — 表情确认属锦上添花，任何异常不阻断主流程
+        logger.warning(
+            "仓库飞书表情回复异常: message_id=%s emoji=%s",
+            message_id, emoji_type, exc_info=True,
+        )
+        return False

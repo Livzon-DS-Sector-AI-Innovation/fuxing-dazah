@@ -302,6 +302,10 @@ async def handle_im_message(event: dict[str, Any]) -> None:
     if chat_type == "group" and not _mentioned_bot(mentions):
         return
 
+    # 3.5 收到确认：回复 OK 表情（add_reaction 内部吞错，不阻断主流程）
+    if message_id:
+        await notification.add_reaction(message_id, "OK")
+
     # 4. 消息类型路由
     if msg_type == "image":
         image_key = _extract_image_key(message)

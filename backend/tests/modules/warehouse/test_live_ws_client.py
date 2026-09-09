@@ -336,3 +336,62 @@ async def test_plain_event_ack_no_card_payload(clean_handlers: None) -> None:
     # 异步 create_task 分发，短暂让出后应完成
     await asyncio.wait_for(done.wait(), timeout=2)
     event_client._handlers.pop("wh.test.plain", None)
+
+
+# ══ OK 表情回复（收到确认）══
+
+
+def test_add_reaction_dry_run_no_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dry_run：只记日志不触网。"""
+    from app.modules.warehouse.feishu import notification as notif
+
+    called = {"n": 0}
+    monkeypatch.setattr(notif.httpx, "AsyncClient", _ForbiddenClient)
+
+    async def _run() -> bool:
+        return await notif.add_reaction("om_test_msg", "OK", dry_run=True)
+
+    ok = asyncio.run(_run())
+    assert ok is True
+    assert called["n"] == 0
+
+
+def test_add_reaction_empty_message_id() -> None:
+    from app.modules.warehouse.feishu import notification as notif
+
+    ok = asyncio.run(notif.add_reaction("", "OK"))
+    assert ok is False
+
+
+class _ForbiddenClient:
+    """实例化即失败的假 httpx client（dry_run 用例防误触网）。"""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("dry_run 模式不应创建 HTTP 客户端")
+
+
+def test_add_reaction_live_on_sent_card() -> None:
+    """live：发卡片到测试群并回 OK 表情（需要 WAREHOUSE_TEST_CHAT_ID）。"""
+    import os
+
+    chat_id = os.environ.get("WAREHOUSE_TEST_CHAT_ID") or _env_chat_id()
+    if not chat_id:
+        pytest.skip("WAREHOUSE_TEST_CHAT_ID 未配置")
+    from app.modules.warehouse.feishu import notification as notif
+
+    async def _run() -> bool:
+        mid = await notif.send_card(
+            chat_id,
+            {"elements": [{"tag": "markdown", "content": "🧪 表情回复自动化验证"}]},
+        )
+        assert mid and mid != notif.DRY_RUN_MESSAGE_ID
+        return await notif.add_reaction(mid, "OK")
+
+    ok = asyncio.run(_run())
+    assert ok is True
+
+
+def _env_chat_id() -> str:
+    from app.core.config import get_settings
+
+    return get_settings().WAREHOUSE_TEST_CHAT_ID
