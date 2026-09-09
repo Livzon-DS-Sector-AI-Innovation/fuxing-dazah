@@ -732,6 +732,26 @@ async def _row_status_is(
     return (await db.execute(stmt)).scalar_one_or_none() == status
 
 
+async def _read_settings_with_retry(
+    notify_type: str,
+) -> tuple[bool, list[uuid.UUID]]:
+    """读取提醒配置，瞬时 DB 故障短暂重试（与 _wait_until_committed 同口径）。
+
+    配置读取发生在等待事务提交之前：无重试时连接池竞争/滚动部署的
+    瞬时抖动会直接静默丢通知。
+    """
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            async with async_session_factory() as db:
+                return (await _notification_settings(db))[notify_type]
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+        await asyncio.sleep(0.5)
+    assert last_error is not None
+    raise last_error
+
+
 async def _send_configured_notification(
     notify_type: str,
     status_check: Callable[[AsyncSession], Awaitable[bool]],
@@ -745,8 +765,7 @@ async def _send_configured_notification(
     计划单下达/完成共用的发送管线；新增同类提醒时复用，
     避免再复制一遍配置读取→等待提交→合并接收人→解析 open_id→发卡。
     """
-    async with async_session_factory() as db:
-        enabled, extras = (await _notification_settings(db))[notify_type]
+    enabled, extras = await _read_settings_with_retry(notify_type)
     if not enabled:
         return
     committed = await _wait_until_committed(status_check)
@@ -794,8 +813,7 @@ async def notify_plan_closed(payload: PlanClosedReminder) -> None:
 async def notify_step_completed(payload: StepCompletedEvent) -> None:
     """工序结束提醒（后台任务入口）：确认提交后再收集接收人与卡片并发送。"""
     try:
-        async with async_session_factory() as db:
-            enabled, extras = (await _notification_settings(db))["step_completed"]
+        enabled, extras = await _read_settings_with_retry("step_completed")
         if not enabled:
             return
         committed = await _wait_until_committed(

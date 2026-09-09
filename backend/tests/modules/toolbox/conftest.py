@@ -10,22 +10,39 @@ import redis.asyncio as redis
 
 
 class FakeRedis:
-    """最小 redis.asyncio.Redis 替身：get/set/expire。"""
+    """最小 redis.asyncio.Redis 替身：get/set/expire/sadd/smembers/delete。"""
 
     def __init__(self) -> None:
         self.store: dict[str, bytes] = {}
         self.ttls: dict[str, int] = {}
+        self.sets: dict[str, set[bytes]] = {}
 
     async def get(self, key: str) -> bytes | None:
         return self.store.get(key)
 
-    async def set(self, key: str, value: str | bytes, ex: int | None = None) -> None:
+    async def set(
+        self, key: str, value: str | bytes, ex: int | None = None, nx: bool = False
+    ) -> bool | None:
+        if nx and key in self.store:
+            return None  # 与 redis-py 一致：NX 条件不满足返回 None
         self.store[key] = value.encode() if isinstance(value, str) else value
         if ex:
             self.ttls[key] = ex
+        return True
+
+    async def delete(self, key: str) -> None:
+        self.store.pop(key, None)
+        self.ttls.pop(key, None)
 
     async def expire(self, key: str, ttl: int) -> None:
         self.ttls[key] = ttl
+
+    async def sadd(self, key: str, value: str | bytes) -> None:
+        self.sets.setdefault(key, set()).add(value.encode() if isinstance(value, str) else value)
+
+    async def smembers(self, key: str) -> "set[bytes]":
+        # 注解用字符串：类体内的 set 方法名遮蔽内置 set，直接写 set[bytes] 会在类体求值时报错
+        return set(self.sets.get(key, set()))
 
 
 @pytest.fixture

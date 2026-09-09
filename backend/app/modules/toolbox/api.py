@@ -5,11 +5,16 @@
 - 首次执行（无 execution_id）创建会话；文件落临时目录并登记到会话。
 - params 中 file 型参数可传 {"file_ids": [...]} 引用本会话已上传文件，后端解析为本地路径列表。
 - file_paths 与 file_ids 恒为 list[str]（单文件也是单元素列表）。
+- background 工具：WATCH 事务原子标记 running（并发防重、合并最新 payload 落库），
+  工具在 asyncio.create_task 后台执行，接口立即返回 status="running"；进度经
+  StepContext.report_progress 写入会话，前端轮询 GET /executions/{id} 直到 done/failed。
+  服务重启遗留的 running 会话在读取时惰性收割为 failed。
 """
 
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +41,7 @@ from app.modules.toolbox.registry import (
 from app.modules.toolbox.repository import get_tool_config, upsert_tool_config
 from app.modules.toolbox.schemas import (
     ExecutionOut,
+    ExecutionSummaryOut,
     StepRunResponse,
     ToolGrantsOut,
     ToolOut,
@@ -55,6 +61,7 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100MB
 _grant_service = ToolboxGrantService()
 
 _cleanup_tasks: set[asyncio.Task[None]] = set()
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
 def _spawn_cleanup() -> None:
@@ -70,6 +77,92 @@ async def _cleanup_safe() -> None:
         await storage.maybe_cleanup()
     except Exception:
         logger.exception("toolbox 临时目录后台清理失败")
+
+
+async def _write_progress_safe(
+    redis: Redis, execution_id: str, step_id: str, percent: int, message: str
+) -> None:
+    """把工具上报的进度写入会话。终态（done/failed）后迟到的进度不再覆盖。
+
+    进度写入失败只记日志：进度条缺失不影响翻译本身。
+    """
+    try:
+        exec_data = await sessions.get_execution(redis, execution_id)
+        if exec_data is None:
+            return
+        if exec_data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
+            return
+        sessions.set_progress(exec_data, step_id, percent=percent, message=message)
+        await sessions.save_execution(redis, exec_data)
+    except Exception:
+        logger.exception("toolbox 进度写入失败 execution=%s step=%s", execution_id, step_id)
+
+
+def _make_progress_reporter(redis: Redis, execution_id: str, step_id: str) -> Callable[[int, str], None]:
+    """构造线程安全的进度上报函数：工作线程调用时 schedule 回事件循环写 Redis。"""
+    loop = asyncio.get_running_loop()
+
+    def report(percent: int, message: str) -> None:
+        asyncio.run_coroutine_threadsafe(
+            _write_progress_safe(redis, execution_id, step_id, percent, message), loop
+        )
+
+    return report
+
+
+async def _finish_background(
+    redis: Redis,
+    execution_id: str,
+    step_id: str,
+    result: dict[str, Any] | None,
+    error: str | None = None,
+) -> None:
+    """后台任务收尾：结果写入 outputs 并标记 done；失败标记 failed（error 为原因）。"""
+    try:
+        exec_data = await sessions.get_execution(redis, execution_id)
+        if exec_data is None:
+            logger.error("toolbox 后台执行收尾时会话不存在 execution=%s", execution_id)
+            return
+        if result is not None:
+            sessions.add_step_output(exec_data, step_id, result)
+            sessions.set_progress(exec_data, step_id, percent=100, message="执行完成", status="done")
+        else:
+            # 失败保留失败前的进度百分比，避免「失败却显示 100%」
+            prev = exec_data.get("progress", {}).get(step_id) or {}
+            sessions.set_progress(
+                exec_data, step_id,
+                percent=int(prev.get("percent") or 0),
+                message="执行失败", status="failed", error=error,
+            )
+        await sessions.save_execution(redis, exec_data)
+    except Exception:
+        logger.exception("toolbox 后台执行记录保存失败 execution=%s step=%s", execution_id, step_id)
+
+
+async def _run_tool_background(
+    redis: Redis,
+    tool: Tool,
+    step_id: str,
+    params: dict[str, Any],
+    context: StepContext,
+    execution_id: str,
+) -> None:
+    """后台执行工具步骤：结果与进度写会话；异常转 failed 进度（此时已无 HTTP 响应可挂）。"""
+    try:
+        result = await tool.func(step_id, params, context)
+    except ToolError as e:
+        logger.warning(
+            "toolbox 后台工具执行失败(预期内) tool=%s step=%s execution=%s: %s",
+            tool.id, step_id, execution_id, e,
+        )
+        await _finish_background(redis, execution_id, step_id, result=None, error=str(e))
+        return
+    except Exception as e:
+        # 内部系统：异常消息写进会话供前端展示，堆栈仅进日志
+        logger.exception("toolbox 后台工具执行失败 tool=%s step=%s execution=%s", tool.id, step_id, execution_id)
+        await _finish_background(redis, execution_id, step_id, result=None, error=f"工具执行失败: {e}")
+        return
+    await _finish_background(redis, execution_id, step_id, result=result)
 
 
 def _tool_to_out(t: Tool, can_use: bool = False, can_config: bool = False) -> dict[str, Any]:
@@ -89,8 +182,9 @@ async def list_tool_endpoints(
     """工具箱全部工具元数据（驱动首页卡片与执行页动态表单）。
 
     返回全部工具（不过滤），每个工具带当前用户的 can_use / can_config 标志：
-    默认开放时全员 can_use=True；已配置名单的工具对名单外用户 can_use=False，
-    前端据此置灰卡片并提示无权限（执行接口另有 403 兜底）。超管标志全 True。
+    使用名单留空时全员 can_use=True（仅配置配置名单不限制使用）；
+    使用名单非空时名单外用户 can_use=False，前端据此置灰卡片并提示无权限
+    （执行接口另有 403 兜底）。超管标志全 True。
     """
     if user is None:
         return error_response("未登录", status_code=401)
@@ -224,8 +318,7 @@ async def run_step(
     # 已有会话的文件登记先落库：工具执行耗时长，失败后客户端仍可引用已上传文件。
     # 新会话推迟到执行成功后一次性落库（客户端失败时拿不到 execution_id，落库只会留孤儿）。
     if registered and not is_new:
-        sessions.add_files(exec_data, registered)
-        await sessions.save_execution(redis, exec_data)
+        await sessions.merge_add_files(redis, execution_id, registered)
 
     # ── 执行 ──
     # 工具声明 config_schema 时从数据库加载配置（每次步骤执行现读，无缓存）
@@ -243,6 +336,31 @@ async def run_step(
         output_dir=storage.exec_dir(execution_id),
         config=tool_config,
     )
+
+    # ── 后台执行（background 工具）：会话先落库，工具后台跑，立即返回 running ──
+    if tool.background:
+        # 原子占位：并发重复提交只有一个能标记 running；写入基于最新 payload
+        # 合并（防旧快照盲写覆盖并发步骤的产出，与同步路径同口径）
+        if not await sessions.claim_step_running(redis, exec_data, step_id, registered):
+            return error_response("该步骤正在执行中，请等待执行完成", status_code=400)
+        # 登记进用户执行历史：用户中途离开后，重进工具页可经列表端点找回进行中的任务
+        try:
+            await sessions.remember_execution(redis, str(user.id), execution_id)
+        except Exception:
+            # 登记失败不再占位：撤销 running 标记，客户端可重试
+            await sessions.clear_step_running(redis, execution_id, step_id)
+            raise
+        context.report_progress = _make_progress_reporter(redis, execution_id, step_id)
+        task = asyncio.create_task(
+            _run_tool_background(redis, tool, step_id, params_dict, context, execution_id)
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+        response = StepRunResponse(
+            execution_id=execution_id, data={}, file_ids=file_ids, status="running"
+        )
+        return success_response(data=response.model_dump(mode="json"))
+
     try:
         result = await tool.func(step_id, params_dict, context)
     except ToolError as e:
@@ -381,11 +499,70 @@ async def get_execution_state(
     exec_data = await sessions.get_execution(redis, execution_id)
     if exec_data is None or exec_data["user_id"] != str(user.id):
         return error_response("执行会话不存在", status_code=404)
+    # 惰性收割：服务重启后旧进程的 running 任务已死，读时标记 failed
+    if sessions.reap_orphaned_running(exec_data):
+        await sessions.save_execution(redis, exec_data)
     # 会话归属之外再校验当前授权：被移出名单后不能继续轮询状态/下载产物
     can_use, _ = await _grant_service.resolve_access(db, user, exec_data["tool_id"])
     if not can_use:
         return error_response("没有使用该工具的权限", status_code=403)
     return success_response(data=ExecutionOut(**exec_data).model_dump(mode="json"))
+
+
+def _summarize_execution(exec_data: dict[str, Any]) -> dict[str, Any]:
+    """会话 payload → 列表摘要。状态按 progress 聚合：
+    任一步骤 running=执行中；否则有 failed=失败；否则已完成。
+    无进度记录的会话（同步工具，执行成功才落库产出）视为已完成。
+    """
+    progress: dict[str, Any] = exec_data.get("progress") or {}
+    statuses = [p.get("status") for p in progress.values()]
+    if "running" in statuses:
+        status = "running"
+    elif "failed" in statuses:
+        status = "failed"
+    elif statuses:
+        status = "done"
+    else:
+        status = "done" if exec_data.get("outputs") else "running"
+    # 摘要字段与聚合状态同源：running/failed 取对应步骤（避免失败会话展示
+    # 完成步骤的「执行完成 / 100%」矛盾行）；无进度记录则全为空
+    candidates = [p for p in progress.values() if p.get("status") == status]
+    latest = max(candidates, key=lambda p: p.get("updated_at") or 0) if candidates else None
+    return {
+        "execution_id": exec_data["execution_id"],
+        "tool_id": exec_data["tool_id"],
+        "status": status,
+        "percent": int(latest.get("percent") or 0) if latest else 0,
+        "message": str(latest.get("message") or "") if latest else "",
+        "error": str(latest.get("error") or "") if latest else "",
+        "created_at": float(exec_data.get("created_at") or 0.0),
+    }
+
+
+@router.get("/executions", summary="当前用户执行列表")
+async def list_my_executions(
+    user: User | None = Depends(get_current_user),
+    redis: Redis = Depends(get_redis),
+) -> JSONResponse:
+    """当前用户最近的执行会话摘要（仅 background 工具会登记），按创建时间倒序。
+
+    过期会话自动跳过；用于工具执行页展示「进行中/上次执行」恢复提示。
+    """
+    if user is None:
+        return error_response("未登录", status_code=401)
+    execs = await sessions.list_user_executions(redis, str(user.id))
+    for e in execs:
+        # 惰性收割：重启遗留的 running 标记在列表读取时标记 failed
+        if sessions.reap_orphaned_running(e):
+            await sessions.save_execution(redis, e)
+    summaries = sorted(
+        (_summarize_execution(e) for e in execs),
+        key=lambda d: d["created_at"],
+        reverse=True,
+    )[:20]
+    return success_response(
+        data=[ExecutionSummaryOut.model_validate(s).model_dump(mode="json") for s in summaries]
+    )
 
 
 @router.get("/executions/{execution_id}/files/{file_id}", summary="下载执行产物")

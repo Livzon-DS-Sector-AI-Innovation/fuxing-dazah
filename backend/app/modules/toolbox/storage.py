@@ -23,7 +23,7 @@ EXEC_DIR_ROOT = Path(get_settings().UPLOAD_DIR) / "toolbox"
 MAX_AGE_SECONDS = 48 * 3600
 _CLEANUP_INTERVAL_SECONDS = 3600
 
-_ALLOWED_SUFFIXES = {".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".pdf", ".csv", ".txt", ".json"}
+_ALLOWED_SUFFIXES = {".docx", ".xlsx", ".png", ".jpg", ".jpeg", ".pdf", ".csv", ".txt", ".json", ".md"}
 
 
 def exec_dir(execution_id: str) -> Path:

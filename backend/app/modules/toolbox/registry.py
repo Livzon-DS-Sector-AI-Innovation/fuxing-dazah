@@ -18,6 +18,9 @@ class ToolInput:
     """工具输入声明。type: file / text / textarea / boolean / number / select / month / date。
 
     show_when=(key, value)：当同步骤中 key 字段的值为 value 时该输入才显示（如日期字段跟随核对方式）。
+    options：select 的可选项，元素为字符串（显示=提交值）或 {"value", "label"}
+    （显示中文 label、提交英文枚举值）。
+    help：参数用途说明，前端在 label 旁以问号气泡展示。
     """
 
     key: str
@@ -28,10 +31,11 @@ class ToolInput:
     multiple: bool = False
     default: Any = None
     placeholder: str | None = None
-    options: list[str] | None = None
+    options: list[str] | list[dict[str, str]] | None = None
     from_step: str | None = None
     from_key: str | None = None
     show_when: tuple[str, str] | None = None
+    help: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,8 @@ class ConfigField:
     """工具配置表单字段声明（驱动前端配置页动态渲染）。
 
     key 为点路径（如 feishu.app_id），前端拆分为嵌套表单路径。
-    type: text / password / number。
+    type: text / password / number / textarea。
+    help：字段用途说明，前端在 label 旁以问号气泡展示。
     """
 
     key: str
@@ -55,6 +60,7 @@ class ConfigField:
     type: str
     section: str = ""
     required: bool = False
+    help: str | None = None
 
 
 @dataclass
@@ -66,6 +72,9 @@ class Tool:
     steps: list[ToolStep]
     func: Callable[..., Awaitable[dict[str, Any]]]
     config_schema: list[ConfigField] = field(default_factory=list)
+    # 后台执行：run 接口校验落盘后立即返回，工具在 asyncio.create_task 中执行，
+    # 进度经 StepContext.report_progress 写入会话，前端轮询 GET /executions/{id}
+    background: bool = False
 
 
 @dataclass
@@ -78,6 +87,9 @@ class StepContext:
     file_paths: dict[str, list[str]]  # input_key -> 本地绝对路径列表（单文件也是单元素列表）
     output_dir: Path  # 工具产出文件目录（已创建）
     config: dict[str, Any] | None = None  # 工具配置 JSON（声明 config_schema 时由 api 层从数据库加载）
+    # 进度上报（仅 background 工具由 api 层注入；同步工具为 None）。
+    # 同步函数且线程安全：工具在 to_thread 中调用也会被安全转回事件循环写 Redis。
+    report_progress: Callable[[int, str], None] | None = None
 
 
 class ToolError(Exception):
@@ -101,6 +113,7 @@ def tool(
     image: str | None = None,
     steps: list[ToolStep],
     config_schema: list[ConfigField] | None = None,
+    background: bool = False,
 ) -> Callable[
     [Callable[..., Awaitable[dict[str, Any]]]], Callable[..., Awaitable[dict[str, Any]]]
 ]:
@@ -110,6 +123,8 @@ def tool(
 
     config_schema 声明工具配置表单字段（点路径 + 中文标签 + 类型 + 分组），
     前端配置页据此动态渲染；声明 config_schema 即启用配置读写（存储于数据库）。
+    background=True 声明后台执行（长任务）：run 接口立即返回，工具在后台任务中
+    执行，经 context.report_progress 上报进度，前端轮询会话状态直到完成。
     """
 
     def deco(func: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
@@ -119,6 +134,7 @@ def tool(
             id=id, name=name, description=description,
             image=image, steps=list(steps), func=func,
             config_schema=list(config_schema or []),
+            background=background,
         )
         return func
 

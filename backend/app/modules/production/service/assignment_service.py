@@ -10,6 +10,7 @@ from app.core.exceptions import (
     ForbiddenException,
     NotFoundException,
 )
+from app.modules.production.models.assignment import NodeAssignment, StageAssignment
 from app.modules.production.repository import assignment as repo
 from app.modules.production.repository import route as route_repo
 from app.modules.production.schemas.assignment import (
@@ -202,6 +203,8 @@ async def _operator_access_denial_reason(
     stage_name: str | None,
     batch: "Batch | None",
     execution: "NodeExecution | None" = None,
+    user_stages: list[StageAssignment] | None = None,
+    user_node_assignments: list[NodeAssignment] | None = None,
 ) -> str | None:
     """执行层归属判定（唯一口径）：返回 None=有权限，否则返回拒绝原因。
 
@@ -212,6 +215,9 @@ async def _operator_access_denial_reason(
     单次执行负责人（开始工序时指定的 execution.owner_id）直接放行：
     实际执行人可结束/补录/中止自己这一次执行，不受批次归属隔离限制；
     该豁免不授予任何其他批次或工序的操作权。
+
+    user_stages / user_node_assignments 供批量判定场景传入一次查询的结果
+    （None=自行查询，空列表=已查且无记录），避免逐执行重复查询（N+1）。
 
     check_operator_access（bool）与 require_operator_access（抛异常）
     都基于本函数，保证写接口校验与只读场景的 can_* 标志永远同口径。
@@ -226,9 +232,11 @@ async def _operator_access_denial_reason(
         return None
     if stage_name is None:
         return "您没有该工段的操作权限"
+    if user_stages is None:
+        user_stages = await repo.get_user_stages(db, user_id)
     has_stage = any(
         s.stage_name == stage_name and s.route_id == route_id
-        for s in await repo.get_user_stages(db, user_id)
+        for s in user_stages
     )
     owner_batch = (
         batch
@@ -237,9 +245,10 @@ async def _operator_access_denial_reason(
     )
     node_assigned = False
     if not has_stage or owner_batch is not None:
-        user_nodes = await repo.get_user_node_assignments(db, user_id)
+        if user_node_assignments is None:
+            user_node_assignments = await repo.get_user_node_assignments(db, user_id)
         node_assigned = any(
-            n.node_id == node_id and n.route_id == route_id for n in user_nodes
+            n.node_id == node_id and n.route_id == route_id for n in user_node_assignments
         )
     if not has_stage and not node_assigned:
         return "您没有该工段的操作权限"
@@ -257,10 +266,13 @@ async def check_operator_access(
     stage_name: str | None,
     batch: "Batch | None",
     execution: "NodeExecution | None" = None,
+    user_stages: list[StageAssignment] | None = None,
+    user_node_assignments: list[NodeAssignment] | None = None,
 ) -> bool:
     """require_operator_access 的 bool 版（详情标志等只读场景复用）。"""
     return await _operator_access_denial_reason(
-        db, user_id, node_id, route_id, stage_name, batch, execution
+        db, user_id, node_id, route_id, stage_name, batch, execution,
+        user_stages=user_stages, user_node_assignments=user_node_assignments,
     ) is None
 
 

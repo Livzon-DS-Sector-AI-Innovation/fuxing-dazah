@@ -5,7 +5,7 @@
 
 import { Fragment, useState } from 'react'
 import Link from 'next/link'
-import { Alert, Button, Form, Input, InputNumber } from 'antd'
+import { Alert, App, Button, Form, Input, InputNumber } from 'antd'
 import { ArrowLeftOutlined } from '@ant-design/icons'
 
 import { updateToolConfig } from '@/actions/toolbox'
@@ -16,15 +16,23 @@ function renderField(field: ConfigFieldInfo) {
   const rules = field.required
     ? [{ required: true, message: `请填写${field.label}` }]
     : undefined
+  const tooltip = field.help ?? undefined
+  if (field.type === 'textarea') {
+    return (
+      <Form.Item key={field.key} name={name} label={field.label} rules={rules} tooltip={tooltip}>
+        <Input.TextArea rows={8} className="font-mono text-[13px]" />
+      </Form.Item>
+    )
+  }
   if (field.type === 'number') {
     return (
-      <Form.Item key={field.key} name={name} label={field.label} rules={rules}>
+      <Form.Item key={field.key} name={name} label={field.label} rules={rules} tooltip={tooltip}>
         <InputNumber style={{ width: 200 }} min={0} />
       </Form.Item>
     )
   }
   return (
-    <Form.Item key={field.key} name={name} label={field.label} rules={rules}>
+    <Form.Item key={field.key} name={name} label={field.label} rules={rules} tooltip={tooltip}>
       {field.type === 'password' ? <Input.Password /> : <Input />}
     </Form.Item>
   )
@@ -41,20 +49,17 @@ export function ToolConfigForm({
   schema: ConfigFieldInfo[]
   initial: ToolConfig | null
 }) {
+  const { message } = App.useApp()
   const [form] = Form.useForm<ToolConfig>()
   const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [saved, setSaved] = useState(false)
 
   const onFinish = async (values: ToolConfig) => {
     setSaving(true)
-    setError(null)
-    setSaved(false)
     try {
       await updateToolConfig(toolId, values)
-      setSaved(true)
+      message.success('配置已保存')
     } catch (e) {
-      setError(e instanceof Error ? e.message : '保存失败')
+      message.error(e instanceof Error ? e.message : '保存失败')
     } finally {
       setSaving(false)
     }
@@ -95,8 +100,6 @@ export function ToolConfigForm({
             showIcon
           />
         )}
-        {error && <Alert className="mb-4" type="error" title={error} showIcon />}
-        {saved && <Alert className="mb-4" type="success" title="配置已保存" showIcon />}
         <Form form={form} layout="vertical" initialValues={initial ?? {}} onFinish={onFinish}>
           {sections.map((section, i) => (
             <Fragment key={section.title || `section-${i}`}>

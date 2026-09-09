@@ -260,8 +260,6 @@ function NotificationConfigContent() {
       extra_user_ids: patch.extra_user_ids ?? record.extra_user_ids,
     }
     // 先乐观写进缓存，失败再回滚，避免网络延迟造成开关回跳
-    const prev =
-      queryClient.getQueryData<ProductionNotificationConfig[]>(QUERY_KEY)
     queryClient.setQueryData<ProductionNotificationConfig[]>(
       QUERY_KEY,
       old =>
@@ -277,7 +275,14 @@ function NotificationConfigContent() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY })
     } else {
       message.error(result.error)
-      if (prev) queryClient.setQueryData(QUERY_KEY, prev)
+      // 只回滚失败行：整数组快照回滚会覆盖期间其他行已提交的保存
+      queryClient.setQueryData<ProductionNotificationConfig[]>(
+        QUERY_KEY,
+        old =>
+          old?.map(r =>
+            r.notify_type === record.notify_type ? { ...r, ...record } : r,
+          ),
+      )
     }
   }
 

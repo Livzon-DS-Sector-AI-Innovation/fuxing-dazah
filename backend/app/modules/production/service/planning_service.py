@@ -6,9 +6,10 @@ import logging
 import re
 import uuid
 from datetime import date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
@@ -479,13 +480,26 @@ async def close_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User | N
         raise NotFoundException("计划单", str(order_id))
     if order.status not in ("confirmed", "released", "completed"):
         raise AppException(status_code=400, message="仅 confirmed/released/completed 状态的计划单可关闭")
-    order.status = "closed"
-    order.updated_by = user.id if user else None
+    # 条件 UPDATE 原子关闭：并发双击/重试只有一个能改状态，
+    # 输者不再触发通知，避免各工段负责人收到重复的完成卡片
+    result = cast(
+        CursorResult[Any],
+        await db.execute(
+            update(PlanOrder)
+            .where(
+                PlanOrder.id == order_id,
+                PlanOrder.status.in_(("confirmed", "released", "completed")),
+                PlanOrder.is_deleted == False,  # noqa: E712
+            )
+            .values(status="closed", updated_by=user.id if user else None)
+        ),
+    )
     await db.flush()
-    # 飞书提醒：全部计划项非进行中/已分配时通知所涉路线工段负责人
-    # （收集在事务内，发送为后台尽力而为；内部判定不满足则静默跳过）
-    items = await repo.list_plan_items(db, order_id)
-    await schedule_plan_closed_notification(db, order, items)
+    if result.rowcount:
+        # 飞书提醒：全部计划项非进行中/已分配时通知所涉路线工段负责人
+        # （收集在事务内，发送为后台尽力而为；内部判定不满足则静默跳过）
+        items = await repo.list_plan_items(db, order_id)
+        await schedule_plan_closed_notification(db, order, items)
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
     return refreshed

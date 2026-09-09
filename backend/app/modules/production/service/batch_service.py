@@ -12,7 +12,14 @@ from app.core.exceptions import (
     NotFoundException,
 )
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch, BatchLink
+from app.modules.production.models import (
+    Batch,
+    BatchLink,
+    NodeAssignment,
+    NodeExecution,
+    StageAssignment,
+)
+from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.schemas import (
     BatchCreate,
     BatchDetailOut,
@@ -489,7 +496,15 @@ async def get_batch_detail(
     # 补录仅批次结束前可用（completed/cancelled 均禁止，与 backfill_execution_fields 一致）
     batch_backfillable = batch.status not in ("completed", "cancelled")
 
-    async def _can_backfill(e) -> bool:
+    # 权限归属数据一次取回（None=未取）：_can_backfill 对每个已完成执行判定，
+    # 逐执行查询工段/工序分配会在重做回流批次上放大成 N+1
+    user_stages: list[StageAssignment] | None = None
+    user_node_assignments: list[NodeAssignment] | None = None
+    if user is not None and not has_submit and batch_backfillable:
+        user_stages = await assignment_repo.get_user_stages(db, user.id)
+        user_node_assignments = await assignment_repo.get_user_node_assignments(db, user.id)
+
+    async def _can_backfill(e: NodeExecution) -> bool:
         if user is None or not batch_backfillable or e.status != "completed":
             return False
         if has_submit:
@@ -497,6 +512,7 @@ async def get_batch_detail(
         return await check_operator_access(
             db, user.id, e.node_id, batch.route_id,
             node_stage_names.get(e.node_id), batch=batch, execution=e,
+            user_stages=user_stages, user_node_assignments=user_node_assignments,
         )
 
     async def _can_complete() -> bool:
@@ -511,13 +527,15 @@ async def get_batch_detail(
              if e.status == "completed" and e.finished_at is not None),
             key=lambda e: e.finished_at, default=None,
         )
-        if last_ex is not None:
-            return await check_operator_access(
-                db, user.id, last_ex.node_id, batch.route_id,
-                node_stage_names.get(last_ex.node_id), batch=batch,
-            )
-        # 无已完成执行：退回归属判定（require_batch_owner_access 同口径）
-        return batch.owner_user_id is None or batch.owner_user_id == user.id
+        if last_ex is None:
+            # 无已完成执行：complete_batch 必被「批次没有任何已完成的工序」拒绝，
+            # 不做归属回退，避免渲染一个必然失败的「完成批次」按钮
+            return False
+        return await check_operator_access(
+            db, user.id, last_ex.node_id, batch.route_id,
+            node_stage_names.get(last_ex.node_id), batch=batch,
+            user_stages=user_stages, user_node_assignments=user_node_assignments,
+        )
 
     eq_by_exec: dict[uuid.UUID, list[EquipmentSnapshotOut]] = {}
     for eq in equipments:

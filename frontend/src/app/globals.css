@@ -1,5 +1,10 @@
+/* 声明层序：preflight(base) < antd reset < 工具类(utilities)。
+   antd reset.css 未分层时会压过一切 Tailwind 工具类（unlayered > @layer utilities），
+   其 p/h1-h6/ul 等默认 margin 曾导致裸元素下边距常驻、mt-* 失效（flex 居中行文字上浮）。
+   导入进 antd 层后：无工具类时 antd 默认值仍生效，有工具类时工具类获胜。 */
+@layer theme, base, antd, components, utilities;
 @import "tailwindcss";
-@import "antd/dist/reset.css";
+@import "antd/dist/reset.css" layer(antd);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
