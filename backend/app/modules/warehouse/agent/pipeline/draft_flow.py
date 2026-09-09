@@ -183,8 +183,8 @@ async def create_receipt_draft(
 
     recognized JSONB 存 ``RecognizedReceipt.model_dump()``（13 字段 value/
     confidence + raw，票04/05 审计回溯用）；source_image 存原图 file token
-    （票04 submit 下载回字节传附件列）。chat_id 仅用于审计摘要——卡片发送
-    由调用方显式传目标（send_confirm_card），草稿本身不存会话。
+    （票04 submit 下载回字节传附件列）。chat_id 落库——确认后回执按原渠道
+    回复（群聊发起回群聊，私聊发起回私聊）。
     """
     started = time.monotonic()
     recognized_json = recognized.model_dump(mode="json")
@@ -199,6 +199,7 @@ async def create_receipt_draft(
             recognized=recognized_json,
             aligned={},
             created_by_open_id=open_id,
+        chat_id=chat_id,
             expires_at=expires_at,
         )
         db.add(draft)
@@ -257,6 +258,7 @@ async def create_dialog_draft(
             recognized=fields_json,  # 原始收集值留底（审计回溯）
             aligned={},
             created_by_open_id=open_id,
+            chat_id=chat_id,
             expires_at=expires_at,
         )
         db.add(draft)

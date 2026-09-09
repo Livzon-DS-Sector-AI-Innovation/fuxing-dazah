@@ -910,6 +910,30 @@ FINISHED_DEGRADE_EXPRESS_HINT = (
 _RESULT_VALUE_MAX = 30
 
 
+def _fmt_ts_value(value: Any) -> str:
+    """写入字段展示值格式化：毫秒时间戳（飞书 datetime 写入契约）转 YYYY-MM-DD。"""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 10**12:
+        try:
+            from datetime import datetime as _dt
+
+            return _dt.fromtimestamp(value / 1000).strftime("%Y-%m-%d")
+        except (OSError, OverflowError, ValueError):
+            return str(value)
+    return str(value) if value is not None else "-"
+
+
+def _base_record_link(draft: Any, record_id: str) -> str:
+    """多维表格记录直达链接（租户域名 + app_token/table/record 三元组）。"""
+    app_token = str(getattr(draft, "target_base", "") or "")
+    table_id = str(getattr(draft, "target_table", "") or "")
+    if app_token and table_id:
+        return (
+            f"https://j0eukrlohu.feishu.cn/base/{app_token}"
+            f"?table={table_id}&record={record_id}"
+        )
+    return ""
+
+
 def render_receipt_result_card(
     draft: Any, check_result: dict[str, Any]
 ) -> dict[str, Any]:
@@ -953,14 +977,18 @@ def render_receipt_result_card(
 
     lines = [f"**草稿**：{draft_no or '-'}"]
     if record_id != "-":
-        lines.append(f"**Base 记录**：{record_id}")
+        link = _base_record_link(draft, record_id)
+        lines.append(
+            f"**多维表格记录**：[{record_id}]({link})" if link else f"**记录 ID**：{record_id}"
+        )
 
     written = check.get("written")
     if isinstance(written, dict) and written:
         lines.extend(["", "**写入字段**"])
         for index, (name, value) in enumerate(written.items(), 1):
             lines.append(
-                f"{index}. {_clean(name, 24)}：{_clean(value, _RESULT_VALUE_MAX)}"
+                f"{index}. {_clean(name, 24)}："
+                f"{_clean(_fmt_ts_value(value), _RESULT_VALUE_MAX)}"
             )
 
     lines.extend(["", "**读回核对**"])

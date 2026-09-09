@@ -398,19 +398,7 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
     from app.modules.warehouse.agent.cards import render_receipt_result_card
 
     card = render_receipt_result_card(draft, check_result)
-    open_id = (draft.created_by_open_id or "").strip()
-    if open_id:
-        try:
-            sent = await notification.send_card_to_user(open_id, card)
-        except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
-            logger.exception("入库回执卡片发送异常: draft_no=%s", draft.draft_no)
-            sent = False
-        if not sent:
-            logger.warning(
-                "入库回执卡片发送失败: draft_no=%s open_id=%s",
-                draft.draft_no,
-                open_id[:20],
-            )
+    await _send_result_card(draft, card)
 
     logger.info(
         "入库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
@@ -453,6 +441,27 @@ _GMP_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
     ("quantity", "领用数量", False),
     ("production_batch_no", "生产批号", False),
 )
+
+async def _send_result_card(draft: WarehouseAgentDraft, card: dict[str, Any]) -> None:
+    """回执按发起渠道发送：chat_id（群/私聊原渠道）优先，缺失回落发起人私聊。
+
+    发送失败只记日志（回执不回滚已完成的写入）。
+    """
+
+    chat_id = (draft.chat_id or "").strip()
+    sent: bool | str | None = None
+    try:
+        if chat_id:
+            sent = await notification.send_card(chat_id, card)
+        else:
+            open_id = (draft.created_by_open_id or "").strip()
+            sent = await notification.send_card_to_user(open_id, card) if open_id else False
+    except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
+        logger.exception("回执卡片发送异常: draft_no=%s", draft.draft_no)
+        return
+    if not sent:
+        logger.warning("回执卡片发送失败: draft_no=%s chat_id=%r", draft.draft_no, chat_id[:24])
+
 
 def _today_ms(today: date | None = None) -> int:
     """当天日期 → 毫秒时间戳（飞书 datetime 写入契约；UTC 零点即北京当天
@@ -583,19 +592,7 @@ async def submit_gmp(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None
     from app.modules.warehouse.agent.cards import render_receipt_result_card
 
     card = render_receipt_result_card(draft, check_result)
-    open_id = (draft.created_by_open_id or "").strip()
-    if open_id:
-        try:
-            sent = await notification.send_card_to_user(open_id, card)
-        except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
-            logger.exception("GMP 回执卡片发送异常: draft_no=%s", draft.draft_no)
-            sent = False
-        if not sent:
-            logger.warning(
-                "GMP 回执卡片发送失败: draft_no=%s open_id=%s",
-                draft.draft_no,
-                open_id[:20],
-            )
+    await _send_result_card(draft, card)
 
     logger.info(
         "GMP 出库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
@@ -794,19 +791,7 @@ async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str |
     from app.modules.warehouse.agent.cards import render_receipt_result_card
 
     card = render_receipt_result_card(draft, check_result)
-    open_id = (draft.created_by_open_id or "").strip()
-    if open_id:
-        try:
-            sent = await notification.send_card_to_user(open_id, card)
-        except Exception:  # noqa: BLE001 — 回执发送失败不回滚已完成的写入
-            logger.exception("成品出库回执卡片发送异常: draft_no=%s", draft.draft_no)
-            sent = False
-        if not sent:
-            logger.warning(
-                "成品出库回执卡片发送失败: draft_no=%s open_id=%s",
-                draft.draft_no,
-                open_id[:20],
-            )
+    await _send_result_card(draft, card)
 
     logger.info(
         "成品出库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",

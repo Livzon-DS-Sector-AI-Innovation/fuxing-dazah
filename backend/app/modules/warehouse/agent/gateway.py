@@ -161,14 +161,6 @@ def _build_card(
     }
 
 
-def _build_placeholder_card() -> dict[str, Any]:
-    return _build_card(
-        title="⏳ 正在处理…",
-        template="blue",
-        markdown="已收到你的消息，正在处理，请稍候…",
-    )
-
-
 def _build_image_processing_card() -> dict[str, Any]:
     """图片消息占位卡片（票05：识别 Pipeline 后台异步，完成后另发确认卡片）。"""
     return _build_card(
@@ -272,6 +264,25 @@ async def _record_gateway_audit(
 # ── im.message.receive_v1 处理器 ──
 
 
+def _scene_hint(text: str) -> str | None:
+    """登记意图的场景预判（确定性路由提示，注入本轮上下文）。
+
+    背景：同会话第二段登记易被第一段的历史/草稿带偏（live 实测），静态
+    系统提示词约束不足——按关键词把场景提示作为近因消息注入，遵循度高。
+    """
+    t = text.lower().replace(" ", "").replace("　", "")
+    if "登记" in t and ("gmp" in t or "gmp" in text.lower()):
+        return (
+            "【场景提示】本次任务为 GMP 物料出库登记：必须调用 create_gmp_draft "
+            "收集字段，禁止调用其他登记工具。"
+        )
+    if "登记" in t and "成品出库" in t:
+        return (
+            "【场景提示】本次任务为成品出库登记：必须调用 create_finished_outbound_draft "
+            "收集字段，禁止调用其他登记工具。"
+        )
+    return None
+
 @on_event("im.message.receive_v1")
 async def handle_im_message(event: dict[str, Any]) -> None:
     """飞书消息事件入口（event_client._dispatch 分发的 event dict）。"""
@@ -359,6 +370,75 @@ async def handle_im_message(event: dict[str, Any]) -> None:
     await _handle_text_message(
         chat_id=chat_id, chat_type=chat_type, open_id=open_id, text=text, started=started
     )
+
+
+async def _run_submit_background(draft_id: uuid.UUID) -> None:
+    """后台执行登记提交（submit 类场景确认后）：回调 → 回执按原渠道发送。
+
+    独立 DB 会话（确认门事务已提交 confirmed 状态）；异常置 failed + 失败
+    回执，不静默。回执渠道：draft.chat_id（群/私聊原渠道）优先，缺失回落
+    发起人私聊。
+    """
+    from app.modules.warehouse.agent.pipeline.draft_flow import (
+        SCENE_CONFIG,
+        DraftFlowError,
+    )
+
+    try:
+        async with _db_session() as db:
+            draft = await agent_repository.get_agent_draft(db, draft_id)
+            if draft is None or draft.status != "confirmed":
+                return  # 幂等：状态已被处理/作废
+            cfg = SCENE_CONFIG.get(draft.scene)
+            submit_fn = cfg.submit if cfg else None
+            if submit_fn is None:
+                return
+            try:
+                await submit_fn(db, draft)
+            except DraftFlowError as exc:
+                logger.error("后台登记执行失败: draft_no=%s err=%s", draft.draft_no, exc)
+                await agent_repository.set_agent_draft_status(db, draft, "failed")
+                await _send_failure_reply(draft, str(exc))
+    except Exception:  # noqa: BLE001 — 后台任务顶层兜底
+        logger.exception("后台登记任务异常: draft_id=%s", draft_id)
+        try:
+            async with _db_session() as db:
+                draft = await agent_repository.get_agent_draft(db, draft_id)
+                if draft is not None and draft.status == "confirmed":
+                    await agent_repository.set_agent_draft_status(db, draft, "failed")
+                    await _send_failure_reply(draft, "登记执行异常，请重新发起识别或登记")
+        except Exception:  # noqa: BLE001
+            logger.exception("后台登记失败回执发送异常: draft_id=%s", draft_id)
+
+
+async def _send_failure_reply(draft: Any, reason: str) -> None:
+    """登记失败回执：按发起渠道发送（chat_id 优先，回落私聊）。"""
+    from app.modules.warehouse.feishu import notification
+
+    card = {
+        "config": {"update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": "⚠️ 登记未完成"}, "template": "red"},
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": "**草稿**："
+                + draft.draft_no
+                + "\n**原因**："
+                + reason
+                + "\n请重新发起。",
+            }
+        ],
+    }
+    chat_id = (draft.chat_id or "").strip()
+    try:
+        if chat_id:
+            await notification.send_card(chat_id, card)
+        else:
+            open_id = (draft.created_by_open_id or "").strip()
+            if open_id:
+                await notification.send_card_to_user(open_id, card)
+    except Exception:  # noqa: BLE001
+        logger.exception("失败回执发送异常: draft_no=%s", draft.draft_no)
 
 
 async def _process_receipt_image(
@@ -498,12 +578,9 @@ async def _handle_text_message(
         runner_session = located
         if runner_session is None:  # 理论不可达（get_or_create_session 必返回或抛异常）
             raise RuntimeError("仓库网关会话定位失败")
-        # 占位卡片先发（S1 不做卡片 patch 更新，完成后直接新发结果卡片——S2 升级）
-        await _send_card_to(
-            chat_id=chat_id, chat_type=chat_type, open_id=open_id,
-            card=_build_placeholder_card(),
-        )
-        reply = await get_runner().run(runner_session, text)
+        # 收到确认由 OK 表情承担（add_reaction）；不再发「正在处理」占位卡片
+        # （用户反馈：与表情功能重复，2026-09-08）
+        reply = await get_runner().run(runner_session, text, scene_hint=_scene_hint(text))
     except Exception as exc:
         logger.exception("仓库网关文本处理失败: message=%r", text[:50])
         try:
@@ -523,10 +600,38 @@ async def _handle_text_message(
         )
         return
 
-    # 结果卡片（Reply.data 命中查询工具 → 专用卡片；否则兜底文本卡片，ticket 04）
+    # 结果卡片（Reply.data 命中查询工具 → 专用卡片；登记类工具 → 简短引导
+    # 卡片替代 LLM 复述（用户反馈：字段核对以登记卡片为准，不重复展示）；
+    # 否则兜底文本卡片，ticket 04）
+    data = reply.data if isinstance(reply.data, dict) else {}
+    tool_name = str(data.get("tool") or "")
+    result_raw = data.get("result")
+    result = result_raw if isinstance(result_raw, dict) else {}
+    draft_no = str(result.get("draft_no") or "")
+    if (
+        tool_name.startswith("create_")
+        and tool_name.endswith("_draft")
+        and draft_no
+    ):
+        # 草稿真正创建才替换为简短引导卡；missing/追问场景保留 LLM 文本
+        card = {
+            "config": {"update_multi": True},
+            "header": {"title": {"tag": "plain_text", "content": "📝 等待你确认"}, "template": "blue"},
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": (
+                        f"**草稿 {draft_no or '已创建'}** 已生成，确认卡片在上方消息中。\n"
+                        "请核对字段后点「确认登记」；要修改直接回复消息（如「数量改成 30」）。"
+                    ),
+                }
+            ],
+        }
+    else:
+        card = render_reply_card(reply)
     await _send_card_to(
         chat_id=chat_id, chat_type=chat_type, open_id=open_id,
-        card=render_reply_card(reply),
+        card=card,
     )
     # 会话历史追加 + 审计（ok）
     duration_ms = _elapsed_ms(started)
@@ -582,6 +687,45 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
         scene, value.get("action"), operator_open_id[:20],
     )
 
+    # submit 类场景（SceneConfig.submit 已注册）：确认门只置状态，ACK 更新
+    # 卡片为「登记中」，submit 移后台执行，回执按发起渠道（draft.chat_id）
+    # 发送——执行含 Base 写入+读回核对，可能超过 2.9s ACK 窗口
+    from app.modules.warehouse.agent.pipeline.draft_flow import SCENE_CONFIG
+
+    scene_cfg = SCENE_CONFIG.get(scene)
+    submit_scene = scene_cfg is not None and scene_cfg.submit is not None
+    if submit_scene and str(value.get("action") or "") == "confirm":
+        try:
+            async with _db_session() as db:
+                outcome = await asyncio.shield(
+                    confirm.handle_action(
+                        db, value=value, operator_open_id=operator_open_id, execute=False
+                    )
+                )
+                draft = outcome.draft
+        except Exception:
+            logger.exception("仓库网关登记确认处理异常")
+            return {
+                "config": {"update_multi": True},
+                "elements": [
+                    {"tag": "markdown", "content": "⚠️ 处理失败，请稍后重试"}
+                ],
+            }
+        if outcome.ok and draft is not None:
+            _spawn_receipt_task(_run_submit_background(draft.id))
+        return {
+            "config": {"update_multi": True},
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": f"⏳ 已确认，正在登记…（草稿 {draft.draft_no}）"
+                    if outcome.ok and draft is not None
+                    else f"⚠️ {outcome.message}",
+                }
+            ],
+        }
+
+    # 非submit场景（send_card 等）：原同步路径
     try:
         async with _db_session() as db:
             # shield：event_client 2.9s ACK 超时取消外层等待时，内部处理继续跑完，

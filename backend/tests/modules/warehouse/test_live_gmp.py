@@ -734,8 +734,8 @@ async def test_live_gmp_missing_field_asks(
     # 无 GMP 草稿落库（工具 incomplete 分支不建稿；LLM 不应硬写）
     assert await _gmp_drafts(agent_db, open_id) == []
 
-    # 回复含追问（问句或明确点名缺失字段）
-    assert len(captured_sends) >= 2
+    # 回复含追问（问句或明确点名缺失字段）；无占位卡（OK 表情承担确认）
+    assert len(captured_sends) >= 1
     reply = _card_of(captured_sends[-1])
     text = reply["elements"][0]["content"]
     assert "？" in text or "?" in text or "生产批号" in text, (

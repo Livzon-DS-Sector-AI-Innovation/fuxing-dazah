@@ -264,7 +264,10 @@ async def test_live_image_event_full_pipeline_to_submit(
         )
     )
     assert update is not None
-    assert "已登记" in update["elements"][0]["content"]
+    # submit 类场景：ACK 卡片更新为「登记中」，submit 后台执行（回执按原渠道）
+    assert "正在登记" in update["elements"][0]["content"]
+    await _drain_background_tasks()
+    await gateway_db.refresh(draft)
     assert draft.status == "submitted"
 
     record_id = draft.target_record_id or ""

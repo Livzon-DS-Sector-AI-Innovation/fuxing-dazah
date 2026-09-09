@@ -464,8 +464,8 @@ async def test_live_stock_query_renders_dedicated_stock_card(
         )
     )
 
-    assert len(captured_sends) == 2  # 占位卡片 + 结果卡片
-    card = _card_of(captured_sends[1])
+    assert len(captured_sends) >= 1  # 结果卡片（OK 表情承担收到确认，无占位）
+    card = _card_of(captured_sends[0])
     title = _title(card)
     print(f"[结果卡片] title={title}")
     assert "库存" in title, f"结果卡片应为专用库存卡片，实际标题: {title}"
@@ -485,7 +485,7 @@ async def test_live_dead_report_renders_report_card(
     票 08 起系统提示词注入技能目录：「查呆料」匹配 dead-stock-analysis 触发
     描述，LLM 可能先 load_skill + plan_task（捕获序列中插入计划/进度卡片），
     终局 Reply.data 常为 update_plan（无专用渲染器）→ 降级文本卡承载分组
-    报告。故断言放宽为：占位卡之后，最后一张卡片正文含真实呆料物料。
+    报告。故断言放宽为：最后一张卡片正文含真实呆料物料。
     """
     baseline = await query_tools.query_report("dead")
     if not baseline.get("total"):
@@ -500,10 +500,10 @@ async def test_live_dead_report_renders_report_card(
         )
     )
 
-    assert len(captured_sends) >= 2, "占位卡片 + 至少一张计划/结果卡片"
+    assert len(captured_sends) >= 1, "至少一张计划/结果卡片（无占位）"
     cards = [_card_of(payload) for payload in captured_sends]
     print(f"[卡片序列] {[_title(c) for c in cards]}")
-    card = cards[-1]  # 终局结果卡在捕获序列末尾（占位卡最前，技能计划卡居中）
+    card = cards[-1]  # 终局结果卡在捕获序列末尾（技能计划卡居中）
     body = _body(card)
     assert any(n in body for n in names[:5]), (
         f"结果卡应含真实呆料物料（{names[:5]}）: {body[:300]}"

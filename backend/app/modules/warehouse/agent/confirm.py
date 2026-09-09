@@ -60,12 +60,14 @@ def is_registered_scene(scene: str) -> bool:
 
 
 @dataclass
+@dataclass
 class ConfirmOutcome:
     """一次确认操作的结构化结果（gateway 渲染卡片更新用）。"""
 
     ok: bool
     status: str  # confirmed/cancelled/denied/expired/invalid/error
     message: str  # 用户可见提示
+    draft: Any | None = None  # execute=False 时携带草稿（gateway 后台执行 submit 用）
 
 
 def _generate_draft_no() -> str:
@@ -136,7 +138,11 @@ def build_confirm_card(draft: WarehouseAgentDraft) -> dict[str, Any]:
 
 
 async def handle_action(
-    db: AsyncSession, *, value: dict[str, Any], operator_open_id: str
+    db: AsyncSession,
+    *,
+    value: dict[str, Any],
+    operator_open_id: str,
+    execute: bool = True,
 ) -> ConfirmOutcome:
     """处理卡片按钮点击（value 来自 card.action.trigger 的 action.value）。
 
@@ -199,6 +205,14 @@ async def handle_action(
     if action != "confirm":
         await _audit(draft_id, "denied", "unknown_action")
         return ConfirmOutcome(ok=False, status="invalid", message="未知操作")
+
+    if not execute:
+        # submit 类场景（receipt/gmp_outbound/finished_outbound）：确认门只
+        # 置状态，回调由 gateway 后台执行（执行耗时可能超过 ACK 窗口），
+        # 回执按发起渠道（draft.chat_id）发送
+        await agent_repository.set_agent_draft_status(db, draft, "confirmed")
+        await _audit(draft_id, "ok")
+        return ConfirmOutcome(ok=True, status="confirmed", message="已确认，正在登记…", draft=draft)
 
     callback = _confirm_callbacks.get(draft.scene)
     if callback is None:

@@ -297,6 +297,11 @@ async def build_system_prompt(
         "区分：原辅料/GMP 物料 = GMP 出库登记（create_gmp_draft）；成品"
         "（硫酸黏菌素/万古霉素等成品品种）= 成品出库登记"
         "（create_finished_outbound_draft）。",
+        "- **每条新消息独立判定场景**：同会话中先前的登记/草稿不影响本条"
+        "消息的场景——本条消息说「登记 GMP 出库」就用 create_gmp_draft，"
+        "说「登记成品出库」就用 create_finished_outbound_draft，即使上一条"
+        "消息登记的是另一类。禁止因为历史里已有某场景草稿而拒绝或回避本条"
+        "消息的登记请求。",
     ]
     parts += ["", "## 四、长期记忆（只影响表达与默认参数，不影响数据）"]
     if memory_fragment.strip():

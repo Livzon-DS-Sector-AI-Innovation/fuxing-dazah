@@ -173,23 +173,18 @@ def _unique_chat(prefix: str) -> str:
 async def test_text_private_message_e2e(
     gateway_db: AsyncSession, captured_sends: list[dict[str, str]]
 ) -> None:
-    """私聊文本 → 占位卡片 + 结果卡片两次发送（dry-run 捕获），全程无异常。"""
+    """私聊文本 → 结果卡片一次发送（OK 表情承担收到确认，无占位），全程无异常。"""
     event = _im_message_event(
         chat_id=_unique_chat("oc_p2p"), sender_open_id="ou_user_a", text="你好"
     )
     await gateway.handle_im_message(event)
 
-    assert len(captured_sends) == 2
-    first, second = captured_sends
-    assert first["receive_id_type"] == "open_id"
-    assert first["receive_id"] == "ou_user_a"
-    assert first["msg_type"] == "interactive"
-    placeholder = _card_of(first)
-    assert "正在处理" in placeholder["header"]["title"]["content"]
-
-    assert second["receive_id_type"] == "open_id"
-    assert second["msg_type"] == "interactive"
-    result = _card_of(second)
+    assert len(captured_sends) == 1
+    only = captured_sends[0]
+    assert only["receive_id_type"] == "open_id"
+    assert only["receive_id"] == "ou_user_a"
+    assert only["msg_type"] == "interactive"
+    result = _card_of(only)
     # 票03 起 Runner 为真实现（LLM 真调），回复内容不固定——断言非空即可
     assert result["elements"][0]["content"].strip()
 
@@ -233,10 +228,10 @@ async def test_group_mention_responded(
     )
     await gateway.handle_im_message(event)
 
-    assert len(captured_sends) == 2
+    assert len(captured_sends) == 1
     assert captured_sends[0]["receive_id_type"] == "chat_id"
     assert captured_sends[0]["receive_id"] == chat_id
-    result = _card_of(captured_sends[1])
+    result = _card_of(captured_sends[0])
     # 票03 起 Runner 为真实现（LLM 真调），回复内容不固定——断言非空即可
     assert result["elements"][0]["content"].strip()
 
@@ -260,10 +255,10 @@ async def test_duplicate_message_deduped(
             message_id=message_id,
         )
         await gateway.handle_im_message(event)
-        assert len(captured_sends) == 2
+        assert len(captured_sends) == 1
 
         await gateway.handle_im_message(event)  # 同 message_id 重复投递
-        assert len(captured_sends) == 2  # 第二次零发送
+        assert len(captured_sends) == 1  # 第二次零发送
     finally:
         await fresh_redis.delete(dedup_key)
 
@@ -349,7 +344,9 @@ async def test_session_persisted(
 
 
 class _BoomRunner:
-    async def run(self, session: Any, text: str) -> Any:
+    async def run(
+        self, session: Any, text: str, scene_hint: str | None = None
+    ) -> Any:  # scene_hint 兼容：gateway 预判注入（2026-09-08）
         raise RuntimeError("runner boom")
 
 
@@ -365,8 +362,8 @@ async def test_runner_error_degrades(
     )
     await gateway.handle_im_message(event)
 
-    assert len(captured_sends) == 2  # 占位卡片 + 降级卡片
-    error_card = _card_of(captured_sends[1])
+    assert len(captured_sends) == 1  # 降级卡片（无占位，OK 表情承担确认）
+    error_card = _card_of(captured_sends[0])
     assert "处理失败" in error_card["header"]["title"]["content"]
 
     audits = (

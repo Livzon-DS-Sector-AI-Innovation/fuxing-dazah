@@ -180,7 +180,9 @@ class Runner:
 
     # ── 主循环 ──
 
-    async def run(self, session: WarehouseAgentSession, text: str) -> Reply:
+    async def run(
+        self, session: WarehouseAgentSession, text: str, scene_hint: str | None = None
+    ) -> Reply:
         llm = self._ensure_llm()
         history_messages = list((session.history or {}).get("messages") or [])
         trimmed = history_messages[-(self._session_rounds * 2) :]
@@ -190,10 +192,18 @@ class Runner:
             system_text += (
                 "\n\n## 六、当前待处理事项（用户可能追问进展）\n" + pending_note
             )
+        user_message: dict[str, Any] = {"role": "user", "content": text}
+        if scene_hint:
+            # 场景预判提示紧贴本轮用户消息（gateway 关键词预判注入，对抗
+            # 同会话历史场景的串场倾向）；hint 不落 history（用户原文落库）
+            user_message = {
+                "role": "user",
+                "content": f"{scene_hint}\n\n用户消息：{text}",
+            }
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_text},
             *trimmed,
-            {"role": "user", "content": text},
+            user_message,
         ]
 
         tool_logs: list[dict[str, Any]] = []

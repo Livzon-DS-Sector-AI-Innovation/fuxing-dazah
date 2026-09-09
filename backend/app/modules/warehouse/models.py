@@ -271,6 +271,7 @@ class WarehouseAgentDraft(BaseModel):
     target_table: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="目标表 table_id")
     target_record_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="写入成功后回填的 record_id")
     created_by_open_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="发起人飞书 open_id")
+    chat_id: Mapped[str | None] = mapped_column(String(60), nullable=True, comment="发起会话 chat_id（回执按原渠道回复）")
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="草稿过期时间")
 
 

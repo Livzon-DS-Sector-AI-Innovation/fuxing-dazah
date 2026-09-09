@@ -355,7 +355,7 @@ def test_render_receipt_result_card_ok() -> None:
     assert card["header"]["template"] == "green"
     content = _card_content(card)
     assert "**草稿**：WR20990101-010" in content
-    assert "**Base 记录**：recABC123" in content
+    assert "**记录 ID**：recABC123" in content  # 无 target 坐标 → 无链接，退化为 ID 行
     assert "1. 入库数量：32000" in content
     assert "✅ 数量/批号/单位/供应商 与 Base 读回一致" in content
     assert RECEIPT_DEGRADE_MATERIAL_HINT in content
