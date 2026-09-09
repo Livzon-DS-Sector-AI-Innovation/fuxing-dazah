@@ -362,10 +362,10 @@ async def send_confirm_card(
     try:
         if chat_id:
             confirm_message_id = await notification.send_card(chat_id, card)
-            sent = confirm_message_id is not None
         elif open_id:
-            sent = await notification.send_card_to_user(open_id, card)
-            confirm_message_id = "sent"  # 私聊 send_card_to_user 不回 message_id
+            # 私聊场景（p2p chat_id 未传时回落 open_id 直发）
+            confirm_message_id = await notification.send_card_to_user(open_id, card)
+        sent = confirm_message_id is not None
     except Exception:  # noqa: BLE001 — 发送异常按失败落审计，不中断 Pipeline
         logger.exception(
             "入库确认卡片发送异常: draft_no=%s chat_id=%s",

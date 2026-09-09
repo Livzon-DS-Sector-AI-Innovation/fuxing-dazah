@@ -947,7 +947,12 @@ _RESULT_VALUE_MAX = 30
 
 
 def _fmt_ts_value(value: Any) -> str:
-    """写入字段展示值格式化：毫秒时间戳（飞书 datetime 写入契约）转 YYYY-MM-DD。"""
+    """写入字段展示值格式化：毫秒时间戳转日期；附件（file_token dict/list）
+    显示为「📎 附件已上传」而非原始 token。"""
+    if isinstance(value, dict) and "file_token" in value:
+        return "📎 附件已上传"
+    if isinstance(value, list) and value and isinstance(value[0], dict) and "file_token" in value[0]:
+        return f"📎 附件已上传（{len(value)} 个）"
     if isinstance(value, int) and not isinstance(value, bool) and value > 10**12:
         try:
             from datetime import datetime as _dt

@@ -539,11 +539,13 @@ async def _process_receipt_image(
             aligned = await align_receipt(recognized)
             await mark_aligned(db, draft, aligned)
             # 群聊发群卡片、私聊发发起人（与 _send_card_to 通道选择同口径）
+            # chat_id 统一传（p2p 会话也有 chat_id，确认后 PATCH/回执
+            # 按原渠道回复；open_id 作为无 chat_id 时的回落）
             await send_confirm_card(
                 db,
                 draft,
-                chat_id=chat_id if chat_type == "group" else None,
-                open_id=open_id if chat_type != "group" else None,
+                chat_id=chat_id,
+                open_id=open_id if not chat_id else None,
             )
             draft_no = draft.draft_no
             match_confidence = aligned.match_confidence

@@ -153,7 +153,7 @@ async def send_card(
 
 async def send_card_to_user(
     open_id: str, card: dict[str, Any], dry_run: bool | None = None
-) -> bool:
+) -> str | None:
     """使用仓储飞书应用发送卡片消息给单个用户（私聊，按 open_id）。
 
     Args:
@@ -162,7 +162,8 @@ async def send_card_to_user(
         dry_run: None=跟随模块级开关；True=只构建消息体并记录日志；False=真发送
 
     Returns:
-        True 表示发送成功（dry_run 时返回模拟成功 True），False 表示失败
+        成功返回飞书 message_id（如 "om_xxx"；dry_run 时返回 "dry_run" 占位），
+        失败返回 None（不抛异常）
     """
     payload = _build_create_payload(
         "open_id", open_id, "interactive", _json_dumps(card)
@@ -171,8 +172,8 @@ async def send_card_to_user(
         logger.info(
             "[dry_run] 仓库飞书卡片(私聊): %s", _json_dumps(payload)[:500]
         )
-        return True
-    return await _send_create(payload) is not None
+        return DRY_RUN_MESSAGE_ID
+    return await _send_create(payload)
 
 
 async def add_reaction(

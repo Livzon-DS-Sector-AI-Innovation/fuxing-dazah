@@ -209,7 +209,7 @@ async def request_card_send(
     if chat_id:
         sent = await notification.send_card(chat_id, card) is not None
     else:
-        sent = await notification.send_card_to_user(requester_open_id, card)
+        sent = await notification.send_card_to_user(requester_open_id, card) is not None
     if not sent:
         logger.warning(
             "外发确认预览卡片发送失败: draft_no=%s requester=%s",
@@ -317,7 +317,7 @@ async def _fire_reminder(reminder_id: str, payload: dict[str, Any]) -> None:
         if channel == "chat_id":
             sent = await notification.send_card(receiver, card) is not None
         else:
-            sent = await notification.send_card_to_user(receiver, card)
+            sent = await notification.send_card_to_user(receiver, card) is not None
     except Exception as exc:  # noqa: BLE001 — 发送异常按失败落库
         logger.exception("仓库提醒卡片发送异常: reminder_id=%s", reminder_id)
         await _mark_reminder(reminder_id, "failed", error_code=type(exc).__name__[:30])
