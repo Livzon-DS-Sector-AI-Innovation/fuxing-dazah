@@ -358,11 +358,14 @@ async def send_confirm_card(
 
     card = render_receipt_confirm_card(draft)
     sent = False
+    confirm_message_id: str | None = None
     try:
         if chat_id:
-            sent = await notification.send_card(chat_id, card) is not None
+            confirm_message_id = await notification.send_card(chat_id, card)
+            sent = confirm_message_id is not None
         elif open_id:
             sent = await notification.send_card_to_user(open_id, card)
+            confirm_message_id = "sent"  # 私聊 send_card_to_user 不回 message_id
     except Exception:  # noqa: BLE001 — 发送异常按失败落审计，不中断 Pipeline
         logger.exception(
             "入库确认卡片发送异常: draft_no=%s chat_id=%s",
@@ -387,6 +390,19 @@ async def send_confirm_card(
             started=started,
         )
         return
+    if confirm_message_id and confirm_message_id != "dry_run":
+        try:
+            from app.core.redis import redis_client
+
+            await redis_client.set(
+                f"wh:draft:card:{draft.id}",
+                confirm_message_id,
+                ex=600,
+            )
+        except Exception:  # noqa: BLE001 — 存储失败仅影响卡片更新，不阻断
+            logger.warning(
+                "确认卡片 message_id 存储失败: draft_no=%s", draft.draft_no
+            )
     logger.info(
         "入库确认卡片已发送: draft_no=%s chat_id=%s",
         draft.draft_no,

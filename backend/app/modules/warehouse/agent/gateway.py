@@ -372,6 +372,31 @@ async def handle_im_message(event: dict[str, Any]) -> None:
     )
 
 
+async def _patch_confirm_card(draft: Any, state: str) -> None:
+    """PATCH 更新原确认卡片状态（登记中/已登记/失败），message_id 取 Redis。"""
+
+    from app.core.redis import redis_client
+    from app.modules.warehouse.agent import cards
+    from app.modules.warehouse.feishu import notification
+
+    try:
+        raw = await redis_client.get(f"wh:draft:card:{draft.id}")
+        if not raw:
+            return
+        message_id = raw.decode() if isinstance(raw, bytes) else str(raw)
+        if state == "processing":
+            card = cards.render_confirm_status_card(
+                draft, state="processing", title="⏳ 登记中"
+            )
+        else:
+            card = cards.render_confirm_status_card(
+                draft, state="done", title="✅ 登记完成"
+            )
+        await notification.update_card(message_id, card)
+    except Exception:  # noqa: BLE001 — 卡片状态更新失败不阻断主流程
+        logger.warning("确认卡片状态更新失败: draft_no=%s state=%s", draft.draft_no, state)
+
+
 async def _run_submit_background(draft_id: uuid.UUID) -> None:
     """后台执行登记提交（submit 类场景确认后）：回调 → 回执按原渠道发送。
 
@@ -395,10 +420,12 @@ async def _run_submit_background(draft_id: uuid.UUID) -> None:
                 return
             try:
                 await submit_fn(db, draft)
+                await _patch_confirm_card(draft, "done")
             except DraftFlowError as exc:
                 logger.error("后台登记执行失败: draft_no=%s err=%s", draft.draft_no, exc)
                 await agent_repository.set_agent_draft_status(db, draft, "failed")
                 await _send_failure_reply(draft, str(exc))
+                await _patch_confirm_card(draft, "failed")
     except Exception:  # noqa: BLE001 — 后台任务顶层兜底
         logger.exception("后台登记任务异常: draft_id=%s", draft_id)
         try:
@@ -712,16 +739,15 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
                 ],
             }
         if outcome.ok and draft is not None:
+            # PATCH 原确认卡片为「登记中」（按钮移除）——不依赖卡片回调 ACK
+            # 协议（lark_oapi SDK 对 CARD 帧不处理，回调响应更新不可靠，实测）
+            asyncio.create_task(_patch_confirm_card(draft, "processing"))
             _spawn_receipt_task(_run_submit_background(draft.id))
+            return {"code": 200}  # ACK 通用信封（卡片更新走 PATCH）
         return {
             "config": {"update_multi": True},
             "elements": [
-                {
-                    "tag": "markdown",
-                    "content": f"⏳ 已确认，正在登记…（草稿 {draft.draft_no}）"
-                    if outcome.ok and draft is not None
-                    else f"⚠️ {outcome.message}",
-                }
+                {"tag": "markdown", "content": f"⚠️ {outcome.message}"}
             ],
         }
 

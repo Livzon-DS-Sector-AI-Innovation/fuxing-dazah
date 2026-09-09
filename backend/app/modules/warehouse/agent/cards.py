@@ -791,6 +791,38 @@ def _render_finished_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
+def render_confirm_status_card(
+    draft: Any, *, state: str, title: str
+) -> dict[str, Any]:
+    """确认卡片的状态更新视图（PATCH 原卡）：登记中 / 已确认 / 已取消 / 失败。
+
+    state: processing（登记中）/ done（已登记）/ cancelled（已取消）/
+    failed（失败）。字段清单沿用 render_receipt_confirm_card 的正文结构，
+    按钮区按状态替换（processing=无按钮，done/cancelled/failed=状态说明）。
+    """
+    confirm_card = render_receipt_confirm_card(draft)
+    status_line = {
+        "processing": "⏳ **已确认，正在登记…**",
+        "done": "✅ **已确认，登记完成**（结果见下方回执）",
+        "cancelled": "❌ **已取消**",
+        "failed": "⚠️ **登记未完成**（详见下方失败回执）",
+    }.get(state, f"状态：{state}")
+    elements = [
+        {"tag": "markdown", "content": status_line},
+    ]
+    # 保留原卡片的字段清单（确认卡正文 index 0），去掉按钮与引导行
+    for el in confirm_card.get("elements", []):
+        content = str(el.get("content") or "")
+        if "确认前请核对" in content or "确认登记" in content:
+            continue
+        elements.append(el)
+    return {
+        "config": {"update_multi": True},
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": "blue"},
+        "elements": elements,
+    }
+
+
 def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """登记确认卡片（pipeline.draft_flow.send_confirm_card 发送）。
 

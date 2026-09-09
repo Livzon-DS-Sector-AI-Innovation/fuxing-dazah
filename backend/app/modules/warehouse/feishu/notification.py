@@ -225,3 +225,48 @@ async def add_reaction(
             message_id, emoji_type, exc_info=True,
         )
         return False
+
+
+async def update_card(
+    message_id: str, card: dict[str, Any], dry_run: bool | None = None
+) -> bool:
+    """更新机器人已发送的卡片（PATCH /im/v1/messages/{message_id}）。
+
+    用于确认卡片状态推进：确认中 → 登记中 → 已登记（按钮同步禁用）。
+    失败内部吞掉返回 False（更新失败不影响主流程状态机）。
+    """
+    if not message_id:
+        return False
+    content = _json_dumps(card)
+    if _is_dry_run(dry_run):
+        logger.info(
+            "[dry_run] 仓库飞书卡片更新: message_id=%s content=%s",
+            message_id, content[:500],
+        )
+        return True
+    try:
+        client = await get_warehouse_feishu_client()
+        token = await get_warehouse_tenant_token(client)
+        http = httpx.AsyncClient(timeout=15.0)
+        try:
+            resp = await http.patch(
+                f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"content": content},
+            )
+        finally:
+            await http.aclose()
+        data = resp.json()
+        if resp.status_code == 200 and data.get("code") == 0:
+            return True
+        logger.warning(
+            "仓库飞书卡片更新失败: message_id=%s status=%s resp=%s",
+            message_id, resp.status_code, str(data)[:200],
+        )
+        return False
+    except Exception:  # noqa: BLE001 — 卡片更新失败不阻断主流程
+        logger.warning("仓库飞书卡片更新异常: message_id=%s", message_id, exc_info=True)
+        return False
