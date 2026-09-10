@@ -1123,55 +1123,40 @@ class SafetyService:
         """
         from app.modules.safety.schemas import RISK_LEVELS, get_risk_level
 
-        if script_number == 3:
-            l = update_data.get("l_inherent")
-            e = update_data.get("e_inherent")
-            c = update_data.get("c_inherent")
-            if all(v is not None for v in (l, e, c)):
-                # D 值：优先用 AI 输出，否则后端计算
-                if update_data.get("d_inherent") is None:
-                    update_data["d_inherent"] = l * e * c
-                # 风险等级 key：优先用 AI 输出
-                if update_data.get("inherent_risk_level") is None:
-                    level = get_risk_level(update_data["d_inherent"])
-                    update_data["inherent_risk_level"] = level["key"]
-                # 补充 label / control_level / responsible_person（后端计算）
-                for rl in RISK_LEVELS:
-                    if rl["key"] == update_data.get("inherent_risk_level"):
-                        update_data["inherent_risk_label"] = rl["label"]
-                        update_data["control_level"] = rl["control_level"]
-                        update_data["responsible_person"] = rl["responsible_person"]
-                        break
+        # 脚本 3/5/7 共用同一套 L×E×C 兜底逻辑，仅字段前缀与补充展示字段不同
+        variants: dict[int, tuple[str, bool, bool]] = {
+            3: ("inherent", True, True),   # 补 label + control_level/responsible
+            5: ("residual", True, False),  # 补 label
+            7: ("post", True, False),      # 补 label
+        }
+        prefix, fill_label, fill_control = variants.get(
+            script_number, (None, False, False)
+        )
+        if prefix is None:
+            return
 
-        elif script_number == 5:
-            l = update_data.get("l_residual")
-            e = update_data.get("e_residual")
-            c = update_data.get("c_residual")
-            if all(v is not None for v in (l, e, c)):
-                if update_data.get("d_residual") is None:
-                    update_data["d_residual"] = l * e * c
-                if update_data.get("residual_risk_level") is None:
-                    level = get_risk_level(update_data["d_residual"])
-                    update_data["residual_risk_level"] = level["key"]
-                for rl in RISK_LEVELS:
-                    if rl["key"] == update_data.get("residual_risk_level"):
-                        update_data["residual_risk_label"] = rl["label"]
-                        break
+        l = update_data.get(f"l_{prefix}")
+        e = update_data.get(f"e_{prefix}")
+        c = update_data.get(f"c_{prefix}")
+        if not all(v is not None for v in (l, e, c)):
+            return
 
-        elif script_number == 7:
-            l = update_data.get("l_post")
-            e = update_data.get("e_post")
-            c = update_data.get("c_post")
-            if all(v is not None for v in (l, e, c)):
-                if update_data.get("d_post") is None:
-                    update_data["d_post"] = l * e * c
-                if update_data.get("post_risk_level") is None:
-                    level = get_risk_level(update_data["post_risk_level"])
-                    update_data["post_risk_level"] = level["key"]
-                for rl in RISK_LEVELS:
-                    if rl["key"] == update_data.get("post_risk_level"):
-                        update_data["post_risk_label"] = rl["label"]
-                        break
+        # D 值：优先用 AI 输出，否则后端计算
+        if update_data.get(f"d_{prefix}") is None:
+            update_data[f"d_{prefix}"] = l * e * c
+        # 风险等级 key：优先用 AI 输出
+        if update_data.get(f"{prefix}_risk_level") is None:
+            level = get_risk_level(update_data[f"d_{prefix}"])
+            update_data[f"{prefix}_risk_level"] = level["key"]
+        # 补充展示字段（后端计算）
+        for rl in RISK_LEVELS:
+            if rl["key"] == update_data.get(f"{prefix}_risk_level"):
+                if fill_label:
+                    update_data[f"{prefix}_risk_label"] = rl["label"]
+                if fill_control:
+                    update_data["control_level"] = rl["control_level"]
+                    update_data["responsible_person"] = rl["responsible_person"]
+                break
 
     # ==================== 附件上传 ====================
 

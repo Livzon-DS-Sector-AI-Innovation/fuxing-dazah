@@ -19,8 +19,9 @@ migration 可直接引用。
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 # 字段类型语义对齐 app/modules/safety/audit/parser.py（text/person/multi_select/
@@ -1069,6 +1070,39 @@ for _domain in _DOMAINS:
     assert len(_kind_keys) == len(set(_kind_keys)), (
         f"Bitable 域 {_domain.key} 存在重复 kind key"
     )
+
+
+def _apply_env_overrides() -> dict[str, DomainInfo]:
+    """按 ``SAFETY_BITABLE_APP_TOKEN_{DOMAIN_KEY}`` 覆盖各域 app_token。
+
+    代码内默认值是本厂测试版 Base token（与 .env.development 一致）；换环境
+    部署时用同名 env 键覆盖，不需改代码。DB 活行优先级始终高于本 registry。
+    """
+    overridden: dict[str, DomainInfo] = {}
+    for domain in _DOMAINS:
+        env_key = f"SAFETY_BITABLE_APP_TOKEN_{domain.key.upper()}"
+        token = os.environ.get(env_key, "").strip()
+        if not token:
+            overridden[domain.key] = domain
+            continue
+        new_domain = domain
+        new_kinds = []
+        for kind in domain.kinds:
+            if kind.default_connection is not None:
+                kind = replace(
+                    kind,
+                    default_connection=replace(
+                        kind.default_connection, app_token=token
+                    ),
+                )
+            new_kinds.append(kind)
+        new_domain = replace(new_domain, kinds=tuple(new_kinds))
+        overridden[domain.key] = new_domain
+    return overridden
+
+
+# 环境覆盖在导入时应用一次（registry 是迁移播种源 + 运行时 fallback）
+REGISTRY = _apply_env_overrides()
 
 
 def get_domain(key: str) -> DomainInfo:
