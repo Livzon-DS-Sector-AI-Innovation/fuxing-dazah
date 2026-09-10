@@ -44,6 +44,7 @@ export default function OccupationalHealthClient() {
             label: '体检记录',
             children: (
               <OhExamsPanel
+                key={examKeyword || 'exams-default'}
                 initialKeyword={examKeyword}
                 onConsumedKeyword={() => setExamKeyword('')}
               />

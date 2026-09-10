@@ -54,6 +54,10 @@ export async function apiGet<T>(url: string, options?: RequestInit): Promise<T> 
   return (json as any).data ?? json
 }
 
+// ── 统一 API 基址（Server/Client 组件通用）──
+export const API_BASE_URL =
+  process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+
 export async function apiPost<T>(url: string, body?: unknown, options?: RequestInit): Promise<T> {
   const json = await request<T>(url, {
     ...options,

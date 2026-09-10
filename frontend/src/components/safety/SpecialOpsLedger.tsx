@@ -14,6 +14,8 @@ import {
   AlertOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { exportSpecialOpsLedger, parseSpecialOpsQuery } from '@/actions/safety'
+import { downloadBase64Excel } from '@/actions/safety/_utils'
 import type { Dayjs } from 'dayjs'
 import { useQuery } from '@tanstack/react-query'
 import { fetchSpecialOperationLedger, fetchSpecialOperationLedgerStats } from '@/lib/api/safety/special-ops'
@@ -94,7 +96,6 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
   const total = listData?.total ?? 0
 
   // ── AI Export ──
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
 
   const handleAIExport = async () => {
     if (!exportQuery.trim()) {
@@ -103,14 +104,9 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
     }
     setExportLoading(true)
     try {
-      const parseRes = await fetch(`${API_BASE}/safety/special-operation-ledger/parse-query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ natural_query: exportQuery }),
-      })
-      const parseData = await parseRes.json()
-      setExportExplanation(parseData.data?.explanation || '')
-      await downloadExcel(parseData.data || {})
+      const parsed = await parseSpecialOpsQuery(exportQuery)
+      setExportExplanation(parsed.explanation || '')
+      await downloadExcel(parsed.filters || {})
     } catch {
       message.error('AI 解析失败，使用当前筛选条件导出')
       await downloadExcel({})
@@ -134,21 +130,8 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
       }
       Object.keys(body).forEach(k => { if (body[k] === undefined || body[k] === null || body[k] === '') delete body[k] })
 
-      const res = await fetch(`${API_BASE}/safety/special-operation-ledger/export`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) throw new Error('导出失败')
-      const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `特殊作业台账_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      const { blob } = await exportSpecialOpsLedger(body)
+      downloadBase64Excel(blob, `特殊作业台账_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`)
       message.success('导出成功')
       setExportModalOpen(false)
       setExportQuery('')

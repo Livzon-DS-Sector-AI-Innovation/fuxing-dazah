@@ -2605,3 +2605,46 @@ export async function queryKnowledgeChat(
     body: JSON.stringify({ query, history: history || [] }),
   })
 }
+
+// ==================== 台账导出（Server Action 返回 base64，客户端下载） ====================
+
+export async function exportSpecialOpsLedger(filters: Record<string, unknown>): Promise<{ blob: string; filename: string }> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/safety/special-operation-ledger/export`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json' },
+    body: JSON.stringify(filters),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  const arrayBuffer = await res.arrayBuffer()
+  const base64 = Buffer.from(arrayBuffer).toString('base64')
+  return { blob: base64, filename: '特殊作业台账.xlsx' }
+}
+
+export async function parseSpecialOpsQuery(naturalQuery: string): Promise<{
+  explanation?: string
+  filters: Record<string, unknown>
+}> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/safety/special-operation-ledger/parse-query`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ natural_query: naturalQuery }),
+  })
+  if (!res.ok) throw new Error('AI 解析失败')
+  const json = await res.json()
+  return { explanation: json.data?.explanation || '', filters: json.data || {} }
+}
+
+export async function exportKeyRiskOpsReports(filters: Record<string, unknown>): Promise<{ blob: string; filename: string }> {
+  const authHeaders = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/safety/key-risk-operation-reports/export`, {
+    method: 'POST',
+    headers: { ...authHeaders, 'Content-Type': 'application/json' },
+    body: JSON.stringify(filters),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  const arrayBuffer = await res.arrayBuffer()
+  const base64 = Buffer.from(arrayBuffer).toString('base64')
+  return { blob: base64, filename: '关键风险作业台账.xlsx' }
+}

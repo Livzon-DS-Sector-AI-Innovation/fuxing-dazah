@@ -1,7 +1,6 @@
 import type { OperationRegulation, OperationRegulationQueryParams, RegulationRevision, RegulationRevisionQueryParams } from '@/types/safety'
-import { apiFetchPaginated } from '@/lib/http-client'
+import { apiFetchPaginated, API_BASE_URL } from '@/lib/http-client'
 
-const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 /** 安全操作规程列表（分页） */
 export async function fetchRegulations(

@@ -1,7 +1,6 @@
 import type { OhPerson, OhPersonQueryParams, OhPersonStats, OhHealthExam, OhHealthExamQueryParams, OhExamStats, OhFollowup, OhFollowupQueryParams, OhPosition, OhPositionQueryParams, OhHazardFactor, OhHazardFactorQueryParams } from '@/types/safety'
-import { apiGet, apiFetchPaginated } from '@/lib/http-client'
+import { apiGet, apiFetchPaginated, API_BASE_URL } from '@/lib/http-client'
 
-const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 /** 职业健康人员台账（分页） */
 export async function fetchOhPersons(

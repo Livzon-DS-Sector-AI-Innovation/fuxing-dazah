@@ -29,3 +29,19 @@ export function buildQueryString(params: object): string {
   const qs = searchParams.toString()
   return qs ? `?${qs}` : ''
 }
+
+/** base64 → 浏览器下载（与 meter 模块导出基线一致） */
+export function downloadBase64Excel(base64: string, filename: string): void {
+  const byteChars = atob(base64)
+  const byteNums = new Array(byteChars.length)
+  for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i)
+  const blob = new Blob([new Uint8Array(byteNums)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = window.URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  window.URL.revokeObjectURL(url)
+  document.body.removeChild(a)
+}

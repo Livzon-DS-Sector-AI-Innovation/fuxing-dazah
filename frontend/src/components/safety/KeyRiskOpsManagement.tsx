@@ -9,6 +9,8 @@ import {
   ExportOutlined, EyeOutlined, ReloadOutlined, SearchOutlined, SyncOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { exportKeyRiskOpsReports } from '@/actions/safety'
+import { downloadBase64Excel } from '@/actions/safety/_utils'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchKeyRiskOperationReports, fetchKeyRiskOperationStats } from '@/lib/api/safety/key-risk-operation'
 import { syncKeyRiskOperations } from '@/actions/safety'
@@ -153,22 +155,8 @@ export default function KeyRiskOpsManagement() {
         keyword: keyword.trim() || undefined,
       }
       Object.keys(body).forEach(k => { if (body[k] === undefined || body[k] === null || body[k] === '') delete body[k] })
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
-      const res = await fetch(`${API_BASE}/safety/key-risk-operation-reports/export`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) throw new Error('导出失败')
-      const blob = await res.blob()
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `关键风险作业台账_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      const { blob } = await exportKeyRiskOpsReports(body)
+      downloadBase64Excel(blob, `关键风险作业台账_${dayjs().format('YYYYMMDD_HHmmss')}.xlsx`)
       message.success('导出成功')
     } catch {
       message.error('导出失败')

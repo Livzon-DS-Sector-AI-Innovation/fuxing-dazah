@@ -36,6 +36,8 @@ import {
   getHazards,
   runHazardAI,
   deleteHazard,
+  uploadHazardPhoto,
+  getHazard,
 } from '@/actions/safety'
 import type { HazardReport, HazardReportFormData } from '@/types/safety'
 import dayjs from 'dayjs'
@@ -173,7 +175,6 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
   // ── 已完成状态 ──
   const [completedHazardNo, setCompletedHazardNo] = useState('')
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
 
   // 加载草稿列表
   const loadDrafts = useCallback(async () => {
@@ -245,15 +246,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
       if (files.length > 0) {
         for (const file of files) {
           try {
-            const formData = new FormData()
-            formData.append('file', file)
-            const res = await fetch(`${API_BASE}/safety/hazards/${hazard.id}/upload-photo`, {
-              method: 'POST',
-              body: formData,
-            })
-            if (!res.ok) {
-              message.warning('部分图片上传失败，可稍后重试')
-            }
+            await uploadHazardPhoto(hazard.id, file)
           } catch {
             message.warning('部分图片上传失败，可稍后重试')
           }
@@ -344,12 +337,7 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
       if (files.length > 0) {
         for (const file of files) {
           try {
-            const formData = new FormData()
-            formData.append('file', file)
-            await fetch(`${API_BASE}/safety/hazards/${hazard.id}/upload-photo`, {
-              method: 'POST',
-              body: formData,
-            })
+            await uploadHazardPhoto(hazard.id, file)
           } catch {
             // 照片批量上传：单张失败不阻塞其余
           }
@@ -370,12 +358,12 @@ export default function HazardInspectionFlow({ variant = 'page', onDone }: Props
 
   // ── 刷新隐患数据 ──
   const refreshHazard = async (id: string): Promise<HazardReport | null> => {
-    const res = await fetch(`${API_BASE}/safety/hazards/${id}`)
-    if (res.ok) {
-      const json = await res.json()
-      return json.data || json
+    try {
+      const res = await getHazard(id)
+      return res.code === 200 ? res.data : null
+    } catch {
+      return null
     }
-    return null
   }
 
   // ── 从草稿继续登记 ──

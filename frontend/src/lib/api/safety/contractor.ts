@@ -1,7 +1,6 @@
 import type { Contractor, ContractorQueryParams } from '@/types/safety'
-import { apiFetchPaginated } from '@/lib/http-client'
+import { apiFetchPaginated, API_BASE_URL } from '@/lib/http-client'
 
-const API_BASE_URL = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 /** 承包商列表（分页） */
 export async function fetchContractorList(

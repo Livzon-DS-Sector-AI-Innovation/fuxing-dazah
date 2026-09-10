@@ -6,7 +6,7 @@
 // failed 解析状态行内附「重试」；报告附件下载复用 /api/v1/safety/files/{path}。
 // 跨 Tab 联动：接收 initialKeyword（人员台账跳转预筛），消费后回调 onConsumedKeyword。
 
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import {
   App,
   Button,
@@ -73,14 +73,16 @@ interface OhExamsPanelProps {
 export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhExamsPanelProps) {
   const { message } = App.useApp()
 
-  const [keyword, setKeyword] = useState('')
+  // 跨 Tab 联动预筛：父组件用 key={keyword} 重建本组件（见 page-client.tsx），
+  // 挂载时一次性消费 initialKeyword，之后不再监听 —— 避免 useEffect 同步 setState 反模式。
+  const [keyword, setKeyword] = useState(initialKeyword ?? '')
   const [examType, setExamType] = useState<string | undefined>()
   const [aiConclusion, setAiConclusion] = useState<string | undefined>()
   const [parseStatus, setParseStatus] = useState<string | undefined>()
   const [department, setDepartment] = useState('')
 
   // 已应用筛选（下拉选中即查，文本框回车/刷新时查）
-  const [applied, setApplied] = useState<{ keyword: string; examType?: string; aiConclusion?: string; parseStatus?: string; department: string }>({ keyword: '', department: '' })
+  const [applied, setApplied] = useState<{ keyword: string; examType?: string; aiConclusion?: string; parseStatus?: string; department: string }>({ keyword: initialKeyword ?? '', department: '' })
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -88,7 +90,8 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
   const [detailExam, setDetailExam] = useState<OhHealthExam | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
-  const consumedKeywordRef = useRef('')
+  // 挂载即消费联动 keyword（父组件重建本组件时触发一次）
+  if (initialKeyword) onConsumedKeyword?.()
 
   const queryClient = useQueryClient()
 
@@ -114,18 +117,6 @@ export default function OhExamsPanel({ initialKeyword, onConsumedKeyword }: OhEx
 
   const rows = listData?.items ?? []
   const total = listData?.total ?? 0
-
-  // 跨 Tab 联动：人员台账 → 体检记录预筛
-  useEffect(() => {
-    if (initialKeyword && initialKeyword !== consumedKeywordRef.current) {
-      consumedKeywordRef.current = initialKeyword
-      setKeyword(initialKeyword)
-      setApplied({ keyword: initialKeyword, examType, aiConclusion, parseStatus, department })
-      setPage(1)
-      onConsumedKeyword?.()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialKeyword])
 
   const handleSearch = () => {
     setApplied({ keyword, examType, aiConclusion, parseStatus, department })
