@@ -100,5 +100,4 @@ async def renew_cert_warning(
         return ApiResponse(code=400, message=str(e))
     if not item:
         return ApiResponse(code=404, message="持证记录不存在")
-    await db.commit()
     return ApiResponse(data=CertWarningDetail.model_validate(item))

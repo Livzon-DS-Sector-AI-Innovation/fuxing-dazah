@@ -122,5 +122,4 @@ async def sync_oh_person(
     person = await service.manual_sync(person_id)
     if not person:
         return ApiResponse(code=404, message="人员记录不存在")
-    await db.commit()
     return ApiResponse(data=OhPersonResponse.model_validate(person))

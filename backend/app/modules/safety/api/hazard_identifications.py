@@ -130,7 +130,6 @@ async def create_hazard_identification(
     """创建危险源辨识记录（填写基础信息）"""
     service = SafetyService(db)
     item = await service.create_hazard_identification(data)
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -168,7 +167,6 @@ async def create_hazard_identification_batch(
     service = SafetyService(db)
     try:
         result = await service.create_hazard_identification_batch(data)
-        await db.commit()
         return ApiResponse(data=result)
     except ValueError as e:
         return ApiResponse(code=400, message=str(e))
@@ -190,7 +188,6 @@ async def update_hazard_identification(
     item = await service.update_hazard_identification(hid, data)
     if not item:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -209,7 +206,6 @@ async def submit_hazard_identification(
     item = await service.submit_hazard_identification(hid)
     if not item:
         return ApiResponse(code=400, message="无法提交，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -229,7 +225,6 @@ async def run_hazard_script(
     item = await service.run_script(hid, data.script_number, data.ai_output)
     if not item:
         return ApiResponse(code=400, message="无法执行脚本，当前状态不允许或条件不满足")
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -249,7 +244,6 @@ async def review_hazard_script(
     item = await service.review_script(hid, data.script_number, data.action)
     if not item:
         return ApiResponse(code=400, message="无法审核，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -340,7 +334,6 @@ async def upload_hazard_attachment(
     )
     if not item:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(data=HazardIdentificationResponse.model_validate(item))
 
 
@@ -359,7 +352,6 @@ async def delete_hazard_identification(
     result = await service.delete_hazard_identification(hid)
     if not result:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 

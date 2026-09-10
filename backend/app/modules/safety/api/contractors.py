@@ -70,7 +70,6 @@ async def create_contractor(
     """创建承包商"""
     service = SafetyService(db)
     item = await service.create_contractor(data)
-    await db.commit()
     return ApiResponse(data=ContractorResponse.model_validate(item))
 
 
@@ -86,7 +85,6 @@ async def update_contractor(
     item = await service.update_contractor(contractor_id, data)
     if not item:
         return ApiResponse(code=404, message="承包商不存在")
-    await db.commit()
     return ApiResponse(data=ContractorResponse.model_validate(item))
 
 
@@ -101,7 +99,6 @@ async def delete_contractor(
     result = await service.delete_contractor(contractor_id)
     if not result:
         return ApiResponse(code=404, message="承包商不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -116,7 +113,6 @@ async def blacklist_contractor(
     item = await service.blacklist_contractor(contractor_id)
     if not item:
         return ApiResponse(code=404, message="承包商不存在")
-    await db.commit()
     return ApiResponse(data=ContractorResponse.model_validate(item))
 
 
@@ -131,7 +127,6 @@ async def activate_contractor(
     item = await service.activate_contractor(contractor_id)
     if not item:
         return ApiResponse(code=404, message="承包商不存在")
-    await db.commit()
     return ApiResponse(data=ContractorResponse.model_validate(item))
 
 
@@ -151,7 +146,6 @@ async def update_contractor_training(
     item = await service.update_contractor_training(contractor_id, training_status)
     if not item:
         return ApiResponse(code=404, message="承包商不存在")
-    await db.commit()
     return ApiResponse(data=ContractorResponse.model_validate(item))
 
 
@@ -188,7 +182,6 @@ async def create_work_record(
     """创建承包商的施工记录"""
     service = SafetyService(db)
     item = await service.create_work_record(contractor_id, data)
-    await db.commit()
     return ApiResponse(data=ContractorWorkRecordResponse.model_validate(item))
 
 
@@ -209,7 +202,6 @@ async def update_work_record(
     item = await service.update_work_record(record_id, data)
     if not item:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(data=ContractorWorkRecordResponse.model_validate(item))
 
 
@@ -229,7 +221,6 @@ async def delete_work_record(
     result = await service.delete_work_record(record_id)
     if not result:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -252,7 +243,6 @@ async def evaluate_work_record(
     )
     if not item:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(data=ContractorWorkRecordResponse.model_validate(item))
 
 

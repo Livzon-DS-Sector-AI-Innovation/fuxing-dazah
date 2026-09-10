@@ -85,7 +85,6 @@ async def create_report(
 ):
     service = URSService(db)
     report = await service.create_report(data.model_dump())
-    await db.commit()
     # INSERT 有 RETURNING 回填，但 commit 后统一 re-fetch 更稳妥（避免懒加载 MissingGreenlet）
     report = await service.get_report(report.id)
     return ApiResponse(data=URSReportResponse.model_validate(report), message="创建成功")
@@ -141,7 +140,6 @@ async def update_report(
         return ApiResponse(code=400, message="仅草稿状态可修改", data=None)
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(report, key, value)
-    await db.commit()
     report = await service.get_report(report_id)
     return ApiResponse(data=URSReportResponse.model_validate(report), message="更新成功")
 
@@ -152,7 +150,6 @@ async def delete_report(report_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     ok = await service.delete_report(report_id)
     if not ok:
         return ApiResponse(code=404, message="记录不存在", data=None)
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -166,7 +163,6 @@ async def submit_report(report_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     service = URSService(db)
     try:
         report = await service.submit_report(report_id)
-        await db.commit()
         # 提交后 spawn 后台评估（请求 session 已 commit）
         service.trigger_assessment_background(report_id)
         # UPDATE 后 re-fetch，避免 updated_at 懒加载 MissingGreenlet
@@ -200,7 +196,6 @@ async def confirm_assessment(
             comment=data.comment,
             corrections=data.corrections,
         )
-        await db.commit()
         if report is None:
             return ApiResponse(code=404, message="记录不存在", data=None)
         # UPDATE 后 re-fetch，避免 updated_at 懒加载 MissingGreenlet
@@ -222,7 +217,6 @@ async def run_adaptation(report_id: uuid.UUID, db: AsyncSession = Depends(get_db
     service = URSService(db)
     try:
         report = await service.run_adaptation(report_id)
-        await db.commit()
         if report is None:
             return ApiResponse(code=404, message="记录不存在", data=None)
         # UPDATE 后 re-fetch，避免 updated_at 懒加载 MissingGreenlet
@@ -252,7 +246,6 @@ async def review_items_batch(
         updated = await service.review_items_batch(
             report_id, [it.model_dump() for it in data.items],
         )
-        await db.commit()
         # UPDATE 后 re-fetch 全部条目，避免字段懒加载 MissingGreenlet
         all_items = await service.get_items(report_id)
         updated_ids = {it.id for it in updated}
@@ -281,7 +274,6 @@ async def review_item(
     )
     if item is None:
         return ApiResponse(code=404, message="审核条目不存在", data=None)
-    await db.commit()
     # UPDATE 后 re-fetch，避免字段懒加载 MissingGreenlet
     item = await service.get_item(report_id, item_id)
     return ApiResponse(data=URSStandardItemResponse.model_validate(item), message="已更新")
@@ -301,7 +293,6 @@ async def generate_conclusion(report_id: uuid.UUID, db: AsyncSession = Depends(g
     service = URSService(db)
     try:
         report = await service.generate_conclusion(report_id)
-        await db.commit()
         if report is None:
             return ApiResponse(code=404, message="记录不存在", data=None)
         # UPDATE 后 re-fetch，避免 updated_at 懒加载 MissingGreenlet
@@ -320,7 +311,6 @@ async def submit_appeal(
     service = URSService(db)
     try:
         report = await service.submit_appeal(report_id, data.reason)
-        await db.commit()
         if report is None:
             return ApiResponse(code=404, message="记录不存在", data=None)
         # UPDATE 后 re-fetch，避免 updated_at 懒加载 MissingGreenlet

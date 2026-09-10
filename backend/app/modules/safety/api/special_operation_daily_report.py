@@ -35,7 +35,6 @@ async def sync_from_bitable(db: AsyncSession = Depends(get_db)):
     service = SpecialOperationDailyReportService(db)
     try:
         synced = await service.sync_from_bitable()
-        await db.commit()
         return ApiResponse(data={"synced_count": synced}, message=f"同步完成，共处理 {synced} 条记录")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"同步失败: {exc}")
@@ -62,7 +61,6 @@ async def generate_daily_report(
             target_date=data.target_date if data else None,
             mode=data.mode if data else "today",
         )
-        await db.commit()
         return ApiResponse(data=result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"日报生成失败: {exc}")

@@ -140,7 +140,6 @@ async def create_hazard(
     POST /hazards/{id}/ai/run/1 手动触发，与 Bitable 同步流程对齐）。"""
     service = HazardService(db)
     item = await service.create_hazard(data, auto_run_ai=False)
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -156,7 +155,6 @@ async def update_hazard(
     item = await service.update_hazard(hazard_id, data)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -195,7 +193,6 @@ async def upload_hazard_photo(
     item = await service.upload_hazard_photo(hazard_id, file.filename or "unknown", stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -233,7 +230,6 @@ async def upload_rectification_photo(
     item = await service.upload_rectification_photo(hazard_id, stored_path)
     if not item:
         return ApiResponse(code=404, message="隐患不存在")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -252,7 +248,6 @@ async def start_rectification(
     item = await service.start_rectification(hazard_id)
     if not item:
         return ApiResponse(code=400, message="无法开始整改，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -279,7 +274,6 @@ async def reply_rectification(
     )
     if not item:
         return ApiResponse(code=400, message="无法回复，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -308,7 +302,6 @@ async def verify_level(
     )
     if not item:
         return ApiResponse(code=400, message="无法复核，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -336,7 +329,6 @@ async def rework_rectification(
     )
     if not item:
         return ApiResponse(code=400, message="无法重新整改，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -351,7 +343,6 @@ async def delete_hazard(
     result = await service.delete_hazard(hazard_id)
     if not result:
         return ApiResponse(code=404, message="隐患不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -374,7 +365,6 @@ async def run_hazard_ai(
     item = await service.run_hazard_ai_script(hazard_id, script_number)
     if item is None:
         return ApiResponse(code=400, message="无法执行AI工作流，当前状态不允许或前置步骤未完成")
-    await db.commit()
 
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 

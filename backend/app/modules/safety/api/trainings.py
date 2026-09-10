@@ -66,7 +66,6 @@ async def create_training(
     """创建安全培训"""
     service = SafetyService(db)
     item = await service.create_training(data)
-    await db.commit()
     return ApiResponse(data=SafetyTrainingResponse.model_validate(item))
 
 
@@ -82,7 +81,6 @@ async def update_training(
     item = await service.update_training(training_id, data)
     if not item:
         return ApiResponse(code=404, message="培训不存在")
-    await db.commit()
     return ApiResponse(data=SafetyTrainingResponse.model_validate(item))
 
 
@@ -97,7 +95,6 @@ async def start_training(
     item = await service.start_training(training_id)
     if not item:
         return ApiResponse(code=400, message="无法开始培训，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SafetyTrainingResponse.model_validate(item))
 
 
@@ -112,7 +109,6 @@ async def complete_training(
     item = await service.complete_training(training_id)
     if not item:
         return ApiResponse(code=400, message="无法完成培训，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SafetyTrainingResponse.model_validate(item))
 
 
@@ -127,7 +123,6 @@ async def delete_training(
     result = await service.delete_training(training_id)
     if not result:
         return ApiResponse(code=404, message="培训不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -165,7 +160,6 @@ async def create_training_record(
     service = SafetyService(db)
     data.training_id = training_id
     item = await service.create_training_record(data)
-    await db.commit()
     return ApiResponse(data=TrainingRecordResponse.model_validate(item))
 
 
@@ -185,7 +179,6 @@ async def update_training_record(
     item = await service.update_training_record(record_id, data)
     if not item:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(data=TrainingRecordResponse.model_validate(item))
 
 
@@ -204,7 +197,6 @@ async def delete_training_record(
     result = await service.delete_training_record(record_id)
     if not result:
         return ApiResponse(code=404, message="记录不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 

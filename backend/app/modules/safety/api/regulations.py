@@ -79,7 +79,6 @@ async def create_regulation(
     """创建安全操作规程"""
     service = RegulationService(db)
     item = await service.create_regulation(data)
-    await db.commit()
     return ApiResponse(data=OperationRegulationResponse.model_validate(item))
 
 
@@ -99,7 +98,6 @@ async def update_regulation(
     item = await service.update_regulation(regulation_id, data)
     if not item:
         return ApiResponse(code=404, message="操规不存在")
-    await db.commit()
     return ApiResponse(data=OperationRegulationResponse.model_validate(item))
 
 
@@ -118,7 +116,6 @@ async def delete_regulation(
     result = await service.delete_regulation(regulation_id)
     if not result:
         return ApiResponse(code=404, message="操规不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -157,7 +154,6 @@ async def upload_regulation_document(
     )
     if not item:
         return ApiResponse(code=404, message="操规不存在")
-    await db.commit()
     return ApiResponse(data=OperationRegulationResponse.model_validate(item))
 
 
@@ -216,7 +212,6 @@ async def create_revision(
     item = await service.create_revision(data)
     if not item:
         return ApiResponse(code=404, message="关联的操规不存在")
-    await db.commit()
     return ApiResponse(data=RegulationRevisionResponse.model_validate(item))
 
 
@@ -236,7 +231,6 @@ async def update_revision(
     item = await service.update_revision(revision_id, data)
     if not item:
         return ApiResponse(code=404, message="修订记录不存在")
-    await db.commit()
     return ApiResponse(data=RegulationRevisionResponse.model_validate(item))
 
 
@@ -255,7 +249,6 @@ async def delete_revision(
     result = await service.delete_revision(revision_id)
     if not result:
         return ApiResponse(code=404, message="修订记录不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -301,7 +294,6 @@ async def manual_revision_complete(
     )
     if not item:
         return ApiResponse(code=400, message="无法完成修订，当前状态不允许或修订类型不是人工修订")
-    await db.commit()
     return ApiResponse(data=RegulationRevisionResponse.model_validate(item))
 
 
@@ -345,7 +337,6 @@ async def ai_revision_confirm(
     )
     if not item:
         return ApiResponse(code=400, message="无法确认，修订类型不是AI修订或修订记录不存在")
-    await db.commit()
     return ApiResponse(data=RegulationRevisionResponse.model_validate(item))
 
 
@@ -369,7 +360,6 @@ async def identify_revision_scope(
     item = await service.identify_revision_scope(revision_id)
     if not item:
         return ApiResponse(code=404, message="修订记录不存在")
-    await db.commit()
     return ApiResponse(data=RegulationRevisionResponse.model_validate(item))
 
 
@@ -398,7 +388,6 @@ async def generate_sop(
 
     service = SopGeneratorService(db)
     result = await service.generate_from_draft(file)
-    await db.commit()
 
     # 自动 AI 审核：必须在本请求 commit 之后触发，否则后台独立 session
     # 在 READ COMMITTED 下看不到刚插入的记录（D6 竞态）。process 类型在
@@ -452,7 +441,6 @@ async def update_sop_content(
     )
     if not item:
         return ApiResponse(code=404, message="操规不存在")
-    await db.commit()
 
     return ApiResponse(
         data={
@@ -490,7 +478,6 @@ async def revise_regulation(
     )
     if not result:
         return ApiResponse(code=404, message="操规不存在")
-    await db.commit()
     return ApiResponse(data=result, message="修订保存成功")
 
 
@@ -524,7 +511,6 @@ async def export_sop_pdf(
     if data is None:
         return ApiResponse(code=400, message="导出失败：文件不存在")
 
-    await db.commit()
 
     # Generate a friendly download filename (RFC 5987 encoded for non-ASCII chars)
     filename = f"标准化操规_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
@@ -569,7 +555,6 @@ async def rerun_regulation_ai_review(
         regulation_id,
         {"ai_review_status": "pending", "ai_review_note": None},
     )
-    await db.commit()
     asyncio.create_task(service.run_ai_review(regulation_id, channel="web"))
     return ApiResponse(
         data={"regulation_id": str(regulation_id), "ai_review_status": "pending"},

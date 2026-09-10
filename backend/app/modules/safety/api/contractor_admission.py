@@ -118,5 +118,4 @@ async def run_contractor_admission_ai_audit(
     item = await service.run_admission_review(admission_id, channel="web")
     if item is None:
         return ApiResponse(code=400, message="仅支持飞书来源的相关方准入记录触发AI审核")
-    await db.commit()
     return ApiResponse(data=ContractorAdmissionResponse.model_validate(item))

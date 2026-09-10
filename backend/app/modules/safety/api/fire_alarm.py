@@ -40,7 +40,6 @@ async def sync_from_bitable(db: AsyncSession = Depends(get_db)):
     service = FireAlarmService(db)
     try:
         synced, soft_deleted = await service.sync_from_bitable()
-        await db.commit()
         return ApiResponse(
             data=FireAlarmSyncResponse(
                 synced_count=synced, soft_deleted_count=soft_deleted,
@@ -129,7 +128,6 @@ async def generate_daily_report(
         target_date=data.target_date if data else None,
         push=True, channel="web",
     )
-    await db.commit()
     return ApiResponse(data=result.model_dump(mode="json"))
 
 
@@ -155,7 +153,6 @@ async def generate_weekly_report(
         week_end=data.week_end if data else None,
         push=True, channel="web",
     )
-    await db.commit()
     return ApiResponse(data=result.model_dump(mode="json"))
 
 

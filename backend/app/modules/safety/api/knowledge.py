@@ -67,7 +67,6 @@ async def create_knowledge_article(
     """创建安全知识库文章"""
     service = KnowledgeService(db)
     item = await service.create_article(data)
-    await db.commit()
     return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
 
 
@@ -97,7 +96,6 @@ async def update_knowledge_article(
     item = await service.update_article(article_id, data)
     if not item:
         return ApiResponse(code=404, message="文章不存在")
-    await db.commit()
     return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
 
 
@@ -112,7 +110,6 @@ async def delete_knowledge_article(
     result = await service.delete_article(article_id)
     if not result:
         return ApiResponse(code=404, message="文章不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -127,7 +124,6 @@ async def publish_knowledge_article(
     item = await service.publish_article(article_id)
     if not item:
         return ApiResponse(code=400, message="无法发布，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
 
 
@@ -142,7 +138,6 @@ async def archive_knowledge_article(
     item = await service.archive_article(article_id)
     if not item:
         return ApiResponse(code=400, message="无法归档，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
 
 
@@ -182,7 +177,6 @@ async def upload_knowledge_article_attachment(
     )
     if not item:
         return ApiResponse(code=404, message="文章不存在")
-    await db.commit()
     return ApiResponse(data=SafetyKnowledgeArticleResponse.model_validate(item))
 
 
@@ -272,7 +266,6 @@ async def create_new_article_version(
     new_article, version_chain = await service.create_new_version(article_id)
     if not new_article:
         return ApiResponse(code=404, message="原文档不存在")
-    await db.commit()
     return ApiResponse(data={
         "new_article": SafetyKnowledgeArticleResponse.model_validate(new_article).model_dump(),
         "version_chain": [v.model_dump() for v in version_chain],
@@ -293,7 +286,6 @@ async def generate_knowledge_card(
     result = await service.generate_knowledge_card(article_id)
     if not result:
         return ApiResponse(code=404, message="文档不存在")
-    await db.commit()
     return ApiResponse(data=result.model_dump())
 
 
@@ -320,7 +312,6 @@ async def batch_generate_knowledge_cards(
     """批量对多个文档 AI 生成知识卡片（顺序执行，单条失败不影响其他）。"""
     service = KnowledgeService(db)
     result = await service.batch_generate_cards(data.article_ids)
-    await db.commit()
     return ApiResponse(data=result.model_dump())
 
 
@@ -370,7 +361,6 @@ async def generate_summary(
     result = await service.generate_summary(article_id)
     if not result:
         return ApiResponse(code=404, message="文档不存在")
-    await db.commit()
     return ApiResponse(data=result.model_dump())
 
 
@@ -412,7 +402,6 @@ async def sync_knowledge_from_bitable(
     """
     service = KnowledgeService(db)
     result = await service.sync_from_bitable()
-    await db.commit()
     return ApiResponse(data=result.model_dump())
 
 

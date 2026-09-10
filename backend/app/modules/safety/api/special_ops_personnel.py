@@ -60,7 +60,6 @@ async def create_special_operation_personnel(
     """创建特殊作业人员资质"""
     service = SpecialOperationService(db)
     item = await service.create_personnel(data)
-    await db.commit()
     return ApiResponse(data=SpecialOperationPersonnelResponse.model_validate(item))
 
 
@@ -98,7 +97,6 @@ async def update_special_operation_personnel(
     item = await service.update_personnel(personnel_id, data)
     if not item:
         return ApiResponse(code=404, message="人员资质不存在")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPersonnelResponse.model_validate(item))
 
 
@@ -117,7 +115,6 @@ async def delete_special_operation_personnel(
     result = await service.delete_personnel(personnel_id)
     if not result:
         return ApiResponse(code=404, message="人员资质不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 

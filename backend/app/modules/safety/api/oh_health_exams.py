@@ -116,7 +116,6 @@ async def create_oh_health_exam(
     """创建职业健康体检记录（联动人员汇总表 last_exam_*）"""
     service = OhHealthExamService(db)
     item = await service.create_exam(data, user_id=current_user.id if current_user else None)
-    await db.commit()
     return ApiResponse(data=OhHealthExamResponse.model_validate(item))
 
 
@@ -153,7 +152,6 @@ async def update_oh_health_exam(
     item = await service.update_exam(exam_id, data, user_id=current_user.id if current_user else None)
     if not item:
         return ApiResponse(code=404, message="体检记录不存在")
-    await db.commit()
     return ApiResponse(data=OhHealthExamResponse.model_validate(item))
 
 
@@ -170,7 +168,6 @@ async def delete_oh_health_exam(
     ok = await service.delete_exam(exam_id, user_id=current_user.id if current_user else None)
     if not ok:
         return ApiResponse(code=404, message="体检记录不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -187,7 +184,6 @@ async def parse_oh_health_exam(
     item = await service.run_ai_parse(exam_id, channel="web")
     if not item:
         return ApiResponse(code=404, message="体检记录不存在")
-    await db.commit()
     return ApiResponse(data=OhHealthExamResponse.model_validate(item))
 
 
@@ -213,7 +209,6 @@ async def override_oh_health_exam_conclusion(
     )
     if not item:
         return ApiResponse(code=404, message="体检记录不存在")
-    await db.commit()
     return ApiResponse(data=OhHealthExamResponse.model_validate(item))
 
 

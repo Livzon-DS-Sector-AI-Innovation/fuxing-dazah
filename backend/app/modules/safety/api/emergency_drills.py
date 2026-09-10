@@ -162,7 +162,6 @@ async def generate_drill_plan(
         return ApiResponse(code=404, message="记录不存在", data=None)
     try:
         doc = await service.generate_drill_plan(record_id)
-        await db.commit()
         if doc is None:
             return ApiResponse(code=500, message="方案生成失败", data=None)
         return ApiResponse(
@@ -210,7 +209,6 @@ async def create_hazards(
         return ApiResponse(code=400, message="演练问题为空", data=None)
     try:
         created = await service.create_hazards_from_issues(record_id)
-        await db.commit()
         return ApiResponse(data=created, message=f"已创建 {len(created)} 条隐患记录")
     except Exception as e:
         return ApiResponse(code=500, message=f"创建隐患失败: {e}", data=None)
@@ -236,7 +234,6 @@ async def generate_drill_eval(
         from app.modules.safety.service.drill_eval import generate_eval_form
 
         doc = await generate_eval_form(db, record_id, source="manual")
-        await db.commit()
         if doc is None:
             return ApiResponse(code=500, message="评估表生成失败", data=None)
         return ApiResponse(
@@ -273,7 +270,6 @@ async def check_complete(
     """检查关联隐患是否全部关闭，是则自动将状态标记为已完成。"""
     service = EmergencyDrillService(db)
     completed = await service.check_and_complete(record_id)
-    await db.commit()
     return ApiResponse(
         data={"completed": completed},
         message="已标记为已完成" if completed else "尚有隐患未关闭",

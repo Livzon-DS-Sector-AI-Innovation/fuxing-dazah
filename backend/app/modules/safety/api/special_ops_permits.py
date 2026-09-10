@@ -60,7 +60,6 @@ async def create_special_operation_permit(
     """创建特殊作业票"""
     service = SpecialOperationService(db)
     item = await service.create_permit(data)
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -98,7 +97,6 @@ async def update_special_operation_permit(
     item = await service.update_permit(permit_id, data)
     if not item:
         return ApiResponse(code=404, message="作业票不存在")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -117,7 +115,6 @@ async def delete_special_operation_permit(
     result = await service.delete_permit(permit_id)
     if not result:
         return ApiResponse(code=404, message="作业票不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -139,7 +136,6 @@ async def submit_special_operation_permit(
     item = await service.submit_permit(permit_id)
     if not item:
         return ApiResponse(code=400, message="无法提交，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -158,7 +154,6 @@ async def approve_special_operation_permit(
     item = await service.approve_permit(permit_id)
     if not item:
         return ApiResponse(code=400, message="无法审批，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -178,7 +173,6 @@ async def reject_special_operation_permit(
     item = await service.reject_permit(permit_id, reason)
     if not item:
         return ApiResponse(code=400, message="无法驳回，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -197,7 +191,6 @@ async def start_special_operation_permit(
     item = await service.start_permit(permit_id)
     if not item:
         return ApiResponse(code=400, message="无法开始作业，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -217,7 +210,6 @@ async def complete_special_operation_permit(
     item = await service.complete_permit(permit_id, method)
     if not item:
         return ApiResponse(code=400, message="无法完工，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 
@@ -236,7 +228,6 @@ async def archive_special_operation_permit(
     item = await service.archive_permit(permit_id)
     if not item:
         return ApiResponse(code=400, message="无法归档，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationPermitResponse.model_validate(item))
 
 

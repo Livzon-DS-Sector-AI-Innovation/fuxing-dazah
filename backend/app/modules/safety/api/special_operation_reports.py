@@ -62,7 +62,6 @@ async def create_special_operation_report(
     """创建特殊作业报备"""
     service = SpecialOperationReportService(db)
     item = await service.create_report(data)
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 
@@ -92,7 +91,6 @@ async def update_special_operation_report(
     item = await service.update_report(report_id, data)
     if not item:
         return ApiResponse(code=404, message="报备不存在")
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 
@@ -107,7 +105,6 @@ async def delete_special_operation_report(
     ok = await service.delete_report(report_id)
     if not ok:
         return ApiResponse(code=404, message="报备不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -122,7 +119,6 @@ async def submit_special_operation_report(
     item = await service.submit_report(report_id)
     if not item:
         return ApiResponse(code=400, message="无法提交，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 
@@ -137,7 +133,6 @@ async def approve_special_operation_report(
     item = await service.approve_report(report_id)
     if not item:
         return ApiResponse(code=400, message="无法审批，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 
@@ -153,7 +148,6 @@ async def reject_special_operation_report(
     item = await service.reject_report(report_id, reason)
     if not item:
         return ApiResponse(code=400, message="无法驳回，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 
@@ -176,7 +170,6 @@ async def set_special_operation_report_critical(
     )
     if not item:
         return ApiResponse(code=404, message="报备不存在")
-    await db.commit()
     return ApiResponse(data=SpecialOperationReportResponse.model_validate(item))
 
 

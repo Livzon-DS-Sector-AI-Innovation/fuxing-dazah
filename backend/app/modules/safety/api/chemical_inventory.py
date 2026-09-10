@@ -51,7 +51,6 @@ async def create_inventory_record(
 ):
     service = ChemicalInventoryService(db)
     item = await service.create_record(data.model_dump(exclude_none=True))
-    await db.commit()
     return ApiResponse(data=ChemicalInventoryRecordResponse.model_validate(item).model_dump())
 
 
@@ -64,7 +63,6 @@ async def scan_inventory(
 ):
     service = ChemicalInventoryService(db)
     result = await service.run_full_scan()
-    await db.commit()
     return ApiResponse(data=result)
 
 

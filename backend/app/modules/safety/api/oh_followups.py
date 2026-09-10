@@ -77,7 +77,6 @@ async def create_oh_followup(
         )
     except ValueError as e:
         return ApiResponse(code=400, message=str(e))
-    await db.commit()
     return ApiResponse(data=OhFollowupResponse.model_validate(item))
 
 
@@ -100,7 +99,6 @@ async def update_oh_followup(
         return ApiResponse(code=400, message=str(e))
     if not item:
         return ApiResponse(code=404, message="随访记录不存在")
-    await db.commit()
     return ApiResponse(data=OhFollowupResponse.model_validate(item))
 
 
@@ -127,5 +125,4 @@ async def close_oh_followup(
         return ApiResponse(code=400, message=str(e))
     if not item:
         return ApiResponse(code=404, message="随访记录不存在")
-    await db.commit()
     return ApiResponse(data=OhFollowupResponse.model_validate(item))

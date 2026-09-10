@@ -61,7 +61,6 @@ async def create_ehs_change(
     """创建EHS变更申请"""
     service = EhsChangeService(db)
     item = await service.create_ehs_change(data)
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -104,7 +103,6 @@ async def update_ehs_change(
     item = await service.update_ehs_change(change_id, data)
     if not item:
         return ApiResponse(code=404, message="变更不存在")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -119,7 +117,6 @@ async def delete_ehs_change(
     ok = await service.delete_ehs_change(change_id)
     if not ok:
         return ApiResponse(code=404, message="变更不存在")
-    await db.commit()
     return ApiResponse(message="删除成功")
 
 
@@ -137,7 +134,6 @@ async def submit_ehs_change(
     item = await service.submit_change(change_id)
     if not item:
         return ApiResponse(code=400, message="无法提交，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -153,7 +149,6 @@ async def approve_ehs_change(
     item = await service.approve_change(change_id, data.decision, data.comments)
     if not item:
         return ApiResponse(code=400, message="无法审批，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -169,7 +164,6 @@ async def reject_ehs_change(
     item = await service.reject_change(change_id, comments)
     if not item:
         return ApiResponse(code=400, message="无法驳回，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -184,7 +178,6 @@ async def start_implementation_ehs_change(
     item = await service.start_implementation(change_id)
     if not item:
         return ApiResponse(code=400, message="无法开始实施，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -199,7 +192,6 @@ async def commission_ehs_change(
     item = await service.commission_change(change_id)
     if not item:
         return ApiResponse(code=400, message="无法投用，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -217,7 +209,6 @@ async def close_ehs_change(
     )
     if not item:
         return ApiResponse(code=400, message="无法关闭，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -232,7 +223,6 @@ async def cancel_ehs_change(
     item = await service.cancel_change(change_id)
     if not item:
         return ApiResponse(code=400, message="无法取消，当前状态不允许")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -251,7 +241,6 @@ async def add_risk_assessment_ehs_change(
     item = await service.add_risk_assessment(change_id, data)
     if not item:
         return ApiResponse(code=404, message="变更不存在")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -268,7 +257,6 @@ async def update_action_item_ehs_change(
     item = await service.update_action_item(change_id, index, status)
     if not item:
         return ApiResponse(code=400, message="无法更新，变更不存在或索引无效")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -284,7 +272,6 @@ async def update_pssr_checklist_ehs_change(
     item = await service.update_pssr_checklist(change_id, data)
     if not item:
         return ApiResponse(code=404, message="变更不存在")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -300,7 +287,6 @@ async def submit_verification_ehs_change(
     item = await service.submit_verification(change_id, data)
     if not item:
         return ApiResponse(code=404, message="变更不存在")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
@@ -318,7 +304,6 @@ async def run_ehs_ai_audit(
     item = await service.run_ehs_ai_review(change_id, channel="web")
     if item is None:
         return ApiResponse(code=400, message="仅支持飞书来源的变更审批记录触发AI审核")
-    await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 
 
