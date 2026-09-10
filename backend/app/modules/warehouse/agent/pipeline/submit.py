@@ -27,10 +27,9 @@ send_card 确认门发送发货通知，spec 决策 3）。
 回执卡片与 audit 标注「需人工在 Base 补填」；Base 放开后置 True 恢复
 自动写入。
 
-**物料名称降级**（spec 决策 6，``SUBMIT_MATERIAL_NAME_ENABLED`` 开关注释）：
-测试版「物料名称」单选字段选项重复未治理，按名写入必失败（业务方暂缓
-治理）——submit 跳过该字段，回执卡片与 audit 标注「需人工在 Base 补选」；
-Base 治理完成后置 True 即恢复自动写入（代码无其他改动）。
+**物料名称**写入 API 专用文本字段「物料名称(API)」（原「物料名称」单选
+被 Base 侧字段级编辑限制拒写 1254062——2026-09-09 新建文本字段绕开，
+人工补选列保留但不再使用）。
 
 单选字段适配（读写不对称 + 选项集硬约束）：识别/对齐值与 Base 选项集
 （bitable_schema 静态快照）先做大小写归一匹配（如识别 kg → 选项 Kg），
@@ -52,6 +51,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import UTC, date, datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,10 +81,6 @@ ATTACHMENT_FIELD = "外包装/厂家报告单/送货单照片"
 
 # 到货情况固定写入值（合法选项，spec 决策 6 场景 A）
 ARRIVAL_STATUS_VALUE = "到货物料"
-
-# 物料名称降级开关（spec 决策 6：测试版选项重复未治理 → False 跳过写入；
-# Base 治理后置 True 恢复自动写入）
-SUBMIT_MATERIAL_NAME_ENABLED = False
 
 # 读回核对关键字段（spec 决策 6：数量/批号/单位/供应商）
 CHECK_FIELDS: tuple[str, ...] = ("入库数量", "厂家批号", "单位", "供应商")
@@ -196,6 +192,16 @@ def _select_or_skip(
     for opt in options:
         if opt.lower() == lowered:
             return opt
+    # 供应商等长文本字段：选项集模糊容差（ratio≥0.85，处理公司名小差异
+    # 如括号/后缀/空格）——数字/枚举类字段（短选项集）不受影响（ratio 低）
+    if len(text) >= 6:
+        best_opt, best_ratio = "", 0.0
+        for opt in options:
+            ratio = SequenceMatcher(None, lowered, opt.lower()).ratio()
+            if ratio > best_ratio:
+                best_opt, best_ratio = opt, ratio
+        if best_ratio >= 0.85:
+            return best_opt
     degraded.append(field_name)
     return None
 
@@ -230,12 +236,10 @@ def build_receipt_fields(
 
     # 物料名称（spec 决策 6 降级：跳过写入，标注人工补选；开关见模块注释）
     name = value_of("material_name")
-    if name and SUBMIT_MATERIAL_NAME_ENABLED:
-        adapted = _select_or_skip(table_fields, "物料名称", str(name).strip(), degraded)
-        if adapted:
-            fields["物料名称"] = adapted
-    elif name:
-        degraded.append("物料名称")
+    if name:
+        # 物料名称写入 API 专用文本字段「物料名称(API)」（原单选被 Base 侧
+        # 字段级编辑限制拒写，2026-09-09 新建绕开，不再降级）
+        fields["物料名称(API)"] = str(name).strip()
 
     for key, field_name, is_select in _FIELD_MAP:
         value = value_of(key)
@@ -263,6 +267,35 @@ def build_receipt_fields(
             degraded.append("生产日期")
         else:
             fields["生产日期"] = ms
+
+    # ── 对齐产物直填（级别/型号、物料大类）：主数据对齐已有值，单选适配 ──
+    for aligned_key, field_name in (
+        ("level", "级别/型号(API)"),
+        ("material_category", "物料大类"),
+    ):
+        v = str(aligned.get(aligned_key) or "").strip()
+        if v:
+            adapted = _select_or_skip(table_fields, field_name, v, degraded)
+            if adapted:
+                fields[field_name] = adapted
+
+    # ── 物料批号（内部批号）规则生成：{代码}-{YYMMDD}（人工记录同款格式，
+    # 如 10123-260902）；卡片确认后可改。代码缺失时不生成（降级人工）。
+    if "物料批号" not in fields:
+        gen_code = str(aligned.get("code") or "").strip()
+        if gen_code:
+            today = date.today()
+            fields["物料批号"] = (
+                f"{gen_code}-{today.strftime('%y%m%d')}"
+            )
+
+    # ── 是否加急检测：选项集只有「加急检测」一个值（默认态=留空）——
+    # 非加急时不写该字段（空即默认），加急时由人工/识别标注。
+
+    # ── 件数（送货单「总数量/件数」的件数部分，如 1404/14桶 的 14） ──
+    pkg_count = value_of("package_count")
+    if pkg_count is not None:
+        fields["件数"] = str(pkg_count).strip()
 
     fields["到货情况"] = ARRIVAL_STATUS_VALUE
     return fields, degraded
@@ -352,6 +385,10 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
                 source_image[:20],
             )
             fields[ATTACHMENT_FIELD] = [{"file_token": source_image}]
+        # 请验单附件列：识别原图即请验单/送货单照片本身（与外包装列同源，
+        # 人工流程两张附件列挂同一张照片的形态）
+        if attachment_token:
+            fields["请验单"] = [{"file_token": attachment_token}]
 
     validate_write_fields(RECEIPT_TABLE, fields)  # S0 写契约最后防线（本地拦截）
 

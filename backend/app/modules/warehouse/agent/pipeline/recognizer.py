@@ -46,9 +46,10 @@ RECOGNIZE_PROMPT = """你是制药厂仓库的送货单识别助手。请仔细�
 - plate_no：车牌号（别名：车牌、运输车牌、车号）
 - contract_no：合同编号或订单号（别名：合同号、订单号、采购订单、PO 号）
 
-## 选提字段（6 个，识别不到就填 null）
+## 选提字段（7 个，识别不到就填 null）
 - material_code：物料代码（别名：代码、物料编码；请验单/送货单常有此栏——
   这是物料身份的强标识，务必优先仔细辨认）
+- package_count：件数（别名：件数、桶数、包数；如「总数量/件数 1404/14桶」取 14，只给数字）
 - package_spec：包装规格（如 25Kg/包、500ml/瓶）
 - produced_at：生产日期（别名：生产批号日期、制造日期）
 - arrival_period：到货时间段
@@ -57,7 +58,7 @@ RECOGNIZE_PROMPT = """你是制药厂仓库的送货单识别助手。请仔细�
 
 ## 输出要求（严格遵守）
 1. 只输出一个 JSON 对象，禁止输出任何解释文字或 markdown 代码块。
-2. JSON 结构（14 个字段全部出现，格式统一）：
+2. JSON 结构（15 个字段全部出现，格式统一）：
    {"material_name": {"value": "硫酸", "confidence": 0.95}, "vendor_batch_no": {"value": "H26050902", "confidence": 0.9}, ...}
 3. 每个字段的 confidence 是 0 到 1 的小数，表示辨认把握程度：清晰可辨 ≥0.8，模糊但可推断 0.4-0.8，猜测 <0.4。
 4. 无法辨认时 value 填 null 并给低 confidence，但必提字段必须基于图片给出最佳猜测，不要轻易填 null。
@@ -120,6 +121,8 @@ class RecognizedReceipt(BaseModel):
     plate_no: RecognizedField
     contract_no: RecognizedField
 
+    material_code: RecognizedField | None = None  # 物料代码（对齐代码锚点，2026-09-09）
+    package_count: RecognizedField | None = None  # 件数（如「1404/14桶」的 14）
     package_spec: RecognizedField | None = None
     produced_at: RecognizedField | None = None
     arrival_period: RecognizedField | None = None

@@ -162,7 +162,7 @@ async def test_send_card_to_user_uses_open_id(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(notification, "_send_create", fake_send)
     result = await notification.send_card_to_user("ou_user_1", _sample_card())
-    assert result is True
+    assert result == "om_fake_id"  # 2026-09-09 起 send_card_to_user 返回 message_id
     assert captured["receive_id_type"] == "open_id"
     assert captured["receive_id"] == "ou_user_1"
     assert captured["msg_type"] == "interactive"
@@ -181,7 +181,7 @@ async def test_dry_run_skips_http(monkeypatch: pytest.MonkeyPatch) -> None:
     card = _sample_card()
     assert await notification.send_card("oc_chat_1", card, dry_run=True) == "dry_run"
     assert await notification.send_text("oc_chat_1", "hi", dry_run=True) is True
-    assert await notification.send_card_to_user("ou_user_1", card, dry_run=True) is True
+    assert await notification.send_card_to_user("ou_user_1", card, dry_run=True) == "dry_run"
 
 
 async def _never_send(payload: dict[str, str]) -> str | None:

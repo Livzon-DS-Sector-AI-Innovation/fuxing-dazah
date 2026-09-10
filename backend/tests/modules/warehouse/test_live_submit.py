@@ -1,7 +1,7 @@
 """S2 ticket 04 验收：Submit 写入 + 附件上传 + 读回核对（识别入库最后一公里）。
 
 单测（真库 whdev + 事务回滚隔离；Base/附件/发送全部注入假件不触网）：
-- build_receipt_fields：物料名称降级（fields 无该键 + degraded 标注）、
+- build_receipt_fields：物料名称 API 文本字段直写、
   单选大小写归一（kg→Kg）与选项集不匹配跳过、数量数字化、生产日期转
   毫秒时间戳、到货情况固定「到货物料」；
 - render_receipt_result_card：成功态「✅ 入库已登记」/ mismatch 态 ⚠ 标题
@@ -59,7 +59,6 @@ from app.modules.warehouse.agent.pipeline.submit import (
     ARRIVAL_STATUS_VALUE,
     ATTACHMENT_FIELD,
     RECEIPT_TABLE,
-    SUBMIT_MATERIAL_NAME_ENABLED,
     build_receipt_fields,
     submit_receipt,
 )
@@ -243,7 +242,7 @@ def fake_backend(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_build_receipt_fields_degrades_material_name() -> None:
-    """spec 决策 6：物料名称降级——fields 无「物料名称」键 + degraded 标注。"""
+    """物料名称 API 文本字段直写（2026-09-09 起无降级）。"""
     payload = _recognized_payload()
     draft = WarehouseAgentDraft(
         draft_no="WR20990101-001",
@@ -254,14 +253,17 @@ def test_build_receipt_fields_degrades_material_name() -> None:
     )
     fields, degraded = build_receipt_fields(draft)
 
-    assert "物料名称" not in fields
-    assert "物料名称" in degraded
-    assert SUBMIT_MATERIAL_NAME_ENABLED is False  # 降级开关：治理后置 True
+    # 物料名称写入 API 专用文本字段「物料名称(API)」
+    assert fields["物料名称(API)"] == "硫酸铵"
+    assert "物料名称" not in degraded
     assert fields["到货情况"] == ARRIVAL_STATUS_VALUE == "到货物料"
 
 
 def test_build_receipt_fields_mapping_and_select_adaptation() -> None:
-    """字段映射 + 单选大小写归一（kg→Kg）+ 数量数字化 + 生产日期毫秒。"""
+    """字段映射 + 单选大小写归一（kg→Kg）+ 数量数字化 + 生产日期毫秒。
+
+    2026-09-09：物料名称走 API 文本字段，无降级。
+    """
     draft = WarehouseAgentDraft(
         draft_no="WR20990101-002",
         scene=RECEIPT_SCENE,
@@ -271,7 +273,8 @@ def test_build_receipt_fields_mapping_and_select_adaptation() -> None:
     )
     fields, degraded = build_receipt_fields(draft)
 
-    assert degraded == ["物料名称"]  # 其余字段均合法写入
+    assert degraded == []  # 其余字段均合法写入（物料名称走 API 文本字段）
+    assert fields["物料名称(API)"] == "硫酸铵"
     assert fields["厂家批号"] == "2511"
     assert fields["入库数量"] == 32000 and isinstance(fields["入库数量"], int)
     assert fields["单位"] == "Kg"  # 识别 kg → 选项集 Kg（大小写归一）
@@ -411,27 +414,29 @@ async def test_submit_receipt_happy_path_with_degradation(
     assert draft.target_record_id == "rec_fake_001"
     assert draft.target_table == TABLES[RECEIPT_TABLE].table_id
 
-    # 写入 fields：物料名称降级（无该键）+ 到货情况固定值 + 附件列 file_token
+    # 写入 fields：物料名称(API) 文本字段 + 到货情况固定值 + 附件列 file_token
     fields = fake_backend["adapter"].created
     assert fields is not None
-    assert "物料名称" not in fields
+    assert "物料名称(API)" in fields
     assert fields["到货情况"] == "到货物料"
     assert fields[ATTACHMENT_FIELD] == [{"file_token": "upl_fake_token"}]
+    assert fields["物料名称(API)"] == "硫酸铵"
     assert fields["厂家批号"] == "2511"
 
-    # audit：tool_name=submit_receipt，一致无 error_code，fields 不含物料名称
+    # audit：tool_name=submit_receipt，一致无 error_code，fields 含物料名称(API)
     audits = await _submit_audits(db_session, draft.id)
     assert len(audits) == 1
     assert audits[0].result_status == "ok"
     assert audits[0].error_code is None
     assert "物料名称" not in audits[0].args_summary["fields"]
-    assert "物料名称" in audits[0].args_summary["degraded"]
+    assert "物料名称" not in audits[0].args_summary.get("degraded", [])  # 无降级
+    assert "物料名称(API)" in audits[0].args_summary.get("fields", {})
 
     # 回执卡片（dry-run 捕获，发发起人私聊）：✅ 标题 + 人工补选提示
     cards = _interactive_cards(captured_sends)
     assert cards, "回执卡片未被捕获"
     assert cards[-1]["header"]["title"]["content"] == RECEIPT_RESULT_CARD_TITLE_OK
-    assert "人工补选" in _card_content(cards[-1])
+    assert "人工补选" not in _card_content(cards[-1])  # 2026-09-09 起无降级
 
     # 终态幂等：submitted 后再次提交拒绝
     with pytest.raises(DraftFlowError):
@@ -586,7 +591,6 @@ async def test_live_submit_full_flow(
         assert len(audits) == 1
         assert audits[0].error_code is None
         assert "物料名称" not in audits[0].args_summary["fields"]
-        assert "物料名称" in audits[0].args_summary["degraded"]
         print(
             f"[live submit] record_id={record_id} fields={audits[0].args_summary['fields']}"
         )
@@ -599,5 +603,5 @@ async def test_live_submit_full_flow(
     assert cards[-1]["header"]["title"]["content"] == RECEIPT_RESULT_CARD_TITLE_OK
     assert "已登记" in outcome.message  # 确认卡更新文案
     content = _card_content(cards[-1])
-    assert "人工补选" in content
+    assert "需人工补填" in content  # 选项集不匹配的生产商/包装规格
     assert record_id in content
