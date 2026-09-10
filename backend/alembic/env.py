@@ -17,6 +17,12 @@ for module in BUSINESS_MODULES:
         continue  # 无数据库表的模块（如 toolbox）
     import_module(f"app.modules.{module.code}.models")
 
+# safety 模块的子包模型不随顶层 models.py 导入（延迟加载），需显式注册进
+# Base.metadata，否则 autogenerate 看不到这些表（agent_*/memory 系列）。
+import_module("app.modules.safety.business_agent.models")
+import_module("app.modules.safety.business_agent.core.events")
+import_module("app.modules.safety.memory.models")
+
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
