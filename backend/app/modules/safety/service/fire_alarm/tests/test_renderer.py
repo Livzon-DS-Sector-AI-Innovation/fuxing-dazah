@@ -183,8 +183,8 @@ class TestRenderWeeklyReport:
         # 重复/集中问题块（count>=2 的模式）
         assert "**🔁 重复/集中问题**" in md
         assert "· ① 1号装置/压缩机房-火灾报警（**2 次**）涉及：动力车间" in md
-        # 周级 AI 分析（需求保留：重复报警未采取措施 + @负责人跟进）
-        assert "**🔁 重复报警（未采取措施）**" in md
+        # 周级 AI 分析（实现已改为 AI 周级分析块：典型问题/系统性建议/趋势）
+        assert "🧠 **AI 周级分析**" in md
         assert "1. 传感器老化误报：1号装置压缩机房本周发生 2 次火灾报警" in md
         assert "**✅ 系统性整改建议**" in md
         assert "1. 同批次传感器老化：统一更换并建立周期校验台账" in md
