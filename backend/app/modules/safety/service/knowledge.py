@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
-from app.platform.integrations.ai.client import AIOutputError
 from app.modules.safety.models import (
     SafetyKnowledgeArticle,
 )
@@ -33,6 +32,7 @@ from app.modules.safety.schemas import (
     SafetyKnowledgeArticleUpdate,
     VersionChainItem,
 )
+from app.platform.integrations.ai.client import AIOutputError
 
 logger = logging.getLogger(__name__)
 
@@ -1307,7 +1307,7 @@ class KnowledgeService:
                     "三环境保护类": "laws_regulations",
                 }
             tables.append(table_def)
-            print(f"sync_from_bitable: 加入法规表 {name} table_id={conn.table_id}")
+            logger.info("sync_from_bitable: 加入法规表 %s table_id=%s", name, conn.table_id)
 
         default_prefix: dict[str, str] = {
             "laws_regulations": "LAW",

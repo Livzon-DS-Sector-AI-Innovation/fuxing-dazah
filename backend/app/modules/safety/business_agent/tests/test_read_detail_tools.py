@@ -24,16 +24,19 @@ from typing import Any
 import pytest
 
 from app.modules.safety.business_agent import tool_selector
-from app.modules.safety.business_agent.core.permissions import allowed_tools, ROLE_VIEWER
+from app.modules.safety.business_agent.core.permissions import (
+    ROLE_VIEWER,
+    allowed_tools,
+)
 from app.modules.safety.business_agent.tools import registry
 from app.modules.safety.business_agent.tools.read_tools import (
+    _SPECIAL_OP_RISK_MAP,
     _norm_choice,
     query_ehs_changes,
     query_hazard_identifications,
     query_key_risk_ops,
     query_special_op_records,
     query_work_ticket_reviews,
-    _SPECIAL_OP_RISK_MAP,
 )
 from app.modules.safety.models import (
     EhsChange,

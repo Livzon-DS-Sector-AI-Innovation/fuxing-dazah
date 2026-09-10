@@ -227,7 +227,10 @@ async def send_daily_alarm_dms(
     if missing_email:
         logger.warning("身份表未找到邮箱（跳过收件）: %s", "、".join(sorted(missing_email)))
 
-    from app.modules.safety.feishu.client import get_safety_feishu_client, get_safety_tenant_token
+    from app.modules.safety.feishu.client import (
+        get_safety_feishu_client,
+        get_safety_tenant_token,
+    )
 
     client = await get_safety_feishu_client()
     token = await get_safety_tenant_token(client)

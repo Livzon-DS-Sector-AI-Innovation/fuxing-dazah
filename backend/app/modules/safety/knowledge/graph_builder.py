@@ -9,7 +9,6 @@
   Step 6: 写入数据库
 """
 
-from typing import cast
 import asyncio
 import json
 import logging
@@ -167,18 +166,18 @@ class GraphBuilder:
             # 0. 可选：清除已有 AI 生成数据
             if force_rebuild:
                 await self._clear_ai_generated()
-    
+
             # 1. 加载文档
             documents = await self._load_documents(document_ids)
             if not documents:
                 result["errors"].append("没有找到 published 状态的文档")
                 return result
             logger.info("GraphBuilder: 加载 %d 份文档", len(documents))
-    
+
             # 2. AI 实体提取（并行批次）
             entities = await self._extract_entities(documents)
             logger.info("GraphBuilder: 提取 %d 个实体", len(entities))
-    
+
             # 3. 写入实体节点（每项用 SAVEPOINT，单条 DB 错不污染整个会话）
             for entity in entities:
                 try:
@@ -188,13 +187,13 @@ class GraphBuilder:
                         result["nodes_created"] += 1
                 except Exception as e:
                     result["errors"].append(f"写入实体节点失败: {entity.get('entity_name', '?')} - {e}")
-    
+
             await self.session.flush()
-    
+
             # 4. AI 分类体系构建
             taxonomy = await self._build_taxonomy(documents, entities)
             logger.info("GraphBuilder: 构建 %d 个分类节点", len(taxonomy))
-    
+
             # 5. 写入分类节点 + belongs_to 边（SAVEPOINT）
             for taxon in taxonomy:
                 try:
@@ -206,13 +205,13 @@ class GraphBuilder:
                         result["nodes_created"] += 1
                 except Exception as e:
                     result["errors"].append(f"写入分类节点失败: {taxon.get('name', '?')} - {e}")
-    
+
             await self.session.flush()
-    
+
             # 6. AI 关系识别
             relations = await self._extract_relations(entities, taxonomy)
             logger.info("GraphBuilder: 识别 %d 条关系", len(relations))
-    
+
             # 7. 写入关系边（SAVEPOINT）
             for rel in relations:
                 try:
@@ -222,9 +221,9 @@ class GraphBuilder:
                         result["edges_created"] += 1
                 except Exception as e:
                     result["errors"].append(f"写入关系边失败: {rel.get('source_name', '?')}→{rel.get('target_name', '?')} - {e}")
-    
+
             await self.session.flush()
-    
+
             return result
         finally:
             if self._ai is not None:

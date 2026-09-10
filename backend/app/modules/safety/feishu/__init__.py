@@ -13,11 +13,11 @@ from app.modules.safety.feishu import (
     emergency_drill_collection_handler,  # noqa: F401
     key_risk_op_bitable_handler,  # noqa: F401
     knowledge_bitable_handler,  # noqa: F401
+    menu_handler,  # noqa: F401
     msds_bitable_handler,  # noqa: F401
     msds_collection_handler,  # noqa: F401
     special_op_bitable_handler,  # noqa: F401
 )
-from app.modules.safety.feishu import menu_handler  # noqa: F401
 from app.modules.safety.feishu.bitable_id_mapper import (
     get_bitable_open_id,
     get_bitable_person_value,

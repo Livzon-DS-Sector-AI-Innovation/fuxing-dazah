@@ -11,7 +11,6 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.safety.ai_audit.context import ai_audit_scope
@@ -22,7 +21,6 @@ from app.modules.safety.chemical_inventory.snapshots import (
     take_snapshot,
 )
 from app.modules.safety.feishu.notification import send_group_card
-from app.modules.safety.models import ChemicalInventorySnapshot
 
 logger = logging.getLogger(__name__)
 

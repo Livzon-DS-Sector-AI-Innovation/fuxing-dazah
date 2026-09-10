@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +57,10 @@ def _reload() -> None:
 
 
 def get_bitable_open_id(
-    user_id: Optional[str] = None,
-    name: Optional[str] = None,
-    fallback_to_identity: Optional[str] = None,
-) -> Optional[str]:
+    user_id: str | None = None,
+    name: str | None = None,
+    fallback_to_identity: str | None = None,
+) -> str | None:
     """通过 user_id 或 name 查找 Bitable open_id。
 
     查找顺序：
@@ -101,7 +100,7 @@ def get_bitable_open_id(
     return None
 
 
-def get_user_id_by_bitable_open_id(bitable_open_id: str) -> Optional[str]:
+def get_user_id_by_bitable_open_id(bitable_open_id: str) -> str | None:
     """反向查找：安全应用 open_id → employee user_id。
 
     用于 _resolve_person 中，Bitable person 字段的 open_id 是安全应用命名空间，
@@ -118,10 +117,10 @@ def get_user_id_by_bitable_open_id(bitable_open_id: str) -> Optional[str]:
 
 
 def get_bitable_person_value(
-    user_id: Optional[str] = None,
-    name: Optional[str] = None,
-    fallback_to_identity: Optional[str] = None,
-) -> Optional[list[dict]]:
+    user_id: str | None = None,
+    name: str | None = None,
+    fallback_to_identity: str | None = None,
+) -> list[dict] | None:
     """构造 Bitable person 字段写入值。
 
     Returns:

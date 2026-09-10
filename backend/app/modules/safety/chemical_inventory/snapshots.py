@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, cast
+from typing import cast
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession

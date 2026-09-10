@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -771,18 +771,18 @@ class ReportBuilder:
         - today（机器人随时查询）: 窗口为 08:00 ~ 当前查询时刻
         提交时间取 submitted_at（发起时间），缺失时回退 created_at。
         """
-        start = datetime.combine(report_date, datetime.min.time(), tzinfo=timezone.utc)  # BJT 08:00
+        start = datetime.combine(report_date, datetime.min.time(), tzinfo=UTC)  # BJT 08:00
         if mode == "afternoon":
             end = start + timedelta(hours=9)  # BJT 17:00
         else:
-            end = datetime.now(timezone.utc)
+            end = datetime.now(UTC)
 
         def _new_ts(r) -> datetime:
             if r.submitted_at:
                 return r.submitted_at
             if r.created_at:
                 return r.created_at
-            return datetime.min.replace(tzinfo=timezone.utc)
+            return datetime.min.replace(tzinfo=UTC)
 
         new = [r for r in reports if start <= _new_ts(r) < end]
         lines = ["", "🔔 今日新增计划外作业", "━━━━━━━━━━━━━━━━━━━━"]

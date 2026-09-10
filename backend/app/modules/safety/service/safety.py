@@ -1,6 +1,5 @@
 """Safety business workflows."""
 
-from typing import cast
 import json
 import logging
 import os
@@ -1020,9 +1019,6 @@ class SafetyService:
             return None
 
         current_node, next_node, review_field = self.SCRIPT_NODE_MAP[script_number]
-
-        # Current node must match
-        expected_current = current_node if action == "approved" else current_node
 
         update_data: dict[str, Any] = {
             f"script{script_number}_review_status": action,

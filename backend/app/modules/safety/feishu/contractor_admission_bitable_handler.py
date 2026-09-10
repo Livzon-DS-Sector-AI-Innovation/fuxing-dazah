@@ -23,10 +23,10 @@ import logging
 
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.contractor_admission_bitable import (
+    _match_table,
     admission_app_token,
     admission_tables,
     table_kind_by_id,
-    _match_table,
 )
 from app.modules.safety.feishu.event_client import on_event
 

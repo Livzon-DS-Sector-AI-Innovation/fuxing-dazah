@@ -17,7 +17,8 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, time as dtime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dtime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 

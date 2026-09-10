@@ -391,10 +391,10 @@ async def run_knowledge_chat(
                 description=query,
                 target_chunks=6,
             )
-    
+
             # 2. Deduplicate chunks by document
             doc_groups = _group_chunks_by_document(context.chunks)
-    
+
             # 3. ═══ 联网搜索模式判断 ═══
             if not enable_web_search:
                 # 仅内部知识库，不触发联网
@@ -425,14 +425,14 @@ async def run_knowledge_chat(
                 else:
                     # 检索已降级且无结果：只能联网
                     mode = "replace"
-    
+
                 logger.info(
                     "Web search mode=%s for query=%r "
                     "(degradation=%s, top_vec=%.3f, chunks=%d)",
                     mode, query[:80], context.degradation,
                     top_vector_score, len(context.chunks),
                 )
-    
+
             # 4. Run web search if needed (supplement or replace mode)
             web_results: list[WebSearchResult] = []
             if mode in ("supplement", "replace"):
@@ -454,7 +454,7 @@ async def run_knowledge_chat(
                         "Web search failed for query=%r, continuing without it",
                         query[:60],
                     )
-    
+
             # 5. Build context and select system prompt by mode
             if mode == "replace":
                 # Web-only: KB found nothing useful
@@ -480,23 +480,23 @@ async def run_knowledge_chat(
                     f"## 参考法规\n\n"
                     f"{_build_document_context(doc_groups)}\n\n"
                 )
-    
+
             # 6. Build messages for AI chat
             messages: list[dict] = [
                 {"role": "system", "content": system_prompt},
             ]
-    
+
             # Add conversation history (last N turns)
             for msg in (history or []):
                 messages.append({
                     "role": msg.get("role", "user"),
                     "content": msg.get("content", ""),
                 })
-    
+
             # Add current query with context appended
             user_msg = f"{user_context}---\n\n## 问题\n\n{query}"
             messages.append({"role": "user", "content": user_msg})
-    
+
             # 7. Call AI service
             try:
                 answer = await ai_service.chat(

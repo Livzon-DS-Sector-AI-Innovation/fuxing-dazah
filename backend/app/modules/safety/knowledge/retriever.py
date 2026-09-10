@@ -65,7 +65,7 @@ _RETRIEVE_SEM = asyncio.Semaphore(6)
 # 2026-09-03 修复：此前挂在实例上，而 BM25Scorer 是全局单例 —— 首个实例
 # 建好索引后，后续新实例因单例已 _indexed 跳过构建、又不持有 chunk 映射，
 # 导致 _bm25_search 恒返回空、文本召回在进程生命周期内一直失效。
-_bm25_chunks: dict[int, "RegulationChunk"] = {}
+_bm25_chunks: dict[int, RegulationChunk] = {}
 _bm25_index_lock = asyncio.Lock()
 
 

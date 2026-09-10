@@ -68,8 +68,8 @@ async def _alert_handler_failure(event_type: str, handler_name: str) -> None:
     _alert_throttled_at[key] = now
     try:
         # 延迟 import：scheduler 顶层依赖链重，且反向依赖 event_client 的模块众多
-        from app.modules.safety.scheduler import ALERT_NOTIFY_OPEN_ID
         from app.modules.safety.feishu.notification import send_user_card
+        from app.modules.safety.scheduler import ALERT_NOTIFY_OPEN_ID
 
         ok = await send_user_card(
             open_id=ALERT_NOTIFY_OPEN_ID,
@@ -511,6 +511,15 @@ async def start_ws() -> None:
                 from app.modules.safety.feishu.chemical_inventory_bitable_handler import (
                     ensure_chemical_inventory_bitable_subscribed,
                 )
+                from app.modules.safety.feishu.contractor_admission_bitable_handler import (
+                    ensure_contractor_admission_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.ehs_change_bitable_handler import (
+                    ensure_ehs_change_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.emergency_drill_bitable_handler import (
+                    ensure_emergency_drill_bitable_subscribed,
+                )
                 from app.modules.safety.feishu.fire_alarm_bitable_handler import (
                     ensure_fire_alarm_bitable_subscribed,
                 )
@@ -523,23 +532,14 @@ async def start_ws() -> None:
                 from app.modules.safety.feishu.knowledge_bitable_handler import (
                     ensure_knowledge_bitable_subscribed,
                 )
+                from app.modules.safety.feishu.msds_bitable_handler import (
+                    ensure_msds_bitable_subscribed,
+                )
                 from app.modules.safety.feishu.oh_bitable_handler import (
                     ensure_oh_bitable_subscribed,
                 )
                 from app.modules.safety.feishu.special_op_bitable_handler import (
                     ensure_special_op_bitable_subscribed,
-                )
-                from app.modules.safety.feishu.contractor_admission_bitable_handler import (
-                    ensure_contractor_admission_bitable_subscribed,
-                )
-                from app.modules.safety.feishu.ehs_change_bitable_handler import (
-                    ensure_ehs_change_bitable_subscribed,
-                )
-                from app.modules.safety.feishu.emergency_drill_bitable_handler import (
-                    ensure_emergency_drill_bitable_subscribed,
-                )
-                from app.modules.safety.feishu.msds_bitable_handler import (
-                    ensure_msds_bitable_subscribed,
                 )
 
                 subscribed = await ensure_bitable_subscribed()
