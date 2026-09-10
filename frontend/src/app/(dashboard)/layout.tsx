@@ -1,6 +1,7 @@
 import '@/lib/http-server'
 import { AppShell } from "@/components/layout/AppShell"
 import { AntdProvider } from "@/components/AntdProvider"
+import { DashboardQueryProvider } from "@/components/DashboardQueryProvider"
 import { PermissionProvider } from "@/components/PermissionProvider"
 import { apiGet } from "@/lib/http-client"
 import '@/lib/dayjs-config'
@@ -29,13 +30,15 @@ export default async function DashboardLayout({
 
   return (
     <AntdProvider>
-      <PermissionProvider
-        initialPermissions={perm.permissions}
-        initialRoles={perm.roles}
-        initialDataScopes={perm.dataScopes}
-      >
-        <AppShell>{children}</AppShell>
-      </PermissionProvider>
+      <DashboardQueryProvider>
+        <PermissionProvider
+          initialPermissions={perm.permissions}
+          initialRoles={perm.roles}
+          initialDataScopes={perm.dataScopes}
+        >
+          <AppShell>{children}</AppShell>
+        </PermissionProvider>
+      </DashboardQueryProvider>
     </AntdProvider>
   )
 }
