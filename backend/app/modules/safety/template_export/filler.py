@@ -132,7 +132,6 @@ class ExcelTemplateFiller:
         # 合并组内的「非主列」：填表时留空（合并单元格只保留首列值）
         merge_non_primary = set()
         for start_letter, end_letter in self._cfg.merge_column_groups:
-            start = get_column_letter(self._col_index(start_letter))
             for idx in range(
                 self._col_index(start_letter) + 1,
                 self._col_index(end_letter) + 1,

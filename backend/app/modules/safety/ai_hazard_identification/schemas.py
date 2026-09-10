@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class HazardTypeEnum(str, Enum):
+class HazardTypeEnum(StrEnum):
     """隐患分类 — 4 个枚举值"""
     UNSAFE_ACTION = "unsafe_action"       # 人的不安全行为
     UNSAFE_CONDITION = "unsafe_condition"  # 物的不安全状态
@@ -24,7 +24,7 @@ class HazardTypeEnum(str, Enum):
     MANAGEMENT_DEFECT = "management_defect"  # 管理的缺陷
 
 
-class HazardCategoryEnum(str, Enum):
+class HazardCategoryEnum(StrEnum):
     """隐患类别 — 13 个枚举值"""
     EQUIPMENT = "equipment"                      # 设备设施
     HAZARDOUS_STORAGE = "hazardous_storage"      # 危化储存
@@ -41,14 +41,14 @@ class HazardCategoryEnum(str, Enum):
     SPECIAL_OPERATION = "special_operation"      # 特殊作业
 
 
-class HazardLevelEnum(str, Enum):
+class HazardLevelEnum(StrEnum):
     """隐患级别 — 3 个枚举值"""
     GENERAL = "general"    # 一般隐患
     SERIOUS = "serious"    # 较大隐患
     MAJOR = "major"        # 重大隐患
 
 
-class DefectSubstanceEnum(str, Enum):
+class DefectSubstanceEnum(StrEnum):
     """缺陷实质评估 — 3 个枚举值
 
     用于控制 AI 过度推断：区分直接安全风险与形式/管理瑕疵。

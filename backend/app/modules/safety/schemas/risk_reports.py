@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,7 @@ from app.modules.safety.schemas.enums import (
 )
 
 
-class ReportStatus(str, Enum):
+class ReportStatus(StrEnum):
     """报备状态枚举"""
 
     DRAFT = "draft"

@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -20,27 +20,27 @@ from pydantic import BaseModel, Field
 # ════════════════════════════════════════════════════════════════
 
 
-class RiskLevelEnum(str, Enum):
+class RiskLevelEnum(StrEnum):
     """风险等级 — 高/中/低"""
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
 
 
-class ApplicabilityEnum(str, Enum):
+class ApplicabilityEnum(StrEnum):
     """三级标准适配等级"""
     MANDATORY = "mandatory"          # 强制适用（否决项/底线条款）
     RECOMMENDED = "recommended"      # 建议适用
     NOT_APPLICABLE = "not_applicable"  # 不适用
 
 
-class ReviewVerdictEnum(str, Enum):
+class ReviewVerdictEnum(StrEnum):
     """逐条审核结论"""
     PASSED = "passed"
     FAILED = "failed"
 
 
-class ConclusionEnum(str, Enum):
+class ConclusionEnum(StrEnum):
     """最终审核结论"""
     APPROVED = "approved"
     REJECTED = "rejected"

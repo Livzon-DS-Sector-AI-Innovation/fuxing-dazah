@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class OhHazardFactorsStatus(str, Enum):
+class OhHazardFactorsStatus(StrEnum):
     """岗位危害因素状态"""
 
     FILLED = "filled"

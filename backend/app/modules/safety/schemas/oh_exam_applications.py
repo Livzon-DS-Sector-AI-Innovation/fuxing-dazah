@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class OhTransferType(str, Enum):
+class OhTransferType(StrEnum):
     """转岗/离岗类型"""
 
     TRANSFER = "transfer"
@@ -25,7 +25,7 @@ OH_TRANSFER_TYPE_OPTIONS = [
 ]
 
 
-class OhApplicationStatus(str, Enum):
+class OhApplicationStatus(StrEnum):
     """申请状态（Bitable 7 态原文值）"""
 
     APPROVED = "已通过"
@@ -48,7 +48,7 @@ OH_APPLICATION_STATUS_OPTIONS = [
 ]
 
 
-class OhDiffAnalyzeStatus(str, Enum):
+class OhDiffAnalyzeStatus(StrEnum):
     """差异分析状态"""
 
     NONE = "none"

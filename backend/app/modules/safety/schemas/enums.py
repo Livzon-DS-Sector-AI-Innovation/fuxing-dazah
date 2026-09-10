@@ -1,9 +1,9 @@
 """Safety request and response schemas."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class ChangeType(str, Enum):
+class ChangeType(StrEnum):
     """变更类型枚举"""
 
     PROCESS_TECH = "process_tech"
@@ -18,7 +18,7 @@ CHANGE_TYPE_OPTIONS = [
 ]
 
 
-class ChangeGrade(str, Enum):
+class ChangeGrade(StrEnum):
     """变更等级枚举"""
 
     MAJOR = "major"
@@ -31,7 +31,7 @@ CHANGE_GRADE_OPTIONS = [
 ]
 
 
-class ChangeDuration(str, Enum):
+class ChangeDuration(StrEnum):
     """变更期限枚举"""
 
     PERMANENT = "permanent"
@@ -46,7 +46,7 @@ CHANGE_DURATION_OPTIONS = [
 ]
 
 
-class EhsChangeStatusEnum(str, Enum):
+class EhsChangeStatusEnum(StrEnum):
     """EHS变更状态枚举"""
 
     DRAFT = "draft"
@@ -69,7 +69,7 @@ EHS_CHANGE_STATUS_OPTIONS = [
 ]
 
 
-class RiskAssessmentMethodEnum(str, Enum):
+class RiskAssessmentMethodEnum(StrEnum):
     """风险评估方法枚举"""
 
     LEC = "LEC"
@@ -96,7 +96,7 @@ RISK_ASSESSMENT_METHOD_OPTIONS = [
 ]
 
 
-class RiskLevelEnum(str, Enum):
+class RiskLevelEnum(StrEnum):
     """风险等级枚举"""
 
     LEVEL_1 = "level_1"
@@ -113,7 +113,7 @@ RISK_LEVEL_OPTIONS = [
 ]
 
 
-class ApprovalDecisionEnum(str, Enum):
+class ApprovalDecisionEnum(StrEnum):
     """审批决定枚举"""
 
     PENDING = "pending"
@@ -128,7 +128,7 @@ APPROVAL_DECISION_OPTIONS = [
 ]
 
 
-class ActionItemStatusEnum(str, Enum):
+class ActionItemStatusEnum(StrEnum):
     """行动项状态枚举"""
 
     PENDING = "pending"
@@ -143,7 +143,7 @@ ACTION_ITEM_STATUS_OPTIONS = [
 ]
 
 
-class PSSRResultEnum(str, Enum):
+class PSSRResultEnum(StrEnum):
     """PSSR检查结果枚举"""
 
     PASS = "pass"
@@ -179,7 +179,7 @@ INSPECTION_CATEGORY_OPTIONS = [
 ]
 
 
-class HazardType(str, Enum):
+class HazardType(StrEnum):
     """隐患类型枚举"""
 
     UNSAFE_CONDITION = "unsafe_condition"
@@ -196,7 +196,7 @@ HAZARD_TYPE_OPTIONS = [
 ]
 
 
-class HazardLevel(str, Enum):
+class HazardLevel(StrEnum):
     """隐患等级枚举（三级）"""
 
     GENERAL = "general"    # 一般隐患
@@ -211,7 +211,7 @@ HAZARD_LEVEL_OPTIONS = [
 ]
 
 
-class HazardCategory(str, Enum):
+class HazardCategory(StrEnum):
     """隐患类别枚举（13种）"""
 
     EQUIPMENT = "equipment"
@@ -246,7 +246,7 @@ HAZARD_CATEGORY_OPTIONS = [
 ]
 
 
-class InjurySeverity(str, Enum):
+class InjurySeverity(StrEnum):
     """伤害程度枚举"""
 
     DEATH = "death"
@@ -263,7 +263,7 @@ INJURY_SEVERITY_OPTIONS = [
 ]
 
 
-class TrainingType(str, Enum):
+class TrainingType(StrEnum):
     """培训类型枚举"""
 
     INDUCTION = "induction"
@@ -284,7 +284,7 @@ TRAINING_TYPE_OPTIONS = [
 ]
 
 
-class TrainingMode(str, Enum):
+class TrainingMode(StrEnum):
     """培训方式枚举"""
 
     ONLINE = "online"
@@ -292,7 +292,7 @@ class TrainingMode(str, Enum):
     BLENDED = "blended"
 
 
-class TrainingLevel(str, Enum):
+class TrainingLevel(StrEnum):
     """培训级别枚举"""
 
     COMPANY = "company"
@@ -307,7 +307,7 @@ TRAINING_LEVEL_OPTIONS = [
 ]
 
 
-class CertificateStatus(str, Enum):
+class CertificateStatus(StrEnum):
     """证书状态枚举"""
 
     VALID = "valid"
@@ -329,7 +329,7 @@ TRAINING_MODE_OPTIONS = [
 ]
 
 
-class RevisionType(str, Enum):
+class RevisionType(StrEnum):
     """修订类型枚举"""
 
     MANUAL = "manual"
@@ -342,7 +342,7 @@ REVISION_TYPE_OPTIONS = [
 ]
 
 
-class RevisionScope(str, Enum):
+class RevisionScope(StrEnum):
     """修订范围枚举"""
 
     PROCESS = "process"
@@ -355,7 +355,7 @@ REVISION_SCOPE_OPTIONS = [
 ]
 
 
-class ReviewOpinion(str, Enum):
+class ReviewOpinion(StrEnum):
     """审核意见枚举"""
 
     PENDING = "pending"
@@ -370,7 +370,7 @@ REVIEW_OPINION_OPTIONS = [
 
 
 
-class OperationType(str, Enum):
+class OperationType(StrEnum):
     """特殊作业类型枚举（GB 30871-2022）"""
 
     HOT_WORK = "hot_work"
@@ -395,7 +395,7 @@ OPERATION_TYPE_OPTIONS = [
 ]
 
 
-class OperationLevel(str, Enum):
+class OperationLevel(StrEnum):
     """特殊作业级别枚举"""
 
     SPECIAL = "special"
@@ -412,7 +412,7 @@ OPERATION_LEVEL_OPTIONS = [
 ]
 
 
-class PersonnelStatus(str, Enum):
+class PersonnelStatus(StrEnum):
     """人员资质状态枚举"""
 
     ACTIVE = "active"
@@ -427,7 +427,7 @@ PERSONNEL_STATUS_OPTIONS = [
 ]
 
 
-class PermitStatus(str, Enum):
+class PermitStatus(StrEnum):
     """作业票状态枚举"""
 
     DRAFT = "draft"
@@ -450,7 +450,7 @@ PERMIT_STATUS_OPTIONS = [
 ]
 
 
-class CompletionMethod(str, Enum):
+class CompletionMethod(StrEnum):
     """完工方式枚举"""
 
     NORMAL = "normal"
@@ -463,7 +463,7 @@ COMPLETION_METHOD_OPTIONS = [
 ]
 
 
-class KnowledgeCategory(str, Enum):
+class KnowledgeCategory(StrEnum):
     """安全知识库分类枚举"""
 
     LAWS_REGULATIONS = "laws_regulations"  # 法律法规
@@ -488,7 +488,7 @@ KNOWLEDGE_CATEGORY_OPTIONS = [
 ]
 
 
-class DetectionTypeEnum(str, Enum):
+class DetectionTypeEnum(StrEnum):
     """检测类型枚举"""
 
     REGULAR = "regular"
@@ -505,7 +505,7 @@ DETECTION_TYPE_OPTIONS = [
 ]
 
 
-class HazardFactorCategoryEnum(str, Enum):
+class HazardFactorCategoryEnum(StrEnum):
     """危害因素类别枚举"""
 
     DUST = "dust"
@@ -520,7 +520,7 @@ HAZARD_FACTOR_CATEGORY_OPTIONS = [
 ]
 
 
-class OELComplianceStatusEnum(str, Enum):
+class OELComplianceStatusEnum(StrEnum):
     """OEL合规状态枚举"""
 
     COMPLIANT = "compliant"
@@ -535,7 +535,7 @@ OEL_COMPLIANCE_STATUS_OPTIONS = [
 ]
 
 
-class MonitorStatusEnum(str, Enum):
+class MonitorStatusEnum(StrEnum):
     """监测状态枚举"""
 
     DRAFT = "draft"
@@ -552,7 +552,7 @@ MONITOR_STATUS_OPTIONS = [
 ]
 
 
-class ExamTypeEnum(str, Enum):
+class ExamTypeEnum(StrEnum):
     """体检类型枚举"""
 
     PRE_EMPLOYMENT = "pre_employment"
@@ -569,7 +569,7 @@ EXAM_TYPE_OPTIONS = [
 ]
 
 
-class ExamConclusionEnum(str, Enum):
+class ExamConclusionEnum(StrEnum):
     """体检结论枚举"""
 
     NORMAL = "normal"
@@ -590,7 +590,7 @@ EXAM_CONCLUSION_OPTIONS = [
 ]
 
 
-class ExamStatusEnum(str, Enum):
+class ExamStatusEnum(StrEnum):
     """体检状态枚举"""
 
     SCHEDULED = "scheduled"
@@ -607,7 +607,7 @@ EXAM_STATUS_OPTIONS = [
 ]
 
 
-class AbnormalityStatusEnum(str, Enum):
+class AbnormalityStatusEnum(StrEnum):
     """异常处置状态枚举"""
 
     OPEN = "open"

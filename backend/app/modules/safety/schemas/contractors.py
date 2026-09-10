@@ -2,12 +2,12 @@
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class ContractorStatus(str, Enum):
+class ContractorStatus(StrEnum):
     """承包商状态枚举"""
 
     ACTIVE = "active"
@@ -22,7 +22,7 @@ CONTRACTOR_STATUS_OPTIONS = [
 ]
 
 
-class QualificationTypeEnum(str, Enum):
+class QualificationTypeEnum(StrEnum):
     """承包资质类型枚举"""
 
     CONSTRUCTION = "construction"
@@ -43,7 +43,7 @@ QUALIFICATION_TYPE_OPTIONS = [
 ]
 
 
-class QualificationLevelEnum(str, Enum):
+class QualificationLevelEnum(StrEnum):
     """资质等级枚举"""
 
     GRADE_A = "grade_a"
@@ -58,7 +58,7 @@ QUALIFICATION_LEVEL_OPTIONS = [
 ]
 
 
-class ContractorTrainingStatusEnum(str, Enum):
+class ContractorTrainingStatusEnum(StrEnum):
     """承包商培训状态枚举"""
 
     UNTRAINED = "untrained"
@@ -75,7 +75,7 @@ CONTRACTOR_TRAINING_STATUS_OPTIONS = [
 ]
 
 
-class WorkRecordStatusEnum(str, Enum):
+class WorkRecordStatusEnum(StrEnum):
     """施工记录状态枚举"""
 
     IN_PROGRESS = "in_progress"

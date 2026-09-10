@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.modules.safety.schemas.oh_health_exams import OhAiConclusion, OhExamType
 
 
-class OhWorkStatus(str, Enum):
+class OhWorkStatus(StrEnum):
     """在岗状态（原「最后体检状态」更名，D6）"""
 
     ON_POST = "on_post"

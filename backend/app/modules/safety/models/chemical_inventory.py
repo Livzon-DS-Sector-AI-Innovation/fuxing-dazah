@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum as PyEnum
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -29,7 +29,7 @@ from app.shared.base_model import BaseModel
 # ==================== 危化品库存管理 Enums ====================
 
 
-class ChemicalDepartmentType(str, PyEnum):
+class ChemicalDepartmentType(StrEnum):
     """危化品库存部门枚举（14 部门 + 其他）。"""
 
     WAREHOUSE = "warehouse"              # 仓储部
@@ -47,7 +47,7 @@ class ChemicalDepartmentType(str, PyEnum):
     OTHER = "other"
 
 
-class ChemicalUnitType(str, PyEnum):
+class ChemicalUnitType(StrEnum):
     """危化品库存单位枚举。"""
 
     KG = "kg"
@@ -58,7 +58,7 @@ class ChemicalUnitType(str, PyEnum):
     BOTTLE = "bottle"
 
 
-class HazardClassType(str, PyEnum):
+class HazardClassType(StrEnum):
     """危险性类别（多选）。"""
 
     FLAMMABLE = "flammable"                        # 易燃
@@ -71,7 +71,7 @@ class HazardClassType(str, PyEnum):
     IRRITANT = "irritant"                          # 刺激性
 
 
-class RiskFlagType(str, PyEnum):
+class RiskFlagType(StrEnum):
     """库存记录风险标记（系统回填，二元：正常/预警）。"""
 
     NORMAL = "normal"

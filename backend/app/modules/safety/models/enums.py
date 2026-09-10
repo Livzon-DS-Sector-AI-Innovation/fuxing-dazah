@@ -1,6 +1,6 @@
 """Safety ORM models."""
 
-from enum import Enum as PyEnum
+from enum import StrEnum
 
 # 业务表均软删除（is_deleted），唯一编号约束使用部分唯一索引
 # (WHERE is_deleted = false)，避免「软删→重建同编号」触发约束冲突。
@@ -10,7 +10,7 @@ from enum import Enum as PyEnum
 # ==================== Enums ====================
 
 
-class ChangeType(str, PyEnum):
+class ChangeType(StrEnum):
     """变更类型枚举（三大类）"""
 
     PROCESS_TECH = "process_tech"  # 工艺技术变更
@@ -18,14 +18,14 @@ class ChangeType(str, PyEnum):
     MANAGEMENT = "management"  # 管理变更
 
 
-class ChangeGrade(str, PyEnum):
+class ChangeGrade(StrEnum):
     """变更等级枚举"""
 
     MAJOR = "major"  # 重大变更
     GENERAL = "general"  # 一般变更
 
 
-class ChangeDuration(str, PyEnum):
+class ChangeDuration(StrEnum):
     """变更期限枚举"""
 
     PERMANENT = "permanent"  # 永久性
@@ -33,7 +33,7 @@ class ChangeDuration(str, PyEnum):
     EMERGENCY = "emergency"  # 紧急
 
 
-class EhsChangeStatus(str, PyEnum):
+class EhsChangeStatus(StrEnum):
     """EHS变更状态枚举"""
 
     DRAFT = "draft"  # 草稿
@@ -45,7 +45,7 @@ class EhsChangeStatus(str, PyEnum):
     CLOSED = "closed"  # 已关闭
 
 
-class RiskAssessmentMethod(str, PyEnum):
+class RiskAssessmentMethod(StrEnum):
     """风险评估方法枚举"""
 
     LEC = "LEC"  # LEC评价法
@@ -59,7 +59,7 @@ class RiskAssessmentMethod(str, PyEnum):
     OTHER = "other"  # 其他
 
 
-class RiskLevel(str, PyEnum):
+class RiskLevel(StrEnum):
     """风险等级枚举"""
 
     LEVEL_1 = "level_1"  # 一级/重大风险
@@ -68,7 +68,7 @@ class RiskLevel(str, PyEnum):
     LEVEL_4 = "level_4"  # 四级/低风险
 
 
-class ApprovalDecision(str, PyEnum):
+class ApprovalDecision(StrEnum):
     """审批决定枚举"""
 
     PENDING = "pending"  # 待审批
@@ -76,7 +76,7 @@ class ApprovalDecision(str, PyEnum):
     REJECTED = "rejected"  # 驳回
 
 
-class ActionItemStatus(str, PyEnum):
+class ActionItemStatus(StrEnum):
     """行动项状态枚举"""
 
     PENDING = "pending"  # 待完成
@@ -84,7 +84,7 @@ class ActionItemStatus(str, PyEnum):
     COMPLETED = "completed"  # 已完成
 
 
-class PSSRResult(str, PyEnum):
+class PSSRResult(StrEnum):
     """PSSR检查结果枚举"""
 
     PASS = "pass"  # 通过
@@ -92,7 +92,7 @@ class PSSRResult(str, PyEnum):
     NA = "na"  # 不适用
 
 
-class HazardType(str, PyEnum):
+class HazardType(StrEnum):
     """隐患类型枚举（人/物/环/管）"""
 
     UNSAFE_CONDITION = "unsafe_condition"  # 物的不安全状态
@@ -101,7 +101,7 @@ class HazardType(str, PyEnum):
     ENVIRONMENTAL = "environmental"  # 环境因素
 
 
-class HazardLevel(str, PyEnum):
+class HazardLevel(StrEnum):
     """隐患等级枚举（三级）"""
 
     GENERAL = "general"  # 一般隐患
@@ -109,7 +109,7 @@ class HazardLevel(str, PyEnum):
     MAJOR = "major"  # 重大隐患
 
 
-class HazardCategory(str, PyEnum):
+class HazardCategory(StrEnum):
     """隐患类别枚举（13种）"""
 
     EQUIPMENT = "equipment"  # 设备设施
@@ -127,7 +127,7 @@ class HazardCategory(str, PyEnum):
     SPECIAL_OPERATION = "special_operation"  # 特殊作业
 
 
-class InjurySeverity(str, PyEnum):
+class InjurySeverity(StrEnum):
     """伤害程度枚举"""
 
     DEATH = "death"  # 死亡
@@ -136,7 +136,7 @@ class InjurySeverity(str, PyEnum):
     NO_INJURY = "no_injury"  # 无伤害
 
 
-class ContractorStatus(str, PyEnum):
+class ContractorStatus(StrEnum):
     """承包商状态枚举"""
 
     ACTIVE = "active"  # 活跃
@@ -144,7 +144,7 @@ class ContractorStatus(str, PyEnum):
     BLACKLISTED = "blacklisted"  # 黑名单
 
 
-class QualificationType(str, PyEnum):
+class QualificationType(StrEnum):
     """承包资质类型枚举"""
 
     CONSTRUCTION = "construction"  # 建筑施工
@@ -155,7 +155,7 @@ class QualificationType(str, PyEnum):
     OTHER = "other"  # 其他
 
 
-class QualificationLevel(str, PyEnum):
+class QualificationLevel(StrEnum):
     """资质等级枚举"""
 
     GRADE_A = "grade_a"  # 甲级/一级
@@ -163,7 +163,7 @@ class QualificationLevel(str, PyEnum):
     GRADE_C = "grade_c"  # 丙级/三级
 
 
-class ContractorTrainingStatus(str, PyEnum):
+class ContractorTrainingStatus(StrEnum):
     """承包商培训状态枚举"""
 
     UNTRAINED = "untrained"  # 未培训
@@ -172,7 +172,7 @@ class ContractorTrainingStatus(str, PyEnum):
     EXPIRED = "expired"  # 已过期
 
 
-class WorkRecordStatus(str, PyEnum):
+class WorkRecordStatus(StrEnum):
     """施工记录状态枚举"""
 
     IN_PROGRESS = "in_progress"  # 施工中
@@ -180,7 +180,7 @@ class WorkRecordStatus(str, PyEnum):
     EVALUATED = "evaluated"  # 已评价
 
 
-class TrainingType(str, PyEnum):
+class TrainingType(StrEnum):
     """培训类型枚举"""
 
     INDUCTION = "induction"  # 入职培训
@@ -191,7 +191,7 @@ class TrainingType(str, PyEnum):
     REFRESHER = "refresher"  # 复训
 
 
-class TrainingLevel(str, PyEnum):
+class TrainingLevel(StrEnum):
     """培训级别枚举"""
 
     COMPANY = "company"  # 公司级
@@ -199,7 +199,7 @@ class TrainingLevel(str, PyEnum):
     TEAM = "team"  # 班组级
 
 
-class CertificateStatus(str, PyEnum):
+class CertificateStatus(StrEnum):
     """证书状态枚举"""
 
     VALID = "valid"  # 有效
@@ -207,7 +207,7 @@ class CertificateStatus(str, PyEnum):
     EXPIRED = "expired"  # 已过期
 
 
-class TrainingMode(str, PyEnum):
+class TrainingMode(StrEnum):
     """培训方式枚举"""
 
     ONLINE = "online"  # 线上
@@ -215,28 +215,28 @@ class TrainingMode(str, PyEnum):
     BLENDED = "blended"  # 混合
 
 
-class RevisionType(str, PyEnum):
+class RevisionType(StrEnum):
     """操规修订类型枚举"""
 
     MANUAL = "manual"  # 人工修订
     AI = "ai"  # AI修订
 
 
-class RevisionScope(str, PyEnum):
+class RevisionScope(StrEnum):
     """修订范围枚举"""
 
     PROCESS = "process"  # 工艺
     SAFETY_REQUIREMENT = "safety_requirement"  # 安全要求
 
 
-class ReviewOpinion(str, PyEnum):
+class ReviewOpinion(StrEnum):
     """审核意见枚举"""
 
     PENDING = "pending"  # 待审核
     APPROVED = "approved"  # 已审核
 
 
-class OperationType(str, PyEnum):
+class OperationType(StrEnum):
     """特殊作业类型枚举（GB 30871-2022 八大特殊作业）"""
 
     HOT_WORK = "hot_work"  # 动火作业
@@ -249,7 +249,7 @@ class OperationType(str, PyEnum):
     ROAD_BREAKING = "road_breaking"  # 断路作业
 
 
-class OperationLevel(str, PyEnum):
+class OperationLevel(StrEnum):
     """特殊作业级别枚举"""
 
     SPECIAL = "special"  # 特级
@@ -258,7 +258,7 @@ class OperationLevel(str, PyEnum):
     NOT_APPLICABLE = "not_applicable"  # 不涉及
 
 
-class PersonnelStatus(str, PyEnum):
+class PersonnelStatus(StrEnum):
     """人员资质状态枚举"""
 
     ACTIVE = "active"  # 有效
@@ -266,7 +266,7 @@ class PersonnelStatus(str, PyEnum):
     REVOKED = "revoked"  # 已撤销
 
 
-class PermitStatus(str, PyEnum):
+class PermitStatus(StrEnum):
     """作业票状态枚举"""
 
     DRAFT = "draft"  # 草稿
@@ -278,14 +278,14 @@ class PermitStatus(str, PyEnum):
     ARCHIVED = "archived"  # 已归档
 
 
-class CompletionMethod(str, PyEnum):
+class CompletionMethod(StrEnum):
     """完工方式枚举"""
 
     NORMAL = "normal"  # 正常完工
     EARLY_TERMINATION = "early_termination"  # 提前终止
 
 
-class KnowledgeCategory(str, PyEnum):
+class KnowledgeCategory(StrEnum):
     """安全知识库分类枚举"""
 
     LAWS_REGULATIONS = "laws_regulations"  # 法律法规
@@ -298,7 +298,7 @@ class KnowledgeCategory(str, PyEnum):
     OTHER = "other"  # 其他
 
 
-class DetectionType(str, PyEnum):
+class DetectionType(StrEnum):
     """检测类型枚举"""
 
     REGULAR = "regular"  # 定期检测
@@ -307,7 +307,7 @@ class DetectionType(str, PyEnum):
     ACCIDENT = "accident"  # 事故调查检测
 
 
-class HazardFactorCategory(str, PyEnum):
+class HazardFactorCategory(StrEnum):
     """危害因素类别枚举"""
 
     DUST = "dust"  # 粉尘（总尘/呼尘）
@@ -315,7 +315,7 @@ class HazardFactorCategory(str, PyEnum):
     PHYSICAL = "physical"  # 物理因素（噪声、高温、振动、辐射、照度）
 
 
-class OELComplianceStatus(str, PyEnum):
+class OELComplianceStatus(StrEnum):
     """OEL合规状态枚举"""
 
     COMPLIANT = "compliant"  # 符合
@@ -323,7 +323,7 @@ class OELComplianceStatus(str, PyEnum):
     MARGINAL = "marginal"  # 临界（接近限值）
 
 
-class MonitorStatus(str, PyEnum):
+class MonitorStatus(StrEnum):
     """监测状态枚举"""
 
     DRAFT = "draft"  # 草稿
@@ -332,7 +332,7 @@ class MonitorStatus(str, PyEnum):
     VERIFIED = "verified"  # 已验证
 
 
-class ExamType(str, PyEnum):
+class ExamType(StrEnum):
     """体检类型枚举"""
 
     PRE_EMPLOYMENT = "pre_employment"  # 上岗前
@@ -341,7 +341,7 @@ class ExamType(str, PyEnum):
     EMERGENCY = "emergency"  # 应急/事故后
 
 
-class ExamConclusion(str, PyEnum):
+class ExamConclusion(StrEnum):
     """体检结论枚举"""
 
     NORMAL = "normal"  # 未见异常
@@ -352,7 +352,7 @@ class ExamConclusion(str, PyEnum):
     RE_EXAMINATION = "re_examination"  # 复查
 
 
-class ExamStatus(str, PyEnum):
+class ExamStatus(StrEnum):
     """体检状态枚举"""
 
     SCHEDULED = "scheduled"  # 已安排
@@ -361,7 +361,7 @@ class ExamStatus(str, PyEnum):
     ARCHIVED = "archived"  # 已归档
 
 
-class AbnormalityStatus(str, PyEnum):
+class AbnormalityStatus(StrEnum):
     """异常处置状态枚举"""
 
     OPEN = "open"  # 待处理
@@ -370,7 +370,7 @@ class AbnormalityStatus(str, PyEnum):
     CLOSED = "closed"  # 已关闭
 
 
-class RegulationStatus(str, PyEnum):
+class RegulationStatus(StrEnum):
     """操规标准化生成状态"""
 
     DRAFT = "draft"          # 初始状态
@@ -380,7 +380,7 @@ class RegulationStatus(str, PyEnum):
     EXPORTED = "exported"    # 已导出 PDF
 
 
-class ReportStatus(str, PyEnum):
+class ReportStatus(StrEnum):
     """报备状态枚举"""
 
     DRAFT = "draft"
@@ -389,7 +389,7 @@ class ReportStatus(str, PyEnum):
     REJECTED = "rejected"
 
 
-class AdmissionReviewStatus(str, PyEnum):
+class AdmissionReviewStatus(StrEnum):
     """相关方准入 AI 审核状态（平台内部状态机，英文 value）"""
 
     NONE = "none"            # 未审核
@@ -398,7 +398,7 @@ class AdmissionReviewStatus(str, PyEnum):
     FAILED = "failed"        # 失败（可重审）
 
 
-class AdmissionConclusion(str, PyEnum):
+class AdmissionConclusion(StrEnum):
     """相关方准入 AI 审核总体结论（中文 value，与 Bitable 单选选项一致，回填直传）"""
 
     APPROVED = "审核通过"
@@ -406,7 +406,7 @@ class AdmissionConclusion(str, PyEnum):
     REJECTED = "审核不通过"
 
 
-class RelatedPartyType(str, PyEnum):
+class RelatedPartyType(StrEnum):
     """相关方类型（中文 value，与 Bitable 单选选项一致）"""
 
     CONTRACTOR = "承包商"
@@ -415,7 +415,7 @@ class RelatedPartyType(str, PyEnum):
     OTHER = "其他相关方"
 
 
-class AdmissionSubmitStatus(str, PyEnum):
+class AdmissionSubmitStatus(StrEnum):
     """提交状态（中文 value，与 Bitable 单选选项一致）"""
 
     COMPLETED = "已完成"
@@ -423,7 +423,7 @@ class AdmissionSubmitStatus(str, PyEnum):
     NOT_STARTED = "未开始"
 
 
-class AdmissionTrainingStatus(str, PyEnum):
+class AdmissionTrainingStatus(StrEnum):
     """培训状态（中文 value，与 Bitable 单选选项一致）"""
 
     COMPLETED = "已完结"

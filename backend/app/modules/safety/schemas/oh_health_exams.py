@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ── 枚举 ──
 
 
-class OhExamType(str, Enum):
+class OhExamType(StrEnum):
     """体检类型（5 标准枚举）"""
 
     PRE_EMPLOYMENT = "pre_employment"
@@ -35,7 +35,7 @@ OH_EXAM_TYPE_OPTIONS = [
 ]
 
 
-class OhAiConclusion(str, Enum):
+class OhAiConclusion(StrEnum):
     """AI 结论分类（6 标准枚举）"""
 
     NORMAL = "normal"
@@ -56,7 +56,7 @@ OH_AI_CONCLUSION_OPTIONS = [
 ]
 
 
-class OhAiParseStatus(str, Enum):
+class OhAiParseStatus(StrEnum):
     """AI 解析状态"""
 
     PENDING = "pending"
@@ -73,7 +73,7 @@ OH_AI_PARSE_STATUS_OPTIONS = [
 ]
 
 
-class OhFitness(str, Enum):
+class OhFitness(StrEnum):
     """AI 适配判定"""
 
     FIT = "fit"
@@ -88,7 +88,7 @@ OH_FITNESS_OPTIONS = [
 ]
 
 
-class OhExamStatus(str, Enum):
+class OhExamStatus(StrEnum):
     """机器状态（兼容旧前端，含 pending）"""
 
     PENDING = "pending"

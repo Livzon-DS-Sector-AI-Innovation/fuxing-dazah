@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class OhFollowupStatus(str, Enum):
+class OhFollowupStatus(StrEnum):
     """随访状态（状态机: open→followed→closed；expired 二期派生）"""
 
     OPEN = "open"
@@ -29,7 +29,7 @@ OH_FOLLOWUP_STATUS_OPTIONS = [
 ]
 
 
-class OhFollowupType(str, Enum):
+class OhFollowupType(StrEnum):
     """随访类型"""
 
     RE_EXAMINATION = "re_examination"
@@ -46,7 +46,7 @@ OH_FOLLOWUP_TYPE_OPTIONS = [
 ]
 
 
-class OhFollowupCategory(str, Enum):
+class OhFollowupCategory(StrEnum):
     """异常指标类别"""
 
     LAB = "lab"
@@ -65,7 +65,7 @@ OH_FOLLOWUP_CATEGORY_OPTIONS = [
 ]
 
 
-class OhAbnormalLevel(str, Enum):
+class OhAbnormalLevel(StrEnum):
     """异常程度"""
 
     MILD = "mild"

@@ -1135,15 +1135,17 @@ class SafetyService:
         if prefix is None:
             return
 
-        l = update_data.get(f"l_{prefix}")
-        e = update_data.get(f"e_{prefix}")
-        c = update_data.get(f"c_{prefix}")
-        if not all(v is not None for v in (l, e, c)):
+        lec = (
+            update_data.get(f"l_{prefix}"),
+            update_data.get(f"e_{prefix}"),
+            update_data.get(f"c_{prefix}"),
+        )
+        if not all(v is not None for v in lec):
             return
 
-        # D 值：优先用 AI 输出，否则后端计算
+        # D 值：优先用 AI 输出，否则后端计算（LEC 法：D = L × E × C）
         if update_data.get(f"d_{prefix}") is None:
-            update_data[f"d_{prefix}"] = l * e * c
+            update_data[f"d_{prefix}"] = lec[0] * lec[1] * lec[2]
         # 风险等级 key：优先用 AI 输出
         if update_data.get(f"{prefix}_risk_level") is None:
             level = get_risk_level(update_data[f"d_{prefix}"])

@@ -10,8 +10,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from app.core.database import get_db
 from app.modules.safety.models import WorkTicketReviewViolation
 from app.modules.safety.schemas import WorkTicketReviewRunRequest
@@ -20,6 +18,8 @@ from app.modules.safety.workticket_review.service import WorkTicketReviewService
 from app.shared.schemas import ApiResponse
 
 workticket_review_router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 @workticket_review_router.post(
