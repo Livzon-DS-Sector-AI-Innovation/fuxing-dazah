@@ -81,7 +81,7 @@ export function BatchHoverCard({ item }: { item: ProcessBoardExecution }) {
       <InfoRow label="数量">
         {item.batch_quantity != null ? `${item.batch_quantity} ${item.batch_unit ?? ''}` : '—'}
       </InfoRow>
-      <InfoRow label="归属人">{item.owner_name ?? '—'}</InfoRow>
+      <InfoRow label="执行人">{item.owner_name ?? '—'}</InfoRow>
       <InfoRow label="开始时间">{formatDateTime(item.started_at)}</InfoRow>
       <InfoRow label="结束时间">
         {item.finished_at ? formatDateTime(item.finished_at) : '—'}

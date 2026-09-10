@@ -159,7 +159,10 @@ async def _run_tool_background(
         return
     except Exception as e:
         # 内部系统：异常消息写进会话供前端展示，堆栈仅进日志
-        logger.exception("toolbox 后台工具执行失败 tool=%s step=%s execution=%s", tool.id, step_id, execution_id)
+        logger.exception(
+            "toolbox 后台工具执行失败 tool=%s step=%s execution=%s: %s",
+            tool.id, step_id, execution_id, e,
+        )
         await _finish_background(redis, execution_id, step_id, result=None, error=f"工具执行失败: {e}")
         return
     await _finish_background(redis, execution_id, step_id, result=result)
@@ -367,7 +370,7 @@ async def run_step(
         return error_response(str(e), status_code=400)
     except Exception as e:
         # 内部系统：异常消息直接反馈给用户，堆栈仅进日志
-        logger.exception("toolbox 工具执行失败 tool=%s step=%s", tool_id, step_id)
+        logger.exception("toolbox 工具执行失败 tool=%s step=%s: %s", tool_id, step_id, e)
         return error_response(f"工具执行失败: {e}", status_code=500)
 
     sessions.add_files(exec_data, registered)

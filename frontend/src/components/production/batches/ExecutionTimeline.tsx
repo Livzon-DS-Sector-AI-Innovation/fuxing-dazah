@@ -143,7 +143,7 @@ export function ExecutionTimeline({
                 </div>
               )}
               <div style={{ fontSize: 12, color: '#787671', marginTop: 4 }}>
-                负责人 {e.owner_name ?? '—'} · 开始{' '}
+                执行人 {e.owner_name ?? '—'} · 开始{' '}
                 {new Date(e.started_at).toLocaleString('zh-CN')}
                 {e.finished_at &&
                   ` · 结束 ${new Date(e.finished_at).toLocaleString('zh-CN')}`}

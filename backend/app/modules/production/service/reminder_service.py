@@ -56,8 +56,9 @@ NOTIFICATION_TYPES: dict[str, NotificationTypeDef] = {
         ),
         NotificationTypeDef(
             "step_completed", "工序完成提醒",
-            "工序完成后通知下一工序接收人：同批次同工段为批次负责人，"
-            "跨批次或跨工段为下一工段负责人。",
+            "工序完成后通知下一工序接收人：跨批次或跨工段立即通知下一工段"
+            "负责人；同批次同工段延迟 30 分钟通知批次负责人"
+            "（届时若下一工序已开始则不再通知）。",
         ),
         NotificationTypeDef(
             "batch_start_due", "计划批次开工提醒",
@@ -117,6 +118,11 @@ class StepCompletedReminder:
     next_node: str
     to_owner: bool
     user_ids: list[uuid.UUID]
+
+
+# 同批次同工段卡（发批次负责人）的延迟发送秒数：给批次负责人缓冲，
+# 到期时若下一工序已开始则放弃发送（跨工段卡不受影响，始终立即发）
+STEP_COMPLETED_OWNER_DELAY_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -811,7 +817,11 @@ async def notify_plan_closed(payload: PlanClosedReminder) -> None:
 
 
 async def notify_step_completed(payload: StepCompletedEvent) -> None:
-    """工序结束提醒（后台任务入口）：确认提交后再收集接收人与卡片并发送。"""
+    """工序结束提醒（后台任务入口）：确认提交后再收集接收人与卡片并发送。
+
+    跨批次边界/跨工段卡立即发；同批次同工段卡（发批次负责人）
+    转入延迟发送——到期时若下一工序已开始则放弃。
+    """
     try:
         enabled, extras = await _read_settings_with_retry("step_completed")
         if not enabled:
@@ -831,27 +841,104 @@ async def notify_step_completed(payload: StepCompletedEvent) -> None:
             if batch is None or node is None:
                 return
             reminders = await _collect_step_completed_reminders(db, batch, node)
-            if not reminders:
+            owner_cards = [r for r in reminders if r.to_owner]
+            immediate_cards = [r for r in reminders if not r.to_owner]
+            if owner_cards:
+                _spawn(_send_delayed_owner_cards(payload))
+            if not immediate_cards:
                 return
-            # 同一次任务内统一解析 open_id，各卡并行发送
-            user_ids_per_card = [
-                _merge_recipients(r.user_ids, extras) for r in reminders
-            ]
-            all_uids = sorted(
-                {uid for uids in user_ids_per_card for uid in uids}, key=str,
+            open_ids, sends = await _prepare_step_card_sends(
+                db, immediate_cards, extras,
             )
-            open_ids = await _user_open_ids(db, all_uids)
-            sends = [
-                (uids, "工序完成提醒", _build_step_completed_content(
-                    r.batch_no, r.finished_node, r.next_node, r.to_owner,
-                ))
-                for r, uids in zip(reminders, user_ids_per_card, strict=True)
-            ]
         await asyncio.gather(
             *(_send_cards(open_ids, uids, title, content) for uids, title, content in sends)
         )
     except Exception:
         logger.exception("工序完成提醒发送异常: batch_id=%s", payload.batch_id)
+
+
+async def _prepare_step_card_sends(
+    db: AsyncSession,
+    cards: list[StepCompletedReminder],
+    extras: list[uuid.UUID],
+) -> tuple[dict[uuid.UUID, str], list[tuple[list[uuid.UUID], str, str]]]:
+    """工序完成提醒的发送准备：合并追加人员、统一解析 open_id、组卡。
+
+    立即路径与延迟路径共用；返回后由调用方在会话外并行发送。
+    """
+    user_ids_per_card = [_merge_recipients(r.user_ids, extras) for r in cards]
+    all_uids = sorted(
+        {uid for uids in user_ids_per_card for uid in uids}, key=str,
+    )
+    open_ids = await _user_open_ids(db, all_uids)
+    sends = [
+        (uids, "工序完成提醒", _build_step_completed_content(
+            r.batch_no, r.finished_node, r.next_node, r.to_owner,
+        ))
+        for r, uids in zip(cards, user_ids_per_card, strict=True)
+    ]
+    return open_ids, sends
+
+
+async def _delayed_owner_cards(
+    db: AsyncSession, payload: StepCompletedEvent,
+) -> list[StepCompletedReminder]:
+    """延迟到期后应发的同批次同工段卡；条件不满足返回空（放弃发送）。
+
+    放弃条件：批次已删/已完成/已取消，结束节点已不存在，
+    或下一工序已开始（任一 normal 出边目标节点存在
+    in_progress/completed 执行；aborted 不算已开始）。
+    """
+    batch = await repo.get_batch(db, payload.batch_id)
+    if batch is None or batch.status in ("completed", "cancelled"):
+        return []
+    nodes = await repo.get_nodes_by_ids(db, [payload.node_id])
+    node = nodes[0] if nodes else None
+    if node is None:
+        return []
+    edges = await repo.get_route_edges(db, batch.route_id)
+    target_ids = {
+        e.to_node_id for e in edges
+        if e.from_node_id == payload.node_id and e.edge_type == "normal"
+    }
+    if target_ids:
+        started = (
+            await repo.in_progress_node_ids(db, payload.batch_id)
+            | await repo.completed_node_ids(db, payload.batch_id)
+        )
+        if target_ids & started:
+            logger.info(
+                "工序完成延迟提醒放弃（下一工序已开始）: batch_id=%s",
+                payload.batch_id,
+            )
+            return []
+    return [
+        r for r in await _collect_step_completed_reminders(db, batch, node)
+        if r.to_owner
+    ]
+
+
+async def _send_delayed_owner_cards(payload: StepCompletedEvent) -> None:
+    """同批次同工段卡的延迟发送（30 分钟缓冲）。
+
+    缓冲内批次负责人多半已自行开工，届时下一工序已开始即不再打扰；
+    配置关闭同样放弃。接收人与卡片按到期时点重新收集。
+    """
+    await asyncio.sleep(STEP_COMPLETED_OWNER_DELAY_SECONDS)
+    try:
+        enabled, extras = await _read_settings_with_retry("step_completed")
+        if not enabled:
+            return
+        async with async_session_factory() as db:
+            cards = await _delayed_owner_cards(db, payload)
+            if not cards:
+                return
+            open_ids, sends = await _prepare_step_card_sends(db, cards, extras)
+        await asyncio.gather(
+            *(_send_cards(open_ids, uids, title, content) for uids, title, content in sends)
+        )
+    except Exception:
+        logger.exception("工序完成延迟提醒异常: batch_id=%s", payload.batch_id)
 
 
 async def _cached_first_stage_leaders(

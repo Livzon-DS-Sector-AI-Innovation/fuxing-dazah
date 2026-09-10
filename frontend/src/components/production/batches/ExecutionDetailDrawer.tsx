@@ -36,7 +36,7 @@ export function ExecutionDetailDrawer({ item, onClose }: Props) {
             bordered
             items={[
               { key: 'node', label: '工序', children: `${execution.node_name ?? '—'}（第 ${execution.execution_seq} 次）` },
-              { key: 'owner', label: '负责人', children: execution.owner_name ?? '—' },
+              { key: 'owner', label: '执行人', children: execution.owner_name ?? '—' },
               {
                 key: 'time',
                 label: '起止时间',

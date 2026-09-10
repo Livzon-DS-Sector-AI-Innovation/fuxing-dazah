@@ -91,9 +91,6 @@ export function ToolGrid({ tools }: { tools: ToolInfo[] }) {
   const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
   return (
     <div className="px-6 pb-6 pointer-events-none">
-      <p className="mt-1 text-[13px] text-[var(--color-slate)]">
-        金漆描龙凤，朱砂点牡丹。
-      </p>
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pointer-events-none">
         {tools.map((tool) => {
           if (tool.can_use) {

@@ -593,7 +593,9 @@ export function ToolRunner({
         }
       }
       fd.set('params', JSON.stringify(params))
-      const result = await runToolStep(fd)
+      const res = await runToolStep(fd)
+      if (!res.success) throw new Error(res.error)
+      const result = res.data
       setExecutionId(result.execution_id)
       setWarning(result.warning ?? null)
       // 直接改写 URL 持久化 execution，不触发 Next.js 导航与服务端重渲染
@@ -970,7 +972,7 @@ export function ToolRunner({
               >
                 <CheckCircleOutlined style={{ fontSize: 12 }} />
               </span>
-              <h3 className="text-[14px] font-semibold text-[var(--color-charcoal)]">执行结果</h3>
+              <h3 className="m-0 text-[14px] font-semibold text-[var(--color-charcoal)]">执行结果</h3>
             </div>
             <ResultView data={currentResult.data} executionId={currentResult.execution_id} tintBg={tintBg} tintInk={tintInk} />
           </div>

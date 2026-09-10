@@ -56,7 +56,8 @@ export function ToolConfigForm({
   const onFinish = async (values: ToolConfig) => {
     setSaving(true)
     try {
-      await updateToolConfig(toolId, values)
+      const res = await updateToolConfig(toolId, values)
+      if (!res.success) throw new Error(res.error)
       message.success('配置已保存')
     } catch (e) {
       message.error(e instanceof Error ? e.message : '保存失败')

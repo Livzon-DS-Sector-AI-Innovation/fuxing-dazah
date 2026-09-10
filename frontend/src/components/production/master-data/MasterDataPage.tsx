@@ -167,7 +167,7 @@ function IntermediateTypeFormModal({
           <Input maxLength={200} />
         </Form.Item>
         <Form.Item name="category" label="分类">
-          <Input maxLength={100} placeholder="如：发酵液、结晶粉、湿品" />
+          <Input maxLength={100} placeholder="如：万古霉素、达托霉素" />
         </Form.Item>
         <Form.Item name="default_unit" label="默认单位">
           <Input maxLength={20} placeholder="如：kg、L" />

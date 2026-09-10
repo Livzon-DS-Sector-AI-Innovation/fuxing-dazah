@@ -98,7 +98,8 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
                 }}
                 onEdit={() => setEditing(true)}
               />
-              {effectiveRouteId && canManage && (
+              {/* 空路线时主区域的 Empty 已提示，工段面板等有节点后再渲染，避免双空态 */}
+              {effectiveRouteId && canManage && !!graph?.nodes.length && (
                 <StageAssignmentPanel
                   routeId={effectiveRouteId}
                   stageNames={[...new Set((graph?.nodes ?? []).map(n => n.stage_name).filter(Boolean) as string[])]}
