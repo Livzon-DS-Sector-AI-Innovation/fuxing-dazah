@@ -38,6 +38,10 @@ dependencies = [
     "PyMuPDF>=1.28.0",      # knowledge 模块 PDF 解析（import fitz）
     "playwright>=1.61.0",   # regulation_crawler 法规爬取
     "markitdown>=0.1.6",    # knowledge 文档转换
+    # ── safety 模块直连但此前靠传递依赖存活的 3 项 ──
+    "numpy>=1.26.0",        # knowledge/bm25 向量计算
+    "websockets>=12.0",     # feishu/event_client 飞书长连接
+    "beautifulsoup4>=4.12.0",  # regulation_crawler HTML 解析
 ]
 
 [project.optional-dependencies]
