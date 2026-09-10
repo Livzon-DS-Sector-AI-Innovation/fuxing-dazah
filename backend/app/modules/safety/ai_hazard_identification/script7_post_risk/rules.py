@@ -17,20 +17,49 @@ from app.modules.safety.ai_hazard_identification.script7_post_risk.schemas impor
 logger = logging.getLogger(__name__)
 
 RISK_LEVEL_RANGES = {
-    "level_1": (320, float("inf")),
-    "level_2": (160, 320),
-    "level_3": (70, 160),
-    "level_4": (0, 70),
+    "level_1": (160, float("inf")),
+    "level_2": (70, 160),
+    "level_3": (20, 70),
+    "level_4": (0, 20),
 }
 
-# 措施类型 → 预期最大降幅（相对于残余风险）
+# 措施类型 → 预期最大降幅（相对于残余风险）。
+# 键为 Bitable「建议措施类型（AI）」预设选项（多选字段）。
 MEASURE_TYPE_MAX_REDUCTION = {
-    "工程控制": {"l": 0.5, "e": 0.3, "c": 0.5},
-    "管理控制": {"l": 0.2, "e": 0, "c": 0},
-    "PPE": {"l": 0, "e": 0, "c": 0.3},
-    "应急": {"l": 0, "e": 0, "c": 0.3},
+    "工程技术": {"l": 0.5, "e": 0.3, "c": 0.5},
+    "管理措施": {"l": 0.2, "e": 0.1, "c": 0.1},
+    "培训教育": {"l": 0.2, "e": 0.1, "c": 0.1},
+    "个体防护": {"l": 0, "e": 0, "c": 0.3},
+    "应急处置": {"l": 0, "e": 0, "c": 0.3},
     "综合": {"l": 0.5, "e": 0.3, "c": 0.5},
+    "无": {"l": 0, "e": 0, "c": 0},
 }
+
+# 未知措施类型的默认降幅（保守放行，仅软告警）
+_DEFAULT_REDUCTION = {"l": 0.5, "e": 0.3, "c": 0.5}
+
+
+def _measure_type_limits(recommendation_type: str) -> dict[str, float]:
+    """多选措施类型 → 合并后的降幅上限（按 l/e/c 分别取各类型上限的最大值）。
+
+    recommendation_type 为「、」连接的多个类型（如「工程技术、培训教育」），
+    组合措施可叠加降幅，故取各维度上限的最大值；全部类型都未知时回落默认值。
+    """
+    merged = {"l": 0.0, "e": 0.0, "c": 0.0}
+    matched = False
+    for t in recommendation_type.split("、"):
+        t = t.strip()
+        if not t:
+            continue
+        limits = MEASURE_TYPE_MAX_REDUCTION.get(t)
+        if limits is None:
+            continue
+        matched = True
+        for key in ("l", "e", "c"):
+            merged[key] = max(merged[key], limits[key])
+    if not matched:
+        return dict(_DEFAULT_REDUCTION)
+    return merged
 
 
 class PostRiskRuleEngine:
@@ -95,16 +124,13 @@ class PostRiskRuleEngine:
                 "这不合理"
             )
 
-        # 6. 措施类型对应的合理降幅检查
+        # 6. 措施类型对应的合理降幅检查（多选：取各类型上限的最大值）
         if (
             input_data.recommendation_type
             and input_data.l_residual is not None and lec.l_value is not None
             and input_data.d_residual is not None and lec.d_value is not None
         ):
-            limits = MEASURE_TYPE_MAX_REDUCTION.get(
-                input_data.recommendation_type,
-                {"l": 0.5, "e": 0.3, "c": 0.5},
-            )
+            limits = _measure_type_limits(input_data.recommendation_type)
             if input_data.l_residual > 0:
                 l_ratio = lec.l_value / input_data.l_residual
                 max_l_ratio = 1 - limits["l"]

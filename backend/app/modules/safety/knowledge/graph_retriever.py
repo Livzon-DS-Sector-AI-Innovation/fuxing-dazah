@@ -21,6 +21,7 @@ from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.modules.safety.knowledge.graph_models import (
     KnowledgeGraphEdge,
@@ -37,6 +38,7 @@ class GraphSearchResult:
     node_name: str
     node_type: str
     graph_distance: int  # 距离起始实体的跳数
+    article_id: UUID | None = None  # 关联知识库文章 ID（clause/document 节点）
     path: list[str] = field(default_factory=list)  # 导航路径
 
 
@@ -103,6 +105,7 @@ class GraphRetriever:
                             node_name=node.name,
                             node_type=node.node_type,
                             graph_distance=dist,
+                            article_id=node.article_id,
                             path=path,
                         )
 
@@ -131,6 +134,45 @@ class GraphRetriever:
         # 按距离排序
         sorted_results = sorted(results.values(), key=lambda r: r.graph_distance)
         return sorted_results[:max_results]
+
+    async def get_article_ids(
+        self,
+        entity_names: list[str],
+        max_hops: int = 2,
+        max_results: int = 100,
+    ) -> list[UUID]:
+        """沿图导航收集相关条款关联的知识库文章 ID（去重）。
+
+        Layer 1 图谱导航的产出之一：将实体 → 条款导航结果映射为
+        knowledge_articles 的 article_id 列表，供混合检索做软加分
+        （boost_article_ids）。
+
+        Args:
+            entity_names: 从查询/隐患描述中提取的实体名称列表
+            max_hops: 最大展开跳数
+            max_results: 导航结果上限
+
+        Returns:
+            去重后的 article_id 列表（可能与实体无关、可能为空）
+        """
+        results = await self.find_related_clauses(
+            entity_names=entity_names,
+            max_results=max_results,
+            max_hops=max_hops,
+        )
+        seen: set[UUID] = set()
+        article_ids: list[UUID] = []
+        for r in results:
+            aid = r.article_id
+            if aid is not None and aid not in seen:
+                seen.add(aid)
+                article_ids.append(aid)
+        if article_ids:
+            logger.debug(
+                "GraphRetriever.get_article_ids: %d → %d article_ids",
+                len(entity_names), len(article_ids),
+            )
+        return article_ids
 
     async def get_graph_context(
         self,
@@ -163,6 +205,21 @@ class GraphRetriever:
         return "\n".join(lines)
 
     # ── 内部方法 ───────────────────────────────────────────────
+
+    @staticmethod
+    def _chinese_bigrams(text: str) -> set[str]:
+        """计算中文文本的字符二元组（bigram）集合，用于模糊实体匹配。
+
+        示例: "动火作业" → {"动火", "火作", "作业"}
+        """
+        if not text:
+            return set()
+        cleaned = text.replace(" ", "").replace("　", "").replace("\n", "").replace("\t", "")
+        return {
+            cleaned[i : i + 2]
+            for i in range(len(cleaned) - 1)
+            if cleaned[i : i + 2].strip()
+        }
 
     async def _match_entities(self, names: list[str]) -> list[KnowledgeGraphNode]:
         """按名称/别名匹配实体节点。"""
@@ -210,7 +267,9 @@ class GraphRetriever:
 
     async def _get_outgoing_edges(self, node_id: UUID) -> list[KnowledgeGraphEdge]:
         """获取节点的出边（仅 confirmed/ai_generated 状态）。"""
-        stmt = select(KnowledgeGraphEdge).where(
+        stmt = select(KnowledgeGraphEdge).options(
+            selectinload(KnowledgeGraphEdge.target_node),
+        ).where(
             KnowledgeGraphEdge.source_node_id == node_id,
             ~KnowledgeGraphEdge.is_deleted,
             KnowledgeGraphEdge.status.in_(("human_confirmed", "ai_generated")),
@@ -220,7 +279,9 @@ class GraphRetriever:
 
     async def _get_incoming_edges(self, node_id: UUID) -> list[KnowledgeGraphEdge]:
         """获取节点的入边（仅 confirmed/ai_generated 状态）。"""
-        stmt = select(KnowledgeGraphEdge).where(
+        stmt = select(KnowledgeGraphEdge).options(
+            selectinload(KnowledgeGraphEdge.source_node),
+        ).where(
             KnowledgeGraphEdge.target_node_id == node_id,
             ~KnowledgeGraphEdge.is_deleted,
             KnowledgeGraphEdge.status.in_(("human_confirmed", "ai_generated")),

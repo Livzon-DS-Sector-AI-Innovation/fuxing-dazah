@@ -1,43 +1,5 @@
 // ============ Enums ============
 
-export enum CheckType {
-  DAILY = 'daily',
-  SPECIAL = 'special',
-  COMPREHENSIVE = 'comprehensive',
-  HOLIDAY = 'holiday',
-  MONTHLY = 'monthly',
-  SEASONAL = 'seasonal',
-  PRE_HOLIDAY = 'pre_holiday',
-  LEADERSHIP_DUTY = 'leadership_duty',
-  DEPT_CROSS = 'dept_cross',
-  WEEKLY = 'weekly',
-  RESUMPTION = 'resumption',
-  CHANGE_ACCEPTANCE = 'change_acceptance',
-  LIGHTNING = 'lightning',
-  SAFETY_VALVE = 'safety_valve',
-  POST_HOLIDAY = 'post_holiday',
-  HEATSTROKE_PREVENTION = 'heatstroke_prevention',
-}
-
-export const CHECK_TYPE_OPTIONS = [
-  { value: CheckType.DAILY, label: '日常检查', color: 'blue' },
-  { value: CheckType.SPECIAL, label: '专项检查', color: 'orange' },
-  { value: CheckType.COMPREHENSIVE, label: '综合检查', color: 'purple' },
-  { value: CheckType.HOLIDAY, label: '节假日检查', color: 'red' },
-  { value: CheckType.MONTHLY, label: '月度安全检查', color: 'blue' },
-  { value: CheckType.SEASONAL, label: '季节性安全检查', color: 'cyan' },
-  { value: CheckType.PRE_HOLIDAY, label: '节前安全检查', color: 'orange' },
-  { value: CheckType.LEADERSHIP_DUTY, label: '领导干部值班检查', color: 'gold' },
-  { value: CheckType.DEPT_CROSS, label: '部门互查', color: 'green' },
-  { value: CheckType.WEEKLY, label: '周检', color: 'blue' },
-  { value: CheckType.RESUMPTION, label: '复工复产安全检查', color: 'orange' },
-  { value: CheckType.CHANGE_ACCEPTANCE, label: '变更验收', color: 'purple' },
-  { value: CheckType.LIGHTNING, label: '防雷检查', color: 'yellow' },
-  { value: CheckType.SAFETY_VALVE, label: '安全阀专项检查', color: 'red' },
-  { value: CheckType.POST_HOLIDAY, label: '节后复工检查', color: 'orange' },
-  { value: CheckType.HEATSTROKE_PREVENTION, label: '防暑降温专项', color: 'volcano' },
-]
-
 export enum HazardType {
   UNSAFE_CONDITION = 'unsafe_condition',
   UNSAFE_ACTION = 'unsafe_action',
@@ -63,6 +25,28 @@ export const HAZARD_LEVEL_OPTIONS = [
   { value: HazardLevel.SERIOUS, label: '较大隐患', color: 'orange' },
   { value: HazardLevel.MAJOR, label: '重大隐患', color: 'red' },
 ]
+
+// 隐患等级兼容中文与英文存储值（历史人工录入/Bitable 混存），统一归一到英文枚举值。
+// 返回 '' 表示空值；未识别的值原样返回，由调用方回退显示原文。
+export function normalizeHazardLevel(value: string | null | undefined): string {
+  if (!value) return ''
+  switch (value) {
+    case '一般隐患': return HazardLevel.GENERAL
+    case '较大隐患': return HazardLevel.SERIOUS
+    case '重大隐患': return HazardLevel.MAJOR
+    default: return value
+  }
+}
+
+// 督办等级（后端 calculate_supervision_level 返回中文值：红色预警/一般预警/closed）
+export const SUPERVISION_LEVEL_OPTIONS = [
+  { value: '红色预警', label: '红色预警', color: 'red' },
+  { value: '一般预警', label: '一般预警', color: 'orange' },
+  { value: 'closed', label: '已关闭', color: 'default' },
+]
+
+// 督办进展状态（后端 calculate_all_open 计算，连续 7 天未更新「目前进展」时标记）
+export const SUPERVISION_PROGRESS_NOT_UPDATED = '未更新进展'
 
 export enum HazardCategory {
   EQUIPMENT = 'equipment',
@@ -198,62 +182,6 @@ export const KNOWLEDGE_CATEGORY_OPTIONS = [
   { value: KnowledgeCategory.EQUIPMENT_MANUALS, label: '设备说明书' },
   { value: KnowledgeCategory.RISK_ASSESSMENT_STANDARDS, label: '风险评估标准' },
   { value: KnowledgeCategory.OTHER, label: '其他' },
-]
-
-export enum AccidentType {
-  INJURY = 'injury',
-  FIRE = 'fire',
-  EXPLOSION = 'explosion',
-  LEAKAGE = 'leakage',
-  EQUIPMENT = 'equipment',
-  NEAR_MISS = 'near_miss',
-  ENVIRONMENTAL = 'environmental',
-  OCCUPATIONAL_DISEASE = 'occupational_disease',
-  TRAFFIC = 'traffic',
-  OTHER = 'other',
-}
-
-export const ACCIDENT_TYPE_OPTIONS = [
-  { value: AccidentType.INJURY, label: '工伤事故' },
-  { value: AccidentType.FIRE, label: '火灾' },
-  { value: AccidentType.EXPLOSION, label: '爆炸' },
-  { value: AccidentType.LEAKAGE, label: '泄漏' },
-  { value: AccidentType.EQUIPMENT, label: '设备事故' },
-  { value: AccidentType.NEAR_MISS, label: '未遂事件' },
-  { value: AccidentType.ENVIRONMENTAL, label: '环境事件' },
-  { value: AccidentType.OCCUPATIONAL_DISEASE, label: '职业病' },
-  { value: AccidentType.TRAFFIC, label: '交通事故' },
-  { value: AccidentType.OTHER, label: '其他' },
-]
-
-export enum AccidentLevel {
-  GENERAL = 'general',
-  SERIOUS = 'serious',
-  MAJOR = 'major',
-  CATASTROPHIC = 'catastrophic',
-}
-
-export const ACCIDENT_LEVEL_OPTIONS = [
-  { value: AccidentLevel.GENERAL, label: '一般事故', color: 'blue' },
-  { value: AccidentLevel.SERIOUS, label: '较大事故', color: 'orange' },
-  { value: AccidentLevel.MAJOR, label: '重大事故', color: 'red' },
-  { value: AccidentLevel.CATASTROPHIC, label: '特别重大事故', color: 'magenta' },
-]
-
-export enum AccidentStatus {
-  REPORTED = 'reported',
-  INVESTIGATING = 'investigating',
-  INVESTIGATED = 'investigated',
-  CAPA_IN_PROGRESS = 'capa_in_progress',
-  CLOSED = 'closed',
-}
-
-export const ACCIDENT_STATUS_OPTIONS = [
-  { value: AccidentStatus.REPORTED, label: '已报告', color: 'blue' },
-  { value: AccidentStatus.INVESTIGATING, label: '调查中', color: 'orange' },
-  { value: AccidentStatus.INVESTIGATED, label: '调查完成', color: 'cyan' },
-  { value: AccidentStatus.CAPA_IN_PROGRESS, label: 'CAPA进行中', color: 'purple' },
-  { value: AccidentStatus.CLOSED, label: '已关闭', color: 'green' },
 ]
 
 export enum InjurySeverity {

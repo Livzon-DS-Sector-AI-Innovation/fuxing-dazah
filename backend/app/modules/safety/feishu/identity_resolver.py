@@ -110,6 +110,29 @@ class IdentityResolver:
 
         return self._user_to_person(user)
 
+    async def resolve_by_user_id(
+        self,
+        user_id: str,
+    ) -> ResolvedPerson | None:
+        """按飞书 user_id 查找用户 → open_id / 部门 / 角色。
+
+        Args:
+            user_id: 飞书 user_id（如 Bitable「人员」字段 open_id，或消息发送者 user_id）
+
+        Returns:
+            ResolvedPerson | None
+        """
+        if not user_id or not user_id.strip():
+            logger.warning("resolve_by_user_id: user_id 为空，跳过")
+            return None
+
+        user = await self._find_user_by_user_id(user_id.strip())
+        if user is None:
+            logger.debug("resolve_by_user_id: 未找到用户 user_id=%r", user_id)
+            return None
+
+        return self._user_to_person(user)
+
     async def resolve_department_leader(
         self,
         department_name: str,

@@ -3,10 +3,10 @@ import {
   getHazardIdentifications,
   getExpiringCertificates,
   getSpecialOperationReports,
-  getDailyRiskReports,
+  getKeyRiskOperationReports,
 } from '@/actions/safety'
 import { SafetyDashboard } from '@/components/safety'
-import type { SpecialOperationReport, DailyRiskReport, TrainingRecord } from '@/types/safety'
+import type { SpecialOperationReport, KeyRiskOperationReport, TrainingRecord } from '@/types/safety'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 60
@@ -31,13 +31,13 @@ async function fetchDashboardData() {
     identificationsRes,
     expiringCertsRes,
     specialOpReportsRes,
-    dailyRiskReportsRes,
+    keyRiskOpsRes,
   ] = await Promise.all([
     getHazards({ page_size: 200 }),
     getHazardIdentifications({ page_size: 200 }),
     getExpiringCertificates().catch(() => ({ data: [] })),
     getSpecialOperationReports({ page_size: 50 }).catch(() => ({ data: [], meta: { total: 0 } })),
-    getDailyRiskReports({ page_size: 50, report_date: todayStr }).catch(() => ({ data: [], meta: { total: 0 } })),
+    getKeyRiskOperationReports({ page_size: 50, date_from: todayStr, date_to: todayStr, apply_status: '已通过' }).catch(() => ({ data: [], meta: { total: 0 } })),
   ])
 
   // 未关闭隐患：过滤 status != closed && != verified
@@ -65,17 +65,17 @@ async function fetchDashboardData() {
     : []) as SpecialOperationReport[]
   const todaySpecialOps = specialOpReports.filter((r) => isToday(r.planned_start_time))
 
-  // 每日风险作业报备
-  const dailyRiskReports = (Array.isArray((dailyRiskReportsRes as { data?: DailyRiskReport[] }).data)
-    ? (dailyRiskReportsRes as { data: DailyRiskReport[] }).data
-    : []) as DailyRiskReport[]
+  // 当天关键风险作业（Bitable 同步，已通过）
+  const keyRiskOps = (Array.isArray((keyRiskOpsRes as { data?: KeyRiskOperationReport[] }).data)
+    ? (keyRiskOpsRes as { data: KeyRiskOperationReport[] }).data
+    : []) as KeyRiskOperationReport[]
 
   return {
     openHazardCount,
     unfinishedIdentCount,
     expiringCerts,
     todaySpecialOps,
-    todayDailyRisks: dailyRiskReports,
+    todayDailyRisks: keyRiskOps,
   }
 }
 

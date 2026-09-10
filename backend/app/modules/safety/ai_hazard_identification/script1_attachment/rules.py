@@ -75,7 +75,7 @@ class AttachmentRuleEngine:
             if value and value.strip() and value.strip() != UNCONFIRMED:
                 if "附件" not in value and "见第" not in value:
                     logger.debug(
-                        "字段 %s 未标注附件来源页码，建议补充", label
+                        "字段 %s 未标注附件来源章节/位置，建议补充", label
                     )
 
         return errors

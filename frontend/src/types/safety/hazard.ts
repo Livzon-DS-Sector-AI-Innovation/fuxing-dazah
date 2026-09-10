@@ -7,6 +7,7 @@ export interface HazardReport {
   inspection_category?: string
   hazard_type: HazardType
   hazard_level: HazardLevel
+  hazard_level_manual?: string | null  // 人工等级（DB 兼容英文 general/serious/major 与中文 一般隐患/较大隐患/重大隐患）
   hazard_category?: HazardCategory
   description: string
   discovered_by?: string
@@ -53,6 +54,12 @@ export interface HazardReport {
   review_notified_level?: number | null
   review_notify_status?: string | null
   review_notify_error?: string | null
+  // ── 督办等级 ──
+  supervision_level?: string | null  // 红色预警/一般预警/closed
+  // ── 督办进展监控（「未更新进展」机制）──
+  supervision_progress_status?: string | null  // 未更新进展 / NULL(正常)
+  progress_note?: string | null  // 目前进展（Bitable 单向同步，平台只读）
+  progress_note_updated_at?: string | null  // 目前进展最后更新时间（Bitable 同步落库时刻）
 }
 
 export interface HazardReportFormData {
@@ -61,6 +68,7 @@ export interface HazardReportFormData {
   inspector_department?: string
   hazard_type?: HazardType
   hazard_level?: HazardLevel
+  hazard_level_manual?: string
   hazard_category?: HazardCategory
   description?: string
   discovered_by?: string

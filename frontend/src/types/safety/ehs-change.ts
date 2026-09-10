@@ -184,14 +184,33 @@ export interface ClosureData {
   restored_date?: string
 }
 
+// AI 审核维度（Bitable 审批表四维度）
+export interface EhsAiReviewDimension {
+  conclusion?: string | null
+  report?: string | null
+}
+
+export interface EhsAiReviewResult {
+  reason?: EhsAiReviewDimension
+  plan?: EhsAiReviewDimension
+  effect?: EhsAiReviewDimension
+  risk?: EhsAiReviewDimension
+  pre_review?: string
+  /** AI 审核依据的法规来源（RAG 检索） */
+  regulations?: { doc_title?: string; article_ref?: string }[]
+}
+
+export type EhsChangeSource = 'manual' | 'bitable'
+export type EhsChangeTableId = 'approval' | 'acceptance'
+
 // Main interfaces
 export interface EhsChange {
   id: string
   change_no: string
   title: string
-  change_type: string
+  change_type?: string | null
   change_grade: string
-  change_duration: string
+  change_duration?: string | null
   department?: string
   location_unit?: string
   description?: string
@@ -215,6 +234,29 @@ export interface EhsChange {
   closure?: ClosureData
   linked_safety_check_id?: string
   notes?: string
+  // Bitable 同步字段
+  source?: EhsChangeSource
+  feishu_record_id?: string
+  feishu_table_id?: EhsChangeTableId
+  bt_change_no?: string
+  bt_change_status?: string
+  bt_plan_content?: string
+  bt_risk_measures?: string
+  bt_acceptance_comment?: string
+  bt_extra?: {
+    can_reflect?: string
+    gmp_change_no?: string
+    current_handler?: string
+    approval_node?: string
+    source_id?: string
+    approval_flow?: string
+    related_approval?: string
+    acceptance_date?: string
+    feishu_url?: string
+  }
+  ai_review_status?: string
+  ai_review_result?: EhsAiReviewResult
+  ai_error_message?: string
   created_at: string
   updated_at: string
 }
@@ -226,24 +268,14 @@ export interface EhsChangeFormData {
   change_grade?: string
   change_duration?: string
   department?: string
-  location_unit?: string
-  description?: string
-  technical_basis?: string
-  expected_start?: string
-  expected_completion?: string
-  expected_effect?: string
   applicant_name?: string
-  equipment_tags?: string[]
+  description?: string
+  expected_effect?: string
+  expected_start?: string
   documents_to_update?: { name: string; number?: string }[]
-  attachments?: { name: string; path: string }[]
-  risk_assessments?: RiskAssessmentItem[]
-  approval_chain?: ApprovalChainItem[]
-  action_items?: ActionItem[]
-  pssr_checklist?: PSSRChecklistItem[]
-  verification?: VerificationData
-  closure?: ClosureData
-  linked_safety_check_id?: string
-  notes?: string
+  // 清单字段（变更内容）
+  bt_plan_content?: string
+  bt_risk_measures?: string
 }
 
 export interface EhsChangeQueryParams {
@@ -255,6 +287,16 @@ export interface EhsChangeQueryParams {
   change_duration?: string
   department?: string
   keyword?: string
+  source?: string
+  feishu_table_id?: string
+  sort_by?: string
+  sort_order?: string
+}
+
+export interface EhsChangeStats {
+  total: number
+  status: Record<string, number>
+  ai: Record<string, number>
 }
 
 

@@ -44,6 +44,12 @@ class OperationRegulationResponse(OperationRegulationBase):
     content: str | None = Field(None, description="标准化 Markdown 内容")
     status: str = Field("draft", description="操规状态")
     source_document_path: str | None = Field(None, max_length=500, description="原始上传文件路径")
+    ai_review_status: str = Field(
+        "pending", description="AI 审核状态: pending/reviewing/completed/failed"
+    )
+    ai_review_note: dict | None = Field(
+        None, description="AI 审核说明 {summary, dimensions, chapter_fixes, reviewed_at}"
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -148,6 +154,9 @@ class SopGenerateResponse(BaseModel):
     meta: SopMeta = Field(..., description="提取的元信息")
     content: str = Field(..., description="生成的标准化 Markdown 内容（9 章）")
     status: str = Field("generated", description="生成状态")
+    ai_review_auto: bool = Field(
+        False, description="是否自动触发 AI 审核（process 类型生成后由后端后台执行）"
+    )
 
 
 class SopContentUpdate(BaseModel):

@@ -4,6 +4,7 @@ from app.modules.safety.ai_hazard_identification.script6_recommendations.plugin 
     RecommendationGenerator,
 )
 from app.modules.safety.ai_hazard_identification.script6_recommendations.prompts import (
+    VALID_RECOMMENDATION_TYPES,
     get_db_seed_config,
 )
 from app.modules.safety.ai_hazard_identification.script6_recommendations.rules import (
@@ -21,5 +22,6 @@ __all__ = [
     "RecommendationOutput",
     "RecommendationRuleEngine",
     "auto_correct",
+    "VALID_RECOMMENDATION_TYPES",
     "get_db_seed_config",
 ]

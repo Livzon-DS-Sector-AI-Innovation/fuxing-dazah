@@ -30,6 +30,7 @@ async def send_user_card(
     content: str,
     elements: list[dict] | None = None,
     id_type: str = "open_id",
+    header_template: str = "orange",
 ) -> bool:
     """使用安全模块飞书应用发送卡片消息给单个用户（DM）。
 
@@ -39,6 +40,7 @@ async def send_user_card(
         content: 卡片正文（支持 markdown）
         elements: 额外的卡片元素（按钮、分割线等）
         id_type: 用户标识类型，"open_id"（默认）或 "union_id"（跨应用一致）
+        header_template: 标题颜色模板（orange/blue/green/red/purple）
 
     Returns:
         True 表示发送成功，False 表示失败（不抛异常）
@@ -54,17 +56,20 @@ async def send_user_card(
         )
 
         card = {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True},
             "header": {
                 "title": {"tag": "plain_text", "content": title},
-                "template": "orange",
+                "template": header_template,
             },
-            "elements": [
-                {"tag": "markdown", "content": content},
-            ],
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": content},
+                ],
+            },
         }
         if elements:
-            card["elements"].extend(elements)
+            card["body"]["elements"].extend(elements)
 
         card_json = _json_dumps(card)
 
@@ -171,17 +176,20 @@ async def send_group_card(
         )
 
         card = {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True},
             "header": {
                 "title": {"tag": "plain_text", "content": title},
                 "template": header_template,
             },
-            "elements": [
-                {"tag": "markdown", "content": content},
-            ],
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": content},
+                ],
+            },
         }
         if elements:
-            card["elements"].extend(elements)
+            card["body"]["elements"].extend(elements)
 
         card_json = _json_dumps(card)
 

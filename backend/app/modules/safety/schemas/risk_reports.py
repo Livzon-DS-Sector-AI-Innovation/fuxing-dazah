@@ -92,6 +92,12 @@ class SpecialOperationReportUpdate(BaseModel):
     notes: str | None = Field(None, description="备注")
     is_critical: bool | None = Field(None, description="是否关键作业")
     is_critical_reason: str | None = Field(None, description="关键作业判定理由")
+    # V3.5 风险判定字段（平台直输/同步）
+    fire_work_method: str | None = Field(None, description="动火方式")
+    height_work_method: str | None = Field(None, description="高处作业方式")
+    work_height: float | None = Field(None, description="作业高度(米)")
+    lifting_weight: float | None = Field(None, description="吊物质量(吨)")
+    contractor_name: str | None = Field(None, description="施工单位")
 
 
 class SpecialOperationReportResponse(SpecialOperationReportBase):
@@ -106,6 +112,47 @@ class SpecialOperationReportResponse(SpecialOperationReportBase):
     is_critical_updated_by: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    # ── Bitable 同步 + 日报分析字段 ──
+    source: str | None = None
+    feishu_record_id: str | None = None
+    personnel_type: str | None = None
+    work_duration_hours: float | None = None
+    is_weekend_holiday: str | None = None
+    is_national_holiday: str | None = None
+    holiday_period: str | None = None
+    report_type: str | None = None
+    initiator_department: str | None = None
+    initiator_name: str | None = None
+    approver_type: str | None = None
+    safety_approver_name: str | None = None
+    approval_no: str | None = None
+    work_plan_url: str | None = None
+    work_scheme_url: str | None = None
+    approved_permit_url: str | None = None
+    submitted_at: datetime | None = None
+    completed_at: datetime | None = None
+    approval_node: str | None = None
+    daily_risk_level: str | None = None
+    daily_risk_reason: str | None = None
+    inferred_operation_types: list | None = None
+    is_excluded: bool = False
+    exclusion_reason: str | None = None
+    # V3.5 风险判定字段
+    fire_work_method: str | None = None
+    height_work_method: str | None = None
+    work_height: float | None = None
+    lifting_weight: float | None = None
+    contractor_name: str | None = None
+    daily_report_date: datetime | None = None
+    has_other_operations: str | None = None
+    other_operation_types: list | None = None
+    # V3.5 新增字段
+    fire_work_method: str | None = None
+    height_work_method: str | None = None
+    work_height: float | None = None
+    lifting_weight: float | None = None
+    contractor_name: str | None = None
 
     class Config:
         from_attributes = True
@@ -154,7 +201,7 @@ class LedgerExportParsedFilters(BaseModel):
 
 
 class HazardLedgerExportRequest(BaseModel):
-    """危险源辨识台账导出请求 — AI自然语言筛选"""
+    """危险源辨识台账导出请求 — AI自然语言筛选 / 按 ids 精确导出"""
     natural_query: str | None = Field(None, description="自然语言筛选条件，例如「上月所有重大风险记录」")
     department: str | None = Field(None, description="部门")
     position: str | None = Field(None, description="岗位")
@@ -162,6 +209,11 @@ class HazardLedgerExportRequest(BaseModel):
     date_from: str | None = Field(None, description="创建时间起 YYYY-MM-DD")
     date_to: str | None = Field(None, description="创建时间止 YYYY-MM-DD")
     keyword: str | None = Field(None, description="关键词搜索（编号/部门/岗位/作业活动）")
+    ids: list[str] | None = Field(
+        None,
+        max_length=500,
+        description="危险源辨识记录 ID 列表，指定时按 ID 精确导出（忽略状态过滤）",
+    )
 
 
 class HazardLedgerExportParsedFilters(BaseModel):
@@ -173,99 +225,5 @@ class HazardLedgerExportParsedFilters(BaseModel):
     date_to: str | None = None
     keyword: str | None = None
     explanation: str = Field("", description="AI 对筛选条件的解读说明")
-
-
-# ── 危险源风险选项（常规作业报备用） ──
-
-
-class HazardRiskOption(BaseModel):
-    """危险源风险选项 — 供常规作业报备选择关联危险源"""
-
-    id: uuid.UUID
-    hazard_id_no: str
-    department: str
-    position: str
-    production_step: str
-    specific_activity: str | None = None
-    inherent_risk_level: str | None = None
-    inherent_risk_label: str | None = None
-    hazard_type: str | None = None
-    possible_accident: str | None = None
-    existing_engineering_controls: str | None = None
-    existing_management_controls: str | None = None
-    existing_ppe: str | None = None
-    existing_emergency_measures: str | None = None
-
-    class Config:
-        from_attributes = True
-
-
-# ── 每日风险作业报备 ──
-
-
-class DailyRiskReportBase(BaseModel):
-    """每日风险作业报备基础模式"""
-
-    report_no: str = Field(..., max_length=64, description="报备编号")
-    report_date: datetime = Field(..., description="报备作业日期")
-    report_type: str = Field("regular", max_length=20, description="报备类型: regular(常规作业) / non_regular(非常规作业)")
-    department: str | None = Field(None, max_length=100, description="报备部门")
-    hazard_identification_id: uuid.UUID | None = Field(None, description="关联危险源辨识ID")
-    operation_description: str = Field(..., description="风险作业描述")
-    operation_steps: str | None = Field(None, description="作业步骤")
-    hazard_factors: str | None = Field(None, description="危险因素")
-    risk_level: str | None = Field(None, max_length=20, description="风险等级")
-    control_measures: str | None = Field(None, description="控制措施")
-    responsible_person: str | None = Field(None, max_length=100, description="作业负责人")
-    operator_count: int | None = Field(None, description="作业人数")
-    location: str | None = Field(None, max_length=255, description="作业地点")
-    planned_start_time: datetime | None = Field(None, description="计划开始时间")
-    planned_end_time: datetime | None = Field(None, description="计划结束时间")
-    applicant_name: str | None = Field(None, max_length=100, description="报备申请人姓名")
-    approver_name: str | None = Field(None, max_length=100, description="审批人姓名")
-    notes: str | None = Field(None, description="备注")
-
-
-class DailyRiskReportCreate(DailyRiskReportBase):
-    """创建每日风险作业报备"""
-    pass
-
-
-class DailyRiskReportUpdate(BaseModel):
-    """更新每日风险作业报备"""
-
-    report_no: str | None = Field(None, max_length=64, description="报备编号")
-    report_date: datetime | None = Field(None, description="报备作业日期")
-    report_type: str | None = Field(None, max_length=20, description="报备类型（创建后不可修改）")
-    department: str | None = Field(None, max_length=100, description="报备部门")
-    hazard_identification_id: uuid.UUID | None = Field(None, description="关联危险源辨识ID")
-    operation_description: str | None = Field(None, description="风险作业描述")
-    operation_steps: str | None = Field(None, description="作业步骤")
-    hazard_factors: str | None = Field(None, description="危险因素")
-    risk_level: str | None = Field(None, max_length=20, description="风险等级")
-    control_measures: str | None = Field(None, description="控制措施")
-    responsible_person: str | None = Field(None, max_length=100, description="作业负责人")
-    operator_count: int | None = Field(None, description="作业人数")
-    location: str | None = Field(None, max_length=255, description="作业地点")
-    planned_start_time: datetime | None = Field(None, description="计划开始时间")
-    planned_end_time: datetime | None = Field(None, description="计划结束时间")
-    applicant_name: str | None = Field(None, max_length=100, description="报备申请人姓名")
-    approver_name: str | None = Field(None, max_length=100, description="审批人姓名")
-    status: ReportStatus | None = Field(None, description="状态")
-    notes: str | None = Field(None, description="备注")
-
-
-class DailyRiskReportResponse(DailyRiskReportBase):
-    """每日风险作业报备响应"""
-
-    id: uuid.UUID
-    approved_at: datetime | None = None
-    rejection_reason: str | None = None
-    status: str
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 

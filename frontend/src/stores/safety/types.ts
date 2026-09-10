@@ -1,7 +1,5 @@
 import type {
-  SafetyCheck, SafetyCheckQueryParams,
   HazardReport, HazardReportQueryParams,
-  Accident, AccidentQueryParams,
   SafetyTraining, SafetyTrainingQueryParams, TrainingRecord,
   OperationRegulation, OperationRegulationQueryParams,
   RegulationRevision, RegulationRevisionQueryParams,
@@ -9,37 +7,20 @@ import type {
   SpecialOperationPermit, SpecialOperationPermitQueryParams,
   SafetyKnowledgeArticle, SafetyKnowledgeArticleQueryParams,
   SpecialOperationReport, SpecialOperationReportQueryParams,
-  DailyRiskReport, DailyRiskReportQueryParams,
   HazardIdentification, HazardIdentificationQueryParams,
   EhsChange, EhsChangeQueryParams,
   Contractor, ContractorQueryParams, ContractorWorkRecord,
-  OhHazardMonitor, OhHazardMonitorQueryParams,
-  OhHealthExam, OhHealthExamQueryParams,
 } from '@/types/safety'
 
 // ============ Store State Types ============
 
 export interface SafetyState {
-  // Check state
-  checks: SafetyCheck[]
-  currentCheck: SafetyCheck | null
-  checkQueryParams: SafetyCheckQueryParams
-  checkTotal: number
-  checkLoading: boolean
-
   // Hazard state
   hazards: HazardReport[]
   currentHazard: HazardReport | null
   hazardQueryParams: HazardReportQueryParams
   hazardTotal: number
   hazardLoading: boolean
-
-  // Accident state
-  accidents: Accident[]
-  currentAccident: Accident | null
-  accidentQueryParams: AccidentQueryParams
-  accidentTotal: number
-  accidentLoading: boolean
 
   // Training state
   trainings: SafetyTraining[]
@@ -91,13 +72,6 @@ export interface SafetyState {
   specialOpReportTotal: number
   specialOpReportLoading: boolean
 
-  // Daily risk report state
-  dailyRiskReports: DailyRiskReport[]
-  currentDailyRiskReport: DailyRiskReport | null
-  dailyRiskReportQueryParams: DailyRiskReportQueryParams
-  dailyRiskReportTotal: number
-  dailyRiskReportLoading: boolean
-
   // EHS change state
   // HazardIdentification state
   hazardIdentifications: HazardIdentification[]
@@ -120,30 +94,6 @@ export interface SafetyState {
   contractorLoading: boolean
   contractorWorkRecords: ContractorWorkRecord[]
 
-  // OH Hazard Monitor state
-  ohHazardMonitors: OhHazardMonitor[]
-  currentOhHazardMonitor: OhHazardMonitor | null
-  ohHazardMonitorQueryParams: OhHazardMonitorQueryParams
-  ohHazardMonitorTotal: number
-  ohHazardMonitorLoading: boolean
-
-  // OH Health Exam state
-  ohHealthExams: OhHealthExam[]
-  currentOhHealthExam: OhHealthExam | null
-  ohHealthExamQueryParams: OhHealthExamQueryParams
-  ohHealthExamTotal: number
-  ohHealthExamLoading: boolean
-
-  // Actions - Check
-  setChecks: (checks: SafetyCheck[]) => void
-  setCurrentCheck: (check: SafetyCheck | null) => void
-  setCheckQueryParams: (params: Partial<SafetyCheckQueryParams>) => void
-  setCheckTotal: (total: number) => void
-  setCheckLoading: (loading: boolean) => void
-  addCheck: (check: SafetyCheck) => void
-  updateCheck: (id: string, check: Partial<SafetyCheck>) => void
-  removeCheck: (id: string) => void
-
   // Actions - Hazard
   setHazards: (hazards: HazardReport[]) => void
   setCurrentHazard: (hazard: HazardReport | null) => void
@@ -153,16 +103,6 @@ export interface SafetyState {
   addHazard: (hazard: HazardReport) => void
   updateHazard: (id: string, hazard: Partial<HazardReport>) => void
   removeHazard: (id: string) => void
-
-  // Actions - Accident
-  setAccidents: (accidents: Accident[]) => void
-  setCurrentAccident: (accident: Accident | null) => void
-  setAccidentQueryParams: (params: Partial<AccidentQueryParams>) => void
-  setAccidentTotal: (total: number) => void
-  setAccidentLoading: (loading: boolean) => void
-  addAccident: (accident: Accident) => void
-  updateAccident: (id: string, accident: Partial<Accident>) => void
-  removeAccident: (id: string) => void
 
   // Actions - Training
   setTrainings: (trainings: SafetyTraining[]) => void
@@ -235,16 +175,6 @@ export interface SafetyState {
   updateSpecialOpReport: (id: string, r: Partial<SpecialOperationReport>) => void
   removeSpecialOpReport: (id: string) => void
 
-  // Actions - Daily Risk Report
-  setDailyRiskReports: (reports: DailyRiskReport[]) => void
-  setCurrentDailyRiskReport: (r: DailyRiskReport | null) => void
-  setDailyRiskReportQueryParams: (params: Partial<DailyRiskReportQueryParams>) => void
-  setDailyRiskReportTotal: (total: number) => void
-  setDailyRiskReportLoading: (loading: boolean) => void
-  addDailyRiskReport: (r: DailyRiskReport) => void
-  updateDailyRiskReport: (id: string, r: Partial<DailyRiskReport>) => void
-  removeDailyRiskReport: (id: string) => void
-
   // Actions - HazardIdentification
   setHazardIdentifications: (items: HazardIdentification[], total?: number) => void
   setCurrentHazardIdentification: (item: HazardIdentification | null) => void
@@ -276,32 +206,8 @@ export interface SafetyState {
   removeContractor: (id: string) => void
   setContractorWorkRecords: (records: ContractorWorkRecord[]) => void
 
-  // Actions - OH Hazard Monitor
-  setOhHazardMonitors: (items: OhHazardMonitor[]) => void
-  setCurrentOhHazardMonitor: (item: OhHazardMonitor | null) => void
-  setOhHazardMonitorQueryParams: (params: Partial<OhHazardMonitorQueryParams>) => void
-  setOhHazardMonitorTotal: (total: number) => void
-  setOhHazardMonitorLoading: (loading: boolean) => void
-  addOhHazardMonitor: (item: OhHazardMonitor) => void
-  updateOhHazardMonitor: (id: string, item: Partial<OhHazardMonitor>) => void
-  removeOhHazardMonitor: (id: string) => void
-
-  // Actions - OH Health Exam
-  setOhHealthExams: (items: OhHealthExam[]) => void
-  setCurrentOhHealthExam: (item: OhHealthExam | null) => void
-  setOhHealthExamQueryParams: (params: Partial<OhHealthExamQueryParams>) => void
-  setOhHealthExamTotal: (total: number) => void
-  setOhHealthExamLoading: (loading: boolean) => void
-  addOhHealthExam: (item: OhHealthExam) => void
-  updateOhHealthExam: (id: string, item: Partial<OhHealthExam>) => void
-  removeOhHealthExam: (id: string) => void
-
   // Actions - Reset
-  resetOhHazardMonitorState: () => void
-  resetOhHealthExamState: () => void
-  resetCheckState: () => void
   resetHazardState: () => void
-  resetAccidentState: () => void
   resetTrainingState: () => void
   resetRegulationState: () => void
   resetRevisionState: () => void
@@ -309,7 +215,6 @@ export interface SafetyState {
   resetPermitState: () => void
   resetArticleState: () => void
   resetSpecialOpReportState: () => void
-  resetDailyRiskReportState: () => void
   resetEhsChangeState: () => void
   resetContractorState: () => void
   resetHazardIdentificationState: () => void

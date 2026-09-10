@@ -1,4 +1,4 @@
-import { HazardType, HazardLevel, HazardCategory, CheckType } from './enums'
+import { HazardType, HazardLevel, HazardCategory } from './enums'
 
 export interface HazardIdentification {
   id: string
@@ -25,6 +25,8 @@ export interface HazardIdentification {
   d_inherent?: number
   inherent_risk_level?: string
   inherent_risk_label?: string
+  // Script 3.5（福建固有风险评级，脚本3 附属）
+  inherent_risk_level_fj?: string
   // Script 4
   existing_engineering_controls?: string
   existing_management_controls?: string
@@ -63,6 +65,27 @@ export interface HazardIdentification {
   script5_review_status: string
   script6_review_status: string
   script7_review_status: string
+  // ── Bitable 镜像元信息 ──
+  feishu_record_id?: string
+  feishu_url?: string
+  feishu_table_id?: string
+  submitter_name?: string
+  submitter_feishu_id?: string
+  reviewer_name?: string
+  reviewer_feishu_id?: string
+  // ── 脚本8 四类排查内容（AI + 人工 各一列）──
+  engineering_check_items_ai?: string
+  engineering_check_items_manual?: string
+  management_check_items_ai?: string
+  management_check_items_manual?: string
+  ppe_check_items_ai?: string
+  ppe_check_items_manual?: string
+  emergency_check_items_ai?: string
+  emergency_check_items_manual?: string
+  // ── Bitable 完整字段快照（AI/人工双份 + 公式结果）──
+  bitable_snapshot?: Record<string, unknown>
+  // 脚本8 审核状态（模型无独立列，从 bitable_snapshot 派生）
+  script8_review_status?: string
   // Meta
   notes?: string
   batch_id?: string
@@ -125,6 +148,7 @@ export interface HazardIdentificationQueryParams {
   date_from?: string
   date_to?: string
   batch_id?: string
+  review_status?: string
 }
 
 export interface HazardIdentificationStats {
@@ -151,6 +175,7 @@ export const AI_NODE_PROGRESS_OPTIONS = [
   { value: 'pending_script5', label: '待残余风险评价', color: 'processing' },
   { value: 'pending_script6', label: '待建议措施', color: 'processing' },
   { value: 'pending_script7', label: '待措施后评价', color: 'processing' },
+  { value: 'pending_script8', label: '待人工审核检查清单', color: 'processing' },
   { value: 'completed', label: '已完成', color: 'success' },
 ]
 
@@ -164,6 +189,8 @@ export interface HazardLedgerExportRequest {
   date_from?: string
   date_to?: string
   keyword?: string
+  /** 选中行 ID 列表，指定时按 ID 精确导出（忽略状态过滤） */
+  ids?: string[]
 }
 
 export interface HazardLedgerExportParsedFilters {

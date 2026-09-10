@@ -22,7 +22,7 @@ import {
   HistoryOutlined,
 } from '@ant-design/icons'
 import { generatePpt, getPptHistory } from '@/actions/safety'
-import { fileProxyUrl } from '@/lib/file-url'
+import { fileProxyUrl } from '@/components/safety/file-url'
 import type { GeneratePptRequest, PptGenerationRecord } from '@/types/safety'
 
 const { Text } = Typography

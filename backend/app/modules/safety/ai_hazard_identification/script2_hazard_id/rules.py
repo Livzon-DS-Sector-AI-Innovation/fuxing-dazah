@@ -1,7 +1,7 @@
 """脚本2 HazardIdentifier — 输出规则验证器。
 
 验证 AI 危险源辨识结果：
-1. 危险类型必须在 GB 6441 14 类范围内
+1. 危险类型必须命中 Bitable 预设 24 项（多选 1~5 个，按「、」连接）
 2. 不规范行为必须包含具体动作描述
 3. 三个字段不能互相矛盾
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from app.modules.safety.ai_hazard_identification.script2_hazard_id.prompts import (
-    VALID_HAZARD_TYPES_6441,
+    VALID_HAZARD_TYPES_BITABLE,
 )
 from app.modules.safety.ai_hazard_identification.script2_hazard_id.schemas import (
     HazardIdInput,
@@ -41,13 +41,20 @@ class HazardIdRuleEngine:
         """验证 AI 输出，返回错误列表（空列表 = 通过）。"""
         errors: list[str] = []
 
-        # 1. 危险类型合法性
-        if output.hazard_type and output.hazard_type.strip() != UNCONFIRMED:
-            if output.hazard_type.strip() not in VALID_HAZARD_TYPES_6441:
-                errors.append(
-                    f"无效的危险类型 '{output.hazard_type}'，"
-                    f"必须在 GB 6441 的 14 类范围内: {VALID_HAZARD_TYPES_6441}"
-                )
+        # 危险类型多选拆分（Bitable「危险类型（AI）」多选，按「、」连接）
+        hazard_types = (
+            [t.strip() for t in output.hazard_type.split("、") if t.strip()]
+            if output.hazard_type and output.hazard_type.strip() != UNCONFIRMED
+            else []
+        )
+
+        # 1. 危险类型合法性（多选：逐个必须在预设 24 项内）
+        invalid = [t for t in hazard_types if t not in VALID_HAZARD_TYPES_BITABLE]
+        if invalid:
+            errors.append(
+                f"无效的危险类型 {invalid}，"
+                f"必须从 Bitable 预设 24 项中选择: {VALID_HAZARD_TYPES_BITABLE}"
+            )
 
         # 2. 三个字段不能全部为「待人工确认」
         all_unconfirmed = all(
@@ -76,29 +83,45 @@ class HazardIdRuleEngine:
         if accident and accident != UNCONFIRMED and len(accident) < 10:
             errors.append(f"事故描述过短（{len(accident)}字），最少 10 字")
 
-        # 5. 危险类型与事故描述的语义一致性检查
+        # 5. 危险类型与事故描述的语义一致性检查（多选：逐项检查，软告警）
         if (
-            output.hazard_type and output.hazard_type.strip() != UNCONFIRMED
-            and output.possible_accident and output.possible_accident.strip() != UNCONFIRMED
+            hazard_types and accident and accident != UNCONFIRMED
         ):
-            # 简单的关键词映射检查
+            # 简单的关键词映射检查（键为 Bitable 预设选项名）
             TYPE_ACCIDENT_KEYWORDS = {
-                "灼烫": ["烫", "灼", "烧伤", "高温", "热", "酸", "碱", "腐蚀"],
-                "机械伤害": ["卷入", "夹", "挤压", "切割", "剪切", "旋转", "转动"],
+                "火灾爆炸": ["火", "燃烧", "着火", "爆炸", "爆燃"],
+                "中毒窒息": ["中毒", "窒息", "毒气", "有毒", "氮气", "缺氧"],
                 "触电": ["电击", "触电", "漏电", "电"],
-                "中毒和窒息": ["中毒", "窒息", "毒气", "有毒", "氮气", "缺氧"],
+                "机械伤害": ["卷入", "夹", "挤压", "切割", "剪切", "旋转", "转动"],
                 "高处坠落": ["坠落", "跌落", "摔", "高空", "高处"],
-                "火灾": ["火", "燃烧", "着火"],
+                "腐蚀灼伤": ["腐蚀", "灼", "烫", "烧伤", "酸", "碱"],
+                "车辆伤害": ["车辆", "叉车", "运输", "撞"],
+                "环境污染": ["泄漏", "排放", "污染", "废水", "废气"],
                 "容器爆炸": ["爆炸", "爆裂", "超压", "炸裂"],
+                "静电危害": ["静电", "放电", "火花"],
                 "物体打击": ["砸", "打击", "飞溅", "落下", "坠落物"],
+                "泄漏危险": ["泄漏", "跑冒滴漏", "漏液", "漏气"],
+                "粉尘爆炸": ["粉尘", "扬尘", "爆炸"],
+                "高温烫伤": ["烫", "灼", "高温", "热"],
+                "滑倒坠落": ["滑倒", "滑", "湿滑", "摔"],
+                "化学灼伤": ["灼伤", "化学", "酸", "碱", "腐蚀"],
+                "生物危害": ["生物", "感染", "病菌", "微生物"],
+                "粉尘危害": ["粉尘", "扬尘", "吸入"],
+                "噪声危害": ["噪声", "噪音", "听力"],
+                "高压危险": ["高压", "超压", "压力"],
+                "低温冻伤": ["冻伤", "低温", "液氮", "寒冷"],
+                "火灾": ["火", "燃烧", "着火"],
+                "其他爆炸": ["爆炸", "炸"],
+                "其他": [],
             }
-            expected_keywords = TYPE_ACCIDENT_KEYWORDS.get(output.hazard_type.strip(), [])
-            if expected_keywords:
-                match_found = any(kw in accident for kw in expected_keywords)
-                if not match_found:
+            for ht in hazard_types:
+                keywords = TYPE_ACCIDENT_KEYWORDS.get(ht, [])
+                if not keywords:
+                    continue
+                if not any(kw in accident for kw in keywords):
                     logger.warning(
                         "危险类型 '%s' 与事故描述关键词不匹配，事故描述: %s",
-                        output.hazard_type, accident[:50],
+                        ht, accident[:50],
                     )
 
         return errors

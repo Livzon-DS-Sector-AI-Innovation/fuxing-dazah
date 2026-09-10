@@ -51,6 +51,42 @@ export interface SpecialOperationReport {
   is_critical: boolean
   is_critical_reason?: string
   is_critical_updated_by?: string
+  // Bitable sync fields
+  source?: string
+  feishu_record_id?: string
+  personnel_type?: string
+  work_duration_hours?: number
+  has_other_operations?: string
+  other_operation_types?: string[]
+  is_weekend_holiday?: string
+  is_national_holiday?: string
+  holiday_period?: string
+  report_type?: string
+  initiator_department?: string
+  initiator_name?: string
+  approver_type?: string
+  safety_approver_name?: string
+  approval_no?: string
+  work_plan_url?: string
+  work_scheme_url?: string
+  approved_permit_url?: string
+  submitted_at?: string
+  completed_at?: string
+  approval_node?: string
+  // Daily report analysis
+  daily_risk_level?: string
+  daily_risk_reason?: string
+  inferred_operation_types?: string[]
+  inferred_operation_detail?: string
+  is_excluded?: boolean
+  exclusion_reason?: string
+  daily_report_date?: string
+  // V3.5 风险判定字段
+  fire_work_method?: string | null
+  height_work_method?: string | null
+  work_height?: number | null
+  lifting_weight?: number | null
+  contractor_name?: string | null
   created_at: string
   updated_at: string
 }
@@ -93,6 +129,15 @@ export interface SpecialOperationReportQueryParams {
   is_critical?: boolean
 }
 
+/** V3.5 风险判定字段（平台直输/同步，PUT 更新用） */
+export interface SpecialOperationReportV35Fields {
+  fire_work_method?: string | null
+  height_work_method?: string | null
+  work_height?: number | null
+  lifting_weight?: number | null
+  contractor_name?: string | null
+}
+
 // ── 特殊作业台账 ──
 
 export interface SpecialOperationLedgerQueryParams {
@@ -114,79 +159,5 @@ export interface SpecialOperationLedgerStats {
   critical_count: number
 }
 
-// ── 危险源选项（用于每日风险报备关联） ──
-
-export interface HazardRiskOption {
-  id: string
-  hazard_id_no: string
-  department: string
-  position: string
-  specific_activity: string
-  inherent_risk_level: string
-  inherent_risk_label: string
-  existing_engineering_controls?: string
-  existing_management_controls?: string
-  existing_ppe?: string
-  existing_emergency_measures?: string
-}
-
-// ── 每日风险作业报备 ──
-
-export interface DailyRiskReport {
-  id: string
-  report_no: string
-  report_date: string
-  report_type?: string
-  department?: string
-  hazard_identification_id?: string
-  operation_description: string
-  operation_steps?: string
-  hazard_factors?: string
-  risk_level?: string
-  control_measures?: string
-  responsible_person?: string
-  operator_count?: number
-  location?: string
-  planned_start_time?: string
-  planned_end_time?: string
-  applicant_name?: string
-  approver_name?: string
-  approved_at?: string
-  rejection_reason?: string
-  status: string
-  notes?: string
-  created_at: string
-  updated_at: string
-}
-
-export interface DailyRiskReportFormData {
-  report_no: string
-  report_date: string
-  report_type?: string
-  department?: string
-  hazard_identification_id?: string
-  operation_description: string
-  operation_steps?: string
-  hazard_factors?: string
-  risk_level?: string
-  control_measures?: string
-  responsible_person?: string
-  operator_count?: number
-  location?: string
-  planned_start_time?: string
-  planned_end_time?: string
-  applicant_name?: string
-  approver_name?: string
-  notes?: string
-}
-
-export interface DailyRiskReportQueryParams {
-  page?: number
-  page_size?: number
-  status?: string
-  department?: string
-  report_date?: string
-  report_type?: string
-  keyword?: string
-}
+// ── 关键风险作业报备（Bitable 只读）→ 见 ./key-risk-operation.ts ──
 

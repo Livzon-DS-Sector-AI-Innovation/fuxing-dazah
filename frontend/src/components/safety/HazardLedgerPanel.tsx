@@ -12,26 +12,28 @@ import {
   Typography,
   Modal,
   Descriptions,
-  Spin,
   DatePicker,
   Checkbox,
   Popover,
+  Drawer,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   SearchOutlined,
   ExportOutlined,
-  DownloadOutlined,
   FilterOutlined,
   CloseCircleOutlined,
   CaretUpFilled,
   CaretDownFilled,
   DeleteOutlined,
+  FilePdfOutlined,
+  FileExcelOutlined,
 } from '@ant-design/icons'
 import {
   getHazardIdentifications,
   getHILedgerStats,
   exportHazardLedgerPdf,
+  exportHazardLedgerExcel,
   deleteHazardIdentification,
 } from '@/actions/safety'
 import type { HazardIdentification, HazardLedgerStats } from '@/types/safety'
@@ -48,6 +50,14 @@ const LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
   level_2: { color: '#dd5b00', bg: '#ffe8d4' },
   level_3: { color: '#0075de', bg: '#dcecfa' },
   level_4: { color: '#1aae39', bg: '#d9f3e1' },
+}
+
+// ── 福建固有风险等级语义色（脚本3.5，中文等级名 → pill 色；低=蓝/一般=黄/较大=橙/重大=红）──
+const FJ_LEVEL_CONFIG: Record<string, { color: string; bg: string }> = {
+  低风险: { color: '#0075de', bg: '#dcecfa' },
+  一般风险: { color: '#d4b106', bg: '#fffbe6' },
+  较大风险: { color: '#dd5b00', bg: '#ffe8d4' },
+  重大风险: { color: '#e03131', bg: '#fde0ec' },
 }
 
 // ── 统计药丸配置 ──
@@ -100,6 +110,7 @@ const HI_FIELD_LABELS: Record<string, string> = {
   possible_accident: '可能事故',
   unsafe_behavior: '不规范行为',
   inherent_risk_level: '固有风险等级',
+  inherent_risk_level_fj: '福建固有风险',
   residual_risk_level: '残余风险等级',
   post_risk_level: '措施后风险等级',
   control_level: '管控层级',
@@ -139,11 +150,18 @@ export default function HazardLedgerPanel() {
   const [deleting, setDeleting] = useState(false)
   const [hoveredRowId, setHoveredRowId] = useState<string | null>(null)
 
-  // ── AI 导出 Modal 状态 ──
-  const [exportModalOpen, setExportModalOpen] = useState(false)
-  const [naturalQuery, setNaturalQuery] = useState('')
-  const [exporting, setExporting] = useState(false)
-  const [exportStep, setExportStep] = useState<string>('')
+  // ── 导出 Drawer 状态（独立于主表格勾选，翻页保持）──
+  const [exportDrawerOpen, setExportDrawerOpen] = useState(false)
+  const [exportSelectedKeys, setExportSelectedKeys] = useState<React.Key[]>([])
+  const [exportPage, setExportPage] = useState(1)
+  const [exportPageSize, setExportPageSize] = useState(20)
+  const [exportTotal, setExportTotal] = useState(0)
+  const [exportData, setExportData] = useState<HazardIdentification[]>([])
+  const [exportDrawerLoading, setExportDrawerLoading] = useState(false)
+  const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null)
+  // 抽屉内部门/岗位筛选
+  const [exportDrawerDepartment, setExportDrawerDepartment] = useState('')
+  const [exportDrawerPosition, setExportDrawerPosition] = useState('')
 
   // ── 展开行 key ──
   const [expandedRowKeys, setExpandedRowKeys] = useState<string[]>([])
@@ -368,33 +386,68 @@ export default function HazardLedgerPanel() {
     window.URL.revokeObjectURL(url)
   }
 
-  // ── 导出 PDF ──
-  const handleExportPdf = async () => {
-    setExporting(true)
-    setExportStep('AI 正在解析筛选条件…')
+  // ── 导出 Drawer：加载已完成记录（可带部门/岗位筛选）──
+  const loadExportDrawerData = useCallback(async (page: number, pageSize: number) => {
+    setExportDrawerLoading(true)
     try {
-      const result = await exportHazardLedgerPdf({
-        natural_query: naturalQuery.trim() || undefined,
+      const res = await getHazardIdentifications({
+        page,
+        page_size: pageSize,
+        overall_status: 'completed',
+        department: exportDrawerDepartment.trim() || undefined,
+        position: exportDrawerPosition.trim() || undefined,
       })
-      setExportStep('下载中…')
-      downloadBase64(
-        result.data || '',
-        `危险源辨识台账_${new Date().toISOString().slice(0, 10)}.pdf`,
-        'application/pdf'
-      )
-      msgApi.success('PDF 导出成功')
-      setExportModalOpen(false)
+      if (res.code === 200) {
+        setExportData((res.data as HazardIdentification[]) || [])
+        setExportTotal(res.meta?.total || 0)
+      }
     } catch {
-      msgApi.error('PDF 导出失败')
+      msgApi.error('加载导出列表失败')
     } finally {
-      setExporting(false)
-      setExportStep('')
+      setExportDrawerLoading(false)
     }
+  }, [exportDrawerDepartment, exportDrawerPosition, msgApi])
+
+  const openExportDrawer = () => {
+    setExportSelectedKeys([])
+    setExportPage(1)
+    setExportDrawerOpen(true)
+    loadExportDrawerData(1, exportPageSize)
   }
 
-  const handleCloseExportModal = () => {
-    setExportModalOpen(false)
-    setNaturalQuery('')
+  const closeExportDrawer = () => {
+    setExportDrawerOpen(false)
+    setExportSelectedKeys([])
+    setExportDrawerDepartment('')
+    setExportDrawerPosition('')
+  }
+
+  // ── 统一导出（PDF / Excel 相同方式，按抽屉勾选 ids）──
+  const handleExport = async (format: 'pdf' | 'excel') => {
+    const ids = exportSelectedKeys as string[]
+    if (ids.length === 0) {
+      msgApi.warning('请先选择要导出的记录')
+      return
+    }
+    setExporting(format)
+    try {
+      const result = format === 'pdf'
+        ? await exportHazardLedgerPdf({ ids })
+        : await exportHazardLedgerExcel({ ids })
+      downloadBase64(
+        result.data || '',
+        `危险源辨识台账_选中${ids.length}条_${new Date().toISOString().slice(0, 10)}.${format === 'pdf' ? 'pdf' : 'xlsx'}`,
+        format === 'pdf'
+          ? 'application/pdf'
+          : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      )
+      msgApi.success(`成功导出 ${ids.length} 条记录`)
+      closeExportDrawer()
+    } catch {
+      msgApi.error(`${format.toUpperCase()} 导出失败`)
+    } finally {
+      setExporting(null)
+    }
   }
 
   // ── 统计药丸计数 ──
@@ -429,6 +482,14 @@ export default function HazardLedgerPanel() {
     const cfg = LEVEL_CONFIG[level]
     if (!cfg) return <Tag>{label || level}</Tag>
     return <span style={statusPill(cfg.color, cfg.bg)}>{label || level}</span>
+  }
+
+  // ── 福建固有风险等级 pill（脚本3.5：中文名四色映射，独立于 LEVEL_CONFIG）──
+  const getFjRiskPill = (level?: string) => {
+    if (!level) return <span style={{ color: '#a4a097' }}>-</span>
+    const cfg = FJ_LEVEL_CONFIG[level]
+    if (!cfg) return <Tag>{level}</Tag>
+    return <span style={statusPill(cfg.color, cfg.bg)}>{level}</span>
   }
 
   const getControlLevelTag = (level?: string) => {
@@ -585,6 +646,12 @@ export default function HazardLedgerPanel() {
       render: (_, r) => getRiskPill(r.inherent_risk_level, r.inherent_risk_label),
     },
     {
+      title: '福建固有风险',
+      key: 'inherent_risk_fj',
+      width: 110,
+      render: (_, r) => getFjRiskPill(r.inherent_risk_level_fj),
+    },
+    {
       title: '残余风险',
       key: 'residual_risk',
       width: 90,
@@ -671,6 +738,14 @@ export default function HazardLedgerPanel() {
       <div style={{ padding: '12px 24px', background: '#fafafa', borderRadius: 8 }}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {lecRow('固有风险评价', record.l_inherent, record.e_inherent, record.c_inherent, record.d_inherent, record.inherent_risk_level, record.inherent_risk_label)}
+
+          {record.inherent_risk_level_fj && (
+            <Descriptions size="small" column={6} colon={false} title={<Text strong style={{ fontSize: 13 }}>福建固有风险评级（脚本3.5）</Text>} style={{ marginBottom: 0 }}>
+              <Descriptions.Item label="等级" span={6}>
+                {getFjRiskPill(record.inherent_risk_level_fj)}
+              </Descriptions.Item>
+            </Descriptions>
+          )}
 
           {(record.existing_engineering_controls || record.existing_management_controls || record.existing_ppe || record.existing_emergency_measures) && (
             <Descriptions size="small" column={2} colon={false} title={<Text strong style={{ fontSize: 13 }}>现有控制措施</Text>}>
@@ -830,9 +905,6 @@ export default function HazardLedgerPanel() {
             已完成危险源辨识记录的查询、统计与导出
           </p>
         </div>
-        <Button type="primary" icon={<ExportOutlined />} onClick={() => setExportModalOpen(true)}>
-          导出 PDF
-        </Button>
       </div>
 
       {/* ── 统计药丸 ── */}
@@ -1091,6 +1163,16 @@ export default function HazardLedgerPanel() {
             </button>
           )}
         </div>
+
+        {/* 导出按钮（筛选栏最右侧，与筛选按钮同区域） */}
+        <Button
+          type="primary"
+          icon={<ExportOutlined />}
+          onClick={openExportDrawer}
+          style={{ flexShrink: 0 }}
+        >
+          导出
+        </Button>
       </div>
 
       {/* ── 内容卡片 ── */}
@@ -1181,55 +1263,137 @@ export default function HazardLedgerPanel() {
         />
       </div>
 
-      {/* ── 导出 PDF Modal ── */}
-      <Modal
+      {/* ── 导出 Drawer（勾选多行，翻页保持）── */}
+      <Drawer
         title={
           <span>
             <ExportOutlined style={{ marginRight: 8, color: '#5645D4' }} />
-            导出 PDF
+            导出危险源辨识台账
           </span>
         }
-        open={exportModalOpen}
-        onCancel={handleCloseExportModal}
-        width={520}
-        footer={[
-          <Button key="cancel" onClick={handleCloseExportModal}>
-            取消
-          </Button>,
-          <Button
-            key="export"
-            type="primary"
-            icon={<DownloadOutlined />}
-            loading={exporting}
-            onClick={handleExportPdf}
-          >
-            导出 PDF
-          </Button>,
-        ]}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div>
-            <Text strong style={{ display: 'block', marginBottom: 6 }}>
-              用自然语言描述要导出哪些记录：
-            </Text>
-            <Input.TextArea
-              placeholder={'例如：\n- "上月所有重大风险记录"\n- "合成岗位最近三个月的数据"\n- "生产部一级和二级风险的危险源"'}
-              value={naturalQuery}
-              onChange={(e) => setNaturalQuery(e.target.value)}
-              rows={3}
-            />
-            <Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
-              留空则导出全部已完成记录；输入自然语言后点击「导出 PDF」，AI 将自动解析筛选条件并导出。
-            </Text>
+        open={exportDrawerOpen}
+        onClose={closeExportDrawer}
+        placement="right"
+        width={720}
+        destroyOnHidden
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text type="secondary">已选 {exportSelectedKeys.length} 条</Text>
+            <Space>
+              <Button
+                icon={<FileExcelOutlined />}
+                loading={exporting === 'excel'}
+                disabled={exportSelectedKeys.length === 0}
+                onClick={() => handleExport('excel')}
+              >
+                导出 Excel
+              </Button>
+              <Button
+                type="primary"
+                icon={<FilePdfOutlined />}
+                loading={exporting === 'pdf'}
+                disabled={exportSelectedKeys.length === 0}
+                onClick={() => handleExport('pdf')}
+              >
+                导出 PDF
+              </Button>
+            </Space>
           </div>
-
-          {exporting && (
-            <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin description={exportStep || '正在导出…'} />
-            </div>
-          )}
+        }
+      >
+        {/* ── 抽屉内部门/岗位筛选 ── */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <Input
+            placeholder="筛选部门"
+            prefix={<FilterOutlined style={{ color: '#a4a097' }} />}
+            value={exportDrawerDepartment}
+            onChange={(e) => setExportDrawerDepartment(e.target.value)}
+            onPressEnter={() => {
+              setExportPage(1)
+              loadExportDrawerData(1, exportPageSize)
+            }}
+            allowClear
+            style={{ width: 160, height: 32 }}
+          />
+          <Input
+            placeholder="筛选岗位"
+            prefix={<FilterOutlined style={{ color: '#a4a097' }} />}
+            value={exportDrawerPosition}
+            onChange={(e) => setExportDrawerPosition(e.target.value)}
+            onPressEnter={() => {
+              setExportPage(1)
+              loadExportDrawerData(1, exportPageSize)
+            }}
+            allowClear
+            style={{ width: 160, height: 32 }}
+          />
+          <Button
+            size="small"
+            onClick={() => {
+              setExportPage(1)
+              loadExportDrawerData(1, exportPageSize)
+            }}
+          >
+            查询
+          </Button>
+          <Button
+            size="small"
+            type="text"
+            onClick={() => {
+              setExportDrawerDepartment('')
+              setExportDrawerPosition('')
+              setExportPage(1)
+              loadExportDrawerData(1, exportPageSize)
+            }}
+          >
+            重置
+          </Button>
         </div>
-      </Modal>
+
+        <Table
+          rowKey="id"
+          size="small"
+          loading={exportDrawerLoading}
+          dataSource={exportData}
+          pagination={{
+            current: exportPage,
+            pageSize: exportPageSize,
+            total: exportTotal,
+            showSizeChanger: true,
+            showQuickJumper: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (page, pageSize) => {
+              setExportPage(page)
+              setExportPageSize(pageSize)
+              loadExportDrawerData(page, pageSize)
+            },
+          }}
+          columns={[
+            // 自定义复选框列：手动 toggle 数组，翻页勾选保持
+            {
+              title: '',
+              key: '__export_select__',
+              width: 48,
+              align: 'center',
+              render: (_: unknown, record: HazardIdentification) => {
+                const isSelected = exportSelectedKeys.includes(record.id)
+                const handleToggle = () => {
+                  setExportSelectedKeys((prev) =>
+                    prev.includes(record.id)
+                      ? prev.filter((k) => k !== record.id)
+                      : [...prev, record.id]
+                  )
+                }
+                return <Checkbox checked={isSelected} onChange={handleToggle} />
+              },
+            },
+            { title: '编号', dataIndex: 'hazard_id_no', width: 160 },
+            { title: '部门', dataIndex: 'department', width: 140, ellipsis: true },
+            { title: '岗位', dataIndex: 'position', width: 140, ellipsis: true },
+            { title: '生产步骤', dataIndex: 'production_step', ellipsis: true },
+          ]}
+        />
+      </Drawer>
     </div>
   )
 }

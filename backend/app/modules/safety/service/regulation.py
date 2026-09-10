@@ -62,9 +62,15 @@ class RegulationService:
                 except Exception:
                     pass
             else:
-                abs_path = os.path.abspath(file_path)
-                if os.path.exists(abs_path):
-                    os.remove(abs_path)
+                # 本地模式：经 resolve_local_path 解析（兼容新相对路径 safety/... 与旧 uploads/ 前缀）
+                from app.modules.safety.attachment_store import resolve_local_path
+
+                local_path = resolve_local_path(file_path)
+                if local_path is not None:
+                    try:
+                        os.remove(local_path)
+                    except OSError:
+                        pass
         except OSError:
             pass
 
@@ -261,26 +267,25 @@ class RegulationService:
     ) -> Any | None:
         """用户确认 AI 修订内容后：
 
-        1. 保存新文档到 uploads/
+        1. 保存新文档到统一存储（MinIO key / 本地相对路径）
         2. 更新修订记录的 new_document_path
         3. 同步更新操规表
         4. 审核意见填"已审核"
         """
-        import os
+        from app.modules.safety.attachment_store import store_bytes
 
         revision = await self.repo.get_revision_by_id(revision_id)
         if not revision or revision.revision_type != "ai":
             return None
 
         # 保存生成的文档
-        upload_dir = os.path.join("uploads", "safety", "regulations")
-        os.makedirs(upload_dir, exist_ok=True)
-
         safe_name = f"revision_{revision_id}_{int(datetime.now().timestamp())}.md"
-        file_path = os.path.join(upload_dir, safe_name)
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(generated_content)
+        file_path = store_bytes(
+            "regulation",
+            safe_name,
+            generated_content.encode("utf-8"),
+            content_type="text/markdown; charset=utf-8",
+        )
 
         doc_name = document_name or f"{revision.regulation_name}_修订版_{int(datetime.now().timestamp())}.md"
 
@@ -369,6 +374,7 @@ class RegulationService:
 请返回 JSON 格式：
 {{"scope": "process" 或 "safety_requirement" 或 "process,safety_requirement"（两者都有时逗号分隔）, "reasoning": "识别依据说明"}}"""
 
+        ai = None
         try:
             ai = await self._get_ai_client()
             result = await ai.chat_parsed(
@@ -378,7 +384,6 @@ class RegulationService:
                 ],
                 expected_keys=["scope", "reasoning"],
             )
-            await ai.close()
             return result.get("scope", "safety_requirement")
         except AIOutputError:
             logger.warning("AI 识别修订范围失败，默认标记为安全要求")
@@ -386,6 +391,9 @@ class RegulationService:
         except Exception as e:
             logger.error(f"AI 识别修订范围异常: {e}")
             return "safety_requirement"
+        finally:
+            if ai is not None:
+                await ai.close()
 
     async def _ai_generate_revision(
         self,
@@ -412,6 +420,7 @@ class RegulationService:
 
 请直接输出修订后的完整文档内容。"""
 
+        ai = None
         try:
             ai = await self._get_ai_client()
             messages = [
@@ -424,11 +433,13 @@ class RegulationService:
                 response_format="text",
                 max_tokens=16384,
             )
-            await ai.close()
             return result if result else ""
         except Exception as e:
             logger.error(f"AI 生成修订版本失败: {e}")
             raise AIOutputError(f"AI 生成修订版本失败: {e}")
+        finally:
+            if ai is not None:
+                await ai.close()
 
     async def _ai_diff_analysis(
         self,
@@ -450,6 +461,7 @@ class RegulationService:
 请输出 JSON 格式：
 {{"has_changes": true/false, "changes": [{{"section": "章节/条款号", "old_text": "旧内容摘要", "new_text": "新内容摘要", "change_type": "新增/修改/删除"}}], "summary": "差异摘要说明"}}"""
 
+        ai = None
         try:
             ai = await self._get_ai_client()
             result = await ai.chat_parsed(
@@ -459,22 +471,33 @@ class RegulationService:
                 ],
                 expected_keys=["has_changes", "changes", "summary"],
             )
-            await ai.close()
             return result
         except Exception as e:
             logger.error(f"AI 差异分析失败: {e}")
             raise AIOutputError(f"AI 差异分析失败: {e}")
+        finally:
+            if ai is not None:
+                await ai.close()
 
     @staticmethod
     def _read_document(path: str, max_chars: int = 50000) -> str:
-        """读取文档内容"""
-        import os
+        """读取文档内容（回读适配：MinIO key 经 attachment_store 物化到临时文件）。"""
+        from app.modules.safety.attachment_store import (
+            cleanup_temp,
+            materialize,
+            resolve_local_path,
+        )
 
-        if not os.path.exists(path):
+        is_temp = resolve_local_path(path) is None
+        local = materialize(path)
+        if local is None:
             raise FileNotFoundError(f"文档不存在: {path}")
-
-        with open(path, encoding="utf-8") as f:
-            content = f.read(max_chars)
+        try:
+            with open(local, encoding="utf-8") as f:
+                content = f.read(max_chars)
+        finally:
+            if is_temp:
+                cleanup_temp(local)
         return content
 
     # ==================== 文档上传处理 ====================

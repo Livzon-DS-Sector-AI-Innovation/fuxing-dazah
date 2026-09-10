@@ -46,7 +46,7 @@ VALID_OUTPUT_DICT = {
     "standard_compliance": "满足GB 3836.1-2010第15章引入口封堵要求和GB 50016-2014第10.2.4条防爆措施要求。堵头加装符合标准。",
     "standard_compliance_level": "compliant",
     "review_conclusion": "通过",
-    "review_comments": "通过",
+    "review_comments": "整改后照片显示堵头已加装、积尘已清理，措施具体有效，同意通过。",
 }
 
 
@@ -90,7 +90,7 @@ class MockAIService:
         return dict(self.return_dict)
 
     async def chat_vision_parsed(
-        self, text_prompt, image_urls, expected_keys, temperature=0.05
+        self, text_prompt, image_urls, expected_keys, temperature=0.05, max_tokens=None
     ):
         if self.should_fail:
             raise RuntimeError("Mock AI failure")
@@ -186,13 +186,28 @@ class TestPrompts:
 
     def test_expected_keys(self):
         keys = get_expected_keys()
-        assert len(keys) == 8
+        assert len(keys) == 10
         assert "photo_match_analysis" in keys
         assert "review_conclusion" in keys
 
     def test_critical_constraints_not_empty(self):
         assert len(CRITICAL_CONSTRAINTS) > 100
         assert "不通过" in CRITICAL_CONSTRAINTS
+
+    def test_critical_constraints_conditional_citation(self):
+        """知识库未提供/未命中时不得强制引用，不得编造条文。"""
+        assert "若提供了法规知识库" in CRITICAL_CONSTRAINTS
+        assert "不得编造条文" in CRITICAL_CONSTRAINTS
+        assert "知识库中无相关条款" in CRITICAL_CONSTRAINTS
+
+    def test_citation_format_unified_with_examples(self):
+        """引文格式与示例一致（书名号+章节,无引号包裹条文）。"""
+        assert "`法规/标准名称第X章/条:条文内容`" in CRITICAL_CONSTRAINTS
+        assert "[法规/标准名称]第X条" not in CRITICAL_CONSTRAINTS
+
+    def test_review_comments_free_text_in_output_format(self):
+        assert "审核意见（自由文本" in OUTPUT_FORMAT
+        assert 'review_conclusion": "通过 | 不通过 | 无需整改' in OUTPUT_FORMAT
 
     def test_context_text_basic(self):
         ctx = build_context_text(
@@ -218,6 +233,34 @@ class TestPrompts:
         assert "立即措施" in ctx
         assert "短期整改" in ctx
         assert "长期预防" in ctx
+
+    def test_context_text_with_raw_suggestion(self):
+        """真实输入（{"raw": "【整改措施】...【预防措施】..."}）兼容渲染。"""
+        ctx = build_context_text(
+            original_description="测试",
+            ai_rectification_suggestion={
+                "raw": "【整改措施】立即断电。【预防措施】修订巡检制度。"
+            },
+        )
+        assert "【整改措施】立即断电。【预防措施】修订巡检制度。" in ctx
+
+    def test_context_text_defect_substance_injected(self):
+        ctx = build_context_text(
+            original_description="测试",
+            defect_substance="procedural",
+            defect_substance_reasoning="推断链过长，均为概率假设",
+        )
+        assert "AI 识别阶段判定" in ctx
+        assert "缺陷实质=procedural" in ctx
+        assert "理由=推断链过长，均为概率假设" in ctx
+
+    def test_context_text_defect_substance_empty_skipped(self):
+        ctx = build_context_text(
+            original_description="测试",
+            defect_substance="",
+            defect_substance_reasoning="",
+        )
+        assert "AI 识别阶段判定" not in ctx
 
     def test_reply_context_with_photos(self):
         ctx = build_reply_context_text(
@@ -584,3 +627,17 @@ class TestQualityBenchmarks:
         inp = RectificationReviewInput(**ex["input"])
         result = self.engine.validate(inp, out)
         assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_fewshot_inputs_use_raw_style(self):
+        """示例输入结构与真实输入一致（ai_rectification_suggestion 为 raw 文本风格）。"""
+        for i, ex in enumerate(FEWSHOT_EXAMPLES, 1):
+            suggestion = ex["input"].get("ai_rectification_suggestion")
+            assert suggestion is not None, f"示例{i}缺少整改建议"
+            assert "raw" in suggestion, f"示例{i}未使用 raw 文本结构"
+
+    def test_fewshot_review_comments_free_text(self):
+        """示例 review_comments 为自由文本审核意见，不再是三值枚举。"""
+        for i, ex in enumerate(FEWSHOT_EXAMPLES, 1):
+            comments = ex["output"].get("review_comments", "")
+            assert len(comments) >= 5, f"示例{i} review_comments 过短"
+            assert comments not in ("通过", "不通过", "无需整改")

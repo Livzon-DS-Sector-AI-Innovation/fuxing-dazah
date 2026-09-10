@@ -5,7 +5,19 @@
 """
 
 # 触发 @on_event 装饰器注册（知识库 Bitable 事件处理器）
-from app.modules.safety.feishu import knowledge_bitable_handler  # noqa: F401
+from app.modules.safety.feishu import (
+    chemical_inventory_bitable_handler,  # noqa: F401
+    contractor_admission_bitable_handler,  # noqa: F401
+    ehs_change_bitable_handler,  # noqa: F401
+    emergency_drill_bitable_handler,  # noqa: F401
+    emergency_drill_collection_handler,  # noqa: F401
+    key_risk_op_bitable_handler,  # noqa: F401
+    knowledge_bitable_handler,  # noqa: F401
+    msds_bitable_handler,  # noqa: F401
+    msds_collection_handler,  # noqa: F401
+    special_op_bitable_handler,  # noqa: F401
+)
+from app.modules.safety.feishu import menu_handler  # noqa: F401
 from app.modules.safety.feishu.bitable_id_mapper import (
     get_bitable_open_id,
     get_bitable_person_value,
@@ -19,6 +31,7 @@ from app.modules.safety.feishu.client import (
     get_safety_feishu_client,
     get_safety_tenant_token,
 )
+from app.modules.safety.feishu.docx_service import FeishuDocxService
 from app.modules.safety.feishu.identity_resolver import (
     IdentityResolver,
     ResolvedPerson,
@@ -32,6 +45,7 @@ __all__ = [
     "get_user_id_by_bitable_open_id",
     "get_safety_feishu_client",
     "get_safety_tenant_token",
+    "FeishuDocxService",
     "IdentityResolver",
     "ResolvedPerson",
 ]

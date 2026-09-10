@@ -2,14 +2,30 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.safety.schemas.enums import (
     HazardCategory,
     HazardLevel,
     HazardType,
 )
+
+# 人工等级中文 → 平台英文枚举。前端/Agent 可能传中文标签，DB 统一存英文
+# （与 Bitable 事件链路、差异同步、HAZARD_LEVEL_REVERSE 回写口径一致），
+# 读取端的中文兼容判断（hazard_supervision）保留用于历史存量。
+_HAZARD_LEVEL_MANUAL_MAP = {
+    "一般隐患": "general",
+    "较大隐患": "serious",
+    "重大隐患": "major",
+}
+
+
+def _normalize_hazard_level_manual(v: str | None) -> str | None:
+    if isinstance(v, str):
+        return _HAZARD_LEVEL_MANUAL_MAP.get(v.strip(), v.strip()) or None
+    return v
 
 
 class RectificationReplyRequest(BaseModel):
@@ -56,7 +72,8 @@ class HazardReportBase(BaseModel):
     hazard_no: str = Field(..., max_length=64, description="隐患编号")
     inspection_category: str | None = Field(None, max_length=64, description="检查类别（日常检查/专项检查…）")
     hazard_type: HazardType = Field(..., description="隐患分类（人/物/环/管）")
-    hazard_level: HazardLevel = Field(HazardLevel.GENERAL, description="隐患等级")
+    hazard_level: HazardLevel = Field(HazardLevel.GENERAL, description="隐患等级（AI）")
+    hazard_level_manual: str | None = Field(None, description="隐患等级（人工，督办判定以此为准；写入时中文自动归一为英文枚举）")
     hazard_category: HazardCategory | None = Field(None, description="隐患类别（设备设施/危化储存…）")
     description: str = Field(..., description="隐患描述")
     discovered_by: uuid.UUID | None = Field(None, description="发现人")
@@ -74,8 +91,12 @@ class HazardReportBase(BaseModel):
     deadline: datetime | None = Field(None, description="整改期限")
     actual_completion_date: datetime | None = Field(None, description="整改完成时间")
     rectification_photos: str | None = Field(None, description="整改后图片JSON数组")
-    check_id: uuid.UUID | None = Field(None, description="关联检查ID")
     notes: str | None = Field(None, description="备注")
+    progress_note: str | None = Field(None, description="目前进展（Bitable「目前进展」字段单向同步）")
+
+    _norm_level_manual = field_validator("hazard_level_manual", mode="before")(
+        _normalize_hazard_level_manual
+    )
 
 
 class HazardReportCreate(HazardReportBase):
@@ -84,6 +105,7 @@ class HazardReportCreate(HazardReportBase):
     hazard_no: str | None = Field(None, max_length=64, description="隐患编号（留空自动生成）")
     hazard_type: HazardType | None = Field(None, description="隐患分类")
     hazard_level: HazardLevel | None = Field(None, description="隐患等级")
+    hazard_level_manual: str | None = Field(None, description="隐患等级（人工）")
     hazard_category: HazardCategory | None = Field(None, description="隐患类别")
     description: str | None = Field(None, description="隐患描述")
     discovered_at: datetime | None = Field(None, description="发现时间")
@@ -95,7 +117,8 @@ class HazardReportUpdate(BaseModel):
     hazard_no: str | None = Field(None, max_length=64, description="隐患编号")
     inspection_category: str | None = Field(None, max_length=64, description="检查类别（日常检查/专项检查…）")
     hazard_type: HazardType | None = Field(None, description="隐患分类")
-    hazard_level: HazardLevel | None = Field(None, description="隐患等级")
+    hazard_level: HazardLevel | None = Field(None, description="隐患等级（AI）")
+    hazard_level_manual: str | None = Field(None, description="隐患等级（人工）")
     hazard_category: HazardCategory | None = Field(None, description="隐患类别")
     description: str | None = Field(None, description="隐患描述")
     discovered_by: uuid.UUID | None = Field(None, description="发现人（FK → identity.users）")
@@ -116,6 +139,11 @@ class HazardReportUpdate(BaseModel):
     rectification_status: str | None = Field(None, max_length=32, description="整改进度")
     status: str | None = Field(None, max_length=32, description="状态")
     notes: str | None = Field(None, description="备注")
+    progress_note: str | None = Field(None, description="目前进展（Bitable「目前进展」字段单向同步）")
+
+    _norm_level_manual = field_validator("hazard_level_manual", mode="before")(
+        _normalize_hazard_level_manual
+    )
     # ── AI 流程字段 ──
     ai_node_progress: str | None = Field(None, max_length=50, description="AI流程节点进度")
     overall_status: str | None = Field(None, max_length=20, description="整体状态")
@@ -141,7 +169,7 @@ class HazardReportResponse(HazardReportBase):
     script1_review_status: str = "pending"
     script2_review_status: str = "pending"
     # ── AI 整改初审 ──
-    ai_review_result: dict | None = None
+    ai_review_result: dict[str, Any] | None = None
     ai_review_status: str = "pending"
     ai_review_completed_at: datetime | None = None
     ai_generated: bool = False
@@ -155,6 +183,11 @@ class HazardReportResponse(HazardReportBase):
     review_notified_level: int | None = None
     review_notify_status: str | None = None
     review_notify_error: str | None = None
+    # ── 督办等级 ──
+    supervision_level: str | None = None
+    # ── 督办进展监控（系统回写，用户不可写）──
+    supervision_progress_status: str | None = None
+    progress_note_updated_at: datetime | None = None
 
     class Config:
         from_attributes = True

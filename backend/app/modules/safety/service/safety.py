@@ -1,5 +1,6 @@
 """Safety business workflows."""
 
+from typing import cast
 import json
 import logging
 import os
@@ -13,23 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.models import (
-    Accident,
     Contractor,
     ContractorWorkRecord,
-    SafetyCheck,
     SafetyTraining,
     TrainingRecord,
 )
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import (
-    AccidentCreate,
-    AccidentUpdate,
     ContractorCreate,
     ContractorUpdate,
     ContractorWorkRecordCreate,
     ContractorWorkRecordUpdate,
-    SafetyCheckCreate,
-    SafetyCheckUpdate,
     SafetyTrainingCreate,
     SafetyTrainingUpdate,
     TrainingRecordCreate,
@@ -58,7 +53,7 @@ class SafetyService:
         svc.special_op.get_personnel(...)  # → SpecialOperationService
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = SafetyRepository(session)
 
@@ -68,8 +63,6 @@ class SafetyService:
         self._regulation = None
         self._special_op = None
         self._special_op_report = None
-        self._daily_risk = None
-        self._oh_monitor = None
         self._oh_exam = None
         self._knowledge = None
         self._sop = None
@@ -77,28 +70,28 @@ class SafetyService:
     # ── Lazy-loading accessors for per-domain sub-services ──
 
     @property
-    def hazard(self):
+    def hazard(self) -> Any:
         if self._hazard is None:
             from app.modules.safety.service.hazard import HazardService
             self._hazard = HazardService(self.session)
         return self._hazard
 
     @property
-    def ehs(self):
+    def ehs(self) -> Any:
         if self._ehs is None:
             from app.modules.safety.service.ehs_change import EhsChangeService
             self._ehs = EhsChangeService(self.session)
         return self._ehs
 
     @property
-    def regulation(self):
+    def regulation(self) -> Any:
         if self._regulation is None:
             from app.modules.safety.service.regulation import RegulationService
             self._regulation = RegulationService(self.session)
         return self._regulation
 
     @property
-    def special_op(self):
+    def special_op(self) -> Any:
         if self._special_op is None:
             from app.modules.safety.service.special_operation import (
                 SpecialOperationService,
@@ -107,7 +100,7 @@ class SafetyService:
         return self._special_op
 
     @property
-    def special_op_report(self):
+    def special_op_report(self) -> Any:
         if self._special_op_report is None:
             from app.modules.safety.service.special_operation_report import (
                 SpecialOperationReportService,
@@ -116,39 +109,21 @@ class SafetyService:
         return self._special_op_report
 
     @property
-    def daily_risk(self):
-        if self._daily_risk is None:
-            from app.modules.safety.service.daily_risk_report import (
-                DailyRiskReportService,
-            )
-            self._daily_risk = DailyRiskReportService(self.session)
-        return self._daily_risk
-
-    @property
-    def oh_monitor(self):
-        if self._oh_monitor is None:
-            from app.modules.safety.service.oh_hazard_monitor import (
-                OhHazardMonitorService,
-            )
-            self._oh_monitor = OhHazardMonitorService(self.session)
-        return self._oh_monitor
-
-    @property
-    def oh_exam(self):
+    def oh_exam(self) -> Any:
         if self._oh_exam is None:
             from app.modules.safety.service.oh_health_exam import OhHealthExamService
             self._oh_exam = OhHealthExamService(self.session)
         return self._oh_exam
 
     @property
-    def knowledge(self):
+    def knowledge(self) -> Any:
         if self._knowledge is None:
             from app.modules.safety.service.knowledge import KnowledgeService
             self._knowledge = KnowledgeService(self.session)
         return self._knowledge
 
     @property
-    def sop(self):
+    def sop(self) -> Any:
         if self._sop is None:
             from app.modules.safety.service.sop_generator import SopGeneratorService
             self._sop = SopGeneratorService(self.session)
@@ -209,100 +184,11 @@ class SafetyService:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # ==================== SafetyCheck Operations ====================
-
-    async def get_checks(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        check_type: str | None = None,
-        department: str | None = None,
-    ) -> tuple[list[SafetyCheck], int]:
-        """获取安全检查列表"""
-        return await self.repo.get_checks(skip, limit, status, check_type, department)
-
-    async def get_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """获取安全检查详情"""
-        return await self.repo.get_check_by_id(check_id)
-
-    async def create_check(self, data: SafetyCheckCreate) -> SafetyCheck:
-        """创建安全检查"""
-        check_data = data.model_dump()
-        item = await self.repo.create_check(check_data)
-        await self._audit("create", "safety_check", resource_id=item.id)
-        return item
-
-    async def update_check(
-        self, check_id: uuid.UUID, data: SafetyCheckUpdate
-    ) -> SafetyCheck | None:
-        """更新安全检查"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_check(check_id, update_data)
-        if item:
-            await self._audit("update", "safety_check", resource_id=check_id)
-        return item
-
-    async def submit_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """提交安全检查（草稿→已提交）"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status != "draft":
-            return None
-        item = await self.repo.update_check(check_id, {"status": "submitted"})
-        if item:
-            await self._audit("submit", "safety_check", resource_id=check_id)
-        return item
-
-    async def review_check(
-        self, check_id: uuid.UUID, result: str
-    ) -> SafetyCheck | None:
-        """审核安全检查"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status not in ("submitted",):
-            return None
-        return await self.repo.update_check(
-            check_id, {"status": "reviewed", "result": result}
-        )
-
-    async def close_check(self, check_id: uuid.UUID) -> SafetyCheck | None:
-        """关闭安全检查"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check or check.status not in ("reviewed",):
-            return None
-        item = await self.repo.update_check(check_id, {"status": "closed"})
-        if item:
-            await self._audit("close", "safety_check", resource_id=check_id)
-        return item
-
-    async def confirm_check(
-        self, check_id: uuid.UUID, role: str
-    ) -> SafetyCheck | None:
-        """确认安全检查（检查人员 / 安全办）"""
-        check = await self.repo.get_check_by_id(check_id)
-        if not check:
-            return None
-        if role == "inspector":
-            return await self.repo.update_check(
-                check_id, {"inspector_confirmed": True}
-            )
-        elif role == "safety_officer":
-            return await self.repo.update_check(
-                check_id, {"safety_officer_confirmed": True}
-            )
-        return None
-
-    async def delete_check(self, check_id: uuid.UUID) -> bool:
-        """删除安全检查"""
-        result = await self.repo.delete_check(check_id)
-        if result:
-            await self._audit("delete", "safety_check", resource_id=check_id)
-        return result
-
     # ==================== HazardIdentification Operations ====================
 
     # ── 批量危险源辨识 + 工段预览 ──
 
-    async def create_hazard_identification_batch(self, data) -> dict:
+    async def create_hazard_identification_batch(self, data: Any) -> dict[str, Any]:
         """批量创建危险源辨识记录（一个操规 → 多工艺阶段）。
 
         流程:
@@ -396,7 +282,7 @@ class SafetyService:
             "created_count": len(items),
         }
 
-    async def get_regulation_stages(self, regulation_id: uuid.UUID) -> dict | None:
+    async def get_regulation_stages(self, regulation_id: uuid.UUID) -> dict[str, Any] | None:
         """获取操规 Chapter 7 的工艺阶段列表（供前端批量辨识预览）。"""
         from app.modules.safety.document_parser import parse_chapter7_stages
 
@@ -420,152 +306,6 @@ class SafetyService:
                 for s in all_stages
             ],
         }
-
-    # ==================== Accident Operations ====================
-
-    async def get_accidents(
-        self,
-        skip: int = 0,
-        limit: int = 20,
-        status: str | None = None,
-        accident_type: str | None = None,
-        accident_level: str | None = None,
-        department: str | None = None,
-        date_from: datetime | None = None,
-        date_to: datetime | None = None,
-        keyword: str | None = None,
-    ) -> tuple[list[Accident], int]:
-        """获取事故列表"""
-        return await self.repo.get_accidents(
-            skip, limit, status, accident_type, accident_level,
-            department, date_from, date_to, keyword,
-        )
-
-    async def get_accident(self, accident_id: uuid.UUID) -> Accident | None:
-        """获取事故详情"""
-        return await self.repo.get_accident_by_id(accident_id)
-
-    async def create_accident(self, data: AccidentCreate) -> Accident:
-        """创建事故"""
-        accident_data = data.model_dump()
-        item = await self.repo.create_accident(accident_data)
-        await self._audit("create", "accident", resource_id=item.id)
-        return item
-
-    async def update_accident(
-        self, accident_id: uuid.UUID, data: AccidentUpdate
-    ) -> Accident | None:
-        """更新事故"""
-        update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-        item = await self.repo.update_accident(accident_id, update_data)
-        if item:
-            await self._audit("update", "accident", resource_id=accident_id)
-        return item
-
-    async def investigate_accident(
-        self,
-        accident_id: uuid.UUID,
-        investigator: uuid.UUID,
-        investigator_name: str,
-    ) -> Accident | None:
-        """开始调查事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "reported":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "investigating",
-                "investigator": investigator,
-                "investigator_name": investigator_name,
-            },
-        )
-
-    async def resolve_accident(
-        self,
-        accident_id: uuid.UUID,
-        direct_cause: str,
-        root_cause: str,
-        handling_measures: str,
-        corrective_actions: str | None = None,
-        investigation_findings: str | None = None,
-        investigation_method: str | None = None,
-        investigation_team: list | None = None,
-    ) -> Accident | None:
-        """完成调查事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigating":
-            return None
-        update_data: dict[str, Any] = {
-            "status": "investigated",
-            "direct_cause": direct_cause,
-            "root_cause": root_cause,
-            "handling_measures": handling_measures,
-            "corrective_actions": corrective_actions,
-            "investigation_findings": investigation_findings,
-            "investigation_method": investigation_method,
-        }
-        if investigation_team is not None:
-            update_data["investigation_team"] = investigation_team
-        return await self.repo.update_accident(accident_id, update_data)
-
-    async def start_capa(
-        self,
-        accident_id: uuid.UUID,
-        corrective_action_deadline: datetime,
-        corrective_action_responsible: str,
-    ) -> Accident | None:
-        """启动 CAPA"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigated":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "capa_in_progress",
-                "corrective_action_deadline": corrective_action_deadline,
-                "corrective_action_responsible": corrective_action_responsible,
-                "corrective_action_status": "in_progress",
-            },
-        )
-
-    async def verify_capa(
-        self,
-        accident_id: uuid.UUID,
-        verified_by: uuid.UUID,
-        verified_by_name: str,
-    ) -> Accident | None:
-        """验证 CAPA 并关闭事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "capa_in_progress":
-            return None
-        return await self.repo.update_accident(
-            accident_id,
-            {
-                "status": "closed",
-                "corrective_action_status": "verified",
-                "verified_by": verified_by,
-                "verified_by_name": verified_by_name,
-                "verified_at": datetime.now(),
-            },
-        )
-
-    async def close_accident(self, accident_id: uuid.UUID) -> Accident | None:
-        """直接关闭事故（无CAPA时）"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        if not accident or accident.status != "investigated":
-            return None
-        return await self.repo.update_accident(accident_id, {"status": "closed"})
-
-    async def delete_accident(self, accident_id: uuid.UUID) -> bool:
-        """删除事故"""
-        accident = await self.repo.get_accident_by_id(accident_id)
-        result = await self.repo.delete_accident(accident_id)
-        if result:
-            if accident:
-                self._cleanup_file(accident.investigation_report_path)
-            await self._audit("delete", "accident", resource_id=accident_id)
-        return result
 
     # ==================== Contractor Operations ====================
 
@@ -824,11 +564,13 @@ class SafetyService:
         date_from: str | None = None,
         date_to: str | None = None,
         batch_id: str | None = None,
-    ) -> tuple[list, int]:
+        review_status: str | None = None,
+        ids: list[uuid.UUID] | None = None,
+    ) -> tuple[list[Any], int]:
         """获取危险源辨识列表"""
         return await self.repo.get_hazard_identifications(
             skip, limit, department, overall_status, ai_node_progress, keyword,
-            position, risk_level, date_from, date_to, batch_id,
+            position, risk_level, date_from, date_to, batch_id, review_status, ids,
         )
 
     async def get_hazard_identification_stats(self) -> dict[str, int]:
@@ -848,11 +590,11 @@ class SafetyService:
             department, position, risk_level, date_from, date_to,
         )
 
-    async def get_hazard_identification(self, hid: uuid.UUID):
+    async def get_hazard_identification(self, hid: uuid.UUID) -> Any:
         """获取危险源辨识详情"""
         return await self.repo.get_hazard_identification_by_id(hid)
 
-    async def create_hazard_identification(self, data) -> Any:
+    async def create_hazard_identification(self, data: Any) -> Any:
         """创建危险源辨识记录（hazard_id_no 留空时自动生成 HI-年月日-序号）"""
 
         create_data = data.model_dump(exclude_none=True)
@@ -875,7 +617,7 @@ class SafetyService:
 
 
 
-    async def update_hazard_identification(self, hid: uuid.UUID, data) -> Any | None:
+    async def update_hazard_identification(self, hid: uuid.UUID, data: Any) -> Any | None:
         """更新危险源辨识"""
         update_data = {k: v for k, v in data.model_dump().items() if v is not None}
         item = await self.repo.update_hazard_identification(hid, update_data)
@@ -1006,7 +748,7 @@ class SafetyService:
 
     async def _generate_ai_output(
         self, script_number: int, item: Any
-    ) -> dict:
+    ) -> dict[str, Any]:
         """[DEPRECATED v2.0] 调用 AI 服务生成工作流输出。
 
         已由 HazardIdentificationOrchestrator + 7 个独立 Plugin 替代。
@@ -1024,12 +766,33 @@ class SafetyService:
         if script_number == 1:
             attachment_text = ""
             if item.attachment_path:
+                tmp_path: Path | None = None
                 try:
-                    attachment_text = DocumentParser.extract_text(
-                        item.attachment_path, max_chars=30000
+                    from app.modules.safety.attachment_store import (
+                        cleanup_temp,
+                        materialize,
                     )
+                    from app.modules.safety.vision.utils import resolve_local_path
+
+                    # 回读适配：本地未命中时按 MinIO object key 物化临时文件（保留扩展名）
+                    local = resolve_local_path(item.attachment_path)
+                    parse_target = local
+                    if parse_target is None:
+                        tmp_path = materialize(
+                            item.attachment_path,
+                            suffix=os.path.splitext(item.attachment_path)[1],
+                        )
+                        if tmp_path is not None:
+                            parse_target = str(tmp_path)
+                    if parse_target:
+                        attachment_text = DocumentParser.extract_text(
+                            parse_target, max_chars=30000
+                        )
                 except Exception as e:
                     logger.warning(f"附件解析失败: {e}")
+                finally:
+                    if tmp_path is not None:
+                        cleanup_temp(tmp_path)
             if attachment_text:
                 context_text += f"\n\n### 附件文档内容\n{attachment_text}"
             else:
@@ -1056,7 +819,7 @@ class SafetyService:
             await ai_service.close()
 
     async def run_script(
-        self, hid: uuid.UUID, script_number: int, ai_output: dict | None = None
+        self, hid: uuid.UUID, script_number: int, ai_output: dict[str, Any] | None = None
     ) -> Any | None:
         """执行 AI 脚本（状态机推进）。
 
@@ -1096,6 +859,11 @@ class SafetyService:
             self._calculate_risk_levels(script_number, update_data)
             update_data["ai_node_progress"] = next_node
             update_data["ai_error_message"] = None
+            # ── 脚本3.5：福建固有风险评级（脚本3 附属评估；人工覆盖模式自建 ai_service）──
+            if script_number == 3:
+                fj_label = await self._run_fujian_assessment(item)
+                if fj_label:
+                    update_data["inherent_risk_level_fj"] = fj_label
         else:
             # ── 方案B: 使用 Orchestrator 调用 Plugin ──
             try:
@@ -1117,6 +885,13 @@ class SafetyService:
                 plugin_update = await orchestrator.run_script(item, script_number)
                 update_data.update(plugin_update)
 
+                # ── 脚本3.5：福建固有风险评级（脚本3 附属评估，复用 ai_service，
+                #    时序在 finally close 之前，共享 trace_id 且不泄漏连接）──
+                if script_number == 3:
+                    fj_label = await self._run_fujian_assessment(item, ai_service)
+                    if fj_label:
+                        update_data["inherent_risk_level_fj"] = fj_label
+
             except OrchestratorError as e:
                 logger.error("脚本 %d Orchestrator 执行失败: %s", script_number, e)
                 update_data[f"script{script_number}_review_status"] = "rejected"
@@ -1130,6 +905,48 @@ class SafetyService:
 
         result = await self.repo.update_hazard_identification(hid, update_data)
         return result
+
+    async def _run_fujian_assessment(
+        self, item: Any, ai_service: AIService | None = None,
+    ) -> str | None:
+        """脚本3.5 福建固有风险评级附属评估（脚本3 执行成功后调用）。
+
+        按《福建省危险化学品企业安全风险分级评估指南》表5-1 七指标评价体系，
+        AI 评估固有风险等级（中文等级名：低风险/一般风险/较大风险/重大风险）。
+
+        参数:
+            item: HazardIdentification ORM 对象（读取基础信息 + 脚本1/2 输出 + 操作人数）
+            ai_service: 复用的 AuditedAIService（Orchestrator 分支传入，共享 trace_id）；
+                        None 时自建并负责关闭（人工覆盖分支）。
+
+        返回:
+            中文等级名；失败或输出无效返回 None（不阻断脚本3 主流程落库）。
+        """
+        from app.modules.safety.service.hazard_identification_runner import (
+            HazardIdentificationScriptRunner,
+        )
+
+        fj_effective = {
+            k: getattr(item, k, None)
+            for k in ("department", "position", "production_step", "specific_activity",
+                      "equipment_facilities", "raw_auxiliary_materials", "operation_frequency",
+                      "operator_count", "hazard_type", "possible_accident", "unsafe_behavior")
+        }
+        own_service = ai_service is None
+        if own_service:
+            ai_service = await self._get_ai_service()
+        try:
+            fj_output = await HazardIdentificationScriptRunner(ai_service=ai_service)(
+                3.5, fj_effective
+            )
+            if fj_output is not None:
+                return getattr(fj_output, "risk_label", None)
+        except Exception as e:
+            logger.warning("脚本3.5 福建评级失败（不影响脚本3 落库）: %s", e)
+        finally:
+            if own_service:
+                await ai_service.close()
+        return None
 
     @staticmethod
     def _validate_prerequisites(item: Any, script_number: int) -> bool:
@@ -1159,9 +976,10 @@ class SafetyService:
                 ("unsafe_behavior", "不规范作业行为表现"),
             ],
             4: [
-                ("l_inherent", "可能性L（固有）"),
-                ("e_inherent", "暴露频率E（固有）"),
-                ("c_inherent", "严重性C（固有）"),
+                ("existing_engineering_controls", "现有工程控制措施"),
+                ("existing_management_controls", "现有管理控制措施"),
+                ("existing_ppe", "现有个人防护措施"),
+                ("existing_emergency_measures", "现有应急措施"),
             ],
             5: [
                 ("existing_engineering_controls", "现有工程控制措施"),
@@ -1241,7 +1059,7 @@ class SafetyService:
         return None
 
     def _map_ai_output(
-        self, script_number: int, ai_output: dict, update_data: dict[str, Any]
+        self, script_number: int, ai_output: dict[str, Any], update_data: dict[str, Any]
     ) -> None:
         """将 AI 输出映射到模型字段。
 
@@ -1375,7 +1193,7 @@ class SafetyService:
 
     # ── AI 导出 ──
 
-    async def parse_hazard_export_query(self, natural_query: str) -> dict:
+    async def parse_hazard_export_query(self, natural_query: str) -> dict[str, Any]:
         """使用 AI 将自然语言筛选条件解析为结构化参数。
 
         支持的自然语言示例：
@@ -1420,6 +1238,7 @@ class SafetyService:
         date_from: str | None = None,
         date_to: str | None = None,
         keyword: str | None = None,
+        ids: list[uuid.UUID] | None = None,
     ) -> bytes:
         """导出危险源辨识台账为 PDF。
 
@@ -1428,37 +1247,15 @@ class SafetyService:
         2. 按条件查询数据库
         3. Excel 标准化输出插件填表 → LibreOffice 转 PDF
         4. 回退：reportlab 固定模板
+
+        ids 非空时按 ID 精确导出（忽略状态过滤），跳过 AI 解析。
         """
-        # 第一阶段：AI 解析自然语言 → 筛选条件
-        if natural_query:
-            parsed = await self.parse_hazard_export_query(natural_query)
-            department = department or parsed.get("department")
-            position = position or parsed.get("position")
-            risk_level = risk_level or parsed.get("risk_level")
-            date_from = date_from or parsed.get("date_from")
-            date_to = date_to or parsed.get("date_to")
-            keyword = keyword or parsed.get("keyword")
-
-        # 第二阶段：按条件查询数据
-        items, _ = await self.repo.get_hazard_identifications(
-            skip=0,
-            limit=10000,
-            department=department,
-            overall_status="completed",
-            position=position,
-            risk_level=risk_level,
-            date_from=date_from,
-            date_to=date_to,
-            keyword=keyword,
+        # 查询逻辑（AI 解析自然语言 → 筛选条件 → 查询记录）抽到 _load_hazard_ledger_data，
+        # 与 export_hazard_ledger_excel 共用，避免重复。
+        items, filters = await self._load_hazard_ledger_data(
+            natural_query, department, position, risk_level,
+            date_from, date_to, keyword, ids,
         )
-
-        filters = {
-            k: v for k, v in {
-                "department": department, "position": position,
-                "risk_level": risk_level, "date_from": date_from,
-                "date_to": date_to, "keyword": keyword,
-            }.items() if v is not None
-        }
 
         # ── 策略 1：Excel 标准化输出（最高优先级）──
         try:
@@ -1474,7 +1271,187 @@ class SafetyService:
         logger.debug("使用 reportlab 固定模板生成 PDF")
         return await self._export_hazard_ledger_pdf_fallback(items, filters)
 
-    def _export_via_template_plugin(self, items, filters: dict) -> bytes:
+    async def export_hazard_ledger_excel(
+        self,
+        natural_query: str | None = None,
+        department: str | None = None,
+        position: str | None = None,
+        risk_level: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        keyword: str | None = None,
+        ids: list[uuid.UUID] | None = None,
+    ) -> bytes:
+        """导出危险源辨识台账为 Excel（.xlsx），跳过 PDF 转化。
+
+        与 export_hazard_ledger_pdf 共享查询逻辑，但模板填表后直接输出 xlsx bytes，
+        不经过 LibreOffice 转 PDF（无外部依赖、无回退路径，openpyxl 为已装依赖）。
+        """
+        items, filters = await self._load_hazard_ledger_data(
+            natural_query, department, position, risk_level,
+            date_from, date_to, keyword, ids,
+        )
+        # 严格取 Bitable「建议措施内容（人工）」：人工非空用之，人工空留空
+        manual_map = await self._read_manual_recommendations(items)
+        return self._export_via_template_excel(items, filters, manual_map)
+
+    async def _load_hazard_ledger_data(
+        self,
+        natural_query: str | None,
+        department: str | None,
+        position: str | None,
+        risk_level: str | None,
+        date_from: str | None,
+        date_to: str | None,
+        keyword: str | None,
+        ids: list[uuid.UUID] | None = None,
+    ) -> tuple[list[Any], dict[str, Any]]:
+        """危险源辨识台账查询：AI 解析自然语言 → 筛选条件 → 查询记录。
+
+        返回 (items, filters)，供 PDF / Excel 导出共用（避免两处重复查询逻辑）。
+        - ids 非空：按 ID 精确导出，忽略 overall_status 过滤（可导出任意状态记录）
+        - ids 为空：仅查询 completed 记录，可用自然语言筛选
+        """
+        # 第一阶段：AI 解析自然语言 → 筛选条件（按 ids 精确导出时跳过 AI 解析）
+        if not ids and natural_query:
+            parsed = await self.parse_hazard_export_query(natural_query)
+            department = department or parsed.get("department")
+            position = position or parsed.get("position")
+            risk_level = risk_level or parsed.get("risk_level")
+            date_from = date_from or parsed.get("date_from")
+            date_to = date_to or parsed.get("date_to")
+            keyword = keyword or parsed.get("keyword")
+
+        # 第二阶段：按条件查询数据
+        # ids 非空时不强制 overall_status=completed，允许导出任意状态的选中记录
+        overall_status = None if ids else "completed"
+        items, _ = await self.repo.get_hazard_identifications(
+            skip=0,
+            limit=10000,
+            department=department,
+            overall_status=overall_status,
+            position=position,
+            risk_level=risk_level,
+            date_from=date_from,
+            date_to=date_to,
+            keyword=keyword,
+            ids=ids,
+        )
+        filters = {
+            k: v for k, v in {
+                "department": department, "position": position,
+                "risk_level": risk_level, "date_from": date_from,
+                "date_to": date_to, "keyword": keyword,
+            }.items() if v is not None
+        }
+        return items, filters
+
+    def _export_via_template_excel(
+        self,
+        items: Any,
+        filters: dict[str, Any],
+        manual_recommendations: dict[str, Any] | None = None,
+    ) -> bytes:
+        """模板填表 → xlsx bytes（跳过 LibreOffice PDF 转化，取消转化 PDF 步骤）。
+
+        manual_recommendations: {item.id: str}，严格取 Bitable「建议措施内容（人工）」
+        （人工空 → 空字符串留空）；不传或未覆盖的记录保留平台 recommendation_content。
+        """
+        import io
+
+        from app.modules.safety.template_export import (
+            HAZARD_TEMPLATE_CONFIG,
+            ExcelTemplateFiller,
+        )
+
+        data = []
+        for item in items:
+            d = self._item_to_dict(item)
+            if manual_recommendations and item.id in manual_recommendations:
+                d["recommendation_content"] = manual_recommendations[item.id]
+            data.append(d)
+        data = self._sort_ledger_data(data)
+        template_dir = Path(__file__).resolve().parent.parent / "templates"
+        template_path = template_dir / "危险源辨识管控清单模板.xlsx"
+        if not template_path.exists():
+            raise FileNotFoundError(f"模板文件不存在: {template_path}")
+
+        filler = ExcelTemplateFiller(HAZARD_TEMPLATE_CONFIG)
+        wb = filler.fill(template_path, data)
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    @staticmethod
+    def _sort_ledger_data(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """台账导出按岗位排序：先「合成」再「精制」（如 阿福合成 → 阿福拉纳精制）。
+
+        稳定排序：岗位包含「合成」排最前，「精制」次之，其余按岗位字典序兜底。
+        """
+        def _position_sort_key(d: dict[str, Any]) -> tuple[int, str]:
+            pos = d.get("position") or ""
+            if "合成" in pos:
+                return (0, pos)
+            if "精制" in pos:
+                return (1, pos)
+            return (2, pos)
+
+        return sorted(data, key=_position_sort_key)
+
+    async def _read_manual_recommendations(self, items: Any) -> dict[str, Any]:
+        """从 Bitable 读「建议措施内容（人工）」，供 Excel 导出严格取人工值。
+
+        返回 {item.id: str}——人工非空返回内容、人工空返回空字符串（导出留空）。
+        读失败的记录不覆盖（保留平台 recommendation_content，人工优先回退 AI），
+        避免 Bitable 临时不可用时整份导出失败。
+        """
+        import asyncio
+
+        try:
+            from app.modules.safety.feishu.bitable_client import SafetyBitableClient
+            from app.modules.safety.feishu.hazard_identification_bitable_handler import (
+                _hazard_id_app_token,
+                _hazard_id_table_id,
+            )
+        except Exception:
+            return {}
+
+        client = SafetyBitableClient(
+            app_token=_hazard_id_app_token(), table_id=_hazard_id_table_id()
+        )
+        sem = asyncio.Semaphore(8)
+
+        async def _fetch(item: Any) -> tuple[uuid.UUID, str | None]:
+            rid = getattr(item, "feishu_record_id", None)
+            if not rid:
+                return item.id, None
+            async with sem:
+                try:
+                    fields = await client.get_record(rid) or {}
+                    manual = self._extract_bitable_text(
+                        fields.get("建议措施内容（人工）")
+                    )
+                    return item.id, manual or ""
+                except Exception:
+                    return item.id, None  # 读失败 → 不覆盖
+
+        results = await asyncio.gather(*(_fetch(i) for i in items))
+        return {rid: value for rid, value in results if value is not None}
+
+    @staticmethod
+    def _extract_bitable_text(value: Any) -> str:
+        """Bitable 文本字段取纯文本：list[{text}] / dict{text} / str 统一处理。"""
+        if not value:
+            return ""
+        if isinstance(value, list):
+            return "".join(
+                str(x.get("text", "") if isinstance(x, dict) else x) for x in value
+            ).strip()
+        if isinstance(value, dict):
+            return str(value.get("text", "") or "").strip()
+        return str(value).strip()
+
+    def _export_via_template_plugin(self, items: Any, filters: dict[str, Any]) -> bytes:
         """使用 Excel 标准化输出插件填充模板并导出 PDF。
 
         流程：ORM 对象 → dict 列表 → openpyxl 填表 → LibreOffice → PDF bytes
@@ -1488,8 +1465,8 @@ class SafetyService:
             ExcelToPdfConverter,
         )
 
-        # ORM → dict
-        data = [self._item_to_dict(item) for item in items]
+        # ORM → dict（按岗位排序：先合成再精制）
+        data = self._sort_ledger_data([self._item_to_dict(item) for item in items])
 
         # 模板位置
         template_dir = Path(__file__).resolve().parent.parent / "templates"
@@ -1509,8 +1486,10 @@ class SafetyService:
 
             return pdf_path.read_bytes()
 
-    def _item_to_dict(self, item) -> dict:
+    def _item_to_dict(self, item: Any) -> dict[str, Any]:
         """将 HazardIdentification ORM 对象转为可 JSON 序列化的 dict"""
+        from app.modules.safety.template_export import TRAINING_EDUCATION_FIXED_TEXT
+
         return {
             "hazard_id_no": item.hazard_id_no,
             "department": item.department,
@@ -1520,6 +1499,7 @@ class SafetyService:
             "equipment_facilities": item.equipment_facilities,
             "hazard_type": item.hazard_type,
             "possible_accident": item.possible_accident,
+            "unsafe_behavior": item.unsafe_behavior,
             "inherent_risk_level": item.inherent_risk_level,
             "inherent_risk_label": item.inherent_risk_label,
             "l_inherent": int(item.l_inherent) if item.l_inherent else None,
@@ -1532,6 +1512,8 @@ class SafetyService:
             "e_residual": int(item.e_residual) if item.e_residual else None,
             "c_residual": int(item.c_residual) if item.c_residual else None,
             "d_residual": int(item.d_residual) if item.d_residual else None,
+            # 培训教育措施（I 列）：固定文本，所有记录统一
+            "training_education_measures": TRAINING_EDUCATION_FIXED_TEXT,
             "existing_engineering_controls": item.existing_engineering_controls,
             "existing_management_controls": item.existing_management_controls,
             "existing_ppe": item.existing_ppe,
@@ -1548,7 +1530,7 @@ class SafetyService:
     # ── 固定模板 PDF 回退（reportlab）──
 
     async def _export_hazard_ledger_pdf_fallback(
-        self, items, filters: dict
+        self, items: Any, filters: dict[str, Any]
     ) -> bytes:
         """固定模板 PDF 生成（reportlab）—— AI 格式化失败时的回退方案"""
         import io
@@ -1620,7 +1602,7 @@ class SafetyService:
             alignment=TA_CENTER, textColor=colors.grey,
         )
 
-        elements: list = []
+        elements: list[Any] = []
 
         # 标题
         elements.append(Paragraph("危险源辨识台账", title_style))
@@ -1763,7 +1745,7 @@ class SafetyService:
         elements.append(Spacer(1, 4 * mm))
         elements.append(sign_table2)
 
-        def add_page_number(canvas, doc_obj):
+        def add_page_number(canvas: Any, doc_obj: Any) -> None:
             canvas.saveState()
             canvas.setFont(_font_name, 8)
             canvas.drawCentredString(

@@ -158,47 +158,6 @@ PSSR_RESULT_OPTIONS = [
 ]
 
 
-class CheckType(str, Enum):
-    """检查类型枚举（16种）"""
-
-    DAILY = "daily"
-    SPECIAL = "special"
-    COMPREHENSIVE = "comprehensive"
-    HOLIDAY = "holiday"
-    MONTHLY = "monthly"
-    SEASONAL = "seasonal"
-    PRE_HOLIDAY = "pre_holiday"
-    LEADERSHIP_DUTY = "leadership_duty"
-    DEPT_CROSS = "dept_cross"
-    WEEKLY = "weekly"
-    RESUMPTION = "resumption"
-    CHANGE_ACCEPTANCE = "change_acceptance"
-    LIGHTNING = "lightning"
-    SAFETY_VALVE = "safety_valve"
-    POST_HOLIDAY = "post_holiday"
-    HEATSTROKE_PREVENTION = "heatstroke_prevention"
-
-
-CHECK_TYPE_OPTIONS = [
-    {"value": CheckType.DAILY, "label": "日常检查"},
-    {"value": CheckType.SPECIAL, "label": "专项检查"},
-    {"value": CheckType.COMPREHENSIVE, "label": "综合检查"},
-    {"value": CheckType.HOLIDAY, "label": "节假日检查"},
-    {"value": CheckType.MONTHLY, "label": "月度安全检查"},
-    {"value": CheckType.SEASONAL, "label": "季节性安全检查"},
-    {"value": CheckType.PRE_HOLIDAY, "label": "节前安全检查"},
-    {"value": CheckType.LEADERSHIP_DUTY, "label": "领导干部值班检查"},
-    {"value": CheckType.DEPT_CROSS, "label": "部门互查"},
-    {"value": CheckType.WEEKLY, "label": "周检"},
-    {"value": CheckType.RESUMPTION, "label": "复工复产安全检查"},
-    {"value": CheckType.CHANGE_ACCEPTANCE, "label": "变更验收"},
-    {"value": CheckType.LIGHTNING, "label": "防雷检查"},
-    {"value": CheckType.SAFETY_VALVE, "label": "安全阀专项检查"},
-    {"value": CheckType.POST_HOLIDAY, "label": "节后复工检查"},
-    {"value": CheckType.HEATSTROKE_PREVENTION, "label": "防暑降温专项"},
-]
-
-
 # ── 检查类别（隐患台账 Bitable 多选字段的 16 种预设选项）──
 INSPECTION_CATEGORY_OPTIONS = [
     {"value": "月度安全检查", "label": "月度安全检查"},
@@ -284,71 +243,6 @@ HAZARD_CATEGORY_OPTIONS = [
     {"value": HazardCategory.CONTRACTOR_DEFECT, "label": "承包商缺陷"},
     {"value": HazardCategory.DOCUMENTATION, "label": "内页资料"},
     {"value": HazardCategory.SPECIAL_OPERATION, "label": "特殊作业"},
-]
-
-
-class AccidentType(str, Enum):
-    """事故类型枚举"""
-
-    INJURY = "injury"
-    FIRE = "fire"
-    EXPLOSION = "explosion"
-    LEAKAGE = "leakage"
-    EQUIPMENT = "equipment"
-    NEAR_MISS = "near_miss"
-    ENVIRONMENTAL = "environmental"
-    OCCUPATIONAL_DISEASE = "occupational_disease"
-    TRAFFIC = "traffic"
-    OTHER = "other"
-
-
-ACCIDENT_TYPE_OPTIONS = [
-    {"value": AccidentType.INJURY, "label": "工伤事故"},
-    {"value": AccidentType.FIRE, "label": "火灾"},
-    {"value": AccidentType.EXPLOSION, "label": "爆炸"},
-    {"value": AccidentType.LEAKAGE, "label": "泄漏"},
-    {"value": AccidentType.EQUIPMENT, "label": "设备事故"},
-    {"value": AccidentType.NEAR_MISS, "label": "未遂事件"},
-    {"value": AccidentType.ENVIRONMENTAL, "label": "环境事件"},
-    {"value": AccidentType.OCCUPATIONAL_DISEASE, "label": "职业病"},
-    {"value": AccidentType.TRAFFIC, "label": "交通事故"},
-    {"value": AccidentType.OTHER, "label": "其他"},
-]
-
-
-class AccidentLevel(str, Enum):
-    """事故等级枚举"""
-
-    GENERAL = "general"
-    SERIOUS = "serious"
-    MAJOR = "major"
-    CATASTROPHIC = "catastrophic"
-
-
-ACCIDENT_LEVEL_OPTIONS = [
-    {"value": AccidentLevel.GENERAL, "label": "一般事故"},
-    {"value": AccidentLevel.SERIOUS, "label": "较大事故"},
-    {"value": AccidentLevel.MAJOR, "label": "重大事故"},
-    {"value": AccidentLevel.CATASTROPHIC, "label": "特别重大事故"},
-]
-
-
-class AccidentStatus(str, Enum):
-    """事故处理状态枚举"""
-
-    REPORTED = "reported"
-    INVESTIGATING = "investigating"
-    INVESTIGATED = "investigated"
-    CAPA_IN_PROGRESS = "capa_in_progress"
-    CLOSED = "closed"
-
-
-ACCIDENT_STATUS_OPTIONS = [
-    {"value": AccidentStatus.REPORTED, "label": "已报告", "color": "blue"},
-    {"value": AccidentStatus.INVESTIGATING, "label": "调查中", "color": "orange"},
-    {"value": AccidentStatus.INVESTIGATED, "label": "调查完成", "color": "cyan"},
-    {"value": AccidentStatus.CAPA_IN_PROGRESS, "label": "CAPA进行中", "color": "purple"},
-    {"value": AccidentStatus.CLOSED, "label": "已关闭", "color": "green"},
 ]
 
 

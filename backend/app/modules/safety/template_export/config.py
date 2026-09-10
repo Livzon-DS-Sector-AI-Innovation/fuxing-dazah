@@ -27,26 +27,31 @@ HAZARD_COLUMN_MAPPING: dict[str, str] = {
     "f": "possible_accident",
     "g": "existing_engineering_controls",
     "h": "existing_management_controls",
-    "i": "",   # 培训教育措施·现有 — no DB field yet
+    "i": "training_education_measures",  # 培训教育措施·现有 — 固定文本
     "j": "existing_ppe",
     "k": "existing_emergency_measures",
-    "l": "l_inherent",
-    "m": "e_inherent",
-    "n": "d_inherent",
-    "o": "inherent_risk_label",
-    "p": "recommendation_content",
-    "q": "recommendation_content",
-    "r": "recommendation_content",
-    "s": "recommendation_content",
-    "t": "recommendation_content",
-    "u": "control_level",
-    "v": "department",
-    "w": "responsible_person",
-    "x": "",   # 检查频次 — no DB field yet
+    "l": "l_inherent",       # 可能性 L（LEC 法）
+    "m": "e_inherent",       # 暴露频率 E
+    "n": "c_inherent",       # 严重性 C
+    "o": "d_inherent",       # 风险值 D = L×E×C
+    "p": "residual_risk_label",  # 评价级别 — 取残余风险等级（人工优先）
+    "q": "recommendation_content",  # 建议改进或新增管控措施（一列，合并后加宽）
+    "r": "control_level",           # 管控层级（原 v 列左移）
+    "s": "department",              # 管控责任单位（原 w 列左移）
+    "t": "responsible_person",      # 管控责任人（原 x 列左移）
+    "u": "",                        # 检查频次 — no DB field yet（原 y 列左移）
 }
 
-# Columns whose values should be cast to float (risk scores)
-NUMERIC_COLUMNS = frozenset({"l", "m", "n"})
+# 培训教育措施（I 列）固定文本 — 所有记录统一填写
+TRAINING_EDUCATION_FIXED_TEXT = (
+    "1、新员工入职三级安全教育培训；\n"
+    "2、制定岗位安全操作规程并进行培训，必须严格按照岗位安全操作规程进行操作；\n"
+    "3、重点岗位安全操作培训；\n"
+    "4、其他日常安全教育和培训。"
+)
+
+# Columns whose values should be cast to float (LEC 风险值：L/E/C/D)
+NUMERIC_COLUMNS = frozenset({"l", "m", "n", "o"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -149,6 +154,31 @@ class TemplateConfig:
     # ── 序号列 ──
     sequence_column: int = 1   # 1=A, 0=disabled
 
+    # ── 工作表名称（默认 Sheet1，与新建工作簿一致） ──
+    sheet_name: str = "Sheet1"
+
+    # ── 合并单元格列组 ──
+    # 每项为 (首列字母, 末列字母)，数据行中该列范围合并为一个单元格（只保留首列值）。
+    # 典型：建议措施 Q-U 五列合并为一个宽格子展示。须在删除列字母行后应用。
+    merge_column_groups: list[tuple[str, str]] = field(default_factory=list)
+
+    # ── 表头明细行合并 ──
+    # header_merge_row: 明细列名行行号（1-based，如列字母行上方一行）；None=不处理。
+    # header_merge_groups: [(首列, 末列, 新列名)] → 合并该行首末列并写入新列名，
+    #   用于「Q-U 五列明细列名合成一列」。须在删除列字母行之前应用（表头行号为模板绝对行号）。
+    header_merge_row: int | None = None
+    header_merge_groups: list[tuple[str, str, str]] = field(default_factory=list)
+
+    # ── 数据行样式（可选；None/空 = 克隆模板样本行，保持向后兼容） ──
+    data_font_name: str | None = None        # 统一数据字体名；None=克隆模板样本行
+    data_font_size: float | None = None      # 统一数据字号；None=克隆模板样本行
+    data_font_bold: bool = False             # True 强制加粗（风险着色仍覆盖颜色）
+    data_row_auto_height: bool = False       # True → 数据行高不固定，由 Excel 按内容自动适配
+    data_align_left: frozenset = frozenset()   # 强制左对齐的数据列（小写字母）
+    data_align_center: frozenset = frozenset() # 强制居中的数据列（小写字母）
+    column_widths: dict[str, float] = field(default_factory=dict)  # 列宽覆盖 {列字母: 宽}
+    column_letters_row: int | None = None      # 列字母提示行行号（1-based）；None=不删除
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 预置配置
@@ -167,12 +197,12 @@ HAZARD_TEMPLATE_CONFIG = TemplateConfig(
     title_row=1,
     header_row_count=6,
     sample_row=7,
-    total_columns=24,
+    total_columns=21,
     title_placeholder="***",
     title_resolver=_default_title_resolver,
     column_mapping=HAZARD_COLUMN_MAPPING,
     numeric_columns=NUMERIC_COLUMNS,
-    risk_label_column="o",
+    risk_label_column="p",
     risk_label_colors=RISK_LABEL_COLORS,
     page_setup=PageSetup(
         orientation="landscape",
@@ -181,6 +211,25 @@ HAZARD_TEMPLATE_CONFIG = TemplateConfig(
         fit_to_height=0,
     ),
     sequence_column=1,
+    # ── 台账数据行样式：统一字号 + 自动行高 + 对齐 + 列宽，保证「工整」 ──
+    data_font_name="等线",
+    data_font_size=9,
+    data_font_bold=False,
+    data_row_auto_height=True,
+    data_align_left=frozenset({
+        "b", "c", "d", "e", "f", "g", "h", "i", "j", "k",
+        "q",  # 建议改进或新增管控措施：长文本左对齐
+    }),
+    data_align_center=frozenset({"a", "l", "m", "n", "o", "p", "r", "s", "t", "u"}),
+    column_widths={
+        "a": 6, "b": 12, "c": 12, "d": 36, "e": 26, "f": 32,
+        "g": 20, "h": 22, "i": 18, "j": 18, "k": 22,
+        "l": 8, "m": 8, "n": 8, "o": 8, "p": 14,
+        "q": 40,  # 建议改进或新增管控措施（独立一列，加宽，长文本自动换行）
+        "r": 10, "s": 16, "t": 10, "u": 10,
+    },
+    column_letters_row=6,
+    # 注：R-U 列已从模板删除，Q 为独立一列，无需数据行合并或表头合并
 )
 
 

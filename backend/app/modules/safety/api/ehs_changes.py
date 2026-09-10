@@ -32,6 +32,10 @@ async def get_ehs_changes(
     change_duration: str | None = None,
     department: str | None = None,
     keyword: str | None = None,
+    source: str | None = Query(None, description="数据来源: manual/bitable"),
+    feishu_table_id: str | None = Query(None, description="飞书表类型: approval/acceptance"),
+    sort_by: str | None = Query(None, description="排序字段: expected_start/acceptance_date/created_at"),
+    sort_order: str = Query("desc", description="排序方向: desc/asc"),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
@@ -39,7 +43,8 @@ async def get_ehs_changes(
     service = EhsChangeService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_ehs_changes(
-        skip, page_size, status, change_type, change_grade, change_duration, department, keyword
+        skip, page_size, status, change_type, change_grade, change_duration,
+        department, keyword, source, feishu_table_id, sort_by, sort_order,
     )
     return ApiResponse(
         data=[EhsChangeResponse.model_validate(i) for i in items],
@@ -58,6 +63,19 @@ async def create_ehs_change(
     item = await service.create_ehs_change(data)
     await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
+
+
+@ehs_changes_router.get("/ehs-changes/stats", response_model=ApiResponse, summary="获取EHS变更统计")
+async def get_ehs_changes_stats(
+    feishu_table_id: str | None = Query(None, description="飞书表类型: approval/acceptance"),
+    source: str | None = Query(None, description="数据来源: manual/bitable"),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """EHS 变更统计（KPI 卡）：total + status 分组 + AI 总体结论计数"""
+    service = EhsChangeService(db)
+    data = await service.get_ehs_change_stats(feishu_table_id, source)
+    return ApiResponse(data=data)
 
 
 @ehs_changes_router.get("/ehs-changes/{change_id}", response_model=ApiResponse, summary="获取EHS变更详情")
@@ -282,6 +300,24 @@ async def submit_verification_ehs_change(
     item = await service.submit_verification(change_id, data)
     if not item:
         return ApiResponse(code=404, message="变更不存在")
+    await db.commit()
+    return ApiResponse(data=EhsChangeResponse.model_validate(item))
+
+
+@ehs_changes_router.post("/ehs-changes/{change_id}/ai/audit", response_model=ApiResponse, summary="触发EHS变更AI审核")
+async def run_ehs_ai_audit(
+    change_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """手动触发单条 EHS 变更 AI 审核（4 维度），结果回填飞书多维表格并更新平台。
+
+    仅支持飞书来源（source='bitable'）的变更审批（feishu_table_id='approval'）记录。
+    """
+    service = EhsChangeService(db)
+    item = await service.run_ehs_ai_review(change_id, channel="web")
+    if item is None:
+        return ApiResponse(code=400, message="仅支持飞书来源的变更审批记录触发AI审核")
     await db.commit()
     return ApiResponse(data=EhsChangeResponse.model_validate(item))
 

@@ -107,3 +107,56 @@ export interface SpecialOperationPermitQueryParams {
   keyword?: string
 }
 
+// ============ 日报记录（基于 SpecialOperationReport source=bitable）============
+
+export interface DailyReportRecord {
+  id: string
+  source: string
+  feishu_record_id?: string | null
+  department?: string | null
+  location?: string | null
+  operation_type?: string | null
+  operation_level?: string | null
+  work_description?: string | null
+  work_duration_hours?: number | null
+  personnel_type?: string | null
+  planned_start_time?: string | null
+  planned_end_time?: string | null
+  daily_risk_level?: string | null
+  daily_risk_reason?: string | null
+  inferred_operation_types?: string[] | null
+  is_excluded: boolean
+  exclusion_reason?: string | null
+  daily_report_date?: string | null
+  approval_no?: string | null
+  report_type?: string | null
+  is_weekend_holiday?: string | null
+  status?: string | null
+  created_at?: string | null
+}
+
+export interface DailyReportGenerateRequest {
+  target_date?: string
+  mode?: 'today' | 'tomorrow'
+}
+
+export interface DailyReportResponse {
+  report_date: string
+  mode: string
+  total: number
+  excluded: number
+  high_risk: number
+  medium_risk: number
+  low_risk: number
+  markdown_report: string
+  push_results: Array<{ chat_id: string; success: boolean; message_id?: string; error?: string }>
+}
+
+export interface DailyReportStats {
+  date: string
+  total: number
+  high: number
+  medium: number
+  low: number
+}
+

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 
 class ControlsInput(BaseModel):
-    """脚本4 输入：基础信息 + 脚本1+2+3输出（经人工确认）。"""
+    """脚本4 输入：基础信息 + 脚本1+2+3输出（经人工确认）+ 人工已填现有控制措施（AI 审核润色用）。"""
 
     department: str = Field(..., description="部门")
     position: str = Field(..., description="岗位")
@@ -26,6 +26,12 @@ class ControlsInput(BaseModel):
     d_inherent: float | None = Field(None, description="D 固有")
     inherent_risk_level: str | None = Field(None, description="固有风险等级")
     inherent_risk_label: str | None = Field(None, description="固有风险等级名")
+
+    # 人工已填现有控制措施（优化2：人工先填 → AI 审核润色；平台单列，AI 输出覆盖）
+    existing_engineering_controls: str | None = Field(None, description="人工已填现有工程控制措施")
+    existing_management_controls: str | None = Field(None, description="人工已填现有管理控制措施")
+    existing_ppe: str | None = Field(None, description="人工已填现有个人防护措施")
+    existing_emergency_measures: str | None = Field(None, description="人工已填现有应急措施")
 
 
 class ControlsOutput(BaseModel):

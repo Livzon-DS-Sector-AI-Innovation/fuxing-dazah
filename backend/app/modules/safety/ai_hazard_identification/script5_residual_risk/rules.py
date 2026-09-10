@@ -17,10 +17,10 @@ from app.modules.safety.ai_hazard_identification.script5_residual_risk.schemas i
 logger = logging.getLogger(__name__)
 
 RISK_LEVEL_RANGES = {
-    "level_1": (320, float("inf")),
-    "level_2": (160, 320),
-    "level_3": (70, 160),
-    "level_4": (0, 70),
+    "level_1": (160, float("inf")),
+    "level_2": (70, 160),
+    "level_3": (20, 70),
+    "level_4": (0, 20),
 }
 
 
@@ -75,17 +75,17 @@ class ResidualRiskRuleEngine:
                 "措施不应增加风险"
             )
 
-        # 5. 保守原则 — 无措施不得大幅降低 C 值
+        # 5. 保守原则（硬校验）— 无工程措施不得大幅降低 C 值
         if lec.c_value is not None and input_data.c_inherent is not None:
             if (
                 lec.c_value < input_data.c_inherent * 0.5
                 and "防爆" not in (input_data.existing_engineering_controls or "")
                 and "泄压" not in (input_data.existing_engineering_controls or "")
             ):
-                logger.warning(
-                    "残余 C=%s 较固有 C=%s 下降超过 50%%，"
-                    "但未发现可降低后果严重性的工程措施（防爆/泄压），请人工审核",
-                    lec.c_value, input_data.c_inherent,
+                errors.append(
+                    f"残余 C={lec.c_value} 较固有 C={input_data.c_inherent} 下降超过 50%，"
+                    "但未发现可降低后果严重性的工程措施（防爆/泄压），"
+                    "无充分依据不得大幅降低 C 值"
                 )
 
         return errors

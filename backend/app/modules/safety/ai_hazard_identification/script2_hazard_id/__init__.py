@@ -4,7 +4,7 @@ from app.modules.safety.ai_hazard_identification.script2_hazard_id.plugin import
     HazardIdentifier,
 )
 from app.modules.safety.ai_hazard_identification.script2_hazard_id.prompts import (
-    VALID_HAZARD_TYPES_6441,
+    VALID_HAZARD_TYPES_BITABLE,
     get_db_seed_config,
 )
 from app.modules.safety.ai_hazard_identification.script2_hazard_id.rules import (
@@ -22,6 +22,6 @@ __all__ = [
     "HazardIdOutput",
     "HazardIdRuleEngine",
     "auto_correct",
-    "VALID_HAZARD_TYPES_6441",
+    "VALID_HAZARD_TYPES_BITABLE",
     "get_db_seed_config",
 ]

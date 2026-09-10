@@ -201,7 +201,20 @@ export interface SyncKnowledgeResponse {
   total_platform: number
 }
 
+// ── 分类计数（全库） ──
+
+/** 知识库全库统计响应（分类计数 + 状态分布 + 卡片/附件覆盖） */
+export interface KnowledgeCategoryCounts {
+  total: number
+  by_category: Record<string, number>
+  by_status: Record<string, number>
+  with_card: number
+  with_attachment: number
+}
+
+
 // ============ Info Query (RAG Chat) Types ============
+// 后端 POST /safety/knowledge/chat 仍然存在，前端函数在合并中丢失，此处恢复。
 
 export interface InfoQueryMessage {
   role: 'user' | 'assistant'

@@ -61,7 +61,7 @@ WORK_RULES = f"""## 工作规则
   • 仅靠培训或警示标识
 
 ### 3. 残余风险约束
-- 残余风险通常**不应高于**固有风险（措施不应增加风险）
+- 残余风险**不得高于**固有风险（措施不应增加风险）
 - 残余风险评估应考虑措施的可靠性（如设备可能故障、人员可能不遵守）
 - 不得仅因「有制度」就从 level_1 降到 level_4
 
@@ -71,7 +71,16 @@ WORK_RULES = f"""## 工作规则
 
 ### 5. 风险等级判定
 
-{RISK_LEVEL_TABLE}"""
+{RISK_LEVEL_TABLE}
+
+### 6. 质量约束（依据标准文件）
+- 每个评分结果均应能够从已填写的控制措施、附件文本或知识库中找到依据；无依据内容对应字段填 null（表示「待人工确认」）
+- 残余风险不得高于固有风险（措施不应增加风险）；若 AI 评估后认为两者应相等或接近，直接采用与固有风险相同的 D/L/E/C 值
+- 控制措施越充分、针对性越强、执行条件越明确，残余风险下降幅度可越合理；不得无依据过度降低评分
+- 个人防护措施通常优先影响后果严重性或局部暴露，不应替代工程控制和管理控制的作用
+- 应急措施通常主要用于降低事故扩大后果，不应直接大幅降低事故发生可能性，除非有明确依据
+- 若 L、E、C 任一字段依据不足（null），则风险值 D 和残余风险等级也必须填 null（待人工确认）
+- 输出必须与当前危险源直接对应，内容应结构化、可追溯、可审核"""
 
 OUTPUT_FORMAT = """## 输出格式
 
@@ -85,6 +94,18 @@ OUTPUT_FORMAT = """## 输出格式
     "d_value": L×E×C 的计算结果,
     "risk_level": "level_1 / level_2 / level_3 / level_4",
     "risk_label": "一级/重大风险 / 二级/较大风险 / 三级/一般风险 / 四级/低风险"
+  }
+}
+
+若信息不足无法评分，对应字段填 null（表示「待人工确认」）：
+{
+  "lec": {
+    "l_value": null,
+    "e_value": null,
+    "c_value": null,
+    "d_value": null,
+    "risk_level": null,
+    "risk_label": null
   }
 }"""
 
@@ -112,6 +133,27 @@ FEWSHOT_EXAMPLES = [
             },
         },
     },
+    {
+        "input": {
+            "inherent_risk_level": "level_1",
+            "inherent_risk_label": "一级/重大风险",
+            "l_inherent": 6, "e_inherent": 6, "c_inherent": 7, "d_inherent": 252,
+            "existing_engineering_controls": "无",
+            "existing_management_controls": "加强巡查、张贴警示标识",
+            "existing_ppe": "无",
+            "existing_emergency_measures": "无",
+        },
+        "output": {
+            "lec": {
+                "l_value": 6,
+                "e_value": 6,
+                "c_value": 7,
+                "d_value": 252,
+                "risk_level": "level_1",
+                "risk_label": "一级/重大风险",
+            },
+        },
+    },
 ]
 
 
@@ -123,12 +165,7 @@ def build_prompt(context_text: str, knowledge_context: str | None = None) -> str
 
     sections.append(WORK_RULES)
 
-    ref_docs = ""
-    if knowledge_context:
-        ref_docs += knowledge_context + "\n\n"
-    ref_docs += "## LEC 评分标准（系统内置）\n" + LEC_SCORING_GUIDE
-    ref_docs += "\n## 风险等级表（系统内置）\n" + RISK_LEVEL_TABLE
-    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + ref_docs)
+    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + (knowledge_context or ""))
 
     sections.append(OUTPUT_FORMAT)
 
@@ -140,7 +177,7 @@ def get_db_seed_config() -> dict:
     return {
         "script_number": 5,
         "script_name": "残余风险LEC评价",
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-v4-flash-vision-exp",
         "temperature": 0.05,
         "max_tokens": 4096,
         "system_role": SYSTEM_ROLE,

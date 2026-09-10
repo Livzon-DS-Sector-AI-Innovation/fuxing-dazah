@@ -13,7 +13,7 @@ import copy
 from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 from .config import TemplateConfig
@@ -43,12 +43,21 @@ class ExcelTemplateFiller:
         """Load template, fill with data, return the workbook (unsaved)."""
         wb = openpyxl.load_workbook(str(template_path))
         ws = wb.active
+        # 统一工作表名称（默认 Sheet1，不沿用模板自定义 sheet 名）
+        if self._cfg.sheet_name:
+            ws.title = self._cfg.sheet_name
 
         self._replace_title(ws, data)
         sample_styles = self._capture_sample_styles(ws)
         self._fill_data_rows(ws, data, sample_styles)
-        self._apply_page_setup(ws)
+        # 表头明细行合并须在删除列字母行之前（表头行号为模板绝对行号）
+        self._apply_header_merges(ws)
         self._strip_column_letters_row(ws)
+        # 合并单元格须在删除列字母行之后应用（delete_rows 不会随动 merged_cells 范围）
+        self._apply_merge_groups(ws, len(data))
+        self._apply_data_row_heights(ws, len(data))
+        self._apply_column_widths(ws)
+        self._apply_page_setup(ws)
 
         return wb
 
@@ -98,7 +107,12 @@ class ExcelTemplateFiller:
     def _fill_data_rows(
         self, ws, data: list[dict], sample_styles: dict[str, dict]
     ) -> None:
-        """Write data rows starting at sample_row, cloning styles."""
+        """Write data rows starting at sample_row, cloning styles.
+
+        样式策略：默认克隆模板样本行（向后兼容）；若 config 提供
+        ``data_font_size`` / ``data_align_left`` / ``data_align_center``
+        等覆盖项，则对数据行应用统一的字体/对齐/自动行高，保证导出「工整」。
+        """
         start_row = self._cfg.sample_row
         total_cols = self._cfg.total_columns
         data_height = ws.row_dimensions[start_row].height
@@ -108,15 +122,38 @@ class ExcelTemplateFiller:
         risk_colors = self._cfg.risk_label_colors
         seq_col = self._cfg.sequence_column
 
+        auto_height = self._cfg.data_row_auto_height
+        font_name = self._cfg.data_font_name
+        font_size = self._cfg.data_font_size
+        font_bold = self._cfg.data_font_bold
+        left_cols = self._cfg.data_align_left
+        center_cols = self._cfg.data_align_center
+
+        # 合并组内的「非主列」：填表时留空（合并单元格只保留首列值）
+        merge_non_primary = set()
+        for start_letter, end_letter in self._cfg.merge_column_groups:
+            start = get_column_letter(self._col_index(start_letter))
+            for idx in range(
+                self._col_index(start_letter) + 1,
+                self._col_index(end_letter) + 1,
+            ):
+                merge_non_primary.add(get_column_letter(idx).lower())
+
         for row_idx, record in enumerate(data):
             excel_row = start_row + row_idx
-            ws.row_dimensions[excel_row].height = data_height
+            if auto_height:
+                # 不写固定行高 → Excel 按内容自动适配（避免长文本被截断）
+                ws.row_dimensions[excel_row].height = None
+            else:
+                ws.row_dimensions[excel_row].height = data_height
 
             for c in range(1, total_cols + 1):
                 col_letter = get_column_letter(c).lower()
 
                 # ── Value ──
-                if c == seq_col:
+                if col_letter in merge_non_primary:
+                    formatted = ""  # 合并组的非首列：不填值
+                elif c == seq_col:
                     formatted = row_idx + 1
                 else:
                     db_field = mapping.get(col_letter, "")
@@ -126,12 +163,30 @@ class ExcelTemplateFiller:
                 cell = ws.cell(excel_row, c)
                 cell.value = formatted
 
-                # ── Style (clone from sample) ──
+                # ── Style ──
                 style = sample_styles[col_letter]
-                cell.font = style["font"]
                 cell.fill = style["fill"]
-                cell.alignment = style["alignment"]
                 cell.border = style["border"]
+
+                # 字体：config 指定则统一（字号/字重），否则克隆模板样本行
+                if font_size is not None:
+                    base_name = font_name or style["font"].name or "等线"
+                    cell.font = Font(name=base_name, size=font_size, bold=font_bold)
+                else:
+                    cell.font = style["font"]
+
+                # 对齐：强制换行 + 垂直居中；水平对齐按 config 覆盖，否则克隆样本行
+                if col_letter in center_cols:
+                    horiz = "center"
+                elif col_letter in left_cols:
+                    horiz = "left"
+                else:
+                    horiz = style["alignment"].horizontal or "center"
+                cell.alignment = Alignment(
+                    wrap_text=True,
+                    vertical="center",
+                    horizontal=horiz,
+                )
 
                 # ── Risk label coloring ──
                 if col_letter == risk_col and formatted:
@@ -140,9 +195,14 @@ class ExcelTemplateFiller:
                         cell.font = Font(
                             bold=True,
                             size=cell.font.size or 10.5,
-                            name=cell.font.name or "宋体",
+                            name=cell.font.name or "等线",
                             color=color,
                         )
+
+    def _apply_column_widths(self, ws) -> None:
+        """按 config.column_widths 覆盖模板列宽（未配置的列保持模板原宽）。"""
+        for letter, width in self._cfg.column_widths.items():
+            ws.column_dimensions[letter.upper()].width = width
 
     def _apply_page_setup(self, ws) -> None:
         """Set print/PDF page properties on the worksheet."""
@@ -155,14 +215,76 @@ class ExcelTemplateFiller:
             openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
         )
 
-    @staticmethod
-    def _strip_column_letters_row(ws) -> None:
-        """Remove the column-letter hint row (row with a,b,c,…) if present.
-        Row 6 in the standard template; we clear it so it doesn't appear in PDF.
+    def _strip_column_letters_row(self, ws) -> None:
+        """删除模板中的列字母提示行（如 a, b, c, …），避免出现在导出中。
+
+        config.column_letters_row 指定该行行号（1-based）；None = 不删除。
+        仅删除无内容/纯字母占位行，不影响数据行。
         """
-        # The template row 6 has a,b,c,… — keep it in xlsx for reference
-        # but it's harmless in PDF.  This hook exists for subclasses.
-        pass
+        row = self._cfg.column_letters_row
+        if not row:
+            return
+        ws.delete_rows(row, 1)
+
+    def _apply_data_row_heights(self, ws, count: int) -> None:
+        """删除列字母行后，数据行号上移，重新显式应用行高。
+
+        openpyxl 的 delete_rows 只移动单元格、不移动 row_dimensions，
+        导致数据行可能继承被删行的旧高度（如 17.0），长文本会被截断。
+        此处按自动适配模式将数据行高度重置为 None（Excel 打开时自动撑高）。
+        """
+        if not self._cfg.data_row_auto_height:
+            return
+        first = self._cfg.sample_row - (1 if self._cfg.column_letters_row else 0)
+        for r in range(first, first + count):
+            ws.row_dimensions[r].height = None
+
+    def _apply_merge_groups(self, ws, count: int) -> None:
+        """将每行配置的列组合并为一个单元格（仅保留首列值，取首列样式）。
+
+        须在 ``_strip_column_letters_row`` 之后调用：openpyxl 的 delete_rows
+        不会调整 merged_cells 范围，若先合并再删行会导致合并区域与数据行错位。
+        """
+        groups = self._cfg.merge_column_groups
+        if not groups:
+            return
+        first = self._cfg.sample_row - (1 if self._cfg.column_letters_row else 0)
+        for row_off in range(count):
+            excel_row = first + row_off
+            for start_letter, end_letter in groups:
+                start_col = self._col_index(start_letter)
+                end_col = self._col_index(end_letter)
+                if start_col >= end_col:
+                    continue
+                ws.merge_cells(
+                    start_row=excel_row, start_column=start_col,
+                    end_row=excel_row, end_column=end_col,
+                )
+
+    def _apply_header_merges(self, ws) -> None:
+        """合并表头明细行的列组（如 Q-U 五个明细列名合成一列并写入新列名）。
+
+        须在 ``_strip_column_letters_row`` 之前调用：表头行号是模板绝对行号，
+        删除列字母行不影响其上方行号。合并会清除组内非首列的原值。
+        """
+        row = self._cfg.header_merge_row
+        if not row:
+            return
+        for start_letter, end_letter, text in self._cfg.header_merge_groups:
+            start_col = self._col_index(start_letter)
+            end_col = self._col_index(end_letter)
+            if start_col >= end_col:
+                continue
+            ws.merge_cells(
+                start_row=row, start_column=start_col,
+                end_row=row, end_column=end_col,
+            )
+            ws.cell(row, start_col).value = text
+
+    @staticmethod
+    def _col_index(letter: str) -> int:
+        """列字母 → 1-based 列号（a/A 均接受）。"""
+        return openpyxl.utils.column_index_from_string(letter)
 
     # ── Static helpers ──────────────────────────────────────────────────
 

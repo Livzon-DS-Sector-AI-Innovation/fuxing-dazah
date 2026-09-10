@@ -6,17 +6,19 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 # ── 风险等级常量 ──
+# 判定口径统一到 Bitable 公式：D≥160 重大公司级、70≤D<160 较大部门级、
+# 20≤D<70 一般班组/岗位级、D<20 低风险。
 RISK_LEVELS = [
-    {"key": "level_1", "label": "一级/重大风险", "min_d": 320, "max_d": 99999, "color": "red",
+    {"key": "level_1", "label": "一级/重大风险", "min_d": 160, "max_d": 99999, "color": "red",
      "control_level": "公司级", "responsible_person": "公司主要负责人",
      "requirement": "必须建立管控档案，立即整改，风险降低后方可作业"},
-    {"key": "level_2", "label": "二级/较大风险", "min_d": 160, "max_d": 319, "color": "orange",
+    {"key": "level_2", "label": "二级/较大风险", "min_d": 70, "max_d": 159, "color": "orange",
      "control_level": "部门级", "responsible_person": "安全工程中心 + 各部门按职责分工",
      "requirement": "必须建立管控档案，制定措施控制管理"},
-    {"key": "level_3", "label": "三级/一般风险", "min_d": 70, "max_d": 159, "color": "yellow",
+    {"key": "level_3", "label": "三级/一般风险", "min_d": 20, "max_d": 69, "color": "yellow",
      "control_level": "班组/岗位级", "responsible_person": "所在部门负责管控",
      "requirement": "安全工程中心监督落实"},
-    {"key": "level_4", "label": "四级/低风险", "min_d": 0, "max_d": 69, "color": "blue",
+    {"key": "level_4", "label": "四级/低风险", "min_d": 0, "max_d": 19, "color": "blue",
      "control_level": "班组/岗位级", "responsible_person": "所在班组/岗位负责管控",
      "requirement": "部门安全员监督落实"},
 ]
@@ -39,6 +41,7 @@ AI_NODE_PROGRESS_OPTIONS = [
     {"value": "pending_script5", "label": "待AI评价残余风险"},
     {"value": "pending_script6", "label": "待AI提出建议措施"},
     {"value": "pending_script7", "label": "待AI评价建议措施后风险"},
+    {"value": "pending_script8", "label": "待人工审核检查清单"},
     {"value": "completed", "label": "AI流程结束"},
 ]
 
@@ -134,6 +137,10 @@ class HazardIdentificationResponse(HazardIdentificationBase):
     """危险源辨识完整响应"""
 
     id: uuid.UUID
+    # ── 覆盖基类必填字段：兼容 Bitable 镜像中「部门/岗位」为空的记录，
+    #    否则列表接口对任一空部门记录 model_validate 抛错 → 整页 500 → 前端看不到记录 ──
+    department: str | None = None
+    position: str | None = None
     attachment_path: str | None = None
     attachment_original_name: str | None = None
     # ── 多工段辨识（批量）──
@@ -154,6 +161,7 @@ class HazardIdentificationResponse(HazardIdentificationBase):
     d_inherent: float | None = None
     inherent_risk_level: str | None = None
     inherent_risk_label: str | None = None
+    inherent_risk_level_fj: str | None = None
     existing_engineering_controls: str | None = None
     existing_management_controls: str | None = None
     existing_ppe: str | None = None
@@ -186,6 +194,25 @@ class HazardIdentificationResponse(HazardIdentificationBase):
     script5_review_status: str
     script6_review_status: str
     script7_review_status: str
+    # ── Bitable 镜像元信息 ──
+    feishu_record_id: str | None = None
+    feishu_url: str | None = None
+    feishu_table_id: str | None = None
+    submitter_name: str | None = None
+    submitter_feishu_id: str | None = None
+    reviewer_name: str | None = None
+    reviewer_feishu_id: str | None = None
+    # ── 脚本8 四类排查内容（AI + 人工 各一列）──
+    engineering_check_items_ai: str | None = None
+    engineering_check_items_manual: str | None = None
+    management_check_items_ai: str | None = None
+    management_check_items_manual: str | None = None
+    ppe_check_items_ai: str | None = None
+    ppe_check_items_manual: str | None = None
+    emergency_check_items_ai: str | None = None
+    emergency_check_items_manual: str | None = None
+    # ── Bitable 完整字段快照（AI/人工双份 + 公式结果）──
+    bitable_snapshot: dict | None = None
     created_by: uuid.UUID | None = None
     updated_by: uuid.UUID | None = None
     created_at: datetime

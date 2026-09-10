@@ -21,12 +21,12 @@ from app.modules.safety.ai_hazard_identification.script3_inherent_risk.schemas i
 
 logger = logging.getLogger(__name__)
 
-# 风险等级 D 值范围
+# 风险等级 D 值范围（统一 Bitable 阈值 160/70/20）
 RISK_LEVEL_RANGES = {
-    "level_1": (320, float("inf")),
-    "level_2": (160, 320),
-    "level_3": (70, 160),
-    "level_4": (0, 70),
+    "level_1": (160, float("inf")),
+    "level_2": (70, 160),
+    "level_3": (20, 70),
+    "level_4": (0, 20),
 }
 
 

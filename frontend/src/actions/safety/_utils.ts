@@ -9,6 +9,12 @@ export const API_BASE = process.env.API_BASE_URL
   ? `${process.env.API_BASE_URL}/api/v1`
   : (() => { throw new Error('环境变量 API_BASE_URL 未配置，无法连接后端服务') })()
 
+/** scheduler-config（AI 配置 + 定时任务）API 路径前缀 */
+export const SAFETY_SCHEDULER_CONFIG = '/safety/scheduler-config'
+
+/** bitable-config（多维表格配置中心）API 路径前缀 */
+export const SAFETY_BITABLE_CONFIG = '/safety/bitable-config'
+
 /**
  * Build a URL query string from a plain params object.
  * Filters out undefined, null, and empty string values.

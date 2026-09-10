@@ -32,6 +32,20 @@ from app.modules.safety.ai_hazard_identification.script6_recommendations.schemas
 logger = logging.getLogger(__name__)
 
 
+def _coerce_str(value: Any, default: str) -> str:
+    """AI 返回值 → 字符串：list（多选）按「、」拼接，其余原样。
+
+    Bitable「建议措施类型（AI）」为多选字段，AI 可能直接返回 list，
+    此处统一拼成「、」连接的字符串，与规则引擎和回写逻辑对齐。
+    """
+    if isinstance(value, list):
+        joined = "、".join(str(v) for v in value if str(v).strip())
+        return joined if joined else default
+    if value is None:
+        return default
+    return str(value)
+
+
 class RecommendationGenerator(BasePlugin[RecommendationInput, RecommendationOutput]):
     """脚本6: 建议措施生成 Plugin。
 
@@ -65,10 +79,18 @@ class RecommendationGenerator(BasePlugin[RecommendationInput, RecommendationOutp
     def _parse_output(self, raw: dict) -> RecommendationOutput:
         try:
             return RecommendationOutput(
-                needs_recommendation=raw.get("needs_recommendation", "是"),
-                recommendation_type=raw.get("recommendation_type", "综合"),
-                recommendation_content=raw.get("recommendation_content", "待人工确认"),
-                recommendation_priority=raw.get("recommendation_priority", "中"),
+                needs_recommendation=_coerce_str(
+                    raw.get("needs_recommendation"), "是"
+                ),
+                recommendation_type=_coerce_str(
+                    raw.get("recommendation_type"), "综合"
+                ),
+                recommendation_content=_coerce_str(
+                    raw.get("recommendation_content"), "待人工确认"
+                ),
+                recommendation_priority=_coerce_str(
+                    raw.get("recommendation_priority"), "中"
+                ),
             )
         except (PydanticValidationError, KeyError, TypeError) as e:
             raise PluginError(

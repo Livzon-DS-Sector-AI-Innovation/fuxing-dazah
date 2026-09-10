@@ -26,10 +26,8 @@ from app.modules.safety.schemas import (
 from app.modules.safety.service import (
     HazardService,
 )
-from app.modules.safety.service.hazard import (
-    _send_rectification_notification,
-    _send_verify_notification,
-)
+
+# 通知函数已断开，Bitable 为唯一数据源
 
 hazards_router = APIRouter()
 
@@ -378,11 +376,6 @@ async def run_hazard_ai(
         return ApiResponse(code=400, message="无法执行AI工作流，当前状态不允许或前置步骤未完成")
     await db.commit()
 
-    # AI 识别完成后异步通知责任人整改（与 Bitable 同步流程对齐：
-    # _create_hazard_from_bitable → AI 完成 → _send_rectification_notification）
-    if script_number == 1 and item and not item.ai_error_message:
-        asyncio.create_task(_send_rectification_notification(item))
-
     return ApiResponse(data=HazardReportResponse.model_validate(item))
 
 
@@ -430,14 +423,9 @@ async def notify_reviewer(
     if current_level is None:
         return ApiResponse(code=400, message="当前无需复核，无法发送通知")
 
-    level_labels = {1: "部门负责人", 2: "分管领导", 3: "检查人员"}
-
-    # 异步发送飞书通知，不阻塞响应
-    asyncio.create_task(_send_verify_notification(hazard, current_level))
-
     return ApiResponse(
-        message=f"已向{level_labels[current_level]}发送飞书通知",
-        data={"level": current_level, "level_label": level_labels[current_level]},
+        code=400,
+        message="通知管线已断开，Bitable 为唯一复核入口，请直接在多维表格中操作",
     )
 
 
@@ -490,12 +478,9 @@ async def notify_rectification(
     if not hazard:
         return ApiResponse(code=404, message="隐患不存在")
 
-    # 异步发送飞书通知，不阻塞响应
-    asyncio.create_task(_send_rectification_notification(hazard))
-
     return ApiResponse(
-        message="已向整改责任人发送飞书通知",
-        data={"target": hazard.rectification_responsible_person_name or "未知"},
+        code=400,
+        message="通知管线已断开，整改通知不再发送",
     )
 
 

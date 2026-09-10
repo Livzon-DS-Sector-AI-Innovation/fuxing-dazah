@@ -4,12 +4,14 @@ import logging
 import os
 import uuid
 from datetime import date, datetime
+from typing import Any
 
 from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
+from app.platform.integrations.ai.client import AIOutputError
 from app.modules.safety.models import (
     SafetyKnowledgeArticle,
 )
@@ -50,7 +52,7 @@ CATEGORY_PREFIX_MAP: dict[str, str] = {
 class KnowledgeService:
     """安全知识库业务服务"""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.repo = SafetyRepository(session)
 
@@ -97,6 +99,64 @@ class KnowledgeService:
         return await self.repo.get_knowledge_articles(
             skip, limit, category, status, keyword
         )
+
+    async def get_category_counts(self) -> dict[str, object]:
+        """统计全库知识库文档的完整计数（is_deleted=False）。
+
+        返回 {"total", "by_category", "by_status", "with_card", "with_attachment"}，
+        供前端侧边栏与页头统计使用，不受列表分页影响。
+        """
+        from sqlalchemy import func, select
+
+        base = SafetyKnowledgeArticle.is_deleted == False  # noqa: E712
+
+        # 分类分布
+        cat_stmt = (
+            select(SafetyKnowledgeArticle.category, func.count(SafetyKnowledgeArticle.id))
+            .where(base)
+            .group_by(SafetyKnowledgeArticle.category)
+        )
+        cat_rows = (await self.session.execute(cat_stmt)).all()
+        by_category: dict[str, int] = {}
+        for row in cat_rows:
+            cat = str(row[0] or "other")
+            by_category[cat] = int(row[1] or 0)
+
+        # 状态分布
+        status_stmt = (
+            select(SafetyKnowledgeArticle.status, func.count(SafetyKnowledgeArticle.id))
+            .where(base)
+            .group_by(SafetyKnowledgeArticle.status)
+        )
+        status_rows = (await self.session.execute(status_stmt)).all()
+        by_status: dict[str, int] = {}
+        for row in status_rows:
+            by_status[str(row[0] or "")] = int(row[1] or 0)
+
+        total = sum(by_category.values())
+
+        # 有知识卡片 / 有附件
+        card_count = await self.session.scalar(
+            select(func.count(SafetyKnowledgeArticle.id)).where(
+                base,
+                SafetyKnowledgeArticle.knowledge_card.isnot(None),
+            )
+        )
+        attachment_count = await self.session.scalar(
+            select(func.count(SafetyKnowledgeArticle.id)).where(
+                base,
+                SafetyKnowledgeArticle.attachment_original_name.isnot(None),
+                SafetyKnowledgeArticle.attachment_original_name != "",
+            )
+        )
+
+        return {
+            "total": total,
+            "by_category": by_category,
+            "by_status": by_status,
+            "with_card": int(card_count or 0),
+            "with_attachment": int(attachment_count or 0),
+        }
 
     async def get_article(self, article_id: uuid.UUID) -> SafetyKnowledgeArticle | None:
         """获取文章详情（浏览计数+1）"""
@@ -414,7 +474,7 @@ class KnowledgeService:
         self, article_ids: list[uuid.UUID]
     ) -> BatchGenerateCardsResponse:
         """批量生成知识卡片（顺序执行，单条失败不影响其他）。"""
-        results: list[dict] = []
+        results: list[dict[str, Any]] = []
         success_count = 0
         failed_count = 0
 
@@ -578,7 +638,7 @@ class KnowledgeService:
     def _build_pptx_file(
         title: str,
         subtitle: str,
-        slides: list[dict],
+        slides: list[dict[str, Any]],
         template: str,
         style: str,
     ) -> tuple[str, str]:
@@ -801,7 +861,7 @@ class KnowledgeService:
 3. **关键要点**：3-5 个最重要的规定或发现
 4. **适用范围**：适用于哪些场景/部门/人员
 
-请直接返回摘要文本（纯文本，不要 Markdown 标题），语言简洁专业。"""
+请以 JSON 格式返回：{{"summary": "150-300字结构化摘要（纯文本，不含 Markdown 标题）"}}，不要输出其他任何内容。"""
 
         from app.modules.safety.service.config import create_ai_service
 
@@ -812,11 +872,7 @@ class KnowledgeService:
                 expected_keys=["summary"],
             )
 
-            summary = parsed.get("summary", "")
-            if not summary:
-                # Fallback: treat entire response as summary
-                summary = parsed.get("_raw", "")[:500] if isinstance(parsed, dict) else str(parsed)[:500]
-
+            summary = (parsed.get("summary") or "").strip()
             if not summary:
                 return GenerateSummaryResponse(
                     summary="",
@@ -834,6 +890,18 @@ class KnowledgeService:
                 message="摘要生成成功，已保存到文档。",
             )
 
+        except AIOutputError as e:
+            logger.error("AI 摘要生成解析失败: %s", e)
+            return GenerateSummaryResponse(
+                summary="",
+                message="AI 摘要生成失败，请稍后重试。",
+            )
+        except Exception as e:
+            logger.exception("AI 摘要生成异常: %s", e)
+            return GenerateSummaryResponse(
+                summary="",
+                message="AI 摘要生成失败，请稍后重试。",
+            )
         finally:
             await ai_service.close()
 
@@ -1059,7 +1127,7 @@ class KnowledgeService:
         query: str,
         skip: int = 0,
         limit: int = 20,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """自然语言语义搜索知识库。
 
         流程：
@@ -1213,6 +1281,33 @@ class KnowledgeService:
                 },
             },
         ]
+
+        # ── 法规标准分家（2026-09-01）：安全/环保两表从 store 动态读 ──
+        # 字段/映射定义沿用上方「法规标准」模板，table_id 来自连接配置；
+        # 硬编码的 tbl85HKWCTfyf6rw 条目移除（由动态连接替代，避免重复同步）
+        from app.modules.safety.bitable_config.store import store as _bitable_store
+
+        law_table_template = tables.pop(1)  # 法规标准表模板（移除硬编码条目）
+        for kind, name in (
+            ("collection", "安全法规标准"),
+            ("collection_env", "环保法规标准"),
+        ):
+            conn = _bitable_store.get_connection("knowledge", kind)
+            if conn is None or conn.status == "disabled" or not conn.table_id:
+                continue
+            table_def = {**law_table_template}
+            table_def["table_id"] = conn.table_id
+            table_def["name"] = name
+            table_def["source"] = f"法规标准库-{name}"
+            # 环保表类别映射：环境类 → laws_regulations（安全表不含环境类记录）
+            if kind == "collection_env":
+                table_def["category_map"] = {
+                    **law_table_template["category_map"],
+                    "环境类": "laws_regulations",
+                    "三环境保护类": "laws_regulations",
+                }
+            tables.append(table_def)
+            print(f"sync_from_bitable: 加入法规表 {name} table_id={conn.table_id}")
 
         default_prefix: dict[str, str] = {
             "laws_regulations": "LAW",

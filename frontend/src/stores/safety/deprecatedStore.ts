@@ -3,9 +3,7 @@
 import { create } from 'zustand'
 import type { SafetyState } from './types'
 import {
-  initialCheckState,
   initialHazardState,
-  initialAccidentState,
   initialTrainingState,
   initialRegulationState,
   initialRevisionState,
@@ -13,19 +11,14 @@ import {
   initialPermitState,
   initialArticleState,
   initialSpecialOpReportState,
-  initialDailyRiskReportState,
   initialHazardIdentificationState,
   initialEhsChangeState,
   initialContractorState,
-  initialOhHazardMonitorState,
-  initialOhHealthExamState,
 } from './initialStates'
 
 export const useSafetyStore = create<SafetyState>((set) => ({
   // Initial states
-  ...initialCheckState,
   ...initialHazardState,
-  ...initialAccidentState,
   ...initialTrainingState,
   ...initialRegulationState,
   ...initialRevisionState,
@@ -33,35 +26,9 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   ...initialPermitState,
   ...initialArticleState,
   ...initialSpecialOpReportState,
-  ...initialDailyRiskReportState,
   ...initialHazardIdentificationState,
   ...initialEhsChangeState,
   ...initialContractorState,
-  ...initialOhHazardMonitorState,
-  ...initialOhHealthExamState,
-
-  // ============ Check Actions ============
-  setChecks: (checks) => set({ checks }),
-  setCurrentCheck: (check) => set({ currentCheck: check }),
-  setCheckQueryParams: (params) =>
-    set((state) => ({ checkQueryParams: { ...state.checkQueryParams, ...params } })),
-  setCheckTotal: (total) => set({ checkTotal: total }),
-  setCheckLoading: (loading) => set({ checkLoading: loading }),
-
-  addCheck: (check) =>
-    set((state) => ({ checks: [check, ...state.checks] })),
-
-  updateCheck: (id, updates) =>
-    set((state) => ({
-      checks: state.checks.map((c) => (c.id === id ? { ...c, ...updates } : c)),
-      currentCheck: state.currentCheck?.id === id ? { ...state.currentCheck, ...updates } : state.currentCheck,
-    })),
-
-  removeCheck: (id) =>
-    set((state) => ({
-      checks: state.checks.filter((c) => c.id !== id),
-      currentCheck: state.currentCheck?.id === id ? null : state.currentCheck,
-    })),
 
   // ============ Hazard Actions ============
   setHazards: (hazards) => set({ hazards }),
@@ -84,29 +51,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
     set((state) => ({
       hazards: state.hazards.filter((h) => h.id !== id),
       currentHazard: state.currentHazard?.id === id ? null : state.currentHazard,
-    })),
-
-  // ============ Accident Actions ============
-  setAccidents: (accidents) => set({ accidents }),
-  setCurrentAccident: (accident) => set({ currentAccident: accident }),
-  setAccidentQueryParams: (params) =>
-    set((state) => ({ accidentQueryParams: { ...state.accidentQueryParams, ...params } })),
-  setAccidentTotal: (total) => set({ accidentTotal: total }),
-  setAccidentLoading: (loading) => set({ accidentLoading: loading }),
-
-  addAccident: (accident) =>
-    set((state) => ({ accidents: [accident, ...state.accidents] })),
-
-  updateAccident: (id, updates) =>
-    set((state) => ({
-      accidents: state.accidents.map((a) => (a.id === id ? { ...a, ...updates } : a)),
-      currentAccident: state.currentAccident?.id === id ? { ...state.currentAccident, ...updates } : state.currentAccident,
-    })),
-
-  removeAccident: (id) =>
-    set((state) => ({
-      accidents: state.accidents.filter((a) => a.id !== id),
-      currentAccident: state.currentAccident?.id === id ? null : state.currentAccident,
     })),
 
   // ============ Training Actions ============
@@ -275,27 +219,6 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       currentSpecialOpReport: state.currentSpecialOpReport?.id === id ? null : state.currentSpecialOpReport,
     })),
 
-  // ============ Daily Risk Report Actions ============
-  setDailyRiskReports: (reports) => set({ dailyRiskReports: reports }),
-  setCurrentDailyRiskReport: (r) => set({ currentDailyRiskReport: r }),
-  setDailyRiskReportQueryParams: (params) =>
-    set((state) => ({ dailyRiskReportQueryParams: { ...state.dailyRiskReportQueryParams, ...params } })),
-  setDailyRiskReportTotal: (total) => set({ dailyRiskReportTotal: total }),
-  setDailyRiskReportLoading: (loading) => set({ dailyRiskReportLoading: loading }),
-
-  addDailyRiskReport: (r) =>
-    set((state) => ({ dailyRiskReports: [r, ...state.dailyRiskReports] })),
-  updateDailyRiskReport: (id, updates) =>
-    set((state) => ({
-      dailyRiskReports: state.dailyRiskReports.map((r) => (r.id === id ? { ...r, ...updates } : r)),
-      currentDailyRiskReport: state.currentDailyRiskReport?.id === id ? { ...state.currentDailyRiskReport, ...updates } : state.currentDailyRiskReport,
-    })),
-  removeDailyRiskReport: (id) =>
-    set((state) => ({
-      dailyRiskReports: state.dailyRiskReports.filter((r) => r.id !== id),
-      currentDailyRiskReport: state.currentDailyRiskReport?.id === id ? null : state.currentDailyRiskReport,
-    })),
-
   // ============ HazardIdentification Actions ============
   setHazardIdentifications: (items, total) =>
     set({ hazardIdentifications: items, hazardIdentificationTotal: total ?? items.length }),
@@ -366,50 +289,8 @@ export const useSafetyStore = create<SafetyState>((set) => ({
     })),
   setContractorWorkRecords: (records) => set({ contractorWorkRecords: records }),
 
-  // ============ OH Hazard Monitor Actions ============
-  setOhHazardMonitors: (items) => set({ ohHazardMonitors: items }),
-  setCurrentOhHazardMonitor: (item) => set({ currentOhHazardMonitor: item }),
-  setOhHazardMonitorQueryParams: (params) =>
-    set((state) => ({ ohHazardMonitorQueryParams: { ...state.ohHazardMonitorQueryParams, ...params } })),
-  setOhHazardMonitorTotal: (total) => set({ ohHazardMonitorTotal: total }),
-  setOhHazardMonitorLoading: (loading) => set({ ohHazardMonitorLoading: loading }),
-  addOhHazardMonitor: (item) =>
-    set((state) => ({ ohHazardMonitors: [item, ...state.ohHazardMonitors] })),
-  updateOhHazardMonitor: (id, data) =>
-    set((state) => ({
-      ohHazardMonitors: state.ohHazardMonitors.map((m) => (m.id === id ? { ...m, ...data } : m)),
-      currentOhHazardMonitor: state.currentOhHazardMonitor?.id === id ? { ...state.currentOhHazardMonitor, ...data } : state.currentOhHazardMonitor,
-    })),
-  removeOhHazardMonitor: (id) =>
-    set((state) => ({
-      ohHazardMonitors: state.ohHazardMonitors.filter((m) => m.id !== id),
-      currentOhHazardMonitor: state.currentOhHazardMonitor?.id === id ? null : state.currentOhHazardMonitor,
-    })),
-
-  // ============ OH Health Exam Actions ============
-  setOhHealthExams: (items) => set({ ohHealthExams: items }),
-  setCurrentOhHealthExam: (item) => set({ currentOhHealthExam: item }),
-  setOhHealthExamQueryParams: (params) =>
-    set((state) => ({ ohHealthExamQueryParams: { ...state.ohHealthExamQueryParams, ...params } })),
-  setOhHealthExamTotal: (total) => set({ ohHealthExamTotal: total }),
-  setOhHealthExamLoading: (loading) => set({ ohHealthExamLoading: loading }),
-  addOhHealthExam: (item) =>
-    set((state) => ({ ohHealthExams: [item, ...state.ohHealthExams] })),
-  updateOhHealthExam: (id, data) =>
-    set((state) => ({
-      ohHealthExams: state.ohHealthExams.map((e) => (e.id === id ? { ...e, ...data } : e)),
-      currentOhHealthExam: state.currentOhHealthExam?.id === id ? { ...state.currentOhHealthExam, ...data } : state.currentOhHealthExam,
-    })),
-  removeOhHealthExam: (id) =>
-    set((state) => ({
-      ohHealthExams: state.ohHealthExams.filter((e) => e.id !== id),
-      currentOhHealthExam: state.currentOhHealthExam?.id === id ? null : state.currentOhHealthExam,
-    })),
-
   // ============ Reset Actions ============
-  resetCheckState: () => set(initialCheckState),
   resetHazardState: () => set(initialHazardState),
-  resetAccidentState: () => set(initialAccidentState),
   resetTrainingState: () => set(initialTrainingState),
   resetRegulationState: () => set(initialRegulationState),
   resetRevisionState: () => set(initialRevisionState),
@@ -417,18 +298,13 @@ export const useSafetyStore = create<SafetyState>((set) => ({
   resetPermitState: () => set(initialPermitState),
   resetArticleState: () => set(initialArticleState),
   resetSpecialOpReportState: () => set(initialSpecialOpReportState),
-  resetDailyRiskReportState: () => set(initialDailyRiskReportState),
   resetEhsChangeState: () => set(initialEhsChangeState),
   resetContractorState: () => set(initialContractorState),
   resetHazardIdentificationState: () => set(initialHazardIdentificationState),
-  resetOhHazardMonitorState: () => set(initialOhHazardMonitorState),
-  resetOhHealthExamState: () => set(initialOhHealthExamState),
 
   resetAll: () =>
     set({
-      ...initialCheckState,
       ...initialHazardState,
-      ...initialAccidentState,
       ...initialTrainingState,
       ...initialRegulationState,
       ...initialRevisionState,
@@ -436,11 +312,8 @@ export const useSafetyStore = create<SafetyState>((set) => ({
       ...initialPermitState,
       ...initialArticleState,
       ...initialSpecialOpReportState,
-      ...initialDailyRiskReportState,
       ...initialHazardIdentificationState,
       ...initialEhsChangeState,
       ...initialContractorState,
-      ...initialOhHazardMonitorState,
-      ...initialOhHealthExamState,
     }),
 }))

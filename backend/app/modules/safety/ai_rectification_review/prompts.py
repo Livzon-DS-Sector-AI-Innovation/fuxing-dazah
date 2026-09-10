@@ -34,7 +34,7 @@ WORK_RULES = """## 工作规则
 ⚠️ **首要原则**：本次审核的核心问题是——**该隐患是否已被有效消除？**
 你的任务不是检查整改回复是否符合文档规范（量化标准/时间节点/责任主体等），而是判断隐患是否得到了实质性解决。
 
-上方的「法规知识库」提供了相关法规标准原文摘要，用于辅助判断整改措施是否满足安全底线要求。
+若上方提供了「法规知识库」片段，其内容用于辅助判断整改措施是否满足安全底线要求；未提供知识库时，依据你的专业知识判断。
 
 ### 0. 缺陷实质重评估（v2 — 基于回复反推缺陷是否实质）
 
@@ -100,15 +100,15 @@ WORK_RULES = """## 工作规则
 检查整改措施是否满足法规知识库中的安全底线要求。
 
 **评估方式**：
-1. **查阅知识库**：根据隐患类型查找知识库中的相关标准条文
+1. **查阅知识库**（若提供）：根据隐患类型查找知识库中的相关标准条文；若知识库未提供，则依据专业法规知识判断
 2. **逐条比对**：整改措施是否满足标准中的安全底线要求？
-3. **引用原文**：合规或不合规的判断应引用知识库中的具体条文
+3. **引用原文**：合规或不合规的判断应引用知识库中的具体条文（仅当知识库确实包含该条文时才可引用）
 
 **判定标准**：
 - **合规** → `compliant`：整改措施满足相关标准的安全底线要求
 - **基本合规** → `basically_compliant`：满足主要安全要求，存在轻微偏差但不构成新的安全风险
 - **不合规** → `non_compliant`：违反标准中的安全底线要求，或标准明确禁止的做法未被纠正
-- **知识库无相关条款** → 注明"知识库中无相关条款"，并将 compliance_level 设为 `basically_compliant`
+- **知识库无相关条款**（未提供或未命中）→ 注明"知识库中无相关条款"，并将 compliance_level 设为 `basically_compliant`
 
 > ⚠️ 注意：标准合规是参考维度，不是否决维度。仅当不合规直接意味着隐患未被有效消除或产生了新的安全风险时，才影响最终判定。轻微的标准偏差不应成为不通过的理由。
 
@@ -146,11 +146,11 @@ WORK_RULES = """## 工作规则
 CRITICAL_CONSTRAINTS = """## ⚠️ 关键约束
 
 1. **所有判断必须基于图片对比和文本分析**，不得凭空臆断。图片比对必须具体描述比对发现（修复痕迹、遗留问题等具体细节）
-2. **标准合规引用必须来自「法规知识库」中实际存在的条文**，格式为 `[法规/标准名称]第X条：'条文内容'`。若知识库中无对应条文，注明"知识库中无相关条款"
+2. **标准合规引用**：若提供了法规知识库，引用必须来自其中实际存在的条文，格式为 `法规/标准名称第X章/条:条文内容`（如 `GB 3836.1-2010第15章:引入口使用与防爆型式相适应的堵头封堵`）；知识库未提供或未命中时，写明"知识库中无相关条款"，**不得编造条文**
 3. **无整改后图片时 photo_match_level 必须设为 no_photos**。此时需根据文字描述的质量判断：描述具体可信 → 仍可通过；描述笼统空泛 → 不通过
 4. **实效优先于形式**：不因缺少量化标准、时间节点、责任主体等形式要素而判定整改不合格。只要措施逻辑上能消除隐患，即应认可
 5. **不得以"建议"等模糊词语代替明确结论** — review_conclusion 必须是明确的 通过 / 不通过 / 无需整改
-6. **知识库内容优先于你自己的知识**：即使你认为知识库内容不完整或与你的理解不同，也必须以知识库内容为准"""
+6. **知识库内容优先于你自己的知识**（仅当提供了知识库时）：即使你认为知识库内容不完整或与你的理解不同，也必须以知识库内容为准"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -171,7 +171,7 @@ OUTPUT_FORMAT = """## 输出格式
   "standard_compliance": "标准合规评估（≥30字）：引用法规知识库中的具体条文。若缺陷重评估为非实质，可注明'缺陷非实质，标准合规不适用'",
   "standard_compliance_level": "compliant | basically_compliant | non_compliant",
   "review_conclusion": "通过 | 不通过 | 无需整改",
-  "review_comments": "通过 | 不通过 | 无需整改"
+  "review_comments": "审核意见（自由文本，1-3句）：指出具体问题或说明整改情况，供人工复核参考"
 }"""
 
 
@@ -226,7 +226,7 @@ VISION_PROMPT_TEMPLATE = """请仔细观察以下现场拍摄的图片，进行�
 
 FEWSHOT_MARKER = """## 参考示例
 
-以下为同类型化工企业的标准审核案例，供你参考审核风格和粒度（判定结果为"通过"或"不通过"）："""
+以下为同类型化工企业的标准审核案例，供你参考审核风格和粒度（判定结果为"通过"、"不通过"或"无需整改"）："""
 
 FEWSHOT_EXAMPLES = [
     # 示例1：图片匹配 + 措施完善 → 通过
@@ -239,9 +239,7 @@ FEWSHOT_EXAMPLES = [
             "hazard_category": "instrument_electrical",
             "hazard_level": "major",
             "ai_rectification_suggestion": {
-                "immediate": "立即停止该防爆电箱的供电，断开上级电源开关，并在电箱周围设置临时警示标识防止人员误操作",
-                "short_term": "由持证电工对该电箱未封堵的引入口加装符合GB 3836.1-2010标准的防爆堵头，使用防爆吸尘器清理箱内积尘",
-                "long_term": "修订《防爆电气设备巡检规程》，将防爆电箱引入口封堵状态纳入每周专项检查项"
+                "raw": "【整改措施】立即停止该防爆电箱的供电，断开上级电源开关，并在电箱周围设置临时警示标识防止人员误操作；由持证电工对该电箱未封堵的引入口加装符合GB 3836.1-2010标准的防爆堵头，使用防爆吸尘器清理箱内积尘。【预防措施】修订《防爆电气设备巡检规程》，将防爆电箱引入口封堵状态纳入每周专项检查项"
             },
             "rectification_reply": "已完成整改：1. 由持证电工张工在防爆电箱备用引入口加装GB 3836.1-2010标准防爆堵头（型号M25×1.5），使用密封胶固定，扭矩12N·m；2. 使用防爆吸尘器清理箱内积尘，目视检查箱内无灰尘残留；3. 已修订《防爆电气设备巡检规程》（编号SOP-EE-042），新增第8条'防爆电箱引入口封堵状态每周检查'项，从下周一（7月1日）起执行。附整改后照片。"
         },
@@ -253,7 +251,7 @@ FEWSHOT_EXAMPLES = [
             "standard_compliance": "对照法规知识库，整改措施满足以下标准：（1）GB 3836.1-2010第15章：引入口使用与防爆型式相适应的堵头封堵——已加装GB 3836.1标准堵头；（2）GB 50016-2014第10.2.4条：爆炸危险环境内的电气设备应采取防爆措施——电箱防爆完整性已恢复。整改措施符合相关标准要求。",
             "standard_compliance_level": "compliant",
             "review_conclusion": "通过",
-            "review_comments": "通过"
+            "review_comments": "整改后照片显示引入口已安装防爆堵头、箱内积尘已清理，措施具体且针对根因，同意通过。"
         }
     },
     # 示例2：无照片 + 措施空泛 → 不通过
@@ -266,9 +264,7 @@ FEWSHOT_EXAMPLES = [
             "hazard_category": "emergency_mgmt",
             "hazard_level": "serious",
             "ai_rectification_suggestion": {
-                "immediate": "立即将30袋物料转移至指定暂存区，清理通道确保净宽≥1.4m且指示灯无遮挡",
-                "short_term": "24小时内在通道两侧施划黄色禁停标线，张贴'消防通道 禁止堆放'反光警示标识",
-                "long_term": "修订《车间定置管理与消防通道管理规定》，安全员每月专项检查并拍照留档，纳入安全绩效考核"
+                "raw": "【整改措施】立即将30袋物料转移至指定暂存区，清理通道确保净宽≥1.4m且指示灯无遮挡；24小时内在通道两侧施划黄色禁停标线，张贴'消防通道 禁止堆放'反光警示标识。【预防措施】修订《车间定置管理与消防通道管理规定》，安全员每月专项检查并拍照留档，纳入安全绩效考核"
             },
             "rectification_reply": "已通知相关人员注意消防通道不要堆放物料，今后加强管理。"
         },
@@ -280,7 +276,7 @@ FEWSHOT_EXAMPLES = [
             "standard_compliance": "对照法规知识库：（1）GB 50016-2014第7.3.1条要求疏散通道净宽不应小于1.1m——整改回复未说明通道宽度是否已达标；（2）《安全生产法》第四十二条要求保持疏散通道畅通、标志明显——整改回复未说明指示灯是否已无遮挡。整改回复完全无法证明符合任何标准要求。",
             "standard_compliance_level": "non_compliant",
             "review_conclusion": "不通过",
-            "review_comments": "不通过"
+            "review_comments": "回复仅有'通知相关人员注意'和'加强管理'等空泛表述，未说明物料是否转移、通道净宽及指示灯遮挡是否恢复，无法证明隐患已消除。"
         }
     },
     # 示例3：无照片 + 措施可信 → 通过（无照片不应单独导致不通过）
@@ -293,9 +289,7 @@ FEWSHOT_EXAMPLES = [
             "hazard_category": "violation_operation",
             "hazard_level": "serious",
             "ai_rectification_suggestion": {
-                "immediate": "立即停止该作业人员的高处作业，将其撤离至安全地面；由安全员现场监督其正确佩戴全身式安全带（符合GB 6095标准）",
-                "short_term": "当日内对当班全体高处作业人员进行安全带正确佩戴和挂点选择的专项实操培训",
-                "long_term": "在车间所有高处作业区域统一设置固定式安全绳挂点装置，修订《高处作业安全管理规定》"
+                "raw": "【整改措施】立即停止该作业人员的高处作业，将其撤离至安全地面；由安全员现场监督其正确佩戴全身式安全带（符合GB 6095标准）。【预防措施】当日内对当班全体高处作业人员进行安全带正确佩戴和挂点选择的专项实操培训；在车间所有高处作业区域统一设置固定式安全绳挂点装置，修订《高处作业安全管理规定》"
             },
             "rectification_reply": "已立即叫停该作业人员的高处作业，现场监督其正确佩戴了全身式安全带（品牌3M，型号Protecta），确认安全带挂钩固定在钢结构承重锚点（承载力≥15kN）。当日下班前已完成全体高处作业人员（共8人）的安全带佩戴+挂点选择实操培训并全员考核合格。关于安全绳挂点装置，已向设备部提交安装申请单（编号REQ-2026-015），预计下周完成安装。因整改当时匆忙未拍摄照片，但以上操作均有当班记录和培训签到表可查。"
         },
@@ -307,7 +301,7 @@ FEWSHOT_EXAMPLES = [
             "standard_compliance": "对照法规知识库：（1）GB 30871-2022第5.2条要求高处作业人员正确佩戴安全带——已通过培训和监督佩戴满足；（2）《安全生产法》第四十五条要求提供合格劳动防护用品——已确认使用GB 6095标准安全带。安全绳挂点装置待安装完成后可进一步确认。",
             "standard_compliance_level": "basically_compliant",
             "review_conclusion": "通过",
-            "review_comments": "通过"
+            "review_comments": "文字描述具体可信（安全带品牌型号、锚点承载力、8人培训记录），措施能消除高处坠落风险；安全绳挂点装置建议人工复核落地进度。"
         }
     },
     # 示例4：部分匹配 + 措施基本合理但缺长期预防 → 通过（附人工复核关注点）
@@ -320,9 +314,7 @@ FEWSHOT_EXAMPLES = [
             "hazard_category": "special_operation",
             "hazard_level": "general",
             "ai_rectification_suggestion": {
-                "immediate": "立即暂停该动火作业，撤走动火器具并清理动火点周围可燃物",
-                "short_term": "要求现场监护人和动火负责人到场在作业票上补签确认，对照GB 30871-2022逐项重新核查安全措施落实情况",
-                "long_term": "建立特殊作业票证三级审核制度，每周对已归档票证按10%比例随机抽查，检查结果纳入月度安全绩效考核"
+                "raw": "【整改措施】立即暂停该动火作业，撤走动火器具并清理动火点周围可燃物；要求现场监护人和动火负责人到场在作业票上补签确认，对照GB 30871-2022逐项重新核查安全措施落实情况。【预防措施】建立特殊作业票证三级审核制度，每周对已归档票证按10%比例随机抽查，检查结果纳入月度安全绩效考核"
             },
             "rectification_reply": "已立即暂停动火作业并撤走动火器具。现场监护人李工和动火负责人王工已到场在作业票上补签确认（附补签后票证照片），对照GB 30871-2022逐项核查了安全措施：动火点10m内可燃物已清理、灭火器2具就位、可燃气体检测浓度0%（LEL）、防火毯铺设到位。已对两名责任人进行了口头警告教育。"
         },
@@ -336,7 +328,7 @@ FEWSHOT_EXAMPLES = [
             "defect_reassessment": "缺陷为动火作业票签章缺失，属于实质性安全管理缺陷——签章空白直接导致无监管动火，存在现实的火灾/爆炸风险。整改回复描述了具体的补签、核查和清理动作，缺陷属于实质性安全风险，已有效整改",
             "defect_reassessment_level": "substantive",
             "review_conclusion": "通过",
-            "review_comments": "通过"
+            "review_comments": "票证补签照片与核查记录对应，措施已落实；口头警告教育约束力偏弱，建议人工确认长期预防机制是否建立。"
         }
     },
     # 示例5：缺陷非实质（文档放置不当）— 无需整改（v2 新增）
@@ -349,8 +341,7 @@ FEWSHOT_EXAMPLES = [
             "hazard_category": "documentation",
             "hazard_level": "general",
             "ai_rectification_suggestion": {
-                "corrective": "立即停止使用该打印版操作规程...",
-                "preventive": "修订《安全生产管理制度》中关于操作规程管理章节..."
+                "raw": "【整改措施】立即停止使用该打印版操作规程...【预防措施】修订《安全生产管理制度》中关于操作规程管理章节..."
             },
             "rectification_reply": "新员工阅读后未及时放回原处，已要求就近阅读，及时归位",
             "defect_substance": "procedural",
@@ -366,7 +357,7 @@ FEWSHOT_EXAMPLES = [
             "standard_compliance": "缺陷非实质，GB/T 13861-2022 文档管理条款针对的是文档内容缺失/过期等实质缺陷。本缺陷为文件放置不当，标准合规维度不适用",
             "standard_compliance_level": "basically_compliant",
             "review_conclusion": "无需整改",
-            "review_comments": "无需整改"
+            "review_comments": "回复解释了原委（新员工未归位的收纳问题，正式版规程实际存在），缺陷非实质，无需整改，建议人工现场确认闭环。"
         }
     }
 ]
@@ -384,8 +375,16 @@ def build_context_text(
     hazard_level: str | None = None,
     department: str | None = None,
     ai_rectification_suggestion: dict | None = None,
+    defect_substance: str | None = None,
+    defect_substance_reasoning: str | None = None,
 ) -> str:
-    """构建原始隐患上下文文本（纯文本模式）。"""
+    """构建原始隐患上下文文本（纯文本模式）。
+
+    ai_rectification_suggestion 兼容两种结构：
+    - {"raw": "【整改措施】...【预防措施】..."}（隐患识别阶段原始文本，实际输入）
+    - {"immediate"/"short_term"/"long_term": ...} 或 {"corrective"/"preventive": ...}
+      （结构化三层/两层结构，示例数据）
+    """
 
     lines = ["### 原始隐患描述"]
     lines.append(f"隐患描述：{original_description}")
@@ -403,18 +402,36 @@ def build_context_text(
         lines.append("### AI 识别的关键缺陷")
         lines.append(key_defect)
 
+    # AI 识别阶段的缺陷实质判定（可能为空则跳过该行）
+    if defect_substance:
+        lines.append("")
+        lines.append("### AI 识别阶段判定")
+        lines.append(f"缺陷实质={defect_substance}")
+        if defect_substance_reasoning:
+            lines.append(f"理由={defect_substance_reasoning}")
+
     if ai_rectification_suggestion:
         lines.append("")
         lines.append("### AI 生成的整改建议（需逐一检查是否覆盖）")
-        immediate = ai_rectification_suggestion.get("immediate", "")
-        short_term = ai_rectification_suggestion.get("short_term", "")
-        long_term = ai_rectification_suggestion.get("long_term", "")
-        if immediate:
-            lines.append(f"- 立即措施：{immediate}")
-        if short_term:
-            lines.append(f"- 短期整改：{short_term}")
-        if long_term:
-            lines.append(f"- 长期预防：{long_term}")
+        # 兼容原始文本结构（真实输入：{"raw": "【整改措施】...【预防措施】..."}）
+        if ai_rectification_suggestion.get("raw"):
+            lines.append(ai_rectification_suggestion["raw"])
+        else:
+            immediate = ai_rectification_suggestion.get("immediate", "")
+            short_term = ai_rectification_suggestion.get("short_term", "")
+            long_term = ai_rectification_suggestion.get("long_term", "")
+            corrective = ai_rectification_suggestion.get("corrective", "")
+            preventive = ai_rectification_suggestion.get("preventive", "")
+            if immediate:
+                lines.append(f"- 立即措施：{immediate}")
+            if short_term:
+                lines.append(f"- 短期整改：{short_term}")
+            if long_term:
+                lines.append(f"- 长期预防：{long_term}")
+            if corrective:
+                lines.append(f"- 纠正措施：{corrective}")
+            if preventive:
+                lines.append(f"- 预防措施：{preventive}")
 
     return "\n".join(lines)
 

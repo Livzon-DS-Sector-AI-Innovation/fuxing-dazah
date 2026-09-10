@@ -24,7 +24,7 @@ WORK_RULES = f"""## 工作规则
 ⚠️ **核心原则**：
 1. **仅评价已明确采纳、可执行的建议措施落地后的效果**
 2. 不得假设未确认、不可执行的措施已落地
-3. 措施后风险通常不应高于残余风险
+3. 措施后风险不得高于残余风险（也不得高于固有风险）
 
 ### 1. 评价范围
 - 评价对象：现有控制措施 + 已采纳建议措施 **共同作用**后的最终风险
@@ -74,7 +74,16 @@ WORK_RULES = f"""## 工作规则
 
 ### 6. 风险等级判定
 
-{RISK_LEVEL_TABLE}"""
+{RISK_LEVEL_TABLE}
+
+### 7. 质量约束（依据标准文件）
+- 仅将「建议措施（人工）」和「建议措施内容（人工）」中明确采纳、明确实施的措施纳入评价
+- 若人工填写内容无法判断建议措施是否真正实施、生效、覆盖当前危险源，则相关字段填 null（表示「待人工确认」）
+- 措施后风险不得高于原残余风险（也不得高于固有风险）；若 AI 认为两者应相等或接近，直接采用与残余风险相同的 D/L/E/C 值
+- 风险下降幅度应与建议措施的类型、针对性、实施深度、可执行性相匹配，不得无依据大幅下降
+- 每个评分结果均应能够从人工填写的建议措施、附件文本或知识库中找到依据；无依据内容对应字段填 null
+- 若 L、E、C 任一字段依据不足（null），则风险值 D 和措施后风险等级也必须填 null（待人工确认）
+- 输出必须与当前危险源直接对应，内容应结构化、可追溯、可审核"""
 
 OUTPUT_FORMAT = """## 输出格式
 
@@ -88,6 +97,18 @@ OUTPUT_FORMAT = """## 输出格式
     "d_value": L×E×C 的计算结果,
     "risk_level": "level_1 / level_2 / level_3 / level_4",
     "risk_label": "一级/重大风险 / 二级/较大风险 / 三级/一般风险 / 四级/低风险"
+  }
+}
+
+若信息不足无法评分，对应字段填 null（表示「待人工确认」）：
+{
+  "lec": {
+    "l_value": null,
+    "e_value": null,
+    "c_value": null,
+    "d_value": null,
+    "risk_level": null,
+    "risk_label": null
   }
 }"""
 
@@ -103,7 +124,7 @@ FEWSHOT_EXAMPLES = [
                 "2. pH计增设自动加酸定量控制系统\n"
                 "3. 增设HCl气体检测报警器"
             ),
-            "recommendation_type": "工程控制",
+            "recommendation_type": "工程技术",
         },
         "output": {
             "lec": {
@@ -127,12 +148,7 @@ def build_prompt(context_text: str, knowledge_context: str | None = None) -> str
 
     sections.append(WORK_RULES)
 
-    ref_docs = ""
-    if knowledge_context:
-        ref_docs += knowledge_context + "\n\n"
-    ref_docs += "## LEC 评分标准（系统内置）\n" + LEC_SCORING_GUIDE
-    ref_docs += "\n## 风险等级表（系统内置）\n" + RISK_LEVEL_TABLE
-    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + ref_docs)
+    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + (knowledge_context or ""))
 
     sections.append(OUTPUT_FORMAT)
 
@@ -144,7 +160,7 @@ def get_db_seed_config() -> dict:
     return {
         "script_number": 7,
         "script_name": "措施后风险LEC评价",
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-v4-flash-vision-exp",
         "temperature": 0.05,
         "max_tokens": 4096,
         "system_role": SYSTEM_ROLE,

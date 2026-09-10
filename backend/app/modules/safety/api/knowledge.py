@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
-from app.core.response import ApiResponse
 from app.core.storage import is_enabled as minio_enabled
 from app.core.storage import upload_object
 from app.modules.safety.schemas import (
@@ -23,6 +22,7 @@ from app.modules.safety.schemas import (
 from app.modules.safety.service import (
     KnowledgeService,
 )
+from app.shared.schemas import ApiResponse
 
 knowledge_router = APIRouter()
 
@@ -36,7 +36,7 @@ async def get_knowledge_articles(
     keyword: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取安全知识库文章列表"""
     service = KnowledgeService(db)
     skip = (page - 1) * page_size
@@ -47,12 +47,23 @@ async def get_knowledge_articles(
     )
 
 
+@knowledge_router.get("/knowledge-articles/category-counts", response_model=ApiResponse, summary="知识库分类计数（全库）")
+async def get_knowledge_category_counts(
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> ApiResponse:
+    """返回全库各 category 的文档计数与总数（供侧边栏展示，不受列表分页影响）。"""
+    service = KnowledgeService(db)
+    counts = await service.get_category_counts()
+    return ApiResponse(data=counts)
+
+
 @knowledge_router.post("/knowledge-articles", response_model=ApiResponse, summary="创建安全知识库文章")
 async def create_knowledge_article(
     data: SafetyKnowledgeArticleCreate,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """创建安全知识库文章"""
     service = KnowledgeService(db)
     item = await service.create_article(data)
@@ -65,7 +76,7 @@ async def get_knowledge_article(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取安全知识库文章详情"""
     service = KnowledgeService(db)
     item = await service.get_article(article_id)
@@ -80,7 +91,7 @@ async def update_knowledge_article(
     data: SafetyKnowledgeArticleUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """更新安全知识库文章"""
     service = KnowledgeService(db)
     item = await service.update_article(article_id, data)
@@ -95,7 +106,7 @@ async def delete_knowledge_article(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """删除安全知识库文章"""
     service = KnowledgeService(db)
     result = await service.delete_article(article_id)
@@ -110,7 +121,7 @@ async def publish_knowledge_article(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """发布文章（草稿→已发布）"""
     service = KnowledgeService(db)
     item = await service.publish_article(article_id)
@@ -125,7 +136,7 @@ async def archive_knowledge_article(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """归档文章（已发布→已归档）"""
     service = KnowledgeService(db)
     item = await service.archive_article(article_id)
@@ -141,7 +152,7 @@ async def upload_knowledge_article_attachment(
     file: UploadFile,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """上传知识库文章附件"""
 
     file_ext = os.path.splitext(file.filename or ".bin")[1]
@@ -183,7 +194,7 @@ async def parse_knowledge_document(
     file: UploadFile,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """上传文档文件，AI 自动解析提取元数据（不存库）"""
     allowed_exts = {".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".md"}
     file_ext = os.path.splitext(file.filename or ".txt")[1].lower()
@@ -208,7 +219,7 @@ async def batch_parse_knowledge_documents(
     files: list[UploadFile],
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """批量上传文档文件，AI 解析元数据（不存库）"""
     service = KnowledgeService(db)
     results = await service.batch_parse_documents(files)
@@ -226,7 +237,7 @@ async def check_duplicate_article(
     data: DuplicateCheckRequest,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """检测知识库中是否已有相似文档"""
     service = KnowledgeService(db)
     result = await service.check_duplicate(data.title, data.content)
@@ -241,7 +252,7 @@ async def get_article_version_chain(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取文档的完整版本链（从旧到新排列）"""
     service = KnowledgeService(db)
     chain = await service.get_version_chain(article_id)
@@ -255,7 +266,7 @@ async def create_new_article_version(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """基于现有文档创建新版本（自动复制基本信息，旧版标记为被替代）"""
     service = KnowledgeService(db)
     new_article, version_chain = await service.create_new_version(article_id)
@@ -276,7 +287,7 @@ async def generate_knowledge_card(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """从文档全文 AI 生成 6 维度结构化知识卡片，用于 Agent 知识注入。"""
     service = KnowledgeService(db)
     result = await service.generate_knowledge_card(article_id)
@@ -291,7 +302,7 @@ async def get_agent_usage_stats(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取该文档知识卡片被各 Agent 注入的使用频次统计。"""
     service = KnowledgeService(db)
     result = await service.get_agent_usage_stats(article_id)
@@ -305,7 +316,7 @@ async def batch_generate_knowledge_cards(
     data: BatchGenerateCardsRequest,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """批量对多个文档 AI 生成知识卡片（顺序执行，单条失败不影响其他）。"""
     service = KnowledgeService(db)
     result = await service.batch_generate_cards(data.article_ids)
@@ -322,7 +333,7 @@ async def generate_ppt(
     data: GeneratePptRequest | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """从文档全文 AI 生成培训 PPT（.pptx 文件），返回下载 URL。"""
     service = KnowledgeService(db)
     template = data.template if data else "training"
@@ -338,7 +349,7 @@ async def get_ppt_history(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取文档的 PPT 生成历史记录列表。"""
     service = KnowledgeService(db)
     result = await service.get_ppt_history(article_id)
@@ -353,7 +364,7 @@ async def generate_summary(
     article_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """从文档全文 AI 生成结构化摘要并保存。"""
     service = KnowledgeService(db)
     result = await service.generate_summary(article_id)
@@ -373,7 +384,7 @@ async def semantic_search_articles(
     page_size: int = Query(20, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """用自然语言搜索知识库文档（AI 解析查询意图 + 关键词匹配）"""
     service = KnowledgeService(db)
     skip = (page - 1) * page_size
@@ -391,7 +402,7 @@ async def semantic_search_articles(
 async def sync_knowledge_from_bitable(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """从飞书多维表格全量同步知识库文档（安全管理制度 + 法规标准 + 设备说明书）。
 
     以 Bitable 为数据源，三阶段同步：

@@ -32,11 +32,25 @@ from app.modules.safety.ai_hazard_identification.script2_hazard_id.schemas impor
 logger = logging.getLogger(__name__)
 
 
+def _coerce_str(value: Any, default: str) -> str:
+    """AI 返回值 → 字符串：list（多选）按「、」拼接，其余原样。
+
+    Bitable「危险类型（AI）」为多选字段，AI 可能直接返回 list，
+    此处统一拼成「、」连接的字符串，与规则引擎和回写逻辑对齐。
+    """
+    if isinstance(value, list):
+        joined = "、".join(str(v) for v in value if str(v).strip())
+        return joined if joined else default
+    if value is None:
+        return default
+    return str(value)
+
+
 class HazardIdentifier(BasePlugin[HazardIdInput, HazardIdOutput]):
     """脚本2: AI 危险源辨识 Plugin。
 
     从人机料法环五维度系统辨识：
-    - hazard_type: 危险类型（GB 6441）
+    - hazard_type: 危险类型（Bitable 预设 24 项多选，1~5 个）
     - possible_accident: 可能导致的最典型事故
     - unsafe_behavior: 人的不规范作业行为
     """
@@ -64,9 +78,13 @@ class HazardIdentifier(BasePlugin[HazardIdInput, HazardIdOutput]):
     def _parse_output(self, raw: dict) -> HazardIdOutput:
         try:
             return HazardIdOutput(
-                hazard_type=raw.get("hazard_type", "待人工确认"),
-                possible_accident=raw.get("possible_accident", "待人工确认"),
-                unsafe_behavior=raw.get("unsafe_behavior", "待人工确认"),
+                hazard_type=_coerce_str(raw.get("hazard_type"), "待人工确认"),
+                possible_accident=_coerce_str(
+                    raw.get("possible_accident"), "待人工确认"
+                ),
+                unsafe_behavior=_coerce_str(
+                    raw.get("unsafe_behavior"), "待人工确认"
+                ),
             )
         except (PydanticValidationError, KeyError, TypeError) as e:
             raise PluginError(

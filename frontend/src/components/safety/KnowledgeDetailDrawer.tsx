@@ -23,15 +23,20 @@ import {
   RobotOutlined,
   BarChartOutlined,
   ThunderboltOutlined,
+  CalendarOutlined,
+  UserOutlined,
+  ApartmentOutlined,
+  EyeOutlined,
 } from '@ant-design/icons'
 import { getKnowledgeArticle, getArticleVersions, generateSummary } from '@/actions/safety'
-import { fileProxyUrl } from '@/lib/file-url'
+import { fileProxyUrl } from '@/components/safety/file-url'
 import KnowledgeCardEditor from './KnowledgeCardEditor'
 import InjectionPreviewModal from './InjectionPreviewModal'
 import AgentUsageStats from './AgentUsageStats'
 import PptGeneratorPanel from './PptGeneratorPanel'
 import type { SafetyKnowledgeArticle, VersionChainItem } from '@/types/safety'
 import { KNOWLEDGE_CATEGORY_OPTIONS } from '@/types/safety'
+import { getCategoryStyle } from './knowledgeConstants'
 import dayjs from 'dayjs'
 
 const { Text, Paragraph } = Typography
@@ -193,6 +198,7 @@ export default function KnowledgeDetailDrawer({
           </div>
           <iframe
             src={url}
+            loading="lazy"
             style={{ width: '100%', height: 500, border: '1px solid #e5e3df', borderRadius: 8 }}
             title={name}
           />
@@ -203,7 +209,7 @@ export default function KnowledgeDetailDrawer({
     if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext || '')) {
       return (
         <div style={{ textAlign: 'center' }}>
-          <img src={url} alt={name} style={{ maxWidth: '100%', maxHeight: 500 }} />
+          <img src={url} alt={name} loading="lazy" style={{ maxWidth: '100%', maxHeight: 500 }} />
         </div>
       )
     }
@@ -309,6 +315,171 @@ export default function KnowledgeDetailDrawer({
     )
   }
 
+  // ── 详情概览头部 ──
+  const renderOverview = () => {
+    if (!article) return null
+    const style = getCategoryStyle(article.tags, article.category)
+    const meta = [
+      { icon: <FileTextOutlined />, label: '编号', value: article.article_no || '自动生成' },
+      { icon: <ApartmentOutlined />, label: '来源', value: article.source || '-' },
+      { icon: <CalendarOutlined />, label: '发布', value: article.publish_date ? dayjs(article.publish_date).format('YYYY-MM-DD') : '-' },
+      { icon: <UserOutlined />, label: '作者', value: article.author || '-' },
+      { icon: <EyeOutlined />, label: '浏览', value: String(article.view_count || 0) },
+    ]
+    return (
+      <div
+        style={{
+          display: 'flex',
+          gap: 14,
+          padding: 16,
+          background: 'var(--color-surface-soft, #fafaf9)',
+          border: '1px solid var(--color-hairline-soft, #ede9e4)',
+          borderRadius: 12,
+          marginBottom: 16,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 12,
+            background: style.bg,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 24,
+            flexShrink: 0,
+          }}
+        >
+          {style.emoji}
+        </div>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div
+            style={{
+              fontSize: 16,
+              fontWeight: 600,
+              color: 'var(--color-ink, #1a1a1a)',
+              lineHeight: 1.4,
+              marginBottom: 6,
+            }}
+          >
+            {article.title}
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+            {getStatusTag(article.status)}
+            <Tag color="purple">v{article.version}</Tag>
+            <Tag>{getCategoryLabel(article.category)}</Tag>
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              gap: 16,
+              flexWrap: 'wrap',
+              color: 'var(--color-steel, #787671)',
+              fontSize: 12,
+            }}
+          >
+            {meta.map((m) => (
+              <span key={m.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 11 }}>{m.icon}</span>
+                <span style={{ color: 'var(--color-stone, #a4a097)' }}>{m.label}</span>
+                <span style={{ color: 'var(--color-charcoal, #37352f)', fontWeight: 500 }}>
+                  {m.value}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── 基本信息（完整元数据） ──
+  const renderBasicInfo = () => {
+    if (!article) return null
+    return (
+      <div>
+        {/* 摘要突出块 */}
+        <div style={{ marginBottom: 16 }}>
+          <div
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              marginBottom: 8,
+              color: 'var(--color-ink, #1a1a1a)',
+            }}
+          >
+            摘要
+          </div>
+          {article.summary ? (
+            <div
+              style={{
+                whiteSpace: 'pre-wrap',
+                padding: '12px 14px',
+                backgroundColor: 'var(--color-surface-soft, #fafaf9)',
+                borderRadius: 8,
+                border: '1px solid var(--color-hairline-soft, #ede9e4)',
+                fontSize: 14,
+                lineHeight: 1.6,
+                color: 'var(--color-charcoal, #37352f)',
+                maxHeight: 180,
+                overflow: 'auto',
+              }}
+            >
+              {article.summary}
+            </div>
+          ) : (
+            <span style={{ color: 'var(--color-stone, #a4a097)', fontSize: 13 }}>
+              暂无摘要，可在「摘要」标签页点击 AI 生成
+            </span>
+          )}
+        </div>
+
+        <Descriptions column={2} bordered size="small">
+          <Descriptions.Item label="文档编号">
+            {article.article_no || '自动生成'}
+          </Descriptions.Item>
+          <Descriptions.Item label="版本">
+            <Tag>v{article.version}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="分类">
+            <Tag>{getCategoryLabel(article.category)}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="状态">
+            {getStatusTag(article.status)}
+          </Descriptions.Item>
+          <Descriptions.Item label="来源">
+            {article.source || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="作者/发布单位">
+            {article.author || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="发布日期">
+            {article.publish_date
+              ? dayjs(article.publish_date).format('YYYY-MM-DD')
+              : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="浏览次数">
+            {article.view_count}
+          </Descriptions.Item>
+          <Descriptions.Item label="标签" span={2}>
+            {article.tags || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="附件">
+            {article.attachment_original_name || '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="创建时间">
+            {dayjs(article.created_at).format('YYYY-MM-DD HH:mm')}
+          </Descriptions.Item>
+          <Descriptions.Item label="备注" span={2}>
+            {article.notes || '-'}
+          </Descriptions.Item>
+        </Descriptions>
+      </div>
+    )
+  }
+
   return (
     <>
       <Drawer
@@ -346,52 +517,10 @@ export default function KnowledgeDetailDrawer({
                 key: 'basic',
                 label: '基本信息',
                 children: (
-                  <Descriptions column={2} bordered size="small">
-                    <Descriptions.Item label="文档编号">
-                      {article.article_no || '自动生成'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="版本">
-                      <Tag>v{article.version}</Tag>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="标题" span={2}>
-                      {article.title}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="分类">
-                      <Tag>{getCategoryLabel(article.category)}</Tag>
-                    </Descriptions.Item>
-                    <Descriptions.Item label="状态">
-                      {getStatusTag(article.status)}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="摘要" span={2}>
-                      {article.summary || '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="来源">
-                      {article.source || '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="作者/发布单位">
-                      {article.author || '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="发布日期">
-                      {article.publish_date
-                        ? dayjs(article.publish_date).format('YYYY-MM-DD')
-                        : '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="浏览次数">
-                      {article.view_count}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="标签" span={2}>
-                      {article.tags || '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="附件">
-                      {article.attachment_original_name || '-'}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="创建时间">
-                      {dayjs(article.created_at).format('YYYY-MM-DD HH:mm')}
-                    </Descriptions.Item>
-                    <Descriptions.Item label="备注" span={2}>
-                      {article.notes || '-'}
-                    </Descriptions.Item>
-                  </Descriptions>
+                  <div>
+                    {renderOverview()}
+                    {renderBasicInfo()}
+                  </div>
                 ),
               },
               {

@@ -69,6 +69,7 @@ from .config import (
     HAZARD_TEMPLATE_CONFIG,
     NUMERIC_COLUMNS,
     RISK_LABEL_COLORS,
+    TRAINING_EDUCATION_FIXED_TEXT,
     InspectionResult,
     PageSetup,
     TemplateConfig,
@@ -88,6 +89,7 @@ __all__ = [
     "HAZARD_COLUMN_MAPPING",
     "NUMERIC_COLUMNS",
     "RISK_LABEL_COLORS",
+    "TRAINING_EDUCATION_FIXED_TEXT",
     # 自动检测
     "TemplateInspector",
     "InspectionResult",

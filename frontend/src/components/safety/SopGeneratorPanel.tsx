@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useCallback, useRef, useEffect } from 'react'
-import { App, Button, Empty, Space, Spin, Table, Typography } from 'antd'
+import { App, Button, Drawer, Empty, Space, Spin, Table, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   InboxOutlined,
@@ -12,13 +12,20 @@ import {
   LoadingOutlined,
   FileTextOutlined,
   ReloadOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
-import { getRegulations } from '@/actions/safety'
+import { getRegulations, retryAiReview } from '@/actions/safety'
 import type { OperationRegulation } from '@/types/safety'
+import type { AiReviewNote } from '@/types/safety'
 import {
   actionLink,
   pillInfo,
   pillDefault,
+  pillSuccess,
+  pillError,
+  pillWarning,
+  pillPurple,
+  pillNeutral,
   T,
 } from '@/components/safety/shared-styles'
 import dayjs from 'dayjs'
@@ -32,6 +39,58 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** AI 审核状态 → 中文标签 + 颜色 pill */
+function aiReviewStatusMeta(status?: string): { label: string; style: React.CSSProperties } {
+  switch (status) {
+    case 'reviewing':
+      return { label: '审核中', style: pillInfo }
+    case 'completed':
+      return { label: '已审核', style: pillSuccess }
+    case 'failed':
+      return { label: '审核失败', style: pillError }
+    case 'pending':
+    default:
+      return { label: '待审核', style: pillDefault }
+  }
+}
+
+/** 审核维度结论 → 状态 pill */
+function dimStatusMeta(status?: string): { label: string; style: React.CSSProperties } {
+  switch (status) {
+    case 'pass':
+      return { label: '通过', style: pillSuccess }
+    case 'fail':
+      return { label: '不通过', style: pillError }
+    case 'warn':
+    default:
+      return { label: '需关注', style: pillWarning }
+  }
+}
+
+/** 章节修正动作 → 标签 */
+function fixActionMeta(action?: string): { label: string; style: React.CSSProperties } {
+  switch (action) {
+    case 'rewrite':
+      return { label: '重写', style: pillPurple }
+    case 'append':
+      return { label: '追加', style: pillInfo }
+    case 'keep':
+    default:
+      return { label: '保留', style: pillNeutral }
+  }
+}
+
+/** 排版布局问题严重度 → 标签 */
+function layoutSeverityMeta(severity?: string): { label: string; style: React.CSSProperties } {
+  switch (severity) {
+    case 'fail':
+      return { label: '严重', style: pillError }
+    case 'warn':
+    default:
+      return { label: '轻微', style: pillWarning }
+  }
 }
 
 /* ─────── component ─────── */
@@ -55,6 +114,8 @@ export default function SopGeneratorPanel({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [generatedSops, setGeneratedSops] = useState<OperationRegulation[]>([])
   const [loadingList, setLoadingList] = useState(false)
+  const [reviewTarget, setReviewTarget] = useState<OperationRegulation | null>(null)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { message } = App.useApp()
@@ -65,7 +126,7 @@ export default function SopGeneratorPanel({
       const response = await getRegulations({
         page: 1,
         page_size: 200,
-        status: 'generated',
+        status: 'generated,ai_reviewed',
       })
       if (response.code === 200) {
         setGeneratedSops(response.data as OperationRegulation[])
@@ -80,6 +141,24 @@ export default function SopGeneratorPanel({
   useEffect(() => {
     loadGeneratedSops()
   }, [loadGeneratedSops])
+
+  /* ── AI 审核重试 ── */
+
+  const handleRetryReview = useCallback(async (record: OperationRegulation) => {
+    setRetryingId(record.id)
+    try {
+      const response = await retryAiReview(record.id)
+      if (response.code === 200) {
+        message.success('已重新触发 AI 审核，请稍后刷新查看结果')
+      } else {
+        message.error(response.message || '重试失败')
+      }
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : '重试失败')
+    } finally {
+      setRetryingId(null)
+    }
+  }, [message])
 
   /* ── file handling ── */
 
@@ -176,6 +255,8 @@ export default function SopGeneratorPanel({
     switch (status) {
       case 'generated':
         return <span style={pillInfo}>待审核</span>
+      case 'ai_reviewed':
+        return <span style={pillSuccess}>已AI审核</span>
       default:
         return <span style={pillDefault}>{status || '草稿'}</span>
     }
@@ -184,6 +265,7 @@ export default function SopGeneratorPanel({
   /* ── table columns ── */
 
   const $purple = actionLink('#5645d4')
+  const $danger = actionLink('#e03131')
 
   const columns: ColumnsType<OperationRegulation> = [
     {
@@ -201,7 +283,7 @@ export default function SopGeneratorPanel({
       title: '操规名称',
       dataIndex: 'regulation_name',
       key: 'regulation_name',
-      width: 240,
+      width: 220,
       ellipsis: true,
     },
     {
@@ -217,6 +299,29 @@ export default function SopGeneratorPanel({
       key: 'status',
       width: 90,
       render: (status: string) => renderStatus(status),
+    },
+    {
+      title: 'AI 审核',
+      dataIndex: 'ai_review_status',
+      key: 'ai_review_status',
+      width: 96,
+      render: (status: string, record) => {
+        const meta = aiReviewStatusMeta(status)
+        return (
+          <Space size={6}>
+            <span style={meta.style}>{meta.label}</span>
+            {status === 'completed' && record.ai_review_note && (
+              <span
+                role="button"
+                style={$purple}
+                onClick={() => setReviewTarget(record)}
+              >
+                <EyeOutlined />详情
+              </span>
+            )}
+          </Space>
+        )
+      },
     },
     {
       title: '内容长度',
@@ -243,11 +348,18 @@ export default function SopGeneratorPanel({
     {
       title: '操作',
       key: 'action',
-      width: 100,
+      width: 150,
       render: (_, record) => (
-        <span role="button" style={$purple} onClick={() => onOpenEditor(record)}>
-          <EyeOutlined />编辑审阅
-        </span>
+        <Space size={10}>
+          <span role="button" style={$purple} onClick={() => onOpenEditor(record)}>
+            <EyeOutlined />编辑审阅
+          </span>
+          {record.ai_review_status === 'failed' && (
+            <span role="button" style={$danger} onClick={() => handleRetryReview(record)}>
+              {retryingId === record.id ? <LoadingOutlined /> : <ReloadOutlined />}重试
+            </span>
+          )}
+        </Space>
       ),
     },
   ]
@@ -529,7 +641,7 @@ export default function SopGeneratorPanel({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <FileTextOutlined style={{ fontSize: 15, color: T.primary }} />
             <span style={{ fontSize: 15, fontWeight: 600, color: T.ink }}>
-              待审核的标准化操规
+              已生成 / 已审核的标准化操规
             </span>
             <span
               style={{
@@ -591,10 +703,190 @@ export default function SopGeneratorPanel({
               showQuickJumper: true,
               showTotal: (total) => `共 ${total} 条`,
             }}
-            scroll={{ x: 880 }}
+            scroll={{ x: 980 }}
           />
         )}
       </div>
+
+      {/* ═══ AI 审核详情抽屉 ═══ */}
+      <Drawer
+        open={!!reviewTarget}
+        onClose={() => setReviewTarget(null)}
+        width={620}
+        title={
+          reviewTarget ? (
+            <Space size={8}>
+              <RobotOutlined style={{ color: T.primary }} />
+              <span style={{ fontWeight: 600 }}>
+                AI 审核详情 · {reviewTarget.regulation_no}
+              </span>
+              <span style={aiReviewStatusMeta(reviewTarget.ai_review_status).style}>
+                {aiReviewStatusMeta(reviewTarget.ai_review_status).label}
+              </span>
+            </Space>
+          ) : null
+        }
+      >
+        {reviewTarget && reviewTarget.ai_review_note
+          ? (() => {
+              const note = reviewTarget.ai_review_note as AiReviewNote
+              return (
+                <div style={{ fontSize: 13 }}>
+                  {/* 审核时间 */}
+                  {note.reviewed_at && (
+                    <div style={{ color: T.muted, marginBottom: 14 }}>
+                      审核完成于 {dayjs(note.reviewed_at).format('YYYY-MM-DD HH:mm')}
+                    </div>
+                  )}
+
+                  {/* 总体结论 */}
+                  <div style={{ fontWeight: 600, color: T.ink, marginBottom: 6 }}>
+                    总体结论
+                  </div>
+                  <div
+                    style={{
+                      background: T.canvas,
+                      border: `1px solid ${T.hairlineSoft}`,
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                      color: T.charcoal,
+                      lineHeight: 1.7,
+                      marginBottom: 20,
+                    }}
+                  >
+                    {note.summary || '—'}
+                  </div>
+
+                  {/* 分维度结论 */}
+                  <div style={{ fontWeight: 600, color: T.ink, marginBottom: 8 }}>
+                    分维度审核结论
+                  </div>
+                  <div style={{ marginBottom: 20 }}>
+                    {(note.dimensions || []).map((dim) => {
+                      const meta = dimStatusMeta(dim.status)
+                      return (
+                        <div
+                          key={dim.dimension}
+                          style={{
+                            border: `1px solid ${T.hairlineSoft}`,
+                            borderRadius: 8,
+                            padding: '10px 14px',
+                            marginBottom: 8,
+                            background: T.canvas,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                            <span style={{ fontWeight: 600, color: T.charcoal, fontSize: 13 }}>
+                              {dim.dimension}
+                            </span>
+                            <span style={meta.style}>{meta.label}</span>
+                          </div>
+                          <div style={{ color: T.steel, lineHeight: 1.6 }}>
+                            {dim.detail || '—'}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {(note.dimensions || []).length === 0 && (
+                      <div style={{ color: T.muted }}>无维度结论</div>
+                    )}
+                  </div>
+
+                  {/* 排版布局问题（视觉审核） */}
+                  {((note.layout_issues || []).length > 0 || note.layout_summary) && (
+                    <>
+                      <div style={{ fontWeight: 600, color: T.ink, marginBottom: 8 }}>
+                        排版布局问题
+                      </div>
+                      {note.layout_summary && (
+                        <div
+                          style={{
+                            background: T.canvas,
+                            border: `1px solid ${T.hairlineSoft}`,
+                            borderRadius: 8,
+                            padding: '10px 14px',
+                            color: T.charcoal,
+                            lineHeight: 1.7,
+                            marginBottom: 8,
+                          }}
+                        >
+                          {note.layout_summary}
+                        </div>
+                      )}
+                      <div style={{ marginBottom: 20 }}>
+                        {(note.layout_issues || []).map((issue, idx) => {
+                          const meta = layoutSeverityMeta(issue.severity)
+                          return (
+                            <div
+                              key={`${issue.page}-${issue.issue_type}-${idx}`}
+                              style={{
+                                border: `1px solid ${T.hairlineSoft}`,
+                                borderRadius: 8,
+                                padding: '10px 14px',
+                                marginBottom: 8,
+                                background: T.canvas,
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                <span style={{ fontWeight: 600, color: T.charcoal, fontSize: 13 }}>
+                                  第 {issue.page} 页
+                                </span>
+                                <span style={{ color: T.steel, fontSize: 12 }}>{issue.issue_type}</span>
+                                <span style={meta.style}>{meta.label}</span>
+                              </div>
+                              <div style={{ color: T.steel, lineHeight: 1.6 }}>
+                                {issue.description}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  {/* 章节修正建议 */}
+                  <div style={{ fontWeight: 600, color: T.ink, marginBottom: 8 }}>
+                    章节修正建议
+                  </div>
+                  {(note.chapter_fixes || []).map((fix) => {
+                    const meta = fixActionMeta(fix.action)
+                    return (
+                      <div
+                        key={fix.chapter}
+                        style={{
+                          border: `1px solid ${T.hairlineSoft}`,
+                          borderRadius: 8,
+                          padding: '10px 14px',
+                          marginBottom: 8,
+                          background: T.canvas,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <span style={{ fontWeight: 600, color: T.charcoal, fontSize: 13 }}>
+                            第 {fix.chapter} 章 · {fix.title || ''}
+                          </span>
+                          <span style={meta.style}>{meta.label}</span>
+                        </div>
+                        {fix.note && (
+                          <div style={{ color: T.steel, lineHeight: 1.6, marginTop: 2 }}>
+                            {fix.note}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                  {(note.chapter_fixes || []).length === 0 && (
+                    <div style={{ color: T.muted }}>无章节修正建议</div>
+                  )}
+                </div>
+              )
+            })()
+          : (
+            <div style={{ color: T.muted, padding: 24, textAlign: 'center' }}>
+              暂无 AI 审核说明
+            </div>
+          )}
+      </Drawer>
     </div>
     </App>
   )

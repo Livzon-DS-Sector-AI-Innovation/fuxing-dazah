@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Modal, Form, Input, Upload, App, Image } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
 import { replyRectification, reworkRectification, uploadRectificationPhoto } from '@/actions/safety'
-import { fileProxyUrl } from '@/lib/file-url'
+import { fileProxyUrl } from '@/components/safety/file-url'
 import type { HazardReport } from '@/types/safety'
 import type { UploadFile } from 'antd/es/upload'
 

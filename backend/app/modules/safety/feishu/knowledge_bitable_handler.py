@@ -13,22 +13,53 @@
 
 import json
 import logging
-import os
 from datetime import UTC, date, datetime
 from typing import Any
 
 from app.core.redis import redis_client
+from app.modules.safety.attachment_store import store_bytes
+from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.event_client import on_event
 
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════
-# 表格标识
+# 表格标识（延迟读取 store：改表 ID 后事件过滤/回源立即用新值，§5.1/§5.2 R1）
+# knowledge 域含两张表：collection（安全法规标准）+ collection_env（环保法规标准），
+# 共用同一 app_token，事件按 table_id 区分配对。
 # ═══════════════════════════════════════════════════════════════
 
-_KNOWLEDGE_APP_TOKEN = os.getenv("SAFETY_FEISHU_BITABLE_KNOWLEDGE_APP_TOKEN", "")
-_KNOWLEDGE_TABLE_ID = os.getenv("SAFETY_FEISHU_BITABLE_KNOWLEDGE_TABLE_ID", "")
+_KNOWLEDGE_KINDS = ("collection", "collection_env")
+
+
+def _knowledge_conns() -> list[ConnectionView]:
+    """knowledge 域全部启用连接视图（安全 + 环保法规标准表）。"""
+    conns = []
+    for kind in _KNOWLEDGE_KINDS:
+        conn = store.get_connection("knowledge", kind)
+        if conn and conn.status != "disabled":
+            conns.append(conn)
+    return conns
+
+
+def _knowledge_conn() -> ConnectionView | None:
+    """安全法规标准表连接（向后兼容调用方：仅用于 app_token 读取）。"""
+    return store.get_connection("knowledge", "collection")
+
+
+def _knowledge_conn_for_table(table_id: str) -> ConnectionView | None:
+    """按 table_id 定位知识表连接（事件按表路由）。"""
+    for conn in _knowledge_conns():
+        if conn.table_id == table_id:
+            return conn
+    return None
+
+
+def _knowledge_app_token() -> str:
+    """启用连接的 app_token；未配置/停用返回空串（保留未配置时降级分支）。"""
+    conn = _knowledge_conn()
+    return conn.app_token if conn and conn.status != "disabled" else ""
 
 # ═══════════════════════════════════════════════════════════════
 # 字段映射：Bitable 中文字段名 → SafetyKnowledgeArticle 英文字段名
@@ -80,10 +111,6 @@ CATEGORY_PREFIX_MAP: dict[str, str] = {
     "other": "GEN",
 }
 
-# 飞书知识库文档上传目录
-UPLOAD_DIR = os.path.join("uploads", "safety", "knowledge")
-
-
 # ═══════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════
@@ -114,6 +141,47 @@ def _extract_select_value(value: Any) -> str:
     if isinstance(value, dict):
         return value.get("text", "") or value.get("name", "") or ""
     return ""
+
+
+def _extract_rich_text(value: Any) -> str:
+    """从 Bitable 富文本/文本字段提取纯文本。
+
+    Bitable 文本类字段（如「法律法规及标准名称」「颁布机关」「核心要点总结」）
+    在 API 返回中是富文本结构 list[{"text": ..., "type": "text"}]，
+    而 WS 事件推送是纯字符串。早年实现用 str(raw) 直接落库，导致
+    title/source/summary/notes 存成 "[{'text': ...}]" 的 JSON 字符串。
+    本函数统一三种形态：list[dict] → 拼接 text；JSON 字符串 → 解析后拼接；
+    纯 str → 原样返回。
+    """
+    if value is None:
+        return ""
+
+    def _join(items) -> str:
+        return "".join(
+            item.get("text", "") or item.get("name", "")
+            for item in items
+            if isinstance(item, dict)
+        ).strip()
+
+    if isinstance(value, list):
+        return _join(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if s.startswith("[{") and "text" in s:
+            try:
+                # 兼容两种序列化形态：json.loads（双引号）与 python repr（单引号，
+                # str(list) 落库的旧数据）；ast.literal_eval 二者皆可解析。
+                import ast
+
+                parsed = ast.literal_eval(s)
+                if isinstance(parsed, list):
+                    return _join(parsed)
+            except (ValueError, SyntaxError, TypeError):
+                pass
+        return s
+    if isinstance(value, dict):
+        return (value.get("text", "") or value.get("name", "")).strip()
+    return str(value)
 
 
 def _extract_attachment_list(value: Any) -> list[dict]:
@@ -152,8 +220,8 @@ def _map_knowledge_fields(bitable_fields: dict[str, Any]) -> dict[str, Any]:
             if d:
                 result[en_name] = d
         else:
-            # 文本字段直接取值
-            val = raw if isinstance(raw, str) else str(raw)
+            # 文本字段直接取值（富文本结构 list[{"text":...}] / JSON 字符串 / 纯文本）
+            val = _extract_rich_text(raw)
             if val.strip():
                 result[en_name] = val.strip()
 
@@ -198,14 +266,22 @@ async def _is_sync_ignored(record_id: str) -> bool:
 # ═══════════════════════════════════════════════════════════════
 
 def _match_knowledge_target(file_token: str, table_id: str) -> bool:
-    """检查事件是否属于知识库 Bitable 表格。"""
-    if not _KNOWLEDGE_APP_TOKEN or not _KNOWLEDGE_TABLE_ID:
+    """检查事件是否属于知识库 Bitable 表格（安全或环保法规标准表）。
+
+    同步读 store 缓存（R1：改表 ID → 新事件进新表，过滤立即用新值）。
+    """
+    conns = _knowledge_conns()
+    if not conns:
         return False
-    if file_token and file_token != _KNOWLEDGE_APP_TOKEN:
-        return False
-    if table_id and table_id != _KNOWLEDGE_TABLE_ID:
-        return False
-    return True
+    for conn in conns:
+        if not conn.app_token or not conn.table_id:
+            continue
+        if file_token and file_token != conn.app_token:
+            continue
+        if table_id and table_id != conn.table_id:
+            continue
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -217,7 +293,7 @@ async def _download_knowledge_attachment(
     bitable_fields: dict[str, Any],
     record_id: str,
 ) -> tuple[str | None, str | None]:
-    """下载法规原件到本地。返回 (file_path, original_name)。"""
+    """下载法规原件到统一存储。返回 (store_bytes 返回值, original_name)。"""
     field_cn = "法规原件"
     raw = bitable_fields.get(field_cn)
     attachments = _extract_attachment_list(raw)
@@ -243,14 +319,9 @@ async def _download_knowledge_attachment(
 
     logger.info("下载知识库附件: record_id=%s file_token=%s name=%s", record_id, file_token, file_name)
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-    # 生成本地文件名
+    # 统一存储文件名（保留 knowledge_sync_ 前缀，chunk_service._extract_file_token 依赖它）
     safe_name = file_name.replace("/", "_").replace("\\", "_")
-    local_path = os.path.join(
-        UPLOAD_DIR,
-        f"knowledge_sync_{record_id[:20]}_{file_token[:20]}_{safe_name}",
-    )
+    filename = f"knowledge_sync_{record_id[:20]}_{file_token[:20]}_{safe_name}"
 
     data: bytes | None = None
 
@@ -269,10 +340,9 @@ async def _download_knowledge_attachment(
             logger.exception("Drive API 下载失败: file_token=%s", file_token)
 
     if data:
-        with open(local_path, "wb") as f:
-            f.write(data)
-        logger.info("附件下载成功: record_id=%s path=%s size=%d", record_id, local_path, len(data))
-        return local_path, file_name
+        stored = store_bytes("knowledge", filename, data, att.get("type") or "application/octet-stream")
+        logger.info("附件下载成功: record_id=%s path=%s size=%d", record_id, stored, len(data))
+        return stored, file_name
 
     logger.warning("附件下载失败，跳过: record_id=%s file_token=%s", record_id, file_token)
     return None, None
@@ -439,13 +509,22 @@ async def _create_knowledge_from_bitable(
             article.id, article_no, mapped.get("title"), record_id,
         )
 
-        # 6. 回写 article_no 到 Bitable
+        # 6. 回写 article_no 到 Bitable（若表无此字段则跳过，article_no 已存 PostgreSQL）
         try:
-            await bitable.update_record(record_id, {"article_no": article_no})
-            await _set_sync_ignore(record_id)
-            logger.info("article_no 已回写: record_id=%s article_no=%s", record_id, article_no)
+            ok = await bitable.update_record(record_id, {"article_no": article_no})
         except Exception:
             logger.exception("回写 article_no 失败: record_id=%s", record_id)
+        else:
+            if ok:
+                await _set_sync_ignore(record_id)
+                logger.info("article_no 已回写: record_id=%s article_no=%s", record_id, article_no)
+            else:
+                # update_record 对 API 错误返回 False 而非抛异常（如 FieldNameNotFound），
+                # 详情已由 bitable_client 记录；article_no 已存 PostgreSQL，跳过回写不阻塞流程。
+                logger.warning(
+                    "Bitable 无 article_no 字段，跳过回写（已存 PostgreSQL）: record_id=%s article_no=%s",
+                    record_id, article_no,
+                )
 
         return article
 
@@ -503,12 +582,10 @@ async def _update_knowledge_from_bitable(
             bitable, fields, record_id,
         )
         if new_path and new_path != old_attachment:
-            # 清理旧附件（仅本地文件）
-            if old_attachment and os.path.exists(old_attachment):
-                try:
-                    os.remove(old_attachment)
-                except OSError:
-                    pass
+            # 清理旧附件（双模式：MinIO delete / 本地删除）
+            from app.modules.safety.vision.utils import cleanup_file
+
+            cleanup_file(old_attachment)
             update_data["attachment_path"] = new_path
             update_data["attachment_original_name"] = new_name
             logger.info("附件已更新: record_id=%s old=%s new=%s", record_id, old_attachment, new_path)
@@ -593,51 +670,69 @@ _GRAPH_REBUILD_LOCK_KEY = "bitable:knowledge:graph_rebuild_lock"
 _GRAPH_REBUILD_DEBOUNCE_SEC = 60  # 1 分钟内多个文档变更合并为一次重建
 
 
+# 进程内防抖降级：Redis 不可用时使用（仅单进程有效）
+_GRAPH_REBUILD_LAST_SCHEDULE: float = 0.0
+
+
 async def _schedule_graph_rebuild() -> None:
     """文档变更后延迟触发图谱增量重建（Redis 去重防抖）。
 
     多次快速变更时只触发一次重建，等待 {debounce} 秒让变更趋于稳定。
+
+    降级策略：Redis 不可用时（本地上限爬取/离线环境），回退到进程内
+    时间戳防抖，确保图谱重建不被 Redis 故障阻断。
     """
+    import asyncio
+    import time
+
+    acquired = False
     try:
         acquired = await redis_client.set(
             _GRAPH_REBUILD_LOCK_KEY, "1", ex=_GRAPH_REBUILD_DEBOUNCE_SEC, nx=True,
         )
-        if not acquired:
-            logger.debug("图谱重建已在调度中，跳过")
-            return
-
-        import asyncio
-
-        async def _rebuild():
-            await asyncio.sleep(15)  # 等待批量变更稳定
-            try:
-                from app.core.database import async_session_factory
-                from app.modules.safety.knowledge.graph_builder import GraphBuilder
-
-                session = async_session_factory()
-                try:
-                    builder = GraphBuilder(session)
-                    result = await builder.build_full_graph()
-                    await session.commit()
-                    logger.info(
-                        "图谱自动重建完成: nodes_created=%d edges_created=%d errors=%d",
-                        result["nodes_created"],
-                        result["edges_created"],
-                        len(result["errors"]),
-                    )
-                    if result["errors"]:
-                        for err in result["errors"][:3]:
-                            logger.warning("图谱重建错误: %s", err)
-                except Exception:
-                    logger.exception("图谱自动重建失败")
-                finally:
-                    await session.close()
-            except Exception:
-                logger.exception("图谱自动重建调度失败")
-
-        asyncio.create_task(_rebuild())
     except Exception:
-        logger.exception("图谱重建调度异常")
+        # Redis 不可用 → 降级为进程内防抖
+        global _GRAPH_REBUILD_LAST_SCHEDULE
+        now = time.monotonic()
+        if now - _GRAPH_REBUILD_LAST_SCHEDULE < _GRAPH_REBUILD_DEBOUNCE_SEC:
+            logger.debug("图谱重建已在调度中（内存降级），跳过")
+            return
+        _GRAPH_REBUILD_LAST_SCHEDULE = now
+        acquired = True
+        logger.warning("Redis 不可用，图谱重建降级为进程内防抖")
+
+    if not acquired:
+        logger.debug("图谱重建已在调度中，跳过")
+        return
+
+    async def _rebuild():
+        await asyncio.sleep(15)  # 等待批量变更稳定
+        try:
+            from app.core.database import async_session_factory
+            from app.modules.safety.knowledge.graph_builder import GraphBuilder
+
+            session = async_session_factory()
+            try:
+                builder = GraphBuilder(session)
+                result = await builder.build_full_graph()
+                await session.commit()
+                logger.info(
+                    "图谱自动重建完成: nodes_created=%d edges_created=%d errors=%d",
+                    result["nodes_created"],
+                    result["edges_created"],
+                    len(result["errors"]),
+                )
+                if result["errors"]:
+                    for err in result["errors"][:3]:
+                        logger.warning("图谱重建错误: %s", err)
+            except Exception:
+                logger.exception("图谱自动重建失败")
+            finally:
+                await session.close()
+        except Exception:
+            logger.exception("图谱自动重建调度失败")
+
+    asyncio.create_task(_rebuild())
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -700,10 +795,13 @@ async def handle_knowledge_record_changed(event_data: dict[str, Any]) -> None:
 
     logger.info("知识库 Bitable record 变更事件: file_token=%s table_id=%s", file_token, table_id)
 
-    # 构建 Bitable client（使用知识库表格的 app_token 和 table_id）
+    # 构建 Bitable client（按 table_id 路由到安全/环保表连接，延迟读 store）
+    conn = _knowledge_conn_for_table(table_id)
+    if conn is None:
+        return
     bitable = SafetyBitableClient(
-        app_token=_KNOWLEDGE_APP_TOKEN,
-        table_id=_KNOWLEDGE_TABLE_ID,
+        app_token=conn.app_token,
+        table_id=conn.table_id,
     )
 
     # 处理 action_list（新版事件格式）
@@ -749,9 +847,12 @@ async def handle_knowledge_field_changed(event_data: dict[str, Any]) -> None:
 
     logger.info("知识库 Bitable field 变更事件: file_token=%s table_id=%s", file_token, table_id)
 
+    conn = _knowledge_conn_for_table(table_id)
+    if conn is None:
+        return
     bitable = SafetyBitableClient(
-        app_token=_KNOWLEDGE_APP_TOKEN,
-        table_id=_KNOWLEDGE_TABLE_ID,
+        app_token=conn.app_token,
+        table_id=conn.table_id,
     )
 
     record_id = event_data.get("record_id", "")
@@ -775,9 +876,11 @@ async def ensure_knowledge_bitable_subscribed() -> bool:
     """订阅知识库多维表格云文档事件。
 
     飞书要求：在接收 Bitable 事件之前，必须先调用此 API 订阅文档事件。
+    函数体内部读 store（延迟读取，不缓存到模块级），改表后重订阅携带新值。
     """
-    if not _KNOWLEDGE_APP_TOKEN:
-        logger.info("知识库 Bitable app_token 未配置，跳过文档事件订阅")
+    file_token = _knowledge_app_token()
+    if not file_token:
+        logger.info("知识库 Bitable app_token 未配置（store 无 knowledge 连接），跳过文档事件订阅")
         return False
 
     try:
@@ -788,13 +891,13 @@ async def ensure_knowledge_bitable_subscribed() -> bool:
         token = await get_safety_tenant_token()
         async with httpx.AsyncClient(timeout=15) as http:
             resp = await http.post(
-                f"https://open.feishu.cn/open-apis/drive/v1/files/{_KNOWLEDGE_APP_TOKEN}/subscribe",
+                f"https://open.feishu.cn/open-apis/drive/v1/files/{file_token}/subscribe",
                 headers={"Authorization": f"Bearer {token}"},
                 params={"file_type": "bitable"},
             )
             data = resp.json()
             if data.get("code") == 0:
-                logger.info("知识库 Bitable 文档事件订阅成功: file_token=%s", _KNOWLEDGE_APP_TOKEN)
+                logger.info("知识库 Bitable 文档事件订阅成功: file_token=%s", file_token)
                 return True
             logger.error(
                 "知识库 Bitable 文档事件订阅失败: code=%s msg=%s",

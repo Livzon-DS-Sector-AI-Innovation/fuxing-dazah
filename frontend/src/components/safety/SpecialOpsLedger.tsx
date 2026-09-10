@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import {
   Table, Button, Space, Input, Select, DatePicker, Tag, Card,
   Typography, Drawer, Descriptions, Switch, App, Tooltip, Modal,
@@ -8,17 +8,15 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
-  SearchOutlined, ExportOutlined, EyeOutlined, FilterOutlined,
+  SearchOutlined, ExportOutlined, EyeOutlined,
   SafetyCertificateOutlined,
   EnvironmentOutlined, ClockCircleOutlined, RobotOutlined,
   AlertOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { Dayjs } from 'dayjs'
-import {
-  getSpecialOperationLedger,
-  getSpecialOperationLedgerStats,
-} from '@/actions/safety'
+import { useQuery } from '@tanstack/react-query'
+import { fetchSpecialOperationLedger, fetchSpecialOperationLedgerStats } from '@/lib/api/safety/special-ops'
 import type { SpecialOperationReport, SpecialOperationLedgerStats } from '@/types/safety'
 
 import {
@@ -26,7 +24,7 @@ import {
   STATUS_CONFIG, RISK_LEVEL_OPTIONS, OP_TYPE_KEYS,
 } from './specialOpsConstants'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
 
 // ═══════════════════════════════════════════════════════════
@@ -41,14 +39,8 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
   const { message } = App.useApp()
 
   // ── Data State ──
-  const [loading, setLoading] = useState(false)
-  const [data, setData] = useState<SpecialOperationReport[]>([])
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-
-  // ── Stats ──
-  const [stats, setStats] = useState<SpecialOperationLedgerStats[]>(initialStats || [])
 
   // ── Filters ──
   const [opType, setOpType] = useState<string | undefined>()
@@ -69,41 +61,37 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
   const [exportLoading, setExportLoading] = useState(false)
   const [exportExplanation, setExportExplanation] = useState('')
 
-  // ── Fetch stats ──
-  const fetchStats = useCallback(async () => {
-    try {
-      const res = await getSpecialOperationLedgerStats()
-      if (res.code === 200 && res.data) setStats(res.data)
-    } catch { /* silent */ }
-  }, [])
+  // ── Stats query ──
+  const statsQuery = useQuery({
+    queryKey: ['special-ops-stats'],
+    queryFn: fetchSpecialOperationLedgerStats,
+    initialData: initialStats?.length ? initialStats : undefined,
+  })
+  const stats = statsQuery.data ?? []
 
-  useEffect(() => { if (!initialStats?.length) fetchStats() }, [fetchStats, initialStats])
+  // ── Ledger query ──
+  const { data: listData, isLoading } = useQuery({
+    queryKey: ['special-ops-ledger', {
+      page, pageSize, opType, opLevel, riskLevel, dept,
+      dateFrom: dateRange?.[0]?.format('YYYY-MM-DD'),
+      dateTo: dateRange?.[1]?.format('YYYY-MM-DD'),
+      keyword, isCritical,
+    }],
+    queryFn: () => fetchSpecialOperationLedger({
+      page, page_size: pageSize,
+      operation_type: opType,
+      operation_level: opLevel,
+      risk_level: riskLevel,
+      department: dept,
+      date_from: dateRange?.[0]?.format('YYYY-MM-DD'),
+      date_to: dateRange?.[1]?.format('YYYY-MM-DD'),
+      keyword: keyword || undefined,
+      is_critical: isCritical,
+    }),
+  })
 
-  // ── Fetch data ──
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getSpecialOperationLedger({
-        page, page_size: pageSize,
-        operation_type: opType,
-        operation_level: opLevel,
-        risk_level: riskLevel,
-        department: dept,
-        date_from: dateRange?.[0]?.format('YYYY-MM-DD'),
-        date_to: dateRange?.[1]?.format('YYYY-MM-DD'),
-        keyword: keyword || undefined,
-        is_critical: isCritical,
-      })
-      setData(res.data || [])
-      setTotal(res.meta?.total || 0)
-    } catch {
-      message.error('获取数据失败')
-    } finally {
-      setLoading(false)
-    }
-  }, [page, pageSize, opType, opLevel, riskLevel, dept, dateRange, keyword, isCritical])
-
-  useEffect(() => { fetchData() }, [fetchData])
+  const data = listData?.items ?? []
+  const total = listData?.total ?? 0
 
   // ── AI Export ──
   const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ? `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1` : ''
@@ -385,7 +373,7 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
             style={{ width: 200, borderRadius: 8 }}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            onPressEnter={() => { setPage(1); fetchData() }}
+            onPressEnter={() => { setPage(1) }}
             allowClear
           />
           <Space>
@@ -399,7 +387,7 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
           </Space>
           <Button
             icon={<SearchOutlined />}
-            onClick={() => { setPage(1); fetchData() }}
+            onClick={() => { setPage(1) }}
             style={{ borderRadius: 8 }}
           >
             查询
@@ -417,7 +405,7 @@ export default function SpecialOpsLedger({ initialStats }: SpecialOpsLedgerProps
           columns={columns}
           dataSource={data}
           rowKey="id"
-          loading={loading}
+          loading={isLoading}
           scroll={{ x: 1550 }}
           size="middle"
           pagination={{

@@ -1,9 +1,11 @@
 """脚本4 ControlMeasureExtractor — 输出规则验证器。
 
-验证 AI 识别的控制措施质量：
+验证 AI 推导的控制措施质量：
 1. 四维度不能全部为「待人工确认」
-2. 禁止出现建议类表述词汇
+2. 禁止空泛/含糊表述词汇（建议/推荐/可考虑/宜/最好）
 3. 每项措施长度检查
+4. PPE 维度不应包含工程/管理措施描述
+5. （宽松，不阻断）措施-风险对应软检查：维度完全缺少依据标注时仅记日志告警
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ logger = logging.getLogger(__name__)
 
 UNCONFIRMED = "待人工确认"
 
-# 禁止在现有措施中出现的建议类表述
+# 脚本4 角色已从「识别已有措施」翻转为「推导控制措施」，
+# 允许 "应增加/需完善/需要补充" 等表述（推导缺失措施时的正当措辞），
+# 仍禁止空泛、含糊、削弱措施确定性的措辞。
 BANNED_IN_CONTROLS = [
-    "建议", "应增加", "需完善", "可考虑", "宜", "推荐",
-    "最好", "应当增加", "需要补充", "有待加强",
+    "建议", "推荐", "可考虑", "宜", "最好",
 ]
 
 
@@ -51,14 +54,14 @@ class ControlsRuleEngine:
         if all_unconfirmed:
             errors.append("四个维度不能全部为「待人工确认」")
 
-        # 2. 禁止建议类表述
+        # 2. 禁止空泛/含糊表述
         for label, value in fields:
             if value and value.strip() != UNCONFIRMED:
                 for phrase in BANNED_IN_CONTROLS:
                     if phrase in value:
                         errors.append(
-                            f"{label} 包含建议类表述 '{phrase}' — "
-                            "脚本4只输出已有措施，禁止建议"
+                            f"{label} 包含空泛/含糊表述 '{phrase}' — "
+                            "脚本4 输出应为明确的控制措施，禁止空泛/含糊表述"
                         )
 
         # 3. 每个非空字段最低长度
@@ -78,6 +81,18 @@ class ControlsRuleEngine:
                     errors.append(
                         f"PPE 维度不应包含工程控制描述（检测到: '{kw}'），"
                         "请移至 engineering_controls"
+                    )
+
+        # 5.（宽松，不阻断）措施-风险对应软检查：仅当某维度完全没有依据标注时记告警。
+        #    不作为 error —— strict_mode=True 下任何 error 都会阻断脚本4 落库，
+        #    依据标注由 prompt + FEWSHOT 强约束、人工审核兜底，硬校验代价过高。
+        for label, value in fields:
+            if value and value.strip() != UNCONFIRMED:
+                lines = [ln for ln in value.splitlines() if ln.strip()]
+                if lines and not any(("针对事故" in ln or "针对行为" in ln) for ln in lines):
+                    logger.warning(
+                        "脚本4 %s 输出缺少「针对事故N/行为N」依据标注（软提醒，不阻断）",
+                        label,
                     )
 
         return errors

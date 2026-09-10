@@ -249,6 +249,18 @@ async def recover_unprocessed_records() -> dict[str, Any]:
         _set_sync_ignore,
     )
 
+    # 旧路径总开关（2026-09-09 改造：漏单恢复写平台库，已由 hazard_direct 轮询取代）
+    from app.modules.safety.service.hazard_direct.config import catch_up_enabled
+
+    if not catch_up_enabled():
+        logger.info(
+            "Bitable 漏单恢复已关闭（SAFETY_HAZARD_CATCHUP_ENABLED=false），跳过"
+        )
+        return {
+            "total_bitable": 0, "unprocessed": 0, "recovered": 0,
+            "already_exist": 0, "failed": 0, "details": [], "skipped": True,
+        }
+
     client = SafetyBitableClient()
 
     # Step 1: 拉取全部 Bitable 记录

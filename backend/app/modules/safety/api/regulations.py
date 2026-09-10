@@ -6,7 +6,6 @@ from datetime import datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, UploadFile
-from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -401,6 +400,18 @@ async def generate_sop(
     result = await service.generate_from_draft(file)
     await db.commit()
 
+    # 自动 AI 审核：必须在本请求 commit 之后触发，否则后台独立 session
+    # 在 READ COMMITTED 下看不到刚插入的记录（D6 竞态）。process 类型在
+    # 生成后由后台任务执行 AI 审核（channel=system），不阻塞响应。
+    if result.get("ai_review_auto"):
+        import asyncio
+
+        asyncio.create_task(
+            service.run_ai_review(
+                uuid.UUID(str(result["regulation_id"])), channel="system"
+            )
+        )
+
     return ApiResponse(data=SopGenerateResponse(**result).model_dump())
 
 
@@ -485,59 +496,82 @@ async def revise_regulation(
 
 @regulations_router.post(
     "/regulations/{regulation_id}/export",
-    summary="导出标准化操规 PDF",
+    summary="导出标准化操规（PDF / WORD）",
 )
 async def export_sop_pdf(
     regulation_id: uuid.UUID,
+    format: str = Query("pdf", description="导出格式: pdf 或 docx"),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """将存储的标准化 Markdown 渲染为 PDF，返回文件下载。"""
+    """将存储的标准化 Markdown 渲染为 PDF 或 WORD（.docx），返回文件下载。"""
     from io import BytesIO
 
     from fastapi.responses import StreamingResponse
 
-    from app.core.storage import get_object as minio_get
-    from app.core.storage import is_enabled as _minio_enabled
-
     service = SopGeneratorService(db)
-    pdf_path = await service.export_pdf(regulation_id)
+    exported = await service.export(regulation_id, format)
 
-    if not pdf_path:
+    if not exported:
         return ApiResponse(code=400, message="导出失败：操规不存在或内容为空")
 
-    # Check path validity — MinIO mode: object_key; local mode: local path
-    if _minio_enabled():
-        result = minio_get("safety", pdf_path)
-        if result is None:
-            return ApiResponse(code=400, message="导出失败：PDF文件不存在")
-    else:
-        if not os.path.exists(pdf_path):
-            return ApiResponse(code=400, message="导出失败：PDF文件不存在")
+    file_path, media_type = exported
+    is_docx = media_type.endswith("wordprocessingml.document")
+    ext = ".docx" if is_docx else ".pdf"
+
+    # 统一经 service.read_exported_file 读取（MinIO object key 或本地路径）
+    data = await service.read_exported_file(file_path)
+    if data is None:
+        return ApiResponse(code=400, message="导出失败：文件不存在")
 
     await db.commit()
 
     # Generate a friendly download filename (RFC 5987 encoded for non-ASCII chars)
-    filename = f"标准化操规_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
+    filename = f"标准化操规_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
     encoded_filename = quote(filename)
 
-    if _minio_enabled():
-        result = minio_get("safety", pdf_path)
-        if result is not None:
-            data, ct = result
-            return StreamingResponse(
-                BytesIO(data),
-                media_type="application/pdf",
-                headers={
-                    "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
-                },
-            )
-
-    return FileResponse(
-        pdf_path,
-        media_type="application/pdf",
-        filename=filename,
+    return StreamingResponse(
+        BytesIO(data),
+        media_type=media_type,
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
         },
+    )
+
+
+@regulations_router.post(
+    "/regulations/{regulation_id}/ai-review",
+    summary="重新执行操规 AI 审核",
+)
+async def rerun_regulation_ai_review(
+    regulation_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """手动重试 AI 审核（对照源文档重新审核当前内容）。
+
+    已有进行中审核（reviewing）时幂等跳过；
+    触发后立即返回，审核在后台独立 session 执行。
+    """
+    import asyncio
+
+    service = SopGeneratorService(db)
+    reg = await service.repo.get_regulation_by_id(regulation_id)
+    if not reg:
+        return ApiResponse(code=404, message="操规不存在")
+    if reg.ai_review_status == "reviewing":
+        return ApiResponse(code=409, message="AI 审核进行中，请勿重复触发")
+    if not reg.content:
+        return ApiResponse(code=400, message="操规内容为空，无法审核")
+
+    # 重置为待审（同一请求 session 提交），随后后台任务接管状态流转
+    await service.repo.update_regulation(
+        regulation_id,
+        {"ai_review_status": "pending", "ai_review_note": None},
+    )
+    await db.commit()
+    asyncio.create_task(service.run_ai_review(regulation_id, channel="web"))
+    return ApiResponse(
+        data={"regulation_id": str(regulation_id), "ai_review_status": "pending"},
+        message="已触发 AI 审核",
     )

@@ -8,3 +8,17 @@ docs/superpowers
 
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
+
+# safety 模块合并期的临时分析产物（勿入库）
+.ai_fields_result.txt
+base_scan/
+tbl_list.json
+wf_list.json
+wf_sample.json
+wf_summary.txt
+parse_workflows.py
+scan_ai_fields.py
+
+# 备份目录 / 编辑器备份文件
+backend/app/modules/safety.bak.*/
+*.bak

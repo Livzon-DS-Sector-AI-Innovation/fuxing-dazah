@@ -46,7 +46,12 @@ class RecommendationOutput(BaseModel):
         ..., description="是否需提出建议措施（是/否）"
     )
     recommendation_type: str = Field(
-        ..., description="建议措施类型（工程控制/管理控制/PPE/应急/综合）"
+        ...,
+        description=(
+            "建议措施类型（多选字段）：从 Bitable「建议措施类型（AI）」预设 7 项中"
+            "选择 1~5 个（工程技术/管理措施/培训教育/个体防护/应急处置/综合/无），"
+            "多个用「、」连接；needs_recommendation=否 时固定为「无」"
+        ),
     )
     recommendation_content: str = Field(
         ..., min_length=5, description="建议措施具体内容（可执行的详细描述）"

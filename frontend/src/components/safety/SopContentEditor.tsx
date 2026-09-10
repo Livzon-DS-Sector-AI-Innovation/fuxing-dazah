@@ -1,7 +1,8 @@
 'use client'
 
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { App, Button, Modal } from 'antd'
+import { App, Button, Dropdown, Modal } from 'antd'
+import type { MenuProps } from 'antd'
 import {
   DownloadOutlined,
   SaveOutlined,
@@ -14,6 +15,8 @@ import {
   DownOutlined,
   DeleteOutlined,
   HistoryOutlined,
+  FilePdfOutlined,
+  FileWordOutlined,
 } from '@ant-design/icons'
 
 import { T } from '@/components/safety/shared-styles'
@@ -1072,25 +1075,26 @@ export default function SopContentEditor({
     } finally { setSaving(false) }
   }, [regulationId, fullContent, onSaved, sopName, regulationName, revisionMode, onReviseSave, revisionOpinion])
 
-  const handleExport = useCallback(async () => {
+  const handleExport = useCallback(async (format: 'pdf' | 'docx' = 'pdf') => {
     setExporting(true)
     try {
       const { exportSopPdf } = await import('@/actions/safety')
-      const result = await exportSopPdf(regulationId)
+      const result = await exportSopPdf(regulationId, format)
       const blob = result.data
       if (!blob) { message.error('导出失败：未返回文件数据'); setExporting(false); return }
+      const ext = format === 'docx' ? 'docx' : 'pdf'
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url; a.download = `${regulationName || '标准化操规'}.pdf`
+      a.href = url; a.download = `${regulationName || '标准化操规'}.${ext}`
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      message.success('PDF 下载已开始')
+      message.success(format === 'docx' ? 'WORD 下载已开始' : 'PDF 下载已开始')
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '导出失败')
     } finally { setExporting(false) }
   }, [regulationId, regulationName])
 
-  const handleSaveAndExport = useCallback(async () => {
+  const handleSaveAndExport = useCallback(async (format: 'pdf' | 'docx' = 'pdf') => {
     setSaving(true)
     try {
       const { updateSopContent, updateRegulation } = await import('@/actions/safety')
@@ -1100,7 +1104,7 @@ export default function SopContentEditor({
       }
       setJustSaved(true); setIsDirty(false); onSaved()
       setSaving(false)
-      await handleExport()
+      await handleExport(format)
     } catch (err: unknown) {
       message.error(err instanceof Error ? err.message : '保存失败')
       setSaving(false)
@@ -1827,12 +1831,19 @@ export default function SopContentEditor({
             {revisionMode ? '保存修订' : '仅保存'}
           </Button>
           {!revisionMode && (
-            <Button
+            <Dropdown.Button
               type="primary"
               icon={<DownloadOutlined />}
-              onClick={handleSaveAndExport}
               loading={saving || exporting}
               disabled={!fullContent.trim()}
+              onClick={() => handleSaveAndExport('pdf')}
+              menu={{
+                items: [
+                  { key: 'pdf', icon: <FilePdfOutlined />, label: '保存并导出 PDF' },
+                  { key: 'docx', icon: <FileWordOutlined />, label: '保存并导出 WORD' },
+                ],
+                onClick: ({ key }) => handleSaveAndExport(key as 'pdf' | 'docx'),
+              }}
               size="small"
               style={{
                 height: 32, paddingLeft: 14, paddingRight: 14, fontSize: 13, fontWeight: 500,
@@ -1841,7 +1852,7 @@ export default function SopContentEditor({
               }}
             >
               保存并导出 PDF
-            </Button>
+            </Dropdown.Button>
           )}
         </div>
       </div>

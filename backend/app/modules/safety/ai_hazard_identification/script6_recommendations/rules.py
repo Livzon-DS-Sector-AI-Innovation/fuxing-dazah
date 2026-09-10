@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 
+from app.modules.safety.ai_hazard_identification.script6_recommendations.prompts import (
+    VALID_RECOMMENDATION_TYPES,
+)
 from app.modules.safety.ai_hazard_identification.script6_recommendations.schemas import (
     RecommendationInput,
     RecommendationOutput,
@@ -27,7 +30,8 @@ BANNED_PHRASES = [
 ]
 
 VALID_NEEDS = ["是", "否"]
-VALID_TYPES = ["工程控制", "管理控制", "PPE", "应急", "综合"]
+# Bitable「建议措施类型（AI）」多选字段预设选项（单一来源：prompts.VALID_RECOMMENDATION_TYPES）
+VALID_TYPES = VALID_RECOMMENDATION_TYPES
 VALID_PRIORITIES = ["高", "中", "低"]
 
 
@@ -58,10 +62,25 @@ class RecommendationRuleEngine:
                 "needs_recommendation 不能为「否」"
             )
 
-        # 3. recommendation_type 合法值
-        if output.recommendation_type.strip() not in VALID_TYPES:
+        # 3. recommendation_type 合法值（多选：按「、」拆分，逐个必须在 Bitable 预设内）
+        type_parts = [
+            t.strip() for t in output.recommendation_type.split("、") if t.strip()
+        ]
+        invalid_types = [t for t in type_parts if t not in VALID_TYPES]
+        if invalid_types:
             errors.append(
                 f"recommendation_type 必须在 {VALID_TYPES} 中，当前: '{output.recommendation_type}'"
+            )
+
+        # 3b. recommendation_type 与 needs_recommendation 一致性
+        needs = output.needs_recommendation.strip()
+        if needs == "否" and "无" not in type_parts:
+            errors.append(
+                "needs_recommendation=否 时，recommendation_type 必须为「无」"
+            )
+        if needs == "是" and "无" in type_parts:
+            errors.append(
+                "needs_recommendation=是 时，recommendation_type 不能包含「无」"
             )
 
         # 4. recommendation_priority 合法值
@@ -85,10 +104,10 @@ class RecommendationRuleEngine:
 
         # 6. 不能与现有控制措施完全相同（字符串级别检查）
         for existing_field in [
-            ("existing_engineering_controls", "工程控制"),
-            ("existing_management_controls", "管理控制"),
-            ("existing_ppe", "PPE"),
-            ("existing_emergency_measures", "应急"),
+            ("existing_engineering_controls", "工程技术"),
+            ("existing_management_controls", "管理措施"),
+            ("existing_ppe", "个体防护"),
+            ("existing_emergency_measures", "应急处置"),
         ]:
             existing_val = getattr(input_data, existing_field[0], "") or ""
             if existing_val and existing_val.strip() != UNCONFIRMED:

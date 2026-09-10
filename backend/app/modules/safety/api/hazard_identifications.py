@@ -10,21 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.deps import CurrentUser, get_current_user
 from app.core.response import ApiResponse
-from app.core.storage import is_enabled as minio_enabled, upload_object
+from app.core.storage import is_enabled as minio_enabled
+from app.core.storage import upload_object
 from app.modules.safety.schemas import (
     HazardIdentificationBatchCreate,
-    HazardIdentificationBatchResponse,
     HazardIdentificationCreate,
     HazardIdentificationResponse,
     HazardIdentificationReview,
     HazardIdentificationRunScript,
     HazardIdentificationUpdate,
     HazardLedgerExportRequest,
-    HazardRiskOption,
-    RegulationStagesResponse,
 )
 from app.modules.safety.service import (
-    DailyRiskReportService,
     SafetyService,
 )
 
@@ -48,6 +45,7 @@ async def get_hazard_identifications(
     date_from: str | None = None,
     date_to: str | None = None,
     batch_id: str | None = None,
+    review_status: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
@@ -56,7 +54,7 @@ async def get_hazard_identifications(
     skip = (page - 1) * page_size
     items, total = await service.get_hazard_identifications(
         skip, page_size, department, overall_status, ai_node_progress, keyword,
-        position, risk_level, date_from, date_to, batch_id,
+        position, risk_level, date_from, date_to, batch_id, review_status,
     )
     return ApiResponse(
         data=[HazardIdentificationResponse.model_validate(i) for i in items],
@@ -99,29 +97,6 @@ async def get_hazard_identification_ledger_stats(
         department, position, risk_level, date_from, date_to,
     )
     return ApiResponse(data=stats)
-
-
-@hazard_identifications_router.get(
-    "/hazard-identifications/risk-options",
-    response_model=ApiResponse,
-    summary="获取危险源风险选项（常规作业报备用）",
-)
-async def get_hazard_risk_options(
-    department: str | None = Query(None, description="部门筛选"),
-    keyword: str | None = Query(None, description="搜索关键字（编号/部门/岗位）"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=500),
-    db: AsyncSession = Depends(get_db),
-    current_user: CurrentUser | None = Depends(get_current_user),
-):
-    """返回风险等级为 level_1/level_2 且 overall_status=completed 的危险源辨识项"""
-    service = DailyRiskReportService(db)
-    skip = (page - 1) * page_size
-    items, total = await service.get_hazard_risk_options(department, keyword, skip, page_size)
-    return ApiResponse(
-        data=[HazardRiskOption.model_validate(i) for i in items],
-        meta={"page": page, "page_size": page_size, "total": total},
-    )
 
 
 @hazard_identifications_router.get(
@@ -279,6 +254,58 @@ async def review_hazard_script(
 
 
 @hazard_identifications_router.post(
+    "/hazard-identifications/{hid}/manual-trigger",
+    response_model=ApiResponse,
+    summary="手动触发当前节点脚本（事件丢失兜底）",
+)
+async def manual_trigger_hazard_id(
+    hid: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """按平台 id 或 feishu_record_id 指定记录，走 advance_record 推进当前节点脚本。
+
+    与事件驱动共用同一路径（advance_bitable_record），手动触发跳过 60s 状态级去重、
+    保留 120s 记录级互斥（spec.md §9 事件丢失兜底）。
+
+    返回三种结果：
+        advanced  — 已推进（附刷新后的镜像记录）
+        noop(completed)  — AI 流程已结束，无脚本可执行
+        noop(precondition)  — 前置条件不满足或 AI 执行未产出
+    """
+    from app.modules.safety.feishu.hazard_identification_bitable_handler import (
+        advance_bitable_record,
+    )
+
+    item = await _find_hazard_identification_by_ref(db, hid)
+    if not item:
+        return ApiResponse(code=404, message="记录不存在或已删除")
+    if not item.feishu_record_id:
+        return ApiResponse(code=400, message="该记录不是 Bitable 镜像，无法手动触发")
+
+    result = await advance_bitable_record(
+        item.feishu_record_id,
+        channel="web",
+        skip_dedup=True,
+    )
+    if result.get("status") == "advanced":
+        # 手动触发已推进 → 刷新镜像并返回，前端免整页刷新
+        await db.expire_all()
+        refreshed = await _find_hazard_identification_by_ref(db, item.id)
+        return ApiResponse(
+            data={
+                "result": result,
+                "record": (
+                    HazardIdentificationResponse.model_validate(refreshed)
+                    if refreshed
+                    else None
+                ),
+            }
+        )
+    return ApiResponse(data={"result": result})
+
+
+@hazard_identifications_router.post(
     "/hazard-identifications/{hid}/upload",
     response_model=ApiResponse,
     summary="上传岗位资料附件",
@@ -368,12 +395,8 @@ async def export_hazard_ledger_pdf(
 ):
     """导出危险源辨识台账为 PDF 文件。
 
-    流程：
-    1. AI 解析自然语言 → 筛选条件（如「导出所有重大危险源」「提炼一部上月记录」）
-    2. 按条件查询数据库
-    3. Excel 标准化输出插件填表 → LibreOffice 转 PDF
-
-    不提供 natural_query 时导出全部已完成记录。
+    - ids 非空：按选中行精确导出（不限状态），用于前端勾选后批量导出
+    - ids 为空：AI 解析自然语言 → 按条件查询已完成记录
     """
     from datetime import datetime as dt_module
     from urllib.parse import quote
@@ -381,6 +404,14 @@ async def export_hazard_ledger_pdf(
     from fastapi.responses import Response
 
     service = SafetyService(db)
+
+    # 将 str ids 转为 UUID（容错：跳过非法值）
+    parsed_ids: list[uuid.UUID] = []
+    for id_str in data.ids or []:
+        try:
+            parsed_ids.append(uuid.UUID(id_str))
+        except ValueError:
+            continue
 
     pdf_bytes = await service.export_hazard_ledger_pdf(
         natural_query=data.natural_query,
@@ -390,9 +421,11 @@ async def export_hazard_ledger_pdf(
         date_from=data.date_from,
         date_to=data.date_to,
         keyword=data.keyword,
+        ids=parsed_ids or None,
     )
 
-    filename = f"危险源辨识台账_{dt_module.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    count_suffix = f"{len(parsed_ids)}条" if parsed_ids else "全部"
+    filename = f"危险源辨识台账_{count_suffix}_{dt_module.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     ascii_filename = f"hazard_ledger_{dt_module.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     return Response(
         content=pdf_bytes,
@@ -405,5 +438,85 @@ async def export_hazard_ledger_pdf(
             "Content-Length": str(len(pdf_bytes)),
         },
     )
+
+
+@hazard_identifications_router.post(
+    "/hazard-identifications/export-excel",
+    summary="导出危险源辨识台账 Excel",
+)
+async def export_hazard_ledger_excel(
+    data: HazardLedgerExportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """导出危险源辨识台账为 Excel 文件。
+
+    - ids 非空：按选中行精确导出（不限状态），用于前端勾选后批量导出
+    - ids 为空：按筛选条件/自然语言导出已完成记录
+    """
+    from datetime import datetime as dt_module
+    from urllib.parse import quote
+
+    from fastapi.responses import Response
+
+    service = SafetyService(db)
+
+    # 将 str ids 转为 UUID（容错：跳过非法值）
+    parsed_ids: list[uuid.UUID] = []
+    for id_str in data.ids or []:
+        try:
+            parsed_ids.append(uuid.UUID(id_str))
+        except ValueError:
+            continue
+
+    excel_bytes = await service.export_hazard_ledger_excel(
+        natural_query=data.natural_query,
+        department=data.department,
+        position=data.position,
+        risk_level=data.risk_level,
+        date_from=data.date_from,
+        date_to=data.date_to,
+        keyword=data.keyword,
+        ids=parsed_ids or None,
+    )
+
+    count_suffix = f"{len(parsed_ids)}条" if parsed_ids else "全部"
+    filename = f"危险源辨识台账_{count_suffix}_{dt_module.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    ascii_filename = f"hazard_ledger_{dt_module.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+            "Content-Length": str(len(excel_bytes)),
+        },
+    )
+
+
+# ── 手动触发辅助 ──
+
+
+async def _find_hazard_identification_by_ref(
+    db: AsyncSession, ref: str | uuid.UUID
+):
+    """按平台 UUID 或 feishu_record_id 查找未删除的镜像记录。"""
+    from sqlalchemy import or_, select
+
+    from app.modules.safety.models import HazardIdentification
+
+    # 仅当 ref 是合法 UUID 时按 id 匹配，避免 Postgres 将非法字符串 cast UUID 报错
+    id_match = None
+    try:
+        id_match = HazardIdentification.id == uuid.UUID(str(ref))
+    except ValueError:
+        id_match = None
+    stmt = select(HazardIdentification).where(
+        HazardIdentification.is_deleted == False,  # noqa: E712
+        or_(id_match, HazardIdentification.feishu_record_id == str(ref)),
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 

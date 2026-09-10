@@ -35,7 +35,6 @@ class SpecialOperationPermitBase(BaseModel):
     emergency_equipment: str | None = Field(None, description="应急消防器材")
     gas_analysis: str | None = Field(None, description="气体分析结果")
     risk_assessment: str | None = Field(None, description="风险评估")
-    check_id: uuid.UUID | None = Field(None, description="关联安全检查ID")
     notes: str | None = Field(None, description="备注")
 
 
@@ -71,7 +70,6 @@ class SpecialOperationPermitUpdate(BaseModel):
     rejection_reason: str | None = Field(None, description="驳回原因")
     completion_method: CompletionMethod | None = Field(None, description="完工方式")
     status: PermitStatus | None = Field(None, description="状态")
-    check_id: uuid.UUID | None = Field(None, description="关联安全检查ID")
     notes: str | None = Field(None, description="备注")
 
 

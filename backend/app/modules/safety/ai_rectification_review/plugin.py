@@ -71,7 +71,7 @@ class AIRectificationReviewer:
         knowledge_context: 法规知识库上下文文本（可选，注入到 prompt 中）
 
     Example:
-        >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-v4-flash")
+        >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-v4-flash-vision-exp")
         >>> plugin = AIRectificationReviewer(ai_service, knowledge_context="...")
         >>> output = await plugin.review(RectificationReviewInput(
         ...     original_description="防爆电箱堵头缺失",
@@ -210,6 +210,8 @@ class AIRectificationReviewer:
             hazard_level=input_data.hazard_level,
             department=input_data.department,
             ai_rectification_suggestion=input_data.ai_rectification_suggestion,
+            defect_substance=input_data.defect_substance,
+            defect_substance_reasoning=input_data.defect_substance_reasoning,
         )
 
         reply_context = build_reply_context_text(
@@ -251,6 +253,8 @@ class AIRectificationReviewer:
             hazard_level=input_data.hazard_level,
             department=input_data.department,
             ai_rectification_suggestion=input_data.ai_rectification_suggestion,
+            defect_substance=input_data.defect_substance,
+            defect_substance_reasoning=input_data.defect_substance_reasoning,
         )
 
         reply_context = build_reply_context_text(
@@ -279,6 +283,7 @@ class AIRectificationReviewer:
                     image_urls=all_images,
                     expected_keys=expected_keys,
                     temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
                 )
 
             # Fallback: 将图片信息嵌入文本 prompt

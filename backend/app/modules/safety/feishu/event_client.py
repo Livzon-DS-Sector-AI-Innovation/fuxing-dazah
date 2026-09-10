@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import importlib
 import json
 import logging
 import ssl
@@ -47,17 +48,78 @@ def on_event(event_type: str):
     return decorator
 
 
+# ── handler 失败重试与告警 ──
+# 此前 _dispatch 对 handler 异常只 logger.exception（无重试、无告警），调度任务
+# 有失败告警而事件链路没有，失败即静默丢事件。现加：有界重试（退避 1s/2s，
+# 共 3 次尝试）→ 重试耗尽后节流告警管理员（同 handler 1 小时最多 1 条，事件
+# 失败频率远高于调度任务，防刷屏）。
+_HANDLER_RETRIES = 2
+_RETRY_BACKOFF = (1.0, 2.0)
+_ALERT_THROTTLE_SECONDS = 3600.0
+_alert_throttled_at: dict[str, float] = {}
+
+
+async def _alert_handler_failure(event_type: str, handler_name: str) -> None:
+    """handler 重试耗尽后 DM 告警管理员（进程内节流，发送失败不抛）。"""
+    now = time.monotonic()
+    key = f"{event_type}:{handler_name}"
+    if now - _alert_throttled_at.get(key, 0.0) < _ALERT_THROTTLE_SECONDS:
+        return
+    _alert_throttled_at[key] = now
+    try:
+        # 延迟 import：scheduler 顶层依赖链重，且反向依赖 event_client 的模块众多
+        from app.modules.safety.scheduler import ALERT_NOTIFY_OPEN_ID
+        from app.modules.safety.feishu.notification import send_user_card
+
+        ok = await send_user_card(
+            open_id=ALERT_NOTIFY_OPEN_ID,
+            title="⚠️ 飞书事件处理失败告警",
+            content=(
+                f"**{handler_name}** 处理事件 **{event_type}** 失败\n"
+                f"已重试 {_HANDLER_RETRIES + 1} 次仍未成功，本次事件丢弃。\n"
+                f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"同类型失败 1 小时内只告警一次；若持续失败，"
+                f"数据由每日定时全量/差异同步兜底补齐，请检查服务日志定位根因。"
+            ),
+        )
+        if ok:
+            logger.warning("已发送事件失败告警: type=%s handler=%s", event_type, handler_name)
+        else:
+            logger.warning("事件失败告警发送失败(返回False): type=%s handler=%s", event_type, handler_name)
+    except Exception:  # noqa: BLE001
+        logger.exception("事件失败告警发送异常: type=%s handler=%s", event_type, handler_name)
+
+
 async def _dispatch(event_type: str, event_data: dict[str, Any]) -> Any:
-    """分发事件给注册的处理器，返回第一个处理器的返回值。"""
+    """分发事件给注册的处理器，返回第一个处理器的返回值。
+
+    card.action.trigger 不重试：外层等待 2.9s 卡片响应，重试会重复更新卡片状态。
+    """
     handlers = _handlers.get(event_type, [])
     if handlers:
         logger.info("分发安全飞书事件: type=%s", event_type)
         result = None
+        allow_retry = event_type != "card.action.trigger"
         for handler in handlers:
-            try:
-                result = await handler(event_data)
-            except Exception:
-                logger.exception("事件处理器异常: %s", handler.__name__)
+            attempts = (1 + _HANDLER_RETRIES) if allow_retry else 1
+            for attempt in range(1, attempts + 1):
+                try:
+                    result = await handler(event_data)
+                    break
+                except Exception:
+                    if attempt >= attempts:
+                        logger.exception(
+                            "事件处理器重试耗尽: %s (type=%s, 共 %d 次尝试)",
+                            handler.__name__, event_type, attempt,
+                        )
+                        await _alert_handler_failure(event_type, handler.__name__)
+                    else:
+                        logger.warning(
+                            "事件处理器异常(第 %d/%d 次尝试，将重试): %s",
+                            attempt, attempts, handler.__name__,
+                            exc_info=True,
+                        )
+                        await asyncio.sleep(_RETRY_BACKOFF[attempt - 1])
         return result
     logger.warning(
         "安全飞书未注册的 event_type=%s (data_keys=%s)，请检查是否已添加 @on_event 处理器",
@@ -144,6 +206,73 @@ def _build_ack_frame(frame, biz_rt: int) -> bytes:
     return frame.SerializeToString()
 
 
+# ── 合包（multi-frame segmentation）──
+# 飞书在事件 payload 超单帧上限时，会把一个逻辑事件拆成 sum 个帧，
+# 每帧带 message_id / sum / seq 头。自定义 client 曾对每个片段直接
+# json.loads，导致大事件（长记录）必然解析失败 → 平台同步静默失效。
+# 此处参照 lark_oapi ws client._combine：按 message_id 缓冲片段，收齐才合并。
+_SEGMENT_TTL = 5.0  # 与 lark_oapi 一致：片段缓冲 TTL（秒）
+_segment_buffers: dict[str, list[bytes]] = {}
+_segment_stamps: dict[str, float] = {}
+
+
+def _header_value(headers, key: str, default: str) -> str:
+    """读取帧 header 值，缺失时返回 default（不抛异常）。
+
+    lark_oapi 的 _get_by_key 缺失时抛 HeaderNotFoundException，这里用安全读取。
+    """
+    for header in headers:
+        if header.key == key:
+            return header.value
+    return default
+
+
+def _assemble_segmented_payload(headers, payload: bytes) -> bytes | None:
+    """处理飞书合包：sum<=1 原样返回；sum>1 按 message_id 缓冲片段，收齐返回拼接。
+
+    返回 None 表示分段尚未收齐 —— 调用方应跳过本次帧（不解析、不分发、不发 ACK）。
+    """
+    from lark_oapi.ws.const import HEADER_MESSAGE_ID, HEADER_SEQ, HEADER_SUM
+
+    sum_ = _header_value(headers, HEADER_SUM, "1")
+    if int(sum_) <= 1:
+        return payload
+
+    msg_id = _header_value(headers, HEADER_MESSAGE_ID, "")
+    seq = _header_value(headers, HEADER_SEQ, "0")
+    if not msg_id:
+        # 协议异常：分段帧却无 message_id，无法可靠关联片段，退回单帧解析
+        logger.warning("安全飞书合包帧缺少 message_id，无法合包 (sum=%s)", sum_)
+        return payload
+
+    now = time.monotonic()
+    # 惰性清理过期片段缓冲（5s TTL）
+    for mid in list(_segment_stamps):
+        if now - _segment_stamps[mid] > _SEGMENT_TTL:
+            _segment_buffers.pop(mid, None)
+            _segment_stamps.pop(mid, None)
+
+    val = _segment_buffers.get(msg_id)
+    if val is None:
+        buf = [b""] * int(sum_)
+        buf[int(seq)] = payload
+        _segment_buffers[msg_id] = buf
+        _segment_stamps[msg_id] = now
+        return None
+
+    val[int(seq)] = payload
+    _segment_stamps[msg_id] = now
+    joined = b""
+    for piece in val:
+        if not piece:
+            return None  # 还有片段未到，继续等待
+        joined += piece
+    # 收齐：清理缓冲并返回完整 payload
+    _segment_buffers.pop(msg_id, None)
+    _segment_stamps.pop(msg_id, None)
+    return joined
+
+
 async def _ping_loop(ws, service_id: int) -> None:
     """定期发送 protobuf PING 帧保持连接和事件路由。"""
     while not _stop.is_set():
@@ -165,7 +294,7 @@ async def _ping_loop(ws, service_id: int) -> None:
 
 
 # 帧活动计数器（用于诊断连接是否存活）
-_frame_count: dict[str, int] = {"received": 0, "control": 0, "data": 0, "event": 0, "error": 0}
+_frame_count: dict[str, int] = {"received": 0, "control": 0, "data": 0, "event": 0, "segment": 0, "error": 0}
 
 # PONG 看门狗：记录最后一次收到 PONG 的时间，用于检测静默断连
 _last_pong_at: float = 0.0  # monotonic seconds
@@ -211,8 +340,18 @@ async def _handle_binary_message(ws, message: bytes) -> None:
             msg_type = MessageType(type_val)
 
             if msg_type == MessageType.EVENT:
+                # ── 合包处理：大事件被飞书拆成 sum 个帧（message_id/sum/seq 头）──
+                # 未收齐时返回 None → 提前 return：不解析、不分发、不发 ACK
+                payload = _assemble_segmented_payload(frame.headers, frame.payload)
+                if payload is None:
+                    _frame_count["segment"] += 1
+                    logger.debug(
+                        "安全飞书合包片段待齐，暂不解析/ACK (共 %d 帧)",
+                        _frame_count["segment"],
+                    )
+                    return
                 _frame_count["event"] += 1
-                event = json.loads(frame.payload.decode("utf-8"))
+                event = json.loads(payload.decode("utf-8"))
                 logger.info(
                     "📨 安全飞书收到事件(完整): %s",
                     json.dumps(event, ensure_ascii=False)[:800],
@@ -279,6 +418,30 @@ async def start_ws() -> None:
         SAFETY_FEISHU_APP_ID,
     )
 
+    # 预热 Bitable 配置缓存（失败不阻塞订阅，store 读时回退 registry 默认）
+    try:
+        from app.modules.safety.bitable_config.store import store
+
+        await store.warmup()
+    except Exception:
+        logger.exception("Bitable 配置缓存预热失败（不影响事件订阅）")
+
+    # 预热 AI 配置中心缓存（失败仅告警，读路径回退 env/registry 默认）
+    try:
+        from app.modules.safety.ai_config.store import store as ai_config_store
+
+        await ai_config_store.warmup()
+    except Exception:
+        logger.exception("AI 配置中心缓存预热失败（不影响事件订阅）")
+
+    # 预热 AI 场景配置缓存（失败仅告警，读路径回退 registry 默认/场景默认开启）
+    try:
+        from app.modules.safety.ai_config.scenario_store import scenario_store
+
+        await scenario_store.warmup()
+    except Exception:
+        logger.exception("AI 场景配置缓存预热失败（不影响事件订阅）")
+
     attempt = 0
     while not _stop.is_set():
         try:
@@ -307,11 +470,76 @@ async def start_ws() -> None:
                 attempt = 0  # 连接成功，重置失败计数
 
                 # 3. 订阅 Bitable 文档事件（持久订阅，每次启动重试无害）
+                # 逐个导入 handler 模块触发 @on_event 注册；单个模块失败只影响
+                # 对应事件类型，不得中断 WS 连接与其余订阅（此前某 handler 缺依赖
+                # 曾导致整个 WS 事件链路崩溃，表现为连接后立即异常并无限重连）
+                _handler_modules = [
+                    "app.modules.safety.feishu.bitable_ai_handler",
+                    "app.modules.safety.feishu.business_agent_bot_handler",
+                    "app.modules.safety.feishu.ehs_change_bitable_handler",
+                    "app.modules.safety.feishu.emergency_drill_bitable_handler",
+                    "app.modules.safety.feishu.emergency_drill_collection_handler",
+                    "app.modules.safety.feishu.fire_alarm_bitable_handler",
+                    "app.modules.safety.feishu.hazard_identification_bitable_handler",
+                    "app.modules.safety.feishu.oh_bitable_handler",
+                    "app.modules.safety.feishu.contractor_admission_bitable_handler",
+                    "app.modules.safety.feishu.central_alarm_bitable_handler",
+                    "app.modules.safety.feishu.cert_bitable_handler",
+                    "app.modules.safety.feishu.chemical_inventory_bitable_handler",
+                    "app.modules.safety.feishu.chemical_inventory_daily_handler",
+                    "app.modules.safety.feishu.msds_bitable_handler",
+                    "app.modules.safety.feishu.msds_collection_handler",
+                    "app.modules.safety.feishu.menu_handler",
+                ]
+                for _handler_mod in _handler_modules:
+                    try:
+                        importlib.import_module(_handler_mod)
+                    except Exception:
+                        logger.exception(
+                            "事件 handler 导入失败: %s（该事件类型不可用，其余订阅不受影响）",
+                            _handler_mod,
+                        )
                 from app.modules.safety.feishu.bitable_handler import (
                     ensure_bitable_subscribed,
                 )
+                from app.modules.safety.feishu.central_alarm_bitable_handler import (
+                    ensure_central_alarm_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.cert_bitable import (
+                    ensure_cert_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.chemical_inventory_bitable_handler import (
+                    ensure_chemical_inventory_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.fire_alarm_bitable_handler import (
+                    ensure_fire_alarm_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.hazard_identification_bitable_handler import (
+                    ensure_hazard_id_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.key_risk_op_bitable_handler import (
+                    ensure_key_risk_op_bitable_subscribed,
+                )
                 from app.modules.safety.feishu.knowledge_bitable_handler import (
                     ensure_knowledge_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.oh_bitable_handler import (
+                    ensure_oh_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.special_op_bitable_handler import (
+                    ensure_special_op_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.contractor_admission_bitable_handler import (
+                    ensure_contractor_admission_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.ehs_change_bitable_handler import (
+                    ensure_ehs_change_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.emergency_drill_bitable_handler import (
+                    ensure_emergency_drill_bitable_subscribed,
+                )
+                from app.modules.safety.feishu.msds_bitable_handler import (
+                    ensure_msds_bitable_subscribed,
                 )
 
                 subscribed = await ensure_bitable_subscribed()
@@ -319,7 +547,7 @@ async def start_ws() -> None:
                     _subscription_ok = False
                     logger.error(
                         "⚠️ Bitable 事件订阅失败！WebSocket 已连接但不会收到任何 Bitable 事件。"
-                        "请检查 SAFETY_FEISHU_BITABLE_APP_TOKEN 配置和飞书应用权限。"
+                        "请在【系统功能 → 多维表格配置】检查该域连接配置和飞书应用权限。"
                     )
                 else:
                     _subscription_ok = True
@@ -331,6 +559,94 @@ async def start_ws() -> None:
                     logger.info("✅ 知识库 Bitable 事件订阅就绪")
                 else:
                     logger.info("知识库 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # 危险源辨识自动化 Bitable — 独立表格，独立订阅
+                hazard_id_subscribed = await ensure_hazard_id_bitable_subscribed()
+                if hazard_id_subscribed:
+                    logger.info("✅ 危险源辨识 Bitable 事件订阅就绪")
+                else:
+                    logger.info("危险源辨识 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # 特殊作业日报 Bitable — 必须显式订阅文档事件，WS 才会推送变更
+                # （不订阅则该文档的 drive.file.bitable_record_changed_v1 永不推送）
+                special_op_subscribed = await ensure_special_op_bitable_subscribed()
+                if special_op_subscribed:
+                    logger.info("✅ 特殊作业日报 Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ 特殊作业日报 Bitable 文档事件订阅失败，实时同步将失效")
+
+                # 相关方准入 Bitable — 必须显式订阅文档事件（drive.file.bitable_record_changed_v1）
+                admission_subscribed = await ensure_contractor_admission_bitable_subscribed()
+                if admission_subscribed:
+                    logger.info("✅ 相关方准入 Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ 相关方准入 Bitable 文档事件订阅失败，实时同步将失效")
+
+                # 关键风险作业 Bitable — 必须显式订阅文档事件，WS 才会推送变更
+                key_risk_op_subscribed = await ensure_key_risk_op_bitable_subscribed()
+                if key_risk_op_subscribed:
+                    logger.info("✅ 关键风险作业 Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ 关键风险作业 Bitable 文档事件订阅失败，实时同步将失效")
+
+                # 职业健康 OH Bitable — 单文档 5 表镜像（人员汇总/体检记录/岗位/危害因素PPE/申请）
+                oh_subscribed = await ensure_oh_bitable_subscribed()
+                if oh_subscribed:
+                    logger.info("✅ 职业健康 Bitable 事件订阅就绪")
+                else:
+                    logger.info("职业健康 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # 消防报警 Bitable — 事件驱动增量同步（仅同步数据，不触发 AI 分析）
+                fire_subscribed = await ensure_fire_alarm_bitable_subscribed()
+                if fire_subscribed:
+                    logger.info("✅ 消防报警 Bitable 事件订阅就绪")
+                else:
+                    logger.info("消防报警 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # 中控报警 Bitable — 事件驱动增量同步（15 表，仅同步数据，不触发 AI 分析）
+                central_subscribed = await ensure_central_alarm_bitable_subscribed()
+                if central_subscribed:
+                    logger.info("✅ 中控报警 Bitable 事件订阅就绪")
+                else:
+                    logger.info("中控报警 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # 危化品库存 Bitable — 总表事件驱动增量同步
+                chem_inv_subscribed = await ensure_chemical_inventory_bitable_subscribed()
+                if chem_inv_subscribed:
+                    logger.info("✅ 危化品库存 Bitable 事件订阅就绪")
+                else:
+                    logger.info("危化品库存 Bitable 事件订阅未启用（可能未配置 env var）")
+
+                # MSDS Bitable — 采集入口 + 收录台账（单 base 两表，2026-09-08
+                # 自从不推送的 bitable.record.* 迁移至文档级事件）
+                msds_subscribed = await ensure_msds_bitable_subscribed()
+                if msds_subscribed:
+                    logger.info("✅ MSDS Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ MSDS Bitable 文档事件订阅失败，实时同步将失效")
+
+                # 应急演练 Bitable — 统计表 + 收录表（单 base 两表，同上迁移）
+                drill_subscribed = await ensure_emergency_drill_bitable_subscribed()
+                if drill_subscribed:
+                    logger.info("✅ 应急演练 Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ 应急演练 Bitable 文档事件订阅失败，实时同步将失效")
+
+                # EHS 变更 Bitable — 审批表 + 验收表（单 base 两表，同上迁移）
+                ehs_subscribed = await ensure_ehs_change_bitable_subscribed()
+                if ehs_subscribed:
+                    logger.info("✅ EHS 变更 Bitable 文档事件订阅就绪")
+                else:
+                    logger.error("⚠️ EHS 变更 Bitable 文档事件订阅失败，实时同步将失效")
+
+                # 持证台账 Bitable — 特种作业证 wiki + 监护人 A/B 证 base 两个文档
+                # （修复现状缺口：此前 _handler_modules 未导入 cert 模块、start_ws 未订阅，
+                #   3 张表的事件永远不会推送，见 backend-design §0 事实 2）
+                cert_subscribed = await ensure_cert_bitable_subscribed()
+                if cert_subscribed:
+                    logger.info("✅ 持证台账 Bitable 事件订阅就绪")
+                else:
+                    logger.error("⚠️ 持证台账 Bitable 事件订阅失败，实时同步将失效")
 
                 # 4. 启动 protobuf PING 心跳循环
                 ping_task = asyncio.create_task(_ping_loop(ws, service_id))

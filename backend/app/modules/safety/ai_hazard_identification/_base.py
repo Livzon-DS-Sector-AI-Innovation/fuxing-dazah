@@ -202,11 +202,15 @@ class BasePlugin[TInput: BaseModel, TOutput: BaseModel](ABC):
             {"role": "user", "content": prompt},
         ]
 
+        # 转发 max_tokens：优先插件配置（seed 配置读取 4096），无配置时用客户端默认 16384
+        max_tokens = self.config.max_tokens if self.config is not None else 16384
+
         try:
             return await self.ai_service.chat_parsed(
                 messages=messages,
                 expected_keys=self._get_expected_keys(),
                 temperature=self.config.temperature,
+                max_tokens=max_tokens,
             )
         except Exception as e:
             logger.error("[%s] AI 调用失败: %s", self.__class__.__name__, e)
@@ -243,7 +247,7 @@ class BasePlugin[TInput: BaseModel, TOutput: BaseModel](ABC):
             "equipment_facilities": "设备设施",
             "raw_auxiliary_materials": "原辅料",
             # 脚本2 输出
-            "hazard_type": "危险类型（GB 6441）",
+            "hazard_type": "危险类型（Bitable 预设多选）",
             "possible_accident": "可能导致的事故",
             "unsafe_behavior": "人的不规范作业行为表现",
             # 脚本3 输出 — 固有风险 LEC

@@ -1,7 +1,5 @@
 import type {
-  SafetyCheck, SafetyCheckQueryParams,
   HazardReport, HazardReportQueryParams,
-  Accident, AccidentQueryParams,
   SafetyTraining, SafetyTrainingQueryParams, TrainingRecord,
   OperationRegulation, OperationRegulationQueryParams,
   RegulationRevision, RegulationRevisionQueryParams,
@@ -9,21 +7,10 @@ import type {
   SpecialOperationPermit, SpecialOperationPermitQueryParams,
   SafetyKnowledgeArticle, SafetyKnowledgeArticleQueryParams,
   SpecialOperationReport, SpecialOperationReportQueryParams,
-  DailyRiskReport, DailyRiskReportQueryParams,
   HazardIdentification, HazardIdentificationQueryParams,
   EhsChange, EhsChangeQueryParams,
   Contractor, ContractorQueryParams, ContractorWorkRecord,
-  OhHazardMonitor, OhHazardMonitorQueryParams,
-  OhHealthExam, OhHealthExamQueryParams,
 } from '@/types/safety'
-
-export const initialCheckState = {
-  checks: [] as SafetyCheck[],
-  currentCheck: null,
-  checkQueryParams: { page: 1, page_size: 20 } as SafetyCheckQueryParams,
-  checkTotal: 0,
-  checkLoading: false,
-}
 
 export const initialHazardState = {
   hazards: [] as HazardReport[],
@@ -31,14 +18,6 @@ export const initialHazardState = {
   hazardQueryParams: { page: 1, page_size: 20 } as HazardReportQueryParams,
   hazardTotal: 0,
   hazardLoading: false,
-}
-
-export const initialAccidentState = {
-  accidents: [] as Accident[],
-  currentAccident: null,
-  accidentQueryParams: { page: 1, page_size: 20 } as AccidentQueryParams,
-  accidentTotal: 0,
-  accidentLoading: false,
 }
 
 export const initialTrainingState = {
@@ -98,14 +77,6 @@ export const initialSpecialOpReportState = {
   specialOpReportLoading: false,
 }
 
-export const initialDailyRiskReportState = {
-  dailyRiskReports: [] as DailyRiskReport[],
-  currentDailyRiskReport: null as DailyRiskReport | null,
-  dailyRiskReportQueryParams: { page: 1, page_size: 20 } as DailyRiskReportQueryParams,
-  dailyRiskReportTotal: 0,
-  dailyRiskReportLoading: false,
-}
-
 export const initialHazardIdentificationState = {
   hazardIdentifications: [] as HazardIdentification[],
   currentHazardIdentification: null as HazardIdentification | null,
@@ -129,20 +100,4 @@ export const initialContractorState = {
   contractorTotal: 0,
   contractorLoading: false,
   contractorWorkRecords: [] as ContractorWorkRecord[],
-}
-
-export const initialOhHazardMonitorState = {
-  ohHazardMonitors: [] as OhHazardMonitor[],
-  currentOhHazardMonitor: null as OhHazardMonitor | null,
-  ohHazardMonitorQueryParams: { page: 1, page_size: 20 } as OhHazardMonitorQueryParams,
-  ohHazardMonitorTotal: 0,
-  ohHazardMonitorLoading: false,
-}
-
-export const initialOhHealthExamState = {
-  ohHealthExams: [] as OhHealthExam[],
-  currentOhHealthExam: null as OhHealthExam | null,
-  ohHealthExamQueryParams: { page: 1, page_size: 20 } as OhHealthExamQueryParams,
-  ohHealthExamTotal: 0,
-  ohHealthExamLoading: false,
 }

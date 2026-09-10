@@ -32,7 +32,7 @@ WORK_RULES = f"""## 工作规则
 ### 2. L 值（可能性）评分原则
 - 结合作业活动类型、危险类型综合判断
 - 化工行业中常见的同类作业事故频率
-- 参考知识库中该岗位/步骤的历史事故记录
+- 如提供知识库信息，可参考知识库中与本岗位/步骤相关的历史事故记录
 
 ### 3. E 值（暴露频率）评分原则
 - 结合 operation_frequency（作业频次）和操作人员接触时长
@@ -56,7 +56,15 @@ WORK_RULES = f"""## 工作规则
 - L/E/C 必须从合法值中选取（允许 AI 在合法值之间做合理判断）
 - D 值 = L × E × C（必须计算精确）
 - 信息不足时对应字段填 null
-- 不得因「不确定」而刻意压低分值 — 保守原则：不确定时偏向较高风险"""
+- 不得因「不确定」而刻意压低分值 — 保守原则：不确定时偏向较高风险
+
+### 8. 质量约束（依据标准文件）
+- 评分必须综合以下维度判断：岗位、生产步骤、具体作业活动、设备设施、原辅料、作业频次、危险类型、可能导致事故
+- 必须基于人工确认后的危险源信息进行评价，不得自行假设输入中不存在的信息
+- 评分仅基于表格字段与知识库，不输出无依据内容
+- 如知识库中已有 LEC 评分标准与风险分级标准，优先按知识库标准执行
+- 无依据内容对应字段填 null（表示「待人工确认」）
+- 若 L、E、C 任一字段信息不足（null），则风险值 D 和固有风险等级也必须填 null（待人工确认）"""
 
 OUTPUT_FORMAT = """## 输出格式
 
@@ -98,7 +106,7 @@ FEWSHOT_EXAMPLES = [
             "equipment_facilities": "反应罐R201（搪玻璃，5000L）、手推泵、盐酸储罐",
             "raw_auxiliary_materials": "盐酸（30%，100L）、氮气",
             "operation_frequency": "每批次，约每日2批",
-            "hazard_type": "灼烫",
+            "hazard_type": "腐蚀灼伤、化学灼伤",
             "possible_accident": "未确认罐压打开罐盖，盐酸喷溅致化学灼伤",
             "unsafe_behavior": "未确认罐压为0即打开罐盖",
         },
@@ -148,13 +156,7 @@ def build_prompt(context_text: str, knowledge_context: str | None = None) -> str
 
     sections.append(WORK_RULES)
 
-    # 注入 LEC 评分参照表 + 风险等级表到知识库段
-    ref_docs = ""
-    if knowledge_context:
-        ref_docs += knowledge_context + "\n\n"
-    ref_docs += "## LEC 评分标准（系统内置）\n" + LEC_SCORING_GUIDE
-    ref_docs += "\n## 风险等级表（系统内置）\n" + RISK_LEVEL_TABLE
-    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + ref_docs)
+    sections.append("## 参考文档（知识库 + 内置标准）\n\n" + (knowledge_context or ""))
 
     sections.append(OUTPUT_FORMAT)
 
@@ -166,7 +168,7 @@ def get_db_seed_config() -> dict:
     return {
         "script_number": 3,
         "script_name": "LEC固有风险评价",
-        "model": "deepseek-v4-pro",
+        "model": "deepseek-v4-flash-vision-exp",
         "temperature": 0.05,
         "max_tokens": 4096,
         "system_role": SYSTEM_ROLE,

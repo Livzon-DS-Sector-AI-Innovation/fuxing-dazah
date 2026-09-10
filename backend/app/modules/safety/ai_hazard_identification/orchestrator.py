@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from sqlalchemy import select
@@ -24,6 +25,22 @@ from app.modules.safety.ai_hazard_identification._base import PluginError
 from app.modules.safety.ai_hazard_identification.schemas import PluginConfig
 
 logger = logging.getLogger(__name__)
+
+# 附件/章七上下文注入提示词前的最大字符数（超长截断，防止上下文溢出）
+MAX_ATTACHMENT_CHARS = 8000
+_TRUNCATION_MARKER = "\n【内容过长已截断】"
+
+
+def _truncate_attachment(
+    text: str | None, max_chars: int = MAX_ATTACHMENT_CHARS,
+) -> str | None:
+    """按 max_chars 截断附件文本，超长时追加截断标注。
+
+    默认值 8000 保持向后兼容；调用方可显式传入其他上限。
+    """
+    if not text or len(text) <= max_chars:
+        return text
+    return text[:max_chars] + _TRUNCATION_MARKER
 
 
 class OrchestratorError(Exception):
@@ -135,7 +152,7 @@ class HazardIdentificationOrchestrator:
 
                 # 多工段模式：优先使用 chapter7_context（仅该工段的节选内容）
                 if getattr(item, "chapter7_context", None):
-                    attachment_text = item.chapter7_context
+                    attachment_text = _truncate_attachment(item.chapter7_context)
                     logger.info(
                         "脚本1 使用工段特化操规内容: %s (%d 字符)",
                         getattr(item, "stage_name", "?"), len(attachment_text),
@@ -150,25 +167,51 @@ class HazardIdentificationOrchestrator:
                     if reg:
                         # 单条模式：使用完整 Markdown 内容，回退到原始文档解析
                         if reg.content:
-                            attachment_text = reg.content
+                            attachment_text = _truncate_attachment(reg.content)
                             logger.info(
                                 "脚本1 使用完整操规内容: %s (%d 字符)",
                                 reg.regulation_name, len(reg.content),
                             )
                         elif reg.document_path:
+                            tmp_path = None
                             try:
-                                from app.modules.safety.ai_hazard_identification.script1_attachment.plugin import (
-                                    DocumentParser,
+                                from app.modules.safety.attachment_store import (
+                                    cleanup_temp,
+                                    materialize,
                                 )
-                                attachment_text = DocumentParser.extract_text(
-                                    reg.document_path, max_chars=30000,
+                                from app.modules.safety.knowledge.document_parser import (
+                                    SafetyDocumentParser,
                                 )
+                                from app.modules.safety.vision.utils import (
+                                    resolve_local_path,
+                                )
+
+                                # 回读适配：本地未命中时按 MinIO object key
+                                # 物化临时文件（保留扩展名），解析后清理
+                                local = resolve_local_path(reg.document_path)
+                                parse_target = local
+                                if parse_target is None:
+                                    tmp_path = materialize(
+                                        reg.document_path,
+                                        suffix=os.path.splitext(reg.document_path)[1],
+                                    )
+                                    if tmp_path is not None:
+                                        parse_target = str(tmp_path)
+                                if parse_target:
+                                    attachment_text = _truncate_attachment(
+                                        SafetyDocumentParser.extract_text(
+                                            parse_target, max_chars=30000,
+                                        )
+                                    )
                                 logger.info(
                                     "脚本1 解析引用操规文档: %s (%d 字符)",
                                     reg.regulation_name, len(attachment_text or ""),
                                 )
                             except Exception as e:
                                 logger.warning("引用操规文档解析失败: %s", e)
+                            finally:
+                                if tmp_path is not None:
+                                    cleanup_temp(tmp_path)
 
             # 回退：使用上传的附件文本（旧模式兼容）
             if not attachment_text:
@@ -233,6 +276,11 @@ class HazardIdentificationOrchestrator:
                 d_inherent=item.d_inherent,
                 inherent_risk_level=item.inherent_risk_level,
                 inherent_risk_label=item.inherent_risk_label,
+                # 优化2：注入人工先填的 4 类现有控制措施（AI 审核润色输入）
+                existing_engineering_controls=item.existing_engineering_controls or "",
+                existing_management_controls=item.existing_management_controls or "",
+                existing_ppe=item.existing_ppe or "",
+                existing_emergency_measures=item.existing_emergency_measures or "",
             )
 
         elif script_number == 5:
@@ -552,8 +600,7 @@ class HazardIdentificationOrchestrator:
             return None
 
         try:
-            from app.modules.safety.knowledge import KnowledgeInjector
-            injector = KnowledgeInjector(self.session)
+            from app.modules.safety.knowledge.retriever import SafetyKnowledgeRetriever
 
             # 根据脚本类型筛选知识卡片类别
             if script_number in (1, 2):
@@ -567,13 +614,15 @@ class HazardIdentificationOrchestrator:
             else:
                 categories = ["standards"]
 
-            context = await injector.build_context(
+            retriever = SafetyKnowledgeRetriever(self.session)
+            context = await retriever.retrieve(
+                description=getattr(item, "description", "") or "",
                 categories=categories,
-                max_cards=3,
-                ai_service=self.ai_service,
-                hazard_description=getattr(item, "description", "") or "",
+                target_chunks=5,
             )
-            return context if context else None
+            if not context.chunks:
+                return None
+            return retriever.build_injection_context(context)
         except Exception as e:
             logger.warning("知识上下文加载失败（非致命）: %s", e)
             return None

@@ -10,8 +10,8 @@ import {
   buildTreeData,
   searchTree,
   getAncestorIds,
-} from '@/lib/buildTreeData'
-import type { KnowledgeTreeNode } from '@/lib/buildTreeData'
+} from '@/components/safety/buildTreeData'
+import type { KnowledgeTreeNode } from '@/components/safety/buildTreeData'
 import KnowledgeGraphTreeNode from './KnowledgeGraphTreeNode'
 import {
   NODE_TYPE_STYLE,

@@ -78,11 +78,21 @@ from app.modules.safety.ai_hazard_identification.script1_attachment import (
 
 # 脚本2: AI 危险源辨识
 from app.modules.safety.ai_hazard_identification.script2_hazard_id import (
-    VALID_HAZARD_TYPES_6441,
+    VALID_HAZARD_TYPES_BITABLE,
     HazardIdentifier,
     HazardIdInput,
     HazardIdOutput,
     HazardIdRuleEngine,
+)
+
+# 脚本3.5: 福建固有风险评级（脚本3 附属评估）
+from app.modules.safety.ai_hazard_identification.script3_5_fujian_risk import (
+    FUJIAN_INDICATOR_FIELDS,
+    FUJIAN_RISK_LABELS,
+    FujianRiskAssessor,
+    FujianRiskInput,
+    FujianRiskOutput,
+    FujianRiskRuleEngine,
 )
 
 # 脚本3: LEC 固有风险评价
@@ -117,6 +127,7 @@ from app.modules.safety.ai_hazard_identification.script5_residual_risk import (
 
 # 脚本6: 建议措施生成
 from app.modules.safety.ai_hazard_identification.script6_recommendations import (
+    VALID_RECOMMENDATION_TYPES,
     RecommendationGenerator,
     RecommendationInput,
     RecommendationOutput,
@@ -170,7 +181,7 @@ __all__ = [
     "HazardIdInput",
     "HazardIdOutput",
     "HazardIdRuleEngine",
-    "VALID_HAZARD_TYPES_6441",
+    "VALID_HAZARD_TYPES_BITABLE",
     # ── 脚本3: LEC 固有风险 ──
     "InherentRiskAssessor",
     "LECOutput",
@@ -197,9 +208,17 @@ __all__ = [
     "RecommendationInput",
     "RecommendationOutput",
     "RecommendationRuleEngine",
+    "VALID_RECOMMENDATION_TYPES",
     # ── 脚本7: 措施后风险 ──
     "PostMeasureAssessor",
     "PostRiskInput",
     "PostRiskOutput",
     "PostRiskRuleEngine",
+    # ── 脚本3.5: 福建固有风险评级 ──
+    "FujianRiskAssessor",
+    "FujianRiskInput",
+    "FujianRiskOutput",
+    "FujianRiskRuleEngine",
+    "FUJIAN_RISK_LABELS",
+    "FUJIAN_INDICATOR_FIELDS",
 ]

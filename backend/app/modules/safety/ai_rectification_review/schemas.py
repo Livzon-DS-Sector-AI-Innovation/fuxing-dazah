@@ -151,11 +151,11 @@ class RectificationReviewOutput(BaseModel):
 
     # ── 综合结论 ──
     review_conclusion: ReviewConclusion = Field(
-        ..., description="综合审核结论"
+        ..., description="综合审核结论：通过/不通过/无需整改"
     )
     review_comments: str = Field(
         ..., min_length=1,
-        description="AI初审结果：通过/不通过"
+        description="审核意见（自由文本，1-3句）：指出具体问题或说明整改情况，供人工复核参考"
     )
 
     # ── 置信度（可选）──

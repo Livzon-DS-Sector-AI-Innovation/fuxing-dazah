@@ -73,7 +73,7 @@ class AIHazardIdentifier:
         knowledge_context: 法规知识库上下文文本（可选，注入到 prompt 中）
 
     Example:
-        >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-v4-flash")
+        >>> ai_service = AIService(api_key="sk-xxx", model="deepseek-v4-flash-vision-exp")
         >>> plugin = AIHazardIdentifier(ai_service, knowledge_context="...")
         >>> output = await plugin.identify(HazardIdentificationInput(
         ...     description="防爆电箱堵头缺失",
@@ -242,6 +242,7 @@ class AIHazardIdentifier:
                     image_urls=input_data.defect_photos,
                     expected_keys=expected_keys,
                     temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
                 )
 
             # Fallback: 将图片信息嵌入文本 prompt

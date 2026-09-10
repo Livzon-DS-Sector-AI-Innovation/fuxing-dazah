@@ -77,26 +77,63 @@ def _extract_xlsx_to_markdown(path: str) -> str:
 
 
 def _extract_docx_to_markdown(path: str) -> str:
-    """Extract DOCX content with basic heading detection."""
+    """Extract DOCX content with basic heading detection, preserving table content.
+
+    按文档顺序遍历 body 子元素（段落 + 表格穿插），表格转 Markdown 表格，
+    避免 URS/操规中表格内的核心内容（条款、参数）被丢弃。
+    """
     from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     doc = Document(path)
     lines: list[str] = []
-    for p in doc.paragraphs:
-        text = p.text.strip()
-        if not text:
-            continue
-        # 检测标题样式
-        if p.style and p.style.name and p.style.name.startswith("Heading"):
-            level = p.style.name.replace("Heading", "").strip()
-            try:
-                lv = int(level)
-            except ValueError:
-                lv = 1
-            lines.append(f"{'#' * min(lv, 4)} {text}")
-        else:
-            lines.append(text)
+
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            para = Paragraph(child, doc)
+            text = para.text.strip()
+            if not text:
+                continue
+            # 检测标题样式
+            if para.style and para.style.name and para.style.name.startswith("Heading"):
+                level = para.style.name.replace("Heading", "").strip()
+                try:
+                    lv = int(level)
+                except ValueError:
+                    lv = 1
+                lines.append(f"{'#' * min(lv, 4)} {text}")
+            else:
+                lines.append(text)
+        elif child.tag == qn("w:tbl"):
+            table = Table(child, doc)
+            table_md = _docx_table_to_markdown(table)
+            if table_md:
+                lines.append(table_md)
+
     return "\n\n".join(lines)
+
+
+def _docx_table_to_markdown(table) -> str:
+    """Convert a python-docx Table to a Markdown table (first row as header)."""
+    rows: list[list[str]] = []
+    for row in table.rows:
+        cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+        if any(c for c in cells):
+            rows.append(cells)
+    if not rows:
+        return ""
+    max_cols = max(len(r) for r in rows)
+    header = rows[0] + [""] * (max_cols - len(rows[0]))
+    md_rows: list[str] = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(["---"] * max_cols) + " |",
+    ]
+    for row in rows[1:]:
+        row += [""] * (max_cols - len(row))
+        md_rows.append("| " + " | ".join(row) + " |")
+    return "\n".join(md_rows)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

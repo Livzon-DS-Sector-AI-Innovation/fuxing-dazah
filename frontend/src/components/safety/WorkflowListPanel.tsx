@@ -35,6 +35,7 @@ import type { HazardIdentification, HazardIdentificationStats } from '@/types/sa
 import {
   AI_NODE_PROGRESS_OPTIONS,
   OVERALL_STATUS_OPTIONS_HI,
+  REVIEW_STATUS_OPTIONS,
 } from '@/types/safety'
 import HazardIdentificationDrawer from './HazardIdentificationDrawer'
 import HazardIdentificationBatchDrawer from './HazardIdentificationBatchDrawer'
@@ -54,6 +55,7 @@ const PROGRESS_COLOR_CONFIG: Record<string, { color: string; bg: string }> = {
   pending_script5:  { color: '#0075de', bg: '#dcecfa' },
   pending_script6:  { color: '#0075de', bg: '#dcecfa' },
   pending_script7:  { color: '#0075de', bg: '#dcecfa' },
+  pending_script8:  { color: '#9c36b5', bg: '#f3d9fa' },
   completed:        { color: '#1aae39', bg: '#d9f3e1' },
 }
 
@@ -92,6 +94,11 @@ const FILTER_FIELDS: FilterFieldConfig[] = [
     type: 'text' as const,
     options: [],
   },
+  {
+    key: 'review_status',
+    label: '审核状态',
+    options: REVIEW_STATUS_OPTIONS,
+  },
 ]
 
 export default function WorkflowListPanel() {
@@ -113,6 +120,7 @@ export default function WorkflowListPanel() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [progressFilter, setProgressFilter] = useState<string | undefined>()
   const [deptFilter, setDeptFilter] = useState<string | undefined>()
+  const [reviewStatusFilter, setReviewStatusFilter] = useState<string | undefined>()
 
   // ── 排序状态 ──
   const [sortField, setSortField] = useState<string | undefined>()
@@ -148,8 +156,12 @@ export default function WorkflowListPanel() {
     if (deptFilter) {
       list.push({ key: 'department', fieldLabel: '部门', value: deptFilter, valueLabel: deptFilter })
     }
+    if (reviewStatusFilter) {
+      const opt = REVIEW_STATUS_OPTIONS.find((o) => o.value === reviewStatusFilter)
+      list.push({ key: 'review_status', fieldLabel: '审核状态', value: reviewStatusFilter, valueLabel: opt?.label || reviewStatusFilter })
+    }
     return list
-  }, [progressFilter, deptFilter])
+  }, [progressFilter, deptFilter, reviewStatusFilter])
 
   // 移除单个筛选条件
   const removeFilter = useCallback((key: string) => {
@@ -157,6 +169,7 @@ export default function WorkflowListPanel() {
     switch (key) {
       case 'ai_node_progress': setProgressFilter(undefined); break
       case 'department': setDeptFilter(undefined); break
+      case 'review_status': setReviewStatusFilter(undefined); break
     }
   }, [queryParams.page_size, setQueryParams])
 
@@ -164,6 +177,7 @@ export default function WorkflowListPanel() {
   const clearAllFilters = useCallback(() => {
     setProgressFilter(undefined)
     setDeptFilter(undefined)
+    setReviewStatusFilter(undefined)
     setStatusFilter(undefined)
     setKeyword('')
     setSearchApplied(false)
@@ -180,6 +194,7 @@ export default function WorkflowListPanel() {
     switch (fieldKey) {
       case 'ai_node_progress': setProgressFilter(value); break
       case 'department': setDeptFilter(value); break
+      case 'review_status': setReviewStatusFilter(value); break
     }
     setPendingFilterField(null)
     setFilterPopoverOpen(false)
@@ -194,6 +209,7 @@ export default function WorkflowListPanel() {
         overall_status: statusFilter,
         ai_node_progress: progressFilter,
         department: deptFilter,
+        review_status: reviewStatusFilter,
         batch_id: activeBatchId || undefined,
       })
       if (res.code === 200) {

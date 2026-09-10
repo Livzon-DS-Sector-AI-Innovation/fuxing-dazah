@@ -25,7 +25,11 @@ class HazardIdOutput(BaseModel):
     """脚本2 输出：危险源辨识结果。"""
 
     hazard_type: str = Field(
-        ..., description="危险类型（按 GB 6441《企业职工伤亡事故分类》归类）"
+        ...,
+        description=(
+            "危险类型（多选字段）：从 Bitable「危险类型（AI）」预设 24 项中选择"
+            " 1~5 个最匹配项，多个用「、」连接，如「火灾爆炸、中毒窒息」"
+        ),
     )
     possible_accident: str = Field(
         ..., description="可能导致的最典型事故（含事故链条简述）"

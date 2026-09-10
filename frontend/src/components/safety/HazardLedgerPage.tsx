@@ -34,10 +34,9 @@ import {
   CaretUpFilled,
   CaretDownFilled,
 } from '@ant-design/icons'
-import { useSafetyStore } from '@/stores/safety'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchHazards, fetchHazardStats } from '@/lib/api/safety/hazard'
 import {
-  getHazards,
-  fetchHazardStats,
   runHazardAI,
   deleteHazards,
   startRectification,
@@ -45,13 +44,14 @@ import {
 import type {
   HazardReport,
   HazardLevel,
-  HazardStats,
-  HazardReportQueryParams,
 } from '@/types/safety'
 import {
   HAZARD_TYPE_OPTIONS,
   HAZARD_LEVEL_OPTIONS,
+  normalizeHazardLevel,
   HAZARD_CATEGORY_OPTIONS,
+  SUPERVISION_LEVEL_OPTIONS,
+  SUPERVISION_PROGRESS_NOT_UPDATED,
   VERIFY_LEVEL_STATUS_OPTIONS,
 } from '@/types/safety'
 import HazardRectificationReplyModal from '@/components/safety/HazardRectificationReplyModal'
@@ -105,6 +105,11 @@ const FILTER_FIELDS: FilterFieldConfig[] = [
     options: HAZARD_LEVEL_OPTIONS,
   },
   {
+    key: 'supervision_level',
+    label: '督办等级',
+    options: SUPERVISION_LEVEL_OPTIONS,
+  },
+  {
     key: 'hazard_type',
     label: '隐患类型',
     options: HAZARD_TYPE_OPTIONS,
@@ -151,19 +156,15 @@ HAZARD_CATEGORY_OPTIONS.forEach((o) => { HAZARD_CATEGORY_LABEL_MAP[o.value] = o.
 
 export default function HazardLedgerPage() {
   const { message: msgApi } = App.useApp()
-  const [loading, setLoading] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [searchApplied, setSearchApplied] = useState(false)
-  const searchKeywordRef = useRef('')
+  const [submittedKeyword, setSubmittedKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [levelFilter, setLevelFilter] = useState<string | undefined>()
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [categoryFilter, setCategoryFilter] = useState<string | undefined>()
   const [inspectionCategoryFilter, setInspectionCategoryFilter] = useState<string | undefined>()
   const [deptFilter, setDeptFilter] = useState<string | undefined>()
-
-  // ── 全局统计（来自 API，不受分页/筛选影响）──
-  const [hazardStats, setHazardStats] = useState<HazardStats | null>(null)
 
   // ── 排序状态 ──
   const [sortField, setSortField] = useState<string | undefined>()
@@ -193,15 +194,57 @@ export default function HazardLedgerPage() {
   // ── 筛选栏滚动容器 ref ──
   const filterScrollRef = useRef<HTMLDivElement>(null)
 
-  const {
-    hazards,
-    hazardTotal,
-    hazardQueryParams,
-    setHazards,
-    setHazardTotal,
-    setHazardQueryParams,
-    updateHazard: updateHazardInStore,
-  } = useSafetyStore()
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+
+  const queryClient = useQueryClient()
+
+  const refreshLedger = () => {
+    queryClient.invalidateQueries({ queryKey: ['hazards'] })
+    queryClient.invalidateQueries({ queryKey: ['hazard-stats'] })
+  }
+
+  // 全局统计 query
+  const statsQuery = useQuery({
+    queryKey: ['hazard-stats'],
+    queryFn: fetchHazardStats,
+  })
+  const hazardStats = statsQuery.data ?? null
+
+  // 列表 query
+  const { data: listData, isLoading } = useQuery({
+    queryKey: ['hazards', {
+      page, pageSize,
+      statusFilter, typeFilter, levelFilter, categoryFilter, inspectionCategoryFilter, deptFilter,
+      submittedKeyword,
+    }],
+    queryFn: () => fetchHazards({
+      page, page_size: pageSize,
+      rectification_status: statusFilter,
+      hazard_type: typeFilter,
+      hazard_level: levelFilter,
+      hazard_category: categoryFilter,
+      inspection_category: inspectionCategoryFilter,
+      department: deptFilter,
+      keyword: submittedKeyword || undefined,
+    }),
+  })
+
+  // 客户端排序
+  const hazards = useMemo(() => {
+    const items = listData?.items ?? []
+    if (sortField && sortOrder) {
+      return [...items].sort((a, b) => {
+        const aVal = (a as unknown as Record<string, unknown>)[sortField] ?? ''
+        const bVal = (b as unknown as Record<string, unknown>)[sortField] ?? ''
+        const cmp = String(aVal).localeCompare(String(bVal), 'zh-CN')
+        return sortOrder === 'ascend' ? cmp : -cmp
+      })
+    }
+    return items
+  }, [listData?.items, sortField, sortOrder])
+
+  const hazardTotal = listData?.total ?? 0
 
   // ── 活跃筛选条件 (多维表格 chip 模式) ──
   const activeFilters = useMemo(() => {
@@ -230,7 +273,7 @@ export default function HazardLedgerPage() {
 
   // 移除单个筛选条件
   const removeFilter = useCallback((key: string) => {
-    setHazardQueryParams({ page: 1 })
+    setPage(1)
     switch (key) {
       case 'hazard_level': setLevelFilter(undefined); break
       case 'hazard_type': setTypeFilter(undefined); break
@@ -238,7 +281,7 @@ export default function HazardLedgerPage() {
       case 'inspection_category': setInspectionCategoryFilter(undefined); break
       case 'department': setDeptFilter(undefined); break
     }
-  }, [setHazardQueryParams])
+  }, [setPage])
 
   // 清除所有筛选
   const clearAllFilters = useCallback(() => {
@@ -250,8 +293,8 @@ export default function HazardLedgerPage() {
     setStatusFilter(undefined)
     setSearchText('')
     setSearchApplied(false)
-    setHazardQueryParams({ page: 1 })
-  }, [setHazardQueryParams])
+    setPage(1)
+  }, [setPage])
 
   // 处理筛选字段选择
   const handleFilterFieldSelect = (fieldKey: string) => {
@@ -260,7 +303,7 @@ export default function HazardLedgerPage() {
   }
 
   const handleFilterValueSelect = (fieldKey: string, value: string) => {
-    setHazardQueryParams({ page: 1 })
+    setPage(1)
     switch (fieldKey) {
       case 'hazard_level': setLevelFilter(value); break
       case 'hazard_type': setTypeFilter(value); break
@@ -272,75 +315,23 @@ export default function HazardLedgerPage() {
     setFilterPopoverOpen(false)
   }
 
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const response = await getHazards({
-        ...hazardQueryParams,
-        rectification_status: statusFilter,
-        hazard_type: typeFilter,
-        hazard_level: levelFilter,
-        hazard_category: categoryFilter,
-        inspection_category: inspectionCategoryFilter,
-        department: deptFilter,
-        keyword: searchKeywordRef.current || undefined,
-      } as HazardReportQueryParams)
-      if (response.code === 200) {
-        let data = response.data || []
-        // 客户端排序（多维表格即时排序体验）
-        if (sortField && sortOrder) {
-          data = [...data].sort((a: any, b: any) => {
-            const aVal = a[sortField] ?? ''
-            const bVal = b[sortField] ?? ''
-            const cmp = String(aVal).localeCompare(String(bVal), 'zh-CN')
-            return sortOrder === 'ascend' ? cmp : -cmp
-          })
-        }
-        setHazards(data)
-        setHazardTotal(response.meta?.total || 0)
-      }
-    } catch {
-      msgApi.error('加载台账失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // ── 全局统计（挂载时 + 数据变更后刷新）──
-  const loadStats = async () => {
-    try {
-      const stats = await fetchHazardStats()
-      setHazardStats(stats.data || null)
-    } catch { /* 静默失败，统计数字保持上次值 */ }
-  }
-  const refreshStats = () => { loadStats() }
-
-  useEffect(() => { loadStats() }, [])
-
+  // 分页/筛选变化时清空批量选择
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedRowKeys([])
-    loadData()
-  }, [hazardQueryParams.page, hazardQueryParams.page_size, statusFilter, typeFilter, levelFilter, categoryFilter, inspectionCategoryFilter, deptFilter])
-
-  // 排序变化时重新加载
-  useEffect(() => {
-    if (sortField) {
-      loadData()
-    }
-  }, [sortField, sortOrder])
+  }, [page, pageSize, statusFilter, typeFilter, levelFilter, categoryFilter, inspectionCategoryFilter, deptFilter])
 
   const handleSearch = () => {
-    searchKeywordRef.current = searchText
+    setSubmittedKeyword(searchText)
     setSearchApplied(true)
-    setHazardQueryParams({ page: 1 })
-    loadData()
+    setPage(1)
   }
 
   const handleSearchBack = () => {
-    searchKeywordRef.current = ''
+    setSubmittedKeyword('')
     setSearchText('')
     setSearchApplied(false)
-    loadData()
+    setPage(1)
   }
 
   // ── 排序切换 ──
@@ -362,8 +353,7 @@ export default function HazardLedgerPage() {
       const response = await startRectification(record.id)
       if (response.code === 200) {
         message.success('已开始整改')
-        updateHazardInStore(record.id, response.data as HazardReport)
-        refreshStats()
+        refreshLedger()
       } else {
         message.error(response.message || '开始整改失败')
       }
@@ -386,14 +376,12 @@ export default function HazardLedgerPage() {
   }
 
   // ── Modal 成功回调 ──
-  const handleReplySuccess = (updated: HazardReport) => {
-    updateHazardInStore(updated.id, updated)
-    refreshStats()
+  const handleReplySuccess = () => {
+    refreshLedger()
   }
 
-  const handleVerifySuccess = (updated: HazardReport) => {
-    updateHazardInStore(updated.id, updated)
-    refreshStats()
+  const handleVerifySuccess = () => {
+    refreshLedger()
   }
 
   // ── 批量删除 ──
@@ -416,8 +404,7 @@ export default function HazardLedgerPage() {
             msgApi.warning(`删除完成：${result.succeeded} 条成功，${result.failed} 条失败`)
           }
           setSelectedRowKeys([])
-          await loadData()
-          refreshStats()
+          refreshLedger()
         } catch {
           msgApi.error('批量删除失败')
         } finally {
@@ -435,12 +422,10 @@ export default function HazardLedgerPage() {
         msgApi.error('重新执行 AI 识别失败: ' + (r1.message || ''))
         return
       }
-      updateHazardInStore(record.id, r1.data)
       const r2 = await runHazardAI(record.id, 2)
       if (r2.code === 200) {
         msgApi.success('AI 已重新执行完成')
-        updateHazardInStore(record.id, r2.data)
-        refreshStats()
+        refreshLedger()
       } else {
         msgApi.warning('AI 识别已完成，整改建议生成失败: ' + (r2.message || ''))
       }
@@ -451,13 +436,13 @@ export default function HazardLedgerPage() {
     }
   }
 
-  const getLevelColor = (level: HazardLevel) => {
-    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === level)
+  const getLevelColor = (level: string) => {
+    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === normalizeHazardLevel(level))
     return option?.color || 'default'
   }
 
-  const getLevelLabel = (level: HazardLevel) => {
-    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === level)
+  const getLevelLabel = (level: string) => {
+    const option = HAZARD_LEVEL_OPTIONS.find((o) => o.value === normalizeHazardLevel(level))
     return option?.label || level
   }
 
@@ -556,54 +541,21 @@ export default function HazardLedgerPage() {
         </span>
       )
     }
+    // 复核操作已迁移到多维表格，平台仅展示状态
     if (record.rectification_status === 'replied') {
-      return (
-        <span
-          role="button"
-          onClick={() => handleVerifyLevel(record)}
-          style={actionLink('#5645d4')}
-        >
-          <SafetyCertificateOutlined />一级复核
-        </span>
-      )
+      return <Text type="secondary">待复核</Text>
     }
     if (record.rectification_status === 'no_rectification_needed') {
-      // AI 判定无需整改：L1/L2 已跳过，L3 待闭环
       if (record.verify_level_3_status === 'pending') {
-        return (
-          <span
-            role="button"
-            onClick={() => handleVerifyLevel(record)}
-            style={actionLink('#5645d4')}
-          >
-            <SafetyCertificateOutlined />三级复核
-          </span>
-        )
+        return <Text type="secondary">待闭环确认</Text>
       }
       return <Text type="secondary">-</Text>
     }
     if (record.rectification_status === 'level1_approved') {
-      const nextLabel = record.hazard_level === 'general' ? '三级复核' : '二级复核'
-      return (
-        <span
-          role="button"
-          onClick={() => handleVerifyLevel(record)}
-          style={actionLink('#5645d4')}
-        >
-          <SafetyCertificateOutlined />{nextLabel}
-        </span>
-      )
+      return <Text type="secondary">待复核</Text>
     }
     if (record.rectification_status === 'level2_approved') {
-      return (
-        <span
-          role="button"
-          onClick={() => handleVerifyLevel(record)}
-          style={actionLink('#5645d4')}
-        >
-          <SafetyCertificateOutlined />三级复核
-        </span>
-      )
+      return <Text type="secondary">待复核</Text>
     }
     if (record.rectification_status === 'rejected') {
       return (
@@ -631,7 +583,7 @@ export default function HazardLedgerPage() {
       render: (_: unknown, record: HazardReport, index: number) => {
         const isSelected = selectedRowKeys.includes(record.id)
         const isHovered = hoveredRowId === record.id
-        const rowNum = ((hazardQueryParams.page || 1) - 1) * (hazardQueryParams.page_size || 20) + index + 1
+        const rowNum = ((page || 1) - 1) * (pageSize || 20) + index + 1
 
         const handleToggle = () => {
           setSelectedRowKeys((prev) =>
@@ -731,10 +683,36 @@ export default function HazardLedgerPage() {
       key: 'hazard_level',
       width: 100,
       sorter: false,
-      render: (level: HazardLevel) => {
+      render: (_: unknown, record: HazardReport) => {
+        // 督办判定以人工等级为准，台账展示优先显示人工等级，缺失时回退 AI 等级
+        // 归一化兼容 DB 中英文混存（一般隐患/general）
+        const level = normalizeHazardLevel(record.hazard_level_manual || record.hazard_level)
         const cfg = LEVEL_CONFIG[level]
         if (!cfg) return <span style={statusPill('#5d5b54', '#f0eeec')}>{level}</span>
         return <span style={statusPill(cfg.color, cfg.bg)}>{getLevelLabel(level)}</span>
+      },
+    },
+    {
+      title: '督办等级',
+      dataIndex: 'supervision_level',
+      key: 'supervision_level',
+      width: 95,
+      render: (level: string) => {
+        const opt = SUPERVISION_LEVEL_OPTIONS.find((o) => o.value === level)
+        if (!opt) return <span style={statusPill('#5d5b54', '#f0eeec')}>{level || '-'}</span>
+        return <span style={statusPill(opt.color, opt.color + '1a')}>{opt.label}</span>
+      },
+    },
+    {
+      title: '进展状态',
+      dataIndex: 'supervision_progress_status',
+      key: 'supervision_progress_status',
+      width: 100,
+      render: (_: unknown, record: HazardReport) => {
+        if (record.supervision_progress_status === SUPERVISION_PROGRESS_NOT_UPDATED) {
+          return <span style={statusPill('#e03131', '#fde0ec')}>{SUPERVISION_PROGRESS_NOT_UPDATED}</span>
+        }
+        return <span style={statusPill('#c8c4be', '#f5f3f0')}>-</span>
       },
     },
     {
@@ -1341,21 +1319,22 @@ export default function HazardLedgerPage() {
           dataSource={hazards}
           rowKey="id"
           size="small"
-          loading={loading}
+          loading={isLoading}
           scroll={{ x: 'max-content' }}
           onRow={(record) => ({
             onMouseEnter: () => setHoveredRowId(record.id),
             onMouseLeave: () => setHoveredRowId((prev) => (prev === record.id ? null : prev)),
           })}
           pagination={{
-            current: hazardQueryParams.page,
-            pageSize: hazardQueryParams.page_size,
+            current: page,
+            pageSize,
             total: hazardTotal,
             showSizeChanger: true,
             showQuickJumper: true,
             showTotal: (total) => `共 ${total} 条`,
-            onChange: (page, pageSize) => {
-              setHazardQueryParams({ page, page_size: pageSize })
+            onChange: (nextPage, nextPageSize) => {
+              setPage(nextPage)
+              setPageSize(nextPageSize)
             },
           }}
         />
@@ -1384,8 +1363,7 @@ export default function HazardLedgerPage() {
         onClose={() => setRegistrationDrawerOpen(false)}
         onDone={() => {
           setRegistrationDrawerOpen(false)
-          loadData()
-          refreshStats()
+          refreshLedger()
         }}
       />
     </div>

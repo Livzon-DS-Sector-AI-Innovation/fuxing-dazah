@@ -46,6 +46,8 @@ VALID_OUTPUT_DICT = {
         "preventive": "修订防爆设备巡检制度，将封堵检查纳入周检，建立防爆设备全生命周期台账",
     },
     "major_hazard_basis": "《化工和危险化学品生产经营单位重大生产安全事故隐患判定标准》第十条：爆炸危险场所未按国家标准安装使用防爆电气设备；GB 3836.1-2010 第15章",
+    "defect_substance": "substantive",
+    "defect_substance_reasoning": "电箱引入口未封堵可直接导致粉尘进入电箱引发短路或爆炸（1步物理必然），推断链短且每步为物理必然，属实质缺陷",
 }
 
 
@@ -146,11 +148,13 @@ class TestPrompts:
         assert "hazard_level" in keys
         assert "rectification_suggestion" in keys
         assert "major_hazard_basis" in keys
-        assert len(keys) == 6
+        assert "defect_substance" in keys
+        assert "defect_substance_reasoning" in keys
+        assert len(keys) == 8
 
     def test_fewshot_examples_complete(self):
-        """4 个 few-shot 示例应覆盖 4 种隐患分类。"""
-        assert len(FEWSHOT_EXAMPLES) == 4
+        """5 个 few-shot 示例应覆盖 4 种隐患分类。"""
+        assert len(FEWSHOT_EXAMPLES) == 5
         types = {ex["output"]["hazard_type"] for ex in FEWSHOT_EXAMPLES}
         assert types == {
             "unsafe_condition",
@@ -173,8 +177,8 @@ class TestPrompts:
         """Few-shot 示例的整改建议应使用两层结构。"""
         for ex in FEWSHOT_EXAMPLES:
             rs = ex["output"]["rectification_suggestion"]
-            assert "corrective" in rs, f"缺少 corrective 字段"
-            assert "preventive" in rs, f"缺少 preventive 字段"
+            assert "corrective" in rs, "缺少 corrective 字段"
+            assert "preventive" in rs, "缺少 preventive 字段"
             assert len(rs["corrective"]) > 30
             assert len(rs["preventive"]) > 20
 
@@ -333,7 +337,7 @@ class MockAIService:
             raise Exception("模拟 AI 调用失败")
         return {**VALID_OUTPUT_DICT}
 
-    async def chat_vision_parsed(self, text_prompt, image_urls, expected_keys, temperature=0.1):
+    async def chat_vision_parsed(self, text_prompt, image_urls, expected_keys, temperature=0.1, max_tokens=None):
         self.call_count += 1
         self.last_messages = [{"role": "user", "content": text_prompt}]
         if self.fail:
@@ -478,6 +482,8 @@ class TestQualityBenchmarks:
                 preventive="修订防爆电气设备巡检制度，将引入口封堵状态纳入每周例行检查项，建立防爆设备全生命周期台账",
             ),
             major_hazard_basis="《化工和危险化学品生产经营单位重大生产安全事故隐患判定标准》第十条：爆炸危险场所未按国家标准安装使用防爆电气设备；GB 3836.1-2010 第15章：电气设备引入装置的密封要求",
+            defect_substance="substantive",
+            defect_substance_reasoning="防爆引入口未封堵可直接导致粉尘进入电箱引发爆炸（1步物理必然），推断链短且每步为物理必然，属实质缺陷",
         )
         result = self.engine.validate(make_input("防爆电箱接线口未封堵"), output)
         assert result.is_valid, f"示例1验证失败: {result.errors}"
@@ -494,6 +500,8 @@ class TestQualityBenchmarks:
                 preventive="在车间高处作业区域统一设置固定式安全绳挂点装置，纳入每日班前安全检查项；修订《高处作业安全管理规定》，明确安全带使用具体要求",
             ),
             major_hazard_basis="GB 30871-2022 第5.2条：高处作业人员应正确佩戴符合国家标准的安全带；《安全生产法》第四十五条",
+            defect_substance="substantive",
+            defect_substance_reasoning="高处作业未系安全带可直接导致高处坠落致伤致死（1步物理必然），推断链短且每步为物理必然，属实质缺陷",
         )
         result = self.engine.validate(make_input("高处作业未佩戴安全带"), output)
         assert result.is_valid, f"示例2验证失败: {result.errors}"
@@ -510,6 +518,8 @@ class TestQualityBenchmarks:
                 preventive="修订车间定置管理制度，明确消防疏散通道净宽≥1.4m的硬性指标，由安全员每月专项检查并拍照留档",
             ),
             major_hazard_basis="GB 50016-2014（2018年版）第7.3.1条：疏散通道的净宽度不应小于1.1m；《安全生产法》第四十二条",
+            defect_substance="substantive",
+            defect_substance_reasoning="疏散通道被物料堵塞直接阻碍紧急逃生（1步物理必然），推断链短且每步为物理必然，属实质缺陷",
         )
         result = self.engine.validate(make_input("消防通道堆放物料"), output)
         assert result.is_valid, f"示例3验证失败: {result.errors}"
@@ -526,6 +536,8 @@ class TestQualityBenchmarks:
                 preventive="建立特殊作业票证三级审核制度，每周对已归档票证做10%随机抽查；检查结果纳入月度安全绩效考核",
             ),
             major_hazard_basis="GB 30871-2022 第4.7条：特殊作业审批手续应齐全；《安全生产法》第四十六条",
+            defect_substance="procedural",
+            defect_substance_reasoning="动火票证签章空白属审批管理失控而非直接物理威胁，补齐签章即可恢复有效审批，推断链后段为概率假设，属形式瑕疵",
         )
         result = self.engine.validate(make_input("动火作业票证审批签章不完整"), output)
         assert result.is_valid, f"示例4验证失败: {result.errors}"

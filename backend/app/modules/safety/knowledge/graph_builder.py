@@ -9,10 +9,12 @@
   Step 6: 写入数据库
 """
 
+from typing import cast
 import asyncio
 import json
 import logging
 import uuid as _uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,7 +138,7 @@ class GraphBuilder:
         self.session = session
         self._ai = None  # 延迟创建
 
-    async def _get_ai(self):
+    async def _get_ai(self) -> Any:
         """懒加载 AIService。"""
         if self._ai is None:
             from app.modules.safety.service.config import create_ai_service
@@ -149,7 +151,7 @@ class GraphBuilder:
         self,
         document_ids: list[_uuid.UUID] | None = None,
         force_rebuild: bool = False,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """完整图谱生成流程。
 
         Args:
@@ -161,69 +163,77 @@ class GraphBuilder:
         """
         result = {"nodes_created": 0, "nodes_updated": 0, "edges_created": 0, "errors": []}
 
-        # 0. 可选：清除已有 AI 生成数据
-        if force_rebuild:
-            await self._clear_ai_generated()
-
-        # 1. 加载文档
-        documents = await self._load_documents(document_ids)
-        if not documents:
-            result["errors"].append("没有找到 published 状态的文档")
+        try:
+            # 0. 可选：清除已有 AI 生成数据
+            if force_rebuild:
+                await self._clear_ai_generated()
+    
+            # 1. 加载文档
+            documents = await self._load_documents(document_ids)
+            if not documents:
+                result["errors"].append("没有找到 published 状态的文档")
+                return result
+            logger.info("GraphBuilder: 加载 %d 份文档", len(documents))
+    
+            # 2. AI 实体提取（并行批次）
+            entities = await self._extract_entities(documents)
+            logger.info("GraphBuilder: 提取 %d 个实体", len(entities))
+    
+            # 3. 写入实体节点（每项用 SAVEPOINT，单条 DB 错不污染整个会话）
+            for entity in entities:
+                try:
+                    async with self.session.begin_nested():
+                        node = await self._upsert_entity_node(entity)
+                    if node:
+                        result["nodes_created"] += 1
+                except Exception as e:
+                    result["errors"].append(f"写入实体节点失败: {entity.get('entity_name', '?')} - {e}")
+    
+            await self.session.flush()
+    
+            # 4. AI 分类体系构建
+            taxonomy = await self._build_taxonomy(documents, entities)
+            logger.info("GraphBuilder: 构建 %d 个分类节点", len(taxonomy))
+    
+            # 5. 写入分类节点 + belongs_to 边（SAVEPOINT）
+            for taxon in taxonomy:
+                try:
+                    async with self.session.begin_nested():
+                        node = await self._upsert_taxonomy_node(taxon)
+                        # 创建子节点 → 父节点的 belongs_to 边
+                        await self._create_taxonomy_edges(taxon)
+                    if node:
+                        result["nodes_created"] += 1
+                except Exception as e:
+                    result["errors"].append(f"写入分类节点失败: {taxon.get('name', '?')} - {e}")
+    
+            await self.session.flush()
+    
+            # 6. AI 关系识别
+            relations = await self._extract_relations(entities, taxonomy)
+            logger.info("GraphBuilder: 识别 %d 条关系", len(relations))
+    
+            # 7. 写入关系边（SAVEPOINT）
+            for rel in relations:
+                try:
+                    async with self.session.begin_nested():
+                        edge = await self._upsert_relation_edge(rel)
+                    if edge:
+                        result["edges_created"] += 1
+                except Exception as e:
+                    result["errors"].append(f"写入关系边失败: {rel.get('source_name', '?')}→{rel.get('target_name', '?')} - {e}")
+    
+            await self.session.flush()
+    
             return result
-        logger.info("GraphBuilder: 加载 %d 份文档", len(documents))
-
-        # 2. AI 实体提取（并行批次）
-        entities = await self._extract_entities(documents)
-        logger.info("GraphBuilder: 提取 %d 个实体", len(entities))
-
-        # 3. 写入实体节点
-        for entity in entities:
-            try:
-                node = await self._upsert_entity_node(entity)
-                if node:
-                    result["nodes_created"] += 1
-            except Exception as e:
-                result["errors"].append(f"写入实体节点失败: {entity.get('entity_name', '?')} - {e}")
-
-        await self.session.flush()
-
-        # 4. AI 分类体系构建
-        taxonomy = await self._build_taxonomy(documents, entities)
-        logger.info("GraphBuilder: 构建 %d 个分类节点", len(taxonomy))
-
-        # 5. 写入分类节点 + belongs_to 边
-        for taxon in taxonomy:
-            try:
-                node = await self._upsert_taxonomy_node(taxon)
-                if node:
-                    result["nodes_created"] += 1
-                # 创建子节点 → 父节点的 belongs_to 边
-                await self._create_taxonomy_edges(taxon)
-            except Exception as e:
-                result["errors"].append(f"写入分类节点失败: {taxon.get('name', '?')} - {e}")
-
-        await self.session.flush()
-
-        # 6. AI 关系识别
-        relations = await self._extract_relations(entities, taxonomy)
-        logger.info("GraphBuilder: 识别 %d 条关系", len(relations))
-
-        # 7. 写入关系边
-        for rel in relations:
-            try:
-                edge = await self._upsert_relation_edge(rel)
-                if edge:
-                    result["edges_created"] += 1
-            except Exception as e:
-                result["errors"].append(f"写入关系边失败: {rel.get('source_name', '?')}→{rel.get('target_name', '?')} - {e}")
-
-        await self.session.flush()
-
-        return result
+        finally:
+            if self._ai is not None:
+                await self._ai.close()
+                self._ai = None
 
     # ── 文档加载 ───────────────────────────────────────────────
 
-    async def _load_documents(self, document_ids: list[_uuid.UUID] | None) -> list[dict]:
+    async def _load_documents(self, document_ids: list[_uuid.UUID] | None) -> list[dict[str, Any]]:
         """加载 published 状态的文档。"""
         from app.modules.safety.models import SafetyKnowledgeArticle
 
@@ -252,9 +262,9 @@ class GraphBuilder:
 
     # ── 实体提取 ───────────────────────────────────────────────
 
-    async def _extract_entities(self, documents: list[dict]) -> list[dict]:
+    async def _extract_entities(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """并行分批提取实体。"""
-        all_entities: list[dict] = []
+        all_entities: list[dict[str, Any]] = []
         ai = await self._get_ai()
 
         for i in range(0, len(documents), ENTITY_EXTRACTION_BATCH_SIZE):
@@ -270,7 +280,7 @@ class GraphBuilder:
 
         # 去重（按 entity_name）
         seen: set[str] = set()
-        deduped: list[dict] = []
+        deduped: list[dict[str, Any]] = []
         for e in all_entities:
             name = e.get("entity_name", "").strip()
             if name and name not in seen:
@@ -278,7 +288,7 @@ class GraphBuilder:
                 deduped.append(e)
         return deduped
 
-    async def _extract_entities_from_doc(self, ai, doc: dict) -> list[dict]:
+    async def _extract_entities_from_doc(self, ai: Any, doc: dict[str, Any]) -> list[dict[str, Any]]:
         """从单个文档提取实体。"""
         # 构建文档内容
         content = doc.get("content", "") or ""
@@ -330,7 +340,7 @@ class GraphBuilder:
 
     # ── 分类体系构建 ───────────────────────────────────────────
 
-    async def _build_taxonomy(self, documents: list[dict], entities: list[dict]) -> list[dict]:
+    async def _build_taxonomy(self, documents: list[dict[str, Any]], entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """构建全局安全知识分类树。"""
         ai = await self._get_ai()
 
@@ -368,9 +378,9 @@ class GraphBuilder:
                     return []
                 logger.warning("分类体系构建重试 %d: %s", attempt + 1, e)
 
-    def _flatten_taxonomy(self, tree: list[dict], parent_name: str = "") -> list[dict]:
+    def _flatten_taxonomy(self, tree: list[dict[str, Any]], parent_name: str = "") -> list[dict[str, Any]]:
         """将嵌套分类树展平为节点列表。"""
-        result: list[dict] = []
+        result: list[dict[str, Any]] = []
         for node in tree:
             name = node.get("name", "")
             item = {
@@ -386,7 +396,7 @@ class GraphBuilder:
 
     # ── 关系识别 ───────────────────────────────────────────────
 
-    async def _extract_relations(self, entities: list[dict], taxonomy: list[dict]) -> list[dict]:
+    async def _extract_relations(self, entities: list[dict[str, Any]], taxonomy: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """识别实体和分类之间的关系。"""
         ai = await self._get_ai()
 
@@ -427,7 +437,7 @@ class GraphBuilder:
 
     # ── 数据库写入 ─────────────────────────────────────────────
 
-    async def _upsert_entity_node(self, entity: dict) -> KnowledgeGraphNode | None:
+    async def _upsert_entity_node(self, entity: dict[str, Any]) -> KnowledgeGraphNode | None:
         """创建或更新实体节点。"""
         name = entity.get("entity_name", "").strip()
         if not name:
@@ -462,7 +472,7 @@ class GraphBuilder:
         self.session.add(node)
         return node
 
-    async def _upsert_taxonomy_node(self, taxon: dict) -> KnowledgeGraphNode | None:
+    async def _upsert_taxonomy_node(self, taxon: dict[str, Any]) -> KnowledgeGraphNode | None:
         """创建或更新分类节点。"""
         name = taxon.get("name", "").strip()
         if not name:
@@ -489,7 +499,7 @@ class GraphBuilder:
         self.session.add(node)
         return node
 
-    async def _create_taxonomy_edges(self, taxon: dict) -> None:
+    async def _create_taxonomy_edges(self, taxon: dict[str, Any]) -> None:
         """创建分类节点的 belongs_to 边（子→父）。"""
         parent_name = taxon.get("parent_name")
         if not parent_name:
@@ -516,7 +526,7 @@ class GraphBuilder:
         )
         self.session.add(edge)
 
-    async def _upsert_relation_edge(self, rel: dict) -> KnowledgeGraphEdge | None:
+    async def _upsert_relation_edge(self, rel: dict[str, Any]) -> KnowledgeGraphEdge | None:
         """创建或更新关系边。"""
         source_name = rel.get("source_name", "").strip()
         target_name = rel.get("target_name", "").strip()
@@ -602,8 +612,8 @@ class GraphBuilder:
         logger.info("GraphBuilder: 已清除 AI 生成数据")
 
     @staticmethod
-    def _parse_json(raw: str) -> dict:
-        """解析 AI 返回的 JSON 对象（兼容 markdown 代码块包裹）。"""
+    def _parse_json(raw: str) -> dict[str, Any]:
+        """解析 AI 返回的 JSON 对象（兼容 markdown 包裹、前后缀文本、截断）。"""
         text = raw.strip()
         # 去掉 markdown 代码块
         if text.startswith("```"):
@@ -614,11 +624,26 @@ class GraphBuilder:
                     break
             if text.endswith("```"):
                 text = text[:-3].strip()
-        return json.loads(text)
+
+        def _try(t: str) -> Any:
+            try:
+                return json.loads(t)
+            except json.JSONDecodeError:
+                return None
+
+        parsed = _try(text)
+        if parsed is None:
+            # 提取最外层 { ... }（容忍前后缀/截断）
+            s, e = text.find("{"), text.rfind("}")
+            if s != -1 and e > s:
+                parsed = _try(text[s:e + 1])
+        if parsed is None or not isinstance(parsed, dict):
+            raise ValueError(f"无法解析 JSON 对象: {text[:80]}")
+        return parsed
 
     @staticmethod
-    def _parse_json_array(raw: str) -> list[dict]:
-        """解析 AI 返回的 JSON（兼容数组和对象包装）。"""
+    def _parse_json_array(raw: str) -> list[dict[str, Any]]:
+        """解析 AI 返回的 JSON（兼容数组、对象包装、markdown 代码块、前后缀文本）。"""
         text = raw.strip()
         # 去掉 markdown 代码块
         if text.startswith("```"):
@@ -630,14 +655,30 @@ class GraphBuilder:
             if text.endswith("```"):
                 text = text[:-3].strip()
 
-        parsed = json.loads(text)
+        def _try(text: str) -> Any:
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return None
+
+        parsed = _try(text)
+        if parsed is None:
+            # 提取最外层 [ ... ] 或 { ... } 子串（容忍前后缀/截断）
+            for open_ch, close_ch in (("[", "]"), ("{", "}")):
+                s, e = text.find(open_ch), text.rfind(close_ch)
+                if s != -1 and e > s:
+                    parsed = _try(text[s:e + 1])
+                    if parsed is not None:
+                        break
+
+        if parsed is None:
+            return []
         if isinstance(parsed, list):
             return parsed
         if isinstance(parsed, dict):
-            # 尝试找常见的数组 key
             for key in ("entities", "results", "data", "items", "relations"):
                 if key in parsed and isinstance(parsed[key], list):
                     return parsed[key]
-            # 如果是单对象，包装为数组
+            # 单对象包装为数组
             return [parsed]
         return []

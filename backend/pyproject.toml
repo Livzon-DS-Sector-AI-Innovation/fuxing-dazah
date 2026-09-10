@@ -33,6 +33,11 @@ dependencies = [
     "fastmcp>=3.4.2",
     "minio>=7.2.0",
     "graphon>=0.5.3,<0.6",
+    # ── 以下 4 项随 safety 模块合并自 dazah-backend，原仓库未声明（仅装在 venv 里）──
+    "pydantic-ai>=2.8.0",   # business_agent 智能体框架
+    "PyMuPDF>=1.28.0",      # knowledge 模块 PDF 解析（import fitz）
+    "playwright>=1.61.0",   # regulation_crawler 法规爬取
+    "markitdown>=0.1.6",    # knowledge 文档转换
 ]
 
 [project.optional-dependencies]

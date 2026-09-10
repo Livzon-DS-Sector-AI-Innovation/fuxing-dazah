@@ -3,18 +3,13 @@
 from fastapi import APIRouter, Depends
 
 from app.core.deps import CurrentUser, get_current_user
-from app.core.response import ApiResponse
 from app.modules.safety.schemas import (
     ABNORMALITY_STATUS_OPTIONS,
-    ACCIDENT_LEVEL_OPTIONS,
-    ACCIDENT_STATUS_OPTIONS,
-    ACCIDENT_TYPE_OPTIONS,
     ACTION_ITEM_STATUS_OPTIONS,
     APPROVAL_DECISION_OPTIONS,
     CHANGE_DURATION_OPTIONS,
     CHANGE_GRADE_OPTIONS,
     CHANGE_TYPE_OPTIONS,
-    CHECK_TYPE_OPTIONS,
     COMPLETION_METHOD_OPTIONS,
     CONTRACTOR_STATUS_OPTIONS,
     CONTRACTOR_TRAINING_STATUS_OPTIONS,
@@ -48,6 +43,7 @@ from app.modules.safety.schemas import (
     TRAINING_TYPE_OPTIONS,
     WORK_RECORD_STATUS_OPTIONS,
 )
+from app.shared.schemas import ApiResponse
 
 enums_router = APIRouter()
 
@@ -55,18 +51,14 @@ enums_router = APIRouter()
 @enums_router.get("/enums", response_model=ApiResponse, summary="获取枚举值列表")
 async def get_enums(
     current_user: CurrentUser | None = Depends(get_current_user),
-):
+) -> ApiResponse:
     """获取安全模块的所有枚举值选项"""
 
     return ApiResponse(
         data={
-            "check_types": CHECK_TYPE_OPTIONS,
             "hazard_types": HAZARD_TYPE_OPTIONS,
             "hazard_levels": HAZARD_LEVEL_OPTIONS,
             "hazard_categories": HAZARD_CATEGORY_OPTIONS,
-            "accident_types": ACCIDENT_TYPE_OPTIONS,
-            "accident_levels": ACCIDENT_LEVEL_OPTIONS,
-            "accident_statuses": ACCIDENT_STATUS_OPTIONS,
             "injury_severities": INJURY_SEVERITY_OPTIONS,
             "training_types": TRAINING_TYPE_OPTIONS,
             "training_modes": TRAINING_MODE_OPTIONS,

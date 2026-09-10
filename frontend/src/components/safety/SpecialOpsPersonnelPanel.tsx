@@ -1,15 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Table, Button, Space, Input, Select, Modal, Form, DatePicker, Tag,
   Card, Row, Col, Typography, App,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
-import { useSafetyStore } from '@/stores/safety'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchSpecialOperationPersonnel } from '@/lib/api/safety/special-ops'
 import { T } from './shared-styles'
-import { getPersonnelList, createPersonnel, updatePersonnel, deletePersonnel } from '@/actions/safety'
+import { createPersonnel, updatePersonnel, deletePersonnel } from '@/actions/safety'
 import type { SpecialOperationPersonnel, SpecialOperationPersonnelFormData } from '@/types/safety'
 import { OPERATION_TYPE_OPTIONS, PERSONNEL_STATUS_OPTIONS } from '@/types/safety'
 import dayjs from 'dayjs'
@@ -23,37 +24,39 @@ export default function SpecialOpsPersonnelPanel() {
   const { message } = App.useApp()
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
-  const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editingRecord, setEditingRecord] = useState<SpecialOperationPersonnel | null>(null)
   const [searchText, setSearchText] = useState('')
+  const [submittedSearch, setSubmittedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [certTypeFilter, setCertTypeFilter] = useState<string | undefined>()
 
-  const {
-    personnel, personnelTotal, personnelQueryParams,
-    setPersonnel, setPersonnelTotal, setPersonnelQueryParams,
-    addPersonnel, updatePersonnel: updateInStore, removePersonnel,
-  } = useSafetyStore()
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
 
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const response = await getPersonnelList({
-        ...personnelQueryParams,
-        status: statusFilter, certificate_type: certTypeFilter, keyword: searchText || undefined,
-      })
-      if (response.code === 200) {
-        setPersonnel(response.data)
-        setPersonnelTotal(response.meta?.total || 0)
-      }
-    } catch { message.error('加载人员列表失败') }
-    finally { setLoading(false) }
+  const queryClient = useQueryClient()
+
+  const refreshPersonnel = () => {
+    queryClient.invalidateQueries({ queryKey: ['special-ops-personnel'] })
   }
 
-  useEffect(() => { loadData() }, [personnelQueryParams.page, personnelQueryParams.page_size, statusFilter, certTypeFilter])
+  const { data: listData, isLoading } = useQuery({
+    queryKey: ['special-ops-personnel', { page, pageSize, statusFilter, certTypeFilter, submittedSearch }],
+    queryFn: () => fetchSpecialOperationPersonnel({
+      page, page_size: pageSize,
+      status: statusFilter,
+      certificate_type: certTypeFilter,
+      keyword: submittedSearch || undefined,
+    }),
+  })
 
-  const handleSearch = () => { setPersonnelQueryParams({ page: 1 }); loadData() }
+  const personnel = listData?.items ?? []
+  const personnelTotal = listData?.total ?? 0
+
+  const handleSearch = () => {
+    setSubmittedSearch(searchText)
+    setPage(1)
+  }
 
   const handleAdd = () => { setEditingRecord(null); form.resetFields(); setModalVisible(true) }
 
@@ -72,7 +75,7 @@ export default function SpecialOpsPersonnelPanel() {
       title: '确认删除', content: '确定要删除该人员记录吗？',
       onOk: async () => {
         const r = await deletePersonnel(id)
-        if (r.code === 200) { message.success('已删除'); removePersonnel(id) }
+        if (r.code === 200) { message.success('已删除'); refreshPersonnel() }
         else { message.error(r.message || '删除失败') }
       },
     })
@@ -88,11 +91,11 @@ export default function SpecialOpsPersonnelPanel() {
       }
       if (editingRecord) {
         const r = await updatePersonnel(editingRecord.id, formatted)
-        if (r.code === 200) { message.success('已更新'); updateInStore(editingRecord.id, r.data); setModalVisible(false) }
+        if (r.code === 200) { message.success('已更新'); refreshPersonnel(); setModalVisible(false) }
         else { message.error(r.message || '更新失败') }
       } else {
         const r = await createPersonnel(formatted as SpecialOperationPersonnelFormData)
-        if (r.code === 200) { message.success('已创建'); addPersonnel(r.data); setModalVisible(false); form.resetFields() }
+        if (r.code === 200) { message.success('已创建'); refreshPersonnel(); setModalVisible(false); form.resetFields() }
         else { message.error(r.message || '创建失败') }
       }
     } catch { /* validation */ }
@@ -152,13 +155,13 @@ export default function SpecialOpsPersonnelPanel() {
           </Col>
           <Col span={4}>
             <Select placeholder="证书类型" allowClear value={certTypeFilter}
-              onChange={v => { setCertTypeFilter(v); setPersonnelQueryParams({ page: 1 }) }}
+              onChange={v => { setCertTypeFilter(v); setPage(1) }}
               style={{ width: '100%' }}
               options={OPERATION_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
           </Col>
           <Col span={4}>
             <Select placeholder="状态" allowClear value={statusFilter}
-              onChange={v => { setStatusFilter(v); setPersonnelQueryParams({ page: 1 }) }}
+              onChange={v => { setStatusFilter(v); setPage(1) }}
               style={{ width: '100%' }}
               options={PERSONNEL_STATUS_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
           </Col>
@@ -168,11 +171,11 @@ export default function SpecialOpsPersonnelPanel() {
         </Row>
 
         <Table<SpecialOperationPersonnel>
-          columns={columns} dataSource={personnel} rowKey="id" loading={loading} scroll={{ x: 1100 }}
+          columns={columns} dataSource={personnel} rowKey="id" loading={isLoading} scroll={{ x: 1100 }}
           pagination={{
-            current: personnelQueryParams.page, pageSize: personnelQueryParams.page_size, total: personnelTotal,
+            current: page, pageSize, total: personnelTotal,
             showSizeChanger: true, showTotal: t => `共 ${t} 条`,
-            onChange: (page, pageSize) => setPersonnelQueryParams({ page, page_size: pageSize }),
+            onChange: (nextPage, nextPageSize) => { setPage(nextPage); setPageSize(nextPageSize) },
           }}
         />
       </Card>

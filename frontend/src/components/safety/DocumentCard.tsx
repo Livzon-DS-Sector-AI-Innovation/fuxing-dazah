@@ -10,11 +10,16 @@ import {
   EyeOutlined,
   EditOutlined,
   EllipsisOutlined,
-  ThunderboltOutlined,
   PaperClipOutlined,
+  CalendarOutlined,
+  UserOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import type { SafetyKnowledgeArticle } from '@/types/safety'
-import { BT_CATEGORY_STYLE, FALLBACK_STYLE, getCategoryStyle } from './knowledgeConstants'
+import { KNOWLEDGE_CATEGORY_OPTIONS } from '@/types/safety'
+import { getCategoryStyle } from './knowledgeConstants'
+import { CategoryChip, MetaItem } from './knowledgeUI'
+import dayjs from 'dayjs'
 
 interface Props {
   article: SafetyKnowledgeArticle
@@ -44,16 +49,22 @@ export default function DocumentCard({
   const [hovered, setHovered] = useState(false)
   const showCheckbox = selectionMode || hovered
 
-  // 优先使用 Bitable 原始子分类（tags），回退到平台分类
   const style = getCategoryStyle(article.tags, article.category)
   const btCategory = (article.tags as string) || ''
-  const categoryLabel = btCategory || article.category
+  const fallbackLabel =
+    KNOWLEDGE_CATEGORY_OPTIONS.find((o) => o.value === article.category)?.label ||
+    article.category
+  const categoryLabel = btCategory || fallbackLabel
 
   const hasCard = article.knowledge_card != null
   const cardVersion = article.card_version || 0
   const hasContent = !!article.content
   const hasAttachment = !!article.attachment_original_name
   const attachmentName = article.attachment_original_name || ''
+  const summary = article.summary?.trim() || ''
+  const source = article.source?.trim() || ''
+  const author = article.author?.trim() || ''
+  const publishDate = article.publish_date ? dayjs(article.publish_date).format('YYYY-MM-DD') : ''
 
   const statusBadge: Record<string, { color: string; bg: string; label: string }> = {
     draft:     { color: '#5d5b54', bg: '#f0eeec', label: '草稿' },
@@ -93,42 +104,32 @@ export default function DocumentCard({
         display: 'flex',
         flexDirection: 'column',
         cursor: 'pointer',
-        background: '#ffffff',
-        borderRadius: 12,
-        border: selected ? '2px solid #5645d4' : '1px solid #e5e3df',
-        padding: '16px',
-        gap: 10,
-        transition: 'box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease',
-        boxShadow: hovered ? '0 4px 16px rgba(15,15,15,0.08)' : '0 1px 3px rgba(0,0,0,0.04)',
-        transform: hovered ? 'translateY(-3px)' : 'translateY(0)',
+        background: 'var(--color-canvas, #ffffff)',
+        borderRadius: 14,
+        border: selected
+          ? '1.5px solid var(--color-primary, #5645d4)'
+          : '1px solid var(--color-hairline, #e5e3df)',
+        padding: '18px',
+        gap: 8,
+        transition: 'box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease',
+        boxShadow: hovered
+          ? '0 10px 30px rgba(26, 26, 26, 0.08)'
+          : '0 1px 2px rgba(26, 26, 26, 0.03)',
+        transform: hovered ? 'translateY(-2px)' : 'translateY(0)',
         animation: 'fadeInUp 0.4s ease both',
-        animationDelay: `${animationDelay}ms`,
+        animationDelay: animationDelay + 'ms',
         userSelect: 'none',
       }}
     >
-      {/* ── 顶部：Bitable 分类标签 + 多选框 ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            padding: '2px 8px',
-            borderRadius: 4,
-            fontSize: 11,
-            fontWeight: 600,
-            color: style.color,
-            background: style.bg,
-            lineHeight: '18px',
-            maxWidth: showCheckbox ? 'calc(100% - 28px)' : '100%',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <span>{style.emoji}</span>
-          {categoryLabel}
-        </span>
+      {/* 顶部分类标签 + 选择框 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+        <CategoryChip
+          emoji={style.emoji}
+          label={categoryLabel}
+          color={style.color}
+          bg={style.bg}
+          maxWidth={showCheckbox ? 'calc(100% - 28px)' : '100%'}
+        />
 
         <span
           style={{
@@ -143,117 +144,131 @@ export default function DocumentCard({
         </span>
       </div>
 
-      {/* ── 中部：图标 + 标题 + 编号 ── */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flex: 1 }}>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            background: style.bg,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 20,
-            flexShrink: 0,
-            marginTop: 2,
-          }}
-        >
-          {style.emoji}
-        </div>
-
-        <div style={{ minWidth: 0, flex: 1 }}>
-          {/* 标题 */}
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              color: '#1a1a1a',
-              lineHeight: 1.4,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-              wordBreak: 'break-word',
-            }}
-          >
-            {article.title}
-          </div>
-
-          {/* 编号 + 版本 + 状态 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
-            {article.article_no && (
-              <span
-                style={{
-                  fontFamily: '"SF Mono","Fira Code",monospace',
-                  fontSize: 12,
-                  color: '#5d5b54',
-                  fontWeight: 600,
-                }}
-              >
-                {article.article_no}
-              </span>
-            )}
-            <span
-              style={{
-                display: 'inline-block',
-                padding: '0 6px',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                color: '#5645d4',
-                background: '#e6e0f5',
-                lineHeight: '18px',
-              }}
-            >
-              v{article.version || 1}
-            </span>
-            <span
-              style={{
-                display: 'inline-block',
-                padding: '0 6px',
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                color: st.color,
-                background: st.bg,
-                lineHeight: '18px',
-              }}
-            >
-              {st.label}
-            </span>
-          </div>
-        </div>
+      {/* 标题 */}
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 600,
+          color: 'var(--color-ink, #1a1a1a)',
+          lineHeight: 1.45,
+          letterSpacing: '-0.01em',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          wordBreak: 'break-word',
+        }}
+      >
+        {article.title}
       </div>
 
-      {/* ── 底部：状态栏 ── */}
+      {/* 编号 · 版本 · 状态 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        {article.article_no && (
+          <span
+            style={{
+              fontFamily: '"SF Mono", "Fira Code", ui-monospace, monospace',
+              fontSize: 12,
+              color: 'var(--color-slate, #5d5b54)',
+              fontWeight: 600,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {article.article_no}
+          </span>
+        )}
+        <span
+          style={{
+            display: 'inline-block',
+            padding: '0 7px',
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--color-primary, #5645d4)',
+            background: 'rgba(86, 69, 212, 0.08)',
+            lineHeight: '18px',
+          }}
+        >
+          v{article.version || 1}
+        </span>
+        <span
+          style={{
+            display: 'inline-block',
+            padding: '0 7px',
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 600,
+            color: st.color,
+            background: st.bg,
+            lineHeight: '18px',
+          }}
+        >
+          {st.label}
+        </span>
+      </div>
+
+      {/* 摘要 */}
+      <div
+        style={{
+          fontSize: 13,
+          lineHeight: 1.6,
+          color: summary ? 'var(--color-charcoal, #37352f)' : 'var(--color-stone, #a4a097)',
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          wordBreak: 'break-word',
+          minHeight: summary ? undefined : '1.6em',
+        }}
+      >
+        {summary || '暂无摘要'}
+      </div>
+
+      {/* 弹性占位，压底部状态栏 */}
+      <div style={{ flex: 1 }} />
+
+      {/* 元数据行 */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 14px' }}>
+        {source && <MetaItem icon={<ApartmentOutlined />} text={source} title={'来源：' + source} />}
+        {publishDate && <MetaItem icon={<CalendarOutlined />} text={publishDate} title={'发布日期：' + publishDate} />}
+        {author && <MetaItem icon={<UserOutlined />} text={author} title={'作者/发布单位：' + author} />}
+        <MetaItem
+          icon={<EyeOutlined />}
+          text={(article.view_count || 0) + ' 次浏览'}
+          title={'浏览次数：' + (article.view_count || 0)}
+        />
+      </div>
+
+      {/* 底部状态栏 */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          paddingTop: 8,
-          borderTop: '1px solid #f6f5f4',
+          paddingTop: 10,
+          marginTop: 2,
+          borderTop: '1px solid var(--color-hairline-soft, #ede9e4)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* 知识卡片状态 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           {hasCard ? (
-            <Tooltip title={`知识卡片 v${cardVersion}`}>
+            <Tooltip title={'知识卡片 v' + cardVersion}>
               <span
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 3,
+                  gap: 4,
                   padding: '1px 8px',
-                  borderRadius: 4,
+                  borderRadius: 999,
                   fontSize: 12,
                   fontWeight: 600,
                   color: '#1aae39',
-                  background: '#d9f3e1',
+                  background: '#e7f7ec',
+                  flexShrink: 0,
                 }}
               >
-                <span style={{ fontSize: 10 }}>✓</span> v{cardVersion}
+                <RobotOutlined style={{ fontSize: 11 }} />
+                v{cardVersion}
               </span>
             </Tooltip>
           ) : (
@@ -261,31 +276,32 @@ export default function DocumentCard({
               style={{
                 display: 'inline-block',
                 padding: '1px 8px',
-                borderRadius: 4,
+                borderRadius: 999,
                 fontSize: 12,
                 fontWeight: 600,
-                color: '#a4a097',
-                background: '#f0eeec',
+                color: 'var(--color-stone, #a4a097)',
+                background: 'var(--color-surface, #f0eeec)',
+                flexShrink: 0,
               }}
             >
-              —
+              无卡片
             </span>
           )}
 
-          {/* 附件指示 */}
           {hasAttachment && (
             <Tooltip title={attachmentName}>
               <span
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 3,
+                  gap: 4,
                   fontSize: 12,
-                  color: '#1aae39',
+                  color: 'var(--color-steel, #787671)',
+                  minWidth: 0,
                 }}
               >
-                <PaperClipOutlined style={{ fontSize: 11 }} />
-                <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <PaperClipOutlined style={{ fontSize: 12, flexShrink: 0 }} />
+                <span style={{ maxWidth: 90, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {attachmentName}
                 </span>
               </span>
@@ -301,6 +317,7 @@ export default function DocumentCard({
             gap: 2,
             opacity: hovered ? 1 : 0,
             transition: 'opacity 0.15s ease',
+            flexShrink: 0,
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -318,12 +335,10 @@ export default function DocumentCard({
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes fadeInUp {
-          from { opacity: 0; transform: translateY(16px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+      <style jsx>{`@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}`}</style>
     </div>
   )
 }

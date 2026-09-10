@@ -29,7 +29,7 @@ DEPARTMENT_CONFIG: dict[str, dict[str, str]] = {
     "提炼工程五部":        {"leader": "林东态", "supervisor": "刘文锋", "safety_officer": "蔡嘉旺"},
     "提炼工程六部":        {"leader": "王涛",   "supervisor": "刘文锋", "safety_officer": "陈美丽"},
     "提炼技术精进中心":    {"leader": "刘小刚", "supervisor": "刘文锋", "safety_officer": "李帅"},
-    "质量控制部（QC部）":  {"leader": "王凤景", "supervisor": "吴钰彬", "safety_officer": "翁日生"},
+    "质量控制部（QC部）":  {"leader": "陈雅芬", "supervisor": "吴钰彬", "safety_officer": "翁日生"},
     "质量保证部（QA部）":  {"leader": "廖庆云", "supervisor": "吴钰彬", "safety_officer": "翁日生"},
     "法规注册部（RA部）":  {"leader": "蔡榕斌", "supervisor": "吴钰彬"},
     "环保工程中心":        {"leader": "杨剑",   "supervisor": "温军贤", "safety_officer": "罗建华"},

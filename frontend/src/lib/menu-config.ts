@@ -170,7 +170,6 @@ export const moduleMenus: ModuleMenu[] = [
         label: "应急与事故",
         path: "",
         children: [
-          { key: "accident-ledger", label: "事故台账", path: "/safety/accident" },
           { key: "emergency-plan", label: "应急预案管理", path: "", disabled: true },
           { key: "emergency-drill", label: "应急演练管理", path: "", disabled: true },
         ],

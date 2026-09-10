@@ -1,20 +1,21 @@
-"""安全知识库模块 — 法规标准文档管理与 AI 知识注入。
+"""安全知识库模块 — 法规标准文档管理与 RAG 知识检索。
 
 提供：
 - KnowledgeCard: 法规知识卡片的 Pydantic 数据模型
+- KnowledgeDocumentMeta / KNOWLEDGE_DOCUMENTS: 法规清单元数据
 - DocumentLoader: 飞书 Drive 文档下载与解析
-- KnowledgeInjector: AI prompt 知识注入层
-- KnowledgeCardSelector: AI 智能卡片选择器（根据隐患上下文精准选择相关卡片）
+- SafetyKnowledgeRetriever: 统一 RAG 检索入口（三层管线）
 - KnowledgeGraphNode / KnowledgeGraphEdge: 知识图谱节点与边 ORM 模型
 - GraphService: 图谱 CRUD 与图查询
-- GraphBuilder: AI 图谱生成器 (Phase 2)
-- GraphRetriever: 图导航检索器 (Phase 3)
+- GraphBuilder: AI 图谱生成器
+- GraphRetriever: 图导航检索器
 
 用法:
-    from app.modules.safety.knowledge import KnowledgeInjector
+    from app.modules.safety.knowledge.retriever import SafetyKnowledgeRetriever
 
-    injector = KnowledgeInjector(session)
-    context = await injector.build_knowledge_context()
+    retriever = SafetyKnowledgeRetriever(session)
+    context = await retriever.retrieve(description="防爆堵头未封堵")
+    injection_md = retriever.build_injection_context(context)
 """
 
 from app.modules.safety.knowledge.card_selector import KnowledgeCardSelector
@@ -47,8 +48,8 @@ __all__ = [
     "KnowledgeDocumentMeta",
     "KNOWLEDGE_DOCUMENTS",
     "DocumentLoader",
-    "KnowledgeInjector",
     "KnowledgeCardSelector",
+    "KnowledgeInjector",
     # Graph
     "KnowledgeGraphNode",
     "KnowledgeGraphEdge",

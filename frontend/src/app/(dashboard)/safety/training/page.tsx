@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Table,
   Button,
@@ -16,7 +16,6 @@ import {
   Card,
   Row,
   Col,
-  Typography,
   Tabs,
   Switch,
 } from 'antd'
@@ -31,20 +30,17 @@ import {
   TeamOutlined,
   DownloadOutlined,
 } from '@ant-design/icons'
-import { useSafetyStore } from '@/stores/safety'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { fetchTrainings, fetchTrainingRecords, fetchTrainingCertificates } from '@/lib/api/safety/training'
 import {
-  getTrainings,
   createTraining,
   updateTraining,
   startTraining,
   completeTraining,
   deleteTraining,
-  getTrainingRecords,
   createTrainingRecord,
   updateTrainingRecord,
   deleteTrainingRecord,
-  getTrainingCertificates,
-  getExpiringCertificates,
 } from '@/actions/safety'
 import type {
   SafetyTraining,
@@ -63,24 +59,23 @@ import {
 } from '@/types/safety'
 import dayjs from 'dayjs'
 
-const { Text } = Typography
 
 export default function TrainingPage() {
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
-  const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [editingRecord, setEditingRecord] = useState<SafetyTraining | null>(null)
   const [searchText, setSearchText] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | undefined>()
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
 
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+
   // Training record state
   const [recordModalVisible, setRecordModalVisible] = useState(false)
   const [currentTrainingId, setCurrentTrainingId] = useState<string | null>(null)
   const [currentTrainingName, setCurrentTrainingName] = useState('')
-  const [records, setRecords] = useState<TrainingRecord[]>([])
-  const [recordsLoading, setRecordsLoading] = useState(false)
   const [recordForm] = Form.useForm()
   const [editingRecordItem, setEditingRecordItem] = useState<TrainingRecord | null>(null)
   const [batchRecordVisible, setBatchRecordVisible] = useState(false)
@@ -88,53 +83,53 @@ export default function TrainingPage() {
 
   // Certificate tab state
   const [activeTab, setActiveTab] = useState('training')
-  const [certificates, setCertificates] = useState<TrainingRecord[]>([])
-  const [certTotal, setCertTotal] = useState(0)
   const [certPage, setCertPage] = useState(1)
   const [certPageSize, setCertPageSize] = useState(20)
-  const [certLoading, setCertLoading] = useState(false)
   const [certStatusFilter, setCertStatusFilter] = useState<string | undefined>()
   const [certKeyword, setCertKeyword] = useState('')
 
-  const {
-    trainings,
-    trainingTotal,
-    trainingQueryParams,
-    setTrainings,
-    setTrainingTotal,
-    setTrainingQueryParams,
-    addTraining,
-    updateTraining: updateTrainingInStore,
-    removeTraining,
-  } = useSafetyStore()
+  const queryClient = useQueryClient()
 
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const response = await getTrainings({
-        ...trainingQueryParams,
-        status: statusFilter,
-        training_type: typeFilter,
-      })
-      if (response.code === 200) {
-        setTrainings(response.data)
-        setTrainingTotal(response.meta?.total || 0)
-      }
-    } catch {
-      message.error('加载培训列表失败')
-    } finally {
-      setLoading(false)
-    }
+  const refreshTrainings = () => {
+    queryClient.invalidateQueries({ queryKey: ['trainings'] })
   }
 
-  useEffect(() => {
-    loadData()
-  }, [trainingQueryParams.page, trainingQueryParams.page_size, statusFilter, typeFilter])
+  // 培训列表 query
+  const { data: listData, isLoading } = useQuery({
+    queryKey: ['trainings', { page, pageSize, statusFilter, typeFilter }],
+    queryFn: () => fetchTrainings({
+      page, page_size: pageSize,
+      status: statusFilter,
+      training_type: typeFilter,
+    }),
+  })
+  const trainings = listData?.items ?? []
+  const trainingTotal = listData?.total ?? 0
 
-  const handleSearch = () => {
-    setTrainingQueryParams({ page: 1 })
-    loadData()
-  }
+  // 培训记录 query（选中培训时启用）
+  const recordsQuery = useQuery({
+    queryKey: ['training-records', currentTrainingId],
+    queryFn: () => fetchTrainingRecords(currentTrainingId!),
+    enabled: !!currentTrainingId,
+  })
+  const records = recordsQuery.data ?? []
+  const recordsLoading = recordsQuery.isLoading
+
+  // 证书列表 query（证书 tab 激活时启用）
+  const certQuery = useQuery({
+    queryKey: ['training-certificates', { certPage, certPageSize, certStatusFilter, certKeyword }],
+    queryFn: () => fetchTrainingCertificates({
+      page: certPage, page_size: certPageSize,
+      certificate_status: certStatusFilter,
+      keyword: certKeyword || undefined,
+    }),
+    enabled: activeTab === 'certificate',
+  })
+  const certificates = certQuery.data?.items ?? []
+  const certTotal = certQuery.data?.total ?? 0
+  const certLoading = certQuery.isLoading
+
+  const handleSearch = () => setPage(1)
 
   const handleAdd = () => {
     setEditingRecord(null)
@@ -160,7 +155,7 @@ export default function TrainingPage() {
           const response = await deleteTraining(id)
           if (response.code === 200) {
             message.success('删除成功')
-            removeTraining(id)
+            refreshTrainings()
           } else {
             message.error(response.message || '删除失败')
           }
@@ -183,7 +178,7 @@ export default function TrainingPage() {
         const response = await updateTraining(editingRecord.id, formattedValues)
         if (response.code === 200) {
           message.success('更新成功')
-          updateTrainingInStore(editingRecord.id, response.data)
+          refreshTrainings()
           setModalVisible(false)
         } else {
           message.error(response.message || '更新失败')
@@ -192,7 +187,7 @@ export default function TrainingPage() {
         const response = await createTraining(formattedValues as SafetyTrainingFormData)
         if (response.code === 200) {
           message.success('创建成功')
-          addTraining(response.data)
+          refreshTrainings()
           setModalVisible(false)
           form.resetFields()
         } else {
@@ -209,7 +204,7 @@ export default function TrainingPage() {
       const response = await startTraining(id)
       if (response.code === 200) {
         message.success('培训已开始')
-        updateTrainingInStore(id, response.data)
+        refreshTrainings()
       } else {
         message.error(response.message || '操作失败')
       }
@@ -223,7 +218,7 @@ export default function TrainingPage() {
       const response = await completeTraining(id)
       if (response.code === 200) {
         message.success('培训已完成')
-        updateTrainingInStore(id, response.data)
+        refreshTrainings()
       } else {
         message.error(response.message || '操作失败')
       }
@@ -254,50 +249,9 @@ export default function TrainingPage() {
 
   // ============ Training Record Operations ============
 
-  const loadRecords = async (trainingId: string) => {
-    setRecordsLoading(true)
-    try {
-      const response = await getTrainingRecords(trainingId)
-      if (response.code === 200) {
-        setRecords(response.data || [])
-      }
-    } catch {
-      message.error('加载培训记录失败')
-    } finally {
-      setRecordsLoading(false)
-    }
-  }
-
-  const loadCertificates = async () => {
-    setCertLoading(true)
-    try {
-      const response = await getTrainingCertificates({
-        page: certPage, page_size: certPageSize,
-        certificate_status: certStatusFilter,
-        keyword: certKeyword || undefined,
-      })
-      if (response.code === 200) {
-        setCertificates(response.data || [])
-        setCertTotal(response.meta?.total || 0)
-      }
-    } catch {
-      message.error('加载证书列表失败')
-    } finally {
-      setCertLoading(false)
-    }
-  }
-
-  // Load certificates when tab switches or filters change
-  useEffect(() => {
-    if (activeTab === 'certificate') {
-      loadCertificates()
-    }
-  }, [activeTab, certPage, certPageSize, certStatusFilter])
-
   const handleManageRecords = (record: SafetyTraining) => {
     setCurrentTrainingId(record.id)
     setCurrentTrainingName(record.training_name)
-    loadRecords(record.id)
     setRecordModalVisible(true)
   }
 
@@ -326,7 +280,7 @@ export default function TrainingPage() {
           const response = await deleteTrainingRecord(recordId)
           if (response.code === 200) {
             message.success('删除成功')
-            setRecords(records.filter((r) => r.id !== recordId))
+            queryClient.invalidateQueries({ queryKey: ['training-records'] })
           } else {
             message.error(response.message || '删除失败')
           }
@@ -351,7 +305,7 @@ export default function TrainingPage() {
         const response = await updateTrainingRecord(editingRecordItem.id, payload)
         if (response.code === 200) {
           message.success('更新成功')
-          loadRecords(currentTrainingId)
+          queryClient.invalidateQueries({ queryKey: ['training-records'] })
           recordForm.resetFields()
           setEditingRecordItem(null)
         } else {
@@ -361,7 +315,7 @@ export default function TrainingPage() {
         const response = await createTrainingRecord(currentTrainingId, payload as TrainingRecordFormData)
         if (response.code === 200) {
           message.success('添加成功')
-          loadRecords(currentTrainingId)
+          queryClient.invalidateQueries({ queryKey: ['training-records'] })
           recordForm.resetFields()
         } else {
           message.error(response.message || '添加失败')
@@ -390,7 +344,7 @@ export default function TrainingPage() {
       }
 
       message.success(`成功添加 ${names.length} 人`)
-      loadRecords(currentTrainingId)
+      queryClient.invalidateQueries({ queryKey: ['training-records'] })
       setBatchRecordVisible(false)
       batchRecordForm.resetFields()
     } catch {
@@ -632,7 +586,7 @@ export default function TrainingPage() {
                     value={typeFilter}
                     onChange={(value) => {
                       setTypeFilter(value)
-                      setTrainingQueryParams({ page: 1 })
+                      setPage(1)
                     }}
                     style={{ width: '100%' }}
                     options={TRAINING_TYPE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
@@ -645,7 +599,7 @@ export default function TrainingPage() {
                     value={statusFilter}
                     onChange={(value) => {
                       setStatusFilter(value)
-                      setTrainingQueryParams({ page: 1 })
+                      setPage(1)
                     }}
                     style={{ width: '100%' }}
                     options={TRAINING_STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
@@ -662,17 +616,18 @@ export default function TrainingPage() {
                 columns={columns}
                 dataSource={trainings}
                 rowKey="id"
-                loading={loading}
+                loading={isLoading}
                 scroll={{ x: 1400 }}
                 pagination={{
-                  current: trainingQueryParams.page,
-                  pageSize: trainingQueryParams.page_size,
+                  current: page,
+                  pageSize,
                   total: trainingTotal,
                   showSizeChanger: true,
                   showQuickJumper: true,
                   showTotal: (total) => `共 ${total} 条`,
-                  onChange: (page, pageSize) => {
-                    setTrainingQueryParams({ page, page_size: pageSize })
+                  onChange: (nextPage, nextPageSize) => {
+                    setPage(nextPage)
+                    setPageSize(nextPageSize)
                   },
                 }}
               />
@@ -691,7 +646,7 @@ export default function TrainingPage() {
                     prefix={<SearchOutlined />}
                     value={certKeyword}
                     onChange={(e) => setCertKeyword(e.target.value)}
-                    onPressEnter={() => { setCertPage(1); loadCertificates() }}
+                    onPressEnter={() => { setCertPage(1) }}
                   />
                 </Col>
                 <Col span={4}>
@@ -705,7 +660,7 @@ export default function TrainingPage() {
                   />
                 </Col>
                 <Col span={3}>
-                  <Button type="primary" icon={<SearchOutlined />} onClick={() => { setCertPage(1); loadCertificates() }}>
+                  <Button type="primary" icon={<SearchOutlined />} onClick={() => { setCertPage(1) }}>
                     查询
                   </Button>
                 </Col>

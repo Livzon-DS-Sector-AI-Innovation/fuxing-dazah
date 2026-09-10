@@ -15,7 +15,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { SpecialOperationReport, DailyRiskReport, TrainingRecord } from '@/types/safety'
+import type { SpecialOperationReport, KeyRiskOperationReport, TrainingRecord } from '@/types/safety'
 import { T } from './shared-styles'
 
 const { Title, Text } = Typography
@@ -27,7 +27,7 @@ export interface DashboardData {
   unfinishedIdentCount: number
   expiringCerts: TrainingRecord[]
   todaySpecialOps: SpecialOperationReport[]
-  todayDailyRisks: DailyRiskReport[]
+  todayDailyRisks: KeyRiskOperationReport[]
 }
 
 interface TodayRiskRow {
@@ -78,6 +78,16 @@ function riskLevelConfig(level?: string): { color: string; bg: string; label: st
     return { color: '#16A34A', bg: '#f0fdf4', label: l || '四级' }
   }
   return { color: T.steel, bg: T.surface, label: l || '-' }
+}
+
+// ── 关键风险作业申请状态 → 风险色（用于仪表盘今日卡片）──
+
+function applyStatusConfig(status?: string): { color: string; bg: string; label: string } {
+  const s = status ?? ''
+  if (s === '已通过') return { color: '#16A34A', bg: '#f0fdf4', label: '已通过' }
+  if (s === '审批中') return { color: '#F97316', bg: '#fff7ed', label: '审批中' }
+  if (s === '已拒绝') return { color: '#DC2626', bg: '#fef2f2', label: '已拒绝' }
+  return { color: T.steel, bg: T.surface, label: s || '-' }
 }
 
 // ── Certificate expiry status ──
@@ -261,22 +271,22 @@ export default function SafetyDashboard({ data }: { data: DashboardData }) {
       }
     }),
     ...data.todayDailyRisks.map((r) => {
-      const rl = riskLevelConfig(r.risk_level)
+      const st = applyStatusConfig(r.apply_status)
       return {
         key: `dr-${r.id}`,
         source: 'daily_risk' as const,
-        sourceLabel: '每日报备',
-        operationType: r.operation_description.slice(0, 12) + (r.operation_description.length > 12 ? '…' : ''),
-        operationDescription: r.operation_description,
-        riskLevel: rl.label,
-        location: r.location || '-',
+        sourceLabel: '关键风险',
+        operationType: (r.operation_content || '').slice(0, 12) + ((r.operation_content?.length || 0) > 12 ? '…' : ''),
+        operationDescription: r.operation_content || '-',
+        riskLevel: st.label,
+        location: r.area || '-',
         department: r.department || '-',
-        responsiblePerson: r.responsible_person || r.applicant_name || '-',
-        timeRange: [r.planned_start_time, r.planned_end_time]
+        responsiblePerson: r.guardian || r.site_guardian || r.initiator_name || '-',
+        timeRange: [r.start_time, r.end_time]
           .filter(Boolean)
           .map((t) => (t ? new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : ''))
           .join(' – ') || '-',
-        status: r.status,
+        status: r.apply_status || '',
       }
     }),
   ]

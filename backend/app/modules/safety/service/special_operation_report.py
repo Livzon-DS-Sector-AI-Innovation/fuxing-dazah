@@ -199,6 +199,28 @@ class SpecialOperationReportService:
         item = await self.repo.update_special_operation_report(report_id, update_data)
         if item:
             await self._audit("update", "special_operation_report", resource_id=report_id)
+            # V3.5 字段变更后重新执行日报风险判定
+            v35_keys = {"fire_work_method", "height_work_method", "work_height", "lifting_weight", "contractor_name"}
+            if update_data.keys() & v35_keys:
+                from app.modules.safety.service.special_operation_daily_report import (
+                    RiskAssessmentEngine,
+                )
+                engine = RiskAssessmentEngine()
+                assessment = engine.assess(item)
+                item.daily_risk_level = assessment.risk_level
+                item.daily_risk_reason = "; ".join(assessment.matched_rules) if assessment.matched_rules else None
+                item.inferred_operation_types = assessment.inferred_types if assessment.inferred_types else None
+                item.is_excluded = assessment.is_excluded
+                item.exclusion_reason = assessment.exclusion_reason
+                await self.repo.update_special_operation_report(item.id, {
+                    "daily_risk_level": item.daily_risk_level,
+                    "daily_risk_reason": item.daily_risk_reason,
+                    "inferred_operation_types": item.inferred_operation_types,
+                    "is_excluded": item.is_excluded,
+                    "exclusion_reason": item.exclusion_reason,
+                })
+                # Re-fetch to get the updated row with all server defaults
+                item = await self.repo.get_special_operation_report_by_id(report_id)
         return item
 
     async def delete_report(self, report_id: uuid.UUID) -> bool:
@@ -279,12 +301,16 @@ class SpecialOperationReportService:
         self, report: "SpecialOperationReport"
     ) -> tuple[bool, str | None]:
         """判定报备是否为关键作业（AI 优先，失败时基于规则 fallback）"""
+        ai = None
         try:
             ai = await self._get_ai_service()
             return await self._ai_identify_critical(ai, report)
         except Exception as e:
             logger.warning("AI 关键作业判定失败，使用规则 fallback: %s", e)
             return self._rule_based_identify_critical(report)
+        finally:
+            if ai is not None:
+                await ai.close()
 
     async def _ai_identify_critical(
         self, ai: "AIService", report: "SpecialOperationReport"
@@ -401,6 +427,7 @@ class SpecialOperationReportService:
         # 使用硬编码提示词构建 prompt
         prompt = NATURAL_QUERY_PARSE_PROMPT + "\n\n用户查询：" + natural_query
 
+        ai = None
         try:
             ai = await self._get_ai_service()
             messages = [
@@ -420,6 +447,9 @@ class SpecialOperationReportService:
         except Exception as e:
             logger.warning("AI 自然语言解析失败: %s", e)
             return {"explanation": f"AI 解析失败，将使用原始查询: {natural_query}", "keyword": natural_query}
+        finally:
+            if ai is not None:
+                await ai.close()
 
     async def export_ledger_excel(
         self,

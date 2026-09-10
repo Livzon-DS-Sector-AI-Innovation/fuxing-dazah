@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -95,15 +96,14 @@ class EhsChangeBase(BaseModel):
     expected_effect: str | None = Field(None, description="预期效果")
     applicant_name: str | None = Field(None, max_length=100, description="申请人姓名")
     equipment_tags: list[str] | None = Field(None, description="关联设备位号")
-    documents_to_update: list | None = Field(None, description="需更新的文件清单")
-    attachments: list | None = Field(None, description="附件列表")
-    risk_assessments: list | None = Field(None, description="风险评估记录")
-    approval_chain: list | None = Field(None, description="审批链")
-    action_items: list | None = Field(None, description="行动项")
-    pssr_checklist: list | None = Field(None, description="PSSR检查清单")
-    verification: dict | None = Field(None, description="变更验证数据")
-    closure: dict | None = Field(None, description="变更关闭数据")
-    linked_safety_check_id: uuid.UUID | None = Field(None, description="关联安全检查ID")
+    documents_to_update: list[Any] | None = Field(None, description="需更新的文件清单")
+    attachments: list[Any] | None = Field(None, description="附件列表")
+    risk_assessments: list[Any] | None = Field(None, description="风险评估记录")
+    approval_chain: list[Any] | None = Field(None, description="审批链")
+    action_items: list[Any] | None = Field(None, description="行动项")
+    pssr_checklist: list[Any] | None = Field(None, description="PSSR检查清单")
+    verification: dict[str, Any] | None = Field(None, description="变更验证数据")
+    closure: dict[str, Any] | None = Field(None, description="变更关闭数据")
     notes: str | None = Field(None, description="备注")
 
 
@@ -132,15 +132,14 @@ class EhsChangeUpdate(BaseModel):
     expected_effect: str | None = Field(None, description="预期效果")
     applicant_name: str | None = Field(None, max_length=100, description="申请人姓名")
     equipment_tags: list[str] | None = Field(None, description="关联设备位号")
-    documents_to_update: list | None = Field(None, description="需更新的文件清单")
-    attachments: list | None = Field(None, description="附件列表")
-    risk_assessments: list | None = Field(None, description="风险评估记录")
-    approval_chain: list | None = Field(None, description="审批链")
-    action_items: list | None = Field(None, description="行动项")
-    pssr_checklist: list | None = Field(None, description="PSSR检查清单")
-    verification: dict | None = Field(None, description="变更验证数据")
-    closure: dict | None = Field(None, description="变更关闭数据")
-    linked_safety_check_id: uuid.UUID | None = Field(None, description="关联安全检查ID")
+    documents_to_update: list[Any] | None = Field(None, description="需更新的文件清单")
+    attachments: list[Any] | None = Field(None, description="附件列表")
+    risk_assessments: list[Any] | None = Field(None, description="风险评估记录")
+    approval_chain: list[Any] | None = Field(None, description="审批链")
+    action_items: list[Any] | None = Field(None, description="行动项")
+    pssr_checklist: list[Any] | None = Field(None, description="PSSR检查清单")
+    verification: dict[str, Any] | None = Field(None, description="变更验证数据")
+    closure: dict[str, Any] | None = Field(None, description="变更关闭数据")
     notes: str | None = Field(None, description="备注")
 
 
@@ -152,6 +151,22 @@ class EhsChangeResponse(EhsChangeBase):
     status: str
     created_at: datetime
     updated_at: datetime
+    # Bitable 同步记录（验收表）可能缺失变更分类/时效
+    change_type: str | None = None
+    change_duration: str | None = None
+    # Bitable 同步字段
+    source: str = "manual"
+    feishu_record_id: str | None = None
+    feishu_table_id: str | None = None
+    bt_change_no: str | None = None
+    bt_change_status: str | None = None
+    bt_plan_content: str | None = None
+    bt_risk_measures: str | None = None
+    bt_acceptance_comment: str | None = None
+    bt_extra: dict[str, Any] | None = None
+    ai_review_status: str = "none"
+    ai_review_result: dict[str, Any] | None = None
+    ai_error_message: str | None = None
 
     class Config:
         from_attributes = True

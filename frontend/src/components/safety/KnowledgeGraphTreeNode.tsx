@@ -9,7 +9,7 @@ import {
   BulbOutlined,
   RightOutlined,
 } from '@ant-design/icons'
-import type { KnowledgeTreeNode } from '@/lib/buildTreeData'
+import type { KnowledgeTreeNode } from '@/components/safety/buildTreeData'
 
 // ═══════════════════════════════════════════════════════════════
 // 文档编号提取 — 从名称中识别标准编号
