@@ -2,8 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, Row, Col, Tag, Typography, Spin, Table } from 'antd'
-import type { ColumnsType } from 'antd/es/table'
+import { Card, Row, Col, Typography, Spin } from 'antd'
 import {
   AppstoreOutlined,
   FileTextOutlined,
@@ -12,6 +11,8 @@ import {
   CheckCircleOutlined,
   SyncOutlined,
   EditOutlined,
+  ToolOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons'
 import { getBatches } from '@/actions/production'
 import { BatchStatus } from '@/types/production'
@@ -93,6 +94,22 @@ const MENU_ITEMS = [
     bg: '#ffe8d4',
     iconBg: '#dd5b00',
   },
+  {
+    key: '/production/workbench',
+    title: '工作台',
+    description: '批次执行与工序现场操作',
+    icon: <ToolOutlined />,
+    bg: '#dcecfa',
+    iconBg: '#0075de',
+  },
+  {
+    key: '/production/analytics',
+    title: '数据汇总',
+    description: '工段汇总矩阵与批次字段趋势分析',
+    icon: <BarChartOutlined />,
+    bg: '#d9f3e1',
+    iconBg: '#1aae39',
+  },
 ]
 
 /** 亮色主题聚光卡片 — 鼠标跟随径向渐变 */
@@ -125,10 +142,10 @@ function TintedSpotlightCard({
         position: 'relative',
         background: bg,
         borderRadius: 12,
-        padding: '20px 24px',
+        padding: '12px 16px',
         display: 'flex',
         alignItems: 'center',
-        gap: 16,
+        gap: 12,
         cursor: 'default',
         overflow: 'hidden',
         transition: 'box-shadow 0.25s',
@@ -159,7 +176,6 @@ export default function ProductionDashboard() {
     completedBatches: 0,
     draftBatches: 0,
   })
-  const [recentBatches, setRecentBatches] = useState<BatchRecord[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -179,7 +195,6 @@ export default function ProductionDashboard() {
             completedBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.COMPLETED).length,
             draftBatches: batches.filter((b: BatchRecord) => b.status === BatchStatus.DRAFT).length,
           })
-          setRecentBatches(batches.slice(0, 5))
         }
         setProducts(prods)
       } catch (error) {
@@ -198,48 +213,10 @@ export default function ProductionDashboard() {
     draft: stats.draftBatches,
   }
 
-  const getStatusTag = (status: string) => {
-    const map: Record<string, { color: string; label: string }> = {
-      draft: { color: 'default', label: '草稿' },
-      released: { color: 'blue', label: '已下达' },
-      in_progress: { color: 'processing', label: '执行中' },
-      completed: { color: 'success', label: '已完成' },
-      cancelled: { color: 'error', label: '已取消' },
-    }
-    const c = map[status] ?? { color: 'default', label: status }
-    return (
-      <Tag
-        color={c.color}
-        className={status === 'in_progress' ? 'tag-production-active' : undefined}
-      >
-        {c.label}
-      </Tag>
-    )
-  }
-
-  const recentColumns: ColumnsType<BatchRecord> = [
-    {
-      title: '批次号',
-      dataIndex: 'batch_no',
-      render: (v: string) => <Text strong style={{ fontSize: 13 }}>{v}</Text>,
-    },
-    {
-      title: '产品',
-      dataIndex: 'product_name',
-      render: (v: string) => <Text style={{ color: '#5d5b54', fontSize: 13 }}>{v || '—'}</Text>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      width: 90,
-      render: (s: string) => getStatusTag(s),
-    },
-  ]
-
   return (
     <div>
       {/* ── Header ── */}
-      <div style={{ marginBottom: 24 }}>
+      <div style={{ marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0, fontSize: 22, fontWeight: 600, color: '#1a1a1a' }}>
           生产管理概览
         </Title>
@@ -253,20 +230,20 @@ export default function ProductionDashboard() {
       ) : (
         <>
           {/* ── Stats Row ── */}
-          <Row gutter={16} style={{ marginBottom: 24 }}>
+          <Row gutter={12} style={{ marginBottom: 16 }}>
             {STAT_CARDS.map(s => (
               <Col span={6} key={s.key}>
                 <TintedSpotlightCard bg={s.bg} spotlightColor={s.spotlightColor}>
                   <div
                     style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: 10,
+                      width: 34,
+                      height: 34,
+                      borderRadius: 8,
                       background: '#fff',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: 20,
+                      fontSize: 16,
                       color: s.iconColor,
                       flexShrink: 0,
                       zIndex: 1,
@@ -275,12 +252,12 @@ export default function ProductionDashboard() {
                     {s.icon}
                   </div>
                   <div style={{ zIndex: 1 }}>
-                    <div style={{ fontSize: 13, color: '#5d5b54', marginBottom: 2 }}>
+                    <div style={{ fontSize: 12, color: '#5d5b54', marginBottom: 2 }}>
                       {s.title}
                     </div>
                     <Counter
                       value={statValues[s.key]}
-                      fontSize={36}
+                      fontSize={24}
                       padding={0}
                       gap={2}
                       textColor={s.valueColor}
@@ -295,27 +272,26 @@ export default function ProductionDashboard() {
             ))}
           </Row>
 
-          {/* ── Quick Access + Recent ── */}
+          {/* ── Quick Access ── */}
           <Row gutter={24}>
-            <Col span={14}>
+            <Col span={24}>
               <Card
                 title={<Text strong style={{ fontSize: 15 }}>快捷操作</Text>}
                 variant="borderless"
-                style={{ height: '100%' }}
               >
-                <Row gutter={[16, 16]}>
+                <Row gutter={[12, 12]}>
                   {MENU_ITEMS.map(item => (
-                    <Col span={12} key={item.key}>
+                    <Col xs={12} lg={6} key={item.key}>
                       <div
                         onClick={() => router.push(item.key)}
                         style={{
                           background: item.bg,
                           borderRadius: 12,
-                          padding: '20px 24px',
+                          padding: '14px 18px',
                           cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: 16,
+                          gap: 12,
                           transition: 'box-shadow 0.2s, transform 0.15s',
                           border: '1px solid transparent',
                         }}
@@ -330,14 +306,14 @@ export default function ProductionDashboard() {
                       >
                         <div
                           style={{
-                            width: 44,
-                            height: 44,
-                            borderRadius: 10,
+                            width: 36,
+                            height: 36,
+                            borderRadius: 8,
                             background: item.iconBg,
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            fontSize: 20,
+                            fontSize: 17,
                             color: '#fff',
                             flexShrink: 0,
                           }}
@@ -345,52 +321,18 @@ export default function ProductionDashboard() {
                           {item.icon}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 600, fontSize: 15, color: '#1a1a1a', marginBottom: 2 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, color: '#1a1a1a', marginBottom: 2 }}>
                             {item.title}
                           </div>
-                          <div style={{ fontSize: 13, color: '#5d5b54' }}>
+                          <div style={{ fontSize: 12, color: '#5d5b54' }}>
                             {item.description}
                           </div>
                         </div>
-                        <ArrowRightOutlined style={{ color: '#a4a097', fontSize: 14 }} />
+                        <ArrowRightOutlined style={{ color: '#a4a097', fontSize: 13 }} />
                       </div>
                     </Col>
                   ))}
                 </Row>
-              </Card>
-            </Col>
-
-            <Col span={10}>
-              <Card
-                title={<Text strong style={{ fontSize: 15 }}>最近批次</Text>}
-                variant="borderless"
-                style={{ height: '100%' }}
-                extra={
-                  <a
-                    onClick={() => router.push('/production/batches')}
-                    style={{ fontSize: 13, color: '#0075de' }}
-                  >
-                    查看全部
-                  </a>
-                }
-              >
-                {recentBatches.length > 0 ? (
-                  <Table
-                    columns={recentColumns}
-                    dataSource={recentBatches}
-                    rowKey="id"
-                    size="small"
-                    pagination={false}
-                    onRow={() => ({
-                      onClick: () => router.push('/production/batches'),
-                      style: { cursor: 'pointer' },
-                    })}
-                  />
-                ) : (
-                  <div style={{ textAlign: 'center', padding: '48px 0', color: '#787671', fontSize: 14 }}>
-                    暂无批次数据
-                  </div>
-                )}
               </Card>
             </Col>
           </Row>

@@ -89,6 +89,24 @@ class ExecutionBackfillIn(BaseModel):
     field_values: list[FieldValueIn] = []
 
 
+class ExecutionAmendIn(BaseModel):
+    """修改已结束工序的填报数据（字段值 start/end 两阶段 + 起止时间 + 备注）。
+
+    独立权限 production:batch:amend；None 表示不修改该字段，
+    field_values 里 value=None 表示清空该字段值。
+    """
+
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    field_values: list[FieldValueIn] = []
+    remark: str | None = Field(default=None, max_length=500)
+
+    @field_validator("started_at", "finished_at")
+    @classmethod
+    def _check_time(cls, v: datetime | None) -> datetime | None:
+        return _normalize_manual_time(v)
+
+
 class MissingFieldOut(BaseModel):
     """已结束工序尚未补录的必填字段（批次结束前须补齐）。"""
 
@@ -117,6 +135,9 @@ class ExecutionOut(BaseModel):
     equipments: list[EquipmentSnapshotOut] = []
     field_values: list[FieldValueOut] = []
     missing_required_fields: list[MissingFieldOut] = []  # service 组装：已结束工序缺填的必填字段
+    # service 组装批次详情时按当前用户填充（权限+状态，"现在就能补"语义）；
+    # None=未计算（complete/backfill 等单条返回场景不填），前端按 falsy 处理
+    can_backfill: bool | None = None
 
 
 class NodeExecutionListItem(BaseModel):

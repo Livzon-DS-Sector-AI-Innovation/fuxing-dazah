@@ -5,6 +5,7 @@ import { App, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Dayjs } from 'dayjs'
 import { startExecution, fetchNodeAssignments } from '@/actions/production'
+import { getCurrentUser } from '@/actions/auth'
 import {
   fetchBatchDetailClient,
   fetchRouteGraphClient,
@@ -96,10 +97,20 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     queryFn: async () => {
       if (!detail?.route_id || !nodeId) return []
       const r = await fetchNodeAssignments(detail.route_id, nodeId)
-      return r.success ? (r.data ?? []) : []
+      // 查询失败时抛错（data 保持 undefined）：避免把失败当成"无配置"，
+      // 否则会把负责人静默填成本人并授以新执行负责人权限
+      if (!r.success) throw new Error(r.error ?? '获取节点负责人配置失败')
+      return r.data ?? []
     },
     enabled: !!(detail?.route_id && nodeId),
     staleTime: 30_000,
+  })
+
+  // 当前登录用户：该节点无配置默认负责人时，工序负责人默认填本人
+  const { data: currentUser } = useQuery({
+    queryKey: ['auth-current-user'],
+    queryFn: () => getCurrentUser(),
+    staleTime: 5 * 60 * 1000,
   })
 
   useEffect(() => {
@@ -112,14 +123,19 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
   }, [defaultNodeId, graph, form])
 
   useEffect(() => {
-    if (nodeAssignmentsData?.length) {
-      // 仅在字段为空时自动填充，避免覆盖用户手动选择
-      const currentOwner = form.getFieldValue('owner_id')
-      if (!currentOwner) {
-        form.setFieldsValue({ owner_id: nodeAssignmentsData[0].user_id })
-      }
+    // 等该节点的默认负责人配置加载完再决定：有配置 → 第一个配置人；无配置 → 当前登录用户。
+    // 用户一旦手动选过负责人（isFieldTouched 仅由用户交互置位，setFieldsValue 不会触碰它），
+    // 后续 refetch/切换节点都不再自动填充，避免覆盖手动选择。
+    if (!nodeId || nodeAssignmentsData === undefined) return
+    if (form.isFieldTouched('owner_id')) return
+    const configured = nodeAssignmentsData[0]?.user_id
+    const defaultOwner = configured ?? currentUser?.id
+    if (!defaultOwner) return
+    const currentOwner = form.getFieldValue('owner_id')
+    if (currentOwner !== defaultOwner) {
+      form.setFieldsValue({ owner_id: defaultOwner })
     }
-  }, [nodeId, nodeAssignmentsData, form])
+  }, [nodeId, nodeAssignmentsData, currentUser, form])
 
   const selectedNode = graph?.nodes.find(n => n.id === nodeId)
   const startDefs = selectedNode?.fields.filter(f => f.phase === 'start') ?? []
@@ -167,7 +183,9 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     let ownerName: string | null = null
     if (ownerId) {
       const cache = queryClient.getQueryData<{ items: IdentityPersonnel[] }>(['identity-personnel'])
-      ownerName = cache?.items?.find((p) => p.id === ownerId)?.name ?? null
+      ownerName = cache?.items?.find((p) => p.id === ownerId)?.name
+        // 人员列表缓存未加载/未同步到本人时，回退到当前登录用户信息
+        ?? (ownerId === currentUser?.id ? currentUser.name : null)
     }
     const result = await startExecution(batchId, {
       node_id: values.node_id,

@@ -27,7 +27,7 @@ from app.modules.meter.schemas import (
 
 logger = logging.getLogger(__name__)
 
-@router.post("/reports/match", summary="批量匹配文件名到仪表（单次最多 200 个文件）")
+@router.post("/reports/match", summary="批量匹配文件名到仪表")
 async def match_files(
     body: FileMatchRequest,
     db: AsyncSession = Depends(get_db),
@@ -38,7 +38,7 @@ async def match_files(
 
 
 
-@router.post("/reports/analyze", summary="批量识别报告内容并匹配台账（单次最多 200 份）")
+@router.post("/reports/analyze", summary="批量识别报告内容并匹配台账")
 async def analyze_report_files(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -51,8 +51,6 @@ async def analyze_report_files(
     files_raw = form.getlist("files")
     if not files_raw:
         return JSONResponse(status_code=400, content={"code": 400, "message": "缺少 files 参数"})
-    if len(files_raw) > 200:
-        return JSONResponse(status_code=400, content={"code": 400, "message": "单次最多 200 份文件"})
 
     source_raw = form.get("source")
     source: str | None = str(source_raw) if source_raw and str(source_raw) in ("instrument", "gas_detector") else None
@@ -78,7 +76,7 @@ async def analyze_report_files(
 
 
 
-@router.post("/reports/batch", summary="批量上传检测报告（单次最多 200 份）")
+@router.post("/reports/batch", summary="批量上传检测报告")
 async def batch_upload_reports(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -97,8 +95,8 @@ async def batch_upload_reports(
         items = json.loads(str(items_json))
     except json.JSONDecodeError:
         return JSONResponse(status_code=400, content={"code": 400, "message": "items_json JSON 格式错误"})
-    if not isinstance(items, list) or len(items) > 200:
-        return JSONResponse(status_code=400, content={"code": 400, "message": "items 必须为列表且单次最多 200 项"})
+    if not isinstance(items, list):
+        return JSONResponse(status_code=400, content={"code": 400, "message": "items 必须为列表"})
 
     report_date_raw = form.get("report_date")
     report_date_val: date | None = None
@@ -111,8 +109,6 @@ async def batch_upload_reports(
     remark_val: str | None = str(form.get("remark")) if form.get("remark") else None
 
     files_raw = form.getlist("files")
-    if len(files_raw) > 200:
-        return JSONResponse(status_code=400, content={"code": 400, "message": "单次最多 200 份文件"})
     file_list: list[tuple[str, bytes, str]] = []
     for f in files_raw:
         f = cast(Any, f)

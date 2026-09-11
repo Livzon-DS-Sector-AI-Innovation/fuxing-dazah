@@ -29,13 +29,15 @@ mcp = get_module_mcp("production")
 
 @mcp.tool()
 async def query_workbench_todo(operator_id: str) -> ToolResult:
-    """查询当前用户的生产待办，分三段：待接收批次、待开工工序、可激活计划批次。
+    """查询当前用户的生产待办，分四段：待接收批次、待开工工序、可激活计划批次、待结束工序。
 
     - 待接收批次：上游批次已完成边界边起点工序，等待下游工段接收（分裂=1个父批次，合并=多个父批次）。
       「接收边标识」列的值在调用 receive_batch 时必须原样回传为 edge_id（合并卡片显示 —，不传）。
       「建议批号」由系统生成（根批号+工段尾缀），接收时可默认使用。
     - 待开工工序：批次待执行，可直接开始第一个工序。
     - 可激活计划批次：计划单下达生成、状态为已排产的批次，仅第一工段负责人可激活（列表中已过滤）。
+    - 待结束工序：进行中的执行（含无工段/工序身份的单次执行负责人），
+      用 change_batch_step_status action=end 结束。
 
     Args:
         operator_id: 操作人的飞书 user_id
@@ -93,6 +95,21 @@ async def query_workbench_todo(operator_id: str) -> ToolResult:
             f"| {p.planned_start or '—'} | {p.planned_end or '—'} |"
         )
 
+    # ── 待结束工序（含单次执行负责人：无工段/工序身份的实际执行人）──
+    complete_items = [it for it in wb.items if it.type == "pending_complete"]
+    complete_lines = [
+        "| 批次 | 工序 | 工段 | 产品 | 归属 |",
+        "|------|------|------|------|------|",
+    ]
+    for it in complete_items:
+        owner = it.batch_owner_name or "无主"
+        if not it.can_operate:
+            owner = f"{owner}（仅读）"
+        complete_lines.append(
+            f"| {it.batch_no or '—'} | {it.node_name} | {it.stage_name or '—'} "
+            f"| {it.product_name or '—'} | {owner} |"
+        )
+
     def _section(title: str, lines: list[str]) -> list[str]:
         return [f"## {title}", ""] + lines if len(lines) > 2 else [f"## {title}", "", "无"]
 
@@ -100,6 +117,7 @@ async def query_workbench_todo(operator_id: str) -> ToolResult:
     parts.extend(_section("一、待接收批次", receive_lines))
     parts.extend(_section("二、待开工工序", start_lines))
     parts.extend(_section("三、可激活计划批次", planned_lines))
+    parts.extend(_section("四、待结束工序", complete_lines))
     if skipped:
         parts.append(f"\n另有 {skipped} 个计划批次不属于您负责的第一工段，不可激活。")
     return ToolResult(content="\n".join(parts))
@@ -121,15 +139,15 @@ async def activate_planned_batch(operator_id: str, batch_no: str) -> ToolResult:
 
     batch = await repo.get_batch_by_no(db, batch_no)
     if not batch:
-        return ToolResult(content=f"未找到批次：{batch_no}")
+        return ToolResult(content=f"未找到批次：{batch_no}", is_error=True)
 
     try:
         refreshed = await workbench_service.activate_planned_batch(db, batch.id, user)
     except (ValueError, AppException) as e:
-        return ToolResult(content=f"激活失败：{e}")
+        return ToolResult(content=f"激活失败：{e}", is_error=True)
     except Exception:
         logger.exception("Unexpected error in activate_planned_batch for batch %s", batch_no)
-        return ToolResult(content="激活失败：内部错误，请联系管理员")
+        return ToolResult(content="激活失败：内部错误，请联系管理员", is_error=True)
 
     return ToolResult(
         content=(
@@ -168,10 +186,10 @@ async def receive_batch(
 
     # 参数预校验（Pydantic 原始文案对 LLM 不友好，先自查常见错误）
     if not children:
-        return ToolResult(content="接收失败：至少需要指定一个子批次（children）")
+        return ToolResult(content="接收失败：至少需要指定一个子批次（children）", is_error=True)
     for c in children:
         if not c.get("batch_no"):
-            return ToolResult(content="接收失败：每个子批次必须填写 batch_no（批次号）")
+            return ToolResult(content="接收失败：每个子批次必须填写 batch_no（批次号）", is_error=True)
 
     parent_ids: list[uuid.UUID] = []
     missing: list[str] = []
@@ -182,14 +200,18 @@ async def receive_batch(
         else:
             parent_ids.append(b.id)
     if missing:
-        return ToolResult(content=f"接收失败：未找到父批次：{'、'.join(missing)}")
+        return ToolResult(
+            content=f"接收失败：未找到父批次：{'、'.join(missing)}", is_error=True
+        )
 
     parsed_edge: uuid.UUID | None = None
     if edge_id:
         try:
             parsed_edge = uuid.UUID(edge_id)
         except ValueError:
-            return ToolResult(content=f"接收失败：无效的接收边标识「{edge_id}」")
+            return ToolResult(
+                content=f"接收失败：无效的接收边标识「{edge_id}」", is_error=True
+            )
 
     try:
         body = ReceiveAndStartIn(
@@ -202,15 +224,17 @@ async def receive_batch(
         )
     except ValidationError as e:
         first = e.errors()[0]
-        return ToolResult(content=f"接收失败：子批次参数错误（{first.get('loc')}）")
+        return ToolResult(
+            content=f"接收失败：子批次参数错误（{first.get('loc')}）", is_error=True
+        )
 
     try:
         result = await workbench_service.receive_and_start(db, body, user)
     except (ValueError, AppException) as e:
-        return ToolResult(content=f"接收失败：{e}")
+        return ToolResult(content=f"接收失败：{e}", is_error=True)
     except Exception:
         logger.exception("Unexpected error in receive_batch for parents %s", parent_batch_nos)
-        return ToolResult(content="接收失败：内部错误，请联系管理员")
+        return ToolResult(content="接收失败：内部错误，请联系管理员", is_error=True)
 
     rows = [
         f"| {c['batch_no']} | {_BATCH_STATUS_CN.get(c['status'], c['status'])} |"

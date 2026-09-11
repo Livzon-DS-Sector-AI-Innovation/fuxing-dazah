@@ -73,7 +73,8 @@ class MCPToolLoggingMiddleware(Middleware):
 
     会话生命周期（解决 SSE 连接泄漏）：
     - 每次 tool 调用创建独立 DB session，写入 contextvars
-    - tool 返回后立即 commit/rollback + close，连接秒级归还连接池
+    - tool 返回后立即 commit/rollback + close，连接秒级归还连接池：
+      正常结果 commit；is_error=True 的结果 rollback（失败操作不得落库）
     - 即使 SSE 流长时间不关闭，连接也不会被占用
 
     日志格式（结构化 key=value）：
@@ -81,8 +82,7 @@ class MCPToolLoggingMiddleware(Middleware):
         tool=<工具名>
         agent=<API Key 前8位>
         args=<入参 JSON>
-        result=<返回数据 JSON>      (仅 success)
-        error=<错误信息>            (仅 error)
+        result=<返回数据 JSON>      (success 与 is_error 结果均记录)
         duration_ms=<耗时>
     """
 
@@ -118,16 +118,23 @@ class MCPToolLoggingMiddleware(Middleware):
         start = time.perf_counter()
         try:
             result = await call_next(context)
-            await db.commit()
+            # 错误结果（工具吞掉业务异常返回错误文案）必须回滚：
+            # 会话里可能已残留部分写操作（如结束工序 403 前已 add 的字段值行），
+            # 提交会把失败操作的数据落库
+            if result.is_error:
+                await db.rollback()
+            else:
+                await db.commit()
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
 
-            result_str = _serialize_result(result)
+            event_name = "mcp_tool_error" if result.is_error else "mcp_tool_success"
             logger.info(
-                "event=mcp_tool_success tool=%s agent=%s duration_ms=%s result=%s",
+                "event=%s tool=%s agent=%s duration_ms=%s result=%s",
+                event_name,
                 tool_name,
                 agent,
                 duration_ms,
-                _summarize(result_str),
+                _summarize(_serialize_result(result)),
             )
             return result
         except Exception as exc:

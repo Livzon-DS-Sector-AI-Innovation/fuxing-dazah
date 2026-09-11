@@ -42,16 +42,18 @@ async def step_cycle(
     return success_response(data=result.model_dump())
 
 
-@router.get("/analytics/field-trend", summary="字段趋势（跨批次时间序列）")
+@router.get(
+    "/analytics/field-trend",
+    summary="字段趋势（跨批次时间序列，节点下全部数值字段）",
+)
 async def field_trend(
     route_id: uuid.UUID,
     node_code: str = Query(..., max_length=50),
-    field_key: str = Query(..., max_length=50),
     user: User = Depends(_read),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    rows = await get_field_trend(db, route_id, node_code, field_key)
-    return success_response(rows)
+    result = await get_field_trend(db, route_id, node_code)
+    return success_response(result.model_dump(mode="json"))
 
 
 @router.get("/analytics/stage-summary", summary="工段汇总平铺矩阵")

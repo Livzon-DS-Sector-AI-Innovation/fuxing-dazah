@@ -1,7 +1,7 @@
 'use client'
 
 import { Select, Avatar } from 'antd'
-import type { SelectProps } from 'antd'
+import type { DefaultOptionType, SelectProps } from 'antd/es/select'
 import { useQuery } from '@tanstack/react-query'
 import { fetchIdentityPersonnel } from '@/lib/api/identity'
 import type { IdentityPersonnel } from '@/lib/api/identity'
@@ -16,6 +16,10 @@ interface Props {
   size?: SelectProps['size']
   style?: React.CSSProperties
   excludeIds?: string[]
+  allowClear?: boolean
+  maxTagCount?: SelectProps['maxTagCount']
+  maxTagPlaceholder?: SelectProps['maxTagPlaceholder']
+  groupSelectedFirst?: boolean
 }
 
 export function UserSelect({
@@ -28,6 +32,10 @@ export function UserSelect({
   size = 'middle',
   style,
   excludeIds = [],
+  allowClear = false,
+  maxTagCount,
+  maxTagPlaceholder,
+  groupSelectedFirst = false,
 }: Props) {
   const { data } = useQuery({
     queryKey: ['identity-personnel'],
@@ -44,23 +52,53 @@ export function UserSelect({
     user: p,
   }))
 
+  // 已选人员置顶分组，长名单中可直接点选取消，无需翻找
+  let dropdownOptions: DefaultOptionType[] = options
+  if (
+    groupSelectedFirst &&
+    mode === 'multiple' &&
+    Array.isArray(value) &&
+    value.length > 0
+  ) {
+    const byId = new Map<string, DefaultOptionType>(
+      options.map(o => [o.value, o] as [string, DefaultOptionType]),
+    )
+    const selected = value
+      .map(id => byId.get(id))
+      .filter((o): o is DefaultOptionType => Boolean(o))
+    const rest = options.filter(o => !value.includes(o.value))
+    dropdownOptions = [
+      ...(selected.length > 0
+        ? [{ label: `已选（${selected.length}）`, options: selected }]
+        : []),
+      ...(rest.length > 0 ? [{ label: '全部人员', options: rest }] : []),
+    ]
+  }
+
   return (
     <Select
       mode={mode === 'multiple' ? 'multiple' : undefined}
-      value={value as any}
-      onChange={onChange as any}
-      onSelect={onSelect as any}
-      onDeselect={onDeselect as any}
+      value={
+        mode === 'multiple' ? (value as string[]) : (value as string | undefined)
+      }
+      onChange={v => onChange?.(v as string | string[])}
+      onSelect={userId => onSelect?.(String(userId))}
+      onDeselect={userId => onDeselect?.(String(userId))}
       placeholder={placeholder}
       size={size}
       style={style}
+      allowClear={allowClear}
+      maxTagCount={maxTagCount}
+      maxTagPlaceholder={maxTagPlaceholder}
       showSearch
       filterOption={(input, option) =>
-        (option?.label ?? '' as string).toLowerCase().includes(input.toLowerCase())
+        String(option?.label ?? '')
+          .toLowerCase()
+          .includes(input.toLowerCase())
       }
-      options={options}
+      options={dropdownOptions}
       optionRender={({ data: opt }) => {
-        const u = (opt as any).user as IdentityPersonnel | undefined
+        const u = (opt as { user?: IdentityPersonnel }).user
         if (!u) return <span>{opt.label}</span>
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

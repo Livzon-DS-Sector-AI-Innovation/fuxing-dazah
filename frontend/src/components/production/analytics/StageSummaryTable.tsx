@@ -121,6 +121,15 @@ export function StageSummaryTable({
         {picker}
       </Space>
 
+      {(summary?.merged_routes?.length ?? 0) > 0 && (
+        <Alert
+          title={`已合并历史版本批次：${summary!.merged_routes.join('、')}`}
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       {error && (
         <Alert
           title={error instanceof Error ? error.message : '获取工段汇总数据失败，请稍后重试'}

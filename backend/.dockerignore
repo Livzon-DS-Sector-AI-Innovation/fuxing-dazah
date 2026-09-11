@@ -9,11 +9,12 @@ __pycache__
 .mypy_cache
 .ruff_cache
 
-# IDE
+# IDE / 系统元数据
 .idea
 .vscode
 *.swp
 *.swo
+.DS_Store
 
 # Git
 .git
@@ -26,6 +27,10 @@ __pycache__
 
 # 日志
 logs/
+
+# 运行时数据（通过 volume 挂载，不进镜像；变化会打穿 COPY 缓存）
+uploads/
+temp/
 
 # 文档
 *.md

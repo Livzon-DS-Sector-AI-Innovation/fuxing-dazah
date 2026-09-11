@@ -358,6 +358,25 @@ class TestBatchUploadReports:
         assert updated is not None
         assert updated.calibration_date == date.today()
 
+    async def test_invalid_pdf_date_returns_error(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """校准日期非法时该项失败并返回 error，不静默丢弃、不创建报告。"""
+        _patch_storage(monkeypatch)
+        inst = await create_instrument(db_session)
+        items = [
+            {
+                "filename": "报告0.pdf",
+                "instrument_id": str(inst.id),
+                "calibration_date": "2024/03/05",
+            }
+        ]
+        result = await service.batch_upload_reports(db_session, self._files(), items)
+        assert result["failed"] == 1
+        assert result["success"] == 0
+        assert "格式非法" in result["errors"][0]
+        assert result["report_ids"] == []
+
 
 class TestAnalyzeReportFiles:
     async def test_extraction_and_match_flow(

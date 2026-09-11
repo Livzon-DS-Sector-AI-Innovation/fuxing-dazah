@@ -37,6 +37,8 @@ export interface ChildrenAggregateResult {
 export interface BatchDetail extends ProductionBatch {
   executions: Execution[]
   computed_fields: ComputedFieldValue[]
+  /** 批次详情接口按当前用户填充：能否完成批次（complete_batch 口径 + in_progress） */
+  can_complete?: boolean
 }
 
 export interface CreateBatchInput {

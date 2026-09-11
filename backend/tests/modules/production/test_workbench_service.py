@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppException, DuplicateException
 from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
@@ -21,6 +22,7 @@ from app.modules.production.schemas import (
     ExecutionStartIn,
     FieldValueIn,
     ReceiveAndStartIn,
+    RouteCreate,
 )
 from app.modules.production.service import (
     assignment_service,
@@ -30,7 +32,7 @@ from app.modules.production.service import (
     workbench_service,
 )
 from app.platform.identity.models import User
-from tests.modules.production.conftest import rand_code
+from tests.modules.production.conftest import build_graph_in, rand_code
 
 
 async def _get_or_create_user(db: AsyncSession) -> User:
@@ -198,6 +200,191 @@ class TestWorkbenchQuery:
         route_info = result.assigned_routes[0]
         assert route_info.route_id == route_id
         assert len(route_info.stages) >= 1
+
+
+class TestStartBatch:
+    async def test_first_stage_owner_creates_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """第一工段负责人可手动建批：pending 状态、无主待首开工认领。"""
+        user = await _get_or_create_user(db_session)
+        route_id = published_route["route"].id
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user.id,
+            stage_name="发酵",
+            route_id=route_id,
+            created_by=user.id,
+        )
+        batch = await workbench_service.start_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=route_id,
+                quantity=100,
+                unit="kg",
+            ),
+            user,
+        )
+        assert batch.status == "pending"
+        assert batch.owner_user_id is None
+        assert batch.creation_type == "direct"
+
+    async def test_second_stage_owner_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """第二工段负责人建批被拒：仅第一工段负责人可创建。"""
+        user = await _get_or_create_user(db_session)
+        route_id = published_route["route"].id
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user.id,
+            stage_name="提炼",
+            route_id=route_id,
+            created_by=user.id,
+        )
+        with pytest.raises(AppException) as exc_info:
+            await workbench_service.start_batch(
+                db_session,
+                BatchCreate(
+                    batch_no=rand_code("B"),
+                    product_id=published_route["product"].id,
+                    route_id=route_id,
+                ),
+                user,
+            )
+        assert exc_info.value.status_code == 403
+        assert "第一工段负责人" in exc_info.value.message
+
+    async def test_node_owner_without_stage_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """纯工序负责人（无工段分配）建批被拒。"""
+        user = await _get_or_create_user(db_session)
+        route_id = published_route["route"].id
+        await assignment_service.create_node_assignment(
+            db_session,
+            user_id=user.id,
+            node_id=published_route["node_a"].id,
+            route_id=route_id,
+            assigned_by=user.id,
+        )
+        with pytest.raises(AppException) as exc_info:
+            await workbench_service.start_batch(
+                db_session,
+                BatchCreate(
+                    batch_no=rand_code("B"),
+                    product_id=published_route["product"].id,
+                    route_id=route_id,
+                ),
+                user,
+            )
+        assert exc_info.value.status_code == 403
+
+    async def test_duplicate_batch_no_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批号重复时建批被拒。"""
+        user = await _get_or_create_user(db_session)
+        route_id = published_route["route"].id
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user.id,
+            stage_name="发酵",
+            route_id=route_id,
+            created_by=user.id,
+        )
+        batch_no = rand_code("B")
+        await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=batch_no,
+                product_id=published_route["product"].id,
+                route_id=route_id,
+            ),
+            user=None,
+        )
+        with pytest.raises(DuplicateException):
+            await workbench_service.start_batch(
+                db_session,
+                BatchCreate(
+                    batch_no=batch_no,
+                    product_id=published_route["product"].id,
+                    route_id=route_id,
+                ),
+                user,
+            )
+
+    async def test_draft_route_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """未发布路线不可建批（复用 create_batch 校验）。"""
+        user = await _get_or_create_user(db_session)
+        draft_route = await route_service.create_route(
+            db_session,
+            RouteCreate(
+                product_id=published_route["product"].id,
+                route_name=rand_code("草稿"),
+            ),
+            user=None,
+        )
+        await route_service.save_graph(db_session, draft_route.id, build_graph_in(), user=None)
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user.id,
+            stage_name="发酵",
+            route_id=draft_route.id,
+            created_by=user.id,
+        )
+        with pytest.raises(AppException) as exc_info:
+            await workbench_service.start_batch(
+                db_session,
+                BatchCreate(
+                    batch_no=rand_code("B"),
+                    product_id=published_route["product"].id,
+                    route_id=draft_route.id,
+                ),
+                user,
+            )
+        assert exc_info.value.status_code == 400
+        assert "published" in exc_info.value.message
+
+    async def test_creatable_routes_for_first_stage_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """query_workbench 返回第一工段负责人的可建批路线及首工段名。"""
+        user_id = uuid.uuid4()
+        route_id = published_route["route"].id
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user_id,
+            stage_name="发酵",
+            route_id=route_id,
+            created_by=user_id,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        assert len(result.creatable_routes) == 1
+        info = result.creatable_routes[0]
+        assert info.route_id == route_id
+        assert info.product_id == published_route["product"].id
+        assert info.first_stage_name == "发酵"
+
+    async def test_creatable_routes_empty_for_second_stage_owner(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """非第一工段负责人的可建批路线为空。"""
+        user_id = uuid.uuid4()
+        route_id = published_route["route"].id
+        await assignment_service.create_stage_assignment(
+            db_session,
+            user_id=user_id,
+            stage_name="提炼",
+            route_id=route_id,
+            created_by=user_id,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        assert result.creatable_routes == []
 
 
 class TestReceiveAndStart:
@@ -752,3 +939,75 @@ class TestReceiveSuggestion:
         ]
         assert len(receives) == 1
         assert receives[0].suggested_batch_no is None
+
+
+class TestExecutionOwnerWorkbench:
+    """单次执行负责人（开始工序时指定的 owner）的工作台可见性。
+
+    无工段/工序身份的执行负责人：能看到自己进行中执行的待结束卡片
+    （can_operate=True，批次归属他人也可见），不出现开始/接收类卡片。
+    """
+
+    async def test_owner_sees_pending_complete_for_others_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        user_id = uuid.uuid4()  # 无任何工段/工序身份
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            ),
+            user=None,
+        )
+        batch.owner_user_id = uuid.uuid4()  # 批次归属他人
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=user_id,
+                owner_name="执行人",
+            ),
+            user=None,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        completes = [it for it in result.items if it.type == "pending_complete"]
+        assert len(completes) == 1
+        assert completes[0].execution_id == ex.id
+        assert completes[0].can_operate is True
+        # 执行负责人不能开始任何工序，也不出现开始/接收卡片
+        assert not [it for it in result.items if it.type == "pending_start"]
+        assert not [it for it in result.items if it.type == "pending_receive"]
+
+    async def test_owner_card_gone_after_complete(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """执行结束后卡片消失：单次执行负责人的权限随执行结束自然到期。"""
+        user_id = uuid.uuid4()
+        batch = await batch_service.create_batch(
+            db_session,
+            BatchCreate(
+                batch_no=rand_code("B"),
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            ),
+            user=None,
+        )
+        batch.owner_user_id = uuid.uuid4()
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=user_id,
+                owner_name="执行人",
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        result = await workbench_service.query_workbench(db_session, user_id)
+        assert result.items == []

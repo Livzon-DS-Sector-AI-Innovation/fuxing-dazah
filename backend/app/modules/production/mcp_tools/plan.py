@@ -35,7 +35,8 @@ async def query_plan_items_ending_on_date(
         target_date = datetime.strptime(date_text.strip(), "%Y/%m/%d").date()
     except ValueError:
         return ToolResult(
-            content=f"无法识别日期 `{date_text}`，请输入 YYYY/MM/DD 格式，例如 2026/08/24。"
+            content=f"无法识别日期 `{date_text}`，请输入 YYYY/MM/DD 格式，例如 2026/08/24。",
+            is_error=True,
         )
 
     day_start = datetime.combine(target_date, time.min, tzinfo=_SHANGHAI_TZ)

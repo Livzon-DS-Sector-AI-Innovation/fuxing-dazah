@@ -1,5 +1,6 @@
 """工具箱执行端点集成测试（假工具 + FakeRedis 见 conftest）。"""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -9,7 +10,13 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.toolbox import api, storage
-from app.modules.toolbox.registry import StepContext, ToolInput, ToolStep, tool
+from app.modules.toolbox.registry import (
+    StepContext,
+    ToolError,
+    ToolInput,
+    ToolStep,
+    tool,
+)
 from app.modules.toolbox.sessions import _key
 from tests.modules.toolbox.conftest import FakeRedis
 
@@ -117,6 +124,40 @@ def _register_broken_tool() -> None:
 
 
 _register_broken_tool()
+
+
+def _register_background_tools() -> None:
+    """后台执行工具：成功版（上报进度后延迟返回）与失败版（ToolError）。"""
+
+    @tool(
+        id="t-bg",
+        name="后台工具",
+        description="后台执行测试",
+        background=True,
+        steps=[ToolStep(id="b1", name="执行", description="", inputs=[])],
+    )
+    async def _func(
+        step_id: str, params: dict[str, Any], context: StepContext
+    ) -> dict[str, Any]:
+        if context.report_progress:
+            context.report_progress(30, "进行中")
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    @tool(
+        id="t-bg-fail",
+        name="后台失败工具",
+        description="后台执行失败测试",
+        background=True,
+        steps=[ToolStep(id="b1", name="执行", description="", inputs=[])],
+    )
+    async def _fail_func(
+        step_id: str, params: dict[str, Any], context: StepContext
+    ) -> dict[str, Any]:
+        raise ToolError("后台预期内失败")
+
+
+_register_background_tools()
 
 
 async def test_run_unknown_exception_message_passthrough(client: AsyncClient) -> None:
@@ -288,6 +329,140 @@ async def test_list_tools_unauthenticated_401(client: AsyncClient) -> None:
     async def fake_anon() -> None:
         return None
 
-    client.app.dependency_overrides[api.get_current_user] = fake_anon  # type: ignore[attr-defined]
+    client.app.dependency_overrides[api.get_current_user] = fake_anon
     resp = await client.get("/tools")
+    assert resp.status_code == 401
+
+
+async def _wait_step_done(fake_redis: FakeRedis, execution_id: str, step_id: str) -> dict[str, Any]:
+    """轮询 FakeRedis 直到后台任务写入 outputs（或超时失败）。"""
+    for _ in range(200):
+        raw = fake_redis.store.get(_key(execution_id))
+        if raw:
+            data = json.loads(raw)
+            if data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
+                return data
+        await asyncio.sleep(0.01)
+    raise AssertionError("后台任务未在预期时间内完成")
+
+
+async def test_background_tool_returns_running_then_completes(
+    client: AsyncClient, fake_redis: FakeRedis
+) -> None:
+    """background 工具：run 立即返回 running + 会话落库；完成后 outputs 与进度落库。"""
+    resp = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()["data"]
+    assert body["status"] == "running"
+    assert body["data"] == {}
+    execution_id = body["execution_id"]
+
+    exec_data = await _wait_step_done(fake_redis, execution_id, "b1")
+    assert exec_data["outputs"]["b1"] == {"ok": True}
+    progress = exec_data["progress"]["b1"]
+    assert progress["status"] == "done"
+    assert progress["percent"] == 100
+    # 会话端点透出进度与结果（前端轮询依据）
+    state = await client.get(f"/executions/{execution_id}")
+    assert state.status_code == 200
+    payload = state.json()["data"]
+    assert payload["progress"]["b1"]["status"] == "done"
+    assert payload["outputs"]["b1"]["ok"] is True
+
+
+async def test_background_tool_reports_progress_updates(
+    client: AsyncClient, fake_redis: FakeRedis
+) -> None:
+    """工具内 report_progress 调用写入会话进度（run_coroutine_threadsafe 链路）。"""
+    resp = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
+    execution_id = resp.json()["data"]["execution_id"]
+
+    seen: list[int] = []
+    for _ in range(200):
+        raw = fake_redis.store.get(_key(execution_id))
+        if raw:
+            progress = json.loads(raw).get("progress", {}).get("b1", {})
+            seen.append(progress.get("percent", 0))
+            if progress.get("status") in ("done", "failed"):
+                break
+        await asyncio.sleep(0.01)
+    # 至少观察到一次中间进度（30%），终态 100
+    assert 30 in seen
+    assert seen[-1] == 100
+
+
+async def test_background_tool_failure_marks_progress_failed(
+    client: AsyncClient, fake_redis: FakeRedis
+) -> None:
+    """后台 ToolError → 进度 failed + error 消息，outputs 不写入。"""
+    resp = await client.post("/tools/t-bg-fail/steps/b1/run", data={"params": "{}"})
+    execution_id = resp.json()["data"]["execution_id"]
+
+    exec_data = await _wait_step_done(fake_redis, execution_id, "b1")
+    progress = exec_data["progress"]["b1"]
+    assert progress["status"] == "failed"
+    assert progress["error"] == "后台预期内失败"
+    assert "b1" not in exec_data["outputs"]
+
+
+async def test_background_tool_rejects_duplicate_running_step(client: AsyncClient) -> None:
+    """同一步骤执行中重复提交 → 400（会话 progress 仍为 running 时拦截）。"""
+    first = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
+    assert first.status_code == 200
+    execution_id = first.json()["data"]["execution_id"]
+
+    # 后台任务约 0.05s：立刻重复提交应被 400 拦截
+    second = await client.post(
+        "/tools/t-bg/steps/b1/run",
+        data={"execution_id": execution_id, "params": "{}"},
+    )
+    assert second.status_code == 400
+    assert "正在执行中" in second.json()["message"]
+
+
+async def test_list_executions_empty(client: AsyncClient) -> None:
+    resp = await client.get("/executions")
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+
+
+async def test_list_executions_tracks_background_lifecycle(
+    client: AsyncClient, fake_redis: FakeRedis
+) -> None:
+    """background 执行登记进用户历史：running → done 状态随任务流转。"""
+    resp = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
+    eid = resp.json()["data"]["execution_id"]
+
+    items = (await client.get("/executions")).json()["data"]
+    assert len(items) == 1
+    assert items[0]["execution_id"] == eid
+    assert items[0]["tool_id"] == "t-bg"
+    assert items[0]["status"] == "running"
+    assert items[0]["percent"] == 0
+
+    await _wait_step_done(fake_redis, eid, "b1")
+    items = (await client.get("/executions")).json()["data"]
+    assert items[0]["status"] == "done"
+    assert items[0]["percent"] == 100
+
+
+async def test_list_executions_only_own(client: AsyncClient) -> None:
+    """执行历史按用户隔离：他人看不到我的会话。"""
+    resp = await client.post("/tools/t-bg/steps/b1/run", data={"params": "{}"})
+    assert resp.status_code == 200
+
+    async def fake_user2() -> SimpleNamespace:
+        return SimpleNamespace(id="user-2")
+
+    client.app.dependency_overrides[api.get_current_user] = fake_user2
+    items = (await client.get("/executions")).json()["data"]
+    assert items == []
+
+
+async def test_list_executions_unauthenticated_401(client: AsyncClient) -> None:
+    async def fake_anon() -> None:
+        return None
+
+    client.app.dependency_overrides[api.get_current_user] = fake_anon
+    resp = await client.get("/executions")
     assert resp.status_code == 401

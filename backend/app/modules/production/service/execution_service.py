@@ -4,7 +4,7 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from app.modules.production.models import (
 )
 from app.modules.production.schemas import (
     EquipmentSnapshotOut,
+    ExecutionAmendIn,
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
@@ -55,11 +56,14 @@ async def _require_operator_permission(
     db: AsyncSession, user: User | None, node_id: uuid.UUID,
     route_id: uuid.UUID, stage_name: str | None,
     batch: "Batch | None" = None,
+    execution: "NodeExecution | None" = None,
 ) -> None:
     """工序执行操作校验：持有 production:batch:submit 或 为该工段/节点负责人 才可操作。
 
     batch 归属他人时（归属人通常是工段负责人）：
     - 工序级负责人（NodeAssignment）豁免归属限制，可操作自己负责的工序；
+    - 单次执行负责人（开始工序时指定的 execution.owner_id）豁免归属限制，
+      仅能操作自己这一次执行（结束/补录/中止），无其他批次权限；
     - 工段级负责人（StageAssignment）保持归属隔离（同工段多负责人各自认领批次）。
     管理员权限豁免归属限制。
     """
@@ -71,7 +75,7 @@ async def _require_operator_permission(
     if "production:batch:submit" in perms:
         return
     await require_operator_access(
-        db, user.id, node_id, route_id, stage_name, batch,
+        db, user.id, node_id, route_id, stage_name, batch, execution=execution,
     )
 
 
@@ -155,6 +159,36 @@ def _build_field_values(
             row.value_text = str(value)
         rows.append(row)
     return rows
+
+
+async def _upsert_field_value_rows(
+    db: AsyncSession,
+    execution_id: uuid.UUID,
+    rows: list[NodeFieldValue],
+    user: User | None,
+) -> list[NodeFieldValue]:
+    """end 阶段字段值 upsert（结束工序与补录共用）：已有行就地更新，新行加入会话。
+
+    返回全部受影响行（已有行 + 新行），供调用方 flush 与返回；rows 为空时直接返回，
+    不查询存量行。created_by/created_at 保留首次填报归属，filled_at/filled_by 刷新为本次。
+    """
+    if not rows:
+        return []
+    existing = await repo.get_field_values_by_executions(db, [execution_id])
+    by_def = {v.field_def_id: v for v in existing}
+    for row in rows:
+        cur = by_def.get(row.field_def_id)
+        if cur:
+            cur.value_text = row.value_text
+            cur.value_numeric = row.value_numeric
+            cur.value_bool = row.value_bool
+            cur.is_abnormal = row.is_abnormal
+            cur.filled_at = row.filled_at
+            cur.filled_by = row.filled_by
+            cur.updated_by = user.id if user else None
+        else:
+            db.add(row)
+    return existing + [r for r in rows if r.field_def_id not in by_def]
 
 
 async def compute_missing_required_fields(
@@ -502,11 +536,6 @@ async def complete_execution(
     if payload.finished_at and payload.finished_at < execution.started_at:
         raise AppException(status_code=400, message="结束时间不能早于开始时间")
 
-    defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
-    for row in _build_field_values(
-        defs, payload.field_values, "end", execution.id, user, enforce_required=False
-    ):
-        db.add(row)
     # 中间体产出记录
     batch = await repo.get_batch(db, execution.batch_id)
     if not batch:
@@ -540,7 +569,8 @@ async def complete_execution(
             message=f"请先结束{pred_name}后再结束本工序",
         )
 
-    # 权限校验必须保持在写操作之前，勿插入 flush
+    # 权限校验必须保持在一切写操作之前：后续字段值/产出会向会话加入写操作，
+    # 一旦 403 被上层（MCP 工具）吞掉，残留写操作仍可能被会话提交落库
     if user:
         route_node = await repo.get_nodes_by_ids(db, [execution.node_id])
         node = route_node[0] if route_node else None
@@ -548,7 +578,26 @@ async def complete_execution(
             db, user, execution.node_id, batch.route_id,
             node.stage_name if node else None,
             batch=batch,
+            execution=execution,
         )
+
+    # end 阶段字段值 upsert（与补录共用 _upsert_field_value_rows）：已有行就地更新，
+    # 新行才插入。直接插入会在重试/重复提交时撞 (execution_id, field_def_id) 唯一索引
+    defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
+    rows = _build_field_values(
+        defs, payload.field_values, "end", execution.id, user, enforce_required=False
+    )
+    await _upsert_field_value_rows(db, execution.id, rows, user)
+    # 新增行在 savepoint 内先落库：并发重复提交（双击/重试）撞唯一索引时
+    # 在此转 400，避免走到后续查询的 autoflush 时以 500 爆出
+    try:
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        raise AppException(
+            status_code=400,
+            message="提交冲突（并发写入），请刷新后重试",
+        ) from None
     # 从产出物类型配置读取 is_product（批量查询，不走全表扫描）
     output_type_ids = [o.intermediate_type_id for o in payload.intermediate_outputs]
     is_product_map: dict[uuid.UUID, bool] = {}
@@ -658,10 +707,10 @@ async def complete_execution(
         async with db.begin_nested():
             await db.flush()
     except IntegrityError:
-        # 并发写入同批号触发 DB 唯一索引，转 400 而非 500
+        # 并发写入触发 DB 唯一索引（同批号产出 / 并发重复提交同字段值），转 400 而非 500
         raise AppException(
             status_code=400,
-            message="中间体批号已存在（并发写入），请为每个产出填写不重复的批号",
+            message="提交冲突（并发写入），请刷新后重试；若再次失败请检查中间体批号是否重复",
         ) from None
     await record_audit_log(
         db,
@@ -705,6 +754,7 @@ async def backfill_execution_fields(
             db, user, execution.node_id, batch.route_id,
             node.stage_name if node else None,
             batch=batch,
+            execution=execution,
         )
     if not field_values:
         raise AppException(status_code=400, message="没有要补录的字段值")
@@ -714,20 +764,7 @@ async def backfill_execution_fields(
     rows = _build_field_values(
         end_defs, field_values, "end", execution.id, user, enforce_required=False
     )
-    existing = await repo.get_field_values_by_executions(db, [execution.id])
-    by_def = {v.field_def_id: v for v in existing}
-    for row in rows:
-        cur = by_def.get(row.field_def_id)
-        if cur:
-            cur.value_text = row.value_text
-            cur.value_numeric = row.value_numeric
-            cur.value_bool = row.value_bool
-            cur.is_abnormal = row.is_abnormal
-            cur.filled_at = row.filled_at
-            cur.filled_by = row.filled_by
-            cur.updated_by = user.id if user else None
-        else:
-            db.add(row)
+    values = await _upsert_field_value_rows(db, execution.id, rows, user)
     await db.flush()
     await record_audit_log(
         db,
@@ -738,7 +775,212 @@ async def backfill_execution_fields(
         extra={"batch_no": batch.batch_no, "fields": [v.field_key for v in field_values]},
     )
     # 已加载的 existing 即返回结果：upsert 就地修改了命中行，新行在 rows 里
-    return existing + [r for r in rows if r.field_def_id not in by_def]
+    return values
+
+
+def _field_value_repr(v: NodeFieldValue) -> bool | float | str | None:
+    """字段值行的当前值（三列取一），供审计 old/new 记录。"""
+    if v.value_numeric is not None:
+        return v.value_numeric
+    if v.value_bool is not None:
+        return v.value_bool
+    return v.value_text
+
+
+async def _apply_amended_field_values(
+    db: AsyncSession,
+    execution: NodeExecution,
+    inputs: list[FieldValueIn],
+    user: User,
+) -> dict[str, dict[str, Any]]:
+    """修改语义的字段值处理：非空值 upsert（start/end 两阶段），空值清空已有行。
+
+    与补录不同：不限阶段（start 字段也可改）、支持清空（value=None 即清空该字段）。
+    返回 {field_key: {"old": …, "new": …}}（仅有实际变化的字段），供审计记录。
+    """
+    if len({v.field_key for v in inputs}) != len(inputs):
+        raise AppException(status_code=400, message="字段值提交重复，请刷新后重试")
+
+    defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
+    defs_by_key = {d.field_key: d for d in defs}
+    unknown = sorted({v.field_key for v in inputs} - set(defs_by_key))
+    if unknown:
+        raise AppException(
+            status_code=400, message=f"未定义的字段: {', '.join(unknown)}"
+        )
+
+    existing = await repo.get_field_values_by_executions(db, [execution.id])
+    # upsert 会就地改写行对象，旧值必须先快照成普通值
+    old_values = {v.field_key: _field_value_repr(v) for v in existing}
+    existing_by_key = {v.field_key: v for v in existing}
+
+    filled_by_phase: dict[str, list[FieldValueIn]] = {"start": [], "end": []}
+    cleared_keys: list[str] = []
+    for v in inputs:
+        if v.value is None or v.value == "":
+            cleared_keys.append(v.field_key)
+        else:
+            filled_by_phase[defs_by_key[v.field_key].phase].append(v)
+
+    rows: list[NodeFieldValue] = []
+    for phase, phase_inputs in filled_by_phase.items():
+        if phase_inputs:
+            rows.extend(
+                _build_field_values(
+                    defs, phase_inputs, phase, execution.id, user,
+                    enforce_required=False,
+                )
+            )
+    # 值未变化的行不 upsert：幂等/重试提交不应改写 filled_at/filled_by 或产生空审计
+    rows = [r for r in rows if _field_value_repr(r) != old_values.get(r.field_key)]
+    await _upsert_field_value_rows(db, execution.id, rows, user)
+
+    # 审计按归一化后的值记录（数值字段字符串提交会被 _build_field_values 转 float，
+    # 直接用原始 payload 值会产生类型不一致的幽灵变更）
+    changes: dict[str, dict[str, Any]] = {
+        r.field_key: {"old": old_values.get(r.field_key), "new": _field_value_repr(r)}
+        for r in rows
+    }
+
+    # 空值：就地清空已有行（无行或已为空则无事可做）
+    for key in cleared_keys:
+        cur = existing_by_key.get(key)
+        if cur is None:
+            continue
+        if (
+            cur.value_text is None
+            and cur.value_numeric is None
+            and cur.value_bool is None
+        ):
+            continue
+        changes[key] = {"old": _field_value_repr(cur), "new": None}
+        cur.value_text = None
+        cur.value_numeric = None
+        cur.value_bool = None
+        cur.is_abnormal = False
+        cur.filled_at = now()
+        cur.filled_by = user.id
+        cur.updated_by = user.id
+    return changes
+
+
+async def amend_execution(
+    db: AsyncSession,
+    execution_id: uuid.UUID,
+    payload: ExecutionAmendIn,
+    user: User | None,
+) -> NodeExecution:
+    """修改已结束/已中止工序的填报数据（start/end 字段值 + 起止时间 + 备注）。
+
+    独立权限 production:batch:amend，不走工段/工序负责人豁免；
+    与补录互补：补录仅 end 字段且批次结束后禁止，本函数不限批次状态、
+    不限阶段、可清空字段值。修改会重算批次首末时间并记录审计 old/new。
+    """
+    execution = await repo.get_execution(db, execution_id)
+    if not execution:
+        raise NotFoundException("工序执行", str(execution_id))
+    if execution.status not in ("completed", "aborted"):
+        raise AppException(status_code=400, message="仅已结束或已中止的工序可修改数据")
+    batch = await repo.get_batch(db, execution.batch_id)
+    if not batch:
+        raise AppException(status_code=400, message="批次不存在或已删除，无法修改")
+
+    # 硬权限：独立权限码，工段/工序/单次执行负责人豁免均不适用
+    if user is None:
+        raise ForbiddenException("未登录，无法执行操作")
+    perms = await get_user_permissions(str(user.id), db)
+    if "production:batch:amend" not in perms:
+        raise ForbiddenException("缺少 production:batch:amend 权限")
+
+    has_time_change = payload.started_at is not None or payload.finished_at is not None
+    if not (has_time_change or payload.field_values or payload.remark is not None):
+        raise AppException(status_code=400, message="没有要修改的内容")
+
+    # 时间校验：未提供的项取现值合并后，校验先后关系
+    new_started = payload.started_at or execution.started_at
+    new_finished = (
+        payload.finished_at if payload.finished_at is not None else execution.finished_at
+    )
+    if (
+        new_started is not None
+        and new_finished is not None
+        and new_finished < new_started
+    ):
+        raise AppException(status_code=400, message="结束时间不能早于开始时间")
+
+    # 全部变更包在 savepoint 里：_apply_amended_field_values 的待写 INSERT 会随
+    # 后续查询（list_executions 等）触发 autoflush，若在 guard 外抛出 IntegrityError
+    # 会变成 500 而非 400「提交冲突」
+    try:
+        async with db.begin_nested():
+            field_changes = (
+                await _apply_amended_field_values(db, execution, payload.field_values, user)
+                if payload.field_values
+                else {}
+            )
+
+            old_value: dict[str, Any] = {}
+            new_value: dict[str, Any] = {}
+            if payload.started_at is not None and payload.started_at != execution.started_at:
+                old_value["started_at"] = execution.started_at.isoformat()
+                new_value["started_at"] = payload.started_at.isoformat()
+                execution.started_at = payload.started_at
+            if payload.finished_at is not None and payload.finished_at != execution.finished_at:
+                old_value["finished_at"] = (
+                    execution.finished_at.isoformat() if execution.finished_at else None
+                )
+                new_value["finished_at"] = payload.finished_at.isoformat()
+                execution.finished_at = payload.finished_at
+            new_remark = payload.remark or None
+            if payload.remark is not None and new_remark != execution.remark:
+                old_value["remark"] = execution.remark
+                new_value["remark"] = new_remark
+                execution.remark = new_remark
+            if field_changes:
+                old_value["field_values"] = {k: c["old"] for k, c in field_changes.items()}
+                new_value["field_values"] = {k: c["new"] for k, c in field_changes.items()}
+            execution.updated_by = user.id
+
+            # 幂等/重试提交（值与现值相同）没有任何实际变更：拒绝而非写空审计
+            if not (old_value or field_changes):
+                raise AppException(status_code=400, message="没有要修改的内容")
+
+            # 批次首末时间重算：complete 的单调最大不会自动回缩，改小后须整体重算防时间线倒挂；
+            # 结束时间只统计 completed 执行（aborted 的 finished_at 是中继时间，混入会把
+            # 批次末时间拉到一个无关的中止时刻）
+            if "started_at" in new_value or "finished_at" in new_value:
+                executions = await repo.list_executions(db, batch.id)
+                batch.first_started_at = min(e.started_at for e in executions)
+                finished = [
+                    e.finished_at
+                    for e in executions
+                    if e.finished_at is not None and e.status == "completed"
+                ]
+                batch.last_finished_at = max(finished) if finished else None
+                batch.updated_by = user.id
+
+            await db.flush()
+    except IntegrityError:
+        # 并发重复提交撞 (execution_id, field_def_id) 唯一索引时转 400 而非 500
+        raise AppException(
+            status_code=400,
+            message="提交冲突（并发写入），请刷新后重试",
+        ) from None
+    await record_audit_log(
+        db,
+        action="production.execution.amend",
+        user=user,
+        resource_type="node_execution",
+        resource_id=execution.id,
+        old_value=old_value or None,
+        new_value=new_value or None,
+        extra={"batch_no": batch.batch_no},
+    )
+    # UPDATE 后必须 re-fetch：updated_at 为 onupdate，flush 后属性过期，
+    # 直接返回原对象会在后续序列化时触发同步惰性加载（MissingGreenlet）
+    refreshed = await repo.get_execution(db, execution_id)
+    assert refreshed is not None
+    return refreshed
 
 
 async def abort_execution(
@@ -758,12 +1000,15 @@ async def abort_execution(
                 db, user, execution.node_id, batch.route_id,
                 node.stage_name if node else None,
                 batch=batch,
+                execution=execution,
             )
         else:
             # 孤儿执行：批次已删除，回退到纯权限码校验
-            perms = await get_user_permissions(str(user.id), db)
-            if "production:batch:submit" not in perms:
-                raise ForbiddenException("缺少 production:batch:submit 权限")
+            # （单次执行负责人豁免与有批次时同口径：可中止自己这一次执行）
+            if execution.owner_id != user.id:
+                perms = await get_user_permissions(str(user.id), db)
+                if "production:batch:submit" not in perms:
+                    raise ForbiddenException("缺少 production:batch:submit 权限")
     execution.status = "aborted"
     execution.finished_at = now()
     execution.finished_by = user.id if user else None

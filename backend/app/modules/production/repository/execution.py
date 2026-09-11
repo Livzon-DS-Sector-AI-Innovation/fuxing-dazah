@@ -30,6 +30,7 @@ __all__ = [
     "get_nodes_by_ids",
     "list_executions_by_node",
     "list_completed_executions_by_nodes",
+    "list_owned_in_progress_executions",
     "group_latest_completed_by_batch_node",
     "find_duplicate_output_batch_nos",
 ]
@@ -55,6 +56,18 @@ async def list_executions(
             NodeExecution.is_deleted == False,  # noqa: E712
         )
         .order_by(NodeExecution.started_at)
+    )
+    return list((await db.execute(stmt)).scalars())
+
+
+async def list_owned_in_progress_executions(
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[NodeExecution]:
+    """用户被指定为单次执行负责人（owner_id）的进行中执行。"""
+    stmt = select(NodeExecution).where(
+        NodeExecution.owner_id == user_id,
+        NodeExecution.status == "in_progress",
+        NodeExecution.is_deleted == False,  # noqa: E712
     )
     return list((await db.execute(stmt)).scalars())
 

@@ -17,6 +17,7 @@ from app.modules.production.schemas.assignment import (
     AssignedNodeInfo,
     AssignedRouteInfo,
     AssignedStageInfo,
+    CreatableRouteInfo,
     MissingExecutionOut,
     NodeAssigneeInfo,
     PlannedBatchItem,
@@ -27,8 +28,17 @@ from app.modules.production.schemas.assignment import (
     WorkbenchItem,
     WorkbenchOut,
 )
-from app.modules.production.schemas.batch import DeriveIn, MergeIn, MergeParentIn
-from app.modules.production.service.batch_service import derive_batches, merge_batches
+from app.modules.production.schemas.batch import (
+    BatchCreate,
+    DeriveIn,
+    MergeIn,
+    MergeParentIn,
+)
+from app.modules.production.service.batch_service import (
+    create_batch,
+    derive_batches,
+    merge_batches,
+)
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
     start_execution,
@@ -173,6 +183,22 @@ def _calc_current_progress(
 # ── 计划批次查询 ──
 
 
+async def _require_first_stage_owner(
+    db: AsyncSession, route_id: uuid.UUID, user: User, action: str,
+) -> None:
+    """校验用户是指定路线第一工段的负责人（StageAssignment 口径）。"""
+    user_stages = await repo.get_user_stages(db, user.id)
+    user_route_stages = {
+        s.stage_name for s in user_stages if s.route_id == route_id
+    }
+    if not user_route_stages:
+        raise AppException(status_code=403, message=f"您无权{action}此路线的批次")
+    nodes = await repo.get_route_nodes(db, route_id)
+    stage_order = _build_stage_order(nodes)
+    if not stage_order or stage_order[0] not in user_route_stages:
+        raise AppException(status_code=403, message=f"仅路线第一工段负责人可{action}批次")
+
+
 async def activate_planned_batch(
     db: AsyncSession, batch_id: uuid.UUID, user: User,
 ) -> Batch:
@@ -185,17 +211,7 @@ async def activate_planned_batch(
     if batch.creation_type != "plan":
         raise AppException(status_code=400, message="仅计划批次可激活")
 
-    # verify user owns the first stage of this batch's route
-    user_stages = await repo.get_user_stages(db, user.id)
-    user_route_stages = {
-        s.stage_name for s in user_stages if s.route_id == batch.route_id
-    }
-    if not user_route_stages:
-        raise AppException(status_code=403, message="您无权激活此批次")
-    nodes = await repo.get_route_nodes(db, batch.route_id)
-    stage_order = _build_stage_order(nodes)
-    if not stage_order or stage_order[0] not in user_route_stages:
-        raise AppException(status_code=403, message="仅路线第一工段负责人可激活批次")
+    await _require_first_stage_owner(db, batch.route_id, user, action="激活")
 
     batch.status = "pending"
     batch.updated_by = user.id if user else None
@@ -204,6 +220,20 @@ async def activate_planned_batch(
     refreshed = await repo.get_batch(db, batch_id)
     assert refreshed is not None
     return refreshed
+
+
+async def start_batch(
+    db: AsyncSession, payload: BatchCreate, user: User,
+) -> Batch:
+    """工作台手动建批：仅路线第一工段负责人可创建，批次无主待首开工认领。
+
+    校验（published、产品归属、批号查重）复用 batch_service.create_batch。
+    """
+    route = await repo.get_route(db, payload.route_id)
+    if not route:
+        raise AppException(status_code=404, message=f"工艺路线 {payload.route_id} 不存在")
+    await _require_first_stage_owner(db, payload.route_id, user, action="创建")
+    return await create_batch(db, payload, user)
 
 
 async def query_planned_batches(
@@ -504,9 +534,20 @@ async def query_workbench(
     stages = await repo.get_user_stages(db, user_id)
     node_assignments = await repo.get_user_node_assignments(db, user_id)
 
+    # 单次执行负责人：开始工序时被指定 owner 的进行中执行——
+    # 无工段/工序身份也可结束自己这一次执行，工作台需为其生成待结束卡片
+    owned_execs = await repo.list_owned_in_progress_executions(db, user_id)
+    owned_route_ids: set[uuid.UUID] = set()
+    if owned_execs:
+        owned_batches = await repo.get_batches_by_ids(
+            db, list({ex.batch_id for ex in owned_execs})
+        )
+        owned_route_ids = {b.route_id for b in owned_batches}
+
     def _can_operate_batch(b: Batch, node_id: uuid.UUID | None = None) -> bool:
         """批次归属判定：无主=共享可操作；归属自己=可操作；归属他人时，
-        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。"""
+        该工序的工序级负责人（NodeAssignment）豁免，与 require_operator_access 同口径。
+        单次执行负责人的豁免按执行粒度在 pending_complete 循环中单独判定。"""
         if b.owner_user_id is None or b.owner_user_id == user_id:
             return True
         return (
@@ -525,7 +566,7 @@ async def query_workbench(
     for na in node_assignments:
         route_nodes[na.route_id].add(na.node_id)
 
-    all_route_ids = set(route_stages) | set(route_nodes)
+    all_route_ids = set(route_stages) | set(route_nodes) | owned_route_ids
     if not all_route_ids:
         return WorkbenchOut(role=role, stage_names=stage_names, assigned_routes=[], items=[])
 
@@ -583,6 +624,25 @@ async def query_workbench(
             route_name=r.route_name,
             product_name=p.product_name if p else None,
             stages=stages_info,
+        ))
+
+    # ── 可建批路线：用户是第一工段负责人的已发布路线（复用已缓存的节点，零额外查询）──
+    creatable_routes: list[CreatableRouteInfo] = []
+    for route_id in sorted(route_map):
+        user_stage_set = route_stages.get(route_id, set())
+        if not user_stage_set:
+            continue
+        stage_order = _build_stage_order(route_nodes_cache[route_id])
+        if not stage_order or stage_order[0] not in user_stage_set:
+            continue
+        r = route_map[route_id]
+        p = product_map.get(r.product_id)
+        creatable_routes.append(CreatableRouteInfo(
+            route_id=route_id,
+            route_name=r.route_name,
+            product_id=r.product_id,
+            product_name=p.product_name if p else None,
+            first_stage_name=stage_order[0],
         ))
 
     # ── 批量查询：所有路线的活跃/已完成批次、节点状态、已派生链接 ──
@@ -687,7 +747,9 @@ async def query_workbench(
         else:
             permitted_node_ids = route_nodes.get(route_id, set())
 
-        if not permitted_node_ids:
+        # 无授权节点时，仅当用户在该路线有自己负责的进行中执行才继续
+        # （单次执行负责人：只为该执行生成待结束卡片，不开放开始/接收）
+        if not permitted_node_ids and route_id not in owned_route_ids:
             continue
 
         batches = active_by_route.get(route_id, [])
@@ -822,12 +884,15 @@ async def query_workbench(
                     ))
 
         # ── pending_complete：用户权限节点上有进行中的执行 ──
+        # 单次执行负责人（execution.owner_id）的执行不受授权节点与批次归属限制，
+        # 可结束自己这一次执行（与 require_operator_access 的执行级豁免同口径）
         in_progress_execs = [
             ex for b in batches
             for ex in in_progress_execs_by_batch.get(b.id, [])
         ]
         for ex in in_progress_execs:
-            if ex.node_id not in permitted_node_ids:
+            is_exec_owner = ex.owner_id == user_id
+            if ex.node_id not in permitted_node_ids and not is_exec_owner:
                 continue
             node = node_map.get(ex.node_id)
             if not node:
@@ -835,7 +900,7 @@ async def query_workbench(
             b = next((b for b in batches if b.id == ex.batch_id), None)
             if not b:
                 continue
-            can_operate = _can_operate_batch(b, ex.node_id)
+            can_operate = is_exec_owner or _can_operate_batch(b, ex.node_id)
             if view_mode == "mine" and not can_operate:
                 continue
             # 检查是否是工段内最后一个节点
@@ -1011,16 +1076,22 @@ async def query_workbench(
         if not entry:
             continue
         node, route = entry
-        # 权限过滤
+        # 权限过滤（单次执行负责人可见自己负责的执行）
         user_stages = route_stages.get(route.id, set())
         user_nodes = route_nodes.get(route.id, set())
-        if node.stage_name not in user_stages and ex.node_id not in user_nodes:
+        if (
+            node.stage_name not in user_stages
+            and ex.node_id not in user_nodes
+            and ex.owner_id != user_id
+        ):
             continue
         b = recent_batches_map.get(ex.batch_id)
         if not b:
             continue
         # mine 模式按归属过滤：只显示自己/无主的完成记录
-        if view_mode == "mine" and not _can_operate_batch(b, ex.node_id):
+        if view_mode == "mine" and not (
+            _can_operate_batch(b, ex.node_id) or ex.owner_id == user_id
+        ):
             continue
         p = product_map.get(route.product_id)
         recent.append(RecentCompletedItem(
@@ -1037,7 +1108,9 @@ async def query_workbench(
     items.sort(key=lambda x: x.batch_no or "")
     return WorkbenchOut(
         role=role, stage_names=stage_names,
-        assigned_routes=assigned_routes, items=items,
+        assigned_routes=assigned_routes,
+        creatable_routes=creatable_routes,
+        items=items,
         recent_completed=recent,
     )
 

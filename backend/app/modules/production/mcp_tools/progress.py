@@ -32,7 +32,7 @@ async def query_batch_progress(batch_no: str) -> ToolResult:
     db = get_db()
     batch = await repo.get_batch_by_no(db, batch_no)
     if not batch:
-        return ToolResult(content=f"未找到批次：{batch_no}")
+        return ToolResult(content=f"未找到批次：{batch_no}", is_error=True)
 
     nodes = await repo.get_route_nodes(db, batch.route_id)
     executions = await repo.list_executions(db, batch.id)

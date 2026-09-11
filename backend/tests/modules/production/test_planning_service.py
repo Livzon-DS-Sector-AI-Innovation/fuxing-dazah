@@ -389,6 +389,30 @@ class TestPlanOrder:
         refreshed_item = await repo.get_plan_item(db_session, item.id)
         assert refreshed_item is not None and refreshed_item.status == "allocated"
 
+    async def test_release_writes_back_actual_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """下达后计划项批号回写为实际生成批号（含去重 -N 后缀）。"""
+        order = await _make_order(db_session, published_route, test_user)
+        seed = rand_code("ITM")
+        item = (await _make_items(db_session, order, published_route, [seed], test_user))[0]
+        # 下达前直接插入占用 seed 的批次 → 下达去重生成 seed-2
+        db_session.add(
+            Batch(
+                batch_no=seed,
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            )
+        )
+        await db_session.flush()
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.batch_no == f"{seed}-2"
+
     async def test_close_status_restrictions(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
@@ -406,6 +430,49 @@ class TestPlanOrder:
             db_session, order.id, test_user,
         )
         assert closed.status == "closed"
+
+    async def test_close_triggers_completed_notification(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """全部计划项非进行中/已分配时关闭 → 收集完成提醒并后台发送。"""
+        from app.modules.production.service import assignment_service
+
+        spawned: list = []
+        monkeypatch.setattr(
+            "app.modules.production.service.reminder_service._spawn",
+            lambda coro: (spawned.append(coro), coro.close()),
+        )
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        await planning_service.release_plan_order(db_session, order.id, test_user)
+
+        # 计划项仍在已分配 → 关闭不产生完成提醒
+        await planning_service.close_plan_order(db_session, order.id, test_user)
+        assert spawned == []
+
+        # 重新走一单：工段负责人就位 + 计划项完成 → 触发提醒
+        order2 = await _make_order(db_session, published_route, test_user)
+        item2 = await _make_item(db_session, order2, published_route, test_user)
+        await _schedule_item(db_session, item2, test_user)
+        await planning_service.confirm_plan_order(db_session, order2.id, test_user)
+        await planning_service.release_plan_order(db_session, order2.id, test_user)
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=test_user.id, stage_name="发酵",
+            route_id=published_route["route"].id, created_by=test_user.id,
+        )
+        refreshed = await repo.get_plan_item(db_session, item2.id)
+        assert refreshed is not None
+        refreshed.status = "completed"
+        await db_session.flush()
+
+        closed = await planning_service.close_plan_order(
+            db_session, order2.id, test_user,
+        )
+        assert closed.status == "closed"
+        assert len(spawned) == 1
 
     async def test_delete_soft(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -861,6 +928,43 @@ class TestChangePlanOrder:
         batch = await repo.get_batch(db_session, allocs[0].batch_id)
         assert batch is not None and batch.status == "scheduled"
 
+    async def test_change_writes_back_actual_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """变更新增计划项：自动生成批号去重后回写计划项（= 实际批次号）。"""
+        order, _ = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        items_before = await repo.list_plan_items(db_session, order.id)
+        next_no = max(i.item_no for i in items_before) + 1
+        base_no = f"{order.order_no}-{next_no}"
+        # 预插占用自动生成号 base_no 的批次 → 变更时去重生成 base_no-2
+        db_session.add(
+            Batch(
+                batch_no=base_no,
+                product_id=published_route["product"].id,
+                route_id=published_route["route"].id,
+            )
+        )
+        await db_session.flush()
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="追加一个批次",
+                items_upsert=[PlanItemChangeItem(
+                    product_id=published_route["product"].id,
+                    product_name="追加品",
+                    route_id=published_route["route"].id,
+                    planned_quantity=30,
+                )],
+            ),
+            test_user,
+        )
+        items_after = await repo.list_plan_items(db_session, order.id)
+        new_item = max(items_after, key=lambda i: i.item_no)
+        assert new_item.batch_no == f"{base_no}-2"
+
     async def test_change_delete_blocks_batch_in_production(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
@@ -904,6 +1008,40 @@ class TestChangePlanOrder:
         batch = await repo.get_batch(db_session, allocs[0].batch_id)
         assert batch is not None and batch.quantity == 99
         assert allocs[0].allocated_quantity == 99
+
+    async def test_change_blocked_item_still_updates_remark(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """批次已投产的计划项：生产性字段（数量）跳过，纯展示的备注仍可更新。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "in_progress"
+        await db_session.flush()
+
+        await planning_service.change_plan_order(
+            db_session, order.id,
+            PlanOrderChangeRequest(
+                change_reason="改备注",
+                items_upsert=[
+                    PlanItemChangeItem(
+                        id=item.id, planned_quantity=77, remark="投产后补的备注",
+                    ),
+                ],
+            ),
+            test_user,
+        )
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.remark == "投产后补的备注"
+        # 数量仍被生产状态拦下，批次/分配不受影响
+        assert refreshed.planned_quantity != 77
+        assert batch.quantity != 77
+        assert allocs[0].allocated_quantity != 77
 
 
 # ═══════════════════════════════════════════

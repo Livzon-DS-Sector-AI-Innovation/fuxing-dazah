@@ -1,6 +1,8 @@
 """生产模块飞书提醒服务。
 
-计划单下达 / 计划批次预计开工 / 工序结束三类提醒的收集与发送。
+计划单下达 / 计划批次预计开工 / 工序结束 / 计划单完成四类提醒的收集与发送。
+各类提醒支持启用开关与额外通知人员配置（NOTIFICATION_TYPES +
+notification_configs 表，无配置行按默认启用处理）。
 消息发送为尽力而为（fire-and-forget）：失败仅记日志，不影响业务事务。
 """
 
@@ -12,15 +14,20 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_factory
 from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch, PlanItem, PlanOrder
+from app.modules.production.models import (
+    Batch,
+    NotificationConfig,
+    PlanItem,
+    PlanOrder,
+)
 from app.modules.production.models.execution import NodeExecution
-from app.modules.production.models.planning import PlanAllocation
+from app.modules.production.models.planning import PlanAllocation, PlanChangeLog
 from app.modules.production.models.product import Product
 from app.modules.production.models.route import RouteNode
 from app.modules.production.repository.assignment import list_stage_assignments
@@ -28,6 +35,47 @@ from app.modules.production.service.route_service import build_stage_order
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationTypeDef:
+    """通知类型定义：编码/名称/说明，配置页展示与发送侧共用。"""
+
+    code: str
+    name: str
+    description: str
+
+
+NOTIFICATION_TYPES: dict[str, NotificationTypeDef] = {
+    t.code: t
+    for t in (
+        NotificationTypeDef(
+            "plan_released", "计划单下达提醒",
+            "计划单下达后，通知所涉工艺路径全部工段负责人，"
+            "内容含各计划项的工段计划开始时间。",
+        ),
+        NotificationTypeDef(
+            "step_completed", "工序完成提醒",
+            "工序完成后通知下一工序接收人：同批次同工段为批次负责人，"
+            "跨批次或跨工段为下一工段负责人。",
+        ),
+        NotificationTypeDef(
+            "batch_start_due", "计划批次开工提醒",
+            "每日 08:31，将预计当天开工的计划批次通知其路线第一工段负责人。",
+        ),
+        NotificationTypeDef(
+            "pending_batches", "待开工批次清单提醒",
+            "每日 08:31，向批次负责人汇总全部待开工批次"
+            "（无主批次发第一工段负责人）。",
+        ),
+        NotificationTypeDef(
+            "plan_completed", "计划单完成提醒",
+            "计划单关闭且全部计划项非进行中/已分配时，"
+            "通知所涉工艺路径全部工段负责人，附执行统计"
+            "（计划项数、完成数、变更情况、各工序平均耗时）。",
+        ),
+    )
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +128,37 @@ class BatchStartReminder:
     planned_start: datetime
     quantity: float | None
     unit: str | None
+    user_ids: list[uuid.UUID]
+
+
+@dataclass(frozen=True, slots=True)
+class NodeDurationStat:
+    """单工序耗时统计（跨异步边界用）。"""
+
+    node_name: str
+    avg_hours: float
+    count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RouteDurationStats:
+    """单条工艺路径的工序耗时统计。"""
+
+    route_name: str
+    nodes: list[NodeDurationStat]
+
+
+@dataclass(frozen=True, slots=True)
+class PlanClosedReminder:
+    """计划单完成提醒载荷。"""
+
+    order_id: uuid.UUID
+    order_no: str
+    title: str
+    total_items: int
+    completed_items: int
+    change_reasons: list[str]
+    routes: list[RouteDurationStats]
     user_ids: list[uuid.UUID]
 
 
@@ -201,6 +280,30 @@ def _build_pending_batches_content(entries: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _build_plan_closed_content(payload: PlanClosedReminder) -> str:
+    """计划单完成提醒正文：执行统计（计划项/完成/变更/工序耗时）。"""
+    lines = [
+        f"**计划单 {payload.order_no}（{payload.title}）已顺利执行完成**",
+        "",
+        f"计划项总数：{payload.total_items}",
+        f"已完成：{payload.completed_items}",
+    ]
+    if payload.change_reasons:
+        lines.append(f"变更情况：共 {len(payload.change_reasons)} 次变更")
+        lines.extend(f"- {reason}" for reason in payload.change_reasons)
+    else:
+        lines.append("变更情况：无变更")
+    for route in payload.routes:
+        lines.append(f"工序平均耗时（{route.route_name}）：")
+        lines.extend(
+            f"- {n.node_name}：{n.avg_hours:.1f} 小时（{n.count} 次）"
+            for n in route.nodes
+        )
+    if not payload.routes:
+        lines.append("工序平均耗时：暂无执行记录")
+    return "\n".join(lines)
+
+
 # ── 提醒数据收集（同步，供 service 内 fire-and-forget）────────────
 
 
@@ -277,6 +380,113 @@ async def _collect_plan_released_reminders(
         title=order.title,
         user_ids=sorted(user_ids, key=str),
         items=item_reminders,
+    )
+
+
+# 计划单完成提醒的阻断状态：任一计划项处于进行中/已分配则不提醒
+_PLAN_CLOSED_BLOCKING_STATUSES = ("in_progress", "allocated")
+
+
+async def _route_node_duration_stats(
+    db: AsyncSession, route_id: uuid.UUID, batch_ids: list[uuid.UUID],
+) -> list[NodeDurationStat]:
+    """指定路线关联批次的各工序平均耗时（小时，含回流重做）。"""
+    if not batch_ids:
+        return []
+    duration_sec = func.extract(
+        "epoch", NodeExecution.finished_at - NodeExecution.started_at,
+    )
+    stmt = (
+        select(
+            RouteNode.name,
+            func.count(),
+            func.avg(duration_sec) / 3600.0,
+        )
+        .select_from(NodeExecution)
+        .join(RouteNode, RouteNode.id == NodeExecution.node_id)
+        .where(
+            NodeExecution.batch_id.in_(batch_ids),
+            NodeExecution.status == "completed",
+            NodeExecution.finished_at.is_not(None),
+            NodeExecution.started_at.is_not(None),
+            NodeExecution.is_deleted == False,  # noqa: E712
+            RouteNode.is_deleted == False,  # noqa: E712
+            RouteNode.route_id == route_id,
+        )
+        .group_by(RouteNode.id, RouteNode.name, RouteNode.sort_order)
+        .order_by(RouteNode.sort_order)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [
+        NodeDurationStat(node_name=name, avg_hours=avg or 0.0, count=count)
+        for name, count, avg in rows
+    ]
+
+
+async def _collect_plan_closed_reminders(
+    db: AsyncSession,
+    order: PlanOrder,
+    items: list[PlanItem],
+) -> PlanClosedReminder | None:
+    """计划单完成提醒数据：全部计划项非进行中/已分配时才收集。
+
+    统计：计划项总数/已完成数、变更日志（各次原因）、各路线工序
+    平均耗时（该单关联批次全部已完成执行，含回流重做）。
+    接收人：所涉路线全部工段负责人去重。无可接收人时返回 None。
+    """
+    if not items:
+        return None
+    if any(i.status in _PLAN_CLOSED_BLOCKING_STATUSES for i in items):
+        return None
+    route_ids = {i.route_id for i in items if i.route_id}
+    if not route_ids:
+        return None
+    user_ids: set[uuid.UUID] = set()
+    for rid in route_ids:
+        user_ids.update(
+            r.user_id for r in await list_stage_assignments(db, route_id=rid)
+        )
+    if not user_ids:
+        return None
+
+    log_rows = await db.execute(
+        select(PlanChangeLog.change_reason)
+        .where(
+            PlanChangeLog.plan_order_id == order.id,
+            PlanChangeLog.is_deleted == False,  # noqa: E712
+        )
+        .order_by(PlanChangeLog.plan_version)
+    )
+    change_reasons = [row[0] for row in log_rows.all()]
+
+    # 关联批次按路线分组，逐路线聚合工序耗时
+    batches_by_item = await repo.get_batches_by_plan_items(
+        db, [i.id for i in items],
+    )
+    batch_ids_by_route: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for batch in batches_by_item.values():
+        if batch.route_id in route_ids:
+            batch_ids_by_route.setdefault(batch.route_id, []).append(batch.id)
+    routes = await repo.get_routes_by_ids(db, sorted(route_ids, key=str))
+    route_stats: list[RouteDurationStats] = []
+    for route in sorted(routes, key=lambda r: r.route_name):
+        nodes = await _route_node_duration_stats(
+            db, route.id, batch_ids_by_route.get(route.id, []),
+        )
+        if nodes:
+            route_stats.append(
+                RouteDurationStats(route_name=route.route_name, nodes=nodes)
+            )
+
+    return PlanClosedReminder(
+        order_id=order.id,
+        order_no=order.order_no,
+        title=order.title,
+        total_items=len(items),
+        completed_items=sum(1 for i in items if i.status == "completed"),
+        change_reasons=change_reasons,
+        routes=route_stats,
+        user_ids=sorted(user_ids, key=str),
     )
 
 
@@ -417,6 +627,42 @@ def _spawn(coro: Coroutine[Any, Any, None]) -> None:
     task.add_done_callback(_BG_TASKS.discard)
 
 
+async def _notification_settings(
+    db: AsyncSession,
+) -> dict[str, tuple[bool, list[uuid.UUID]]]:
+    """全部通知类型的配置：notify_type → (是否启用, 额外通知人员)。
+
+    无配置行的类型按默认（启用、无额外人员）处理，
+    与引入配置前的行为一致。
+    """
+    rows = await db.execute(
+        select(NotificationConfig).where(
+            NotificationConfig.is_deleted == False,  # noqa: E712
+        )
+    )
+    configs = {r.notify_type: r for r in rows.scalars()}
+    result: dict[str, tuple[bool, list[uuid.UUID]]] = {}
+    for code in NOTIFICATION_TYPES:
+        row = configs.get(code)
+        extras = (
+            [uuid.UUID(uid) for uid in (row.extra_recipients or []) if uid]
+            if row is not None
+            else []
+        )
+        result[code] = (row.is_enabled if row is not None else True, extras)
+    return result
+
+
+def _merge_recipients(
+    base: list[uuid.UUID], extras: list[uuid.UUID],
+) -> list[uuid.UUID]:
+    """功能接收人 + 配置的额外人员合并去重（保持首现顺序）。
+
+    _send_cards 按列表逐人发送，重复 user_id 会发重卡，必须去重。
+    """
+    return list(dict.fromkeys([*base, *extras]))
+
+
 async def _wait_until_committed(
     check: Callable[[AsyncSession], Awaitable[bool]],
 ) -> bool:
@@ -486,30 +732,90 @@ async def _row_status_is(
     return (await db.execute(stmt)).scalar_one_or_none() == status
 
 
+async def _read_settings_with_retry(
+    notify_type: str,
+) -> tuple[bool, list[uuid.UUID]]:
+    """读取提醒配置，瞬时 DB 故障短暂重试（与 _wait_until_committed 同口径）。
+
+    配置读取发生在等待事务提交之前：无重试时连接池竞争/滚动部署的
+    瞬时抖动会直接静默丢通知。
+    """
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            async with async_session_factory() as db:
+                return (await _notification_settings(db))[notify_type]
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+        await asyncio.sleep(0.5)
+    assert last_error is not None
+    raise last_error
+
+
+async def _send_configured_notification(
+    notify_type: str,
+    status_check: Callable[[AsyncSession], Awaitable[bool]],
+    user_ids: list[uuid.UUID],
+    title: str,
+    content: str,
+    ctx: str,
+) -> None:
+    """按类型配置发送单卡提醒：配置禁用或业务事务未提交则跳过。
+
+    计划单下达/完成共用的发送管线；新增同类提醒时复用，
+    避免再复制一遍配置读取→等待提交→合并接收人→解析 open_id→发卡。
+    """
+    enabled, extras = await _read_settings_with_retry(notify_type)
+    if not enabled:
+        return
+    committed = await _wait_until_committed(status_check)
+    if not committed:
+        logger.warning("提醒放弃（事务未提交）: %s", ctx)
+        return
+    merged = _merge_recipients(user_ids, extras)
+    async with async_session_factory() as db:
+        open_ids = await _user_open_ids(db, merged)
+    await _send_cards(open_ids, merged, title, content)
+
+
 async def notify_plan_released(payload: PlanReleasedReminder) -> None:
     """计划单下达提醒（后台任务入口）。"""
     try:
-        committed = await _wait_until_committed(
+        await _send_configured_notification(
+            "plan_released",
             lambda db: _row_status_is(db, PlanOrder, payload.order_id, "released"),
+            payload.user_ids,
+            "生产计划下达提醒",
+            _build_plan_released_content(
+                payload.order_no, payload.title, payload.items,
+            ),
+            f"order_no={payload.order_no}",
         )
-        if not committed:
-            logger.warning(
-                "计划单下达提醒放弃（事务未提交）: order_no=%s", payload.order_no,
-            )
-            return
-        content = _build_plan_released_content(
-            payload.order_no, payload.title, payload.items,
-        )
-        async with async_session_factory() as db:
-            open_ids = await _user_open_ids(db, payload.user_ids)
-        await _send_cards(open_ids, payload.user_ids, "生产计划下达提醒", content)
     except Exception:
         logger.exception("计划单下达提醒发送异常: order_no=%s", payload.order_no)
+
+
+async def notify_plan_closed(payload: PlanClosedReminder) -> None:
+    """计划单完成提醒（后台任务入口）。"""
+    try:
+        await _send_configured_notification(
+            "plan_completed",
+            lambda db: _row_status_is(db, PlanOrder, payload.order_id, "closed"),
+            payload.user_ids,
+            "计划单完成提醒",
+            _build_plan_closed_content(payload),
+            f"order_no={payload.order_no}",
+        )
+    except Exception:
+        logger.exception("计划单完成提醒发送异常: order_no=%s", payload.order_no)
 
 
 async def notify_step_completed(payload: StepCompletedEvent) -> None:
     """工序结束提醒（后台任务入口）：确认提交后再收集接收人与卡片并发送。"""
     try:
+        enabled, extras = await _read_settings_with_retry("step_completed")
+        if not enabled:
+            return
         committed = await _wait_until_committed(
             lambda db: _row_status_is(db, NodeExecution, payload.execution_id, "completed"),
         )
@@ -528,13 +834,18 @@ async def notify_step_completed(payload: StepCompletedEvent) -> None:
             if not reminders:
                 return
             # 同一次任务内统一解析 open_id，各卡并行发送
-            all_uids = sorted({uid for r in reminders for uid in r.user_ids}, key=str)
+            user_ids_per_card = [
+                _merge_recipients(r.user_ids, extras) for r in reminders
+            ]
+            all_uids = sorted(
+                {uid for uids in user_ids_per_card for uid in uids}, key=str,
+            )
             open_ids = await _user_open_ids(db, all_uids)
             sends = [
-                (r.user_ids, "工序完成提醒", _build_step_completed_content(
+                (uids, "工序完成提醒", _build_step_completed_content(
                     r.batch_no, r.finished_node, r.next_node, r.to_owner,
                 ))
-                for r in reminders
+                for r, uids in zip(reminders, user_ids_per_card, strict=True)
             ]
         await asyncio.gather(
             *(_send_cards(open_ids, uids, title, content) for uids, title, content in sends)
@@ -580,48 +891,58 @@ async def notify_batch_start_due() -> None:
 async def _send_batch_start_due_reminders(now_dt: datetime) -> None:
     """收集并发送当日计划批次开工提醒 + 待开工批次清单。"""
     async with async_session_factory() as db:
+        settings = await _notification_settings(db)
+        start_enabled, start_extras = settings["batch_start_due"]
+        pending_enabled, pending_extras = settings["pending_batches"]
         leaders_cache: dict[uuid.UUID, list[uuid.UUID]] = {}
         sends: list[tuple[list[uuid.UUID], str, str]] = []
 
         # ── 1. 计划批次开工提醒 ──
-        for batch, item in await _due_plan_batches(db, now_dt.date()):
-            leaders = await _cached_first_stage_leaders(
-                db, batch.route_id, leaders_cache,
-            )
-            if not leaders:
-                continue
-            content = _build_batch_start_content(
-                batch.batch_no, item.product_name,
-                batch.quantity, batch.unit,
-                _to_local(item.planned_start) or now_dt,
-            )
-            sends.append((leaders, "计划批次开工提醒", content))
+        if start_enabled:
+            for batch, item in await _due_plan_batches(db, now_dt.date()):
+                leaders = await _cached_first_stage_leaders(
+                    db, batch.route_id, leaders_cache,
+                )
+                if not leaders:
+                    continue
+                content = _build_batch_start_content(
+                    batch.batch_no, item.product_name,
+                    batch.quantity, batch.unit,
+                    _to_local(item.planned_start) or now_dt,
+                )
+                sends.append((
+                    _merge_recipients(leaders, start_extras),
+                    "计划批次开工提醒", content,
+                ))
 
         # ── 2. 待开工批次清单 ──
         # 有主 → 批次负责人；无主（计划批次激活未开工）→ 第一工段负责人
-        by_owner: dict[uuid.UUID, list[tuple[str, str]]] = {}
-        unowned_groups: dict[tuple[uuid.UUID, ...], list[tuple[str, str]]] = {}
-        for batch, product_name in await _pending_batches(db):
-            entry = (batch.batch_no, product_name)
-            if batch.owner_user_id is not None:
-                by_owner.setdefault(batch.owner_user_id, []).append(entry)
-                continue
-            leaders = await _cached_first_stage_leaders(
-                db, batch.route_id, leaders_cache,
-            )
-            if leaders:
-                key = tuple(sorted(leaders, key=str))
-                unowned_groups.setdefault(key, []).append(entry)
-        for owner_id, entries in by_owner.items():
-            sends.append((
-                [owner_id], "待开工批次提醒",
-                _build_pending_batches_content(entries),
-            ))
-        for leader_ids, entries in unowned_groups.items():
-            sends.append((
-                list(leader_ids), "待开工批次提醒",
-                _build_pending_batches_content(entries),
-            ))
+        if pending_enabled:
+            by_owner: dict[uuid.UUID, list[tuple[str, str]]] = {}
+            unowned_groups: dict[tuple[uuid.UUID, ...], list[tuple[str, str]]] = {}
+            for batch, product_name in await _pending_batches(db):
+                entry = (batch.batch_no, product_name)
+                if batch.owner_user_id is not None:
+                    by_owner.setdefault(batch.owner_user_id, []).append(entry)
+                    continue
+                leaders = await _cached_first_stage_leaders(
+                    db, batch.route_id, leaders_cache,
+                )
+                if leaders:
+                    key = tuple(sorted(leaders, key=str))
+                    unowned_groups.setdefault(key, []).append(entry)
+            for owner_id, entries in by_owner.items():
+                sends.append((
+                    _merge_recipients([owner_id], pending_extras),
+                    "待开工批次提醒",
+                    _build_pending_batches_content(entries),
+                ))
+            for leader_ids, entries in unowned_groups.items():
+                sends.append((
+                    _merge_recipients(list(leader_ids), pending_extras),
+                    "待开工批次提醒",
+                    _build_pending_batches_content(entries),
+                ))
 
         # 一次解析全部接收人 open_id，再并行发送
         all_uids = sorted({uid for uids, _, _ in sends for uid in uids}, key=str)
@@ -651,6 +972,26 @@ async def schedule_plan_released_notification(
         return
     if payload:
         _spawn(notify_plan_released(payload))
+
+
+async def schedule_plan_closed_notification(
+    db: AsyncSession,
+    order: PlanOrder,
+    items: list[PlanItem],
+) -> None:
+    """计划单关闭后的完成提醒收集 + 后台发送（fire-and-forget）。
+
+    仅当全部计划项非进行中/已分配时才会产生提醒（收集内部判定）。
+    收集在请求事务内同步完成（纯数据快照），发送在后台执行，
+    发送前轮询确认事务已提交（避免回滚时发出虚假提醒）。
+    """
+    try:
+        payload = await _collect_plan_closed_reminders(db, order, items)
+    except Exception:
+        logger.exception("计划单完成提醒收集失败: order_no=%s", order.order_no)
+        return
+    if payload:
+        _spawn(notify_plan_closed(payload))
 
 
 def schedule_step_completed_notification(

@@ -2,6 +2,7 @@
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
@@ -11,10 +12,19 @@ from app.core.exceptions import (
     NotFoundException,
 )
 from app.modules.production import repository as repo
-from app.modules.production.models import Batch, BatchLink
+from app.modules.production.models import (
+    Batch,
+    BatchLink,
+    NodeAssignment,
+    NodeExecution,
+    StageAssignment,
+)
+from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.schemas import (
     BatchCreate,
     BatchDetailOut,
+    BatchNoUpdateIn,
+    BatchOwnerTransferIn,
     DeriveIn,
     EquipmentSnapshotOut,
     ExecutionOut,
@@ -22,6 +32,7 @@ from app.modules.production.schemas import (
     MergeIn,
 )
 from app.modules.production.service.assignment_service import (
+    check_operator_access,
     require_batch_owner_access,
     require_operator_access,
 )
@@ -29,7 +40,11 @@ from app.modules.production.service.computed_service import expand_computed_fiel
 from app.modules.production.service.execution_service import (
     compute_missing_required_fields,
 )
-from app.modules.production.service.planning_service import sync_plan_item_status
+from app.modules.production.service.planning_service import (
+    _check_batch_no_unique,
+    _find_plan_item_by_batch,
+    sync_plan_item_status,
+)
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 from app.platform.permission.deps import get_user_permissions
@@ -80,8 +95,8 @@ async def create_batch(
         raise AppException(status_code=400, message="只能在 published 路线上创建批次")
     if route.product_id != payload.product_id:
         raise AppException(status_code=400, message="路线不属于该产品")
-    if await repo.get_batch_by_no(db, payload.batch_no):
-        raise DuplicateException("批号", payload.batch_no)
+    # 批号空间全局唯一：plan_items 预分配号 + batches（与计划项创建/编辑同口径）
+    await _check_batch_no_unique(db, payload.batch_no)
     batch = Batch(
         batch_no=payload.batch_no,
         product_id=payload.product_id,
@@ -337,8 +352,134 @@ async def cancel_batch(
     return refreshed
 
 
-async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetailOut:
-    """批次详情 = 批次 + 执行时间线（含设备快照、字段值、工序名）。"""
+async def _require_submit_permission(db: AsyncSession, user: User | None) -> None:
+    """转移负责人/修改批号共用的硬权限门禁（production:batch:submit，无工段豁免）。"""
+    if user is None:
+        raise ForbiddenException("未登录，无法执行操作")
+    perms = await get_user_permissions(str(user.id), db)
+    if "production:batch:submit" not in perms:
+        raise ForbiddenException("缺少 production:batch:submit 权限")
+
+
+async def transfer_batch_owner(
+    db: AsyncSession, batch_id: uuid.UUID, payload: BatchOwnerTransferIn, user: User | None
+) -> Batch:
+    """转移/清空批次负责人（复用 production:batch:submit 权限）。
+
+    归属校验、工作台「我的批次」、产线兜底、飞书提醒均实时读
+    batch.owner_user_id，改字段即完成权限转移；各工序的单次执行负责人
+    （execution.owner_id）不受影响。终态批次不可转移（无操作权可转，
+    且避免篡改历史归属）。
+    """
+    batch = await _get_batch_or_404(db, batch_id)
+    if batch.status in ("completed", "cancelled"):
+        raise AppException(status_code=400, message="批次已结束，不能转移负责人")
+
+    await _require_submit_permission(db, user)
+    assert user is not None  # _require_submit_permission 已拒绝匿名用户
+
+    old_owner = {
+        "owner_user_id": str(batch.owner_user_id) if batch.owner_user_id else None,
+        "owner_name": batch.owner_name,
+    }
+    if payload.owner_user_id is not None:
+        if payload.owner_user_id == batch.owner_user_id:
+            raise AppException(status_code=400, message="负责人未变化")
+        stmt = select(User).where(
+            User.id == payload.owner_user_id,
+            User.is_deleted == False,  # noqa: E712
+        )
+        new_owner = (await db.execute(stmt)).scalar_one_or_none()
+        if new_owner is None:
+            raise NotFoundException("用户", str(payload.owner_user_id))
+        batch.owner_user_id = new_owner.id
+        batch.owner_name = new_owner.name
+    else:
+        # 清空负责人：恢复无主共享状态（工段内可操作，首开工会被认领）
+        if batch.owner_user_id is None:
+            raise AppException(status_code=400, message="负责人未变化")
+        batch.owner_user_id = None
+        batch.owner_name = None
+    batch.updated_by = user.id
+    await db.flush()
+    await record_audit_log(
+        db,
+        action="production.batch.transfer_owner",
+        user=user,
+        resource_type="batch",
+        resource_id=batch.id,
+        old_value=old_owner,
+        new_value={
+            "owner_user_id": str(batch.owner_user_id) if batch.owner_user_id else None,
+            "owner_name": batch.owner_name,
+        },
+        extra={"batch_no": batch.batch_no},
+    )
+    # 重新查询返回：updated_at 带 onupdate，flush 后属性过期，
+    # 直接序列化原对象会触发同步惰性加载（MissingGreenlet）
+    refreshed = await repo.get_batch(db, batch_id)
+    assert refreshed is not None
+    return refreshed
+
+
+async def rename_batch_no(
+    db: AsyncSession, batch_id: uuid.UUID, payload: BatchNoUpdateIn, user: User | None
+) -> Batch:
+    """修改批次号（复用 production:batch:submit 权限，不限批次状态）。
+
+    批号是批次身份级数据：展示/溯源/MCP 批号查询均实时读库，改名自动跟随；
+    中间体产出记录已固化的批号快照（intermediate_batch_no）不回写。
+    唯一性同计划项创建/编辑口径（batches ∪ plan_items 预分配号）；
+    对应计划项的批号种子未被计划员改过时同步回写。
+    """
+    batch = await _get_batch_or_404(db, batch_id)
+
+    await _require_submit_permission(db, user)
+    assert user is not None  # _require_submit_permission 已拒绝匿名用户
+
+    new_no = payload.batch_no
+    if new_no == batch.batch_no:
+        raise AppException(status_code=400, message="批次号未变化")
+    # 批号空间全局唯一：查 plan_items 预分配号 + batches（排除自身计划项，
+    # 与 update_plan_item 同口径；计划员已把种子改成 new_no 时也放行）
+    item = await _find_plan_item_by_batch(db, batch_id)
+    await _check_batch_no_unique(db, new_no, exclude_item_id=item.id if item else None)
+
+    old_no = batch.batch_no
+    batch.batch_no = new_no
+    batch.updated_by = user.id
+    # 回写计划项批号：种子仍等于旧批号才同步（已改写说明是留给未来下达的新号）
+    if item and item.batch_no == old_no:
+        item.batch_no = new_no
+        item.updated_by = user.id
+    await db.flush()
+    await record_audit_log(
+        db,
+        action="production.batch.rename_no",
+        user=user,
+        resource_type="batch",
+        resource_id=batch.id,
+        old_value={"batch_no": old_no},
+        new_value={"batch_no": new_no},
+        extra={"batch_no": new_no, "status": batch.status},
+    )
+    # 重新查询返回：updated_at 带 onupdate，flush 后属性过期，
+    # 直接序列化原对象会触发同步惰性加载（MissingGreenlet）
+    refreshed = await repo.get_batch(db, batch_id)
+    assert refreshed is not None
+    return refreshed
+
+
+async def get_batch_detail(
+    db: AsyncSession, batch_id: uuid.UUID, user: User | None = None,
+) -> BatchDetailOut:
+    """批次详情 = 批次 + 执行时间线（含设备快照、字段值、工序名）。
+
+    user 给定时按当前用户填充 can_complete / executions[].can_backfill
+    （权限 + 状态的"现在就能做"语义，与 complete_batch /
+    backfill_execution_fields 的授权口径一致）。前端据此显示按钮，
+    写接口仍各自校验兜底——标志只是 UI 预判，不是新的授权面。
+    """
     batch = await _get_batch_or_404(db, batch_id)
     executions = await repo.list_executions(db, batch_id)
     exec_ids = [e.id for e in executions]
@@ -346,6 +487,55 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
     values = await repo.get_field_values_by_executions(db, exec_ids)
     nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
     node_names = {n.id: n.name for n in nodes}
+    node_stage_names = {n.id: n.stage_name for n in nodes}
+
+    has_submit = False
+    if user is not None:
+        perms = await get_user_permissions(str(user.id), db)
+        has_submit = "production:batch:submit" in perms
+    # 补录仅批次结束前可用（completed/cancelled 均禁止，与 backfill_execution_fields 一致）
+    batch_backfillable = batch.status not in ("completed", "cancelled")
+
+    # 权限归属数据一次取回（None=未取）：_can_backfill 对每个已完成执行判定，
+    # 逐执行查询工段/工序分配会在重做回流批次上放大成 N+1
+    user_stages: list[StageAssignment] | None = None
+    user_node_assignments: list[NodeAssignment] | None = None
+    if user is not None and not has_submit and batch_backfillable:
+        user_stages = await assignment_repo.get_user_stages(db, user.id)
+        user_node_assignments = await assignment_repo.get_user_node_assignments(db, user.id)
+
+    async def _can_backfill(e: NodeExecution) -> bool:
+        if user is None or not batch_backfillable or e.status != "completed":
+            return False
+        if has_submit:
+            return True
+        return await check_operator_access(
+            db, user.id, e.node_id, batch.route_id,
+            node_stage_names.get(e.node_id), batch=batch, execution=e,
+            user_stages=user_stages, user_node_assignments=user_node_assignments,
+        )
+
+    async def _can_complete() -> bool:
+        if user is None or batch.status != "in_progress":
+            return False
+        if has_submit:
+            return True
+        # 与 complete_batch 同口径：最后一个完成的执行的 node 做归属判定，
+        # 不传 execution——完成批次不吃单次执行负责人豁免
+        last_ex = max(
+            (e for e in executions
+             if e.status == "completed" and e.finished_at is not None),
+            key=lambda e: e.finished_at, default=None,
+        )
+        if last_ex is None:
+            # 无已完成执行：complete_batch 必被「批次没有任何已完成的工序」拒绝，
+            # 不做归属回退，避免渲染一个必然失败的「完成批次」按钮
+            return False
+        return await check_operator_access(
+            db, user.id, last_ex.node_id, batch.route_id,
+            node_stage_names.get(last_ex.node_id), batch=batch,
+            user_stages=user_stages, user_node_assignments=user_node_assignments,
+        )
 
     eq_by_exec: dict[uuid.UUID, list[EquipmentSnapshotOut]] = {}
     for eq in equipments:
@@ -365,9 +555,11 @@ async def get_batch_detail(db: AsyncSession, batch_id: uuid.UUID) -> BatchDetail
         out.equipments = eq_by_exec.get(e.id, [])
         out.field_values = val_by_exec.get(e.id, [])
         out.missing_required_fields = missing_by_exec.get(e.id, [])
+        out.can_backfill = await _can_backfill(e)
         exec_outs.append(out)
     detail = BatchDetailOut.model_validate(batch)
     detail.executions = exec_outs
+    detail.can_complete = await _can_complete()
     # 填充路线名称
     route = await repo.get_route(db, batch.route_id)
     if route:

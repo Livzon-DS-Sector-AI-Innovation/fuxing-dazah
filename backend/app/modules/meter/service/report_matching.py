@@ -128,6 +128,19 @@ async def batch_upload_reports(
             failed += 1
             errors.append("items 项缺少 filename 字段")
             continue
+        # 校准日期非法直接报错回传，绝不静默丢弃——否则用户以为日期已回写台账
+        if pdf_date is not None:
+            if isinstance(pdf_date, str):
+                try:
+                    pdf_date = date.fromisoformat(pdf_date)
+                except ValueError:
+                    failed += 1
+                    errors.append(f"{fn}: 校准日期「{pdf_date}」格式非法（需 YYYY-MM-DD）")
+                    continue
+            elif not isinstance(pdf_date, date):
+                failed += 1
+                errors.append(f"{fn}: 校准日期类型非法（需 YYYY-MM-DD 字符串）")
+                continue
         queue = file_queue.get(fn)
         if not queue:
             failed += 1
@@ -173,11 +186,6 @@ async def batch_upload_reports(
                 upload_object(MODULE_CODE, object_path, file_data, len(file_data), content_type)
 
                 report_date_val = report_date
-                if isinstance(pdf_date, str):
-                    try:
-                        pdf_date = date.fromisoformat(pdf_date)
-                    except ValueError:
-                        pdf_date = None
                 if isinstance(pdf_date, date):
                     existing = getattr(target, "calibration_date", None)
                     if existing is None or pdf_date >= existing:

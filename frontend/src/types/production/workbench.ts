@@ -66,6 +66,15 @@ export interface AssignedRouteInfo {
   stages: AssignedStageInfo[]
 }
 
+export interface CreatableRouteInfo {
+  /** 当前用户可手动建批的路线（用户是该路线第一工段负责人） */
+  route_id: string
+  route_name: string
+  product_id: string
+  product_name: string | null
+  first_stage_name: string
+}
+
 export interface RecentCompletedItem {
   batch_no: string | null
   batch_id: string | null
@@ -84,6 +93,8 @@ export interface WorkbenchData {
   role: 'stage_owner' | 'node_owner'
   stage_names: string[]
   assigned_routes: AssignedRouteInfo[]
+  /** 当前用户可手动建批的路线（第一工段负责人） */
+  creatable_routes: CreatableRouteInfo[]
   items: WorkbenchItem[]
   recent_completed: RecentCompletedItem[]
 }

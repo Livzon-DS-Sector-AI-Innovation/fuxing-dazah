@@ -20,6 +20,9 @@ import { BATCH_STATUS_META } from './BatchTable'
 import { TraceGraph } from './TraceGraph'
 import { ExecutionTimeline } from './ExecutionTimeline'
 import { BackfillFieldsModal } from './BackfillFieldsModal'
+import { AmendExecutionModal } from './AmendExecutionModal'
+import { TransferOwnerModal } from './TransferOwnerModal'
+import { RenameBatchNoModal } from './RenameBatchNoModal'
 
 // ── 设计令牌 ──────────────────────────────────────────────
 const T = {
@@ -73,6 +76,7 @@ function Section({
 interface Props {
   batchId: string
   canSubmit: boolean
+  canAmend?: boolean
   onClose: () => void
   onStartExecution?: (batchId: string) => void
   onCompleteExecution?: (execution: Execution, routeId: string) => void
@@ -83,6 +87,7 @@ interface Props {
 export function BatchDetailDrawer({
   batchId,
   canSubmit,
+  canAmend = false,
   onClose,
   onStartExecution,
   onCompleteExecution,
@@ -93,6 +98,9 @@ export function BatchDetailDrawer({
   const queryClient = useQueryClient()
   const [currentId, setCurrentId] = useState(batchId)
   const [backfillExec, setBackfillExec] = useState<Execution | null>(null)
+  const [amendExec, setAmendExec] = useState<Execution | null>(null)
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['production-batch-detail', currentId],
@@ -156,16 +164,24 @@ export function BatchDetailDrawer({
         </Space>
       }
       extra={
-        canSubmit &&
-        detail &&
-        detail.status !== 'completed' &&
-        detail.status !== 'cancelled' && (
-          <Popconfirm
-            title="报废该批次？不可恢复"
-            onConfirm={() => runAction(() => cancelBatch(currentId), '批次已报废')}
-          >
-            <Button danger>报废</Button>
-          </Popconfirm>
+        detail && (
+          <Space>
+            {/* 批号修正不限批次状态（错误晚发现也要能改） */}
+            {canSubmit && <Button onClick={() => setRenameOpen(true)}>修改批次号</Button>}
+            {canSubmit &&
+              detail.status !== 'completed' &&
+              detail.status !== 'cancelled' && (
+                <>
+                  <Button onClick={() => setTransferOpen(true)}>转移负责人</Button>
+                  <Popconfirm
+                    title="报废该批次？不可恢复"
+                    onConfirm={() => runAction(() => cancelBatch(currentId), '批次已报废')}
+                  >
+                    <Button danger>报废</Button>
+                  </Popconfirm>
+                </>
+              )}
+          </Space>
         )
       }
     >
@@ -195,7 +211,7 @@ export function BatchDetailDrawer({
           <Section
             title="工序执行时间线"
             extra={
-              canSubmit && detail?.status === 'in_progress' && (
+              detail?.can_complete && (
                 pendingBackfill > 0 ? (
                   <Popconfirm
                     title={`还有 ${pendingBackfill} 项必填字段待补录，批次完成后不可再补。确认完成？`}
@@ -217,15 +233,39 @@ export function BatchDetailDrawer({
             <ExecutionTimeline
               executions={detail?.executions ?? []}
               canSubmit={canSubmit && detail?.status === 'in_progress'}
+              canAmend={canAmend}
               onComplete={e => detail && onCompleteExecution?.(e, detail.route_id)}
               onAbort={e => runAction(() => abortExecution(e.id), '已中止')}
               onBackfill={e => setBackfillExec(e)}
+              onAmend={e => setAmendExec(e)}
             />
             {backfillExec && detail && (
               <BackfillFieldsModal
                 executions={[backfillExec]}
                 routeId={detail.route_id}
                 onClose={() => setBackfillExec(null)}
+              />
+            )}
+            {amendExec && detail && (
+              <AmendExecutionModal
+                execution={amendExec}
+                routeId={detail.route_id}
+                onClose={() => setAmendExec(null)}
+              />
+            )}
+            {transferOpen && detail && (
+              <TransferOwnerModal
+                batchId={currentId}
+                batchNo={detail.batch_no}
+                currentOwnerName={detail.owner_name ?? null}
+                onClose={() => setTransferOpen(false)}
+              />
+            )}
+            {renameOpen && detail && (
+              <RenameBatchNoModal
+                batchId={currentId}
+                batchNo={detail.batch_no}
+                onClose={() => setRenameOpen(false)}
               />
             )}
 

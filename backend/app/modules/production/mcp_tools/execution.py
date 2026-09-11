@@ -58,6 +58,7 @@ async def change_batch_step_status(
     if action not in ("start", "end"):
         return ToolResult(
             content=f"无效操作 `{action}`，仅支持 `start` 或 `end`。",
+            is_error=True,
         )
 
     db = get_db()
@@ -66,7 +67,7 @@ async def change_batch_step_status(
     try:
         batch, node = await _resolve_batch_and_node(db, batch_no, step_name)
     except ValueError as e:
-        return ToolResult(content=f"{e}")
+        return ToolResult(content=f"{e}", is_error=True)
 
     # 解析 field_values
     fvs = [_field_dict_to_in(f) for f in (field_values or [])]
@@ -81,11 +82,12 @@ async def change_batch_step_status(
         try:
             execution = await start_execution(db, batch.id, payload, user)
         except (ValueError, AppException) as e:
-            # AppException 覆盖权限拒绝（含批次归属校验）与业务校验，直接透出文案
-            return ToolResult(content=f"开始工序失败：{e}")
+            # AppException 覆盖权限拒绝（含批次归属校验）与业务校验，直接透出文案；
+            # is_error 标记让中间件回滚会话——异常前可能已有部分写操作入会话
+            return ToolResult(content=f"开始工序失败：{e}", is_error=True)
         except Exception:
             logger.exception("Unexpected error in start_execution for batch %s", batch_no)
-            return ToolResult(content="开始工序失败：内部错误，请联系管理员")
+            return ToolResult(content="开始工序失败：内部错误，请联系管理员", is_error=True)
 
         started_str = execution.started_at.astimezone(_SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M")
         msg = (
@@ -107,16 +109,17 @@ async def change_batch_step_status(
                 f"批次 **{batch_no}** 的工序「**{step_name}**」没有进行中的执行。\n"
                 f"请先开始该工序后，再进行结束操作。"
             ),
+            is_error=True,
         )
 
     end_payload = ExecutionCompleteIn(field_values=fvs)
     try:
         completed_ex = await complete_execution(db, in_progress_ex.id, end_payload, user)
     except (ValueError, AppException) as e:
-        return ToolResult(content=f"结束工序失败：{e}")
+        return ToolResult(content=f"结束工序失败：{e}", is_error=True)
     except Exception:
         logger.exception("Unexpected error in complete_execution for batch %s", batch_no)
-        return ToolResult(content="结束工序失败：内部错误，请联系管理员")
+        return ToolResult(content="结束工序失败：内部错误，请联系管理员", is_error=True)
 
     finished = (
         completed_ex.finished_at.astimezone(_SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M")
@@ -172,17 +175,19 @@ async def backfill_step_fields(
     try:
         batch, node = await _resolve_batch_and_node(db, batch_no, step_name)
     except ValueError as e:
-        return ToolResult(content=f"{e}")
+        return ToolResult(content=f"{e}", is_error=True)
 
     if batch.status in ("completed", "cancelled"):
         return ToolResult(
-            content=f"批次 {batch_no} 已{_BATCH_STATUS_CN.get(batch.status, batch.status)}，禁止补录。"
+            content=f"批次 {batch_no} 已{_BATCH_STATUS_CN.get(batch.status, batch.status)}，禁止补录。",
+            is_error=True,
         )
 
     execution = await _get_latest_execution(db, batch.id, node.id, status="completed")
     if not execution:
         return ToolResult(
-            content=f"批次 {batch_no} 的工序「{step_name}」没有已完成的执行，无法补录。"
+            content=f"批次 {batch_no} 的工序「{step_name}」没有已完成的执行，无法补录。",
+            is_error=True,
         )
 
     fvs = [_field_dict_to_in(f) for f in field_values]
@@ -190,10 +195,10 @@ async def backfill_step_fields(
         await backfill_execution_fields(db, execution.id, fvs, user)
     except (ValueError, AppException) as e:
         # AppException 覆盖权限拒绝（含批次归属校验）与业务校验，直接透出文案
-        return ToolResult(content=f"补录失败：{e}")
+        return ToolResult(content=f"补录失败：{e}", is_error=True)
     except Exception:
         logger.exception("Unexpected error in backfill_execution_fields for batch %s", batch_no)
-        return ToolResult(content="补录失败：内部错误，请联系管理员")
+        return ToolResult(content="补录失败：内部错误，请联系管理员", is_error=True)
 
     # 再次检查是否还有缺填
     missing_map = await compute_missing_required_fields(db, [execution])

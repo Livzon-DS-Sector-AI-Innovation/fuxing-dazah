@@ -28,6 +28,21 @@ export interface FieldTrendPoint {
   value: number
 }
 
+/** 单字段趋势序列：节点下一个数值字段的全部数据点 */
+export interface FieldTrendSeries {
+  field_key: string
+  field_label: string
+  unit: string | null
+  data_points: FieldTrendPoint[]
+}
+
+/** 字段趋势响应：节点下全部有数据的数值字段 */
+export interface FieldTrendResponse {
+  series: FieldTrendSeries[]
+  /** 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空 */
+  merged_routes: string[]
+}
+
 /** 工段汇总平铺矩阵列定义（工序字段或计算字段） */
 export interface StageSummaryColumn {
   /** 工序节点 id，前端按节点分组表头 */
@@ -54,4 +69,6 @@ export interface StageSummaryRow {
 export interface StageSummary {
   columns: StageSummaryColumn[]
   rows: StageSummaryRow[]
+  /** 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空 */
+  merged_routes: string[]
 }

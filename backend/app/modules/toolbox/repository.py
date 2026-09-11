@@ -53,16 +53,31 @@ class ToolboxGrantRepository:
 
     @_missing_table_as(set)
     async def list_tool_ids_with_grants(self, db: AsyncSession) -> set[str]:
-        """已配置授权（即进入限制模式）的工具 ID 集合。
-
-        与 list_tool_grants 同口径过滤软删除用户，避免其授权行锁死工具却在管理列表不可见。
-        """
+        """存在任意授权行的工具 ID 集合（孤儿行清空检查用，与限制判定无关）。"""
         stmt = (
             select(ToolGrant.tool_id)
             .join(User, User.id == ToolGrant.user_id)
             .where(
                 ToolGrant.is_deleted == False,  # noqa: E712
                 User.is_deleted == False,  # noqa: E712
+            )
+        )
+        result = await db.execute(stmt)
+        return set(result.scalars())
+
+    @_missing_table_as(set)
+    async def list_tool_ids_with_use_grants(self, db: AsyncSession) -> set[str]:
+        """已配置使用名单（存在 can_use 行）的工具 ID 集合——即使用限制模式。
+
+        仅使用名单限制使用：只配置了配置名单的工具，使用对全员保持开放。
+        不过滤软删用户：其授权行仍使工具保持限制——最后一名名单成员离职后
+        工具锁定（管理员可整体替换名单解除），优于「名单被视作清空而全员放开」。
+        """
+        stmt = (
+            select(ToolGrant.tool_id)
+            .where(
+                ToolGrant.is_deleted == False,  # noqa: E712
+                ToolGrant.can_use == True,  # noqa: E712
             )
         )
         result = await db.execute(stmt)

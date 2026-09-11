@@ -17,10 +17,11 @@ class ToolInputOut(BaseModel):
     multiple: bool = False
     default: Any = None
     placeholder: str | None = None
-    options: list[str] | None = None
+    options: list[str] | list[dict[str, str]] | None = None
     from_step: str | None = None
     from_key: str | None = None
     show_when: tuple[str, str] | None = None
+    help: str | None = None
 
 
 class ToolStepOut(BaseModel):
@@ -40,6 +41,7 @@ class ConfigFieldOut(BaseModel):
     type: str
     section: str = ""
     required: bool = False
+    help: str | None = None
 
 
 class ToolOut(BaseModel):
@@ -53,6 +55,7 @@ class ToolOut(BaseModel):
     config_schema: list[ConfigFieldOut] = []
     can_use: bool = False
     can_config: bool = False
+    background: bool = False
 
 
 class StepRunResponse(BaseModel):
@@ -60,6 +63,9 @@ class StepRunResponse(BaseModel):
     data: dict[str, Any]
     file_ids: dict[str, list[str]]
     warning: str | None = None  # 执行成功但记录落库失败时的提示；正常为 None
+    # done=同步执行完毕（data 为工具结果）；running=后台执行已启动（data 为空，
+    # 最终结果与进度经 GET /executions/{id} 轮询获取）
+    status: str = "done"
 
 
 class ExecutionOut(BaseModel):
@@ -67,6 +73,20 @@ class ExecutionOut(BaseModel):
     tool_id: str
     outputs: dict[str, Any]
     files: dict[str, Any]
+    # 各步骤执行进度：step_id -> {percent, message, status(running/done/failed), error, updated_at}
+    progress: dict[str, Any] = {}
+
+
+class ExecutionSummaryOut(BaseModel):
+    """执行会话列表摘要（当前用户、跨工具），驱动执行页「进行中/上次执行」提示条。"""
+
+    execution_id: str
+    tool_id: str
+    status: str  # running / done / failed
+    percent: int
+    message: str
+    error: str
+    created_at: float
 
 
 # ── 使用权限管理 ──

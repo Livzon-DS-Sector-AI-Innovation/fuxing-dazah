@@ -1,8 +1,8 @@
 'use client'
 
-// 使用权限管理：按工具配置「使用人员」与「配置人员」名单。
-// 空名单语义：使用名单留空 = 所有登录用户可用；配置名单留空 = 仅超级管理员可修改配置。
-// 配置名单成员自动获得使用权限（配置包含使用）。
+// 使用权限管理：按工具配置「使用人员」与「配置人员」名单，两个名单相互独立。
+// 空名单语义：使用名单留空 = 所有登录用户可用（仅配置配置人员不限制使用）；
+// 配置名单留空 = 仅超级管理员可修改配置。配置名单成员自动获得使用权限。
 
 import { useState } from 'react'
 import { App, Button, Select, Tag } from 'antd'
@@ -56,6 +56,7 @@ function buildOrphanTools(tools: ToolInfo[], grants: ToolGrantInfo[]): ToolInfo[
       config_schema: [],
       can_use: false,
       can_config: false,
+      background: false,
     }))
 }
 

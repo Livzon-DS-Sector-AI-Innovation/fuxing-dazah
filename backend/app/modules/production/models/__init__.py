@@ -19,6 +19,7 @@ from app.modules.production.models.intermediate import (
     RouteNodeIntermediate,
 )
 from app.modules.production.models.line import Line, LineAssignment, LineProductLink
+from app.modules.production.models.notification import NotificationConfig
 from app.modules.production.models.planning import (
     Demand,
     DemandAllocation,
@@ -52,6 +53,7 @@ __all__ = [
     "NodeExecutionEquipment",
     "NodeFieldValue",
     "NodeFieldDef",
+    "NotificationConfig",
     "PlanAllocation",
     "PlanItem",
     "PlanOrder",

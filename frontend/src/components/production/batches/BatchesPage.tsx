@@ -23,6 +23,7 @@ function BatchesPageInner() {
   const searchParams = useSearchParams()
   const { hasPermission } = usePermission()
   const canSubmit = hasPermission('production:batch:submit')
+  const canAmend = hasPermission('production:batch:amend')
 
   const selectedProductId = searchParams.get('product')
   const activeTab = searchParams.get('tab') ?? 'batches'
@@ -104,6 +105,7 @@ function BatchesPageInner() {
         <BatchDetailDrawer
           batchId={detailBatchId}
           canSubmit={canSubmit}
+          canAmend={canAmend}
           onClose={() => setDetailBatchId(null)}
           onStartExecution={setStartBatchId}
           onCompleteExecution={(e, routeId) => setCompleteExec({ execution: e, routeId })}
