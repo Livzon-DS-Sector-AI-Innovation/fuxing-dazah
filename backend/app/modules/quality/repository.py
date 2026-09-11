@@ -17,6 +17,7 @@ from app.modules.quality.models import (
     QualityStandardItem,
     QualityTestResult,
     QualityTestTask,
+    QualityUnqualifiedEvent,
     ReportRecord,
 )
 
@@ -755,6 +756,29 @@ async def list_task_standard_document_ids(
     if task and task.standard_document_id and task.standard_document_id not in doc_ids:
         doc_ids.append(task.standard_document_id)
     return doc_ids
+
+
+async def create_unqualified_event(
+    db: AsyncSession, data: dict[str, Any]
+) -> QualityUnqualifiedEvent:
+    """记录不合格事件台账。INSERT 后 flush 返回。"""
+    event = QualityUnqualifiedEvent(**data)
+    db.add(event)
+    await db.flush()
+    return event
+
+
+async def list_unqualified_events(
+    db: AsyncSession, handled: bool | None = None, limit: int = 200
+) -> list[QualityUnqualifiedEvent]:
+    """不合格事件台账列表（默认最新在前，可过滤处理状态）。"""
+    stmt = select(QualityUnqualifiedEvent).where(
+        QualityUnqualifiedEvent.is_deleted == False,  # noqa: E712
+    )
+    if handled is not None:
+        stmt = stmt.where(QualityUnqualifiedEvent.handled == handled)
+    stmt = stmt.order_by(QualityUnqualifiedEvent.created_at.desc()).limit(limit)
+    return list((await db.execute(stmt)).scalars())
 
 
 async def get_standard_item_doc_map(

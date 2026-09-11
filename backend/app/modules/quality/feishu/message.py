@@ -58,6 +58,38 @@ async def send_interactive_card(chat_id: str, card: dict) -> None:
         logger.error("质量飞书发卡片失败: %s", resp.msg)
 
 
+async def send_alert_post(
+    chat_id: str, at_open_ids: list[str], title: str, lines: list[str]
+) -> None:
+    """发 post 消息提醒（可 @ 指定用户 open_id；列表为空则纯文本）。"""
+    client = build_client()
+    from lark_oapi.api.im.v1 import (
+        CreateMessageRequest,
+        CreateMessageRequestBody,
+    )
+
+    content_blocks: list[list[dict]] = []
+    if at_open_ids:
+        content_blocks.append([{"tag": "at", "user_id": uid} for uid in at_open_ids])
+    content_blocks.append([{"tag": "text", "text": "\n".join(lines)}])
+    body = {"zh_cn": {"title": title, "content": content_blocks}}
+    req = (
+        CreateMessageRequest.builder()
+        .receive_id_type("chat_id")
+        .request_body(
+            CreateMessageRequestBody.builder()
+            .receive_id(chat_id)
+            .msg_type("post")
+            .content(json.dumps(body, ensure_ascii=False))
+            .build()
+        )
+        .build()
+    )
+    resp = await client.im.v1.message.acreate(req)
+    if not resp.success():
+        logger.error("质量飞书发提醒失败: %s", resp.msg)
+
+
 async def send_user_interactive_card(open_id: str, card: dict) -> None:
     """向指定用户单聊发送交互式卡片（机器人身份）。"""
     client = build_client()

@@ -338,6 +338,36 @@ class QualityTestTask(BaseModel):
     )
 
 
+class QualityUnqualifiedEvent(BaseModel):
+    """不合格事件台账：不合格值不写结果行，仅记录事件供追溯与人工处理。"""
+
+    __tablename__ = "quality_unqualified_events"
+    __table_args__ = (
+        Index("ix_quality_unqualified_event_task", "task_id"),
+        Index("ix_quality_unqualified_event_batch", "batch_number"),
+        {"schema": "quality"},
+    )
+
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="关联检验任务，逻辑引用 quality.quality_test_tasks.id"
+    )
+    product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
+    batch_number: Mapped[str] = mapped_column(String(100), comment="批号")
+    item_name: Mapped[str] = mapped_column(String(200), comment="项目名称")
+    sop_no: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="SOP 号")
+    result_value: Mapped[float | None] = mapped_column(nullable=True, comment="实测值")
+    standard_text: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="合格标准原文")
+    limit_text: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="限度摘要（如 ≤ 3.0%）")
+    source: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual",
+        comment="来源：manual 机器人填报 / web 网页端 / parse 液相解析",
+    )
+    handled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false",
+        comment="是否已人工处理",
+    )
+
+
 class QualityTestResult(BaseModel):
     """检验任务结果行：标准快照 + 填报结果（一手数据本体）。"""
 

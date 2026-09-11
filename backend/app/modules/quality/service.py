@@ -24,6 +24,7 @@ from app.modules.quality.repository import (
     create_inspection_record,
     create_test_results,
     create_test_task,
+    create_unqualified_event,
     delete_test_result,
     delete_test_task,
     get_impurities_by_record,
@@ -671,6 +672,46 @@ class TestTaskService:
         except Exception:
             logger.exception("待复核提醒推送失败")
         return True
+
+    # ── 不合格事件台账 ──
+
+    @staticmethod
+    async def record_unqualified_event(
+        db: AsyncSession,
+        task: QualityTestTask,
+        row: QualityTestResult,
+        value: float,
+        source: str,
+        notify: bool,
+        origin_chat_id: str = "",
+    ) -> None:
+        """不合格事件台账（不写结果行）；notify=True 时触发飞书群提醒（fire-and-forget）。"""
+        unit = TestTaskService._unit_of(row.standard_text)
+        limit_text = (
+            f"{row.operator or ''} {row.limit_min if row.limit_min is not None else ''}"
+            f"{row.limit_max if row.limit_max is not None else ''}{unit}"
+        ).strip()
+        await create_unqualified_event(db, {
+            "task_id": task.id,
+            "product_name": task.product_name,
+            "batch_number": task.batch_number,
+            "item_name": row.item_name,
+            "sop_no": row.sop_no,
+            "result_value": value,
+            "standard_text": row.standard_text,
+            "limit_text": limit_text,
+            "source": source,
+        })
+        if notify:
+            try:
+                from app.modules.quality.feishu.fill_service import notify_unqualified
+
+                asyncio.create_task(notify_unqualified(
+                    task.product_name, task.batch_number, row.item_name,
+                    f"{value}{unit}", limit_text, origin_chat_id=origin_chat_id,
+                ))
+            except Exception:
+                logger.exception("不合格飞书提醒推送失败")
 
     # ── P1 液相解析映射 ──
 

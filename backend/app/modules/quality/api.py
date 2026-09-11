@@ -50,6 +50,7 @@ from app.modules.quality.repository import (
     list_report_records,
     list_standard_documents,
     list_standard_items,
+    list_unqualified_events,
     update_standard_document,
     update_standard_item,
     upsert_coa_binding,
@@ -1161,6 +1162,31 @@ async def list_test_task_endpoint(
         data=[it.model_dump(mode="json") for it in items],
         page=page, page_size=page_size, total=total,
     )
+
+
+@router.get("/unqualified-events", summary="不合格事件台账")
+async def list_unqualified_events_endpoint(
+    handled: bool | None = Query(default=None, description="按处理状态过滤"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items = await list_unqualified_events(db, handled=handled)
+    return success_response(data=[
+        {
+            "id": str(e.id),
+            "task_id": str(e.task_id) if e.task_id else None,
+            "product_name": e.product_name,
+            "batch_number": e.batch_number,
+            "item_name": e.item_name,
+            "sop_no": e.sop_no,
+            "result_value": e.result_value,
+            "standard_text": e.standard_text,
+            "limit_text": e.limit_text,
+            "source": e.source,
+            "handled": e.handled,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in items
+    ])
 
 
 @router.get("/tasks/summary", summary="按 SOP 汇总各批次检验结果（以 SOP 为索引）")

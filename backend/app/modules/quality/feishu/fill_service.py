@@ -327,7 +327,10 @@ async def handle_fill_command(event: dict) -> None:
                     continue
                 unit = TestTaskService._unit_of(target.standard_text)
                 if verdict is False:
-                    # 不合格不落库：只发提醒，由人工处理
+                    # 不合格不落库：记录台账并发提醒，由人工处理
+                    await TestTaskService.record_unqualified_event(
+                        db, task, target, value, "manual", notify=True, origin_chat_id=chat_id,
+                    )
                     limit_text = (
                         f"{target.operator or ''} {target.limit_min if target.limit_min is not None else ''}"
                         f"{target.limit_max if target.limit_max is not None else ''}{unit}"
@@ -360,20 +363,10 @@ async def handle_fill_command(event: dict) -> None:
     if problems:
         lines.append("⚠️ " + "；".join(problems))
     if alerts:
-        lines.append("🚨 不合格未落库：")
+        lines.append("🚨 不合格未落库（已记录台账）：")
         lines.extend(f"- {a}" for a in alerts)
         lines.append("请人工处理")
     await send_chat_text(chat_id, "\n".join(lines))
-    # 不合格提醒另发到白名单群（当前会话不是该群时）
-    if alerts:
-        alert_text = (
-            f"🚨 检验不合格提醒\n批号 {batch}（{task.product_name}）：\n"
-            + "\n".join(f"- {a}" for a in alerts)
-            + "\n请尽快人工处理"
-        )
-        for cid in QUALITY_FEISHU_CHAT_IDS:
-            if cid != chat_id:
-                await send_chat_text(cid, alert_text)
 
 
 @event_client.on_event("application.bot.menu_v6")
@@ -712,7 +705,10 @@ async def handle_card_action(event: dict) -> None:
                     continue
                 unit = TestTaskService._unit_of(row.standard_text)
                 if verdict is False:
-                    # 不合格不落库：只发提醒，由人工处理
+                    # 不合格不落库：记录台账并发提醒，由人工处理
+                    await TestTaskService.record_unqualified_event(
+                        db, task, row, value, "manual", notify=True, origin_chat_id=chat_id,
+                    )
                     limit_text = (
                         f"{row.operator or ''} {row.limit_min if row.limit_min is not None else ''}"
                         f"{row.limit_max if row.limit_max is not None else ''}{unit}"
@@ -739,21 +735,9 @@ async def handle_card_action(event: dict) -> None:
             chat_id,
             f"✅ 批号 {batch} 表单提交已落库 {len(updates)} 项：\n" +
             ("，".join(results) if results else "无有效数值") +
-            ("\n🚨 不合格未落库：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
+            ("\n🚨 不合格未落库（已记录台账）：" + "\n".join(f"- {a}" for a in alerts) + "\n请人工处理" if alerts else "") +
             ("\n🔍 已全部填报完成，进入待复核，请专员审核" if advanced else ""),
         )
-        # 不合格提醒另发到白名单群（当前会话不是该群时）
-        if alerts:
-            async with async_session_factory() as _db:
-                _task = await _resolve_task_by_batch(_db, batch)
-            alert_text = (
-                f"🚨 检验不合格提醒\n批号 {batch}（{_task.product_name if _task else '-'}）：\n"
-                + "\n".join(f"- {a}" for a in alerts)
-                + "\n请尽快人工处理"
-            )
-            for cid in QUALITY_FEISHU_CHAT_IDS:
-                if cid != chat_id:
-                    await send_chat_text(cid, alert_text)
         # 卡片原地更新：已提交组的表单区替换为确认文本
         from app.modules.quality.feishu import message as feishu_msg
 
@@ -873,6 +857,36 @@ async def push_task_reminder(task: QualityTestTask, rows: list) -> None:
         )
         if bio_rows or chem_rows:
             await send_fill_card(chat_id, task.batch_number, [("生物组", bio_rows), ("理化组", chem_rows)])
+
+
+async def notify_unqualified(
+    product_name: str,
+    batch: str,
+    item_name: str,
+    value_text: str,
+    limit_text: str,
+    origin_chat_id: str = "",
+) -> None:
+    """不合格飞书提醒（@ 负责人；未配置提醒人时纯 post 文本群通知）。"""
+    from app.modules.quality.feishu.client import (
+        QUALITY_FEISHU_ALERT_USER_IDS,
+        QUALITY_FEISHU_CHAT_IDS,
+        feishu_configured,
+    )
+    from app.modules.quality.feishu.message import send_alert_post
+
+    if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
+        return
+    title = "🚨 检验不合格提醒"
+    lines = [
+        f"批号 {batch}（{product_name}）",
+        f"项目 {item_name}：实测 {value_text}（限度 {limit_text}）",
+        "请尽快人工处理",
+    ]
+    for chat_id in QUALITY_FEISHU_CHAT_IDS:
+        if chat_id == origin_chat_id:
+            continue  # 当前会话已在回执中展示明细，不重复打扰
+        await send_alert_post(chat_id, QUALITY_FEISHU_ALERT_USER_IDS, title, lines)
 
 
 async def notify_pending_review(task_id: str) -> None:

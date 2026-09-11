@@ -127,3 +127,22 @@ async def test_results_preserved_after_advance(db_session):
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
     rows = await list_test_results(db_session, task.id)
     assert len(rows) == 2
+
+
+async def test_unqualified_event_ledger(db_session):
+    from app.modules.quality.repository import list_unqualified_events
+
+    task = await _make_task(db_session, filled=False)
+    rows = await list_test_results(db_session, task.id)
+    row = rows[0]
+    await TestTaskService.record_unqualified_event(
+        db_session, task, row, 9.9, "manual", notify=False
+    )
+    events = await list_unqualified_events(db_session)
+    hit = [e for e in events if e.batch_number == task.batch_number]
+    assert len(hit) == 1
+    assert hit[0].item_name == "水分"
+    assert hit[0].result_value == 9.9
+    assert hit[0].handled is False
+    # 结果行未被写入不合格值
+    assert rows[0].is_pass is None

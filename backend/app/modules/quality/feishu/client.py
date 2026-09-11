@@ -28,6 +28,10 @@ QUALITY_FEISHU_USER_IDS = [
 QUALITY_FEISHU_CREATE_USER_IDS = [
     u.strip() for u in os.getenv("QUALITY_FEISHU_CREATE_USER_IDS", "").split(",") if u.strip()
 ]
+# 不合格提醒 @ 的负责人 open_id 列表（逗号分隔），空 = 不发 @ 仅普通群消息
+QUALITY_FEISHU_ALERT_USER_IDS = [
+    u.strip() for u in os.getenv("QUALITY_FEISHU_ALERT_USER_IDS", "").split(",") if u.strip()
+]
 
 
 def feishu_configured() -> bool:
