@@ -40,6 +40,11 @@ _DEFAULT_DOC_TYPE = "GMP 文件（批记录/工艺验证报告）"
 # 输出流参数或子进程隔离。
 _engine_lock = asyncio.Lock()
 
+# 正在执行 + 排队等待引擎锁的任务数（事件循环内单线程，读写之间无 await，无需再加锁）。
+# 只用于告诉排队者前面还有几个：等待期若不报进度，前端只能看到不动的 0%「任务已启动」，
+# 与卡死无从区分。
+_engine_pending = 0
+
 
 def _option(value: str, label: str) -> dict[str, str]:
     return {"value": value, "label": label}
@@ -150,6 +155,8 @@ def _positive_int(value: Any, default: int, name: str, maximum: int | None = Non
 async def document_translate(
     step_id: str, params: dict[str, Any], context: StepContext
 ) -> dict[str, Any]:
+    global _engine_pending
+
     # ── 输入文件 ──
     paths = context.file_paths.get("input_file") or []
     if not paths:
@@ -239,9 +246,18 @@ async def document_translate(
     # 引擎的 print/stderr 全程捕获：错误场景作为用户可见消息返回，不污染服务日志。
     # 锁内才安全：重定向是进程级的，无锁并发时不同任务的捕获互相串写
     out_buf, err_buf = io.StringIO(), io.StringIO()
-    async with _engine_lock:
-        with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
-            rc = await asyncio.to_thread(run_pipeline, s, progress_cb)
+    ahead = _engine_pending
+    _engine_pending += 1
+    try:
+        if reporter and ahead:
+            reporter(0, f"排队中：前面还有 {ahead} 个翻译任务，完成后自动开始…")
+        async with _engine_lock:
+            if reporter and ahead:
+                reporter(0, "已获得执行权，正在解析文档…")
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                rc = await asyncio.to_thread(run_pipeline, s, progress_cb)
+    finally:
+        _engine_pending -= 1
 
     # 退出码非 0 且无产物 = 前置失败（文件/参数/凭据问题），stderr 即原因
     if rc != 0 and not output_path.exists():

@@ -87,13 +87,16 @@ async def _write_progress_safe(
     进度写入失败只记日志：进度条缺失不影响翻译本身。
     """
     try:
-        exec_data = await sessions.get_execution(redis, execution_id)
-        if exec_data is None:
-            return
-        if exec_data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
-            return
-        sessions.set_progress(exec_data, step_id, percent=percent, message=message)
-        await sessions.save_execution(redis, exec_data)
+        # 与 _finish_background 共用会话写锁：不加锁时「读到 running → 写回」的窗口
+        # 会把刚写入的 done/failed 覆盖回 running，步骤永久卡住且无法重跑
+        async with sessions.session_lock(execution_id):
+            exec_data = await sessions.get_execution(redis, execution_id)
+            if exec_data is None:
+                return
+            if exec_data.get("progress", {}).get(step_id, {}).get("status") in ("done", "failed"):
+                return
+            sessions.set_progress(exec_data, step_id, percent=percent, message=message)
+            await sessions.save_execution(redis, exec_data)
     except Exception:
         logger.exception("toolbox 进度写入失败 execution=%s step=%s", execution_id, step_id)
 
@@ -103,9 +106,13 @@ def _make_progress_reporter(redis: Redis, execution_id: str, step_id: str) -> Ca
     loop = asyncio.get_running_loop()
 
     def report(percent: int, message: str) -> None:
-        asyncio.run_coroutine_threadsafe(
-            _write_progress_safe(redis, execution_id, step_id, percent, message), loop
-        )
+        coro = _write_progress_safe(redis, execution_id, step_id, percent, message)
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            # 事件循环已关闭（进程关停）：丢一次进度即可，异常绝不能顺着
+            # 引擎的 progress_cb 调用栈冒泡——那会打断整次翻译、已翻内容全丢
+            coro.close()
 
     return report
 
@@ -119,22 +126,23 @@ async def _finish_background(
 ) -> None:
     """后台任务收尾：结果写入 outputs 并标记 done；失败标记 failed（error 为原因）。"""
     try:
-        exec_data = await sessions.get_execution(redis, execution_id)
-        if exec_data is None:
-            logger.error("toolbox 后台执行收尾时会话不存在 execution=%s", execution_id)
-            return
-        if result is not None:
-            sessions.add_step_output(exec_data, step_id, result)
-            sessions.set_progress(exec_data, step_id, percent=100, message="执行完成", status="done")
-        else:
-            # 失败保留失败前的进度百分比，避免「失败却显示 100%」
-            prev = exec_data.get("progress", {}).get(step_id) or {}
-            sessions.set_progress(
-                exec_data, step_id,
-                percent=int(prev.get("percent") or 0),
-                message="执行失败", status="failed", error=error,
-            )
-        await sessions.save_execution(redis, exec_data)
+        async with sessions.session_lock(execution_id):
+            exec_data = await sessions.get_execution(redis, execution_id)
+            if exec_data is None:
+                logger.error("toolbox 后台执行收尾时会话不存在 execution=%s", execution_id)
+                return
+            if result is not None:
+                sessions.add_step_output(exec_data, step_id, result)
+                sessions.set_progress(exec_data, step_id, percent=100, message="执行完成", status="done")
+            else:
+                # 失败保留失败前的进度百分比，避免「失败却显示 100%」
+                prev = exec_data.get("progress", {}).get(step_id) or {}
+                sessions.set_progress(
+                    exec_data, step_id,
+                    percent=int(prev.get("percent") or 0),
+                    message="执行失败", status="failed", error=error,
+                )
+            await sessions.save_execution(redis, exec_data)
     except Exception:
         logger.exception("toolbox 后台执行记录保存失败 execution=%s step=%s", execution_id, step_id)
 
@@ -348,7 +356,9 @@ async def run_step(
             return error_response("该步骤正在执行中，请等待执行完成", status_code=400)
         # 登记进用户执行历史：用户中途离开后，重进工具页可经列表端点找回进行中的任务
         try:
-            await sessions.remember_execution(redis, str(user.id), execution_id)
+            await sessions.remember_execution(
+                redis, str(user.id), execution_id, float(exec_data.get("created_at") or 0.0)
+            )
         except Exception:
             # 登记失败不再占位：撤销 running 标记，客户端可重试
             await sessions.clear_step_running(redis, execution_id, step_id)
@@ -378,12 +388,13 @@ async def run_step(
     warning: str | None = None
     try:
         # 合并保存：重新拉取最新 payload 再合并写入，避免并发步骤盲写互相覆盖
-        latest = await sessions.get_execution(redis, execution_id)
-        if latest is not None:
-            latest["files"].update(exec_data["files"])
-            latest["outputs"].update(exec_data["outputs"])
-            exec_data = latest
-        await sessions.save_execution(redis, exec_data)
+        async with sessions.session_lock(execution_id):
+            latest = await sessions.get_execution(redis, execution_id)
+            if latest is not None:
+                latest["files"].update(exec_data["files"])
+                latest["outputs"].update(exec_data["outputs"])
+                exec_data = latest
+            await sessions.save_execution(redis, exec_data)
     except Exception:
         # 工具已执行成功，仅记录失败：不再抛 500 误导用户，降级为成功响应附带警告
         logger.exception(
@@ -553,6 +564,7 @@ async def list_my_executions(
     """
     if user is None:
         return error_response("未登录", status_code=401)
+    # 只取最近 EXEC_LIST_LIMIT 条：会话 payload 含校验报告全文，全量拉取代价高
     execs = await sessions.list_user_executions(redis, str(user.id))
     for e in execs:
         # 惰性收割：重启遗留的 running 标记在列表读取时标记 failed
@@ -562,7 +574,7 @@ async def list_my_executions(
         (_summarize_execution(e) for e in execs),
         key=lambda d: d["created_at"],
         reverse=True,
-    )[:20]
+    )
     return success_response(
         data=[ExecutionSummaryOut.model_validate(s).model_dump(mode="json") for s in summaries]
     )

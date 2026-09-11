@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
+from typing import Any
 
 
 class TranslationError(Exception):
@@ -16,6 +18,9 @@ SYSTEM_PROMPT = """你是一名精通 GMP（药品生产质量管理规范）领
 翻译要求：
 1. 只做翻译，严禁增删内容，严禁添加解释、注释或原文没有的信息。
 2. 译文使用正式的技术文档书面语体，术语准确、表述严谨。
+   目标语言为中文时，译文要像中文母语者直接写出来的一样自然：符合中文语序和断句习惯，\
+优先主动句，多用短句；避免“被……所”“进行……的操作”“对于……而言”这类翻译腔，\
+避免一长串前置定语；不要逐词硬译，把英文句式改写成中文句式，通顺优先于字面对应。
 3. 原文中形如 ⟦N1⟧、⟦N2⟧ 的占位符代表数字、日期、批号、规格、单位等关键信息，\
 必须原样保留在译文中的对应位置，一个不能多、不能少、不能改写。
 4. 严格遵守用户提供的术语对照表。
@@ -102,21 +107,25 @@ class LLMTranslator:
             {"role": "user", "content": user},
         ]
         extra = {"reasoning_effort": self.thinking_level} if self.thinking_level else None
-        if self._schema_ok:
-            try:
-                return self.client.chat.completions.create(
-                    model=self.model, messages=messages, temperature=0.1,
-                    response_format={"type": "json_schema", "json_schema": {
-                        "name": "translation_result", "strict": True, "schema": RESULT_SCHEMA}},
-                    extra_body=extra,
-                )
-            except BadRequestError:
-                self._schema_ok = False  # 本批及后续全部降级为 json_object
-        return self.client.chat.completions.create(
-            model=self.model, messages=messages, temperature=0.1,
-            response_format={"type": "json_object"},
-            extra_body=extra,
-        )
+
+        def call(fmt: dict[str, Any]) -> Any:
+            return self.client.chat.completions.create(
+                model=self.model, messages=messages, temperature=0.1,
+                response_format=fmt, extra_body=extra,
+            )
+
+        if not self._schema_ok:
+            return call({"type": "json_object"})
+        try:
+            return call({"type": "json_schema", "json_schema": {
+                "name": "translation_result", "strict": True, "schema": RESULT_SCHEMA}})
+        except BadRequestError:
+            # 降级重试成功，才判定本服务不支持结构化输出并关闭（本批及后续）。
+            # 若降级同样 BadRequestError，说明是别的参数问题（超长/限流），异常
+            # 继续上抛；此时绝不能关 schema——否则本轮剩余批次会静默失去结构约束
+            result = call({"type": "json_object"})
+            self._schema_ok = False
+            return result
 
     def translate_batch(self, items, target_lang, doc_type, glossary_lines, prev_context) -> dict[int, str]:
         if not items:
@@ -146,7 +155,8 @@ class LLMTranslator:
             except Exception as e:  # noqa: BLE001 —— 网络/解析/结构异常统一走重试
                 last_err = e
             if attempt < self.max_retries:
-                time.sleep(2**attempt)
+                # 抖动：并发路径下多个线程同时失败，同步退避会一起撞上升级后的限流
+                time.sleep(2**attempt + random.uniform(0, 1))
         raise TranslationError(f"批次翻译失败（已重试 {self.max_retries} 次）: {last_err}")
 
 

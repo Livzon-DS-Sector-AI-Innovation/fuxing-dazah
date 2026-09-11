@@ -210,3 +210,51 @@ async def test_engine_hard_issues_still_returns_result(
     result = await run_tool("translate", {}, make_context(tmp_path, docx_file))
     assert "❌" in result["report_md"]
     assert result["translated_file"]["file_id"]
+
+
+async def test_waiting_run_reports_queue_position(
+    tmp_path: Path, docx_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """引擎全局串行：后到的任务在等锁期间必须报「排队中」。
+
+    等待期若不报进度，前端只能看到不动的 0%「任务已启动」，与卡死无从区分。
+    """
+    def fake_run_pipeline(s: Any, progress_cb: Any = None) -> int:
+        make_docx(Path(s.output))
+        Path(s.report).write_text("# 报告\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(document_translate, "run_pipeline", fake_run_pipeline)
+    # 前面已有一个任务占着引擎锁：本次必然要排队
+    monkeypatch.setattr(document_translate, "_engine_pending", 1)
+
+    ctx = make_context(tmp_path, docx_file)
+    progress: list[tuple[int, str]] = []
+    ctx.report_progress = lambda pct, msg: progress.append((pct, msg))
+    await run_tool("translate", {}, ctx)
+
+    assert progress[0][1].startswith("排队中：前面还有 1 个")
+    assert progress[1][1].startswith("已获得执行权")
+    # 出队后计数必须归位，否则后续任务会看到永远不退的「排队中」
+    assert document_translate._engine_pending == 1
+
+
+async def test_uncontended_run_reports_no_queue_message(
+    tmp_path: Path, docx_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """锁空闲时不该出现「排队中」或「已获得执行权」的噪声。"""
+    def fake_run_pipeline(s: Any, progress_cb: Any = None) -> int:
+        if progress_cb:
+            progress_cb(50, "半程")
+        make_docx(Path(s.output))
+        Path(s.report).write_text("# 报告\n", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(document_translate, "run_pipeline", fake_run_pipeline)
+    ctx = make_context(tmp_path, docx_file)
+    progress: list[tuple[int, str]] = []
+    ctx.report_progress = lambda pct, msg: progress.append((pct, msg))
+    await run_tool("translate", {}, ctx)
+
+    assert progress == [(50, "半程")]
+    assert document_translate._engine_pending == 0

@@ -150,7 +150,7 @@ export function TopNav() {
       {impersonation?.is_impersonating && impersonation.target_user && (
         <ImpersonateBanner targetUser={impersonation.target_user} />
       )}
-    <header className="h-16 bg-[var(--color-canvas)] border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0">
+    <header className="glass-chrome relative z-10 h-16 border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0">
       {/* 离屏测量容器：渲染全部可见模块用于宽度测量 */}
       <div
         aria-hidden
@@ -193,7 +193,9 @@ export function TopNav() {
                 flex items-center gap-1.5 px-3 h-full text-[14px] font-medium transition-colors whitespace-nowrap
                 ${isActive
                   ? "text-[var(--color-primary)]"
-                  : "text-[var(--color-steel)] hover:text-[var(--color-primary)]"
+                  // 玻璃顶栏带淡紫底色，--color-steel 在其上只有 3.3:1（白底时 4.5:1）。
+                  // 标签是正文级文字，需 4.5:1，故降到 --color-slate（约 5.0:1）。
+                  : "text-[var(--color-slate)] hover:text-[var(--color-primary)]"
                 }
               `}
             >

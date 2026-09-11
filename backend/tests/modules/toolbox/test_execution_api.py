@@ -6,10 +6,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import redis.asyncio as redis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.toolbox import api, storage
+from app.modules.toolbox import api, sessions, storage
 from app.modules.toolbox.registry import (
     StepContext,
     ToolError,
@@ -466,3 +467,63 @@ async def test_list_executions_unauthenticated_401(client: AsyncClient) -> None:
     client.app.dependency_overrides[api.get_current_user] = fake_anon
     resp = await client.get("/executions")
     assert resp.status_code == 401
+
+
+async def test_late_progress_does_not_revert_terminal_status(
+    fake_redis: redis.Redis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """迟到的进度写入不得把终态 done 覆盖回 running。
+
+    构造旧快照写回落地的交错：进度写入卡在「已读到 running、尚未写回」处，
+    让终态写入先落库，再放行进度写入。没有会话写锁时 done 会被覆盖回 running，
+    步骤就永久卡在「执行中」——前端轮询不结束，claim_step_running 持续拒绝重跑，
+    reap_orphaned_running 只收割本进程启动前的 running，也救不回来。
+    """
+    eid = "exec-late-progress"
+    await sessions.save_execution(
+        fake_redis,
+        {
+            "execution_id": eid,
+            "tool_id": "t-bg",
+            "user_id": "u1",
+            "outputs": {},
+            "files": {},
+            "progress": {
+                "s1": {
+                    "percent": 10, "message": "半程", "status": "running",
+                    "error": None, "updated_at": 1.0,
+                }
+            },
+            "created_at": 1.0,
+        },
+    )
+
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    original = sessions.get_execution
+    gate_armed = True
+
+    async def gated_get(r: redis.Redis, execution_id: str) -> Any:
+        nonlocal gate_armed
+        data = await original(r, execution_id)
+        if gate_armed:
+            gate_armed = False
+            entered.set()
+            await release.wait()  # 卡在「读到旧快照」与「写回」之间
+        return data
+
+    monkeypatch.setattr(sessions, "get_execution", gated_get)
+
+    late = asyncio.create_task(api._write_progress_safe(fake_redis, eid, "s1", 50, "半程"))
+    await asyncio.wait_for(entered.wait(), 5)
+    finish = asyncio.create_task(
+        api._finish_background(fake_redis, eid, "s1", result={"ok": True})
+    )
+    await asyncio.sleep(0.05)  # 终态写入推进到等锁处（无锁实现则已直接写完）
+    release.set()
+    await asyncio.gather(late, finish)
+
+    data = await original(fake_redis, eid)
+    assert data is not None
+    assert data["progress"]["s1"]["status"] == "done"
+    assert data["outputs"]["s1"] == {"ok": True}

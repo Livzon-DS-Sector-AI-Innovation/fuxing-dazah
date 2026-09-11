@@ -15,12 +15,14 @@ export function AppShell({ children }: AppShellProps) {
   usePermission()
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className="relative h-screen flex flex-col overflow-hidden">
+      {/* 玻璃的衬底：fixed 脱离文档流，不参与下面的 flex 布局 */}
+      <div className="ambient-backdrop" aria-hidden />
       <TopNav />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <App className="flex-1 overflow-hidden">
-          <main className="h-full overflow-y-auto bg-[var(--color-surface)] p-6">
+          <main className="app-main relative z-10 h-full overflow-y-auto p-6">
             {children}
           </main>
         </App>

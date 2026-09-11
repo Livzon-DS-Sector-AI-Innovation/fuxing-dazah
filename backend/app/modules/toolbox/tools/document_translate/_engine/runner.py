@@ -13,6 +13,10 @@ from .translate import TranslationError
 
 TARGET_LANG = {"zh2en": "英文（English）", "en2zh": "中文（简体中文）", "auto": "对方语言"}
 
+# 翻译阶段内的进度权重：批次翻译占 0~0.9，占位符重译占 0.9~1.0。
+# 重译单元少但每个一次请求，不留进度的话进度条会在尾部长时间不动（看起来像卡死）。
+_BATCH_SHARE = 0.9
+
 
 def _snippet(text: str, n: int = 36) -> str:
     text = text.replace("\n", " ")
@@ -70,29 +74,79 @@ def translate_all(batches, translator, s, glossary, todo, pos_of, ctx, progress_
         for u in batch:
             ctx.add("翻译失败", f"{_where(u)}：{e}")
 
-    def _retry_placeholder(retry_list: list):
-        """占位符异常的单元单独重译一次（附明确指令），成功记提示、失败升硬性问题。"""
-        for u, bad_text in retry_list:
+    def _retry_placeholder(retry_list: list, retry_progress=None) -> None:
+        """占位符异常的单元各自重译一次（附明确指令），成功记提示、失败升硬性问题。
+
+        与批次翻译同样并发：数字密集型文档（批号/规格/温度/日期都被掩码）攒下
+        十几个异常单元很常见，串行重译等于在并发阶段跑完之后再挂一条几十分钟的
+        尾巴，且全程占着引擎锁。请求仍在工作线程发出，掩码还原与 ctx 记录回主线程。
+        """
+        jobs = []
+        for u, _bad_text in retry_list:
             m = mask(u.text)
             first_pos = pos_of[id(u)]
             prev = todo[first_pos - 1].text[:160] if first_pos > 0 else ""
-            note = f"{prev}（重试提示：上一次译文丢失了占位符，本次所有 ⟦N⟧ 占位符必须原样保留在译文中）"
-            try:
-                results = translator.translate_batch(
-                    [(u.idx, m.masked)], TARGET_LANG[s.direction], s.doc_type,
-                    glossary.prompt_lines(u.lang), note,
+            jobs.append((
+                u, m,
+                f"{prev}（重试提示：上一次译文丢失了占位符，本次所有 ⟦N⟧ 占位符必须原样保留在译文中）",
+            ))
+
+        def _send(job):
+            u, m, note = job
+            return translator.translate_batch(
+                [(u.idx, m.masked)], TARGET_LANG[s.direction], s.doc_type,
+                glossary.prompt_lines(u.lang), note,
+            )
+
+        def _consume_retry(job, translated) -> None:
+            u, m, _ = job
+            restored, anomalies = m.restore(translated, _date_style(u, s))
+            if not translated.strip():
+                ctx.add("无译文", _where(u))
+            elif anomalies:
+                ctx.add("占位符异常", f"{_where(u)}：重试后仍 " + "；".join(anomalies))
+            else:
+                u.translation = restored
+                ctx.add("占位符重试成功", f"{_where(u)}：首次译文丢失占位符，单段重译通过，建议抽查")
+
+        total = len(jobs)
+        done = 0
+
+        def _tick() -> None:
+            nonlocal done
+            done += 1
+            if retry_progress:
+                retry_progress(
+                    _BATCH_SHARE + (1 - _BATCH_SHARE) * done / total,
+                    f"重译占位符异常段落 {done}/{total}",
                 )
-                translated = results.get(u.idx, "")
-                restored, anomalies = m.restore(translated, _date_style(u, s))
-                if not translated.strip():
-                    ctx.add("无译文", _where(u))
-                elif anomalies:
-                    ctx.add("占位符异常", f"{_where(u)}：重试后仍 " + "；".join(anomalies))
-                else:
-                    u.translation = restored
-                    ctx.add("占位符重试成功", f"{_where(u)}：首次译文丢失占位符，单段重译通过，建议抽查")
-            except TranslationError as e:
-                ctx.add("占位符异常", f"{_where(u)}：重试失败 {e}")
+
+        def _run(job, results=None, error=None) -> None:
+            if error is not None:
+                ctx.add("占位符异常", f"{_where(job[0])}：重试失败 {error}")
+            else:
+                _consume_retry(job, results.get(job[0].idx, ""))
+
+        if s.concurrency <= 1 or total == 1:
+            for job in jobs:
+                try:
+                    _run(job, results=_send(job))
+                except TranslationError as e:
+                    _run(job, error=e)
+                _tick()
+            return
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=min(s.concurrency, total)) as pool:
+            futures = {pool.submit(_send, job): job for job in jobs}
+            for fut in as_completed(futures):
+                job = futures[fut]
+                try:
+                    _run(job, results=fut.result())
+                except TranslationError as e:
+                    _run(job, error=e)
+                _tick()
 
     if s.mock or s.concurrency <= 1:
         failed_units: list = []
@@ -114,10 +168,10 @@ def translate_all(batches, translator, s, glossary, todo, pos_of, ctx, progress_
                 placeholder_retry.extend(_consume(batch, masked_map, results))
             done_batches += 1
             if progress_cb:
-                progress_cb(done_batches / total_batches if total_batches else 1.0,
+                progress_cb(_BATCH_SHARE * (done_batches / total_batches if total_batches else 1.0),
                             f"翻译批次 {done_batches}/{total_batches}")
         if placeholder_retry and not s.mock:
-            _retry_placeholder(placeholder_retry)
+            _retry_placeholder(placeholder_retry, progress_cb)
         return failed_units
 
     # 并发路径
@@ -147,7 +201,8 @@ def translate_all(batches, translator, s, glossary, todo, pos_of, ctx, progress_
                 placeholder_retry.extend(_consume(batch, masked_map, results))
             done_batches += 1
             if progress_cb:
-                progress_cb(done_batches / len(futures), f"翻译批次 {done_batches}/{len(futures)}")
+                progress_cb(_BATCH_SHARE * done_batches / len(futures),
+                            f"翻译批次 {done_batches}/{len(futures)}")
     if placeholder_retry and not s.mock:
-        _retry_placeholder(placeholder_retry)
+        _retry_placeholder(placeholder_retry, progress_cb)
     return failed_units

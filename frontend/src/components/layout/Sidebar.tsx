@@ -170,7 +170,8 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`bg-[var(--color-canvas)] border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-hidden transition-all duration-200 ${
+      // 收起时宽 0：玻璃的 box-shadow 会在零宽盒子上画出条竖影，故整体摘掉
+      className={`${collapsed ? "" : "glass-chrome "}relative z-10 border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-hidden transition-all duration-200 ${
         collapsed ? "w-0 border-r-0" : "w-56"
       }`}
     >

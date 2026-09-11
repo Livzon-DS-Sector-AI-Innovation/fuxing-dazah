@@ -162,8 +162,100 @@ body {
   font-family: var(--font-sans), "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif;
 }
 
+/* ═══════════════════════════════════════════════════
+   环境氛围层 + 毛玻璃 chrome
+
+   玻璃成立的先决条件：它背后得有东西可折射。
+   顶栏/侧栏下方原本只有 body 的一层纯色，此时
+   backdrop-filter 只是对纯色做模糊 —— 视觉上等于没加。
+   所以这层固定光晕是玻璃的衬底，不是装饰附件。
+   ═══════════════════════════════════════════════════ */
+
+/* 全屏衬底。它只做两件事，都不靠颜色：
+
+   1) 提供明度差。玻璃的白填充与内高光落在同亮度的背景上是看不见的，
+      顶栏必须比内容区亮才读作「浮在上面」。所以顶部先提一道白光。
+   2) 留一丝色气息。紫与青都压到几乎察觉不到 —— 有色 chrome 在
+      数据密集的工作台上会显得花，那是装饰而不是质感。
+
+   色量刻意留得极低：要的是「白里透一点点品牌」，不是「紫色渐变条」。 */
+.ambient-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: #eeedf0;
+  background-image:
+    /* 顶部提亮：让顶栏玻璃比内容区更亮，读作浮起而非凹陷 */
+    radial-gradient(120rem 26rem at 30% -30%,
+      rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0.45) 45%, rgba(255, 255, 255, 0) 78%),
+    /* 品牌紫：一丝气息 */
+    radial-gradient(90rem 22rem at 20% -6%,
+      rgba(86, 69, 212, 0.075) 0%, rgba(86, 69, 212, 0.045) 40%, rgba(86, 69, 212, 0) 76%),
+    /* 右上冷调：一丝气息 */
+    radial-gradient(60rem 20rem at 88% -8%,
+      rgba(40, 150, 180, 0.05) 0%, rgba(40, 150, 180, 0.03) 42%, rgba(40, 150, 180, 0) 78%),
+    /* 侧栏：同样只留气息，避免整条侧栏发灰发紫 */
+    radial-gradient(22rem 80rem at -2% 50%,
+      rgba(122, 92, 214, 0.055) 0%, rgba(122, 92, 214, 0.032) 45%, rgba(122, 92, 214, 0) 80%);
+}
+
+/* 玻璃配方。
+   backdrop-filter 在这里只负责「透出衬底色」与边缘过渡，磨砂质感并不来自它 ——
+   对平滑渐变做模糊，结果与不模糊无异（没有高频细节可抹平）。
+   磨砂感来自下面 ::after 那层细颗粒：它长在玻璃表面，不受 blur 影响。
+   内高光是顶边 1px 的受光面，负责把面板从衬底上「抬」起来。
+
+   白填充 0.62：要高于 .app-main 的等效亮度，chrome 才比内容区亮。
+   早先 0.5 时顶栏比内容区暗 13 级，玻璃看着是凹进去的。
+   saturate 从 180% 收到 130%：衬底已近乎无色，高饱和只会放残余色偏。 */
+.glass-chrome {
+  background-color: rgba(255, 255, 255, 0.62);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(16px) saturate(130%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.75),
+    0 1px 2px rgba(15, 15, 15, 0.05),
+    0 10px 30px -18px rgba(15, 15, 15, 0.3);
+}
+
+/* 表面细颗粒 —— 「磨砂」二字的实际来源，也是与「一层半透明色」的分界。
+   pointer-events:none 保证它不挡顶栏下拉与侧栏菜单的点击。 */
+.glass-chrome::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.055;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* 内容区：留 10% 让氛围透上来。这层要压得比 chrome 重得多，
+   正文才不会被背景色干扰，同时 chrome 那边的玻璃仍然是足的。
+   卡片/表格自身不透明（见下方 .ant-table 覆盖），文字对比度不受影响。 */
+.app-main {
+  background-color: rgba(246, 245, 244, 0.9);
+}
+
+/* 系统开了「降低透明度」时退回实色，不做无谓的视觉干扰 */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-chrome {
+    background-color: var(--color-canvas);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .app-main {
+    background-color: var(--color-surface);
+  }
+}
+
 /* Sidebar Menu Styles - Following DESIGN.md */
 .sidebar-menu.ant-menu {
+  background: transparent;
+}
+
+/* 展开的子菜单同样不能有实底，否则在玻璃侧栏里是一块白砖 */
+.sidebar-menu.ant-menu .ant-menu-sub {
   background: transparent;
 }
 
@@ -188,8 +280,10 @@ body {
   color: var(--color-primary);
 }
 
+/* 0.06 在白底上够用，但侧栏改成玻璃后底色本身带紫，
+   6% 的紫已经读不出来，选中态会消失 —— 加深到 0.13 补回这一层信息。 */
 .sidebar-menu.ant-menu .ant-menu-item-selected {
-  background-color: rgba(86, 69, 212, 0.06);
+  background-color: rgba(86, 69, 212, 0.13);
   color: var(--color-primary);
   font-weight: 500;
 }
@@ -204,6 +298,8 @@ body {
 .ant-table {
   border-radius: 12px;
   overflow: hidden;
+  /* 显式实底：内容区有 10% 透光，表格不自己兜住会透出背景光晕 */
+  background: #ffffff;
 }
 
 .ant-table-thead > tr > th,
