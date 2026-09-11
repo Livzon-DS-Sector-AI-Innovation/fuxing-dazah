@@ -126,6 +126,22 @@ def delete_object(module: str, object_key: str) -> None:
     )
 
 
+def list_objects(module: str, prefix: str = "") -> list[str]:
+    """列出对象键（可选前缀过滤）。MinIO 未启用返回空列表。"""
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        objs = client.list_objects(
+            bucket_name=_module_bucket(module),
+            prefix=prefix,
+        )
+        return [o.object_name for o in objs]
+    except Exception:
+        logger.exception("Failed to list MinIO objects: %s/%s", module, prefix)
+        return []
+
+
 def is_enabled() -> bool:
     _init()
     return _enabled or False

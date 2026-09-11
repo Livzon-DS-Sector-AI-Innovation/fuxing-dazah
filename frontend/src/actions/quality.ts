@@ -8,6 +8,11 @@ import type {
   InspectionRecordDetail,
   ReportRecord,
   HistorySummary,
+  TestResultItem,
+  TestTaskDetail,
+  TestTaskListItem,
+  TestTaskStatus,
+  SopSummaryItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -159,6 +164,7 @@ export interface StandardDocument {
   valid_years: string | null
   effective_date: string | null
   version: string | null
+  template_path: string | null
 }
 
 export interface StandardItem {
@@ -243,7 +249,7 @@ export async function deleteStandardItem(id: string): Promise<{ message: string 
   return res.json()
 }
 
-export async function importStandardDoc(formData: FormData): Promise<{ message: string; data: { id: string; created_items: number; parsed_items: number } }> {
+export async function importStandardDoc(formData: FormData): Promise<{ message: string; data: { id: string; file_no: string; product_name: string; created_items: number; parsed_items: number } }> {
   const headers = await _authHeaders()
   delete headers['Content-Type']
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/import-doc`, {
@@ -253,5 +259,323 @@ export async function importStandardDoc(formData: FormData): Promise<{ message: 
     const err = await res.json().catch(() => ({}))
     throw new Error((err as any).detail || '导入失败')
   }
+  return res.json()
+}
+
+
+// ─── 标准文档导入（预览确认流程）───
+
+export interface StandardImportDraftItem {
+  seq: number | null
+  category: string | null
+  item_name: string
+  sop_no: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  remark: string | null
+}
+
+export interface StandardImportDraft {
+  document: {
+    file_no: string
+    product_name: string
+    product_code: string | null
+    product_internal_code: string | null
+    specification: string | null
+    valid_years: string | null
+    effective_date: string | null
+    version: string | null
+  }
+  items: StandardImportDraftItem[]
+  existing: { id: string; product_name: string } | null
+}
+
+export async function importStandardDocPreview(formData: FormData): Promise<{ message: string; data: StandardImportDraft }> {
+  const headers = await _authHeaders()
+  delete headers['Content-Type']
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/import-doc/preview`, {
+    method: 'POST', headers, body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '解析失败')
+  }
+  return res.json()
+}
+
+export async function importStandardDocConfirm(
+  document: StandardImportDraft['document'],
+  items: StandardImportDraftItem[],
+): Promise<{ message: string; data: { id: string; file_no: string; created_items: number; skipped_items: number; overwritten: boolean } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/standards/import-doc/confirm`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ document, items }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '确认导入失败')
+  }
+  return res.json()
+}
+
+
+// ─── 报告模板管理 ───
+
+export async function fetchTemplates(): Promise<any[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取模板列表失败')
+  return res.json()
+}
+
+export async function uploadTemplate(folder: string, formData: FormData): Promise<{ filename: string; folder: string; path: string; bound: boolean; matched: { doc_id: string; file_no: string; product_code: string } | null }> {
+  const headers = await _authHeaders()
+  delete headers['Content-Type']
+  formData.append('folder', folder)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/upload`, {
+    method: 'POST', headers, body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '上传模板失败')
+  }
+  return res.json()
+}
+
+export async function createTemplateFolder(name: string): Promise<{ name: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/folders`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw new Error('创建文件夹失败')
+  return res.json()
+}
+
+export async function deleteTemplateFolder(name: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/folders`, {
+    method: 'DELETE', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '删除文件夹失败')
+  }
+  return res.json()
+}
+
+export async function bindTemplate(
+  template_path: string, standard_document_id: string,
+): Promise<{ message: string; data: { template_path: string; sop_no: string | null; standard_document_id: string | null } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/bindings`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_path, standard_document_id }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '绑定模板失败')
+  }
+  return res.json()
+}
+
+export async function unbindTemplate(template_path: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/bindings/${encodeURIComponent(template_path)}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('解绑模板失败')
+  return res.json()
+}
+
+export async function deleteTemplateFile(path: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/templates/file`, {
+    method: 'DELETE', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '删除模板失败')
+  }
+  return res.json()
+}
+
+
+// ─── 检验任务填报 ───
+
+export async function createTestTask(data: {
+  product_name: string
+  batch_number: string
+  production_date?: string
+  expiry_date?: string
+  specification?: string
+  form_id?: string
+  report_date?: string
+  standard_document_id?: string
+  standard_document_ids?: string[]
+  standard_item_ids?: string[]
+}): Promise<{ message: string; data: TestTaskDetail }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '创建检验任务失败')
+  }
+  revalidatePath('/quality/task')
+  return res.json()
+}
+
+export async function updateTestTaskReportDate(
+  taskId: string, reportDate: string | null,
+): Promise<{ message: string; data: TestTaskDetail }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/report-date`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ report_date: reportDate }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '更新出报日期失败')
+  }
+  revalidatePath('/quality/task')
+  return res.json()
+}
+
+export async function fetchTestTasks(
+  product_name?: string, status?: TestTaskStatus, page = 1,
+): Promise<{ data: TestTaskListItem[]; meta: { total: number } }> {
+  const params = new URLSearchParams()
+  if (product_name) params.set('product_name', product_name)
+  if (status) params.set('status', status)
+  params.set('page', String(page))
+  params.set('page_size', '20')
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取检验任务失败')
+  return res.json()
+}
+
+export async function fetchTaskSopSummary(product_name?: string): Promise<SopSummaryItem[]> {
+  const params = new URLSearchParams()
+  if (product_name) params.set('product_name', product_name)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/summary${params.toString() ? `?${params.toString()}` : ''}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取按 SOP 汇总失败')
+  const body = await res.json()
+  return (body.data?.items || []) as SopSummaryItem[]
+}
+
+export async function fetchTestTaskDetail(id: string): Promise<TestTaskDetail> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${id}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取检验任务详情失败')
+  const body = await res.json()
+  return body.data as TestTaskDetail
+}
+
+export async function updateTestResults(
+  taskId: string,
+  results: { result_id: string; result_text?: string | null; result_value?: number | null; is_pass?: boolean | null }[],
+): Promise<{ message: string; data: TestTaskDetail }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ results }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '保存结果失败')
+  }
+  return res.json()
+}
+
+export async function addTestResult(
+  taskId: string,
+  data: { item_name: string; category?: string; sop_no?: string; standard_text?: string; operator?: string; limit_min?: number | null; limit_max?: number | null; method_source?: string; remark?: string },
+): Promise<{ message: string; data: TestResultItem }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '追加项目失败')
+  }
+  return res.json()
+}
+
+export interface TaskCoaReportItem {
+  report_id: string
+  filename: string
+  file_no: string
+  template_path: string
+}
+
+export async function generateTaskReports(
+  taskId: string,
+): Promise<{ message: string; data: TaskCoaReportItem[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/report`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '生成 COA 失败')
+  }
+  return res.json()
+}
+
+export async function downloadReportFile(reportId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/records/${reportId}/download`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('下载报告文件失败')
+  return res.blob()
+}
+
+export async function parseLcIntoTask(taskId: string, formData: FormData): Promise<{ message: string; data: TestTaskDetail }> {
+  const headers = await _authHeaders()
+  delete headers['Content-Type']
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/parse-lc`, {
+    method: 'POST', headers, body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '解析填入失败')
+  }
+  return res.json()
+}
+
+export async function updateTestTaskStatus(taskId: string, status: TestTaskStatus): Promise<{ message: string; data: TestTaskDetail }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/status`, {
+    method: 'PUT', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '状态更新失败')
+  }
+  revalidatePath('/quality/task')
+  return res.json()
+}
+
+export async function deleteTestTask(id: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${id}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除检验任务失败')
+  revalidatePath('/quality/task')
+  return res.json()
+}
+
+export async function deleteTestResult(taskId: string, resultId: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/results/${resultId}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除结果行失败')
   return res.json()
 }

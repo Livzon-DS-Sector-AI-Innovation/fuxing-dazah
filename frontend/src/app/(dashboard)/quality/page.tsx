@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Typography, Divider, Empty, Button, Space } from 'antd'
+import { Typography, Divider, Empty, Button, Space, Table, Tag } from 'antd'
 import { ExperimentOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons'
 import Link from 'next/link'
 import { LcUploader, LcReportView } from '@/components/quality'
@@ -39,7 +39,26 @@ export default function QualityPage() {
       {result && (
         <>
           <Divider />
-          <LcReportView report={result.report} />
+          {result.components ? (
+            <div>
+              <Paragraph strong>解析组分结果（模板配置驱动）</Paragraph>
+              <Table
+                rowKey="name"
+                size="small"
+                pagination={false}
+                dataSource={(result.components || []).map((c: any) => ({ ...c, key: c.name }))}
+                columns={[
+                  { title: '组分', dataIndex: 'name', key: 'name' },
+                  {
+                    title: '报告值', dataIndex: 'report_value', key: 'report_value',
+                    render: (v: number | null) => v != null ? `${v}%` : <Tag color="orange">未检出/未填</Tag>,
+                  },
+                ]}
+              />
+            </div>
+          ) : (
+            <LcReportView report={result.report} />
+          )}
         </>
       )}
 

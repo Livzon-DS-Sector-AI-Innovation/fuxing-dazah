@@ -59,9 +59,6 @@ export default function LcHistoryList() {
         ? <Tag color="success">合格</Tag>
         : <Tag color="error">不合格</Tag>,
     },
-    {
-      render: (v: boolean) => v ? <Tag color="warning">OOT</Tag> : null,
-    },
     { title: '文件名', dataIndex: 'excel_filename', key: 'excel_filename', ellipsis: true },
     {
       title: '上传时间', dataIndex: 'created_at', key: 'created_at', width: 170,

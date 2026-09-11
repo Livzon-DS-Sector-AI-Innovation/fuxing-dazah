@@ -27,8 +27,8 @@ export default function ReportGenerator({ record, templates }: Props) {
       const a = document.createElement('a')
       a.href = url
       const disposition = res.headers.get('Content-Disposition') || ''
-      const match = disposition.match(/filename=(.+)/)
-      a.download = match ? match[1] : `COA-${record.batch_number}.docx`
+      const m = disposition.match(/filename\*=UTF-8''([^;]+)/)
+      a.download = m ? decodeURIComponent(m[1]) : `COA-${record.batch_number}.docx`
       a.click()
       URL.revokeObjectURL(url)
       message.success('报告单已生成')
