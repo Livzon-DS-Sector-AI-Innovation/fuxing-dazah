@@ -252,11 +252,12 @@ export const moduleMenus: ModuleMenu[] = [
     permissions: ["quality:*:read"],
     children: [
       { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
-      { key: "lc-calc", label: "📊 计算表", path: "/quality/calculator" },
-      { key: "inspection", label: "质量检验", path: "/quality/inspection" },
-      { key: "deviation", label: "偏差管理", path: "/quality/deviation" },
-      { key: "capa", label: "CAPA管理", path: "/quality/capa" },
-      { key: "change", label: "变更控制", path: "/quality/change" },
+      { key: "quality-task", label: "📝 检验填报", path: "/quality/task" },
+      { key: "lc-history", label: "📜 检验历史", path: "/quality/history" },
+      { key: "quality-summary", label: "📈 汇总统计", path: "/quality/summary" },
+      { key: "quality-standards", label: "🎯 产品标准", path: "/quality/standards" },
+      { key: "quality-templates", label: "📑 报告模板", path: "/quality/templates" },
+      { key: "quality-report", label: "📄 报告单", path: "/quality/report" },
     ],
   },
   {

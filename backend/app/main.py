@@ -112,6 +112,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     safety_ws_task = asyncio.create_task(start_ws())
 
+    # ── 质量模块专属飞书事件订阅（WebSocket 长连接，独立应用凭据）──
+    from app.modules.quality.feishu import event_client as quality_feishu_ws
+    from app.modules.quality.feishu import fill_service  # noqa: F401 注册事件处理器
+
+    quality_ws_task = asyncio.create_task(quality_feishu_ws.start_ws())
+
+    # ── 质量模块出报日期每日推送（当日需出报任务的群提醒）──
+    from app.modules.quality.feishu import daily_push as quality_daily_push
+
+    quality_daily_push_task = asyncio.create_task(quality_daily_push.daily_report_push_loop())
+
     # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
     from app.modules.safety.feishu.catch_up import recover_unprocessed_records
 
@@ -171,6 +182,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 停止安全模块 WebSocket
     await stop_ws()
     safety_ws_task.cancel()
+
+    # 停止质量模块 WebSocket
+    await quality_feishu_ws.stop_ws()
+    quality_ws_task.cancel()
+
+    # 停止质量模块出报日期每日推送
+    quality_daily_push.stop_flag.set()
+    quality_daily_push_task.cancel()
 
     # 停止定时任务调度引擎
     stop_scheduled_task_flag.set()

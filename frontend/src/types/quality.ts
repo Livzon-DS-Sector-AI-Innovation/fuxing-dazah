@@ -5,8 +5,6 @@
 export interface QualityStandard {
   name: string
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   operator: string // "≤" | "≥"
 }
 
@@ -25,10 +23,7 @@ export interface ImpurityResult {
   first_percent: number
   second_percent: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 主计算结果（万古霉素B、总杂质等）───
@@ -40,10 +35,7 @@ export interface CalculatedResult {
   rounded_first: number
   rounded_second: number
   limit: number | null
-  oot_haf: number | null
-  oot_haa: number | null
   is_pass: boolean
-  is_oot: boolean
 }
 
 // ─── 完整解析结果 ───
@@ -81,7 +73,6 @@ export interface LcReportData {
 
   // 汇总
   all_pass: boolean
-  has_oot: boolean
 }
 
 // ─── 上传响应 ───
@@ -89,4 +80,144 @@ export interface LcReportData {
 export interface UploadLcResponse {
   filename: string
   report: LcReportData
+  record_id: string | null
+  task_link?: {
+    task_id: string
+    filled: string[]
+    unmatched: string[]
+  } | null
+  components?: {
+    name: string
+    first: number | null
+    second: number | null
+    report_value: number | null
+  }[] | null
+}
+
+// ─── 检验记录列表/详情 ───
+
+export interface InspectionRecordListItem {
+  id: string
+  product_name: string
+  batch_number: string
+  form_id: string | null
+  standard_type: string | null
+  all_pass: boolean
+  excel_filename: string | null
+  created_at: string | null
+}
+
+export interface InspectionRecordDetail extends InspectionRecordListItem {
+  impurities: ImpurityResult[]
+  report: LcReportData
+}
+
+// ─── 报告单记录 ───
+
+export interface ReportRecord {
+  id: string
+  inspection_record_id: string
+  template_path: string
+  product_name: string
+  batch_number: string
+  file_path: string
+  file_size: number | null
+  created_at: string | null
+}
+
+// ─── 汇总统计 ───
+
+export interface ProductSummary {
+  product_name: string
+  total: number
+  pass_count: number
+  fail_count: number
+}
+
+export interface HistorySummary {
+  total: number
+  pass_count: number
+  fail_count: number
+  pass_rate: number
+  products: ProductSummary[]
+}
+
+// ─── 检验任务填报 ───
+
+export type TestTaskStatus = 'in_progress' | 'pending_review' | 'completed' | 'void'
+
+export interface TestResultItem {
+  id: string
+  seq: number | null
+  category: string | null
+  item_name: string
+  sop_no: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  remark: string | null
+  result_text: string | null
+  result_value: number | null
+  is_pass: boolean | null
+  judge_mode: 'auto' | 'manual'
+  source: 'manual' | 'parse'
+  filled_at: string | null
+}
+
+export interface TestTaskListItem {
+  id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  specification: string | null
+  form_id: string | null
+  report_date: string | null
+  status: TestTaskStatus
+  created_at: string | null
+  results_total: number
+  results_filled: number
+}
+
+export interface TestTaskDetail {
+  id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  specification: string | null
+  form_id: string | null
+  report_date: string | null
+  standard_document_id: string | null
+  status: TestTaskStatus
+  created_at: string | null
+  results: TestResultItem[]
+}
+
+// ─── 按 SOP 汇总 ───
+
+export interface SopSummaryBatch {
+  task_id: string
+  batch_number: string
+  production_date: string | null
+  expiry_date: string | null
+  result_value: number | null
+  result_text: string | null
+  is_pass: boolean
+  source: 'manual' | 'parse'
+  filled_at: string | null
+}
+
+export interface SopSummaryItem {
+  sop_no: string | null
+  item_name: string
+  category: string | null
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  method_source: string | null
+  batches: SopSummaryBatch[]
 }
