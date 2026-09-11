@@ -33,7 +33,16 @@ function renderField(field: ConfigFieldInfo) {
   }
   return (
     <Form.Item key={field.key} name={name} label={field.label} rules={rules} tooltip={tooltip}>
-      {field.type === 'password' ? <Input.Password /> : <Input />}
+      {field.type === 'password' ? (
+        <Input.Password
+          visibilityToggle={false}
+          onCopy={(e) => e.preventDefault()}
+          onCut={(e) => e.preventDefault()}
+          onContextMenu={(e) => e.preventDefault()}
+        />
+      ) : (
+        <Input />
+      )}
     </Form.Item>
   )
 }

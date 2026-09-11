@@ -1,8 +1,8 @@
 'use client'
 
 // 通用步骤向导：动态渲染工具声明的输入，逐步执行，展示结果。
-// 页面骨架：顶栏（返回/配置，工具身份已在首页卡片展示不再重复）
-// → 最近执行（白底卡片 + 状态徽标）→ 步骤轨道 → 工作卡（页面阴影锚点，眉标步骤头 + 分区表单）。
+// 页面骨架：工具标题区 → 最近执行 → 立体步骤轨道 → 分区工作卡。
+// 视觉样式限定在 CSS Module 内，工具识别色通过局部 CSS 变量传递。
 // 表单布局：文件输入聚合成「材料槽」区——tint 虚线插槽，上传后实色填充（本页签名元素）；
 // 非文件输入为参数区，show_when 声明驱动条件显示（如核对方式切换月份/日期字段），
 // month/date 类型渲染 DatePicker，提交时格式化为字符串，后端 params 结构不变。
@@ -44,6 +44,7 @@ import {
   WarningOutlined,
 } from '@ant-design/icons'
 import type { FormInstance, UploadFile } from 'antd'
+import type { CSSProperties, MouseEvent, ReactNode } from 'react'
 import type { Dayjs } from 'dayjs'
 
 import { runToolStep } from '@/actions/toolbox'
@@ -51,6 +52,7 @@ import { fetchExecutionState, fetchFileDownload } from '@/lib/api/toolbox'
 import type { ExecutionInfo, ExecutionSummaryInfo, StepProgress, StepRunData, ToolInfo } from '@/types/toolbox'
 import { toolTint } from './toolTint'
 import { MarkdownView } from './MarkdownView'
+import styles from './ToolRunner.module.css'
 
 const { TextArea } = Input
 type ToolInput = ToolInfo['steps'][number]['inputs'][number]
@@ -91,7 +93,7 @@ function StatStrip({ data, tintBg, tintInk }: { data: Record<string, unknown>; t
   return (
     <div className="mb-4 flex flex-wrap gap-3">
       {stats.map(([k, v]) => (
-        <div key={k} className="flex items-baseline gap-2 rounded-lg px-4 py-3" style={{ background: tintBg }}>
+        <div key={k} className={`${styles.statCard} flex items-baseline gap-2 rounded-lg px-4 py-3`} style={{ background: tintBg }}>
           <span className="text-[24px] font-semibold leading-none" style={{ color: tintInk }}>{String(v)}</span>
           <span className="text-[13px]" style={{ color: tintInk }}>{STAT_LABELS[k]}</span>
         </div>
@@ -154,7 +156,7 @@ function ResultView({
     ([k, v]) => k.endsWith('_md') && typeof v === 'string' && v,
   )
   const hasTable = Array.isArray(data.rows) && Array.isArray(data.columns)
-  let body: React.ReactNode
+  let body: ReactNode
   if (data.text != null) {
     body = <pre className="m-0 whitespace-pre-wrap rounded-lg bg-[var(--color-surface)] p-4 text-[14px] leading-relaxed text-[var(--color-charcoal)]">{String(data.text)}</pre>
   } else if (mdEntries.length > 0) {
@@ -231,7 +233,7 @@ function MaterialSlot({
   form: FormInstance
 }) {
   const filled = files.length > 0
-  const removeFile = (e: React.MouseEvent, uid: string) => {
+  const removeFile = (e: MouseEvent, uid: string) => {
     e.stopPropagation()
     form.setFieldValue(input.key, files.filter((f) => f.uid !== uid))
   }
@@ -264,7 +266,8 @@ function MaterialSlot({
         className="[&_.ant-upload-drag]:border-transparent! [&_.ant-upload-drag]:bg-transparent! [&_.ant-upload-drag:hover]:border-transparent! [&_.ant-upload-drag.ant-upload-drag-hover]:border-transparent! [&_.ant-upload-btn]:p-0!"
       >
         <div
-          className="rounded-xl border border-dashed px-4 text-center transition-colors"
+          className={`${styles.materialSlot} rounded-xl border border-dashed px-4 text-center`}
+          data-filled={filled}
           style={{
             background: filled ? tintBg : 'var(--color-surface-soft)',
             borderColor: filled ? 'transparent' : `${tintInk}40`,
@@ -290,12 +293,12 @@ function MaterialSlot({
                 </div>
               ))}
               <p className="m-0 text-[12px]" style={{ color: tintInk, opacity: 0.7 }}>
-                点击更换文件
+                {input.multiple ? '点击继续添加文件' : '点击更换文件'}
               </p>
             </div>
           ) : (
             <div className="py-5">
-              <InboxOutlined className="text-[20px]" style={{ color: tintInk }} />
+              <span className={styles.uploadIcon}><InboxOutlined /></span>
               <p className="m-0 mt-2 text-[13px] font-medium" style={{ color: tintInk }}>
                 {input.label}
                 {input.required && <span className="ml-0.5 text-[var(--color-error)]">*</span>}
@@ -331,7 +334,7 @@ function ReferenceMaterial({
   tintInk: string
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-3 py-2.5" style={{ background: tintBg }}>
+    <div className={`${styles.referenceCard} flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-3 py-2.5`} style={{ background: tintBg }}>
       <FileTextOutlined style={{ color: tintInk }} />
       <span className="text-[13px] font-medium" style={{ color: tintInk }}>{input.label}</span>
       {filename && <span className="text-[13px]" style={{ color: tintInk }}>{filename}</span>}
@@ -645,7 +648,7 @@ export function ToolRunner({
     if (inp.type === 'select') {
       return (
         <Form.Item name={inp.key} label={labelOf(inp)} rules={rules} tooltip={tooltip}>
-          <Select style={{ width: 240 }} options={optionItems(inp)} />
+          <Select style={{ width: '100%' }} options={optionItems(inp)} />
         </Form.Item>
       )
     }
@@ -697,10 +700,14 @@ export function ToolRunner({
         ? 'sm:grid-cols-2'
         : 'sm:grid-cols-3'
 
+  const completedSteps = tool.steps.filter((s) => stepResults[s.id]).length
+  const statusLabel = running ? '正在执行' : error ? '执行异常' : currentResult ? '步骤已完成' : '等待执行'
+
   return (
-    <div className="mx-auto max-w-4xl p-6">
+    <div className={styles.page} style={{ '--tool-tint': tintBg, '--tool-ink': tintInk } as CSSProperties}>
+      <div className={styles.content}>
       {/* 页头工具条：返回与配置置于内容之上 */}
-      <div className="flex items-center justify-between gap-3">
+      <div className={styles.toolbar}>
         <Link
           href="/toolbox"
           className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[var(--color-steel)] transition-colors hover:text-[var(--color-primary)]"
@@ -711,15 +718,31 @@ export function ToolRunner({
         {tool.config_schema.length > 0 && tool.can_config && (
           <Link
             href={`/toolbox/config/${tool.id}`}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-hairline-strong)] px-3 py-1.5 text-[13px] font-medium text-[var(--color-charcoal)] transition-colors hover:border-[var(--color-stone)] hover:text-[var(--color-ink)]"
+            className={styles.configLink}
           >
             <SettingOutlined />
-            配置
+            工具配置
           </Link>
         )}
       </div>
 
-      {/* 工具身份已在首页卡片展示，执行页不再重复（名称/描述/步数），顶栏即页头 */}
+      <header className={styles.header}>
+        <div className={styles.toolEmblem} aria-hidden="true">
+          <span /><span /><span><SettingOutlined /></span>
+        </div>
+        <div className={styles.heading}>
+          <p className={styles.eyebrow}>系统工具箱 / 执行工具</p>
+          <h1>{tool.name}</h1>
+          <p className={styles.description}>{tool.description}</p>
+        </div>
+        <div className={styles.overview}>
+          <span className={styles.status} data-state={running ? 'running' : error ? 'error' : currentResult ? 'done' : 'idle'} role="status">
+            {running ? <ClockCircleOutlined spin /> : error ? <CloseCircleOutlined /> : currentResult ? <CheckCircleOutlined /> : <ClockCircleOutlined />}
+            {statusLabel}
+          </span>
+          <span className={styles.completion}>已完成 <strong>{completedSteps}</strong> / {tool.steps.length} 步</span>
+        </div>
+      </header>
 
       {/* 恢复提示：后台任务不随页面离开而终止，重进工具页时给出找回入口。
           仅在尚未进入任何会话时显示（已恢复/已开跑则当前视图即任务本身）。
@@ -727,7 +750,7 @@ export function ToolRunner({
           避免标签悬在卡外形成第二条左线。 */}
       {recentExecutions.length > 0 && !executionId && (
         <section className="mt-7">
-          <div className="overflow-hidden rounded-xl border border-[var(--color-hairline)] bg-[var(--color-canvas)] shadow-[rgba(15,15,15,0.04)_0px_1px_2px_0px]">
+          <div className={styles.recentCard}>
             <div className="px-6 pt-4">
               <SectionLabel>最近执行</SectionLabel>
             </div>
@@ -745,7 +768,7 @@ export function ToolRunner({
                 return (
                   <li
                     key={e.execution_id}
-                    className="flex h-[52px] items-center gap-3 px-6"
+                    className={styles.recentRow}
                     style={running ? { background: tintBg } : undefined}
                   >
                     <span
@@ -805,7 +828,7 @@ export function ToolRunner({
 
       {/* 步骤轨道：编号承载真实流程顺序；完成态填充工具识别色，当前步骤 tint 底 + 描边，
           连接线在前序步骤完成后染上 tint，进度一眼可读 */}
-      <div className="mt-7 flex items-center gap-0 overflow-x-auto pb-1">
+      <nav className={styles.steps} aria-label="工具执行步骤">
         {tool.steps.map((s, i) => {
           const done = Boolean(stepResults[s.id])
           const current = i === stepIndex
@@ -814,7 +837,7 @@ export function ToolRunner({
             <Fragment key={s.id}>
               {i > 0 && (
                 <span
-                  className="mx-3 h-px w-8 shrink-0"
+                  className={styles.connector}
                   style={{ background: prevDone ? `${tintInk}59` : 'var(--color-hairline-strong)' }}
                 />
               )}
@@ -822,12 +845,13 @@ export function ToolRunner({
                 type="button"
                 onClick={() => handleStepClick(i)}
                 disabled={!done || current || running}
-                className={`flex shrink-0 items-center gap-2 rounded-full py-1 pr-3 transition-colors ${
-                  current ? '' : done ? 'cursor-pointer hover:bg-[var(--color-surface)]' : 'cursor-default'
-                }`}
+                aria-current={current ? 'step' : undefined}
+                className={styles.stepCard}
+                data-current={current}
+                data-done={done}
               >
                 <span
-                  className="flex h-7 w-7 items-center justify-center rounded-full text-[13px] font-semibold"
+                  className={styles.stepNumber}
                   style={
                     done
                       ? { background: tintInk, color: '#ffffff' }
@@ -838,22 +862,19 @@ export function ToolRunner({
                 >
                   {done ? <CheckOutlined style={{ fontSize: 12 }} /> : i + 1}
                 </span>
-                <span
-                  className={`text-[14px] ${
-                    current ? 'font-semibold text-[var(--color-charcoal)]' : done ? 'text-[var(--color-slate)]' : 'text-[var(--color-stone)]'
-                  }`}
-                >
-                  {s.name}
+                <span className={styles.stepText}>
+                  <span>{s.name}</span>
+                  <small>{current ? running ? '正在处理' : '当前步骤' : done ? '已完成' : '待执行'}</small>
                 </span>
               </button>
             </Fragment>
           )
         })}
-      </div>
+      </nav>
 
-      <div className="mt-4 rounded-xl border border-[var(--color-hairline)] bg-[var(--color-canvas)] p-6 shadow-[rgba(15,15,15,0.04)_0px_1px_2px_0px,rgba(15,15,15,0.05)_0px_6px_16px_0px]">
+      <div className={styles.workCard}>
         {/* 步骤头：眉标 + 标题 + 描述同一条左线，与卡内分区标签对齐 */}
-        <div className="border-b border-[var(--color-hairline-soft)] pb-4">
+        <div className={styles.workHeader}>
           <p className="m-0 text-[12px] font-semibold tracking-[0.08em]" style={{ color: tintInk }}>
             步骤 {stepIndex + 1}
           </p>
@@ -862,9 +883,9 @@ export function ToolRunner({
         </div>
         {error && <Alert className="mt-4" type="error" title={error} showIcon />}
         {warning && <Alert className="mt-4" type="warning" title={warning} showIcon />}
-        <Form form={form} className="mt-4" layout="vertical" initialValues={initialValues} onFinish={onFinish}>
+        <Form form={form} className={styles.form} layout="vertical" initialValues={initialValues} onFinish={onFinish}>
           {fileInputs.length > 0 && (
-            <section>
+            <section className={styles.formSection}>
               <SectionLabel>上传材料</SectionLabel>
               <div className={`mt-3 grid grid-cols-1 gap-3 ${fileGridCls}`}>
                 {fileInputs.map((inp) => (
@@ -881,7 +902,7 @@ export function ToolRunner({
             </section>
           )}
           {refInputs.length > 0 && (
-            <section className="mt-5 max-w-xl">
+            <section className={styles.formSection}>
               <SectionLabel>引用材料</SectionLabel>
               <div className="mt-3 space-y-2">
                 {refInputs.map((inp) => (
@@ -899,8 +920,8 @@ export function ToolRunner({
             </section>
           )}
           {paramInputs.length > 0 && (
-            <section className="mt-5 max-w-xl">
-              <SectionLabel>参数</SectionLabel>
+            <section className={styles.formSection}>
+              <SectionLabel>执行参数</SectionLabel>
               <div className="mt-3 grid grid-cols-1 gap-x-4 sm:grid-cols-2">
                 {paramInputs.map((inp) => (
                   <Fragment key={inp.key}>{renderParam(inp)}</Fragment>
@@ -919,19 +940,20 @@ export function ToolRunner({
               <p className="m-0 text-[13px] leading-relaxed" style={{ color: tintInk }}>{step.description}</p>
             </div>
           )}
-          <div className="mt-6 flex items-center gap-3">
-            <Button type="primary" size="large" htmlType="submit" loading={running} className="min-w-[128px]">
+          <div className={styles.actions}>
+            <Button type="primary" size="large" htmlType="submit" loading={running} className={styles.executeButton}>
               {step.inputs.length === 0
                 ? currentResult
                   ? `重新${step.name}`
                   : step.name
                 : currentResult
                   ? '重新执行'
-                  : '执行'}
+                  : '开始执行'}
             </Button>
             {currentResult && !isLast && (
               <Button
                 size="large"
+                disabled={running}
                 onClick={() => {
                   setStepIndex((i) => i + 1)
                   form.resetFields()
@@ -945,7 +967,7 @@ export function ToolRunner({
           </div>
         </Form>
         {progress && running && (
-          <div className="mt-5 rounded-lg px-4 py-3" style={{ background: tintBg }}>
+          <div className={styles.progressCard} style={{ background: tintBg }} role="status" aria-live="polite">
             <div className="flex items-center justify-between gap-3">
               <span className="truncate text-[13px] font-medium" style={{ color: tintInk }}>
                 {progress.message}
@@ -964,7 +986,7 @@ export function ToolRunner({
           </div>
         )}
         {currentResult && (
-          <div className="mt-6 border-t border-[var(--color-hairline-soft)] pt-5">
+          <div className={styles.resultCard}>
             <div className="mb-3 flex items-center gap-2">
               <span
                 className="flex h-5 w-5 items-center justify-center rounded-full"
@@ -977,6 +999,7 @@ export function ToolRunner({
             <ResultView data={currentResult.data} executionId={currentResult.execution_id} tintBg={tintBg} tintInk={tintInk} />
           </div>
         )}
+      </div>
       </div>
     </div>
   )
