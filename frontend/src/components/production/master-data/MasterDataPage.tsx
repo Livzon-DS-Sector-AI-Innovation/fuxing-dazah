@@ -42,6 +42,7 @@ import {
 } from '@/lib/api/production-client'
 import type { Product, IntermediateType, MixingContainer } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { PageHeading } from '@/components/shared/PageHeading'
 import { LinesTab } from './LinesTab'
 
 const { Text } = Typography
@@ -725,14 +726,7 @@ function MasterDataContent() {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 600, margin: '0 0 4px', color: '#1a1a1a' }}>
-          主数据管理
-        </h2>
-        <span style={{ color: '#787671', fontSize: 14 }}>
-          管理产品主数据与产出物（中间体）字典
-        </span>
-      </div>
+      <PageHeading title="主数据管理" subtitle="管理产品主数据与产出物（中间体）字典" />
       <Tabs items={tabItems} />
       <ProductFormModal
         key={editProduct?.id ?? 'product-new'}

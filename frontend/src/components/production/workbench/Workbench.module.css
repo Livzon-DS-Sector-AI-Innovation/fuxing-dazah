@@ -1,0 +1,41 @@
+/* 保留业务配色，仅在工作台及其弹窗内建立光影层次。 */
+.surface { --wb-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 rgba(55,53,47,.045), 0 2px 3px rgba(55,53,47,.045), 0 8px 20px -8px rgba(55,53,47,.14); }
+.card { box-shadow: var(--wb-shadow); }
+.card::before { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(145deg, rgba(255,255,255,.24), transparent 35%, transparent 70%, rgba(55,53,47,.025)); }
+.card:focus-within { box-shadow: inset 0 1px 0 #fff, 0 0 0 2px rgba(86,69,212,.16), 0 12px 24px -10px rgba(55,53,47,.2); }
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .card:not(.stacked):hover { transform: translateY(-3px); box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 rgba(55,53,47,.05), 0 4px 6px rgba(55,53,47,.05), 0 16px 28px -12px rgba(55,53,47,.22); }
+}
+.plannedCard { box-shadow: inset 0 1px 0 #fff, inset 0 -1px 0 rgba(55,53,47,.04), 0 5px 12px -6px rgba(55,53,47,.16); }
+.toolbar { padding: 16px 18px; border: 1px solid #ede9e4; border-radius: 12px; background: linear-gradient(135deg, #fff, #fafaf9); box-shadow: var(--wb-shadow); }
+.workbenchHeading { flex: 0 1 auto; min-width: 170px; margin: 0 !important; padding: 0 12px 0 0 !important; }
+.workbenchHeading::before, .workbenchHeading > div:first-child { display: none; }
+.configPanel { padding: 14px; border: 1px solid #ede9e4; border-radius: 12px; background: #fafaf9; box-shadow: inset 0 2px 5px rgba(55,53,47,.045), 0 1px 0 #fff; }
+.cardActions { padding-top: 12px; border-top: 1px solid #f0eeec; box-shadow: inset 0 1px 0 #fff; }
+.cardActions button, .receiveButton,
+.surface :global(.ant-btn-default):not(:disabled), .surface :global(.ant-btn-primary):not(:disabled) { background-image: linear-gradient(to bottom, rgba(255,255,255,.16), transparent 55%, rgba(0,0,0,.055)); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), inset 0 -2px 0 rgba(0,0,0,.10), 0 3px 5px rgba(55,53,47,.10); }
+.cardActions button:active, .receiveButton:active,
+.surface :global(.ant-btn-default):not(:disabled):active, .surface :global(.ant-btn-primary):not(:disabled):active { box-shadow: inset 0 2px 4px rgba(0,0,0,.15); }
+.cardActions button:focus-visible, .receiveButton:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; }
+.surface :global(.ant-segmented) { box-shadow: inset 0 2px 4px rgba(55,53,47,.08), 0 1px 0 #fff; }
+.surface :global(.ant-segmented-item-selected) { box-shadow: inset 0 1px 0 #fff, 0 2px 4px rgba(55,53,47,.12); }
+/* 语义类名随 Modal portal 渲染，不改变共享组件及其业务逻辑。 */
+.surface .dialog { padding: 8px; border: 1px solid rgba(255,255,255,.9); border-radius: 16px; background: linear-gradient(145deg, #fff, #f6f5f4); box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 rgba(55,53,47,.06), 0 8px 16px -8px rgba(10,21,48,.20), 0 32px 80px -20px rgba(10,21,48,.30); }
+.surface .dialogHeader { padding: 16px 44px 16px 16px; margin-bottom: 0; background: transparent; }
+.surface .dialogBody { padding: 20px; border: 1px solid #ede9e4; border-radius: 10px; background: #fff; box-shadow: inset 0 2px 5px rgba(55,53,47,.025), 0 1px 0 #fff; }
+.surface .dialogFooter { margin-top: 0; padding: 16px 12px 8px; }
+.surface :global(.ant-form-item-label) > label { font-weight: 600; }
+.surface :global(.ant-input-outlined):not(:disabled),
+.surface :global(.ant-input-affix-wrapper-outlined):not(:global(.ant-input-affix-wrapper-disabled)),
+.surface :global(.ant-input-number-outlined):not(:global(.ant-input-number-disabled)),
+.surface :global(.ant-picker-outlined):not(:global(.ant-picker-disabled)),
+.surface :global(.ant-select-outlined):not(:global(.ant-select-disabled)) { box-shadow: inset 0 2px 3px rgba(55,53,47,.055), 0 1px 0 rgba(255,255,255,.9); }
+.surface :global(.ant-input-outlined):focus, .surface :global(.ant-input-affix-wrapper-focused), .surface :global(.ant-input-number-focused), .surface :global(.ant-picker-focused), .surface :global(.ant-select-focused) { box-shadow: 0 0 0 3px rgba(86,69,212,.12); }
+.badge { box-shadow: inset 0 1px 0 rgba(255,255,255,.85), inset 0 -1px 0 rgba(55,53,47,.07), 0 2px 3px rgba(55,53,47,.05); }
+.progressWell { padding: 10px 8px 8px; border-radius: 8px; background: #fafaf9; border: 1px solid #f0eeec; box-shadow: inset 0 2px 4px rgba(55,53,47,.04), 0 1px 0 #fff; }
+.nodeDot { background-image: linear-gradient(145deg, rgba(255,255,255,.6), transparent 60%, rgba(0,0,0,.12)) !important; }
+.ownerChip { display: inline-flex; align-self: flex-start; padding: 4px 8px; border-radius: 6px; background: #fafaf9; box-shadow: inset 0 1px 0 #fff, 0 1px 3px rgba(55,53,47,.06); }
+.timeline { box-shadow: inset 0 1px 2px rgba(55,53,47,.12), 0 1px 0 #fff; }
+.timeline > div { box-shadow: inset 0 1px 0 rgba(255,255,255,.4), inset 0 -1px 0 rgba(0,0,0,.1); }
+@media (max-width: 575px) { .toolbar { padding: 12px; } .surface .dialogBody { padding: 14px; } }
+@media (prefers-reduced-motion: reduce) { .card, .cardActions button, .receiveButton { transition: none !important; } }

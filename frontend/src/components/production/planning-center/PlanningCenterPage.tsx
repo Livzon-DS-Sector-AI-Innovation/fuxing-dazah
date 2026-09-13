@@ -9,6 +9,7 @@ import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { DemandPool } from './DemandPool'
 import { PlanOrderList } from './PlanOrderList'
 import { ScheduleView } from './ScheduleView'
+import { PageHeading } from '@/components/shared/PageHeading'
 import './planning-center.css'
 
 function PlanningCenterInner() {
@@ -25,14 +26,7 @@ function PlanningCenterInner() {
   return (
     <div className="h-full flex flex-col">
       {/* Header — 内容自适应高度，不参与 flex 伸缩 */}
-      <div className="shrink-0 mb-5">
-        <h2 className="text-[22px] font-semibold m-0 mb-1 text-[var(--color-ink)]">
-          计划中枢
-        </h2>
-        <span className="text-[var(--color-steel)] text-sm">
-          需求管理、计划制定与排程调度
-        </span>
-      </div>
+      <PageHeading className="shrink-0" title="计划中枢" subtitle="需求管理、计划制定与排程调度" />
 
       {/* Tabs — flex-1 填满剩余高度，CSS 全链路 flex 见 globals.css */}
       <Tabs

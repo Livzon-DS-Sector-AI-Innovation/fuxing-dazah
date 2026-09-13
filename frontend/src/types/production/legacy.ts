@@ -1,16 +1,3 @@
-// production module TypeScript types
-
-export interface ApiResponse<T = unknown> {
-  code: number
-  message: string
-  data: T
-  meta?: {
-    page?: number
-    page_size?: number
-    total?: number
-  }
-}
-
 // ============ Enums ============
 
 export enum BatchStatus {
@@ -327,17 +314,6 @@ export interface MaterialBalance {
   notes?: string
   created_at: string
   updated_at: string
-}
-
-// ============ Query Parameters ============
-
-export interface BatchQueryParams {
-  page?: number
-  page_size?: number
-  status?: BatchStatus
-  product_code?: string
-  batch_no?: string
-  exclude_cancelled?: boolean
 }
 
 export interface PlanQueryParams {

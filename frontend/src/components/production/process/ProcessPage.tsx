@@ -16,6 +16,7 @@ import { RouteFlowGraph } from './RouteFlowGraph'
 import { RouteGraphEditor } from './RouteGraphEditor'
 import { NodeFieldsDrawer } from './NodeFieldsDrawer'
 import { StageAssignmentPanel } from './StageAssignmentPanel'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
   void initialProducts // 产品列表由 ProductSidebar 经 React Query 拉取；SSR 数据仅用于首屏占位扩展
@@ -51,14 +52,7 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 600, margin: '0 0 4px', color: '#1a1a1a' }}>
-          工艺路径
-        </h2>
-        <span style={{ color: '#787671', fontSize: 14 }}>
-          查看工艺路线与节点流程
-        </span>
-      </div>
+      <PageHeading title="工艺路径" subtitle="查看工艺路线与节点流程" />
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
         <ProductSidebar
           selectedId={selectedProductId}

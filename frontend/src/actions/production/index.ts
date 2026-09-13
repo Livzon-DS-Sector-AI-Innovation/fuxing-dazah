@@ -47,7 +47,6 @@ export {
   bindLineProduct,
   unbindLineProduct,
 } from './line'
-export { getBatches } from './legacy'
 export {
   fetchWorkbench,
   fetchStageAssignments,

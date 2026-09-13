@@ -11,11 +11,13 @@ class StepCycleStat(BaseModel):
     """单工序周期统计"""
     model_config = ConfigDict(from_attributes=True)
 
+    route_id: uuid.UUID
+    route_name: str
     node_id: uuid.UUID
     node_name: str
     stage_name: str
     sort_order: int
-    n: int
+    n: int  # 含路线血缘前版本的同工序样本
     avg_hours: float
     min_hours: float | None
     max_hours: float | None

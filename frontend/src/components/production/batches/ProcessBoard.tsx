@@ -1,12 +1,14 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Button, Empty, Popover, Select, Skeleton, Tag } from 'antd'
+import { Button, Empty, Popover, Select, Skeleton, Tag, Tooltip } from 'antd'
 import {
   ArrowRightOutlined,
+  LeftOutlined,
   ReloadOutlined,
   ScheduleOutlined,
+  RightOutlined,
 } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { AnimatePresence, MotionConfig, motion } from 'motion/react'
@@ -21,11 +23,11 @@ import type {
 import { ExecutionDetailDrawer } from './ExecutionDetailDrawer'
 import { BatchHoverCard, PlannedHoverCard, BOARD_STATE_META } from './BatchHoverCard'
 import { STATUS_META as ROUTE_STATUS_META } from '../process/RouteVersionBar'
+import styles from './ProcessBoard.module.css'
 
 // 动效常量：统一缓动曲线，保证"丝滑"一致的节奏
 const EASE_OUT: [number, number, number, number] = [0.22, 0.61, 0.36, 1]
 const COL_WIDTH = 200
-const BOARD_HEIGHT = 520
 const BOARD_HEADER_H = 64
 
 /** 骨架屏呼吸动画 */
@@ -61,20 +63,7 @@ function CountBadge({ count }: { count: number }) {
       initial={{ scale: 1.35 }}
       animate={{ scale: 1 }}
       transition={{ type: 'spring', stiffness: 520, damping: 24 }}
-      style={{
-        minWidth: 22,
-        height: 18,
-        padding: '0 6px',
-        borderRadius: 9,
-        background: 'var(--color-surface)',
-        color: 'var(--color-slate)',
-        fontSize: 11,
-        fontWeight: 600,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 'auto',
-      }}
+      className={styles.countBadge}
     >
       {count}
     </motion.span>
@@ -101,6 +90,16 @@ function FlowConnector() {
           justifyContent: 'center',
         }}
       >
+        <div
+          style={{
+            position: 'absolute',
+            top: 10,
+            left: 2,
+            right: 2,
+            height: 1,
+            background: 'linear-gradient(90deg, rgba(200,196,190,0), rgba(200,196,190,0.8), rgba(200,196,190,0))',
+          }}
+        />
         <ArrowRightOutlined style={{ color: '#c8c4be', fontSize: 12 }} />
       </div>
     </div>
@@ -126,6 +125,7 @@ function Chip({ batchNo, dot, delay, children, onClick }: ChipProps) {
       styles={{ content: { padding: 10, borderRadius: 10 } }}
     >
       <motion.div
+        className={`${styles.chip} ${onClick ? styles.chipClickable : ''}`}
         initial={{ opacity: 0, y: 8 }}
         animate={{
           opacity: 1,
@@ -133,31 +133,19 @@ function Chip({ batchNo, dot, delay, children, onClick }: ChipProps) {
           transition: { duration: 0.26, ease: EASE_OUT, delay },
         }}
         exit={{ opacity: 0, transition: { duration: 0.15, ease: 'easeIn' } }}
-        whileHover={{ y: -2, transition: { duration: 0.16, ease: 'easeOut' } }}
+        whileHover={{ y: -2, z: 7, transition: { duration: 0.16, ease: 'easeOut' } }}
         onClick={onClick}
-        style={{
-          height: 34,
-          maxWidth: '100%',
-          flex: '0 0 auto',
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 10px',
-          background: '#fff',
-          border: '1px solid var(--color-hairline-soft)',
-          borderLeft: dot ? `3px solid ${dot}` : undefined,
-          borderRadius: 8,
-          fontSize: 12,
-          fontWeight: 600,
-          color: 'var(--color-charcoal)',
-          fontVariantNumeric: 'tabular-nums',
-          lineHeight: 1,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          cursor: onClick ? 'pointer' : 'default',
-          boxShadow: '0 1px 2px rgba(15,15,15,0.03)',
+        tabIndex={onClick ? 0 : undefined}
+        role={onClick ? 'button' : undefined}
+        onKeyDown={event => {
+          if (onClick && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault()
+            onClick()
+          }
         }}
+        style={dot ? { borderLeft: `3px solid ${dot}` } : undefined}
       >
-        {batchNo}
+        <span className={styles.batchNo}>{batchNo}</span>
       </motion.div>
     </Popover>
   )
@@ -172,53 +160,22 @@ function PlannedColumn({
 }) {
   return (
     <motion.div
+      className={`${styles.column} ${styles.plannedColumn}`}
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0, transition: { duration: 0.34, ease: EASE_OUT, delay } }}
-      style={{
-        width: COL_WIDTH,
-        flexShrink: 0,
-        height: BOARD_HEIGHT,
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'linear-gradient(180deg, #f7f4fd 0%, #fbf9ff 100%)',
-        border: '1px dashed #cfc6ee',
-        borderRadius: 12,
-        overflow: 'hidden',
-      }}
+      whileHover={{ y: -3, rotateX: 1, transition: { duration: 0.2, ease: 'easeOut' } }}
     >
-      <div
-        style={{
-          height: BOARD_HEADER_H,
-          padding: '10px 12px',
-          borderBottom: '1px dashed #e0d9f2',
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div className={styles.columnHeader}>
+        <div className={styles.columnTitleRow}>
           <ScheduleOutlined style={{ color: '#7b5fd9', fontSize: 13 }} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-ink)' }}>
-            计划批次
-          </span>
+          <span className={styles.columnTitle}>计划批次</span>
           <CountBadge count={items.length} />
         </div>
-        <div style={{ fontSize: 11, color: '#9a8fd0', marginTop: 2 }}>
-          已分配 · 待开工
-        </div>
+        <div className={`${styles.columnMeta} ${styles.plannedMeta}`}>已分配 · 待开工</div>
       </div>
-      <div
-        style={{
-          padding: 8,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          flex: 1,
-          overflowY: 'auto',
-        }}
-      >
+      <div className={styles.columnBody}>
         {items.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#b3a9da', fontSize: 12, padding: '18px 0' }}>
-            暂无
-          </div>
+          <div className={`${styles.emptyColumn} ${styles.plannedEmptyColumn}`}>暂无</div>
         ) : (
           <AnimatePresence initial={false}>
             {items.map((item, i) => (
@@ -239,91 +196,38 @@ function PlannedColumn({
 
 function NodeColumn({
   node,
+  index,
   items,
   delay,
   onOpen,
 }: {
   node: ProcessBoardNode
+  index: number
   items: ProcessBoardExecution[]
   delay: number
   onOpen: (item: ProcessBoardExecution) => void
 }) {
   return (
     <motion.div
+      className={styles.column}
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0, transition: { duration: 0.34, ease: EASE_OUT, delay } }}
-      style={{
-        width: COL_WIDTH,
-        flexShrink: 0,
-        height: BOARD_HEIGHT,
-        display: 'flex',
-        flexDirection: 'column',
-        background: '#fff',
-        border: '1px solid var(--color-hairline)',
-        borderRadius: 12,
-        overflow: 'hidden',
-        boxShadow: '0 1px 2px rgba(15,15,15,0.04)',
-      }}
+      whileHover={{ y: -3, rotateX: 1, transition: { duration: 0.2, ease: 'easeOut' } }}
     >
-      <div
-        style={{
-          height: BOARD_HEADER_H,
-          padding: '10px 12px',
-          borderBottom: '1px solid var(--color-hairline-soft)',
-          background: 'linear-gradient(180deg, #fff 0%, #fafaf9 100%)',
-          flexShrink: 0,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              color: 'var(--color-ink)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {node.name}
-          </span>
+      <div className={styles.columnHeader}>
+        <div className={styles.columnTitleRow}>
+          <span className={styles.stepBadge}>{index + 1}</span>
+          <span className={styles.columnTitle}>{node.name}</span>
           <CountBadge count={items.length} />
         </div>
-        <div
-          style={{
-            fontSize: 11,
-            color: 'var(--color-stone)',
-            marginTop: 2,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
+        <div className={styles.columnMeta}>
           {node.node_code}
           {node.stage_name ? ` · ${node.stage_name}` : ''}
         </div>
       </div>
-      <div
-        style={{
-          padding: 8,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-          flex: 1,
-          overflowY: 'auto',
-        }}
-      >
+      <div className={styles.columnBody}>
         {items.length === 0 ? (
-          <div
-            style={{
-              textAlign: 'center',
-              color: 'var(--color-stone)',
-              fontSize: 12,
-              padding: '18px 0',
-            }}
-          >
-            暂无
-          </div>
+          <div className={styles.emptyColumn}>暂无</div>
         ) : (
           <AnimatePresence initial={false}>
             {items.map((item, i) => (
@@ -346,19 +250,12 @@ function NodeColumn({
 
 function BoardSkeleton() {
   return (
-    <div style={{ display: 'flex', gap: 12, overflow: 'hidden' }}>
+    <div className={styles.track} style={{ gap: 12, overflow: 'hidden' }}>
       {[0, 1, 2, 3].map(i => (
         <div
           key={i}
-          style={{
-            width: COL_WIDTH,
-            flexShrink: 0,
-            height: BOARD_HEIGHT,
-            border: '1px solid var(--color-hairline)',
-            borderRadius: 12,
-            padding: 10,
-            background: '#fff',
-          }}
+          className={styles.column}
+          style={{ padding: 10 }}
         >
           <Skeleton active paragraph={{ rows: 1 }} title={false} style={{ marginBottom: 10 }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -383,6 +280,8 @@ function BoardSkeleton() {
 export function ProcessBoard({ productId }: { productId: string }) {
   const [routeId, setRouteId] = useState<string | null>(null)
   const [detail, setDetail] = useState<NodeExecutionListItem | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [scrollState, setScrollState] = useState({ left: false, right: false })
 
   const { data: routes } = useQuery({
     queryKey: ['production-routes', productId],
@@ -396,6 +295,53 @@ export function ProcessBoard({ productId }: { productId: string }) {
   })
 
   const { running, aborted, waiting, planned } = useMemo(() => countBoard(board), [board])
+
+  const updateScrollState = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const maxScrollLeft = Math.max(0, el.scrollWidth - el.clientWidth)
+    const nextState = {
+      left: el.scrollLeft > 4,
+      right: el.scrollLeft < maxScrollLeft - 4,
+    }
+    setScrollState(prev => (
+      prev.left === nextState.left && prev.right === nextState.right ? prev : nextState
+    ))
+  }, [])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    updateScrollState()
+    el.addEventListener('scroll', updateScrollState, { passive: true })
+    const observer = new ResizeObserver(updateScrollState)
+    observer.observe(el)
+    return () => {
+      el.removeEventListener('scroll', updateScrollState)
+      observer.disconnect()
+    }
+  }, [routeId, board?.nodes.length, board?.planned.length, updateScrollState])
+
+  const scrollByColumns = useCallback((direction: -1 | 1) => {
+    scrollRef.current?.scrollBy({
+      left: direction * (COL_WIDTH + 22) * 2,
+      behavior: 'smooth',
+    })
+  }, [])
+
+  const handleBoardWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    // 卡片内容有自己的纵向滚动容器：滚轮落在卡片内时交给它处理，
+    // 避免禁用横向滚轮时影响批次较多时的纵向浏览。
+    const isColumnBody = event.target instanceof Element && event.target.closest(`.${styles.columnBody}`)
+    if (isColumnBody) {
+      if (Math.abs(event.deltaX) > 0) event.preventDefault()
+      return
+    }
+    // 横向视角只由左右按钮控制，阻止鼠标/触控板的横向 wheel 手势。
+    if (Math.abs(event.deltaX) > 0) {
+      event.preventDefault()
+    }
+  }
 
   const handleOpenDetail = (item: ProcessBoardExecution) => {
     setDetail({
@@ -416,129 +362,148 @@ export function ProcessBoard({ productId }: { productId: string }) {
     <MotionConfig reducedMotion="user">
       <style>{FLOW_STYLE}</style>
 
-      {/* 工具栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
-        <Select
-          placeholder="选择工艺路线"
-          style={{ width: 264 }}
-          value={routeId}
-          onChange={setRouteId}
-          options={(routes ?? []).map(r => ({
-            value: r.id,
-            label: `${r.route_name}（${ROUTE_STATUS_META[r.status]?.label ?? r.status}）`,
-          }))}
-        />
-        <div style={{ flex: 1 }} />
-        {routeId && (
-          <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-                fontSize: 12,
-                color: 'var(--color-steel)',
-              }}
-            >
-              {Object.entries(BOARD_STATE_META).map(([state, meta]) => (
-                <span key={state} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: meta.dot }} />
-                  {meta.label}
-                </span>
-              ))}
+      <div className={styles.processBoard}>
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarTitle}>
+            <div className={styles.toolbarEyebrow}>PROCESS FLOW</div>
+            <div className={styles.toolbarHeading}>工序流转看板</div>
+          </div>
+          <Select
+            className={styles.routeSelect}
+            placeholder="选择工艺路线"
+            value={routeId}
+            onChange={setRouteId}
+            options={(routes ?? []).map(r => ({
+              value: r.id,
+              label: `${r.route_name}（${ROUTE_STATUS_META[r.status]?.label ?? r.status}）`,
+            }))}
+          />
+          <div className={styles.toolbarSpacer} />
+          {routeId && (
+            <>
+              <div className={styles.legend} aria-label="批次状态图例">
+                {Object.entries(BOARD_STATE_META).map(([state, meta]) => (
+                  <span key={state} className={styles.legendItem}>
+                    <span className={styles.legendDot} style={{ background: meta.dot }} />
+                    {meta.label}
+                  </span>
+                ))}
+              </div>
+              <Tooltip title="刷新看板数据">
+                <Button
+                  size="small"
+                  aria-label="刷新看板数据"
+                  icon={<ReloadOutlined spin={isFetching} />}
+                  onClick={() => refetch()}
+                >
+                  刷新
+                </Button>
+              </Tooltip>
+            </>
+          )}
+        </div>
+
+        {!routeId ? (
+          <div className={styles.emptyState}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>请选择工艺路线版本</span>}
+            />
+          </div>
+        ) : isLoading ? (
+          <div className={styles.boardShell}>
+            <div className={styles.viewport}>
+              <BoardSkeleton />
             </div>
-            <Button
-              size="small"
-              icon={<ReloadOutlined spin={isFetching} />}
-              onClick={() => refetch()}
+          </div>
+        ) : isError ? (
+          <div className={styles.emptyState}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>看板数据加载失败</span>}
             >
-              刷新
-            </Button>
-          </>
+              <Button size="small" onClick={() => refetch()}>重试</Button>
+            </Empty>
+          </div>
+        ) : board && board.nodes.length === 0 ? (
+          <div className={styles.emptyState}>
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>该路线暂无工序节点</span>}
+            />
+          </div>
+        ) : board ? (
+          <div className={styles.boardShell}>
+            <div className={styles.summary}>
+              <span className={styles.routeName}>{board.route_name}</span>
+              <Tag
+                color={ROUTE_STATUS_META[board.route_status]?.color}
+                style={{ marginInlineEnd: 0, lineHeight: '18px' }}
+              >
+                {ROUTE_STATUS_META[board.route_status]?.label ?? board.route_status}
+              </Tag>
+              <div className={styles.summaryStats}>
+                <span className={styles.stat}>计划 <strong>{planned}</strong></span>
+                <span className={styles.stat}>进行中 <strong>{running}</strong></span>
+                <span className={styles.stat}>待流转 <strong>{waiting}</strong></span>
+                <span className={styles.stat}>已中止 <strong>{aborted}</strong></span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className={`${styles.navButton} ${styles.navButtonLeft}`}
+              aria-label="向前查看工序"
+              disabled={!scrollState.left}
+              onClick={() => scrollByColumns(-1)}
+            >
+              <LeftOutlined />
+            </button>
+            <button
+              type="button"
+              className={`${styles.navButton} ${styles.navButtonRight}`}
+              aria-label="向后查看工序"
+              disabled={!scrollState.right}
+              onClick={() => scrollByColumns(1)}
+            >
+              <RightOutlined />
+            </button>
+            {scrollState.left && <div className={`${styles.edgeFade} ${styles.edgeFadeLeft}`} />}
+            {scrollState.right && <div className={`${styles.edgeFade} ${styles.edgeFadeRight}`} />}
+
+            <div
+              ref={scrollRef}
+              className={styles.viewport}
+              role="region"
+              aria-label="工序流程看板，可横向浏览"
+              onWheel={handleBoardWheel}
+            >
+              <div className={styles.track}>
+                <PlannedColumn items={board.planned} delay={0} />
+                {board.nodes.map((node, i) => (
+                  <div key={node.id} style={{ display: 'contents' }}>
+                    <FlowConnector />
+                    <NodeColumn
+                      node={node}
+                      index={i}
+                      items={board.columns[node.id] ?? []}
+                      delay={0.08 + i * 0.07}
+                      onOpen={handleOpenDetail}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className={styles.boardHint}>
+              <span>点击左右方向按钮浏览后续工序</span>
+            </div>
+          </div>
+        ) : null}
+
+        {detail && (
+          <ExecutionDetailDrawer item={detail} onClose={() => setDetail(null)} />
         )}
       </div>
-
-      {!routeId ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>请选择工艺路线版本</span>}
-          style={{ marginTop: 90 }}
-        />
-      ) : isLoading ? (
-        <BoardSkeleton />
-      ) : isError ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>看板数据加载失败</span>}
-          style={{ marginTop: 90 }}
-        >
-          <Button size="small" onClick={() => refetch()}>重试</Button>
-        </Empty>
-      ) : board && board.nodes.length === 0 ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={<span style={{ color: 'var(--color-steel)', fontSize: 14 }}>该路线暂无工序节点</span>}
-          style={{ marginTop: 90 }}
-        />
-      ) : board ? (
-        <>
-          {/* 摘要条 */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              marginBottom: 12,
-              fontSize: 12,
-              color: 'var(--color-stone)',
-            }}
-          >
-            <span style={{ fontWeight: 600, color: 'var(--color-ink)', fontSize: 13 }}>
-              {board.route_name}
-            </span>
-            <Tag
-              color={ROUTE_STATUS_META[board.route_status]?.color}
-              style={{ marginInlineEnd: 0, lineHeight: '18px' }}
-            >
-              {ROUTE_STATUS_META[board.route_status]?.label ?? board.route_status}
-            </Tag>
-            <span>计划 {planned}</span>
-            <span>· 进行中 {running}</span>
-            <span>· 待流转 {waiting}</span>
-            <span>· 已中止 {aborted}</span>
-          </div>
-
-          {/* 看板主体 */}
-          <div style={{ overflowX: 'auto', paddingBottom: 6 }}>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 0,
-                width: 'max-content',
-                minWidth: '100%',
-              }}
-            >
-              <PlannedColumn items={board.planned} delay={0} />
-              {board.nodes.map((node, i) => (
-                <div key={node.id} style={{ display: 'contents' }}>
-                  <FlowConnector />
-                  <NodeColumn
-                    node={node}
-                    items={board.columns[node.id] ?? []}
-                    delay={0.08 + i * 0.07}
-                    onOpen={handleOpenDetail}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </>
-      ) : null}
-
-      {detail && (
-        <ExecutionDetailDrawer item={detail} onClose={() => setDetail(null)} />
-      )}
     </MotionConfig>
   )
 }

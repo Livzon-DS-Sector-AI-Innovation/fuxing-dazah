@@ -9,6 +9,7 @@ import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { ProductSidebar, CARD_STYLE } from '../shared/ProductSidebar'
 import { StageSummaryTable } from './StageSummaryTable'
 import { FieldTrendChart } from './FieldTrendChart'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 export function AnalyticsPage() {
   const [product, setProduct] = useState<Product | null>(null)
@@ -17,14 +18,7 @@ export function AnalyticsPage() {
     <ProductionQueryProvider>
       <ConfigProvider theme={antdTheme} locale={zhCN}>
         <div>
-          <div style={{ marginBottom: 20 }}>
-            <h2 style={{ fontSize: 22, fontWeight: 600, margin: '0 0 4px', color: '#1a1a1a' }}>
-              数据汇总
-            </h2>
-            <span style={{ color: '#787671', fontSize: 14 }}>
-              工段汇总矩阵与批次字段趋势分析
-            </span>
-          </div>
+          <PageHeading title="数据汇总" subtitle="工段汇总矩阵与批次字段趋势分析" />
           <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
             <ProductSidebar
               selectedId={product?.id ?? null}
