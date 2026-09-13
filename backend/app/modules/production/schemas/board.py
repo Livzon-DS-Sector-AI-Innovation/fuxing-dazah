@@ -68,6 +68,11 @@ class ProcessBoardExecutionOut(BaseModel):
     batch_unit: str | None
     equipments: list[EquipmentSnapshotOut] = []
     field_values: list[FieldValueOut] = []
+    # 工序周期超时监控快照；旧执行或样本不足时为空
+    estimated_duration_seconds: float | None = None
+    expected_finish_at: datetime | None = None
+    timeout_monitor_status: str | None = None
+    timeout_notified_at: datetime | None = None
 
 
 class ProcessBoardOut(BaseModel):

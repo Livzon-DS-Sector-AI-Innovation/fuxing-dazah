@@ -536,6 +536,7 @@ async def change_plan_order(
 
     # 校验不可变更的项（batch 已进入生产）
     blocked_ids: set[uuid.UUID] = set()
+    cancelled_batch_ids: set[uuid.UUID] = set()
     for item_id, batch in item_batch_map.items():
         if batch.status not in ("scheduled", "cancelled"):
             blocked_ids.add(item_id)
@@ -554,6 +555,7 @@ async def change_plan_order(
             if batch:
                 batch.status = "cancelled"
                 batch.updated_by = user.id if user else None
+                cancelled_batch_ids.add(batch.id)
             plan_allocs = await repo.get_plan_allocations_by_item(db, item_id)
             for pa in plan_allocs:
                 pa.is_deleted = True
@@ -671,6 +673,28 @@ async def change_plan_order(
     db.add(log)
 
     await db.flush()
+
+    # 计划项删除会联动批次报废；与批次服务的显式取消路径保持一致，
+    # 及时关闭该批次下尚未发送的工序超时监控，避免下一轮扫描误发。
+    if cancelled_batch_ids:
+        try:
+            from app.modules.production.service.timeout_service import (
+                resolve_timeout_for_batch,
+            )
+
+            async with db.begin_nested():
+                for cancelled_batch_id in cancelled_batch_ids:
+                    await resolve_timeout_for_batch(
+                        db,
+                        cancelled_batch_id,
+                        reason="batch_cancelled_by_plan_change",
+                    )
+        except Exception:  # noqa: BLE001
+            # 监控是旁路能力，不能让计划单变更事务因提醒表异常失败。
+            logger.exception(
+                "变更计划单时关闭工序超时监控失败: batch_ids=%s",
+                cancelled_batch_ids,
+            )
 
     # ── 需求履约重算 ──
     all_items = await repo.list_plan_items(db, order_id)
@@ -1067,6 +1091,8 @@ async def _is_stage_covered(
     db: AsyncSession, item: PlanItem, chain: list[Batch] | None = None,
 ) -> bool:
     """判定：配置工段 S 内全部工序节点，在谱系链（跳过 cancelled）上有 completed 执行。"""
+    if item.route_id is None:
+        return False
     nodes = await repo.get_route_nodes(db, item.route_id)
     if not nodes:
         return False

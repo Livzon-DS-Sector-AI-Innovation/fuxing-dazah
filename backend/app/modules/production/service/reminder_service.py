@@ -1,6 +1,6 @@
 """生产模块飞书提醒服务。
 
-计划单下达 / 计划批次预计开工 / 工序结束 / 计划单完成四类提醒的收集与发送。
+计划单下达 / 计划批次预计开工 / 工序结束 / 计划单完成 / 工序超时提醒的收集与发送。
 各类提醒支持启用开关与额外通知人员配置（NOTIFICATION_TYPES +
 notification_configs 表，无配置行按默认启用处理）。
 消息发送为尽力而为（fire-and-forget）：失败仅记日志，不影响业务事务。
@@ -10,6 +10,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -30,7 +31,10 @@ from app.modules.production.models.execution import NodeExecution
 from app.modules.production.models.planning import PlanAllocation, PlanChangeLog
 from app.modules.production.models.product import Product
 from app.modules.production.models.route import RouteNode
-from app.modules.production.repository.assignment import list_stage_assignments
+from app.modules.production.repository.assignment import (
+    list_node_assignments,
+    list_stage_assignments,
+)
 from app.modules.production.service.route_service import build_stage_order
 from app.platform.identity.models import User
 
@@ -74,6 +78,11 @@ NOTIFICATION_TYPES: dict[str, NotificationTypeDef] = {
             "计划单关闭且全部计划项非进行中/已分配时，"
             "通知所涉工艺路径全部工段负责人，附执行统计"
             "（计划项数、完成数、变更情况、各工序平均耗时）。",
+        ),
+        NotificationTypeDef(
+            "execution_timeout", "工序超时提醒",
+            "工序执行超过历史 P80 参考时长后，提醒本次执行负责人；"
+            "无可用负责人时回退到节点负责人或工段负责人。",
         ),
     )
 }
@@ -123,6 +132,13 @@ class StepCompletedReminder:
 # 同批次同工段卡（发批次负责人）的延迟发送秒数：给批次负责人缓冲，
 # 到期时若下一工序已开始则放弃发送（跨工段卡不受影响，始终立即发）
 STEP_COMPLETED_OWNER_DELAY_SECONDS = 30 * 60
+
+# 超时提醒发送侧的资源边界：扫描器可以批量认领，但飞书请求全局最多并发 10 个。
+TIMEOUT_SEND_CONCURRENCY = 10
+TIMEOUT_SEND_TIMEOUT_SECONDS = 15
+TIMEOUT_RETRY_BASE_SECONDS = 60
+TIMEOUT_RETRY_MAX_SECONDS = 30 * 60
+TIMEOUT_RETRY_LIMIT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,13 +666,31 @@ async def _notification_settings(
     result: dict[str, tuple[bool, list[uuid.UUID]]] = {}
     for code in NOTIFICATION_TYPES:
         row = configs.get(code)
-        extras = (
-            [uuid.UUID(uid) for uid in (row.extra_recipients or []) if uid]
-            if row is not None
-            else []
-        )
+        extras: list[uuid.UUID] = []
+        if row is not None:
+            for raw_id in row.extra_recipients or []:
+                try:
+                    if raw_id:
+                        extras.append(uuid.UUID(str(raw_id)))
+                except (TypeError, ValueError, AttributeError):
+                    logger.warning(
+                        "忽略无效的通知额外人员 user_id: notify_type=%s value=%r",
+                        code,
+                        raw_id,
+                    )
         result[code] = (row.is_enabled if row is not None else True, extras)
     return result
+
+
+async def notification_type_enabled(
+    db: AsyncSession,
+    notify_type: str,
+) -> bool:
+    """读取单个通知开关；无配置行按默认启用。"""
+
+    if notify_type not in NOTIFICATION_TYPES:
+        return False
+    return (await _notification_settings(db))[notify_type][0]
 
 
 def _merge_recipients(
@@ -725,6 +759,508 @@ async def _send_cards(
         ok = await send_user_card(oid, title=title, content=content)
         if not ok:
             logger.warning("提醒发送失败: user_id=%s", uid)
+
+
+_TIMEOUT_SEND_SEMAPHORE = asyncio.Semaphore(TIMEOUT_SEND_CONCURRENCY)
+
+
+def _format_duration(seconds: float | int | None) -> str:
+    """把秒数格式化为适合飞书卡片阅读的墙钟时长。"""
+
+    if seconds is None:
+        return "—"
+    total = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}小时{minutes:02d}分"
+    if minutes:
+        return f"{minutes}分{secs:02d}秒"
+    return f"{secs}秒"
+
+
+def _build_timeout_content(
+    context: repo.TimeoutMonitorContext,
+    *,
+    observed_at: datetime | None = None,
+) -> str:
+    """构建工序超时卡片正文。
+
+    文案只提示“可能超时”，不把统计阈值解释为生产异常；同时保留
+    偏离/返工标记，方便收件人判断是否需要核对现场状态。
+    """
+
+    alert = context.alert
+    execution = context.execution
+    batch = context.batch
+    observed = observed_at or now()
+    started_at = _to_local(execution.started_at)
+    expected_finish = _to_local(alert.expected_finish_at)
+    # 测试数据/历史手工补录可能是 naive datetime；统一到同一时区再相减，
+    # 避免后台提醒因 aware/naive 混用而丢失。
+    start_for_calc = execution.started_at
+    observed_for_calc = observed
+    if start_for_calc.tzinfo is None and observed_for_calc.tzinfo is not None:
+        start_for_calc = start_for_calc.replace(tzinfo=observed_for_calc.tzinfo)
+    elif start_for_calc.tzinfo is not None and observed_for_calc.tzinfo is None:
+        observed_for_calc = observed_for_calc.replace(tzinfo=start_for_calc.tzinfo)
+    elapsed = max(0.0, (observed_for_calc - start_for_calc).total_seconds())
+    status_marks: list[str] = []
+    if execution.is_deviation:
+        status_marks.append("偏离流程")
+    if execution.execution_seq > 1:
+        status_marks.append(f"第 {execution.execution_seq} 次执行（返工/重做）")
+
+    lines = [
+        "**工序可能超时，请确认并更新进度**",
+        "",
+        f"批次：{batch.batch_no}",
+        f"产品：{context.product_name}",
+        f"路线：{context.route.route_name}",
+        f"工序：{context.node.name}",
+        f"开始时间：{_fmt_dt(started_at) if started_at else '—'}",
+        f"预计完成：{_fmt_dt(expected_finish) if expected_finish else '—'}",
+        f"预计时长（P80）：{_format_duration(alert.estimated_duration_seconds)}",
+        f"当前已用时：{_format_duration(elapsed)}",
+    ]
+    if status_marks:
+        lines.append(f"执行标记：{'；'.join(status_marks)}")
+    if execution.deviation_reason:
+        lines.append(f"偏离原因：{execution.deviation_reason}")
+
+    # FRONTEND_URL 在本地测试/部分后台环境可能为空；相对路径仍可被
+    # 已登录用户复制到系统中打开，生产环境则生成完整可点击入口。
+    try:
+        from app.core.config import get_settings
+
+        frontend_url = get_settings().FRONTEND_URL.rstrip("/")
+    except Exception:  # noqa: BLE001
+        frontend_url = ""
+    detail_path = (
+        f"/production/batches?product={batch.product_id}&batch={batch.id}"
+    )
+    detail_url = f"{frontend_url}{detail_path}" if frontend_url else detail_path
+    lines.extend(("", f"[打开执行详情]({detail_url})"))
+    return "\n".join(lines)
+
+
+def _timeout_retry_delay(attempt_count: int) -> int:
+    """指数退避（上限 30 分钟），attempt_count 从 1 开始。"""
+
+    exponent = max(0, min(attempt_count - 1, 8))
+    delay = TIMEOUT_RETRY_BASE_SECONDS * (2 ** exponent)
+    return int(min(TIMEOUT_RETRY_MAX_SECONDS, delay))
+
+
+def _parse_recipient_snapshot(raw: list[str] | None) -> set[uuid.UUID]:
+    """解析已成功发送的 user_id 快照，忽略旧数据中的坏值。"""
+
+    result: set[uuid.UUID] = set()
+    for value in raw or []:
+        try:
+            result.add(uuid.UUID(str(value)))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return result
+
+
+async def _timeout_recipients(
+    db: AsyncSession,
+    context: repo.TimeoutMonitorContext,
+    extras: list[uuid.UUID],
+) -> tuple[list[uuid.UUID], dict[uuid.UUID, str]]:
+    """按 owner → node → stage 逐层兜底，并一次解析所需 open_id。
+
+    “命中”只看业务分配是否存在，不以飞书 open_id 是否已同步为条件：
+    一旦执行负责人存在，就不再向节点/工段负责人扩散；open_id 暂缺时由
+    发送重试记录问题，避免同一提醒在优先级之外额外打扰其他人。
+    """
+
+    execution = context.execution
+    batch = context.batch
+    node = context.node
+    extra_ids = list(dict.fromkeys(extras))
+    # 按优先级逐层查找。命中一层后立即停止，不再读取更低层的分配，
+    # 既符合兜底语义，也避免每条提醒无谓地查询整条路线的工段负责人。
+    owner_ids = [execution.owner_id] if execution.owner_id else []
+    selected = list(dict.fromkeys(owner_ids))
+    if not selected:
+        node_ids = [
+            row.user_id
+            for row in await list_node_assignments(
+                db, route_id=batch.route_id, node_id=node.id,
+            )
+        ]
+        selected = list(dict.fromkeys(node_ids))
+
+    if not selected and node.stage_name:
+        stage_ids = [
+            row.user_id
+            for row in await list_stage_assignments(db, route_id=batch.route_id)
+            if row.stage_name == node.stage_name
+        ]
+        selected = list(dict.fromkeys(stage_ids))
+    merged = _merge_recipients(selected, extra_ids)
+    open_ids = await _user_open_ids(db, merged)
+    return merged, open_ids
+
+
+async def _send_timeout_to_user(
+    open_id: str,
+    *,
+    title: str,
+    content: str,
+) -> bool:
+    """受全局并发上限和单次超时保护的单人发送。"""
+
+    from app.platform.integrations.feishu.notification import send_user_card
+
+    async with _TIMEOUT_SEND_SEMAPHORE:
+        try:
+            return bool(
+                await asyncio.wait_for(
+                    send_user_card(open_id, title=title, content=content),
+                    timeout=TIMEOUT_SEND_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("工序超时提醒发送异常: open_id=%s", open_id)
+            return False
+
+
+async def _timeout_lease_heartbeat(
+    alert_id: uuid.UUID,
+    lease_token: str,
+    stop_event: asyncio.Event,
+) -> None:
+    """在飞书网络调用期间续期告警租约。
+
+    扫描器一次可认领较多记录，且单条提醒可能包含多个收件人。若发送耗时
+    超过初始租约，另一实例会把同一记录重新认领，造成重复发送；心跳只在
+    实际网络调用期间运行，完成后立即由调用方停止，不会为每条执行常驻计时器。
+    """
+
+    # 局部导入避免 timeout_service → reminder_service 的调度依赖形成模块
+    # 初始化环；timeout_service 只在扫描派发时反向导入 notify 函数。
+    from app.modules.production.service.timeout_service import (
+        TIMEOUT_LEASE_RENEW_INTERVAL_SECONDS,
+        TIMEOUT_LEASE_SECONDS,
+    )
+
+    interval = min(
+        TIMEOUT_LEASE_RENEW_INTERVAL_SECONDS,
+        max(1, TIMEOUT_LEASE_SECONDS // 2),
+    )
+    while True:
+        try:
+            stopped = await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            if stopped:
+                return
+        except TimeoutError:
+            # 到续租时间，下面开启一个短数据库事务；Redis/调度器不参与。
+            pass
+        except asyncio.CancelledError:
+            raise
+
+        try:
+            async with async_session_factory() as db:
+                renewed = await repo.renew_timeout_monitor_lease(
+                    db,
+                    alert_id,
+                    lease_token=lease_token,
+                    lease_seconds=TIMEOUT_LEASE_SECONDS,
+                )
+                await db.commit()
+            # 记录已被完成/取消 resolver 关闭，或被另一个 worker 抢占；
+            # 继续续租没有意义，尽快退出让最终写回校验接管。
+            if not renewed:
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            # 一次续租失败不应中断提醒发送；下一轮仍会重试，最终写回
+            # 仍会校验租约令牌和到期时间。
+            logger.exception("工序超时提醒租约续期失败: alert_id=%s", alert_id)
+
+
+async def notify_timeout_alert(
+    alert_id: uuid.UUID,
+    lease_token: str | None = None,
+) -> None:
+    """发送一条已认领的工序超时提醒，并持久化重试进度。
+
+    读取/认领与飞书网络调用分离；网络调用结束后再次校验执行和批次状态，
+    防止完成或取消竞态下误发。每个执行的告警记录只会进入一次 sent。
+    """
+
+    try:
+        enabled, extras = await _read_settings_with_retry("execution_timeout")
+    except Exception:
+        logger.exception("读取工序超时提醒配置失败: alert_id=%s", alert_id)
+        # 交给 dispatch 层按当前租约记录一次失败并安排退避；直接返回会让
+        # sending 状态一直等到租约过期，既不计次数也无法观察失败原因。
+        raise
+
+    async with async_session_factory() as db:
+        context = await repo.get_timeout_monitor_context(db, alert_id)
+        if context is None:
+            # 记录已被软删/关联数据不存在：关闭 sending，避免租约循环重试。
+            await repo.mark_timeout_monitor_failed(
+                db,
+                alert_id,
+                error="timeout_context_not_found",
+                next_attempt_at=now(),
+                terminal=True,
+                lease_token=lease_token,
+            )
+            await db.commit()
+            return
+        alert = context.alert
+        observed_at = now()
+        # 认领令牌是发送 worker 的所有权证明。租约过期或已被另一实例
+        # 重新认领时，旧 worker 直接退出，不能覆盖新 worker 的状态。
+        if alert.status != "sending":
+            return
+        if lease_token is not None and alert.lease_token != lease_token:
+            logger.info("跳过已失效的工序超时提醒租约: alert_id=%s", alert_id)
+            return
+        effective_lease_token = lease_token or alert.lease_token
+        lease_until = alert.lease_until
+        if lease_until is not None:
+            compare_lease_until = lease_until
+            compare_observed_at = observed_at
+            if compare_lease_until.tzinfo is None and compare_observed_at.tzinfo is not None:
+                compare_lease_until = compare_lease_until.replace(
+                    tzinfo=compare_observed_at.tzinfo,
+                )
+            elif compare_lease_until.tzinfo is not None and compare_observed_at.tzinfo is None:
+                compare_observed_at = compare_observed_at.replace(
+                    tzinfo=compare_lease_until.tzinfo,
+                )
+            if compare_lease_until <= compare_observed_at:
+                logger.info("跳过已过期的工序超时提醒租约: alert_id=%s", alert_id)
+                return
+        if (
+            context.execution.status != "in_progress"
+            or context.batch.status in ("completed", "cancelled")
+        ):
+            await repo.resolve_timeout_monitor(
+                db,
+                alert_id,
+                resolution_reason="execution_or_batch_finished",
+                lease_token=effective_lease_token,
+            )
+            await db.commit()
+            return
+        if not enabled:
+            await repo.defer_timeout_monitor(
+                db,
+                alert_id,
+                next_attempt_at=now() + timedelta(minutes=10),
+                reason="notification_disabled",
+                lease_token=effective_lease_token,
+                require_active_execution=True,
+            )
+            await db.commit()
+            return
+        expected_for_compare = alert.expected_finish_at
+        if expected_for_compare.tzinfo is None and observed_at.tzinfo is not None:
+            expected_for_compare = expected_for_compare.replace(tzinfo=observed_at.tzinfo)
+        elif expected_for_compare.tzinfo is not None and observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=expected_for_compare.tzinfo)
+        if observed_at < expected_for_compare:
+            await repo.defer_timeout_monitor(
+                db,
+                alert_id,
+                next_attempt_at=expected_for_compare,
+                reason="not_due",
+                lease_token=effective_lease_token,
+                require_active_execution=True,
+            )
+            await db.commit()
+            return
+        recipient_ids, open_ids = await _timeout_recipients(db, context, extras)
+        already_sent = _parse_recipient_snapshot(alert.notified_recipient_ids)
+        sendable_ids = [uid for uid in recipient_ids if uid in open_ids]
+        # 没有同步飞书 open_id 的收件人也属于本次提醒的目标：不能因为
+        # 同一批次中另一个收件人可发送，就把该目标静默当成“已发送”。
+        # 已在之前重试中成功的收件人即使后来被删除/脱离通讯录，也不应
+        # 再次阻断本条提醒的终态。
+        unavailable_ids = [
+            uid for uid in recipient_ids
+            if uid not in open_ids and uid not in already_sent
+        ]
+        pending_ids = [uid for uid in sendable_ids if uid not in already_sent]
+        content = _build_timeout_content(context, observed_at=observed_at)
+        # 会话内只保留纯数据，网络调用在事务外完成，避免长事务占用连接。
+        attempt_count = int(alert.attempt_count or 0)
+
+    if not recipient_ids:
+        # 没有任何业务收件人时按失败处理；达到上限后进入 failed 终态并留痕。
+        terminal = attempt_count >= TIMEOUT_RETRY_LIMIT
+        async with async_session_factory() as db:
+            await repo.mark_timeout_monitor_failed(
+                db,
+                alert_id,
+                error="no_feishu_recipient",
+                next_attempt_at=(
+                    now()
+                    if terminal
+                    else now() + timedelta(seconds=_timeout_retry_delay(attempt_count))
+                ),
+                terminal=terminal,
+                recipient_user_ids=sorted(already_sent, key=str) or None,
+                lease_token=effective_lease_token,
+                require_active_execution=True,
+            )
+            await db.commit()
+        return
+
+    if not pending_ids and not unavailable_ids:
+        # 重试期间所有收件人都已成功，补写 sent（理论上通常已在上次调用完成）。
+        async with async_session_factory() as db:
+            await repo.mark_timeout_monitor_notified(
+                db,
+                alert_id,
+                notified_at=now(),
+                recipient_user_ids=recipient_ids,
+                lease_token=effective_lease_token,
+            )
+            await db.commit()
+        return
+
+    if not sendable_ids and unavailable_ids:
+        # 有目标收件人尚未同步 open_id；保留已成功快照，按失败重试，
+        # 让通讯录同步后仍有机会补发，而不是误标为 sent。
+        terminal = attempt_count >= TIMEOUT_RETRY_LIMIT
+        async with async_session_factory() as db:
+            await repo.mark_timeout_monitor_failed(
+                db,
+                alert_id,
+                error=f"no_feishu_recipient:{len(unavailable_ids)}",
+                next_attempt_at=(
+                    now()
+                    if terminal
+                    else now() + timedelta(seconds=_timeout_retry_delay(attempt_count))
+                ),
+                terminal=terminal,
+                recipient_user_ids=sorted(already_sent, key=str) or None,
+                lease_token=effective_lease_token,
+                require_active_execution=True,
+            )
+            await db.commit()
+        return
+
+    # 仅在实际网络发送期间续租；没有租令牌的兼容性/手工调用不启动心跳。
+    heartbeat_stop: asyncio.Event | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
+    if effective_lease_token:
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            _timeout_lease_heartbeat(
+                alert_id,
+                effective_lease_token,
+                heartbeat_stop,
+            )
+        )
+    try:
+        send_results = await asyncio.gather(
+            *(
+                _send_timeout_to_user(
+                    open_ids[uid],
+                    title="工序超时提醒",
+                    content=content,
+                )
+                if uid in open_ids
+                else asyncio.sleep(0, result=False)
+                for uid in pending_ids
+            ),
+            return_exceptions=False,
+        )
+    finally:
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+    successful = [uid for uid, ok in zip(pending_ids, send_results, strict=True) if ok]
+    successful_union = sorted(already_sent | set(successful), key=str)
+
+    async with async_session_factory() as db:
+        # 网络调用期间执行可能已经完成/中止；发送前后的双重校验都保留，
+        # 这里是最终闸门，完成后不再把记录标成已发送。
+        latest = await repo.get_timeout_monitor_context(db, alert_id)
+        if latest is None:
+            await db.commit()
+            return
+        latest_lease = latest.alert.lease_token
+        if (
+            latest.alert.status != "sending"
+            or effective_lease_token is not None
+            and latest_lease != effective_lease_token
+        ):
+            # 另一 worker 已接管或 resolver 已关闭；旧发送结果不可再写回。
+            await db.commit()
+            return
+        latest_lease_until = latest.alert.lease_until
+        if latest_lease_until is not None:
+            latest_compare_until = latest_lease_until
+            latest_compare_now = now()
+            if latest_compare_until.tzinfo is None and latest_compare_now.tzinfo is not None:
+                latest_compare_until = latest_compare_until.replace(
+                    tzinfo=latest_compare_now.tzinfo,
+                )
+            elif latest_compare_until.tzinfo is not None and latest_compare_now.tzinfo is None:
+                latest_compare_now = latest_compare_now.replace(
+                    tzinfo=latest_compare_until.tzinfo,
+                )
+            if latest_compare_until <= latest_compare_now:
+                await db.commit()
+                return
+        if (
+            latest.execution.status != "in_progress"
+            or latest.batch.status in ("completed", "cancelled")
+        ):
+            await repo.resolve_timeout_monitor(
+                db,
+                alert_id,
+                resolution_reason="execution_or_batch_finished",
+                lease_token=effective_lease_token,
+            )
+        elif len(successful) == len(pending_ids) and not unavailable_ids:
+            await repo.mark_timeout_monitor_notified(
+                db,
+                alert_id,
+                notified_at=now(),
+                recipient_user_ids=successful_union,
+                lease_token=effective_lease_token,
+            )
+        else:
+            terminal = attempt_count >= TIMEOUT_RETRY_LIMIT
+            await repo.mark_timeout_monitor_failed(
+                db,
+                alert_id,
+                error=(
+                    "feishu_send_failed:"
+                    f"{len(pending_ids) - len(successful)}"
+                    f";no_feishu_recipient:{len(unavailable_ids)}"
+                ),
+                next_attempt_at=(
+                    now()
+                    if terminal
+                    else now() + timedelta(seconds=_timeout_retry_delay(attempt_count))
+                ),
+                terminal=terminal,
+                recipient_user_ids=successful_union,
+                lease_token=effective_lease_token,
+                require_active_execution=True,
+            )
+        await db.commit()
+    logger.info(
+        "工序超时提醒处理完成: alert_id=%s success=%d/%d attempt=%d",
+        alert_id, len(successful), len(pending_ids), attempt_count,
+    )
 
 
 async def _row_status_is(

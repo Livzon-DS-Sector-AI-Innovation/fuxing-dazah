@@ -10,6 +10,8 @@ export interface StepCycleStat {
   n: number
   /** 平均耗时（小时） */
   avg_hours: number
+  /** P80 耗时（小时）；样本不足或尚未计算时为空 */
+  p80_hours?: number | null
   /** 最短耗时（小时） */
   min_hours: number | null
   /** 最长耗时（小时） */

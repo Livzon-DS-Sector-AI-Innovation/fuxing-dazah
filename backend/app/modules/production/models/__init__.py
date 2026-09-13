@@ -35,6 +35,7 @@ from app.modules.production.models.route import (
     RouteEdge,
     RouteNode,
 )
+from app.modules.production.models.timeout import NodeExecutionTimeoutAlert
 
 __all__ = [
     "Batch",
@@ -51,6 +52,7 @@ __all__ = [
     "NodeAssignment",
     "NodeExecution",
     "NodeExecutionEquipment",
+    "NodeExecutionTimeoutAlert",
     "NodeFieldValue",
     "NodeFieldDef",
     "NotificationConfig",

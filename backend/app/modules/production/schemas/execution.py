@@ -138,6 +138,11 @@ class ExecutionOut(BaseModel):
     # service 组装批次详情时按当前用户填充（权限+状态，"现在就能补"语义）；
     # None=未计算（complete/backfill 等单条返回场景不填），前端按 falsy 处理
     can_backfill: bool | None = None
+    # 工序周期超时监控快照；旧执行或样本不足时为空
+    estimated_duration_seconds: float | None = None
+    expected_finish_at: datetime | None = None
+    timeout_monitor_status: str | None = None
+    timeout_notified_at: datetime | None = None
 
 
 class NodeExecutionListItem(BaseModel):
@@ -155,3 +160,8 @@ class NodeExecutionListItem(BaseModel):
     finished_at: datetime | None
     is_deviation: bool
     abnormal_count: int
+    # 工序周期超时监控快照；旧执行或样本不足时为空
+    estimated_duration_seconds: float | None = None
+    expected_finish_at: datetime | None = None
+    timeout_monitor_status: str | None = None
+    timeout_notified_at: datetime | None = None

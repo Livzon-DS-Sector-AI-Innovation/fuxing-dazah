@@ -36,6 +36,10 @@ export interface WorkbenchItem {
   /** 当前用户是否可操作该批次（归属他人=仅读） */
   can_operate: boolean
   started_at: string | null
+  estimated_duration_seconds?: number | null
+  expected_finish_at?: string | null
+  timeout_monitor_status?: string | null
+  timeout_notified_at?: string | null
   is_last_in_stage: boolean
   start_type?: string | null  // pending_start 卡片: normal | parallel | rework
   stage_nodes: StageNodeInfo[]

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Table, Tag, Typography, Alert, Select, Space, Empty, Skeleton } from 'antd'
+import { Card, Table, Tag, Typography, Alert, Select, Space, Empty, Skeleton, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { BarChartOutlined, ClockCircleOutlined } from '@ant-design/icons'
 import { fetchStepCycleClient } from '@/lib/api/production-client'
@@ -19,7 +19,7 @@ interface StepCycleRouteGroup {
   totalSamples: number
 }
 
-function fmtHours(h: number | null): string {
+function fmtHours(h: number | null | undefined): string {
   if (h == null) return '—'
   if (h < 1) return `${Math.round(h * 60)} 分钟`
   return `${h.toFixed(1)} 小时`
@@ -54,6 +54,21 @@ function buildColumns(totalHours: number): ColumnsType<StepCycleStat> {
           <Text strong style={{ color: '#5645d4' }}>{fmtHours(r.avg_hours)}</Text>
         </Space>
       ),
+    },
+    {
+      title: (
+        <Tooltip title="当前分析窗口内有效执行的 P80（80%的记录不超过该时长）；超时监控优先采用近180天 P80，样本不足5条时回退近一年">
+          P80 参考
+        </Tooltip>
+      ),
+      dataIndex: 'p80_hours',
+      width: 116,
+      render: (v: number | null | undefined) =>
+        v == null ? (
+          <Text type="secondary">—</Text>
+        ) : (
+          <Text strong style={{ color: '#a66b00' }}>{fmtHours(v)}</Text>
+        ),
     },
     {
       title: '耗时占比',
@@ -291,7 +306,7 @@ export default function StepCyclePanel({ products }: Props) {
                         {fmtHours(group.totalHours)}
                       </Text>
                     </Table.Summary.Cell>
-                    <Table.Summary.Cell index={2} colSpan={4} />
+                    <Table.Summary.Cell index={2} colSpan={5} />
                   </Table.Summary.Row>
                 )}
               />

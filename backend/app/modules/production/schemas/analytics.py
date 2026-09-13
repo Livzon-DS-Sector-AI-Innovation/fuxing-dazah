@@ -21,6 +21,8 @@ class StepCycleStat(BaseModel):
     avg_hours: float
     min_hours: float | None
     max_hours: float | None
+    # P80 参考时长（小时），用于工序超时监控；样本不足时为空
+    p80_hours: float | None = None
 
 
 class StepCycleResponse(BaseModel):

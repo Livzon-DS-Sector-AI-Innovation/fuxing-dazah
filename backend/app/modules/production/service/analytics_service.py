@@ -1,5 +1,6 @@
 """生产分析服务。"""
 
+import math
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -27,6 +28,21 @@ from app.modules.production.service import computed_service, lineage_service
 from app.modules.production.service.lineage_service import MergedFieldDef, NodeFamily
 
 _MIN_SAMPLE_FOR_CONFIDENCE = 30
+_MIN_SAMPLE_FOR_TIMEOUT = 5
+
+
+def _percentile(values: list[float], quantile: float) -> float | None:
+    """按 PostgreSQL ``percentile_cont`` 语义计算线性插值分位数。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
 
 
 async def _published_route_graphs(
@@ -129,6 +145,12 @@ async def get_step_cycle_analytics(
             avg_hours=round(sum(values) / len(values), 2) if values else 0.0,
             min_hours=round(min(values), 2) if values else None,
             max_hours=round(max(values), 2) if values else None,
+            p80_hours=(
+                round(p80, 2)
+                if len(values) >= _MIN_SAMPLE_FOR_TIMEOUT
+                and (p80 := _percentile(values, 0.8)) is not None
+                else None
+            ),
         )
         for target_route, graph in route_graphs
         for family in graph.families
@@ -199,7 +221,10 @@ async def get_field_trend(
     for v in values:
         if v.value_numeric is None or v.filled_at is None:
             continue
-        batch_no = batch_no_by_id.get(batch_by_exec.get(v.execution_id))
+        batch_id = batch_by_exec.get(v.execution_id)
+        if batch_id is None:
+            continue
+        batch_no = batch_no_by_id.get(batch_id)
         if batch_no is None:
             continue
         points_by_field.setdefault(v.field_key, []).append(

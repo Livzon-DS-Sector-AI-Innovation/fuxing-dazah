@@ -29,7 +29,8 @@ function BatchesPageInner() {
   const selectedProductId = searchParams.get('product')
   const activeTab = searchParams.get('tab') ?? 'batches'
   const [createOpen, setCreateOpen] = useState(false)
-  const [detailBatchId, setDetailBatchId] = useState<string | null>(null)
+  // 超时提醒卡片通过 ?batch=<id> 深链接到批次详情；读取初始查询参数后直接打开抽屉。
+  const [detailBatchId, setDetailBatchId] = useState<string | null>(() => searchParams.get('batch'))
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string } | null>(null)
   const [deriveBatchId, setDeriveBatchId] = useState<string | null>(null)

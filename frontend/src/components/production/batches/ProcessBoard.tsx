@@ -355,6 +355,10 @@ export function ProcessBoard({ productId }: { productId: string }) {
       finished_at: item.finished_at,
       is_deviation: item.is_deviation,
       abnormal_count: item.abnormal_count,
+      estimated_duration_seconds: item.estimated_duration_seconds,
+      expected_finish_at: item.expected_finish_at,
+      timeout_monitor_status: item.timeout_monitor_status,
+      timeout_notified_at: item.timeout_notified_at,
     })
   }
 

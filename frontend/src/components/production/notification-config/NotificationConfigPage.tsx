@@ -20,6 +20,7 @@ import {
   FlagOutlined,
   RocketOutlined,
   UnorderedListOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { antdTheme } from '@/lib/antd-theme'
@@ -86,6 +87,12 @@ const NOTIFY_TYPE_META: Record<string, NotifyTypeMeta> = {
     icon: UnorderedListOutlined,
     color: '#0a1530',
     triggerLabel: '每日 08:31',
+    triggerTone: 'warning',
+  },
+  execution_timeout: {
+    icon: WarningOutlined,
+    color: '#dd5b00',
+    triggerLabel: '每 10 分钟扫描',
     triggerTone: 'warning',
   },
 }

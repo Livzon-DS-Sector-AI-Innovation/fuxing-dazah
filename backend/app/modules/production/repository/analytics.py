@@ -50,7 +50,9 @@ async def list_step_cycle_samples(
             NodeExecution.node_id.in_(node_ids),
             Batch.route_id.in_(route_ids),
             NodeExecution.status == "completed",
+            NodeExecution.started_at.is_not(None),
             NodeExecution.finished_at.is_not(None),
+            NodeExecution.finished_at > NodeExecution.started_at,
             NodeExecution.execution_seq == 1,
             NodeExecution.is_deleted == False,  # noqa: E712
         )
