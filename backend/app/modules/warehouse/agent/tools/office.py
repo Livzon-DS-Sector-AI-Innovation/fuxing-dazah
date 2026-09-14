@@ -466,13 +466,36 @@ async def send_card(
 
 
 async def create_reminder(
-    time: str,
-    content: str,
+    time: str | None = None,
+    content: str = "",
     target: str | None = None,
+    in_seconds: int | None = None,
     _ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """设置到点提醒（到点自动发提醒卡片；time 传 ISO 格式的未来时间）。"""
+    """设置到点提醒（到点自动发提醒卡片）。
+
+    相对时间（「N 秒/N 分钟/N 小时后」）必须传 ``in_seconds``（整数秒），
+    由服务端换算触发时刻——LLM 自行把相对表达换算成钟表时间易出错
+    （2026-09-14 真机实测：「30 秒后」被算成下一个整点 :00:30，迟到 3 分钟）。
+    钟表时间（「明早 8 点」）才传 ``time``（ISO，北京时间解释）。
+    """
     ctx = _ctx or {}
+    if in_seconds is not None:
+        try:
+            delay = int(in_seconds)
+        except (TypeError, ValueError):
+            return {"error": f"in_seconds {in_seconds!r} 需为整数秒"}
+        if delay <= 0:
+            return {"error": "in_seconds 必须为正整数（秒）"}
+        if delay > 30 * 24 * 3600:
+            return {"error": "in_seconds 最大支持 30 天（2592000 秒）"}
+        time = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat()
+    elif not time:
+        return {
+            "error": "缺少触发时间",
+            "hint": "相对表达（「30 秒后」「10 分钟后」）传 in_seconds（整数秒）；"
+            "钟表时间（「明早 8 点」）传 time（ISO 格式）",
+        }
     return await schedule_reminder(
         time=time,
         content=content,
@@ -529,8 +552,9 @@ OFFICE_TOOLS_SCHEMA: list[dict[str, Any]] = [
         "function": {
             "name": "create_reminder",
             "description": (
-                "设置到点提醒（用户说「到点提醒我…」时用）：到点自动向目标发送"
-                "提醒卡片。time 必须是未来的 ISO 时间，相对表达按今天推算。"
+                "设置到点提醒（用户说「到点提醒我…」「N 分钟后提醒我」时用）："
+                "到点自动向目标发送提醒卡片。相对表达（「30 秒后」「10 分钟后」）"
+                "必须传 in_seconds，钟表时间（「明早 8 点」）才传 time，二者传其一。"
             ),
             "parameters": {
                 "type": "object",
@@ -538,8 +562,18 @@ OFFICE_TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "time": {
                         "type": "string",
                         "description": (
-                            "触发时间，ISO 格式（如 2026-09-05T08:00:00，按北京时间"
-                            "解释；相对表达如「明早 8 点」需换算成未来时间）"
+                            "钟表时间的触发时刻，ISO 格式（如 2026-09-05T08:00:00，"
+                            "按北京时间解释）。仅用于「明天/几点的钟表表达」；"
+                            "「N 秒/N 分钟/N 小时后」等相对表达禁止用本参数，"
+                            "必须用 in_seconds（勿自行换算钟表时间）"
+                        ),
+                    },
+                    "in_seconds": {
+                        "type": "integer",
+                        "description": (
+                            "相对时间的延时秒数（如「30 秒后」→ 30、「10 分钟后」"
+                            "→ 600）。用户用「后」表达延时时必须用本参数，"
+                            "禁止自行换算成 time"
                         ),
                     },
                     "content": {
@@ -554,7 +588,7 @@ OFFICE_TOOLS_SCHEMA: list[dict[str, Any]] = [
                         ),
                     },
                 },
-                "required": ["time", "content"],
+                "required": ["content"],
             },
         },
     },

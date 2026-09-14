@@ -371,6 +371,48 @@ async def test_cancel_reminder(
     assert await office_tools.cancel_reminder(reminder_id) is False  # 已取消，不可再取消
 
 
+async def test_create_reminder_in_seconds_relative(
+    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+) -> None:
+    """相对时间 in_seconds：服务端换算触发时刻（LLM 不做时钟算术），短间隔到点触发。"""
+    before = datetime.now(UTC)
+    result = await office_tools.create_reminder(
+        content="该盘点了",
+        in_seconds=1,
+        _ctx={"open_id": "ou_reminder_user", "chat_id": "oc_rem_chat"},
+    )
+    assert "error" not in result
+    trigger = datetime.fromisoformat(result["trigger_at"])
+    computed_delay = (trigger - before).total_seconds()
+    assert 0.9 <= computed_delay <= 3  # ≈1s，留执行余量
+
+    await asyncio.sleep(2.5)
+    reminder_payloads = [
+        p for p in captured_sends
+        if "到点提醒" in _card_of(p)["header"]["title"]["content"]
+    ]
+    assert any(
+        "该盘点了" in json.dumps(_card_of(p), ensure_ascii=False) for p in reminder_payloads
+    )
+    draft = await office_db.get(WarehouseAgentDraft, uuid.UUID(str(result["reminder_id"])))
+    assert draft is not None
+    assert draft.status == "fired"
+
+
+async def test_create_reminder_in_seconds_invalid() -> None:
+    """in_seconds 非法值 / 相对与钟表时间都缺省返回 error 引导。"""
+    ctx: dict[str, Any] = {"open_id": "ou_reminder_user", "chat_id": "oc_rem_chat"}
+    negative = await office_tools.create_reminder(content="早了", in_seconds=-5, _ctx=ctx)
+    assert "error" in negative and "正整数" in negative["error"]
+
+    not_int = await office_tools.create_reminder(content="非整数", in_seconds="abc", _ctx=ctx)
+    assert "error" in not_int and "整数" in not_int["error"]
+
+    missing = await office_tools.create_reminder(content="啥时间都没给", _ctx=ctx)
+    assert "error" in missing
+    assert "in_seconds" in missing["hint"]
+
+
 # ══ live 主接缝：真 LLM 全链路 ══
 
 
