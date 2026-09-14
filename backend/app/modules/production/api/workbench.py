@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import success_response
 from app.modules.production.schemas.assignment import ReceiveAndStartIn
+from app.modules.production.schemas.batch import BatchCreate
 from app.modules.production.service import workbench_service
 from app.platform.permission.deps import RequireUser
 
@@ -41,6 +42,20 @@ async def receive_and_start(
 ):
     result = await workbench_service.receive_and_start(db, body, current_user)
     return success_response(data=result)
+
+
+@router.post("/workbench/start-batch", summary="工作台手动建批（仅路线第一工段负责人）")
+async def start_batch(
+    body: BatchCreate,
+    current_user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+):
+    batch = await workbench_service.start_batch(db, body, current_user)
+    return success_response(data={
+        "id": str(batch.id),
+        "batch_no": batch.batch_no,
+        "status": batch.status,
+    })
 
 
 @router.post("/workbench/activate-planned/{batch_id}", summary="激活计划批次为待开工")

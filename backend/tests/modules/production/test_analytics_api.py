@@ -1,9 +1,11 @@
 """字段趋势端点测试。
 
 覆盖场景：
-- 同路线同节点多批次完成，各填字段 → 按 filled_at 升序返回 batch_no/value
-- 无数据 → []
-- 字段不存在 → []
+- 节点下多个数值字段分别成序列，字段内按 filled_at 升序
+- 某批某字段未填 → 该字段序列少一个点（其余字段不受影响）
+- 字段定义存在但从未填报 / 无执行 / 节点不存在 → 不进序列
+- 回流：同批同节点多条 completed 执行 → 取 finished_at 最新一次的值
+- 非数值字段即使有值也不进序列
 """
 
 import uuid
@@ -34,96 +36,195 @@ from tests.modules.production.test_computed_service import (
 )
 
 
-async def _fill_field(
+async def _fill_fields(
     db: AsyncSession,
     batch_id: uuid.UUID,
     node_id: uuid.UUID,
-    field_key: str,
-    value: float,
+    field_values: dict[str, float],
     filled_at: datetime,
+    *,
+    seq: int = 1,
+    finished_at: datetime | None = None,
 ) -> None:
-    """手造一次完成执行并填写字段，精确控制填写时间。"""
-    ex = await _add_execution(db, batch_id, node_id, field_values={field_key: value})
-    fv = (
+    """手造一次完成执行并填写多个字段，精确控制执行完成时间与填写时间。"""
+    ex = await _add_execution(
+        db, batch_id, node_id,
+        seq=seq, finished_at=finished_at, field_values=field_values,
+    )
+    rows = (
         await db.execute(
             select(NodeFieldValue).where(NodeFieldValue.execution_id == ex.id)
         )
-    ).scalar_one()
-    fv.filled_at = filled_at
+    ).scalars().all()
+    for fv in rows:
+        fv.filled_at = filled_at
     await db.flush()
+    return ex
 
 
 class TestFieldTrend:
-    async def test_field_trend_returns_time_series(
+    async def test_field_trend_multi_field_series(
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
-        """同路线同节点两个批次完成并填 A2 → 按 filled_at 升序返回 batch_no/value。"""
+        """节点下两个数值字段分别成序列：A1 两批都有、B1 只有一批（缺失即少点）。"""
         ctx = await _make_route_ctx(db_session)
         b1 = await _make_batch(db_session, ctx)
         b2 = await _make_batch(db_session, ctx)
-        # 故意乱序填写：b2 先填（08:00）、b1 后填（10:00），验证按填写时间升序
-        await _fill_field(
-            db_session, b2.id, ctx["node_g2"].id, "A2", 7.0,
+        # 故意乱序填写：b2 先填（08:00 只填 A1）、b1 后填（10:00 填 A1+B1）
+        await _fill_fields(
+            db_session, b2.id, ctx["node_g1"].id, {"A1": 7.0},
             datetime(2026, 8, 1, 8, 0, tzinfo=UTC),
         )
-        await _fill_field(
-            db_session, b1.id, ctx["node_g2"].id, "A2", 5.0,
+        await _fill_fields(
+            db_session, b1.id, ctx["node_g1"].id, {"A1": 5.0, "B1": 3.0},
             datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
         )
         resp = await client.get(
             "/api/v1/production/analytics/field-trend",
-            params={
-                "route_id": str(ctx["route"].id),
-                "node_code": "G2",
-                "field_key": "A2",
-            },
+            params={"route_id": str(ctx["route"].id), "node_code": "G1"},
         )
         assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-        assert [d["batch_no"] for d in data] == [b2.batch_no, b1.batch_no]
-        assert [d["value"] for d in data] == [7.0, 5.0]
-        times = [datetime.fromisoformat(d["filled_at"]) for d in data]
+        series = resp.json()["data"]["series"]
+        # 序列按字段定义顺序（A1 在前、B1 在后）
+        assert [s["field_key"] for s in series] == ["A1", "B1"]
+        assert [s["field_label"] for s in series] == ["投料量", "补料量"]
+        a1, b1_series = series
+        # A1：b2（08:00 先填）在前、b1 在后；B1 只有 b1 一个点
+        assert [p["batch_no"] for p in a1["data_points"]] == [b2.batch_no, b1.batch_no]
+        assert [p["value"] for p in a1["data_points"]] == [7.0, 5.0]
+        assert [p["batch_no"] for p in b1_series["data_points"]] == [b1.batch_no]
+        assert [p["value"] for p in b1_series["data_points"]] == [3.0]
+        times = [datetime.fromisoformat(p["filled_at"]) for p in a1["data_points"]]
         assert times == [
             datetime(2026, 8, 1, 8, 0, tzinfo=UTC),
             datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
         ]
 
-    async def test_field_trend_empty(
+    async def test_field_trend_fields_without_data_excluded(
         self, client: AsyncClient, db_session: AsyncSession,
     ) -> None:
-        """无任何执行 → []。"""
-        ctx = await _make_route_ctx(db_session)
-        resp = await client.get(
-            "/api/v1/production/analytics/field-trend",
-            params={
-                "route_id": str(ctx["route"].id),
-                "node_code": "G2",
-                "field_key": "A2",
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["data"] == []
-
-    async def test_field_trend_unknown_field_returns_empty(
-        self, client: AsyncClient, db_session: AsyncSession,
-    ) -> None:
-        """字段不存在 → []。"""
+        """字段定义存在但从未填报 → 不进序列（全空字段不出现在图例里）。"""
         ctx = await _make_route_ctx(db_session)
         b1 = await _make_batch(db_session, ctx)
-        await _fill_field(
-            db_session, b1.id, ctx["node_g2"].id, "A2", 5.0,
+        await _fill_fields(
+            db_session, b1.id, ctx["node_g1"].id, {"A1": 5.0},
             datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
         )
         resp = await client.get(
             "/api/v1/production/analytics/field-trend",
-            params={
-                "route_id": str(ctx["route"].id),
-                "node_code": "G2",
-                "field_key": "NOPE",
-            },
+            params={"route_id": str(ctx["route"].id), "node_code": "G1"},
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["data"] == []
+        assert [s["field_key"] for s in resp.json()["data"]["series"]] == ["A1"]
+
+    async def test_field_trend_empty(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """无任何执行 → series 为空。"""
+        ctx = await _make_route_ctx(db_session)
+        resp = await client.get(
+            "/api/v1/production/analytics/field-trend",
+            params={"route_id": str(ctx["route"].id), "node_code": "G1"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["series"] == []
+
+    async def test_field_trend_unknown_node_returns_empty(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """节点不存在 → series 为空。"""
+        ctx = await _make_route_ctx(db_session)
+        resp = await client.get(
+            "/api/v1/production/analytics/field-trend",
+            params={"route_id": str(ctx["route"].id), "node_code": "NOPE"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["series"] == []
+
+    async def test_field_trend_rework_uses_latest_completed_execution(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """回流：同批同节点两条 completed 执行 → 取 finished_at 最新一次的字段值。"""
+        ctx = await _make_route_ctx(db_session)
+        b1 = await _make_batch(db_session, ctx)
+        t_older = datetime(2026, 8, 1, 8, 0, tzinfo=UTC)
+        t_latest = datetime(2026, 8, 2, 8, 0, tzinfo=UTC)
+        # 先插最新一次（seq=2）、后插旧一次（seq=1），与工段汇总局域一致
+        await _fill_fields(
+            db_session, b1.id, ctx["node_g1"].id, {"A1": 20.0, "B1": 2.0},
+            datetime(2026, 8, 2, 9, 0, tzinfo=UTC), seq=2, finished_at=t_latest,
+        )
+        await _fill_fields(
+            db_session, b1.id, ctx["node_g1"].id, {"A1": 10.0, "B1": 1.0},
+            datetime(2026, 8, 1, 9, 0, tzinfo=UTC), seq=1, finished_at=t_older,
+        )
+        resp = await client.get(
+            "/api/v1/production/analytics/field-trend",
+            params={"route_id": str(ctx["route"].id), "node_code": "G1"},
+        )
+        assert resp.status_code == 200, resp.text
+        series = {s["field_key"]: s for s in resp.json()["data"]["series"]}
+        assert [p["value"] for p in series["A1"]["data_points"]] == [20.0]
+        assert [p["value"] for p in series["B1"]["data_points"]] == [2.0]
+
+    async def test_field_trend_excludes_non_numeric_fields(
+        self, client: AsyncClient, db_session: AsyncSession,
+    ) -> None:
+        """文本字段即使有值也不进趋势序列。"""
+        product = await route_service.create_product(
+            db_session,
+            ProductCreate(product_name=rand_code("文本产品"), product_code=rand_code("P")),
+            user=None,
+        )
+        route = await route_service.create_route(
+            db_session, RouteCreate(product_id=product.id, route_name="文本V1"), user=None,
+        )
+        graph = RouteGraphIn(
+            nodes=[
+                NodeIn(
+                    node_code="G1", name="工序一", stage_name="工段一", sort_order=1,
+                    fields=[
+                        FieldDefIn(
+                            field_key="A1", field_label="投料量", phase="end",
+                            data_type="numeric",
+                        ),
+                        FieldDefIn(
+                            field_key="T1", field_label="备注", phase="end",
+                            data_type="text",
+                        ),
+                    ],
+                ),
+            ],
+            edges=[],
+            computed_fields=[],
+        )
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        node = (await route_service.get_graph(db_session, route.id)).nodes[0]
+        batch = await _make_batch(
+            db_session, {"product": product, "route": route},
+        )
+        ex = await _fill_fields(
+            db_session, batch.id, node.id, {"A1": 5.0},
+            datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+        )
+        db_session.add(
+            NodeFieldValue(
+                execution_id=ex.id,
+                field_def_id=uuid.uuid4(),
+                field_key="T1",
+                field_label="备注",
+                phase="end",
+                value_text="正常",
+                filled_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
+            )
+        )
+        await db_session.flush()
+        resp = await client.get(
+            "/api/v1/production/analytics/field-trend",
+            params={"route_id": str(route.id), "node_code": "G1"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert [s["field_key"] for s in resp.json()["data"]["series"]] == ["A1"]
 
 
 class TestStageSummary:

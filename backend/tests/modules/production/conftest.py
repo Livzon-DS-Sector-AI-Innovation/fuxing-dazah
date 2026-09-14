@@ -40,8 +40,15 @@ async def client(db_session: AsyncSession, test_user: User) -> AsyncIterator[Asy
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = _override_get_current_user
-    with patch(
-        "app.platform.permission.deps.get_user_permissions", new=_grant_read_perms
+    with (
+        # deps 层：HTTP 依赖（require_permission）经此解析
+        patch("app.platform.permission.deps.get_user_permissions", new=_grant_read_perms),
+        # batch_service 层：get_batch_detail 计算 can_backfill/can_complete 时
+        # 直接导入的名字空间引用，不 patch 会打到真实权限平台（Redis）
+        patch(
+            "app.modules.production.service.batch_service.get_user_permissions",
+            new=_grant_read_perms,
+        ),
     ):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:

@@ -14,8 +14,16 @@ export {
   mergeBatches,
   completeBatch,
   cancelBatch,
+  transferBatchOwner,
+  renameBatchNo,
 } from './batch'
-export { startExecution, completeExecution, backfillExecutionFields, abortExecution } from './execution'
+export {
+  startExecution,
+  completeExecution,
+  backfillExecutionFields,
+  amendExecution,
+  abortExecution,
+} from './execution'
 export {
   createIntermediateType,
   updateIntermediateType,
@@ -39,7 +47,6 @@ export {
   bindLineProduct,
   unbindLineProduct,
 } from './line'
-export { getBatches } from './legacy'
 export {
   fetchWorkbench,
   fetchStageAssignments,
@@ -51,6 +58,7 @@ export {
   receiveAndStart,
   fetchPlannedBatches,
   activatePlannedBatch,
+  startBatch,
   fetchMyStageSuffixes,
   setStageSuffix,
 } from './workbench'
@@ -74,3 +82,7 @@ export {
   createDemandAllocation,
   deleteDemandAllocation,
 } from './planning'
+export {
+  fetchNotificationConfigs,
+  updateNotificationConfig,
+} from './notification'

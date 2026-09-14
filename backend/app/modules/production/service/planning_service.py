@@ -6,9 +6,10 @@ import logging
 import re
 import uuid
 from datetime import date, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ from app.modules.production.schemas.planning import (
     TraceNode,
 )
 from app.modules.production.service.reminder_service import (
+    schedule_plan_closed_notification,
     schedule_plan_released_notification,
 )
 from app.platform.identity.models import User
@@ -438,6 +440,9 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
         db.add(batch)
         await db.flush()
         item_batch_nos[item.id] = batch.batch_no
+        # 回写实际批号（含去重 -N 后缀）：allocated 项批号 = 实际批次号，
+        # 计划中心展示与 rename_batch_no 的同步回写都依赖此不变量
+        item.batch_no = batch.batch_no
         alloc = PlanAllocation(
             plan_item_id=item.id,
             batch_id=batch.id,
@@ -475,9 +480,26 @@ async def close_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User | N
         raise NotFoundException("计划单", str(order_id))
     if order.status not in ("confirmed", "released", "completed"):
         raise AppException(status_code=400, message="仅 confirmed/released/completed 状态的计划单可关闭")
-    order.status = "closed"
-    order.updated_by = user.id if user else None
+    # 条件 UPDATE 原子关闭：并发双击/重试只有一个能改状态，
+    # 输者不再触发通知，避免各工段负责人收到重复的完成卡片
+    result = cast(
+        CursorResult[Any],
+        await db.execute(
+            update(PlanOrder)
+            .where(
+                PlanOrder.id == order_id,
+                PlanOrder.status.in_(("confirmed", "released", "completed")),
+                PlanOrder.is_deleted == False,  # noqa: E712
+            )
+            .values(status="closed", updated_by=user.id if user else None)
+        ),
+    )
     await db.flush()
+    if result.rowcount:
+        # 飞书提醒：全部计划项非进行中/已分配时通知所涉路线工段负责人
+        # （收集在事务内，发送为后台尽力而为；内部判定不满足则静默跳过）
+        items = await repo.list_plan_items(db, order_id)
+        await schedule_plan_closed_notification(db, order, items)
     refreshed = await repo.get_plan_order(db, order_id)
     assert refreshed is not None
     return refreshed
@@ -514,6 +536,7 @@ async def change_plan_order(
 
     # 校验不可变更的项（batch 已进入生产）
     blocked_ids: set[uuid.UUID] = set()
+    cancelled_batch_ids: set[uuid.UUID] = set()
     for item_id, batch in item_batch_map.items():
         if batch.status not in ("scheduled", "cancelled"):
             blocked_ids.add(item_id)
@@ -532,6 +555,7 @@ async def change_plan_order(
             if batch:
                 batch.status = "cancelled"
                 batch.updated_by = user.id if user else None
+                cancelled_batch_ids.add(batch.id)
             plan_allocs = await repo.get_plan_allocations_by_item(db, item_id)
             for pa in plan_allocs:
                 pa.is_deleted = True
@@ -545,12 +569,16 @@ async def change_plan_order(
     if payload.items_upsert:
         for ci in payload.items_upsert:
             if ci.id is not None:
-                # 更新：批次生产中 → 跳过，不报错（删除仍会报错）
-                if ci.id in blocked_ids:
-                    continue
+                # 更新：批次生产中 → 生产性字段（数量/时间/批号等）跳过，不报错（删除仍会报错）
                 item = await repo.get_plan_item(db, ci.id)
                 if not item:
                     raise NotFoundException("计划项", str(ci.id))
+                if ci.id in blocked_ids:
+                    # 纯展示的备注不受批次生产状态限制，否则用户输入会被静默吞掉
+                    if "remark" in ci.model_fields_set:
+                        item.remark = ci.remark
+                        item.updated_by = user.id if user else None
+                    continue
                 if ci.batch_no is not None and ci.batch_no != item.batch_no:
                     await _check_batch_no_unique(db, ci.batch_no, ci.id)
                 update_data = ci.model_dump(exclude_unset=True, exclude={"id"})
@@ -616,6 +644,8 @@ async def change_plan_order(
                 )
                 db.add(batch)
                 await db.flush()
+                # 与下达同口径：allocated 项批号回写为实际批次号（含去重后缀）
+                new_item.batch_no = new_batch_no
                 alloc = PlanAllocation(
                     plan_item_id=new_item.id,
                     batch_id=batch.id,
@@ -643,6 +673,28 @@ async def change_plan_order(
     db.add(log)
 
     await db.flush()
+
+    # 计划项删除会联动批次报废；与批次服务的显式取消路径保持一致，
+    # 及时关闭该批次下尚未发送的工序超时监控，避免下一轮扫描误发。
+    if cancelled_batch_ids:
+        try:
+            from app.modules.production.service.timeout_service import (
+                resolve_timeout_for_batch,
+            )
+
+            async with db.begin_nested():
+                for cancelled_batch_id in cancelled_batch_ids:
+                    await resolve_timeout_for_batch(
+                        db,
+                        cancelled_batch_id,
+                        reason="batch_cancelled_by_plan_change",
+                    )
+        except Exception:  # noqa: BLE001
+            # 监控是旁路能力，不能让计划单变更事务因提醒表异常失败。
+            logger.exception(
+                "变更计划单时关闭工序超时监控失败: batch_ids=%s",
+                cancelled_batch_ids,
+            )
 
     # ── 需求履约重算 ──
     all_items = await repo.list_plan_items(db, order_id)
@@ -1039,6 +1091,8 @@ async def _is_stage_covered(
     db: AsyncSession, item: PlanItem, chain: list[Batch] | None = None,
 ) -> bool:
     """判定：配置工段 S 内全部工序节点，在谱系链（跳过 cancelled）上有 completed 执行。"""
+    if item.route_id is None:
+        return False
     nodes = await repo.get_route_nodes(db, item.route_id)
     if not nodes:
         return False

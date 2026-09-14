@@ -43,13 +43,13 @@ async def query_step_fields(
         phase: 阶段，"start"（开始工序时填）或 "end"（结束工序时填）
     """
     if phase not in ("start", "end"):
-        return ToolResult(content=f"无效阶段 `{phase}`，仅支持 start 或 end。")
+        return ToolResult(content=f"无效阶段 `{phase}`，仅支持 start 或 end。", is_error=True)
 
     db = get_db()
     try:
         batch, node = await _resolve_batch_and_node(db, batch_no, step_name)
     except ValueError as e:
-        return ToolResult(content=f"{e}")
+        return ToolResult(content=f"{e}", is_error=True)
     defs = await repo.get_field_defs_by_nodes(db, [node.id])
     phase_defs = [d for d in defs if d.phase == phase]
 

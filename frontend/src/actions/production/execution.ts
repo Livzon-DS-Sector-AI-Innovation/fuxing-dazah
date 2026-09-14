@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { API_BASE, actionFetch, type ActionResult } from './helpers'
 import type {
+  AmendExecutionInput,
   CompleteExecutionInput,
   Execution,
   FieldValue,
@@ -41,6 +42,18 @@ export async function backfillExecutionFields(
   const result = await actionFetch<FieldValue[]>(
     `${API_BASE}/production/executions/${executionId}/field-values`,
     { method: 'POST', body: JSON.stringify({ field_values: fieldValues }) },
+  )
+  if (result.success) revalidatePath('/production/batches')
+  return result
+}
+
+export async function amendExecution(
+  executionId: string,
+  input: AmendExecutionInput,
+): Promise<ActionResult<Execution>> {
+  const result = await actionFetch<Execution>(
+    `${API_BASE}/production/executions/${executionId}`,
+    { method: 'PATCH', body: JSON.stringify(input) },
   )
   if (result.success) revalidatePath('/production/batches')
   return result

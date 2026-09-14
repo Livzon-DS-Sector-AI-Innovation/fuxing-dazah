@@ -8,6 +8,7 @@ import app.modules.production.service.intermediate_service as intermediate_servi
 import app.modules.production.service.line_service as line_service
 import app.modules.production.service.planning_service as planning_service
 import app.modules.production.service.route_service as route_service
+import app.modules.production.service.timeout_service as timeout_service
 import app.modules.production.service.trace_service as trace_service
 import app.modules.production.service.workbench_service as workbench_service
 
@@ -21,5 +22,6 @@ __all__ = [
     "planning_service",
     "route_service",
     "trace_service",
+    "timeout_service",
     "workbench_service",
 ]

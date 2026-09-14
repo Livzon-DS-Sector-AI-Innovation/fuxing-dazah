@@ -179,9 +179,10 @@ async def save_graph(
             )
     _validate_computed_fields(graph, numeric_refs)
 
-    # 节点重建会换新 UUID：先记录旧节点 id，重建后重定向工序负责人分配
+    # 节点重建会换新 UUID：先记录旧节点，重建后重定向工序负责人分配，
+    # 并继承旧节点的血缘指针（指向克隆来源路线的节点，值原样搬移，非指向被替换的旧节点）
     old_nodes_by_code = {
-        n.node_code: n.id for n in await repo.get_route_nodes(db, route_id)
+        n.node_code: n for n in await repo.get_route_nodes(db, route_id)
     }
 
     await repo.soft_delete_route_graph(db, route_id)
@@ -192,6 +193,7 @@ async def save_graph(
 
     node_by_code: dict[str, RouteNode] = {}
     for n in graph.nodes:
+        old = old_nodes_by_code.get(n.node_code)
         node = RouteNode(
             route_id=route_id,
             node_code=n.node_code,
@@ -199,6 +201,7 @@ async def save_graph(
             stage_name=n.stage_name,
             node_type=n.node_type,
             sort_order=n.sort_order,
+            origin_node_id=old.origin_node_id if old is not None else None,
             created_by=user.id if user else None,
         )
         db.add(node)
@@ -207,9 +210,9 @@ async def save_graph(
 
     # 同 node_code 的工序负责人分配从旧节点迁到新节点，避免 UUID 悬空丢权限
     id_map = {
-        old_nodes_by_code[code]: node_by_code[code].id
+        old_nodes_by_code[code].id: node_by_code[code].id
         for code in node_by_code
-        if code in old_nodes_by_code and old_nodes_by_code[code] != node_by_code[code].id
+        if code in old_nodes_by_code and old_nodes_by_code[code].id != node_by_code[code].id
     }
     await repo.remap_node_assignments(db, id_map)
 
@@ -512,6 +515,7 @@ async def copy_route(
         product_id=source.product_id,
         route_name=route_name,
         status="draft",
+        origin_route_id=source.id,
         created_by=user.id if user else None,
     )
     db.add(new_route)
@@ -533,6 +537,7 @@ async def copy_route(
                 stage_name=n.stage_name,
                 node_type=n.node_type,
                 sort_order=n.sort_order,
+                origin_node_id=n.id,
                 created_by=user.id if user else None,
             )
         )

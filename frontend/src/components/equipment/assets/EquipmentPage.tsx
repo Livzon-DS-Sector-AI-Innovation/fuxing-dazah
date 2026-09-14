@@ -17,6 +17,7 @@ import { EquipmentImportModal } from './EquipmentImportModal'
 import { CategoryDrawer } from '../shared/CategoryDrawer'
 import { LocationDrawer } from '../shared/LocationDrawer'
 import { RepairDrawer } from '../maintenance/RepairDrawer'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 interface EquipmentPageProps {
   initialCategories: EquipmentCategory[]
@@ -180,20 +181,7 @@ export function EquipmentPage({
     <ConfigProvider theme={antdTheme} locale={zhCN}>
       <App>
         {/* 标题行 */}
-        <div style={{ marginBottom: 24 }}>
-          <h2
-            style={{
-              fontSize: 22, fontWeight: 600, color: '#1a1a1a',
-              margin: 0, marginBottom: 4, lineHeight: 1.3,
-            }}
-          >
-            设备台账
-          </h2>
-          <p style={{ fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5 }}>
-            分类管理 · 位置管理 · 设备档案 · 状态追踪
-          </p>
-        </div>
-
+        <PageHeading title="设备台账" subtitle="分类管理 · 位置管理 · 设备档案 · 状态追踪" />
         <div className="flex gap-4" style={{ height: 'calc(100vh - 210px)', minHeight: 400 }}>
           {/* 左侧：可折叠分类/位置树 */}
           {!sidebarCollapsed && (

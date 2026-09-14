@@ -6,6 +6,13 @@ node_modules/
 out/
 build/
 
+# 本地 tsc 增量缓存（每次本地 build 都会变，会无谓打穿 COPY . . 缓存层）
+tsconfig.tsbuildinfo
+
+# 构建用不到的杂项（减小 build context）
+package-lock.json
+openapi.json
+
 # 开发环境变量（排除，只保留 .env.production 用于构建）
 .env
 .env.local

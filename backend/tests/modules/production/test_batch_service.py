@@ -17,10 +17,24 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, ForbiddenException
-from app.modules.production.models import Batch, NodeExecution, StageAssignment
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+)
+from app.modules.production import repository as repo
+from app.modules.production.models import (
+    Batch,
+    NodeExecution,
+    PlanAllocation,
+    PlanItem,
+    PlanOrder,
+    StageAssignment,
+)
 from app.modules.production.schemas import (
     BatchCreate,
+    BatchNoUpdateIn,
+    BatchOwnerTransferIn,
     ChildBatchIn,
     DeriveIn,
     MergeIn,
@@ -44,6 +58,30 @@ async def _make_batch(db: AsyncSession, ctx: dict[str, Any]) -> Batch:
         ),
         user=None,
     )
+
+
+async def _make_plan_item(
+    db: AsyncSession, ctx: dict[str, Any], batch_no: str | None,
+    batch: Batch | None = None,
+) -> PlanItem:
+    """辅助：直接构造计划单 + 计划项（可选挂分配到批次），绕过 planning_service。"""
+    order = PlanOrder(order_no=rand_code("PO"), title="t")
+    db.add(order)
+    await db.flush()
+    item = PlanItem(
+        plan_order_id=order.id,
+        item_no=1,
+        product_id=ctx["product"].id,
+        product_name=ctx["product"].product_name,
+        route_id=ctx["route"].id,
+        batch_no=batch_no,
+    )
+    db.add(item)
+    await db.flush()
+    if batch is not None:
+        db.add(PlanAllocation(plan_item_id=item.id, batch_id=batch.id))
+        await db.flush()
+    return item
 
 
 async def _set_in_progress(db: AsyncSession, batch: Batch) -> None:
@@ -89,6 +127,23 @@ class TestCreateBatch:
                 db_session,
                 BatchCreate(
                     batch_no=batch.batch_no,
+                    product_id=published_route["product"].id,
+                    route_id=published_route["route"].id,
+                ),
+                user=None,
+            )
+
+    async def test_create_blocked_by_plan_item_reservation(
+        self, db_session: AsyncSession, published_route: dict[str, Any]
+    ) -> None:
+        """新建批次号已被（草稿）计划项预分配 → 拒绝，防下达时静默改号。"""
+        reserved = rand_code("RESV")
+        await _make_plan_item(db_session, published_route, reserved)
+        with pytest.raises(DuplicateException):
+            await batch_service.create_batch(
+                db_session,
+                BatchCreate(
+                    batch_no=reserved,
                     product_id=published_route["product"].id,
                     route_id=published_route["route"].id,
                 ),
@@ -424,3 +479,357 @@ class TestListSort:
         )
         assert total == 2
         assert [b.batch_no for b in items] == [f"{base}-0", f"{base}-2"]
+
+
+class TestTransferOwner:
+    """转移批次负责人：submit 权限硬校验、终态拒绝、字段更新与审计、清空负责人。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """默认授予 batch:submit；无权限用例自行覆盖。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:submit"}
+
+        monkeypatch.setattr(batch_service, "get_user_permissions", fake_perms)
+
+    async def _make_user(self, db: AsyncSession, label: str = "用户") -> User:
+        user = User(name=f"{label}-{rand_code('U')}", employee_no=rand_code("EMP"))
+        db.add(user)
+        await db.flush()
+        return user
+
+    async def _make_owned_batch(
+        self, db: AsyncSession, ctx: dict[str, Any], owner: User,
+    ) -> Batch:
+        """创建带负责人的 pending 批次（create_batch 不设负责人，此处直接指定）。"""
+        batch = await _make_batch(db, ctx)
+        batch.owner_user_id = owner.id
+        batch.owner_name = owner.name
+        await db.flush()
+        return batch
+
+    async def test_transfer_without_permission_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch, test_user: User,
+    ) -> None:
+        """无 batch:submit 权限（如仅工段负责人）→ 403。"""
+
+        async def no_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(batch_service, "get_user_permissions", no_perms)
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        new_owner = await self._make_user(db_session, "新负责人")
+        with pytest.raises(ForbiddenException, match="batch:submit"):
+            await batch_service.transfer_batch_owner(
+                db_session, batch.id,
+                BatchOwnerTransferIn(owner_user_id=new_owner.id),
+                user=test_user,
+            )
+
+    async def test_transfer_rejects_anonymous_user(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """user=None 拒绝。"""
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        with pytest.raises(ForbiddenException, match="未登录"):
+            await batch_service.transfer_batch_owner(
+                db_session, batch.id,
+                BatchOwnerTransferIn(owner_user_id=uuid.uuid4()),
+                user=None,
+            )
+
+    async def test_transfer_updates_owner_and_records_audit(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """转移成功：owner 两字段更新，审计记录新旧负责人。"""
+        from sqlalchemy import select
+
+        from app.platform.audit.models import AuditLog
+
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        new_owner = await self._make_user(db_session, "新负责人")
+        updated = await batch_service.transfer_batch_owner(
+            db_session, batch.id,
+            BatchOwnerTransferIn(owner_user_id=new_owner.id),
+            user=test_user,
+        )
+        assert updated.owner_user_id == new_owner.id
+        assert updated.owner_name == new_owner.name
+        # 序列化回归守护：API 层用 BatchOut 序列化 service 返回值。若 service
+        # 直接返回 flush 后的原对象（updated_at 被 onupdate 置为过期），此处会以
+        # get_attribute_error / MissingGreenlet 失败（2026-09-07 线上报过的坑）
+        from app.modules.production.schemas import BatchOut
+
+        out = BatchOut.model_validate(updated).model_dump(mode="json")
+        assert out["owner_user_id"] == str(new_owner.id)
+        assert out["owner_name"] == new_owner.name
+        from app.modules.production import repository as prod_repo
+
+        refreshed = await prod_repo.get_batch(db_session, batch.id)
+        assert refreshed is not None
+        assert refreshed.owner_user_id == new_owner.id
+        log = (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "production.batch.transfer_owner",
+                    AuditLog.resource_id == batch.id,
+                )
+            )
+        ).scalar_one()
+        assert log.old_value == {
+            "owner_user_id": str(test_user.id), "owner_name": test_user.name,
+        }
+        assert log.new_value == {
+            "owner_user_id": str(new_owner.id), "owner_name": new_owner.name,
+        }
+
+    async def test_transfer_rejected_for_terminal_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """completed / cancelled 批次不可转移。"""
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        new_owner = await self._make_user(db_session, "新负责人")
+        for terminal in ("completed", "cancelled"):
+            batch.status = terminal
+            await db_session.flush()
+            with pytest.raises(AppException, match="不能转移负责人"):
+                await batch_service.transfer_batch_owner(
+                    db_session, batch.id,
+                    BatchOwnerTransferIn(owner_user_id=new_owner.id),
+                    user=test_user,
+                )
+
+    async def test_transfer_same_owner_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """转移给当前负责人 → 拒绝（无变化）。"""
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        with pytest.raises(AppException, match="负责人未变化"):
+            await batch_service.transfer_batch_owner(
+                db_session, batch.id,
+                BatchOwnerTransferIn(owner_user_id=test_user.id),
+                user=test_user,
+            )
+
+    async def test_transfer_unknown_user_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """目标用户不存在 → 404。"""
+        from app.core.exceptions import NotFoundException
+
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        with pytest.raises(NotFoundException):
+            await batch_service.transfer_batch_owner(
+                db_session, batch.id,
+                BatchOwnerTransferIn(owner_user_id=uuid.uuid4()),
+                user=test_user,
+            )
+
+    async def test_clear_owner_sets_shared_state(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """owner_user_id=None 清空负责人（恢复无主共享）。"""
+        batch = await self._make_owned_batch(db_session, published_route, test_user)
+        updated = await batch_service.transfer_batch_owner(
+            db_session, batch.id, BatchOwnerTransferIn(owner_user_id=None),
+            user=test_user,
+        )
+        assert updated.owner_user_id is None
+        assert updated.owner_name is None
+        # 已无主再清空 → 拒绝
+        with pytest.raises(AppException, match="负责人未变化"):
+            await batch_service.transfer_batch_owner(
+                db_session, batch.id, BatchOwnerTransferIn(owner_user_id=None),
+                user=test_user,
+            )
+
+
+class TestRenameBatchNo:
+    """修改批次号：submit 权限、不限批次状态、重复/未变化拒绝、审计与序列化守护。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """默认授予 batch:submit；无权限用例自行覆盖。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:submit"}
+
+        monkeypatch.setattr(batch_service, "get_user_permissions", fake_perms)
+
+    async def test_rename_without_permission_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch, test_user: User,
+    ) -> None:
+        """无 batch:submit 权限 → 403。"""
+
+        async def no_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(batch_service, "get_user_permissions", no_perms)
+        batch = await _make_batch(db_session, published_route)
+        with pytest.raises(ForbiddenException, match="batch:submit"):
+            await batch_service.rename_batch_no(
+                db_session, batch.id,
+                BatchNoUpdateIn(batch_no=rand_code("NEW")),
+                user=test_user,
+            )
+
+    async def test_rename_rejects_anonymous_user(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """user=None 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        with pytest.raises(ForbiddenException, match="未登录"):
+            await batch_service.rename_batch_no(
+                db_session, batch.id,
+                BatchNoUpdateIn(batch_no=rand_code("NEW")),
+                user=None,
+            )
+
+    async def test_rename_updates_no_and_records_audit(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """改名成功：字段更新、审计记原/新批号，返回值可直接被 BatchOut 序列化。"""
+        from sqlalchemy import select
+
+        from app.modules.production.schemas import BatchOut
+        from app.platform.audit.models import AuditLog
+
+        batch = await _make_batch(db_session, published_route)
+        old_no = batch.batch_no
+        new_no = rand_code("NEW")
+        updated = await batch_service.rename_batch_no(
+            db_session, batch.id, BatchNoUpdateIn(batch_no=new_no), user=test_user,
+        )
+        assert updated.batch_no == new_no
+        # 序列化回归守护（MissingGreenlet 坑，与 transfer 同模式）
+        out = BatchOut.model_validate(updated).model_dump(mode="json")
+        assert out["batch_no"] == new_no
+        log = (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "production.batch.rename_no",
+                    AuditLog.resource_id == batch.id,
+                )
+            )
+        ).scalar_one()
+        assert log.old_value == {"batch_no": old_no}
+        assert log.new_value == {"batch_no": new_no}
+
+    async def test_rename_completed_batch_allowed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """已完成批次也允许改批号（错误晚发现也要能修正）。"""
+        batch = await _make_batch(db_session, published_route)
+        batch.status = "completed"
+        await db_session.flush()
+        new_no = rand_code("NEW")
+        updated = await batch_service.rename_batch_no(
+            db_session, batch.id, BatchNoUpdateIn(batch_no=new_no), user=test_user,
+        )
+        assert updated.status == "completed"
+        assert updated.batch_no == new_no
+
+    async def test_rename_unchanged_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """新批号与当前相同 → 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        with pytest.raises(AppException, match="批次号未变化"):
+            await batch_service.rename_batch_no(
+                db_session, batch.id,
+                BatchNoUpdateIn(batch_no=batch.batch_no),
+                user=test_user,
+            )
+
+    async def test_rename_duplicate_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """新批号与其他未删除批次重复 → 拒绝。"""
+        batch = await _make_batch(db_session, published_route)
+        other = await _make_batch(db_session, published_route)
+        with pytest.raises(DuplicateException):
+            await batch_service.rename_batch_no(
+                db_session, batch.id,
+                BatchNoUpdateIn(batch_no=other.batch_no),
+                user=test_user,
+            )
+
+    async def test_rename_blocked_by_plan_item_reservation(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """新批号已被草稿计划项预分配 → 拒绝，防下达时静默改号。"""
+        batch = await _make_batch(db_session, published_route)
+        reserved = rand_code("RESV")
+        await _make_plan_item(db_session, published_route, reserved)
+        with pytest.raises(DuplicateException):
+            await batch_service.rename_batch_no(
+                db_session, batch.id,
+                BatchNoUpdateIn(batch_no=reserved),
+                user=test_user,
+            )
+
+    async def test_rename_syncs_allocated_plan_item_batch_no(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """改名后回写计划项批号（计划项种子仍等于旧批号时）。"""
+        batch = await _make_batch(db_session, published_route)
+        old_no = batch.batch_no
+        item = await _make_plan_item(db_session, published_route, old_no, batch)
+        new_no = rand_code("NEW")
+        await batch_service.rename_batch_no(
+            db_session, batch.id, BatchNoUpdateIn(batch_no=new_no), user=test_user,
+        )
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None and refreshed.batch_no == new_no
+
+    async def test_rename_preserves_edited_plan_item_seed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """计划项种子已被计划员改过（≠旧批号）→ 改名不回写，保留新种子。"""
+        batch = await _make_batch(db_session, published_route)
+        keep = rand_code("KEEP")
+        item = await _make_plan_item(db_session, published_route, keep, batch)
+        await batch_service.rename_batch_no(
+            db_session, batch.id,
+            BatchNoUpdateIn(batch_no=rand_code("NEW")), user=test_user,
+        )
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None and refreshed.batch_no == keep
+
+    async def test_rename_to_own_edited_seed_allowed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """改名为本批次计划项已改写的种子号 → 放行（自身计划项不参与重复校验）。"""
+        batch = await _make_batch(db_session, published_route)
+        target = rand_code("TGT")
+        item = await _make_plan_item(db_session, published_route, target, batch)
+        updated = await batch_service.rename_batch_no(
+            db_session, batch.id, BatchNoUpdateIn(batch_no=target), user=test_user,
+        )
+        assert updated.batch_no == target
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None and refreshed.batch_no == target
+
+    async def test_rename_whitespace_only_rejected(self) -> None:
+        """纯空白批号在 schema 层即被拒绝。"""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            BatchNoUpdateIn(batch_no="   ")

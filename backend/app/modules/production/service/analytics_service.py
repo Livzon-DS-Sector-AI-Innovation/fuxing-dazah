@@ -1,5 +1,6 @@
 """生产分析服务。"""
 
+import math
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -8,21 +9,75 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException
 from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
+from app.modules.production.models import ProcessRoute
 from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.repository import batch as batch_repo
 from app.modules.production.repository import execution as exec_repo
 from app.modules.production.repository import route as route_repo
 from app.modules.production.schemas.analytics import (
     FieldTrendPoint,
+    FieldTrendResponse,
+    FieldTrendSeries,
     StageSummaryColumn,
     StageSummaryOut,
     StageSummaryRow,
     StepCycleResponse,
     StepCycleStat,
 )
-from app.modules.production.service import computed_service
+from app.modules.production.service import computed_service, lineage_service
+from app.modules.production.service.lineage_service import MergedFieldDef, NodeFamily
 
 _MIN_SAMPLE_FOR_CONFIDENCE = 30
+_MIN_SAMPLE_FOR_TIMEOUT = 5
+
+
+def _percentile(values: list[float], quantile: float) -> float | None:
+    """按 PostgreSQL ``percentile_cont`` 语义计算线性插值分位数。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
+
+
+async def _published_route_graphs(
+    db: AsyncSession,
+    *,
+    route_id: uuid.UUID | None,
+    product_id: uuid.UUID | None,
+) -> list[tuple[ProcessRoute, lineage_service.LineageGraph]]:
+    """获取周期分析作用域内的已发布路线及其血缘图。
+
+    周期分析展示的是当前可用的 published 路线；路线祖先只作为历史样本来源，
+    不单独生成一个路线分组。这样归档的旧版本仍能贡献时长，但不会继续出现在
+    看板的路线列表中。
+    """
+    if route_id is not None:
+        route = await route_repo.get_route(db, route_id)
+        if (
+            route is None
+            or route.status != "published"
+            or (product_id is not None and route.product_id != product_id)
+        ):
+            return []
+        routes = [route]
+    else:
+        # 路线列表接口单页上限只约束 HTTP 入参；分析内部需要拿到产品下全部已发布路线。
+        routes, _ = await route_repo.list_routes(
+            db, product_id, page=1, page_size=10_000, status="published",
+        )
+
+    result: list[tuple[ProcessRoute, lineage_service.LineageGraph]] = []
+    for route in routes:
+        graph = await lineage_service.resolve_lineage(db, route.id)
+        if graph is not None:
+            result.append((route, graph))
+    return result
 
 
 async def get_step_cycle_analytics(
@@ -32,34 +87,89 @@ async def get_step_cycle_analytics(
     product_id: uuid.UUID | None = None,
     days: int = 30,
 ) -> StepCycleResponse:
-    """获取路线/产品的工序周期统计。"""
+    """获取已发布路线的工序周期统计，并沿路线血缘合并历史样本。"""
     since = now() - timedelta(days=days) if days > 0 else None
 
-    rows = await repo.get_step_cycle_stats(
-        db, route_id=route_id, product_id=product_id, since=since,
+    route_graphs = await _published_route_graphs(
+        db, route_id=route_id, product_id=product_id,
     )
-    total_batches = await repo.count_active_batches(
-        db, route_id=route_id, product_id=product_id, since=since,
+    if not route_graphs:
+        return StepCycleResponse(steps=[], total_batches=0, sample_note="暂无数据")
+
+    # 一次查询拿到所有目标路线及其祖先路线的原始执行样本，之后按节点家族归并。
+    scope_route_ids: set[uuid.UUID] = set()
+    scope_node_ids: set[uuid.UUID] = set()
+    # 实际批次所属路线 → (目标路线, 节点成员→代表节点)；同一祖先可被多个目标路线复用。
+    target_by_source_route: dict[
+        uuid.UUID,
+        list[tuple[uuid.UUID, dict[uuid.UUID, uuid.UUID]]],
+    ] = {}
+    for target_route, graph in route_graphs:
+        scope_route_ids.update(graph.route_ids)
+        for family in graph.families:
+            scope_node_ids.update(family.member_id_set)
+        for source_route_id in graph.route_ids:
+            target_by_source_route.setdefault(source_route_id, []).append(
+                (target_route.id, graph.rep_by_member)
+            )
+
+    samples = await repo.list_step_cycle_samples(
+        db,
+        route_ids=scope_route_ids,
+        node_ids=scope_node_ids,
+        product_id=product_id,
+        since=since,
     )
+
+    durations_by_target_node: dict[tuple[uuid.UUID, uuid.UUID], list[float]] = {}
+    for sample in samples:
+        for target_route_id, rep_by_member in target_by_source_route.get(
+            sample["route_id"], []
+        ):
+            representative_id = rep_by_member.get(sample["node_id"])
+            if representative_id is None:
+                continue
+            durations_by_target_node.setdefault(
+                (target_route_id, representative_id), []
+            ).append(sample["duration_sec"] / 3600.0)
 
     steps = [
         StepCycleStat(
-            node_id=r["node_id"],
-            node_name=r["node_name"],
-            stage_name=r["stage_name"],
-            sort_order=r["sort_order"],
-            n=r["n"],
-            avg_hours=r["avg_hours"],
-            min_hours=r["min_hours"],
-            max_hours=r["max_hours"],
+            route_id=target_route.id,
+            route_name=target_route.route_name,
+            node_id=family.rep.id,
+            node_name=family.rep.name,
+            stage_name=family.rep.stage_name,
+            sort_order=family.rep.sort_order,
+            n=len(values := durations_by_target_node.get((target_route.id, family.rep.id), [])),
+            avg_hours=round(sum(values) / len(values), 2) if values else 0.0,
+            min_hours=round(min(values), 2) if values else None,
+            max_hours=round(max(values), 2) if values else None,
+            p80_hours=(
+                round(p80, 2)
+                if len(values) >= _MIN_SAMPLE_FOR_TIMEOUT
+                and (p80 := _percentile(values, 0.8)) is not None
+                else None
+            ),
         )
-        for r in rows
+        for target_route, graph in route_graphs
+        for family in graph.families
     ]
+
+    total_batches = await repo.count_active_batches(
+        db,
+        route_ids=scope_route_ids,
+        product_id=product_id,
+        since=since,
+    )
 
     min_n = min((s.n for s in steps), default=0)
     sample_note = None
-    if min_n == 0:
+    max_n = max((s.n for s in steps), default=0)
+    if not steps or max_n == 0:
         sample_note = "暂无数据"
+    elif min_n == 0:
+        sample_note = "部分工序暂无完成记录，其余数据仅供参考"
     elif min_n < _MIN_SAMPLE_FOR_CONFIDENCE:
         sample_note = f"数据较少（最少工序仅 {min_n} 条记录），仅供参考"
 
@@ -67,16 +177,71 @@ async def get_step_cycle_analytics(
 
 
 async def get_field_trend(
-    db: AsyncSession, route_id: uuid.UUID, node_code: str, field_key: str
-) -> list[FieldTrendPoint]:
-    """跨批次字段趋势：某路线节点下全部完成执行中该字段的值，按填写时间升序。"""
+    db: AsyncSession, route_id: uuid.UUID, node_code: str
+) -> FieldTrendResponse:
+    """跨批次字段趋势：某路线节点下全部数值字段的值，各字段内按填写时间升序。
+
+    沿血缘链合并前身路线同工序（节点家族）的批次：origin 指针优先、
+    node_code 兜底对齐；字段定义按家族归并（当前版本优先、旧版独有保留）。
+    回流场景同批同节点有多条 completed 执行时取 finished_at 最新一条，
+    与工段汇总/批次详情的取数口径保持一致；只返回至少有一个数据点的字段。
+    """
     node = await repo.get_node_by_code(db, route_id, node_code)
     if node is None:
-        return []
-    rows = await repo.get_field_trend_values(db, node.id, field_key)
-    return [
-        FieldTrendPoint(batch_no=b, filled_at=t, value=v) for b, t, v in rows
+        return FieldTrendResponse(series=[], merged_routes=[])
+
+    graph = await lineage_service.resolve_lineage(db, route_id)
+    family = next(
+        (f for f in (graph.families if graph else []) if f.rep.id == node.id), None,
+    )
+    if family is None:
+        return FieldTrendResponse(series=[], merged_routes=[])
+    merged_routes = graph.merged_route_names if graph else []
+
+    numeric_defs = [
+        d for d in graph.merged_defs.get(node.id, []) if d.data_type == "numeric"
     ]
+    executions = await exec_repo.list_completed_executions_by_nodes(db, family.node_ids)
+    latest_by_batch = exec_repo.group_latest_completed_by_batch_node(executions)
+    if not numeric_defs or not latest_by_batch:
+        return FieldTrendResponse(series=[], merged_routes=merged_routes)
+
+    values = await exec_repo.get_field_values_by_executions(
+        db, [e.id for e in latest_by_batch.values()]
+    )
+    batch_no_by_id = {
+        b.id: b.batch_no
+        for b in await batch_repo.get_batches_by_ids(
+            db, sorted({e.batch_id for e in latest_by_batch.values()})
+        )
+    }
+    batch_by_exec = {e.id: e.batch_id for e in latest_by_batch.values()}
+
+    points_by_field: dict[str, list[FieldTrendPoint]] = {}
+    for v in values:
+        if v.value_numeric is None or v.filled_at is None:
+            continue
+        batch_id = batch_by_exec.get(v.execution_id)
+        if batch_id is None:
+            continue
+        batch_no = batch_no_by_id.get(batch_id)
+        if batch_no is None:
+            continue
+        points_by_field.setdefault(v.field_key, []).append(
+            FieldTrendPoint(batch_no=batch_no, filled_at=v.filled_at, value=v.value_numeric)
+        )
+
+    series = [
+        FieldTrendSeries(
+            field_key=d.field_key,
+            field_label=d.field_label,
+            unit=d.unit,
+            data_points=sorted(points_by_field[d.field_key], key=lambda p: p.filled_at),
+        )
+        for d in numeric_defs
+        if d.field_key in points_by_field
+    ]
+    return FieldTrendResponse(series=series, merged_routes=merged_routes)
 
 
 async def get_stage_summary(
@@ -90,6 +255,9 @@ async def get_stage_summary(
 ) -> StageSummaryOut:
     """工段汇总平铺矩阵：每批次一行，列为工序×字段（含计算字段）。
 
+    选定路线时沿血缘链合并历代版本的批次数据（同工序按节点家族对齐：origin
+    指针优先、node_code 兜底；当前版本字段定义优先，旧版独有字段保留为列）。
+    ``route_id=None`` 的全路线平铺模式不跨路线归并，保持每节点独立成列。
     ``start_date`` / ``end_date`` 为可选的日期范围筛选：取"首工序开始时间"
     落在范围内的批次，并连同它们的全部后序批次一并纳入汇总。
     """
@@ -99,62 +267,120 @@ async def get_stage_summary(
         if not allowed:
             return StageSummaryOut(columns=[], rows=[])
 
-    # 仅取有效路线的节点：排除草稿路线（无生产数据）与已删除路线的孤儿节点
-    nodes = await route_repo.list_nodes(
-        db, route_id=route_id, stage_name=stage_name, exclude_draft_route=True,
+    merged_route_names: list[str] = []
+    graph: lineage_service.LineageGraph | None = None
+    if route_id is None:
+        # 全路线平铺：不跨路线归并，每节点自成家族
+        # （仅取有效路线的节点：排除草稿路线与已删除路线的孤儿节点）
+        nodes = await route_repo.list_nodes(
+            db, route_id=None, stage_name=stage_name, exclude_draft_route=True,
+        )
+        families = [NodeFamily(rep=n) for n in nodes]
+        families.sort(key=lambda f: f.rep.sort_order)
+    else:
+        graph = await lineage_service.resolve_lineage(db, route_id)
+        # 与原 exclude_draft_route 口径一致：草稿路线无生产数据，不进汇总
+        if graph is None or graph.chain[-1].status == "draft":
+            return StageSummaryOut(columns=[], rows=[])
+        families = [
+            f for f in graph.families
+            if stage_name is None or f.rep.stage_name == stage_name
+        ]
+        merged_route_names = graph.merged_route_names
+
+    # 权限锚定代表节点：授权随版本链延伸（当前路线有分配即可见前身路线的历史批次）
+    if allowed is not None:
+        families = [f for f in families if f.rep.id in allowed]
+    if not families:
+        return StageSummaryOut(columns=[], rows=[], merged_routes=merged_route_names)
+
+    code_by_rep = {f.rep.id: f.rep.node_code for f in families}
+    name_by_rep = {f.rep.id: f.rep.name for f in families}
+    order_by_rep = {f.rep.id: i for i, f in enumerate(families)}
+    # 成员节点 → 代表节点；血缘模式用解析结果（含被过滤家族，超集无害），
+    # 平铺模式为恒等映射
+    rep_by_member: dict[uuid.UUID, uuid.UUID] = (
+        graph.rep_by_member if graph is not None
+        else {f.rep.id: f.rep.id for f in families}
     )
-    nodes = [n for n in nodes if allowed is None or n.id in allowed]
-    if not nodes:
-        return StageSummaryOut(columns=[], rows=[])
-    nodes.sort(key=lambda n: n.sort_order)
+    # 字段定义：血缘模式用家族归并结果（当前版本优先、旧版独有补后），
+    # 平铺模式直接用节点自身定义
+    if graph is not None:
+        merged_defs = graph.merged_defs
+    else:
+        merged_defs: dict[uuid.UUID, list[MergedFieldDef]] = {}
+        for d in await route_repo.get_field_defs_by_nodes(db, list(order_by_rep)):
+            merged_defs.setdefault(d.node_id, []).append(
+                MergedFieldDef(
+                    node_id=d.node_id,
+                    field_key=d.field_key,
+                    field_label=d.field_label,
+                    unit=d.unit,
+                    data_type=d.data_type,
+                    sort_order=d.sort_order,
+                )
+            )
 
-    node_ids = [n.id for n in nodes]
-    code_by_id = {n.id: n.node_code for n in nodes}
-    name_by_id = {n.id: n.name for n in nodes}
-    order_by_id = {n.id: i for i, n in enumerate(nodes)}
-    route_ids = {n.route_id for n in nodes}
-
-    # 字段列（node_field_defs，按节点顺序 × 字段顺序）
-    defs = await route_repo.get_field_defs_by_nodes(db, node_ids)
-    defs.sort(key=lambda d: (order_by_id[d.node_id], d.sort_order))
+    # 字段列（按家族归并）
     columns: list[StageSummaryColumn] = [
         StageSummaryColumn(
-            node_id=d.node_id,
-            node_code=code_by_id[d.node_id],
-            node_name=name_by_id[d.node_id],
+            node_id=f.rep.id,
+            node_code=code_by_rep[f.rep.id],
+            node_name=name_by_rep[f.rep.id],
             field_key=d.field_key,
             field_label=d.field_label,
             unit=d.unit,
             kind="field",
-            col_key=f"{d.node_id}.{d.field_key}",
+            col_key=f"{f.rep.id}.{d.field_key}",
         )
-        for d in defs
+        for f in families
+        for d in merged_defs.get(f.rep.id, [])
     ]
 
-    # 计算字段列（route_computed_fields，只含当前节点范围内的展示归属）
-    computed_defs = await route_repo.get_computed_fields_by_routes(db, sorted(route_ids))
-    computed_defs = [c for c in computed_defs if c.node_id in code_by_id]
-    computed_defs.sort(key=lambda c: (order_by_id[c.node_id], c.sort_order))
-    allowed_computed_keys = {c.field_key for c in computed_defs}
+    # 计算字段列（route_computed_fields，只含作用域内的展示归属）。
+    # scope_computed 为未去重全集（批次按自己路线的定义找展示节点要用）；
+    # 血缘模式下列定义按 (家族, field_key) 去重、最新版本优先
+    scope_route_ids = (
+        graph.route_ids if graph is not None
+        else {f.rep.route_id for f in families}
+    )
+    scope_computed = await route_repo.get_computed_fields_by_routes(db, sorted(scope_route_ids))
+    scope_computed = [c for c in scope_computed if rep_by_member.get(c.node_id) in order_by_rep]
+    column_computed = scope_computed
+    if graph is not None:
+        route_pos = {r.id: i for i, r in enumerate(graph.chain)}
+        column_computed = sorted(
+            scope_computed, key=lambda c: -route_pos.get(c.route_id, -1)
+        )
+        seen_cols: set[tuple[uuid.UUID, str]] = set()
+        deduped: list = []
+        for c in column_computed:
+            key = (rep_by_member[c.node_id], c.field_key)
+            if key in seen_cols:
+                continue
+            seen_cols.add(key)
+            deduped.append(c)
+        column_computed = deduped
+    column_computed.sort(key=lambda c: (order_by_rep[rep_by_member[c.node_id]], c.sort_order))
     columns += [
         StageSummaryColumn(
-            node_id=c.node_id,
-            node_code=code_by_id[c.node_id],
-            node_name=name_by_id[c.node_id],
+            node_id=rep_by_member[c.node_id],
+            node_code=code_by_rep[rep_by_member[c.node_id]],
+            node_name=name_by_rep[rep_by_member[c.node_id]],
             field_key=c.field_key,
             field_label=c.field_label,
             unit=c.unit,
             kind="computed",
-            col_key=f"{c.node_id}.{c.field_key}",
+            col_key=f"{rep_by_member[c.node_id]}.{c.field_key}",
         )
-        for c in computed_defs
+        for c in column_computed
     ]
 
-    # 行（跨批次）
+    # 行（跨批次，含血缘前身路线的批次）
     if start_date is not None or end_date is not None:
         if start_date is not None and end_date is not None and start_date > end_date:
             raise AppException(status_code=400, message="开始日期不能晚于结束日期")
-        # 日期范围筛选：日期范围内"开始"的批次 + 其全部后序批次（限制在当前路线作用域）
+        # 日期范围筛选：日期范围内"开始"的批次 + 其全部后序批次（限制在作用域路线内）
         start_dt = (
             datetime.combine(start_date, time.min, tzinfo=APP_TZ)
             if start_date is not None else None
@@ -164,7 +390,7 @@ async def get_stage_summary(
             if end_date is not None else None
         )
         source_ids = await batch_repo.list_batches_started_within(
-            db, start_dt, end_dt, route_ids,
+            db, start_dt, end_dt, scope_route_ids,
         )
         descendant_ids = await batch_repo.list_descendant_batch_ids(
             db, set(source_ids),
@@ -172,15 +398,16 @@ async def get_stage_summary(
         candidate_ids = set(source_ids) | descendant_ids
         candidate_batches = [
             b for b in await batch_repo.get_batches_by_ids(db, list(candidate_ids))
-            if b.route_id in route_ids
+            if b.route_id in scope_route_ids
         ]
     else:
         # ponytail: 以最近 500 个批次为汇总窗口，防全量历史扫描；批次量超窗口后改服务端分页
         candidate_batches, _ = await batch_repo.list_batches(
             db, None, None, None, page=1, page_size=500, order_by="created_at",
         )
+    member_node_ids = [n.id for f in families for n in f.members]
     executions = await exec_repo.list_completed_executions_by_nodes(
-        db, node_ids, batch_ids=[b.id for b in candidate_batches],
+        db, member_node_ids, batch_ids=[b.id for b in candidate_batches],
     )
     # 回流场景同批同节点可能有多条 completed 执行：矩阵取 finished_at 最新一条，
     # 与计算字段/批次详情的"最后一次 completed 执行"取数规则保持一致。
@@ -192,12 +419,12 @@ async def get_stage_summary(
     values = await exec_repo.get_field_values_by_executions(db, [e.id for e in executions])
     batches = await batch_repo.get_batches_by_ids(db, sorted({e.batch_id for e in executions}))
 
-    # 字段值按批次一次遍历分组；col_key 用节点 id 维度（node_code 仅路线内唯一，
-    # 多路线平铺时同名工序会互相覆盖）
+    # 字段值按批次一次遍历分组；col_key 用代表节点维度（跨版本同工序归并到同列，
+    # node_code 仅路线内唯一，多路线平铺时同名工序不互相覆盖）
     values_by_batch: dict[uuid.UUID, dict[str, float | str | bool | None]] = {}
     for v in values:
-        node_id, b_id = exec_meta[v.execution_id]
-        col_key = f"{node_id}.{v.field_key}"
+        member_node_id, b_id = exec_meta[v.execution_id]
+        col_key = f"{rep_by_member[member_node_id]}.{v.field_key}"
         if v.value_numeric is not None:
             values_by_batch.setdefault(b_id, {})[col_key] = v.value_numeric
         elif v.value_bool is not None:
@@ -207,28 +434,32 @@ async def get_stage_summary(
 
     computed_by_batch = (
         await computed_service.expand_computed_fields_for_batches(db, batches)
-        if allowed_computed_keys
+        if scope_computed
         else {}
     )
 
     # 计算字段键 → 展示节点（按路线区分；field_key 仅路线内唯一）
     computed_node_by_route_key: dict[uuid.UUID, dict[str, uuid.UUID]] = {}
-    for c in computed_defs:
+    for c in scope_computed:
         computed_node_by_route_key.setdefault(c.route_id, {})[c.field_key] = c.node_id
 
     rows: list[StageSummaryRow] = []
     for batch in batches:
         node_by_key = computed_node_by_route_key.get(batch.route_id, {})
+        computed_row: dict[str, float | None] = {}
+        for c in computed_by_batch.get(batch.id, []):
+            display_node = node_by_key.get(c.field_key)
+            if display_node is None:
+                continue
+            rep = rep_by_member.get(display_node)
+            if rep is not None:
+                computed_row[f"{rep}.{c.field_key}"] = c.value
         rows.append(
             StageSummaryRow(
                 batch_id=batch.id,
                 batch_no=batch.batch_no,
                 values=values_by_batch.get(batch.id, {}),
-                computed={
-                    f"{node_by_key[c.field_key]}.{c.field_key}": c.value
-                    for c in computed_by_batch.get(batch.id, [])
-                    if c.field_key in node_by_key
-                },
+                computed=computed_row,
             )
         )
-    return StageSummaryOut(columns=columns, rows=rows)
+    return StageSummaryOut(columns=columns, rows=rows, merged_routes=merged_route_names)

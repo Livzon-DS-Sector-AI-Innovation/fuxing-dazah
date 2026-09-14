@@ -7,6 +7,8 @@ import { Dropdown, Avatar } from "antd"
 import { LogoutOutlined, UserOutlined, EllipsisOutlined } from "@ant-design/icons"
 import { moduleMenus } from "@/lib/menu-config"
 import { ModuleIcon, SearchIcon, BellIcon } from "@/components/icons"
+import styles from "./TopNav.module.css"
+import chromeStyles from './LayoutChrome.module.css'
 import { logout, getCurrentUser, getImpersonationStatus } from "@/actions/auth"
 import { usePermission } from "@/hooks/usePermission"
 import { useSidebarStore } from "@/stores/sidebar"
@@ -149,7 +151,7 @@ export function TopNav() {
       {impersonation?.is_impersonating && impersonation.target_user && (
         <ImpersonateBanner targetUser={impersonation.target_user} />
       )}
-    <header className="h-16 bg-[var(--color-canvas)] border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0">
+    <header className={`${chromeStyles.chrome} relative z-10 h-16 border-b border-[var(--color-hairline)] flex items-center px-5 shrink-0`}>
       {/* 离屏测量容器：渲染全部可见模块用于宽度测量 */}
       <div
         aria-hidden
@@ -171,7 +173,7 @@ export function TopNav() {
 
       {/* Logo */}
       <div className="flex items-center gap-2.5 mr-10 shrink-0">
-        <div className="w-7 h-7 rounded-[var(--rounded-md)] bg-[var(--color-primary)] flex items-center justify-center">
+        <div className={styles.brandMark}>
           <span className="text-white text-xs font-semibold">API</span>
         </div>
         <span className="text-[var(--color-charcoal)] text-[15px] font-semibold tracking-tight">
@@ -188,11 +190,14 @@ export function TopNav() {
               key={mod.key}
               href={mod.path}
               data-module={mod.key}
+              aria-current={isActive ? "page" : undefined}
               className={`
-                flex items-center gap-1.5 px-3 h-full text-[14px] font-medium transition-colors whitespace-nowrap
+                ${styles.navTab} ${isActive ? styles.isActive : ""} flex items-center gap-1.5 px-3 text-[14px] font-medium whitespace-nowrap
                 ${isActive
                   ? "text-[var(--color-primary)]"
-                  : "text-[var(--color-steel)] hover:text-[var(--color-primary)]"
+                  // 玻璃顶栏带淡紫底色，--color-steel 在其上只有 3.3:1（白底时 4.5:1）。
+                  // 标签是正文级文字，需 4.5:1，故降到 --color-slate（约 5.0:1）。
+                  : "text-[var(--color-slate)] hover:text-[var(--color-primary)]"
                 }
               `}
             >
@@ -219,11 +224,8 @@ export function TopNav() {
             <button
               ref={moreRef}
               className={`
-                flex items-center justify-center h-full w-10 shrink-0 transition-colors
-                ${activeInMore
-                  ? "text-[var(--color-primary)]"
-                  : "text-[var(--color-steel)] hover:text-[var(--color-charcoal)]"
-                }
+                ${styles.moreBtn} flex items-center justify-center w-10 shrink-0
+                ${activeInMore ? styles.isActive : ""}
               `}
               title="更多模块"
             >
@@ -233,7 +235,7 @@ export function TopNav() {
         )}
 
         <span
-          className="absolute bottom-0 left-0 h-[2px] bg-[var(--color-primary)] rounded-full pointer-events-none transition-[transform,width] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
+          className={styles.indicator}
           style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
         />
       </nav>
@@ -242,15 +244,17 @@ export function TopNav() {
       <div className="flex items-center gap-1 ml-4 shrink-0">
         <button
           onClick={toggleSidebar}
-          className="w-8 h-8 flex items-center justify-center rounded-[var(--rounded-sm)] text-[var(--color-steel)] hover:text-[var(--color-charcoal)] hover:bg-[var(--color-surface)] transition-colors"
+          aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
+          aria-expanded={!collapsed}
+          className={styles.iconButton}
           title={collapsed ? "展开侧边栏" : "收起侧边栏"}
         >
           {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
         </button>
-        <button className="w-8 h-8 flex items-center justify-center rounded-[var(--rounded-sm)] text-[var(--color-steel)] hover:text-[var(--color-charcoal)] hover:bg-[var(--color-surface)] transition-colors">
+        <button className={styles.iconButton} aria-label="搜索">
           <SearchIcon className="w-[18px] h-[18px]" />
         </button>
-        <button className="w-8 h-8 flex items-center justify-center rounded-[var(--rounded-sm)] text-[var(--color-steel)] hover:text-[var(--color-charcoal)] hover:bg-[var(--color-surface)] transition-colors relative">
+        <button className={styles.iconButton} aria-label="通知">
           <BellIcon className="w-[18px] h-[18px]" />
           <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--color-error)] rounded-full" />
         </button>
@@ -264,7 +268,7 @@ export function TopNav() {
           placement="bottomRight"
         >
           <button
-            className="ml-2 flex items-center gap-2 h-8 px-2 rounded-[var(--rounded-md)] hover:bg-[var(--color-surface)] transition-colors disabled:opacity-50"
+            className={`${styles.userButton} ml-2 flex items-center gap-2 px-2 disabled:opacity-50`}
             disabled={loggingOut}
           >
             {avatarSrc ? (

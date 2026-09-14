@@ -1,10 +1,11 @@
 'use client'
 
 import { useMemo, useEffect, useState } from 'react'
-import { App, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
+import { App, Button, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Dayjs } from 'dayjs'
 import { startExecution, fetchNodeAssignments } from '@/actions/production'
+import { getCurrentUser } from '@/actions/auth'
 import {
   fetchBatchDetailClient,
   fetchRouteGraphClient,
@@ -20,6 +21,54 @@ interface Props {
   batchId: string
   onClose: () => void
   defaultNodeId?: string
+}
+
+/** 投料消耗数量输入：带「全量/半量」快捷填充，上限为该来源的可用余量 */
+function ConsumeQtyInput({
+  name,
+  max,
+  required,
+  placeholder,
+  onFill,
+}: {
+  name: string
+  max?: number | null
+  required?: boolean
+  placeholder: string
+  onFill: (name: string, value: number) => void
+}) {
+  const hasMax = max != null && max > 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <Form.Item
+        name={name}
+        rules={required ? [{ required: true, message: '请输入' }] : undefined}
+        style={{ margin: 0, width: 130 }}
+      >
+        <InputNumber min={0} max={max ?? undefined} placeholder={placeholder} style={{ width: '100%' }} />
+      </Form.Item>
+      {hasMax && (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, height: 'auto' }}
+          onClick={() => onFill(name, max!)}
+        >
+          全量
+        </Button>
+      )}
+      {hasMax && (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, height: 'auto', marginInlineStart: 0 }}
+          onClick={() => onFill(name, Math.round((max! / 2) * 1000) / 1000)}
+        >
+          半量
+        </Button>
+      )}
+    </div>
+  )
 }
 
 export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) {
@@ -96,10 +145,20 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     queryFn: async () => {
       if (!detail?.route_id || !nodeId) return []
       const r = await fetchNodeAssignments(detail.route_id, nodeId)
-      return r.success ? (r.data ?? []) : []
+      // 查询失败时抛错（data 保持 undefined）：避免把失败当成"无配置"，
+      // 否则会把负责人静默填成本人并授以新执行负责人权限
+      if (!r.success) throw new Error(r.error ?? '获取节点负责人配置失败')
+      return r.data ?? []
     },
     enabled: !!(detail?.route_id && nodeId),
     staleTime: 30_000,
+  })
+
+  // 当前登录用户：该节点无配置默认负责人时，工序负责人默认填本人
+  const { data: currentUser } = useQuery({
+    queryKey: ['auth-current-user'],
+    queryFn: () => getCurrentUser(),
+    staleTime: 5 * 60 * 1000,
   })
 
   useEffect(() => {
@@ -112,14 +171,19 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
   }, [defaultNodeId, graph, form])
 
   useEffect(() => {
-    if (nodeAssignmentsData?.length) {
-      // 仅在字段为空时自动填充，避免覆盖用户手动选择
-      const currentOwner = form.getFieldValue('owner_id')
-      if (!currentOwner) {
-        form.setFieldsValue({ owner_id: nodeAssignmentsData[0].user_id })
-      }
+    // 等该节点的默认负责人配置加载完再决定：有配置 → 第一个配置人；无配置 → 当前登录用户。
+    // 用户一旦手动选过负责人（isFieldTouched 仅由用户交互置位，setFieldsValue 不会触碰它），
+    // 后续 refetch/切换节点都不再自动填充，避免覆盖手动选择。
+    if (!nodeId || nodeAssignmentsData === undefined) return
+    if (form.isFieldTouched('owner_id')) return
+    const configured = nodeAssignmentsData[0]?.user_id
+    const defaultOwner = configured ?? currentUser?.id
+    if (!defaultOwner) return
+    const currentOwner = form.getFieldValue('owner_id')
+    if (currentOwner !== defaultOwner) {
+      form.setFieldsValue({ owner_id: defaultOwner })
     }
-  }, [nodeId, nodeAssignmentsData, form])
+  }, [nodeId, nodeAssignmentsData, currentUser, form])
 
   const selectedNode = graph?.nodes.find(n => n.id === nodeId)
   const startDefs = selectedNode?.fields.filter(f => f.phase === 'start') ?? []
@@ -158,6 +222,22 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
         label: `${ct.name}（${ct.line_name ?? '未标产线'}） / 余量 ${ct.available_quantity ?? 0}`,
       }))
 
+  // 快捷填充：新选中投料来源时默认按其全部余量预填消耗数量
+  const setQty = (name: string, value: number) => form.setFieldValue(name, value)
+  const prefillOnSelect = (
+    selectedIds: string[],
+    prevIds: string[] | undefined,
+    makeName: (id: string) => string,
+    availableOf: (id: string) => number | null | undefined,
+  ) => {
+    const prev = new Set(prevIds ?? [])
+    selectedIds.forEach(id => {
+      if (prev.has(id)) return
+      const available = availableOf(id)
+      if (available != null && available > 0) setQty(makeName(id), available)
+    })
+  }
+
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
     if (!values) return
@@ -167,7 +247,9 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
     let ownerName: string | null = null
     if (ownerId) {
       const cache = queryClient.getQueryData<{ items: IdentityPersonnel[] }>(['identity-personnel'])
-      ownerName = cache?.items?.find((p) => p.id === ownerId)?.name ?? null
+      ownerName = cache?.items?.find((p) => p.id === ownerId)?.name
+        // 人员列表缓存未加载/未同步到本人时，回退到当前登录用户信息
+        ?? (ownerId === currentUser?.id ? currentUser.name : null)
     }
     const result = await startExecution(batchId, {
       node_id: values.node_id,
@@ -365,6 +447,14 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                     allowClear
                     showSearch
                     style={{ borderRadius: 8 }}
+                    onChange={(ids: string[]) =>
+                      prefillOnSelect(
+                        ids,
+                        watchedValues?.[`consume_output_${im.intermediate_type_id}`] as string[] | undefined,
+                        id => `consume_qty_${im.intermediate_type_id}_${id}`,
+                        id => (batchOutputs ?? []).find(o => o.id === id)?.available_quantity,
+                      )
+                    }
                   />
                 </Form.Item>
 
@@ -391,18 +481,13 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                             }}>
                               {label}
                             </span>
-                            <Form.Item
+                            <ConsumeQtyInput
                               name={`consume_qty_${im.intermediate_type_id}_${outputId}`}
-                              rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
-                              style={{ margin: 0, width: 140 }}
-                            >
-                              <InputNumber
-                                min={1}
-                                max={output?.available_quantity ?? undefined}
-                                placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
-                                style={{ width: '100%' }}
-                              />
-                            </Form.Item>
+                              max={output?.available_quantity}
+                              required={im.required}
+                              placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
+                              onFill={setQty}
+                            />
                           </div>
                         )
                       })}
@@ -424,6 +509,14 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                         allowClear
                         showSearch
                         style={{ borderRadius: 8 }}
+                        onChange={(ids: string[]) =>
+                          prefillOnSelect(
+                            ids,
+                            watchedValues?.[`consume_container_${im.intermediate_type_id}`] as string[] | undefined,
+                            id => `consume_cqty_${im.intermediate_type_id}_${id}`,
+                            id => (availableContainers ?? []).find(c => c.id === id)?.available_quantity,
+                          )
+                        }
                       />
                     </Form.Item>
                     {(() => {
@@ -446,17 +539,12 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                                 }}>
                                   {label}
                                 </span>
-                                <Form.Item
+                                <ConsumeQtyInput
                                   name={`consume_cqty_${im.intermediate_type_id}_${containerId}`}
-                                  style={{ margin: 0, width: 140 }}
-                                >
-                                  <InputNumber
-                                    min={1}
-                                    max={ct?.available_quantity ?? undefined}
-                                    placeholder="消耗数量"
-                                    style={{ width: '100%' }}
-                                  />
-                                </Form.Item>
+                                  max={ct?.available_quantity}
+                                  placeholder="消耗数量"
+                                  onFill={setQty}
+                                />
                               </div>
                             )
                           })}

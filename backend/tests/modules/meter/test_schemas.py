@@ -119,10 +119,10 @@ class TestBatchRequests:
         with pytest.raises(ValidationError):
             ExportReportRequest.model_validate({"ids": [str(i) for i in range(201)]})
 
-    def test_file_match_max_200(self) -> None:
-        """文件名批量匹配单次最多 200 个。"""
-        with pytest.raises(ValidationError):
-            FileMatchRequest.model_validate({"filenames": [f"f{i}.pdf" for i in range(201)]})
+    def test_file_match_no_limit(self) -> None:
+        """文件名批量匹配已取消单次 200 上限。"""
+        req = FileMatchRequest.model_validate({"filenames": [f"f{i}.pdf" for i in range(201)]})
+        assert len(req.filenames) == 201
 
 
 class TestDepartmentSchemas:

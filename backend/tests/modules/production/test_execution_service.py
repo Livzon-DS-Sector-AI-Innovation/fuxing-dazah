@@ -19,7 +19,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, ForbiddenException
 from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
 from app.modules.production.models import (
@@ -32,6 +32,7 @@ from app.modules.production.schemas import (
     BatchCreate,
     ChildBatchIn,
     DeriveIn,
+    ExecutionAmendIn,
     ExecutionCompleteIn,
     ExecutionStartIn,
     FieldValueIn,
@@ -501,6 +502,169 @@ class TestCompleteAndRework:
             db_session, ex.id, user=None,
         )
         assert aborted.status == "aborted"
+
+
+class TestExecutionOwnerAndUpsert:
+    """单次执行负责人权限 + 结束字段值 upsert。
+
+    背景：结束工序曾直接插入 end 字段值且插入先于权限校验，MCP 工具
+    吞掉 403 后中间件仍提交会话，脏字段值行落库，后续结束工序撞
+    (execution_id, field_def_id) 唯一索引 500。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock 权限查询为空集：被测用户无任何权限码，聚焦执行级豁免。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return set()
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", fake_perms)
+
+    async def _make_plain_user(self, db: AsyncSession) -> User:
+        """无任何工段/工序身份的用户（单次执行负责人）。"""
+        user = User(name=f"执行人-{rand_code('U')}", employee_no=rand_code("EMP"))
+        db.add(user)
+        await db.flush()
+        return user
+
+    async def test_owner_completes_execution_on_others_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """批次归属他人时，开始工序时被指定的执行负责人仍可结束自己的执行。"""
+        owner = await self._make_plain_user(db_session)
+        batch = await _make_batch(db_session, published_route)
+        batch.owner_user_id = uuid.uuid4()  # 批次归属他人
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=owner.id,
+                owner_name=owner.name,
+            ),
+            user=None,
+        )
+        completed = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=owner,
+        )
+        assert completed.status == "completed"
+
+    async def test_owner_cannot_complete_others_execution(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """无身份用户不能结束别人的执行（执行负责人豁免仅限自己的执行）。"""
+        from app.core.exceptions import ForbiddenException
+
+        owner = await self._make_plain_user(db_session)
+        batch = await _make_batch(db_session, published_route)
+        batch.owner_user_id = uuid.uuid4()
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                owner_id=uuid.uuid4(),  # 执行负责人是别人
+            ),
+            user=None,
+        )
+        with pytest.raises(ForbiddenException):
+            await execution_service.complete_execution(
+                db_session, ex.id, ExecutionCompleteIn(), user=owner,
+            )
+
+    async def test_complete_upserts_existing_end_field_values(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """库里已有同 (execution_id, field_def_id) 行时，结束工序更新而非撞唯一索引。"""
+        from app.modules.production.models import NodeFieldValue
+
+        batch = await _make_batch(db_session, published_route)
+        # 直开 node_b（偏离），使执行带 end 阶段字段 yield_qty
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                deviation_reason="测试直开",
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        defs = await repo.get_field_defs_by_nodes(
+            db_session, [published_route["node_b"].id]
+        )
+        yield_def = next(d for d in defs if d.phase == "end")
+        # 模拟事故脏数据：上一条结束请求已把同键行写入
+        db_session.add(
+            NodeFieldValue(
+                execution_id=ex.id,
+                field_def_id=yield_def.id,
+                field_key=yield_def.field_key,
+                field_label=yield_def.field_label,
+                unit=yield_def.unit,
+                phase="end",
+                value_numeric=99,
+            )
+        )
+        await db_session.flush()
+
+        completed = await execution_service.complete_execution(
+            db_session,
+            ex.id,
+            ExecutionCompleteIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=12.5)]
+            ),
+            user=None,
+        )
+        assert completed.status == "completed"
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        yq = [v for v in values if v.field_key == "yield_qty"]
+        assert len(yq) == 1
+        assert yq[0].value_numeric == 12.5
+
+    async def test_complete_without_values_keeps_existing_rows(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """空字段值结束工序（事故批次的解卡路径）：已有行保留，不新增不报错。"""
+        from app.modules.production.models import NodeFieldValue
+
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                deviation_reason="测试直开",
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        defs = await repo.get_field_defs_by_nodes(
+            db_session, [published_route["node_b"].id]
+        )
+        yield_def = next(d for d in defs if d.phase == "end")
+        db_session.add(
+            NodeFieldValue(
+                execution_id=ex.id,
+                field_def_id=yield_def.id,
+                field_key=yield_def.field_key,
+                field_label=yield_def.field_label,
+                unit=yield_def.unit,
+                phase="end",
+                value_numeric=8,
+            )
+        )
+        await db_session.flush()
+
+        completed = await execution_service.complete_execution(
+            db_session, ex.id, ExecutionCompleteIn(), user=None,
+        )
+        assert completed.status == "completed"
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        yq = [v for v in values if v.field_key == "yield_qty"]
+        assert len(yq) == 1
+        assert yq[0].value_numeric == 8
 
 
 async def _make_line(db: AsyncSession) -> Any:
@@ -1130,3 +1294,400 @@ class TestManualTime:
         )
         assert done.finished_at is not None
         assert abs((done.finished_at - now()).total_seconds()) < 60
+
+
+class TestAmendExecution:
+    """修改已结束工序填报数据：独立权限、start/end 两阶段 upsert 与清空、
+    时间修改与批次首末时间重算、终态批次可改（与补录互补）。"""
+
+    @pytest.fixture(autouse=True)
+    def _mock_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """默认授予 amend 权限；无权限用例自行覆盖。"""
+
+        async def fake_perms(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:amend"}
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", fake_perms)
+
+    async def _make_b_execution(
+        self,
+        db: AsyncSession,
+        ctx: dict[str, Any],
+        *,
+        with_end_value: bool = True,
+    ) -> tuple[Batch, NodeExecution]:
+        """辅助：完成 A 后开始并结束 B（temp=25 start 阶段；yield_qty=80 end 阶段）。"""
+        batch = await _make_batch(db, ctx)
+        await _complete_node_a(db, ctx, batch)
+        ex = await execution_service.start_execution(
+            db,
+            batch.id,
+            ExecutionStartIn(
+                node_id=ctx["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.complete_execution(
+            db,
+            ex.id,
+            ExecutionCompleteIn(
+                field_values=(
+                    [FieldValueIn(field_key="yield_qty", value=80)]
+                    if with_end_value
+                    else []
+                ),
+            ),
+            user=None,
+        )
+        refreshed = await repo.get_execution(db, ex.id)
+        assert refreshed is not None
+        return batch, refreshed
+
+    async def test_amend_requires_dedicated_permission(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch, test_user: User,
+    ) -> None:
+        """batch:submit（管理员通行证）不放行 amend：独立权限硬校验。"""
+
+        async def admin_only(_uid: str, _db: AsyncSession) -> set[str]:
+            return {"production:batch:submit"}
+
+        monkeypatch.setattr(execution_service, "get_user_permissions", admin_only)
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(ForbiddenException, match="amend"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="temp", value=26)],
+                ),
+                user=test_user,
+            )
+
+    async def test_amend_rejects_anonymous_user(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """user=None（未登录）拒绝。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(ForbiddenException, match="未登录"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="temp", value=26)],
+                ),
+                user=None,
+            )
+
+    async def test_amend_updates_end_field_in_place_with_audit(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """end 阶段已有行就地更新，filled_by 刷新、created_by 保留，审计记 old/new。"""
+        from sqlalchemy import select
+
+        from app.platform.audit.models import AuditLog
+
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        amended = await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=95)],
+            ),
+            user=test_user,
+        )
+        assert amended.status == "completed"
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "yield_qty")
+        assert row.value_numeric == 95
+        assert row.filled_by == test_user.id
+        assert row.created_by is None  # 首次填报归属保留（setup 用 user=None）
+        log = (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.action == "production.execution.amend",
+                    AuditLog.resource_id == ex.id,
+                )
+            )
+        ).scalar_one()
+        assert log.old_value == {"field_values": {"yield_qty": 80}}
+        assert log.new_value == {"field_values": {"yield_qty": 95}}
+
+    async def test_amend_updates_start_phase_field(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """start 阶段字段可修改（补录通道只能改 end 阶段）。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="temp", value=28)],
+            ),
+            user=test_user,
+        )
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "temp")
+        assert row.value_numeric == 28
+        assert row.is_abnormal is False
+
+    async def test_amend_clears_field_value(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """value=None 清空已有行（数值/异常标记归零，行保留）。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="temp", value=None)],
+            ),
+            user=test_user,
+        )
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "temp")
+        assert row.value_numeric is None
+        assert row.value_text is None
+        assert row.is_abnormal is False
+
+    async def test_amend_inserts_new_field_row(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """补填从未填写的 end 字段 → 新行插入。"""
+        _batch, ex = await self._make_b_execution(
+            db_session, published_route, with_end_value=False,
+        )
+        await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=66)],
+            ),
+            user=test_user,
+        )
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "yield_qty")
+        assert row.value_numeric == 66
+        assert row.created_by == test_user.id
+
+    async def test_amend_after_batch_completed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """批次 completed 后 amend 仍可用（补录被禁止的场景由本通道承接）。"""
+        batch, ex = await self._make_b_execution(db_session, published_route)
+        await batch_service.complete_batch(db_session, batch.id, user=None)
+        await execution_service.amend_execution(
+            db_session, ex.id,
+            ExecutionAmendIn(
+                field_values=[FieldValueIn(field_key="yield_qty", value=90)],
+            ),
+            user=test_user,
+        )
+        values = await repo.get_field_values_by_executions(db_session, [ex.id])
+        row = next(v for v in values if v.field_key == "yield_qty")
+        assert row.value_numeric == 90
+
+    async def test_amend_updates_times_and_recalculates_batch(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """修改起止时间 → 执行时间生效；批次首末时间按全部执行重算（含改小回缩）。"""
+        batch, ex_b = await self._make_b_execution(db_session, published_route)
+        execs = await repo.list_executions(db_session, batch.id)
+        assert len(execs) == 2
+        ex_a = next(e for e in execs if e.node_id != ex_b.node_id)
+
+        t0 = now() - timedelta(hours=2)
+        # 先给 A、B 排出明确的先后时间线：A [T0, T0+30m]，B [T0+31m, T0+40m]
+        await execution_service.amend_execution(
+            db_session, ex_a.id,
+            ExecutionAmendIn(
+                started_at=t0, finished_at=t0 + timedelta(minutes=30),
+            ),
+            user=test_user,
+        )
+        await execution_service.amend_execution(
+            db_session, ex_b.id,
+            ExecutionAmendIn(
+                started_at=t0 + timedelta(minutes=31),
+                finished_at=t0 + timedelta(minutes=40),
+            ),
+            user=test_user,
+        )
+        batch = await repo.get_batch(db_session, batch.id)
+        assert batch is not None
+        assert batch.first_started_at == t0
+        assert batch.last_finished_at == t0 + timedelta(minutes=40)
+
+        # 整体前移 B 到 A 跨度内：B [T0+5m, T0+10m]。last_finished_at 应回缩到
+        # A 的结束时间 T0+30m，而非保留单调最大旧值 T0+40m（complete 的
+        # 单调最大不会自动回缩，必须重算）
+        await execution_service.amend_execution(
+            db_session, ex_b.id,
+            ExecutionAmendIn(
+                started_at=t0 + timedelta(minutes=5),
+                finished_at=t0 + timedelta(minutes=10),
+            ),
+            user=test_user,
+        )
+        batch = await repo.get_batch(db_session, batch.id)
+        assert batch is not None
+        assert batch.last_finished_at == t0 + timedelta(minutes=30)
+
+        # 再把 B 的开始时间改到 A 之前：first_started_at 按 min 重算 → T0-5m
+        await execution_service.amend_execution(
+            db_session, ex_b.id,
+            ExecutionAmendIn(started_at=t0 - timedelta(minutes=5)),
+            user=test_user,
+        )
+        batch = await repo.get_batch(db_session, batch.id)
+        assert batch is not None
+        assert batch.first_started_at == t0 - timedelta(minutes=5)
+        assert batch.last_finished_at == t0 + timedelta(minutes=30)
+        ex_b_ref = await repo.get_execution(db_session, ex_b.id)
+        assert ex_b_ref is not None
+        assert ex_b_ref.started_at == t0 - timedelta(minutes=5)
+        assert ex_b_ref.finished_at == t0 + timedelta(minutes=10)
+
+    async def test_amend_rejects_finish_before_start(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """结束时间改到开始时间之前 → 拒绝。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(AppException, match="早于开始"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    finished_at=ex.started_at - timedelta(minutes=1),
+                ),
+                user=test_user,
+            )
+
+    async def test_amend_rejects_in_progress_execution(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """进行中的执行不可改（仍由结束工序流程写入）。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=None,
+        )
+        with pytest.raises(AppException, match="仅已结束或已中止"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(remark="x"),
+                user=test_user,
+            )
+
+    async def test_amend_aborted_execution_allowed(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """已中止的执行也可修正时间/数据。"""
+        batch = await _make_batch(db_session, published_route)
+        ex = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id),
+            user=None,
+        )
+        await execution_service.abort_execution(db_session, ex.id, user=None)
+        t = now() - timedelta(hours=1)
+        amended = await execution_service.amend_execution(
+            db_session, ex.id, ExecutionAmendIn(started_at=t), user=test_user,
+        )
+        assert amended.status == "aborted"
+        assert amended.started_at == t
+
+    async def test_amend_rejects_future_time(self) -> None:
+        """未来时间在 schema 层即被拒绝。"""
+        with pytest.raises(ValidationError):
+            ExecutionAmendIn(started_at=now() + timedelta(days=1))
+
+    async def test_amend_rejects_empty_payload(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """无任何变更内容 → 拒绝。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(AppException, match="没有要修改的内容"):
+            await execution_service.amend_execution(
+                db_session, ex.id, ExecutionAmendIn(), user=test_user,
+            )
+
+    async def test_amend_rejects_unknown_field(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """未定义字段 → 拒绝。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        with pytest.raises(AppException, match="未定义的字段"):
+            await execution_service.amend_execution(
+                db_session, ex.id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="nope", value=1)],
+                ),
+                user=test_user,
+            )
+
+    async def test_amend_noop_values_do_not_rewrite_filled_at(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """幂等提交（值与现值相同）不产生实际变更 → 拒绝，不刷新 filled_at/审计。"""
+        _batch, ex = await self._make_b_execution(db_session, published_route)
+        ex_id = ex.id
+        values_before = await repo.get_field_values_by_executions(db_session, [ex_id])
+        before = next(v for v in values_before if v.field_key == "yield_qty")
+        with pytest.raises(AppException, match="没有要修改的内容"):
+            await execution_service.amend_execution(
+                db_session, ex_id,
+                ExecutionAmendIn(
+                    field_values=[FieldValueIn(field_key="yield_qty", value=80)],
+                ),
+                user=test_user,
+            )
+        values_after = await repo.get_field_values_by_executions(db_session, [ex_id])
+        after = next(v for v in values_after if v.field_key == "yield_qty")
+        assert after.filled_at == before.filled_at
+        assert after.filled_by == before.filled_by
+
+    async def test_amend_recalc_ignores_aborted_execution_finish(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """重算批次末时间只统计 completed 执行：aborted 的 finished_at（中止时刻）不参与。"""
+        batch = await _make_batch(db_session, published_route)
+        ex_a = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(node_id=published_route["node_a"].id), user=None,
+        )
+        await execution_service.complete_execution(
+            db_session, ex_a.id, ExecutionCompleteIn(), user=None,
+        )
+        ex_b = await execution_service.start_execution(
+            db_session, batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_b"].id,
+                field_values=[FieldValueIn(field_key="temp", value=25)],
+            ),
+            user=None,
+        )
+        await execution_service.abort_execution(db_session, ex_b.id, user=None)
+
+        ex_a_ref = await repo.get_execution(db_session, ex_a.id)
+        assert ex_a_ref is not None
+        assert ex_a_ref.finished_at is not None
+
+        # 修改 A 的开始时间触发重算：末时间应仍是 A（completed）的结束时间，
+        # 而非 B 的中止时刻（aborted 的 finished_at 不参与）
+        await execution_service.amend_execution(
+            db_session, ex_a.id,
+            ExecutionAmendIn(started_at=now() - timedelta(hours=2)),
+            user=test_user,
+        )
+        batch_ref = await repo.get_batch(db_session, batch.id)
+        assert batch_ref is not None
+        assert batch_ref.last_finished_at == ex_a_ref.finished_at

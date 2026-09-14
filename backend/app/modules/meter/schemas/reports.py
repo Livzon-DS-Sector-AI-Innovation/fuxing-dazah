@@ -124,7 +124,7 @@ class FileMatchItem(BaseModel):
 
 class FileMatchRequest(BaseModel):
     """批量匹配请求：前端发送文件名列表。"""
-    filenames: list[str] = Field(default_factory=list, max_length=200)
+    filenames: list[str] = Field(default_factory=list)
 
 
 

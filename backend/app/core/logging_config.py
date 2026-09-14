@@ -172,7 +172,7 @@ class ConsoleFormatter(logging.Formatter):
         module = _short_module_name(record.name)
         rid: str = getattr(record, "request_id", "-")[:8]  # 截断前 8 位
 
-        return (
+        line = (
             f"{self._DIM}{self.formatTime(record, datefmt='%H:%M:%S')}{self._RESET} "
             f"{color}{record.levelname:<7}{self._RESET} "
             f"[{module:<10}] "
@@ -180,6 +180,10 @@ class ConsoleFormatter(logging.Formatter):
             f"{record.getMessage()}"
             f"{self._DIM}  | {rid}{self._RESET}"
         )
+        # 整个重写 format() 会绕过基类的堆栈拼接，logger.exception 的 traceback 需在此手动追加
+        if record.exc_info and record.exc_info[1]:
+            line += "\n" + self.formatException(record.exc_info)
+        return line
 
 
 class JsonFormatter(logging.Formatter):

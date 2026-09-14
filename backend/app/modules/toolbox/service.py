@@ -2,10 +2,12 @@
 
 权限语义：
 - 超级管理员（permission:role:manage）恒放行使用与配置。
-- 工具无任何授权行 → 使用默认开放（全员可用），配置仅超管。
-- 工具存在授权行 → 使用 = 使用名单 ∪ 配置名单，配置 = 仅配置名单。
-- 存储上 can_use 仅记录使用名单成员；配置名单隐含使用统一在读取时推导
-  （row.can_use or row.can_config），策略判定只实现在 resolve_access_map 一处。
+- 使用名单留空 → 使用默认开放（全员可用），与配置名单无关。
+- 使用名单非空 → 使用 = 使用名单 ∪ 配置名单（配置人员隐含使用权）。
+- 配置 = 配置名单（留空仅超管），与使用名单无关。
+- 存储上 can_use 仅记录使用名单成员；配置名单隐含使用统一在读取时推导，
+  策略判定只实现在 resolve_access_map 一处。两个名单展示（list_tool_grants）
+  按存储口径分开，互不合并。
 """
 
 import uuid
@@ -61,12 +63,16 @@ class ToolboxGrantService:
     async def resolve_access_map(
         self, db: AsyncSession, user: User, tool_ids: list[str]
     ) -> dict[str, tuple[bool, bool]]:
-        """批量判定（GET /tools 用，避免逐工具查询）。返回 {tool_id: (can_use, can_config)}。"""
+        """批量判定（GET /tools 用，避免逐工具查询）。返回 {tool_id: (can_use, can_config)}。
+
+        使用限制只看使用名单（list_tool_ids_with_use_grants）：仅配置了配置名单的
+        工具对全员保持开放；配置人员经 row.can_use or row.can_config 隐含可用。
+        """
         if await self.is_admin(db, user):
             return {tool_id: (True, True) for tool_id in tool_ids}
         uid = _to_uuid(user.id)
         row_map = {r.tool_id: r for r in await self._repo.get_user_grants(db, uid)}
-        restricted = await self._repo.list_tool_ids_with_grants(db)
+        restricted = await self._repo.list_tool_ids_with_use_grants(db)
         result: dict[str, tuple[bool, bool]] = {}
         for tool_id in tool_ids:
             row = row_map.get(tool_id)
@@ -80,7 +86,7 @@ class ToolboxGrantService:
         return result
 
     async def list_tool_ids_with_grants(self, db: AsyncSession) -> set[str]:
-        """已配置授权（进入限制模式）的工具 ID 集合。"""
+        """存在任意授权行的工具 ID 集合（孤儿行检查用）。"""
         return cast(
             set[str], await self._repo.list_tool_ids_with_grants(db)
         )
@@ -100,7 +106,9 @@ class ToolboxGrantService:
                 employee_no=user.employee_no,
                 department=user.department,
             )
-            if grant.can_use or grant.can_config:
+            # 两个名单按存储口径分开展示：配置人员不再并入使用人员
+            # （配置人员隐含使用权由判定逻辑保证，不体现在名单展示里）
+            if grant.can_use:
                 use_users.append(gu)
             if grant.can_config:
                 config_users.append(gu)

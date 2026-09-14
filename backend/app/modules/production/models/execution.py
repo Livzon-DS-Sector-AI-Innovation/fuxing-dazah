@@ -24,6 +24,17 @@ class NodeExecution(BaseModel):
         ),
         Index("ix_production_node_executions_batch", "batch_id"),
         Index("ix_production_node_executions_node", "node_id"),
+        # 工序超时基线只扫描首次已完成执行；复合部分索引避免开始工序时
+        # 在历史执行表上回表过滤大量无关状态。
+        Index(
+            "ix_production_node_executions_timeout_baseline",
+            "node_id",
+            "started_at",
+            "batch_id",
+            postgresql_where=text(
+                "is_deleted = false AND status = 'completed' AND execution_seq = 1"
+            ),
+        ),
         CheckConstraint(
             "status IN ('in_progress', 'completed', 'aborted')",
             name="ck_production_node_executions_status",

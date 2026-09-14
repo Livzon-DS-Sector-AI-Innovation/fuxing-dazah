@@ -41,6 +41,9 @@ class ProcessRoute(BaseModel):
     status: Mapped[str] = mapped_column(
         String(20), default="draft", comment="draft/published/archived"
     )
+    origin_route_id: Mapped[uuid.UUID | None] = mapped_column(
+        comment="复刻来源路线 id；数据汇总沿此链合并历代版本（祖先+自己）的批次数据"
+    )
 
 
 class RouteNode(BaseModel):
@@ -76,6 +79,9 @@ class RouteNode(BaseModel):
         String(20), default="process", comment="节点类型，现阶段恒为 process，预留扩展"
     )
     sort_order: Mapped[int] = mapped_column(default=0, comment="排序")
+    origin_node_id: Mapped[uuid.UUID | None] = mapped_column(
+        comment="克隆来源节点 id；跨版本同工序对齐的精确指针（node_code 改名后仍可对齐）"
+    )
 
 
 class RouteEdge(BaseModel):

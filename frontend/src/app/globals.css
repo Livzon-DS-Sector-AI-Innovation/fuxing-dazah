@@ -1,5 +1,10 @@
+/* 声明层序：preflight(base) < antd reset < 工具类(utilities)。
+   antd reset.css 未分层时会压过一切 Tailwind 工具类（unlayered > @layer utilities），
+   其 p/h1-h6/ul 等默认 margin 曾导致裸元素下边距常驻、mt-* 失效（flex 居中行文字上浮）。
+   导入进 antd 层后：无工具类时 antd 默认值仍生效，有工具类时工具类获胜。 */
+@layer theme, base, antd, components, utilities;
 @import "tailwindcss";
-@import "antd/dist/reset.css";
+@import "antd/dist/reset.css" layer(antd);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
@@ -157,48 +162,14 @@ body {
   font-family: var(--font-sans), "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif;
 }
 
-/* Sidebar Menu Styles - Following DESIGN.md */
-.sidebar-menu.ant-menu {
-  background: transparent;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.50;
-  color: var(--color-charcoal);
-  border-radius: 8px;
-  margin-inline: 8px;
-  margin-block: 2px;
-  padding-inline: 12px;
-  height: 36px;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item:hover {
-  background-color: var(--color-surface);
-  color: var(--color-primary);
-}
-
-.sidebar-menu.ant-menu .ant-menu-submenu-title:hover {
-  color: var(--color-primary);
-}
-
-.sidebar-menu.ant-menu .ant-menu-item-selected {
-  background-color: rgba(86, 69, 212, 0.06);
-  color: var(--color-primary);
-  font-weight: 500;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item-selected::after {
-  display: none;
-}
-
 /* Ant Design 全局样式覆盖 - 符合 DESIGN.md */
 
 /* 表格样式 */
 .ant-table {
   border-radius: 12px;
   overflow: hidden;
+  /* 显式实底：内容区有 10% 透光，表格不自己兜住会透出背景光晕 */
+  background: #ffffff;
 }
 
 .ant-table-thead > tr > th,

@@ -82,7 +82,7 @@ export function TraceGraph({ trace, currentBatchId, onBatchClick }: Props) {
       const isMaterial = l.link_type === 'material'
       return {
         id: isMaterial
-          ? `material:${l.parent_batch_id}-${l.child_batch_id}-${l.intermediate_type_id ?? 'unknown'}`
+          ? `material:${l.parent_batch_id}-${l.child_batch_id}-${l.intermediate_type_id ?? 'unknown'}-${l.intermediate_batch_no ?? ''}`
           : `lineage:${l.parent_batch_id}-${l.child_batch_id}`,
         source: l.parent_batch_id,
         target: l.child_batch_id,

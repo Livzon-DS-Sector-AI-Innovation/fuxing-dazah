@@ -36,6 +36,10 @@ export interface WorkbenchItem {
   /** 当前用户是否可操作该批次（归属他人=仅读） */
   can_operate: boolean
   started_at: string | null
+  estimated_duration_seconds?: number | null
+  expected_finish_at?: string | null
+  timeout_monitor_status?: string | null
+  timeout_notified_at?: string | null
   is_last_in_stage: boolean
   start_type?: string | null  // pending_start 卡片: normal | parallel | rework
   stage_nodes: StageNodeInfo[]
@@ -66,6 +70,15 @@ export interface AssignedRouteInfo {
   stages: AssignedStageInfo[]
 }
 
+export interface CreatableRouteInfo {
+  /** 当前用户可手动建批的路线（用户是该路线第一工段负责人） */
+  route_id: string
+  route_name: string
+  product_id: string
+  product_name: string | null
+  first_stage_name: string
+}
+
 export interface RecentCompletedItem {
   batch_no: string | null
   batch_id: string | null
@@ -84,6 +97,8 @@ export interface WorkbenchData {
   role: 'stage_owner' | 'node_owner'
   stage_names: string[]
   assigned_routes: AssignedRouteInfo[]
+  /** 当前用户可手动建批的路线（第一工段负责人） */
+  creatable_routes: CreatableRouteInfo[]
   items: WorkbenchItem[]
   recent_completed: RecentCompletedItem[]
 }

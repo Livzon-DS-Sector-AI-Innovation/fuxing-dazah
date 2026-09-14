@@ -57,7 +57,8 @@ dev = [
 target-version = "py312"
 line-length = 88
 # 归档迁移目录是旧仓库迁移文件快照（不再执行），排除出 lint 范围
-extend-exclude = ["app/modules/safety/migrations/_archive_from_dazah_backend", "app/modules/safety.bak.*"]
+# vendor 引擎（ai_translator 原样拷贝）不按本仓 lint 标准整改
+extend-exclude = ["app/modules/safety/migrations/_archive_from_dazah_backend", "app/modules/safety.bak.*", "app/modules/toolbox/tools/document_translate/_engine"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
@@ -81,6 +82,11 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["mammoth", "weasyprint", "weasyprint.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# vendor 引擎（ai_translator 原样拷贝）不按本仓 strict 标准整改
+module = ["app.modules.toolbox.tools.document_translate._engine.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

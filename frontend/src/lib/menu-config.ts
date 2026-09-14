@@ -29,6 +29,12 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "planning-center", label: "计划中枢", path: "/production/planning-center" },
       { key: "master-data", label: "主数据管理", path: "/production/master-data" },
       {
+        key: "notification-config",
+        label: "通知配置",
+        path: "/production/notification-config",
+        permissions: ["production:notification:manage"],
+      },
+      {
         key: "manufacturing-unit",
         label: "制造单元",
         path: "",

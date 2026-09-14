@@ -10,6 +10,9 @@ PERMISSIONS: list[PermissionDef] = [
         "production:batch:submit", "提交批次执行", "production", "batch", "submit"
     ),
     PermissionDef(
+        "production:batch:amend", "修改批次填报数据", "production", "batch", "amend"
+    ),
+    PermissionDef(
         "production:batch:read", "查看生产批次", "production", "batch", "read"
     ),
     PermissionDef(
@@ -17,5 +20,8 @@ PERMISSIONS: list[PermissionDef] = [
     ),
     PermissionDef(
         "production:planning:submit", "提交计划中枢操作", "production", "planning", "submit"
+    ),
+    PermissionDef(
+        "production:notification:manage", "管理生产通知配置", "production", "notification", "manage"
     ),
 ]

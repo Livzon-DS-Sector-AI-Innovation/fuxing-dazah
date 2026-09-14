@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Input, Modal, Popconfirm, Space, Tag } from 'antd'
+import { App, Button, Input, Modal, Popconfirm, Space, Tag, Typography } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   archiveRoute,
@@ -12,6 +12,8 @@ import {
   renameRoute,
 } from '@/actions/production'
 import type { ProcessRoute } from '@/types/production'
+
+const { Text } = Typography
 
 export const STATUS_META: Record<string, { color: string; label: string }> = {
   draft: { color: 'default', label: '草稿' },
@@ -178,6 +180,14 @@ export function RouteVersionBar({
           onPressEnter={confirmNameModal}
           autoFocus
         />
+        {nameModal === 'copy' && (
+          <Text
+            type="secondary"
+            style={{ display: 'block', marginTop: 8, fontSize: 12, lineHeight: 1.8 }}
+          >
+            将完整复制本路线的工序、连线与字段定义（计算字段、负责人配置不随带）。新路线视为本路线的后续版本：发布后，数据汇总会自动合并本路线及其历代前身的历史批次数据，不会出现数据断层。发布前编辑时请保持工序编码不变，否则该工序会被视为新增工序、无法对应历史数据。
+          </Text>
+        )}
       </Modal>
     </div>
   )

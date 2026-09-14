@@ -14,6 +14,7 @@ import { deleteRole, assignRoleToUser, removeRoleFromUser, assignRoleToDepartmen
 import { fetchRoles, fetchRoleUsers, fetchRoleDepartments, fetchDepartments } from '@/lib/api/permission'
 import { UserSelect } from '@/components/shared'
 import type { Role, PermissionModuleGroup, DataScope, RoleUser, DepartmentRole, DepartmentItem } from '@/types/permission'
+import styles from './Permission.module.css'
 
 const SCOPE_LABELS: Record<DataScope, string> = {
   all: '全部数据',
@@ -231,18 +232,19 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
 
   return (
     <div
-      className="h-full flex flex-col gap-4 sm:gap-6 p-4 sm:p-6 overflow-hidden"
+      className={`${styles.shell} ${styles.roles} h-full flex flex-col gap-4 sm:gap-5 p-4 sm:p-5 overflow-hidden`}
       style={{ backgroundColor: 'var(--color-surface)' }}
     >
       {/* ═══════════════════════════════════════════════
           Layer 1: Header Card
           ═══════════════════════════════════════════════ */}
       <div
-        className="rounded-[16px] border p-5 sm:p-6"
+        className={`${styles.hero} rounded-[16px] border p-5 sm:p-6`}
         style={{
           backgroundColor: 'var(--color-canvas)',
           borderColor: 'var(--color-hairline)',
-          borderTop: '3px solid var(--color-primary)',
+          borderTop: '0',
+          boxShadow: '0 8px 24px rgba(46,54,94,.06)',
         }}
       >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -288,14 +290,14 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
           Layer 2: Content Panel
           ═══════════════════════════════════════════════ */}
       <div
-        className="rounded-[16px] border p-4 sm:p-6 flex-1 flex flex-col overflow-hidden"
+        className={`${styles.workspace} rounded-[16px] border p-4 sm:p-6 flex-1 flex flex-col overflow-hidden`}
         style={{
           backgroundColor: 'var(--color-canvas)',
           borderColor: 'var(--color-hairline)',
         }}
       >
         {/* Toolbar */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-5">
+        <div className={`${styles.toolbar} flex flex-col sm:flex-row gap-3 mb-5`}>
           <Input
             prefix={<SearchOutlined style={{ color: 'var(--color-stone)' }} />}
             placeholder="搜索角色名称或编码…"
@@ -383,7 +385,7 @@ export function RoleList({ initialRoles, permissionGroups, apiToken }: Props) {
               return (
                 <div
                   key={role.id}
-                  className="rounded-[16px] border p-5 flex flex-col transition-shadow duration-150 group"
+                  className={`${styles.roleCard} rounded-[16px] border p-5 flex flex-col transition-shadow duration-150 group`}
                   style={{
                     backgroundColor: tint.bg,
                     borderColor: tint.border,

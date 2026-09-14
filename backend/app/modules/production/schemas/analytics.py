@@ -11,14 +11,18 @@ class StepCycleStat(BaseModel):
     """单工序周期统计"""
     model_config = ConfigDict(from_attributes=True)
 
+    route_id: uuid.UUID
+    route_name: str
     node_id: uuid.UUID
     node_name: str
     stage_name: str
     sort_order: int
-    n: int
+    n: int  # 含路线血缘前版本的同工序样本
     avg_hours: float
     min_hours: float | None
     max_hours: float | None
+    # P80 参考时长（小时），用于工序超时监控；样本不足时为空
+    p80_hours: float | None = None
 
 
 class StepCycleResponse(BaseModel):
@@ -34,6 +38,23 @@ class FieldTrendPoint(BaseModel):
     batch_no: str
     filled_at: datetime
     value: float
+
+
+class FieldTrendSeries(BaseModel):
+    """单字段趋势序列：节点下一个数值字段的全部数据点。"""
+
+    field_key: str
+    field_label: str
+    unit: str | None
+    data_points: list[FieldTrendPoint]
+
+
+class FieldTrendResponse(BaseModel):
+    """字段趋势响应：节点下全部有数据的数值字段。"""
+
+    series: list[FieldTrendSeries]
+    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    merged_routes: list[str] = []
 
 
 class StageSummaryColumn(BaseModel):
@@ -63,3 +84,5 @@ class StageSummaryOut(BaseModel):
 
     columns: list[StageSummaryColumn]
     rows: list[StageSummaryRow]
+    # 血缘合并纳入的祖先路线名（旧 → 新）；无合并时为空
+    merged_routes: list[str] = []

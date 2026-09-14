@@ -1,6 +1,5 @@
 """工具箱使用权限（tool_grants）与鉴权测试。"""
 
-import json
 import uuid
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
@@ -157,7 +156,7 @@ async def test_config_user_implies_use(
     make_user: MakeUser,
     add_grant: AddGrant,
 ) -> None:
-    """配置名单成员隐含使用权限。"""
+    """配置名单成员隐含使用权限（使用名单留空时工具本就全员可用）。"""
     client, state = grants_client
     u = await make_user("config-user")
     await add_grant(u, TOOL_ID, can_use=False, can_config=True)
@@ -169,6 +168,50 @@ async def test_config_user_implies_use(
     grant_tool = next(t for t in tools if t["id"] == TOOL_ID)
     assert grant_tool["can_use"] is True
     assert grant_tool["can_config"] is True
+
+
+async def test_config_only_grants_do_not_restrict_use(
+    grants_client: GrantsClient,
+    make_user: MakeUser,
+    add_grant: AddGrant,
+) -> None:
+    """只配置配置人员、使用名单留空：工具对全员保持开放，配置人员额外可配置。"""
+    client, state = grants_client
+    config_user = await make_user("config-user")
+    outsider = await make_user("outsider")
+    await add_grant(config_user, TOOL_ID, can_use=False, can_config=True)
+
+    # 名单外普通用户：可用、不可配置
+    state["user"] = SimpleNamespace(id=str(outsider.id))
+    run = await client.post(f"/tools/{TOOL_ID}/steps/s1/run", data={"params": "{}"})
+    assert run.status_code == 200, run.text
+    tools = (await client.get("/tools")).json()["data"]
+    grant_tool = next(t for t in tools if t["id"] == TOOL_ID)
+    assert grant_tool["can_use"] is True
+    assert grant_tool["can_config"] is False
+
+
+async def test_config_user_can_use_when_use_list_restricts(
+    grants_client: GrantsClient,
+    make_user: MakeUser,
+    add_grant: AddGrant,
+) -> None:
+    """使用名单非空且不含配置人员：配置人员仍可使用（隐含使用权）。"""
+    client, state = grants_client
+    u1 = await make_user("u1")
+    config_user = await make_user("config-user")
+    outsider = await make_user("outsider")
+    await add_grant(u1, TOOL_ID, can_use=True, can_config=False)
+    await add_grant(config_user, TOOL_ID, can_use=False, can_config=True)
+
+    state["user"] = SimpleNamespace(id=str(config_user.id))
+    run = await client.post(f"/tools/{TOOL_ID}/steps/s1/run", data={"params": "{}"})
+    assert run.status_code == 200, run.text
+
+    # 名单外（既不在使用名单也不在配置名单）仍被拦
+    state["user"] = SimpleNamespace(id=str(outsider.id))
+    run2 = await client.post(f"/tools/{TOOL_ID}/steps/s1/run", data={"params": "{}"})
+    assert run2.status_code == 403
 
 
 async def test_use_only_user_cannot_read_config(
@@ -242,22 +285,22 @@ async def test_grant_management_endpoints(
     assert target["use_users"] == []
     assert target["config_users"] == []
 
-    # 整体替换名单（配置名单成员隐含使用权限 → u2 也出现在 use_users）
+    # 整体替换名单（两个名单分开展示：u1 只在使用名单、u2 只在配置名单）
     resp = await client.put(
         f"/tools/{TOOL_ID}/grants",
         json={"use_user_ids": [str(u1.id)], "config_user_ids": [str(u2.id)]},
     )
     assert resp.status_code == 200, resp.text
     target = resp.json()["data"]
-    assert {u["user_id"] for u in target["use_users"]} == {str(u1.id), str(u2.id)}
+    assert [u["user_id"] for u in target["use_users"]] == [str(u1.id)]
     assert [u["user_id"] for u in target["config_users"]] == [str(u2.id)]
-    assert {u["name"] for u in target["use_users"]} == {u1.name, u2.name}
+    assert target["use_users"][0]["name"] == u1.name
     assert target["config_users"][0]["name"] == u2.name
 
     # 回读一致
     data2 = (await client.get("/tool-grants")).json()["data"]
     target2 = next(g for g in data2 if g["tool_id"] == TOOL_ID)
-    assert len(target2["use_users"]) == 2
+    assert len(target2["use_users"]) == 1
     assert len(target2["config_users"]) == 1
 
     # 清空名单 → 恢复默认开放

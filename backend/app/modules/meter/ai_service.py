@@ -53,7 +53,7 @@ VISION_PROMPT = """你是一个数据提取助手。从以下文档图片中找�
 
 REPORT_FIELDS_PROMPT = """你是一个计量检测报告数据提取助手。请从图片中提取以下字段：
 1. instrument_name：仪表名称/器具名称（别名：样品名称）
-2. serial_number：出厂编号（器具编号、出厂编号）
+2. serial_number：出厂编号（器具编号、仪器编号）
 3. certificate_no：证书编号
 4. calibration_date：本次校准/检定的执行日期（注意：不是"下次检定日期"，不是"有效期至/下次校准日期"）
 
@@ -109,7 +109,7 @@ async def _call_ai_chat(
     prompt: str,
     *,
     temperature: float = 1,
-    max_tokens: int = 500,
+    max_tokens: int = 2048,
 ) -> str:
     """调用平台统一多模态 LLM 客户端（OpenAI 兼容 chat/completions），返回回复文本。
 
@@ -125,8 +125,17 @@ async def _call_ai_chat(
     try:
         for attempt in range(1, AI_MAX_RETRIES + 1):
             try:
+                # glm-5.3-flash：思考无法关闭，low 为最低档；response_format 官方仅文本模型
+                # 支持（VLM schema 未定义），是否可用需实测，不行则删掉该字段
                 content = await client.chat_vision(
-                    prompt, image_urls, temperature=temperature, max_tokens=max_tokens
+                    prompt,
+                    image_urls,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    extra_body={
+                        "reasoning_effort": "low",
+                        "response_format": {"type": "json_object"},
+                    },
                 )
                 if content is None or content.strip() in ("", "None"):
                     raise Exception("AI 返回了空内容，请检查代理是否正常")

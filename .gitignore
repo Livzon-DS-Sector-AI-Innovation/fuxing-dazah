@@ -1,11 +1,12 @@
 .claude
 .mcp.json
 .DS_Store
+.pnpm-store
 CLAUDE.local.md
 dazah-agent
 prompt.md
 docs/superpowers
-
+.zcode
 # 飞书授权二维码（临时凭证，勿入库）
 lark-auth-qrcode.png
 

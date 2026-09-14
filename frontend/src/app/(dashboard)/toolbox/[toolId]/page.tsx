@@ -3,7 +3,7 @@
 import { apiGet } from '@/lib/http-client'
 
 import { ToolRunner } from '@/components/toolbox'
-import type { ExecutionInfo, ToolInfo } from '@/types/toolbox'
+import type { ExecutionInfo, ExecutionSummaryInfo, StepProgress, ToolInfo } from '@/types/toolbox'
 
 export const dynamic = 'force-dynamic'
 
@@ -51,6 +51,7 @@ export default async function ToolPage({
   let initialExecutionId: string | null = execution ?? null
   let restoreNotice: string | null = null
   let initialOutputs: Record<string, Record<string, unknown>> = {}
+  let initialProgress: Record<string, StepProgress> | undefined
   const initialFileIds: Record<string, string[]> = {}
   const initialFileNames: Record<string, string> = {}
   if (execution) {
@@ -60,6 +61,8 @@ export default async function ToolPage({
         { cache: 'no-store' },
       )
       initialOutputs = einfo.outputs
+      // 后台执行任务的进度：任务仍在跑时 ToolRunner 据此恢复轮询
+      initialProgress = einfo.progress
       // files: {file_id: {input_key, filename}} → {input_key: file_id[]}（后出现者排在后面）
       for (const [fid, meta] of Object.entries(einfo.files)) {
         ;(initialFileIds[meta.input_key] ??= []).push(fid)
@@ -79,14 +82,41 @@ export default async function ToolPage({
     }
   }
 
+  // 恢复提示：用户中途离开后任务仍在后台执行，重进工具页时给出「继续查看」入口。
+  // 仅后台工具、且 URL 未指定 execution 时拉取（已恢复到具体会话则无需提示）。
+  let recentExecutions: ExecutionSummaryInfo[] = []
+  if (!execution && tool.background) {
+    try {
+      const mine = await apiGet<ExecutionSummaryInfo[]>(
+        `${API_BASE}/api/v1/toolbox/executions`,
+        { cache: 'no-store' },
+      )
+      const ofTool = mine.filter((e) => e.tool_id === toolId)
+      const running = ofTool.filter((e) => e.status === 'running')
+      // 已完成只留最新一条：更早的历史结果价值有限，两条重复的「已完成」只会成为噪音
+      const latestFinished = ofTool
+        .filter((e) => e.status !== 'running')
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, 1)
+      recentExecutions = [...running, ...latestFinished]
+    } catch {
+      // 提示条是辅助能力：拉取失败不打断页面
+    }
+  }
+
   return (
     <ToolRunner
+      // key 绑定 execution：软导航（提示条「继续查看」的 router.push）只重渲染
+      // 不重挂载，useState 初始化函数不会重跑、恢复逻辑不生效；key 变化强制重挂载
+      key={execution ?? 'fresh'}
       tool={tool}
       initialExecutionId={initialExecutionId}
       initialOutputs={initialOutputs}
       initialFileIds={initialFileIds}
       initialFileNames={initialFileNames}
       initialWarning={restoreNotice}
+      initialProgress={initialProgress}
+      recentExecutions={recentExecutions}
     />
   )
 }

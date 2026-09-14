@@ -12,10 +12,13 @@ import { fetchBatchDetailClient } from '@/lib/api/production-client'
 import { stageColor } from '@/components/production/shared/stageColor'
 import type { WorkbenchItem, Execution, StageNodeInfo, IntermediateOutput, IntermediateConsumption } from '@/types/production'
 
+import styles from './Workbench.module.css'
+import { PageHeading } from '@/components/shared/PageHeading'
 import { ReceiveModal } from './ReceiveModal'
 import { AssigneeConfig } from './AssigneeConfig'
 import { StageSuffixConfig } from './StageSuffixConfig'
 import { PlannedSection } from './PlannedSection'
+import { StartBatchModal } from './StartBatchModal'
 import { StartExecutionModal } from '../batches/StartExecutionModal'
 import { CompleteExecutionModal } from '../batches/CompleteExecutionModal'
 import { BackfillFieldsModal, type BackfillExecution } from '../batches/BackfillFieldsModal'
@@ -48,12 +51,13 @@ const ANIM_STYLES = `
   from { background-position: 0% 50%; }
   to { background-position: -200% 50%; }
 }
-.wb-card { animation: wb-card-in 0.45s ease-out both; }
+.wb-card { animation: wb-card-in 0.45s ease-out backwards; }
 .wb-card-out { animation: wb-card-out 0.3s ease-in forwards; pointer-events: none; }
 .wb-stage-dot { animation: wb-dot-pulse 2.2s ease-in-out infinite; }
 .wb-batch-gradient { animation: wb-batch-flow 3s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .wb-batch-gradient { animation: none; }
+  .wb-card, .wb-card-out, .wb-stage-dot, .wb-batch-gradient { animation: none !important; }
+  .wb-card * { animation: none !important; }
 }
 `
 
@@ -89,7 +93,7 @@ function CollapsiblePanel({
           <span style={{ fontSize: 12, color: '#a4a097', marginLeft: 4 }}>· {count}</span>
         )}
       </button>
-      {open && <div style={{ paddingTop: 4 }}>{children}</div>}
+      {open && <div className={styles.configPanel}>{children}</div>}
     </div>
   )
 }
@@ -170,7 +174,7 @@ function StageBreadcrumb({
 
     const el = (
       <div key={node.node_id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
-        <div style={{
+        <div className={styles.nodeDot} style={{
           width: dotSize, height: dotSize, borderRadius: '50%',
           background: dotBg,
           border: dotBorder,
@@ -207,7 +211,7 @@ function StageBreadcrumb({
   })
 
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', padding: '6px 0 2px', overflow: 'hidden' }}>
+    <div className={styles.progressWell} style={{ display: 'flex', alignItems: 'flex-start', overflow: 'hidden' }}>
       {parts}
     </div>
   )
@@ -252,7 +256,7 @@ function BatchCard({
 
   return (
     <div
-      className={`wb-card${isCompleting ? ' wb-card-out' : ''}`}
+      className={`${styles.card} ${stacked ? styles.stacked : ''} wb-card${isCompleting ? ' wb-card-out' : ''}`}
       style={{
         position: stacked ? 'absolute' : 'relative',
         overflow: 'hidden',
@@ -271,16 +275,7 @@ function BatchCard({
         opacity: isCompleting ? 0 : 1,
         transform: isCompleting ? 'scale(0.95)' : undefined,
       }}
-      onMouseEnter={e => {
-        if (stacked) return
-        e.currentTarget.style.transform = 'translateY(-2px)'
-        e.currentTarget.style.boxShadow = '0 6px 20px rgba(0,0,0,0.07)'
-      }}
-      onMouseLeave={e => {
-        if (stacked) return
-        e.currentTarget.style.transform = 'translateY(0)'
-        e.currentTarget.style.boxShadow = 'none'
-      }}
+
     >
       {/* 头部：工段负责人→批次号+产品同行 / 工序负责人→批次号优先 */}
       {role === 'stage_owner' ? (
@@ -302,7 +297,7 @@ function BatchCard({
                 </div>
               )}
             </div>
-            <span style={{
+            <span className={styles.badge} style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
               padding: '3px 10px', borderRadius: 6,
               fontSize: 12, fontWeight: 600, lineHeight: '18px',
@@ -342,7 +337,7 @@ function BatchCard({
             >
               {item.batch_no ?? '待创建批次'}
             </span>
-            <span style={{
+            <span className={styles.badge} style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
               padding: '3px 10px', borderRadius: 6,
               fontSize: 12, fontWeight: 600, lineHeight: '18px',
@@ -383,7 +378,7 @@ function BatchCard({
       {/* 进行中负责人 */}
       {item.type === 'pending_complete' && item.owner_name && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
+          <span className={styles.badge} style={{
             fontSize: 11, color: '#5645d4',
             background: '#f4f0ff', padding: '2px 8px', borderRadius: 4,
           }}>
@@ -394,7 +389,7 @@ function BatchCard({
 
       {/* 默认负责人 */}
       {item.type !== 'pending_complete' && (
-        <div style={{ fontSize: 11, color: '#b5b1a8' }}>
+        <div className={styles.ownerChip} style={{ fontSize: 11, color: '#787671' }}>
           负责人：{assignee?.name ?? assignee?.user_id?.slice(0, 8) ?? '未设置'}
         </div>
       )}
@@ -402,7 +397,7 @@ function BatchCard({
       {/* 批次归属人（查看全部模式下他人批次展示） */}
       {readOnly && item.batch_owner_name && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
+          <span className={styles.badge} style={{
             fontSize: 11, color: '#5645d4',
             background: '#f4f0ff', padding: '2px 8px', borderRadius: 4,
           }}>
@@ -412,7 +407,7 @@ function BatchCard({
       )}
 
       {/* 操作按钮 */}
-      <div style={{ marginTop: 2 }}>
+      <div className={styles.cardActions} style={{ marginTop: 2 }}>
         {readOnly && (
           <span style={{
             display: 'inline-flex', alignItems: 'center',
@@ -515,6 +510,8 @@ export function WorkbenchInner() {
   const [recentConsumptions, setRecentConsumptions] = useState<IntermediateConsumption[]>([])
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [startNodeId, setStartNodeId] = useState<string | undefined>(undefined)
+  // 工作台手动建批：记录从哪个工段头点开（null=关闭）
+  const [startBatchStage, setStartBatchStage] = useState<string | null>(null)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string; onSuccess?: () => void } | null>(null)
   const [backfillExec, setBackfillExec] = useState<{ executions: BackfillExecution[]; routeId: string } | null>(null)
 
@@ -587,9 +584,14 @@ export function WorkbenchInner() {
     return items
   }, [data, filterProduct, filterRoute, filterStatus])
 
-  const stageGroups = useMemo(() => {
-    if (!filteredItems.length) return []
+  // 可建批路线（第一工段负责人）与可建批工段名集合
+  const creatableRoutes = useMemo(() => data?.creatable_routes ?? [], [data])
+  const creatableFirstStages = useMemo(
+    () => new Set(creatableRoutes.map(r => r.first_stage_name)),
+    [creatableRoutes],
+  )
 
+  const stageGroups = useMemo(() => {
     // 按状态类型分组的顺序和标签
     const typeOrder: Record<string, { label: string; order: number }> = {
       pending_complete: { label: '进行中', order: 1 },
@@ -637,6 +639,19 @@ export function WorkbenchInner() {
       byStage[stage][gk]!.push(item)
     }
 
+    // 追加可建批但暂无待办的工段（路线下一个批次都没有时仍可手动新建）
+    // status 筛选时不追加：空工段没有可匹配的状态项
+    if (!filterStatus) {
+      for (const stage of creatableFirstStages) {
+        if (byStage[stage]) continue
+        const routes = creatableRoutes.filter(r => r.first_stage_name === stage)
+        const matchesFilter =
+          (!filterProduct || routes.some(r => r.product_name === filterProduct)) &&
+          (!filterRoute || routes.some(r => r.route_id === filterRoute))
+        if (matchesFilter) byStage[stage] = {}
+      }
+    }
+
     return Object.entries(byStage)
       .map(([stage, groups]) => ({
         stage,
@@ -651,7 +666,7 @@ export function WorkbenchInner() {
           .sort((a, b) => a.order - b.order),
       }))
       .sort((a, b) => a.stage.localeCompare(b.stage))
-  }, [filteredItems])
+  }, [filteredItems, creatableFirstStages, creatableRoutes, filterProduct, filterRoute, filterStatus])
 
   const openCompleteModal = async (item: WorkbenchItem, onSuccess?: () => void) => {
     if (!item.batch_id || !item.execution_id) return
@@ -684,17 +699,12 @@ export function WorkbenchInner() {
       <style>{ANIM_STYLES}</style>
 
       {/* ── 页面头部：标题 + 角色工牌 + 视图切换 ── */}
-      <div style={{
+      <div className={styles.toolbar} style={{
         display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
         paddingBottom: 18, marginBottom: 24,
         borderBottom: '1px solid #ede9e4',
       }}>
-        <h2 style={{
-          margin: 0, fontSize: 22, fontWeight: 600, color: '#1a1a1a',
-          lineHeight: 1.3, letterSpacing: '0.01em',
-        }}>
-          工作台
-        </h2>
+        <PageHeading className={styles.workbenchHeading} title="工作台" subtitle="生产任务执行与工序状态跟踪" />
 
         {/* 角色工牌：页面唯一的深色块，身份焦点 */}
         <div style={{
@@ -864,18 +874,34 @@ export function WorkbenchInner() {
                             background: group.color, flexShrink: 0,
                           }}
                         />
+                        {creatableFirstStages.has(group.stage) && (
+                          <Button
+                            size="small"
+                            icon={<PlayCircleOutlined />}
+                            style={{ borderRadius: 6 }}
+                            onClick={() => setStartBatchStage(group.stage)}
+                          >
+                            新建批次
+                          </Button>
+                        )}
                         <h3 style={{
                           margin: 0, fontSize: 16, fontWeight: 600, color: '#1a1a1a',
                           lineHeight: 1.3,
                         }}>
                           {group.stage}
                         </h3>
-                        <span style={{
-                          fontSize: 12, color: '#a4a097',
-                          background: '#f6f5f4', padding: '2px 10px', borderRadius: 10,
-                        }}>
-                          {allItems.length} 项
-                        </span>
+                        {allItems.length > 0 ? (
+                          <span style={{
+                            fontSize: 12, color: '#a4a097',
+                            background: '#f6f5f4', padding: '2px 10px', borderRadius: 10,
+                          }}>
+                            {allItems.length} 项
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 12, color: '#b5b1a8' }}>
+                            暂无批次
+                          </span>
+                        )}
 
                         {mergeGroups.map(([nodeId, items]) => (
                           <Button
@@ -1069,6 +1095,20 @@ export function WorkbenchInner() {
               .map(c => ({ value: c.batch_id!, label: c.batch_no }))}
           />
         </Modal>
+      )}
+
+      {/* ── 工作台手动建批 ── */}
+      {startBatchStage && (
+        <StartBatchModal
+          stage={startBatchStage}
+          creatableRoutes={creatableRoutes}
+          onClose={() => setStartBatchStage(null)}
+          onCreated={(batchId, _batchNo, nodeId) => {
+            setStartBatchStage(null)
+            setStartBatchId(batchId)
+            setStartNodeId(nodeId)
+          }}
+        />
       )}
 
       {startBatchId && (

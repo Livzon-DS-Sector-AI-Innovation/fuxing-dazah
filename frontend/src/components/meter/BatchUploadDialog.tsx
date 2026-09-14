@@ -6,13 +6,15 @@ import { App, Modal, Button, Upload, Tag, Space, Progress } from 'antd'
 import { InboxOutlined } from '@ant-design/icons'
 import { ReportAnalyzeItem, BatchUploadResult } from '@/types/meter'
 import { analyzeReportFilesClient, batchUploadReportsClient } from '@/lib/api/meter'
-import { ReportMatchTable, ReportMatchRow } from '@/components/meter/ReportMatchTable'
+import { ReportMatchTable, ReportMatchRow, isCalibrationDateValid } from '@/components/meter/ReportMatchTable'
 import type { UploadFile } from 'antd/es/upload/interface'
 
 const { Dragger } = Upload
 
-// 识别分批大小：与后端 analyze 并发数对齐，批间串行推进进度条
+// 识别分批大小：与后端 analyze 并发数对齐，批间串行推进进度条；
+// 上传分批避免单请求体过大
 const ANALYZE_BATCH_SIZE = 10
+const UPLOAD_BATCH_SIZE = 50
 
 interface Props {
   open: boolean
@@ -51,7 +53,7 @@ export function BatchUploadDialog({ open, source, onClose }: Props) {
     setAnalyzeProgress({ processed: 0, total: fileList.length })
     try {
       // 分批识别：每批 ANALYZE_BATCH_SIZE 个，批间串行推进进度条。
-      // 好处：进度可视化、可取消、绕过单次 200 文件上限、单批失败可整体重试。
+      // 好处：进度可视化、可取消、避免单请求体过大、单批失败可整体重试。
       const accumulated: ReportMatchRow[] = []
       for (let start = 0; start < fileList.length; start += ANALYZE_BATCH_SIZE) {
         if (seq !== seqRef.current) return  // 已取消/重置
@@ -89,34 +91,66 @@ export function BatchUploadDialog({ open, source, onClose }: Props) {
 
   // ── 步骤2：确认上传 ──
   const handleConfirmUpload = async () => {
+    const matched = matches.filter(m => m.matched_id)
+    const invalidDates = matched.filter(m => !isCalibrationDateValid(m.extraction.calibration_date))
+    if (invalidDates.length > 0) {
+      message.error(
+        `以下文件校准日期格式不正确（需 YYYY-MM-DD，如 2024-03-05）：${invalidDates.map(m => m.filename).join('、')}`
+      )
+      return
+    }
     setUploading(true)
     const seq = ++seqRef.current
     try {
-      const formData = new FormData()
-      files.forEach(f => {
-        if (f.originFileObj) {
-          formData.append('files', f.originFileObj)
-        }
-      })
-      // 只提交已匹配的行；未匹配/识别失败的行按 UI 提示不会上传
-      const matched = matches.filter(m => m.matched_id)
-      const items = matched.map(m => ({
-        filename: m.filename,
-        instrument_id: m.matched_type === 'instrument' ? m.matched_id : null,
-        gas_detector_id: m.matched_type === 'gas_detector' ? m.matched_id : null,
-        certificate_no: m.extraction.certificate_no ?? null,
-        calibration_date: m.extraction.calibration_date ?? null,
-      }))
-      formData.append('items_json', JSON.stringify(items))
+      // 分批提交：每批只带本批文件（后端按文件名与 items 配对），聚合各批结果
+      const fileByName = new Map(files.map(f => [f.name, f.originFileObj]))
+      let success = 0
+      let failed = 0
+      const allErrors: string[] = []
+      const allNotes: string[] = []
+      const allReportIds: string[] = []
+      for (let start = 0; start < matched.length; start += UPLOAD_BATCH_SIZE) {
+        if (seq !== seqRef.current) return
+        const batch = matched.slice(start, start + UPLOAD_BATCH_SIZE)
+        const formData = new FormData()
+        batch.forEach(m => {
+          const f = fileByName.get(m.filename)
+          if (f) formData.append('files', f)
+        })
+        const items = batch.map(m => ({
+          filename: m.filename,
+          instrument_id: m.matched_type === 'instrument' ? m.matched_id : null,
+          gas_detector_id: m.matched_type === 'gas_detector' ? m.matched_id : null,
+          certificate_no: m.extraction.certificate_no ?? null,
+          calibration_date: m.extraction.calibration_date ?? null,
+        }))
+        formData.append('items_json', JSON.stringify(items))
 
-      const res = await batchUploadReportsClient(formData)
-      if (seq !== seqRef.current) return
-      setResult(res)
+        try {
+          const res = await batchUploadReportsClient(formData)
+          if (seq !== seqRef.current) return
+          success += res.success
+          failed += res.failed
+          allErrors.push(...res.errors)
+          allNotes.push(...(res.notes ?? []))
+          allReportIds.push(...(res.report_ids ?? []))
+        } catch (e) {
+          if (seq !== seqRef.current) return
+          failed += batch.length
+          allErrors.push(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
+        }
+      }
+
+      const aggregated: BatchUploadResult = {
+        success,
+        failed,
+        errors: allErrors,
+        notes: allNotes,
+        report_ids: allReportIds,
+      }
+      setResult(aggregated)
       setStep('result')
       router.refresh()
-    } catch (e) {
-      if (seq !== seqRef.current) return
-      message.error(e instanceof Error ? `批量上传失败：${e.message}` : '批量上传失败')
     } finally {
       if (seq === seqRef.current) setUploading(false)
     }
@@ -219,7 +253,15 @@ export function BatchUploadDialog({ open, source, onClose }: Props) {
               </Space>
             </div>
           )}
-          <ReportMatchTable rows={matches} loading={matching} source={source} onRowChange={handleRowChange} />
+          <ReportMatchTable
+            rows={matches}
+            loading={matching}
+            source={source}
+            onRowChange={handleRowChange}
+            invalidDateKeys={
+              new Set(matches.filter(m => !isCalibrationDateValid(m.extraction.calibration_date)).map(m => m._key))
+            }
+          />
           {unmatchedCount > 0 && (
             <div style={{ marginTop: 8, color: '#999', fontSize: 13 }}>
               未关联的文件不会上传，请修正名称/编号后点「重新关联」，或在下拉中选择台账记录。

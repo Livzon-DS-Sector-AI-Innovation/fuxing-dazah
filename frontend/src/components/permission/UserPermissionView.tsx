@@ -15,6 +15,7 @@ import type {
   PersonnelItem, DepartmentItem, UserPermissionDetail,
   Role,
 } from '@/types/permission'
+import styles from './Permission.module.css'
 
 const SCOPE_LABELS: Record<string, string> = {
   all: '全部数据',
@@ -33,7 +34,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
   // ── User list state ──
   const [allUsers, setAllUsers] = useState<PersonnelItem[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [departmentId, setDepartmentId] = useState<string | undefined>()
   const [departments, setDepartments] = useState<DepartmentItem[]>([])
@@ -75,12 +76,11 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
   // ── Load all personnel once ──
   useEffect(() => {
-    setLoading(true)
     fetchPersonnel({ offset: 0, limit: 9999 })
       .then((result) => setAllUsers(result.items))
       .catch(() => message.error('获取人员列表失败'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [message])
 
   const handleSearch = () => {
     // Client-side filtering via useMemo — no-op, just trigger re-render
@@ -196,7 +196,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
         {/* Roles */}
         <div
-          className="p-4 rounded-[12px] border"
+          className={`${styles.detailSection} p-4 rounded-[12px] border`}
           style={{ borderColor: 'var(--color-hairline)' }}
         >
           <div className="flex items-center justify-between mb-3">
@@ -241,7 +241,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
         {/* Data Scopes (resource-level) */}
         <div
-          className="p-4 rounded-[12px] border"
+          className={`${styles.detailSection} p-4 rounded-[12px] border`}
           style={{ borderColor: 'var(--color-hairline)' }}
         >
           <span className="text-[13px] font-medium text-[var(--color-charcoal)] mb-3 block">
@@ -270,7 +270,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
         {/* Permissions */}
         <div
-          className="p-4 rounded-[12px] border"
+          className={`${styles.detailSection} p-4 rounded-[12px] border`}
           style={{ borderColor: 'var(--color-hairline)' }}
         >
           <div className="flex items-center gap-2 mb-3">
@@ -322,7 +322,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
       {/* List */}
       <div
-        className="flex-1 overflow-auto min-h-0"
+        className={`${styles.userScroller} flex-1 overflow-auto min-h-0`}
       >
         {!loading && users.length === 0 ? (
           <Empty
@@ -339,7 +339,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
               <div
                 key={user.id}
                 onClick={() => handleSelectUser(user)}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[8px] cursor-pointer transition-colors"
+                className={`${styles.userRow} flex items-center gap-3 px-3 py-2.5 rounded-[8px] cursor-pointer transition-colors`}
                 style={{
                   backgroundColor:
                     selectedUser?.id === user.id
@@ -391,16 +391,17 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
   return (
     <div
-      className="h-full flex flex-col gap-4 sm:gap-6 p-4 sm:p-6 overflow-hidden"
+      className={`${styles.shell} ${styles.users} h-full flex flex-col gap-4 sm:gap-5 p-4 sm:p-5 overflow-hidden`}
       style={{ backgroundColor: 'var(--color-surface)' }}
     >
       {/* ═══ Layer 1: Header Card ═══ */}
       <div
-        className="rounded-[16px] border p-5 sm:p-6"
+        className={`${styles.hero} rounded-[16px] border p-5 sm:p-6`}
         style={{
           backgroundColor: 'var(--color-canvas)',
           borderColor: 'var(--color-hairline)',
-          borderTop: '3px solid var(--color-primary)',
+          borderTop: '0',
+          boxShadow: '0 8px 24px rgba(46,54,94,.06)',
         }}
       >
         <div className="flex items-center gap-3.5">
@@ -423,21 +424,21 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
       {/* ═══ Layer 2: Content Panel ═══ */}
       <div
-        className="rounded-[16px] border p-4 sm:p-6 flex-1 flex flex-col overflow-hidden"
+        className={`${styles.workspace} rounded-[16px] border p-4 sm:p-6 flex-1 flex flex-col overflow-hidden`}
         style={{
           backgroundColor: 'var(--color-canvas)',
           borderColor: 'var(--color-hairline)',
         }}
       >
         {/* ── Desktop: dual panel ── */}
-        <div className="hidden md:flex gap-5 flex-1 min-h-0 overflow-hidden">
+        <div className={`${styles.userLayout} hidden md:flex gap-0 flex-1 min-h-0 overflow-hidden`}>
           {/* Left: user list */}
-          <div className="w-[340px] flex-shrink-0 flex flex-col min-h-0">
+          <div className={`${styles.userList} w-[340px] flex-shrink-0 flex flex-col min-h-0 pr-5`}>
             {renderUserList()}
           </div>
 
           {/* Right: permission detail */}
-          <div className="flex-1 min-w-0 overflow-auto">
+          <div className={`${styles.userDetail} flex-1 min-w-0 overflow-auto pl-6`}>
             {!selectedUser ? (
               <div className="flex items-center justify-center h-full">
                 <Empty

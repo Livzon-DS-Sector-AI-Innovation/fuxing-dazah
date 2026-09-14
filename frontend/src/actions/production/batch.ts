@@ -56,3 +56,27 @@ export async function cancelBatch(batchId: string): Promise<ActionResult<Product
   if (result.success) revalidatePath('/production/batches')
   return result
 }
+
+export async function transferBatchOwner(
+  batchId: string,
+  ownerUserId: string | null,
+): Promise<ActionResult<ProductionBatch>> {
+  const result = await actionFetch<ProductionBatch>(
+    `${API_BASE}/production/batches/${batchId}/owner`,
+    { method: 'PATCH', body: JSON.stringify({ owner_user_id: ownerUserId }) },
+  )
+  if (result.success) revalidatePath('/production/batches')
+  return result
+}
+
+export async function renameBatchNo(
+  batchId: string,
+  batchNo: string,
+): Promise<ActionResult<ProductionBatch>> {
+  const result = await actionFetch<ProductionBatch>(
+    `${API_BASE}/production/batches/${batchId}/batch-no`,
+    { method: 'PATCH', body: JSON.stringify({ batch_no: batchNo }) },
+  )
+  if (result.success) revalidatePath('/production/batches')
+  return result
+}
