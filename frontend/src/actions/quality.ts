@@ -13,6 +13,7 @@ import type {
   TestTaskListItem,
   TestTaskStatus,
   SopSummaryItem,
+  UnqualifiedEvent,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -444,11 +445,12 @@ export async function updateTestTaskReportDate(
 }
 
 export async function fetchTestTasks(
-  product_name?: string, status?: TestTaskStatus, page = 1,
+  product_name?: string, status?: TestTaskStatus, page = 1, report_date?: string,
 ): Promise<{ data: TestTaskListItem[]; meta: { total: number } }> {
   const params = new URLSearchParams()
   if (product_name) params.set('product_name', product_name)
   if (status) params.set('status', status)
+  if (report_date) params.set('report_date', report_date)
   params.set('page', String(page))
   params.set('page_size', '20')
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks?${params.toString()}`, {
@@ -577,5 +579,30 @@ export async function deleteTestResult(taskId: string, resultId: string): Promis
     method: 'DELETE', headers: await _authHeaders(),
   })
   if (!res.ok) throw new Error('删除结果行失败')
+  return res.json()
+}
+
+// ─── 不合格事件台账 ───
+
+export async function fetchUnqualifiedEvents(
+  handled?: boolean,
+): Promise<{ data: UnqualifiedEvent[] }> {
+  const params = new URLSearchParams()
+  if (handled !== undefined) params.set('handled', String(handled))
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/unqualified-events?${params.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取不合格台账失败')
+  return res.json()
+}
+
+export async function markUnqualifiedEventHandled(
+  eventId: string, handled: boolean,
+): Promise<{ message: string }> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/quality/unqualified-events/${eventId}/handle?handled=${handled}`,
+    { method: 'PUT', headers: await _authHeaders() },
+  )
+  if (!res.ok) throw new Error('更新处理状态失败')
   return res.json()
 }

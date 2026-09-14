@@ -196,6 +196,21 @@ export interface TestTaskDetail {
   results: TestResultItem[]
 }
 
+export interface UnqualifiedEvent {
+  id: string
+  task_id: string | null
+  product_name: string
+  batch_number: string
+  item_name: string
+  sop_no: string | null
+  result_value: number | null
+  standard_text: string | null
+  limit_text: string | null
+  source: string
+  handled: boolean
+  created_at: string | null
+}
+
 // ─── 按 SOP 汇总 ───
 
 export interface SopSummaryBatch {

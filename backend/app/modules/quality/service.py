@@ -1254,8 +1254,11 @@ class TestTaskService:
         status: str | None,
         page: int,
         page_size: int,
+        report_date: str | None = None,
     ) -> tuple[list[TestTaskListItem], int]:
-        items, total = await list_test_tasks(db, product_name, status, page, page_size)
+        items, total = await list_test_tasks(
+            db, product_name, status, report_date=report_date, page=page, page_size=page_size,
+        )
         out = []
         for t in items:
             rows = await list_test_results(db, t.id)

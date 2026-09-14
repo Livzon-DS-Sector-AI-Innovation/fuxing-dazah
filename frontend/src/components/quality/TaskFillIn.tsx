@@ -38,6 +38,7 @@ export default function TaskFillIn() {
   const [page, setPage] = useState(1)
   const [productSearch, setProductSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<TestTaskStatus | undefined>()
+  const [reportDateFilter, setReportDateFilter] = useState<string | undefined>()
 
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -49,7 +50,7 @@ export default function TaskFillIn() {
   const load = useCallback(async (p: number) => {
     setLoading(true)
     try {
-      const res = await fetchTestTasks(productSearch || undefined, statusFilter, p)
+      const res = await fetchTestTasks(productSearch || undefined, statusFilter, p, reportDateFilter)
       setData(res.data)
       setTotal(res.meta.total)
     } catch (err: any) {
@@ -57,9 +58,17 @@ export default function TaskFillIn() {
     } finally {
       setLoading(false)
     }
-  }, [productSearch, statusFilter, message])
+  }, [productSearch, statusFilter, reportDateFilter, message])
 
   useEffect(() => { load(page) }, [page, load])
+
+  // 30 秒自动刷新：机器人侧填报后网页无需手动刷新（页面不可见时跳过）
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden && !createOpen) load(page)
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [load, page, createOpen])
 
   const openCreateModal = async () => {
     createForm.resetFields()
@@ -328,6 +337,12 @@ export default function TaskFillIn() {
           value={statusFilter}
           onChange={(v) => { setStatusFilter(v); setPage(1) }}
           options={(Object.keys(STATUS_META) as TestTaskStatus[]).map((s) => ({ label: STATUS_META[s].label, value: s }))}
+        />
+        <DatePicker
+          placeholder="出报日期筛选"
+          style={{ width: 150 }}
+          value={reportDateFilter ? dayjs(reportDateFilter) : null}
+          onChange={(d) => { setReportDateFilter(d ? d.format('YYYY-MM-DD') : undefined); setPage(1) }}
         />
         <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
         {canCreate && (

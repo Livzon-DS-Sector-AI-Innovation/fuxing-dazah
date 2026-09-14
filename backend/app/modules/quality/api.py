@@ -53,6 +53,7 @@ from app.modules.quality.repository import (
     list_unqualified_events,
     update_standard_document,
     update_standard_item,
+    update_unqualified_event_handled,
     upsert_coa_binding,
 )
 from app.modules.quality.schemas import (
@@ -1152,16 +1153,32 @@ async def create_test_task_endpoint(
 @router.get("/tasks", summary="检验任务分页列表")
 async def list_test_task_endpoint(
     product_name: str | None = Query(default=None, description="产品名称（模糊搜索）"),
-    status: str | None = Query(default=None, description="状态筛选：in_progress/completed/void"),
+    status: str | None = Query(default=None, description="状态筛选：in_progress/pending_review/completed/void"),
+    report_date: str | None = Query(default=None, description="出报日期精确筛选（YYYY-MM-DD）"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    items, total = await test_task_service.list_tasks(db, product_name, status, page, page_size)
+    items, total = await test_task_service.list_tasks(
+        db, product_name, status, page, page_size, report_date=report_date,
+    )
     return paginated_response(
         data=[it.model_dump(mode="json") for it in items],
         page=page, page_size=page_size, total=total,
     )
+
+
+@router.put("/unqualified-events/{event_id}/handle", summary="标记/取消不合格事件处理状态")
+async def handle_unqualified_event_endpoint(
+    event_id: uuid.UUID,
+    handled: bool = Query(default=True, description="true 标记已处理 / false 取消"),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:review")),
+) -> JSONResponse:
+    event = await update_unqualified_event_handled(db, event_id, handled)
+    if not event:
+        raise HTTPException(status_code=404, detail="事件不存在")
+    return success_response(message="已标记处理" if handled else "已取消标记")
 
 
 @router.get("/unqualified-events", summary="不合格事件台账")

@@ -659,6 +659,7 @@ async def list_test_tasks(
     db: AsyncSession,
     product_name: str | None = None,
     status: str | None = None,
+    report_date: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[QualityTestTask], int]:
@@ -668,8 +669,13 @@ async def list_test_tasks(
         stmt = stmt.where(QualityTestTask.product_name.ilike(f"%{product_name}%"))
     if status:
         stmt = stmt.where(QualityTestTask.status == status)
+    if report_date:
+        stmt = stmt.where(QualityTestTask.report_date == report_date)
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
-    stmt = stmt.order_by(QualityTestTask.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    stmt = stmt.order_by(
+        QualityTestTask.report_date.asc().nulls_last(),
+        QualityTestTask.created_at.desc(),
+    ).offset((page - 1) * page_size).limit(page_size)
     items = list((await db.execute(stmt)).scalars())
     return items, total
 
@@ -766,6 +772,23 @@ async def create_unqualified_event(
     db.add(event)
     await db.flush()
     return event
+
+
+async def update_unqualified_event_handled(
+    db: AsyncSession, event_id: uuid.UUID, handled: bool = True
+) -> QualityUnqualifiedEvent | None:
+    """标记/取消不合格事件处理状态。UPDATE 后 flush + re-fetch。"""
+    stmt = select(QualityUnqualifiedEvent).where(
+        QualityUnqualifiedEvent.id == event_id,
+        QualityUnqualifiedEvent.is_deleted == False,  # noqa: E712
+    )
+    event = (await db.execute(stmt)).scalar_one_or_none()
+    if not event:
+        return None
+    event.handled = handled
+    await db.flush()
+    stmt = select(QualityUnqualifiedEvent).where(QualityUnqualifiedEvent.id == event_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 async def list_unqualified_events(
