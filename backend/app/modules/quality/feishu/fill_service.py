@@ -137,6 +137,22 @@ async def _reply_existing_task(chat_id: str, batch: str, task: QualityTestTask) 
         await send_fill_card(chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)])
 
 
+async def _task_doc_file_nos(db, task: QualityTestTask) -> list[str]:
+    """任务对应的标准文件编号列表（出报清单展示用）。"""
+    from app.modules.quality.repository import (
+        get_standard_document,
+        list_task_standard_document_ids,
+    )
+
+    ids = await list_task_standard_document_ids(db, task.id)
+    out: list[str] = []
+    for did in ids:
+        d = await get_standard_document(db, did)
+        if d:
+            out.append(d.file_no)
+    return out
+
+
 async def _reply_today_report(chat_id: str) -> None:
     """一句话查询「今天出报」：今日出报任务清单 + 待复核数。"""
     from app.core.database import async_session_factory
@@ -161,8 +177,10 @@ async def _reply_today_report(chat_id: str) -> None:
                 "pending_review": "待复核",
                 "completed": "已完成",
             }.get(t.status, t.status)
+            file_nos = await _task_doc_file_nos(db, t)
+            sop_suffix = f"｜标准文件：{'、'.join(file_nos)}" if file_nos else ""
             lines.append(
-                f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}"
+                f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}{sop_suffix}"
             )
     text = f"📅 今日出报任务（{today}）：\n" + ("\n".join(lines) if lines else "无")
     if review_items:

@@ -47,6 +47,8 @@ async def _push_today_tasks() -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     today = datetime.now().strftime("%Y-%m-%d")
+    from app.modules.quality.feishu.fill_service import _task_doc_file_nos
+
     async with async_session_factory() as db:
         tasks = await list_test_tasks_by_report_date(db, today)
         lines: list[str] = []
@@ -59,9 +61,11 @@ async def _push_today_tasks() -> None:
                 "pending_review": "待复核",
                 "completed": "已完成",
             }.get(t.status, t.status)
+            file_nos = await _task_doc_file_nos(db, t)
+            sop_suffix = f"｜标准文件：{'、'.join(file_nos)}" if file_nos else ""
             lines.append(
                 f"- {t.product_name} 批号 {t.batch_number}（{t.specification or '-'}）"
-                f"｜{status_label} {filled}/{len(rows)}"
+                f"｜{status_label} {filled}/{len(rows)}{sop_suffix}"
             )
             if t.status == "in_progress":
                 pending.append((t, rows))
@@ -108,6 +112,8 @@ async def _push_afternoon_reminder() -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     today = datetime.now().strftime("%Y-%m-%d")
+    from app.modules.quality.feishu.fill_service import _task_doc_file_nos
+
     async with async_session_factory() as db:
         tasks = await list_test_tasks_by_report_date(db, today)
         lines: list[str] = []
@@ -117,8 +123,10 @@ async def _push_afternoon_reminder() -> None:
             rows = await list_test_results(db, t.id)
             filled = sum(1 for r in rows if r.is_pass is not None)
             status_label = {"in_progress": "填报中", "pending_review": "待复核"}.get(t.status, t.status)
+            file_nos = await _task_doc_file_nos(db, t)
+            sop_suffix = f"｜标准文件：{'、'.join(file_nos)}" if file_nos else ""
             lines.append(
-                f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}"
+                f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}{sop_suffix}"
             )
     if not lines:
         return
