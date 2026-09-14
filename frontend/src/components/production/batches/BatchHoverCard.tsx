@@ -16,6 +16,28 @@ export const BOARD_STATE_META: Record<string, { dot: string; color: string; labe
   aborted: { dot: '#dd5b00', color: 'orange', label: '已中止' },
 }
 
+const TIMEOUT_STATUS_META: Record<string, { label: string; color: string }> = {
+  pending: { label: '监控中', color: 'processing' },
+  processing: { label: '提醒处理中', color: 'warning' },
+  sending: { label: '提醒处理中', color: 'warning' },
+  retry: { label: '提醒重试中', color: 'warning' },
+  notified: { label: '已提醒', color: 'warning' },
+  monitoring: { label: '监控中', color: 'processing' },
+  overdue: { label: '已超时', color: 'error' },
+  not_monitored: { label: '未纳入监控', color: 'default' },
+  sent: { label: '已提醒', color: 'warning' },
+  resolved: { label: '已结束', color: 'success' },
+  failed: { label: '提醒失败', color: 'warning' },
+}
+
+function formatDurationSeconds(seconds: number): string {
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = minutes / 60
+  if (hours < 24) return `${hours.toFixed(1)} 小时`
+  return `${(hours / 24).toFixed(1)} 天`
+}
+
 function InfoRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 10, fontSize: 12, lineHeight: '22px' }}>
@@ -81,11 +103,32 @@ export function BatchHoverCard({ item }: { item: ProcessBoardExecution }) {
       <InfoRow label="数量">
         {item.batch_quantity != null ? `${item.batch_quantity} ${item.batch_unit ?? ''}` : '—'}
       </InfoRow>
-      <InfoRow label="归属人">{item.owner_name ?? '—'}</InfoRow>
+      <InfoRow label="执行人">{item.owner_name ?? '—'}</InfoRow>
       <InfoRow label="开始时间">{formatDateTime(item.started_at)}</InfoRow>
       <InfoRow label="结束时间">
         {item.finished_at ? formatDateTime(item.finished_at) : '—'}
       </InfoRow>
+      {item.timeout_monitor_status && (
+        <InfoRow label="监控状态">
+          <Tag
+            color={TIMEOUT_STATUS_META[item.timeout_monitor_status]?.color ?? 'default'}
+            style={{ marginInlineEnd: 0, lineHeight: '18px' }}
+          >
+            {TIMEOUT_STATUS_META[item.timeout_monitor_status]?.label ?? item.timeout_monitor_status}
+          </Tag>
+        </InfoRow>
+      )}
+      {item.estimated_duration_seconds != null && (
+        <InfoRow label="参考时长（P80）">
+          {formatDurationSeconds(item.estimated_duration_seconds)}
+        </InfoRow>
+      )}
+      {item.expected_finish_at && (
+        <InfoRow label="预计完成">{formatDateTime(item.expected_finish_at)}</InfoRow>
+      )}
+      {item.timeout_notified_at && (
+        <InfoRow label="提醒时间">{formatDateTime(item.timeout_notified_at)}</InfoRow>
+      )}
       <InfoRow label="异常字段">
         {item.abnormal_count > 0 ? (
           <span style={{ color: '#e03131', fontWeight: 600 }}>

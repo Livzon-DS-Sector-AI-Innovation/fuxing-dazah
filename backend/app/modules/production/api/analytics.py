@@ -27,7 +27,7 @@ _read = require_permission("production:batch:read")
     "/analytics/step-cycle",
     response_model=StepCycleResponse,
     summary="工序周期分析",
-    description="按路线/产品/时间范围聚合各工序的执行耗时，以小时为单位。仅统计首次执行。",
+    description="仅展示已发布工艺路径；按路线/产品/时间范围聚合全部工序的执行耗时，并沿路线血缘纳入前版本样本，以小时为单位。仅统计首次执行。",
 )
 async def step_cycle(
     route_id: uuid.UUID | None = Query(None, description="工艺路线 ID"),

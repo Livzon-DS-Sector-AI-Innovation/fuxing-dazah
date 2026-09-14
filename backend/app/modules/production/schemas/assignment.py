@@ -107,6 +107,11 @@ class WorkbenchItem(BaseModel):
     # ready_to_complete 专用：该批次缺填必填字段的工序执行（工作台补录入口）
     missing_executions: list[MissingExecutionOut] = []
     started_at: str | None = None
+    # pending_complete 的工序超时监控快照；样本不足或未创建监控时为空
+    estimated_duration_seconds: float | None = None
+    expected_finish_at: str | None = None
+    timeout_monitor_status: str | None = None
+    timeout_notified_at: str | None = None
     is_last_in_stage: bool = False  # 是否是工段内最后一个节点，完成即可提交批次
     # pending_start 工序的开始类型：normal / parallel / rework
     start_type: str | None = None

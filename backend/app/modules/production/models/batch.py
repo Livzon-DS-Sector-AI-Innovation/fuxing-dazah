@@ -21,6 +21,13 @@ class Batch(BaseModel):
             postgresql_where=text("is_deleted = false"),
         ),
         Index("ix_production_batches_product_status", "product_id", "status"),
+        Index(
+            "ix_production_batches_timeout_scope",
+            "product_id",
+            "route_id",
+            "id",
+            postgresql_where=text("is_deleted = false"),
+        ),
         CheckConstraint(
             "status IN ('draft', 'scheduled', 'released', 'pending', 'in_progress', 'completed', 'cancelled')",
             name="ck_production_batches_status",

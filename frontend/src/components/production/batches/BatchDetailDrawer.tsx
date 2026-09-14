@@ -376,7 +376,7 @@ export function BatchDetailDrawer({
             },
             {
               key: 'summary',
-              label: '汇总',
+              label: '计算字段',
               children: (
                 <ComputedSummary
                   key={currentId}
@@ -392,7 +392,7 @@ export function BatchDetailDrawer({
   )
 }
 
-// ── 汇总 Tab：计算字段列表 + 子批次合计 ──────────────────────
+// ── 计算字段 Tab：本批次字段值 + 子批次合计 ──────────────────
 function ComputedSummary({
   batchId,
   fields,

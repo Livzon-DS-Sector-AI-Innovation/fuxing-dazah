@@ -162,48 +162,14 @@ body {
   font-family: var(--font-sans), "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif;
 }
 
-/* Sidebar Menu Styles - Following DESIGN.md */
-.sidebar-menu.ant-menu {
-  background: transparent;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.50;
-  color: var(--color-charcoal);
-  border-radius: 8px;
-  margin-inline: 8px;
-  margin-block: 2px;
-  padding-inline: 12px;
-  height: 36px;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item:hover {
-  background-color: var(--color-surface);
-  color: var(--color-primary);
-}
-
-.sidebar-menu.ant-menu .ant-menu-submenu-title:hover {
-  color: var(--color-primary);
-}
-
-.sidebar-menu.ant-menu .ant-menu-item-selected {
-  background-color: rgba(86, 69, 212, 0.06);
-  color: var(--color-primary);
-  font-weight: 500;
-}
-
-.sidebar-menu.ant-menu .ant-menu-item-selected::after {
-  display: none;
-}
-
 /* Ant Design 全局样式覆盖 - 符合 DESIGN.md */
 
 /* 表格样式 */
 .ant-table {
   border-radius: 12px;
   overflow: hidden;
+  /* 显式实底：内容区有 10% 透光，表格不自己兜住会透出背景光晕 */
+  background: #ffffff;
 }
 
 .ant-table-thead > tr > th,

@@ -37,7 +37,7 @@ def run_pipeline(s: Settings, progress_cb=None) -> int:
         # PDF 流程：结构化抽取 → 领域预读 → 翻译 → 重排式 DOCX 输出
         from .pdf.pipeline import run_pdf_pipeline
 
-        return run_pdf_pipeline(s)
+        return run_pdf_pipeline(s, progress_cb)
     if suffix != ".docx":
         print("错误：仅支持 .docx / .pdf 文件", file=sys.stderr)
         return 2

@@ -6,6 +6,7 @@ import { ClockCircleOutlined, InboxOutlined } from '@ant-design/icons'
 import { useState, useMemo } from 'react'
 import { fetchPlannedBatches, activatePlannedBatch } from '@/actions/production'
 import { stageColor } from '@/components/production/shared/stageColor'
+import styles from './Workbench.module.css'
 import { formatDateTime } from '@/lib/utils'
 import type { PlannedBatchItem } from '@/types/production'
 
@@ -18,7 +19,7 @@ const STATUS_CFG: Record<string, { label: string; color: string; bg: string; bor
 function StageTimelineBar({ stages }: { stages: PlannedBatchItem['stage_config'] }) {
   if (!stages?.length) return null
   return (
-    <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', gap: 2, marginTop: 2 }}>
+    <div className={styles.timeline} style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', gap: 2, marginTop: 2 }}>
       {stages.map(sc => (
         <div
           key={sc.stage_name}
@@ -47,7 +48,7 @@ function PlannedCard({
 
   return (
     <div
-      className="wb-card"
+      className={`${styles.card} ${styles.plannedCard} wb-card`}
       style={{
         position: 'relative', overflow: 'hidden',
         padding: '14px 14px 14px 12px',
@@ -59,16 +60,9 @@ function PlannedCard({
         cursor: 'default',
         transition: 'transform 0.2s ease, box-shadow 0.2s ease',
         animationDelay: `${index * 60}ms`,
-        opacity: 0.85,
+
       }}
-      onMouseEnter={e => {
-        e.currentTarget.style.transform = 'translateY(-2px)'
-        e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.05)'
-      }}
-      onMouseLeave={e => {
-        e.currentTarget.style.transform = 'translateY(0)'
-        e.currentTarget.style.boxShadow = 'none'
-      }}
+
     >
       {/* 头部 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -87,7 +81,7 @@ function PlannedCard({
             </div>
           )}
         </div>
-        <span style={{
+        <span className={styles.badge} style={{
           display: 'inline-flex', alignItems: 'center', gap: 3,
           padding: '2px 8px', borderRadius: 5,
           fontSize: 11, fontWeight: 600,
@@ -122,7 +116,9 @@ function PlannedCard({
       {/* 接收按钮 — 仅第一工段负责人可见 */}
       {showReceive && (
         <div style={{ marginTop: 4, textAlign: 'right' }}>
-          <span
+          <button
+            type="button"
+            className={styles.receiveButton}
             onClick={e => { e.stopPropagation(); onReceive() }}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -138,7 +134,7 @@ function PlannedCard({
           >
             <InboxOutlined />
             接收
-          </span>
+          </button>
         </div>
       )}
     </div>

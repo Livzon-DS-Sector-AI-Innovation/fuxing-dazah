@@ -9,6 +9,8 @@ import type { SubMenuItem } from "@/lib/menu-config"
 import { hasAnyPermission } from "@/lib/permissions"
 import { usePermissionStore } from "@/stores/permission"
 import { useSidebarStore } from "@/stores/sidebar"
+import chromeStyles from './LayoutChrome.module.css'
+import styles from './Sidebar.module.css'
 
 type MenuItem = Required<MenuProps>['items'][number]
 
@@ -170,7 +172,8 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`bg-[var(--color-canvas)] border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-hidden transition-all duration-200 ${
+      // 收起时宽 0：玻璃的 box-shadow 会在零宽盒子上画出条竖影，故整体摘掉
+      className={`${collapsed ? "" : `${chromeStyles.chrome} ${chromeStyles.sidebar} `}relative z-10 border-r border-[var(--color-hairline)] flex flex-col shrink-0 overflow-hidden transition-all duration-200 ${
         collapsed ? "w-0 border-r-0" : "w-56"
       }`}
     >
@@ -201,7 +204,7 @@ export function Sidebar() {
           onOpenChange={handleOpenChange}
           items={menuItems}
           onClick={handleClick}
-          className="sidebar-menu"
+          className={styles.menu}
           style={{ borderInlineEnd: 'none' }}
         />
       </div>

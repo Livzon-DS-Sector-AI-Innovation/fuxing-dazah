@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useEffect, useState } from 'react'
-import { App, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
+import { App, Button, DatePicker, Form, Input, InputNumber, Modal, Select } from 'antd'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Dayjs } from 'dayjs'
 import { startExecution, fetchNodeAssignments } from '@/actions/production'
@@ -21,6 +21,54 @@ interface Props {
   batchId: string
   onClose: () => void
   defaultNodeId?: string
+}
+
+/** 投料消耗数量输入：带「全量/半量」快捷填充，上限为该来源的可用余量 */
+function ConsumeQtyInput({
+  name,
+  max,
+  required,
+  placeholder,
+  onFill,
+}: {
+  name: string
+  max?: number | null
+  required?: boolean
+  placeholder: string
+  onFill: (name: string, value: number) => void
+}) {
+  const hasMax = max != null && max > 0
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <Form.Item
+        name={name}
+        rules={required ? [{ required: true, message: '请输入' }] : undefined}
+        style={{ margin: 0, width: 130 }}
+      >
+        <InputNumber min={0} max={max ?? undefined} placeholder={placeholder} style={{ width: '100%' }} />
+      </Form.Item>
+      {hasMax && (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, height: 'auto' }}
+          onClick={() => onFill(name, max!)}
+        >
+          全量
+        </Button>
+      )}
+      {hasMax && (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, fontSize: 12, height: 'auto', marginInlineStart: 0 }}
+          onClick={() => onFill(name, Math.round((max! / 2) * 1000) / 1000)}
+        >
+          半量
+        </Button>
+      )}
+    </div>
+  )
 }
 
 export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) {
@@ -173,6 +221,22 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
         value: ct.id,
         label: `${ct.name}（${ct.line_name ?? '未标产线'}） / 余量 ${ct.available_quantity ?? 0}`,
       }))
+
+  // 快捷填充：新选中投料来源时默认按其全部余量预填消耗数量
+  const setQty = (name: string, value: number) => form.setFieldValue(name, value)
+  const prefillOnSelect = (
+    selectedIds: string[],
+    prevIds: string[] | undefined,
+    makeName: (id: string) => string,
+    availableOf: (id: string) => number | null | undefined,
+  ) => {
+    const prev = new Set(prevIds ?? [])
+    selectedIds.forEach(id => {
+      if (prev.has(id)) return
+      const available = availableOf(id)
+      if (available != null && available > 0) setQty(makeName(id), available)
+    })
+  }
 
   const handleOk = async () => {
     const values = await form.validateFields().catch(() => null)
@@ -383,6 +447,14 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                     allowClear
                     showSearch
                     style={{ borderRadius: 8 }}
+                    onChange={(ids: string[]) =>
+                      prefillOnSelect(
+                        ids,
+                        watchedValues?.[`consume_output_${im.intermediate_type_id}`] as string[] | undefined,
+                        id => `consume_qty_${im.intermediate_type_id}_${id}`,
+                        id => (batchOutputs ?? []).find(o => o.id === id)?.available_quantity,
+                      )
+                    }
                   />
                 </Form.Item>
 
@@ -409,18 +481,13 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                             }}>
                               {label}
                             </span>
-                            <Form.Item
+                            <ConsumeQtyInput
                               name={`consume_qty_${im.intermediate_type_id}_${outputId}`}
-                              rules={im.required ? [{ required: true, message: '请输入' }] : undefined}
-                              style={{ margin: 0, width: 140 }}
-                            >
-                              <InputNumber
-                                min={1}
-                                max={output?.available_quantity ?? undefined}
-                                placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
-                                style={{ width: '100%' }}
-                              />
-                            </Form.Item>
+                              max={output?.available_quantity}
+                              required={im.required}
+                              placeholder={`消耗数量${output?.unit ? ` (${output.unit})` : ''}`}
+                              onFill={setQty}
+                            />
                           </div>
                         )
                       })}
@@ -442,6 +509,14 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                         allowClear
                         showSearch
                         style={{ borderRadius: 8 }}
+                        onChange={(ids: string[]) =>
+                          prefillOnSelect(
+                            ids,
+                            watchedValues?.[`consume_container_${im.intermediate_type_id}`] as string[] | undefined,
+                            id => `consume_cqty_${im.intermediate_type_id}_${id}`,
+                            id => (availableContainers ?? []).find(c => c.id === id)?.available_quantity,
+                          )
+                        }
                       />
                     </Form.Item>
                     {(() => {
@@ -464,17 +539,12 @@ export function StartExecutionModal({ batchId, onClose, defaultNodeId }: Props) 
                                 }}>
                                   {label}
                                 </span>
-                                <Form.Item
+                                <ConsumeQtyInput
                                   name={`consume_cqty_${im.intermediate_type_id}_${containerId}`}
-                                  style={{ margin: 0, width: 140 }}
-                                >
-                                  <InputNumber
-                                    min={1}
-                                    max={ct?.available_quantity ?? undefined}
-                                    placeholder="消耗数量"
-                                    style={{ width: '100%' }}
-                                  />
-                                </Form.Item>
+                                  max={ct?.available_quantity}
+                                  placeholder="消耗数量"
+                                  onFill={setQty}
+                                />
                               </div>
                             )
                           })}

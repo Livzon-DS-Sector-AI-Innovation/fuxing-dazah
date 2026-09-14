@@ -34,6 +34,7 @@ from app.modules.production.schemas.batch import (
     MergeIn,
     MergeParentIn,
 )
+from app.modules.production.service import timeout_service
 from app.modules.production.service.batch_service import (
     create_batch,
     derive_batches,
@@ -716,6 +717,13 @@ async def query_workbench(
         for ex in (await db.execute(exec_stmt)).scalars():
             in_progress_execs_by_batch[ex.batch_id].append(ex)
 
+    in_progress_execution_ids = [
+        ex.id for executions in in_progress_execs_by_batch.values() for ex in executions
+    ]
+    timeout_alerts = await timeout_service.get_timeout_monitors_safe(
+        db, in_progress_execution_ids,
+    )
+
     items: list[WorkbenchItem] = []
     root_no_cache: dict[uuid.UUID, str | None] = {}
 
@@ -912,6 +920,7 @@ async def query_workbench(
                 if sn_id != node.id and sn_id not in completed and sn_id not in in_progress:
                     is_last = False
                     break
+            timeout_alert = timeout_alerts.get(ex.id)
             items.append(WorkbenchItem(
                 type="pending_complete",
                 batch_id=b.id,
@@ -928,6 +937,26 @@ async def query_workbench(
                 batch_owner_name=b.owner_name,
                 can_operate=can_operate,
                 started_at=ex.started_at.isoformat() if ex.started_at else None,
+                estimated_duration_seconds=(
+                    float(timeout_alert.estimated_duration_seconds)
+                    if timeout_alert is not None else None
+                ),
+                expected_finish_at=(
+                    timeout_alert.expected_finish_at.isoformat()
+                    if timeout_alert is not None
+                    else None
+                ),
+                timeout_monitor_status=timeout_service.timeout_monitor_status(
+                    timeout_alert,
+                    execution_status=ex.status,
+                    batch_status=b.status,
+                ),
+                timeout_notified_at=(
+                    timeout_alert.notified_at.isoformat()
+                    if timeout_alert is not None
+                    and timeout_alert.notified_at is not None
+                    else None
+                ),
                 is_last_in_stage=is_last,
                 predecessor_batches=[],
                 node_assignees=[],

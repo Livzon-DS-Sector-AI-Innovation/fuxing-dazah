@@ -1,5 +1,6 @@
 """节点执行：开始/结束/中止工序，来路校验、字段校验、异常判定、偏离判定。"""
 
+import logging
 import math
 import uuid
 from collections import defaultdict
@@ -27,6 +28,7 @@ from app.modules.production.schemas import (
     EquipmentSnapshotOut,
     ExecutionAmendIn,
     ExecutionCompleteIn,
+    ExecutionOut,
     ExecutionStartIn,
     FieldValueIn,
     FieldValueOut,
@@ -37,6 +39,7 @@ from app.modules.production.schemas import (
     ProcessBoardOut,
     ProcessBoardPlannedItemOut,
 )
+from app.modules.production.service import timeout_service
 from app.modules.production.service.assignment_service import require_operator_access
 from app.modules.production.service.intermediate_service import (
     get_consumed_quantity_map,
@@ -50,6 +53,8 @@ from app.modules.production.service.route_service import compute_start_nodes
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 from app.platform.permission.deps import get_user_permissions
+
+logger = logging.getLogger(__name__)
 
 
 async def _require_operator_permission(
@@ -510,6 +515,25 @@ async def start_execution(
         batch.owner_user_id = user.id
         batch.owner_name = user.name
     await db.flush()
+
+    # 监控是开始工序的非阻断增强：历史基线/缓存/告警表任一环节异常时，
+    # 正常工序事务仍应继续提交。savepoint 保护主事务免受偶发数据库错误影响。
+    try:
+        async with db.begin_nested():
+            await timeout_service.create_timeout_monitor_for_execution(
+                db,
+                execution,
+                batch,
+                created_by=user.id if user else None,
+                # 统计窗口以本次开始时的系统时间为边界；手工补录的过去
+                # started_at 仅用于 expected_finish_at 计算。
+                now_dt=now(),
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "创建工序超时监控失败（不阻断开始工序）: execution_id=%s",
+            execution.id,
+        )
     await record_audit_log(
         db,
         action="production.execution.start",
@@ -712,6 +736,22 @@ async def complete_execution(
             status_code=400,
             message="提交冲突（并发写入），请刷新后重试；若再次失败请检查中间体批号是否重复",
         ) from None
+    try:
+        # 监控表是增强能力；用独立 savepoint 隔离其异常，避免表未迁移/临时
+        # 连接故障把已经完成的工序事务置为 failed。
+        async with db.begin_nested():
+            await timeout_service.resolve_timeout_for_execution(
+                db,
+                execution.id,
+                reason="execution_finished",
+                resolved_at=execution.finished_at,
+            )
+    except Exception:  # noqa: BLE001
+        # 执行状态已经写入；扫描查询本身也会校验 in_progress，解析失败只记日志，
+        # 不把正常结束工序变成 500。
+        logger.exception(
+            "关闭工序超时监控失败: execution_id=%s", execution.id,
+        )
     await record_audit_log(
         db,
         action="production.execution.complete",
@@ -1015,9 +1055,44 @@ async def abort_execution(
     execution.finished_by_name = user.name if user else None
     execution.updated_by = user.id if user else None
     await db.flush()
+    try:
+        async with db.begin_nested():
+            await timeout_service.resolve_timeout_for_execution(
+                db,
+                execution.id,
+                reason="execution_aborted",
+                resolved_at=execution.finished_at,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "中止工序时关闭超时监控失败: execution_id=%s", execution.id,
+        )
     refreshed = await repo.get_execution(db, execution_id)
     assert refreshed is not None
     return refreshed
+
+
+async def build_execution_output(
+    db: AsyncSession,
+    execution: NodeExecution,
+    *,
+    batch: Batch | None = None,
+) -> ExecutionOut:
+    """构建单条执行响应并填充超时监控快照。
+
+    写接口返回也走这里，确保开始/结束/中止后的即时响应与批次详情、
+    工序看板使用同一套状态映射，而不是依赖 ORM 上不存在的动态字段。
+    """
+
+    out = ExecutionOut.model_validate(execution)
+    current_batch = batch or await repo.get_batch(db, execution.batch_id)
+    alert = await timeout_service.get_timeout_monitor_safe(db, execution.id)
+    return timeout_service.apply_timeout_info(
+        out,
+        execution,
+        alert,
+        batch_status=current_batch.status if current_batch else None,
+    )
 
 
 async def list_node_executions(
@@ -1037,21 +1112,32 @@ async def list_node_executions(
         db, node_id, status, page, page_size, order_by, order
     )
     batches = await repo.get_batches_by_ids(db, list({e.batch_id for e in executions}))
-    batch_no_map = {b.id: b.batch_no for b in batches}
+    batch_map = {b.id: b for b in batches}
     values = await repo.get_field_values_by_executions(db, [e.id for e in executions])
     abnormal = _count_abnormal(values)
+    timeout_alerts = await timeout_service.get_timeout_monitors_safe(
+        db, [e.id for e in executions],
+    )
     items = [
-        NodeExecutionListItem(
-            id=e.id,
-            batch_id=e.batch_id,
-            batch_no=batch_no_map.get(e.batch_id, ""),
-            execution_seq=e.execution_seq,
-            status=e.status,
-            owner_name=e.owner_name,
-            started_at=e.started_at,
-            finished_at=e.finished_at,
-            is_deviation=e.is_deviation,
-            abnormal_count=abnormal.get(e.id, 0),
+        timeout_service.apply_timeout_info(
+            NodeExecutionListItem(
+                id=e.id,
+                batch_id=e.batch_id,
+                batch_no=(
+                    batch_map[e.batch_id].batch_no
+                    if e.batch_id in batch_map else ""
+                ),
+                execution_seq=e.execution_seq,
+                status=e.status,
+                owner_name=e.owner_name,
+                started_at=e.started_at,
+                finished_at=e.finished_at,
+                is_deviation=e.is_deviation,
+                abnormal_count=abnormal.get(e.id, 0),
+            ),
+            e,
+            timeout_alerts.get(e.id),
+            batch_status=batch_map[e.batch_id].status if e.batch_id in batch_map else None,
         )
         for e in executions
     ]
@@ -1129,6 +1215,7 @@ async def get_process_board(
     values = await repo.get_field_values_by_executions(db, anchor_ids)
     abnormal = _count_abnormal(values)
     equipments = await repo.get_equipments_by_executions(db, anchor_ids)
+    timeout_alerts = await timeout_service.get_timeout_monitors_safe(db, anchor_ids)
     eq_map: dict[uuid.UUID, list[EquipmentSnapshotOut]] = defaultdict(list)
     for eq in equipments:
         eq_map[eq.execution_id].append(
@@ -1144,23 +1231,28 @@ async def get_process_board(
 
     for batch, anchor, state in anchors:
         columns[anchor.node_id].append(
-            ProcessBoardExecutionOut(
-                execution_id=anchor.id,
-                batch_id=batch.id,
-                batch_no=batch.batch_no,
-                execution_seq=anchor.execution_seq,
-                status=anchor.status,
-                board_state=state,
-                owner_name=anchor.owner_name,
-                started_at=anchor.started_at,
-                finished_at=anchor.finished_at,
-                is_deviation=anchor.is_deviation,
-                abnormal_count=abnormal.get(anchor.id, 0),
+            timeout_service.apply_timeout_info(
+                ProcessBoardExecutionOut(
+                    execution_id=anchor.id,
+                    batch_id=batch.id,
+                    batch_no=batch.batch_no,
+                    execution_seq=anchor.execution_seq,
+                    status=anchor.status,
+                    board_state=state,
+                    owner_name=anchor.owner_name,
+                    started_at=anchor.started_at,
+                    finished_at=anchor.finished_at,
+                    is_deviation=anchor.is_deviation,
+                    abnormal_count=abnormal.get(anchor.id, 0),
+                    batch_status=batch.status,
+                    batch_quantity=batch.quantity,
+                    batch_unit=batch.unit,
+                    equipments=eq_map.get(anchor.id, []),
+                    field_values=fv_map.get(anchor.id, []),
+                ),
+                anchor,
+                timeout_alerts.get(anchor.id),
                 batch_status=batch.status,
-                batch_quantity=batch.quantity,
-                batch_unit=batch.unit,
-                equipments=eq_map.get(anchor.id, []),
-                field_values=fv_map.get(anchor.id, []),
             )
         )
 

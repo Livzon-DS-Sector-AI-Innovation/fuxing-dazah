@@ -39,6 +39,14 @@ export interface Execution {
   missing_required_fields?: MissingField[]
   /** 批次详情接口按当前用户填充（权限+状态）；单条执行接口不填 */
   can_backfill?: boolean | null
+  /** 周期监控参考时长（秒）；旧数据或无可用基线时为空 */
+  estimated_duration_seconds?: number | null
+  /** 按监控基线计算的预计完成时间 */
+  expected_finish_at?: string | null
+  /** 周期监控状态：monitoring/overdue/not_monitored/sent/resolved/failed */
+  timeout_monitor_status?: string | null
+  /** 最近一次超时提醒发送时间 */
+  timeout_notified_at?: string | null
 }
 
 export interface MissingField {
@@ -103,4 +111,12 @@ export interface NodeExecutionListItem {
   finished_at: string | null
   is_deviation: boolean
   abnormal_count: number
+  /** 周期监控参考时长（秒）；旧数据或无可用基线时为空 */
+  estimated_duration_seconds?: number | null
+  /** 按监控基线计算的预计完成时间 */
+  expected_finish_at?: string | null
+  /** 周期监控状态：monitoring/overdue/not_monitored/sent/resolved/failed */
+  timeout_monitor_status?: string | null
+  /** 最近一次超时提醒发送时间 */
+  timeout_notified_at?: string | null
 }

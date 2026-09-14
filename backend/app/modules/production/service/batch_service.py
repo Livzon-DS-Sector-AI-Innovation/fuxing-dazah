@@ -1,6 +1,9 @@
 """批次生命周期、derive/merge 谱系写入。谱系一致性只在本文件维护。"""
 
+import logging
 import uuid
+from datetime import datetime
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +34,7 @@ from app.modules.production.schemas import (
     FieldValueOut,
     MergeIn,
 )
+from app.modules.production.service import timeout_service
 from app.modules.production.service.assignment_service import (
     check_operator_access,
     require_batch_owner_access,
@@ -48,6 +52,8 @@ from app.modules.production.service.planning_service import (
 from app.platform.audit.service import record_audit_log
 from app.platform.identity.models import User
 from app.platform.permission.deps import get_user_permissions
+
+logger = logging.getLogger(__name__)
 
 
 async def _check_boundary_stage_permission(
@@ -325,6 +331,16 @@ async def complete_batch(
     batch.status = "completed"
     batch.updated_by = user.id if user else None
     await db.flush()
+    try:
+        async with db.begin_nested():
+            await timeout_service.resolve_timeout_for_batch(
+                db,
+                batch.id,
+                reason="batch_completed",
+                resolved_at=batch.last_finished_at,
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("完成批次时关闭工序超时监控失败: batch_id=%s", batch.id)
     refreshed = await repo.get_batch(db, batch_id)
     assert refreshed is not None
     return refreshed
@@ -339,6 +355,15 @@ async def cancel_batch(
     batch.status = "cancelled"
     batch.updated_by = user.id if user else None
     await db.flush()
+    try:
+        async with db.begin_nested():
+            await timeout_service.resolve_timeout_for_batch(
+                db,
+                batch.id,
+                reason="batch_cancelled",
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("报废批次时关闭工序超时监控失败: batch_id=%s", batch.id)
     await record_audit_log(
         db,
         action="production.batch.cancel",
@@ -485,6 +510,7 @@ async def get_batch_detail(
     exec_ids = [e.id for e in executions]
     equipments = await repo.get_equipments_by_executions(db, exec_ids)
     values = await repo.get_field_values_by_executions(db, exec_ids)
+    timeout_alerts = await timeout_service.get_timeout_monitors_safe(db, exec_ids)
     nodes = await repo.get_nodes_by_ids(db, list({e.node_id for e in executions}))
     node_names = {n.id: n.name for n in nodes}
     node_stage_names = {n.id: n.stage_name for n in nodes}
@@ -525,7 +551,7 @@ async def get_batch_detail(
         last_ex = max(
             (e for e in executions
              if e.status == "completed" and e.finished_at is not None),
-            key=lambda e: e.finished_at, default=None,
+            key=lambda e: cast(datetime, e.finished_at), default=None,
         )
         if last_ex is None:
             # 无已完成执行：complete_batch 必被「批次没有任何已完成的工序」拒绝，
@@ -551,6 +577,12 @@ async def get_batch_detail(
     exec_outs = []
     for e in executions:
         out = ExecutionOut.model_validate(e)
+        timeout_service.apply_timeout_info(
+            out,
+            e,
+            timeout_alerts.get(e.id),
+            batch_status=batch.status,
+        )
         out.node_name = node_names.get(e.node_id)
         out.equipments = eq_by_exec.get(e.id, [])
         out.field_values = val_by_exec.get(e.id, [])

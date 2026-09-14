@@ -22,6 +22,7 @@ import { InspectionItemDrawer } from './InspectionItemDrawer'
 import { fetchInspectionTemplatesClient } from '@/lib/api/equipment-client'
 import type { InspectionTemplate, EquipmentCategory } from '@/types/equipment'
 import { usePermission } from '@/hooks/usePermission'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 interface Props {
   initialTemplates: InspectionTemplate[]
@@ -138,21 +139,7 @@ export function InspectionPage({ initialTemplates, initialEquipments, initialCat
   return (
     <div style={{ paddingBottom: 40 }}>
       {/* 页面头部 */}
-      <div style={{
-        marginBottom: 24,
-      }}>
-        <h2 style={{
-          fontSize: 22, fontWeight: 600, color: '#1a1a1a',
-          margin: 0, marginBottom: 4, lineHeight: 1.3,
-        }}>
-          设备巡检
-        </h2>
-        <p style={{
-          fontSize: 14, color: '#787671', margin: 0, lineHeight: 1.5,
-        }}>
-          巡检线路管理 · 任务执行 · 历史追溯 · 模板管理
-        </p>
-      </div>
+      <PageHeading title="设备巡检" subtitle="巡检线路管理 · 任务执行 · 历史追溯 · 模板管理" />
 
       {/* Tab 内容包进白色卡片，浮在 surface 背景上 */}
       <div style={{

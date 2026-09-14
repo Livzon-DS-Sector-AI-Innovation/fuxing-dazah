@@ -1,0 +1,276 @@
+.panel {
+  position: relative;
+  overflow: hidden;
+  margin-top: 24px;
+  border: 1px solid rgba(200, 196, 190, 0.72);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(86, 69, 212, 0.08), transparent 28%),
+    linear-gradient(145deg, #ffffff 0%, #fbfaf9 70%, #f6f4fb 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 12px 28px -24px rgba(40, 33, 91, 0.48);
+}
+
+.panel :global(.ant-card-head) {
+  min-height: 68px;
+  border-bottom-color: rgba(229, 227, 223, 0.82);
+  padding-inline: 22px;
+}
+
+.panel :global(.ant-card-body) {
+  padding: 18px 22px 22px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.titleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(86, 69, 212, 0.16);
+  border-radius: 10px;
+  background: linear-gradient(145deg, #f1effd, #e6e0f5);
+  color: #5645d4;
+  box-shadow: 0 3px 7px rgba(86, 69, 212, 0.12);
+}
+
+.titleText {
+  color: #1a1a1a;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.titleSubtext {
+  margin-left: 2px;
+  color: #a4a097;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.productSelect {
+  width: 190px;
+}
+
+.daysSelect {
+  width: 120px;
+}
+
+.scopeBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(229, 227, 223, 0.82);
+  border-radius: 11px;
+  background: rgba(246, 245, 244, 0.62);
+  color: #787671;
+  font-size: 12px;
+}
+
+.scopeLead {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.scopeLead strong {
+  max-width: 240px;
+  overflow: hidden;
+  color: #37352f;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scopeDot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #5645d4;
+  box-shadow: 0 0 0 3px rgba(86, 69, 212, 0.12);
+}
+
+.scopeMeta {
+  color: #a4a097;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.routeGroup + .routeGroup {
+  margin-top: 18px;
+}
+
+.routeGroup {
+  overflow: hidden;
+  border: 1px solid rgba(229, 227, 223, 0.9);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 5px 14px -13px rgba(15, 15, 15, 0.45);
+}
+
+.routeHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 54px;
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(237, 233, 228, 0.9);
+  background: linear-gradient(110deg, rgba(246, 244, 253, 0.96), rgba(255, 255, 255, 0.8));
+}
+
+.routeMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  border-radius: 9px;
+  background: #5645d4;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 4px 8px rgba(86, 69, 212, 0.25);
+}
+
+.routeName {
+  min-width: 0;
+  overflow: hidden;
+  color: #1a1a1a;
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routeMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #787671;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.routeTotal {
+  color: #5645d4;
+  font-weight: 700;
+}
+
+.tableWrap {
+  overflow-x: auto;
+}
+
+.tableWrap :global(.ant-table) {
+  background: transparent;
+}
+
+.tableWrap :global(.ant-table-thead > tr > th) {
+  background: rgba(250, 250, 249, 0.78);
+  color: #787671;
+  font-size: 11px;
+}
+
+.tableWrap :global(.ant-table-tbody > tr > td) {
+  background: transparent;
+}
+
+.tableWrap :global(.ant-table-tbody > tr:hover > td) {
+  background: rgba(246, 245, 244, 0.72);
+}
+
+.barTrack {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #f0eeec;
+  box-shadow: inset 0 1px 2px rgba(15, 15, 15, 0.08);
+}
+
+.barFill {
+  height: 100%;
+  min-width: 5px;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  transition: width 0.35s ease;
+}
+
+.emptyState {
+  display: flex;
+  min-height: 190px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(200, 196, 190, 0.78);
+  border-radius: 13px;
+  background: rgba(250, 250, 249, 0.66);
+}
+
+.loadingState {
+  min-height: 190px;
+  padding: 18px 16px 4px;
+  border: 1px solid rgba(229, 227, 223, 0.7);
+  border-radius: 13px;
+  background: rgba(250, 250, 249, 0.66);
+}
+
+@media (max-width: 900px) {
+  .panel :global(.ant-card-head) {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding-block: 14px;
+  }
+
+  .controls {
+    width: 100%;
+  }
+
+  .productSelect {
+    flex: 1;
+    width: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .panel :global(.ant-card-head),
+  .panel :global(.ant-card-body) {
+    padding-inline: 14px;
+  }
+
+  .controls {
+    flex-wrap: wrap;
+  }
+
+  .productSelect,
+  .daysSelect {
+    width: 100%;
+  }
+
+  .scopeBar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .routeMeta {
+    margin-left: 0;
+  }
+}

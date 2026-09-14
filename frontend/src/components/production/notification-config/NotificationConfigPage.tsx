@@ -20,6 +20,7 @@ import {
   FlagOutlined,
   RocketOutlined,
   UnorderedListOutlined,
+  WarningOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { antdTheme } from '@/lib/antd-theme'
@@ -32,6 +33,7 @@ import type { ProductionNotificationConfig } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { CARD_STYLE } from '../shared/ProductSidebar'
 import { UserSelect } from '@/components/shared/UserSelect'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 type NotifyIcon = ComponentType<{ style?: CSSProperties }>
 
@@ -85,6 +87,12 @@ const NOTIFY_TYPE_META: Record<string, NotifyTypeMeta> = {
     icon: UnorderedListOutlined,
     color: '#0a1530',
     triggerLabel: '每日 08:31',
+    triggerTone: 'warning',
+  },
+  execution_timeout: {
+    icon: WarningOutlined,
+    color: '#dd5b00',
+    triggerLabel: '每 10 分钟扫描',
     triggerTone: 'warning',
   },
 }
@@ -288,14 +296,7 @@ function NotificationConfigContent() {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: '#1a1a1a' }}>
-          通知配置
-        </h2>
-        <div style={{ marginTop: 6, fontSize: 14, color: '#787671' }}>
-          各类飞书通知的触发时机与默认接收人见下方说明，可按需启停；额外通知人员在默认接收人基础上追加，系统自动去重。
-        </div>
-      </div>
+      <PageHeading title="通知配置" subtitle="各类飞书通知的触发时机与默认接收人见下方说明，可按需启停；额外通知人员在默认接收人基础上追加，系统自动去重。" />
       <div style={{ ...CARD_STYLE, overflowX: 'auto' }}>
         <div style={{ minWidth: 760 }}>
           {!rows && isLoading ? (

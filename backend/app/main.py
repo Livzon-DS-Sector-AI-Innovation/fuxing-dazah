@@ -148,13 +148,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     scheduler_registry.register_generator(InspectionScheduleGenerator())
     scheduler_registry.register_task(AUTO_CLOSE_TASK)
-    # TIMEOUT_SCAN_TASK 暂不启用（设备模块决定后再挂调度引擎）
 
     from app.modules.meter.scheduler import CALIBRATION_REMINDER_TASK
     scheduler_registry.register_task(CALIBRATION_REMINDER_TASK)
 
-    from app.modules.production.scheduled import BATCH_START_REMINDER_TASK
+    from app.modules.production.scheduled import (
+        BATCH_START_REMINDER_TASK,
+        EXECUTION_TIMEOUT_SCAN_TASK,
+    )
     scheduler_registry.register_task(BATCH_START_REMINDER_TASK)
+    scheduler_registry.register_task(EXECUTION_TIMEOUT_SCAN_TASK)
 
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)

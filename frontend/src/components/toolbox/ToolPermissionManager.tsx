@@ -83,7 +83,8 @@ export function ToolPermissionManager({ tools, initialGrants, personnel }: Props
     const savedConfigIds = [...draft.configIds]
     setDraft(toolId, { saving: true, dirty: true })
     try {
-      await updateToolGrants(toolId, savedUseIds, savedConfigIds)
+      const res = await updateToolGrants(toolId, savedUseIds, savedConfigIds)
+      if (!res.success) throw new Error(res.error)
       message.success('使用权限保存成功')
       setDrafts((prev) => {
         const cur = prev[toolId]

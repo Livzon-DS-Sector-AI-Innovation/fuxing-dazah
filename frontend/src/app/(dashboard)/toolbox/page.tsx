@@ -18,7 +18,7 @@ export default async function ToolboxPage() {
     tools = []
   }
   return (
-    <div className="relative min-h-[calc(100%+3rem)] -m-6">
+    <div className="relative min-h-[calc(100%+2rem)] -m-4 overflow-hidden rounded-[18px]">
       {/* WebThreads 背景：铺满当前内容区并开启鼠标交互；背景画布接收鼠标事件，视觉上仍在内容下层 */}
       <div className="absolute inset-0 z-0">
         <WebThreads
@@ -48,7 +48,7 @@ export default async function ToolboxPage() {
 
       {/* 内容层：pointer-events-none 让空白/间隙的事件穿透到背景画布，仅工具卡片保持可点击 */}
       <div className="relative z-10 pointer-events-none">
-        <h1 className="px-6 pt-6 text-[20px] font-semibold text-[var(--color-charcoal)]">花篮</h1>
+        <h1 className="px-6 pt-5 text-[20px] font-semibold text-[var(--color-charcoal)]">花篮</h1>
         {tools.length === 0 ? (
           <p className="px-6 pt-4 text-[var(--color-stone)]">暂无可用工具</p>
         ) : (

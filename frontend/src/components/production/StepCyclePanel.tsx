@@ -1,19 +1,120 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Table, Tag, Typography, Alert, Select, Space, Empty } from 'antd'
+import { Card, Table, Tag, Typography, Alert, Select, Space, Empty, Skeleton, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { BarChartOutlined, ClockCircleOutlined } from '@ant-design/icons'
-import { fetchStepCycleClient, fetchRoutesClient } from '@/lib/api/production-client'
-import type { StepCycleStat, Product, ProcessRoute } from '@/types/production'
+import { fetchStepCycleClient } from '@/lib/api/production-client'
+import type { StepCycleStat, Product } from '@/types/production'
 import { stageColor } from '@/components/production/shared/stageColor'
+import styles from './StepCyclePanel.module.css'
 
 const { Text } = Typography
 
-function fmtHours(h: number | null): string {
+interface StepCycleRouteGroup {
+  key: string
+  routeName: string
+  steps: StepCycleStat[]
+  totalHours: number
+  totalSamples: number
+}
+
+function fmtHours(h: number | null | undefined): string {
   if (h == null) return '—'
   if (h < 1) return `${Math.round(h * 60)} 分钟`
   return `${h.toFixed(1)} 小时`
+}
+
+function buildColumns(totalHours: number): ColumnsType<StepCycleStat> {
+  return [
+    {
+      title: '#',
+      dataIndex: 'sort_order',
+      width: 48,
+      render: (v: number) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text>,
+    },
+    {
+      title: '工序',
+      dataIndex: 'node_name',
+      render: (v: string) => <Text strong>{v}</Text>,
+    },
+    {
+      title: '工段',
+      dataIndex: 'stage_name',
+      width: 100,
+      render: (v: string) => <Tag color={stageColor(v)}>{v}</Tag>,
+    },
+    {
+      title: '平均耗时',
+      dataIndex: 'avg_hours',
+      width: 128,
+      render: (_: number, r: StepCycleStat) => (
+        <Space size={6}>
+          <ClockCircleOutlined style={{ color: '#5645d4', fontSize: 13 }} />
+          <Text strong style={{ color: '#5645d4' }}>{fmtHours(r.avg_hours)}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: (
+        <Tooltip title="当前分析窗口内有效执行的 P80（80%的记录不超过该时长）；超时监控优先采用近180天 P80，样本不足5条时回退近一年">
+          P80 参考
+        </Tooltip>
+      ),
+      dataIndex: 'p80_hours',
+      width: 116,
+      render: (v: number | null | undefined) =>
+        v == null ? (
+          <Text type="secondary">—</Text>
+        ) : (
+          <Text strong style={{ color: '#a66b00' }}>{fmtHours(v)}</Text>
+        ),
+    },
+    {
+      title: '耗时占比',
+      dataIndex: 'avg_hours',
+      width: 190,
+      render: (_: number, r: StepCycleStat) => {
+        const pct = totalHours > 0 ? (r.avg_hours / totalHours) * 100 : 0
+        const color = stageColor(r.stage_name)
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className={styles.barTrack}>
+              <div
+                className={styles.barFill}
+                style={{ width: `${Math.max(pct, pct > 0 ? 2 : 0)}%`, background: color }}
+              />
+            </div>
+            <Text style={{ width: 38, flexShrink: 0, color: '#787671', fontSize: 11, textAlign: 'right' }}>
+              {pct.toFixed(0)}%
+            </Text>
+          </div>
+        )
+      },
+    },
+    {
+      title: '最短',
+      dataIndex: 'min_hours',
+      width: 104,
+      render: (v: number | null) => <Text type="secondary">{fmtHours(v)}</Text>,
+    },
+    {
+      title: '最长',
+      dataIndex: 'max_hours',
+      width: 104,
+      render: (v: number | null) => <Text type="secondary">{fmtHours(v)}</Text>,
+    },
+    {
+      title: '样本数',
+      dataIndex: 'n',
+      width: 76,
+      render: (v: number) => (
+        <Text type={v < 30 ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
+          {v}
+        </Text>
+      ),
+    },
+  ]
 }
 
 interface Props {
@@ -28,8 +129,6 @@ export default function StepCyclePanel({ products }: Props) {
   const [error, setError] = useState<string | null>(null)
   // 用户手动选择的覆盖值，undefined = 自动选第一个
   const [productOverride, setProductOverride] = useState<string | undefined>()
-  const [routeOverride, setRouteOverride] = useState<string | undefined>()
-  const [routes, setRoutes] = useState<ProcessRoute[]>([])
   const [days, setDays] = useState(30)
 
   // 渲染期间派生实际值：用户选了什么就用什么，没选就取第一个
@@ -37,27 +136,17 @@ export default function StepCyclePanel({ products }: Props) {
     () => productOverride ?? (products.length > 0 ? products[0].id : undefined),
     [productOverride, products],
   )
-  const selectedRoute = useMemo(
-    () => routeOverride ?? (routes.length > 0 ? routes[0].id : undefined),
-    [routeOverride, routes],
-  )
-
-  // 产品变化时加载路线（外部系统调用，effect 合理）
-  useEffect(() => {
-    if (!selectedProduct) return
-    fetchRoutesClient(selectedProduct).then(setRoutes).catch(() => setRoutes([]))
-  }, [selectedProduct])
-
   // 加载统计数据
   useEffect(() => {
     let cancelled = false
+    if (!selectedProduct) return () => { cancelled = true }
+
     const load = async () => {
       setLoading(true)
       setError(null)
       try {
         const res = await fetchStepCycleClient({
-          route_id: selectedRoute || undefined,
-          product_id: !selectedRoute ? selectedProduct || undefined : undefined,
+          product_id: selectedProduct,
           days,
         })
         if (cancelled) return
@@ -76,120 +165,56 @@ export default function StepCyclePanel({ products }: Props) {
     }
     load()
     return () => { cancelled = true }
-  }, [selectedProduct, selectedRoute, days])
+  }, [selectedProduct, days])
 
-  const columns: ColumnsType<StepCycleStat> = [
-    {
-      title: '#',
-      dataIndex: 'sort_order',
-      width: 40,
-      render: (v: number) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text>,
-    },
-    {
-      title: '工序',
-      dataIndex: 'node_name',
-      render: (v: string) => <Text strong>{v}</Text>,
-    },
-    {
-      title: '工段',
-      dataIndex: 'stage_name',
-      width: 80,
-      render: (v: string) => <Tag color={stageColor(v)}>{v}</Tag>,
-    },
-    {
-      title: '平均耗时',
-      dataIndex: 'avg_hours',
-      width: 120,
-      render: (_: number, r: StepCycleStat) => (
-        <Space>
-          <ClockCircleOutlined style={{ color: '#1677ff', fontSize: 13 }} />
-          <Text strong style={{ color: '#1677ff' }}>{fmtHours(r.avg_hours)}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: '占比',
-      dataIndex: 'avg_hours',
-      width: 160,
-      render: (_: number, r: StepCycleStat) => {
-        const pct = totalHours > 0 ? (r.avg_hours / totalHours) * 100 : 0
-        const color = stageColor(r.stage_name)
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{
-              flex: 1, height: 14, background: '#f0f0ed', borderRadius: 3, overflow: 'hidden',
-            }}>
-              <div style={{
-                width: `${Math.max(pct, 1)}%`, height: '100%',
-                background: color, borderRadius: 3, transition: 'width 0.3s ease',
-              }} />
-            </div>
-            <Text style={{ fontSize: 11, color: '#787671', width: 38, textAlign: 'right', flexShrink: 0 }}>
-              {pct.toFixed(0)}%
-            </Text>
-          </div>
-        )
-      },
-    },
-    {
-      title: '最短',
-      dataIndex: 'min_hours',
-      width: 100,
-      render: (v: number | null) => <Text type="secondary">{fmtHours(v)}</Text>,
-    },
-    {
-      title: '最长',
-      dataIndex: 'max_hours',
-      width: 100,
-      render: (v: number | null) => <Text type="secondary">{fmtHours(v)}</Text>,
-    },
-    {
-      title: '样本数',
-      dataIndex: 'n',
-      width: 70,
-      render: (v: number) => (
-        <Text type={v < 30 ? 'warning' : 'secondary'} style={{ fontSize: 12 }}>
-          {v}
-        </Text>
-      ),
-    },
-  ]
+  const routeGroups = useMemo<StepCycleRouteGroup[]>(() => {
+    const groups = new Map<string, StepCycleRouteGroup>()
+    for (const step of data) {
+      const key = step.route_id || step.route_name || 'unknown-route'
+      const existing = groups.get(key)
+      if (existing) {
+        existing.steps.push(step)
+        existing.totalHours += step.avg_hours
+        existing.totalSamples += step.n
+      } else {
+        groups.set(key, {
+          key,
+          routeName: step.route_name || '未命名工艺路径',
+          steps: [step],
+          totalHours: step.avg_hours,
+          totalSamples: step.n,
+        })
+      }
+    }
+    return [...groups.values()]
+  }, [data])
 
-  const totalHours = data.reduce((s, r) => s + r.avg_hours, 0)
   const isEmpty = !loading && data.length === 0
+  const selectedProductName = products.find(p => p.id === selectedProduct)?.product_name
 
   return (
     <Card
+      className={styles.panel}
       title={
-        <Space>
-          <BarChartOutlined />
-          <span>工序周期分析</span>
-          {totalBatches > 0 && (
-            <Tag style={{ marginLeft: 8 }}>涉及 {totalBatches} 个批次</Tag>
-          )}
-        </Space>
+        <div className={styles.title}>
+          <span className={styles.titleIcon}><BarChartOutlined /></span>
+          <span>
+            <span className={styles.titleText}>工序周期分析</span>
+            <span className={styles.titleSubtext}>已发布路径 · 含前版本血缘样本</span>
+          </span>
+        </div>
       }
       extra={
-        <Space>
+        <div className={styles.controls}>
           <Select
-            allowClear
-            placeholder="全部产品"
-            style={{ width: 160 }}
+            className={styles.productSelect}
+            placeholder="选择产品"
             value={selectedProduct}
-            onChange={v => { setProductOverride(v); setRouteOverride(undefined) }}
+            onChange={setProductOverride}
             options={products.map(p => ({ label: p.product_name, value: p.id }))}
           />
           <Select
-            allowClear
-            placeholder="全部路线"
-            style={{ width: 150 }}
-            value={selectedRoute}
-            onChange={setRouteOverride}
-            disabled={!selectedProduct || routes.length === 0}
-            options={routes.map(r => ({ label: r.route_name, value: r.id }))}
-          />
-          <Select
-            style={{ width: 120 }}
+            className={styles.daysSelect}
             value={days}
             onChange={setDays}
             options={[
@@ -198,12 +223,23 @@ export default function StepCyclePanel({ products }: Props) {
               { label: '最近 90 天', value: 90 },
             ]}
           />
-        </Space>
+        </div>
       }
       variant="borderless"
-      style={{ marginTop: 24 }}
     >
-      {error && (
+      {selectedProduct && (
+        <div className={styles.scopeBar}>
+          <span className={styles.scopeLead}>
+            <span className={styles.scopeDot} />
+            分析产品 <strong>{selectedProductName ?? '当前产品'}</strong>
+          </span>
+          <span className={styles.scopeMeta}>
+            {routeGroups.length} 条工艺路径 · {data.length} 道工序 · 涵盖 {totalBatches} 个批次
+          </span>
+        </div>
+      )}
+
+      {selectedProduct && error && (
         <Alert
           message={error}
           type="error"
@@ -212,7 +248,7 @@ export default function StepCyclePanel({ products }: Props) {
           style={{ marginBottom: 16 }}
         />
       )}
-      {sampleNote && (
+      {selectedProduct && sampleNote && (
         <Alert
           title={sampleNote}
           type={sampleNote.includes('暂无') ? 'info' : 'warning'}
@@ -220,37 +256,64 @@ export default function StepCyclePanel({ products }: Props) {
           style={{ marginBottom: 16 }}
         />
       )}
-      {isEmpty ? (
-        <Empty
-          description="暂无工序执行记录，开始生产后这里将展示各工序的耗时统计"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-        />
+      {!selectedProduct ? (
+        <div className={styles.emptyState}>
+          <Empty
+            description="请选择产品查看工序周期"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        </div>
+      ) : isEmpty ? (
+        <div className={styles.emptyState}>
+          <Empty
+            description="暂无工序执行记录，开始生产后这里将展示各工序的耗时统计"
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
+        </div>
+      ) : loading && routeGroups.length === 0 ? (
+        <div className={styles.loadingState}>
+          <Skeleton active paragraph={{ rows: 5 }} />
+        </div>
       ) : (
-        <Table
-          columns={columns}
-          dataSource={data}
-          rowKey="node_id"
-          loading={loading}
-          size="middle"
-          pagination={false}
-          summary={() =>
-            data.length > 0 ? (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={3}>
-                  <Text strong>合计</Text>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={1}>
-                  <Text strong style={{ color: '#1677ff' }}>
-                    {fmtHours(totalHours)}
-                  </Text>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={2} colSpan={5} />
-              </Table.Summary.Row>
-            ) : null
-          }
-        />
+        routeGroups.map((group, index) => (
+          <section className={styles.routeGroup} key={group.key}>
+            <div className={styles.routeHeader}>
+              <span className={styles.routeMark}>{String(index + 1).padStart(2, '0')}</span>
+              <span className={styles.routeName}>{group.routeName}</span>
+              <div className={styles.routeMeta}>
+                <span>{group.steps.length} 道工序</span>
+                <span>·</span>
+                <span>样本 {group.totalSamples}</span>
+                <span>·</span>
+                <span>平均总耗时 <span className={styles.routeTotal}>{fmtHours(group.totalHours)}</span></span>
+              </div>
+            </div>
+            <div className={styles.tableWrap}>
+              <Table
+                columns={buildColumns(group.totalHours)}
+                dataSource={group.steps}
+                rowKey="node_id"
+                loading={loading}
+                size="middle"
+                pagination={false}
+                summary={() => (
+                  <Table.Summary.Row>
+                    <Table.Summary.Cell index={0} colSpan={3}>
+                      <Text strong>路径平均总耗时</Text>
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={1}>
+                      <Text strong style={{ color: '#5645d4' }}>
+                        {fmtHours(group.totalHours)}
+                      </Text>
+                    </Table.Summary.Cell>
+                    <Table.Summary.Cell index={2} colSpan={5} />
+                  </Table.Summary.Row>
+                )}
+              />
+            </div>
+          </section>
+        ))
       )}
-
     </Card>
   )
 }

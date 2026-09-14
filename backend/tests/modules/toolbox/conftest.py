@@ -10,12 +10,12 @@ import redis.asyncio as redis
 
 
 class FakeRedis:
-    """最小 redis.asyncio.Redis 替身：get/set/expire/sadd/smembers/delete。"""
+    """最小 redis.asyncio.Redis 替身：get/set/expire/delete/zadd/zrevrange。"""
 
     def __init__(self) -> None:
         self.store: dict[str, bytes] = {}
         self.ttls: dict[str, int] = {}
-        self.sets: dict[str, set[bytes]] = {}
+        self.zsets: dict[str, dict[bytes, float]] = {}
 
     async def get(self, key: str) -> bytes | None:
         return self.store.get(key)
@@ -37,12 +37,15 @@ class FakeRedis:
     async def expire(self, key: str, ttl: int) -> None:
         self.ttls[key] = ttl
 
-    async def sadd(self, key: str, value: str | bytes) -> None:
-        self.sets.setdefault(key, set()).add(value.encode() if isinstance(value, str) else value)
+    async def zadd(self, key: str, mapping: dict[str, float]) -> None:
+        bucket = self.zsets.setdefault(key, {})
+        for member, score in mapping.items():
+            bucket[member.encode()] = score
 
-    async def smembers(self, key: str) -> "set[bytes]":
-        # 注解用字符串：类体内的 set 方法名遮蔽内置 set，直接写 set[bytes] 会在类体求值时报错
-        return set(self.sets.get(key, set()))
+    async def zrevrange(self, key: str, start: int, end: int) -> "list[bytes]":
+        """score 倒序；同分按 member 字典序倒排（与 redis 一致），end 为闭区间。"""
+        items = sorted(self.zsets.get(key, {}).items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
+        return [m for m, _ in items[start : None if end < 0 else end + 1]]
 
 
 @pytest.fixture

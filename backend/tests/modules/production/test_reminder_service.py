@@ -3,6 +3,7 @@
 纯函数：工段计划开始时间（缺口即停）、工序结束下一工序接收人判定、
 计划批次开工提醒时间窗（08:31-08:35）、卡片内容构建。
 集成：计划单下达 / 工序结束 / 计划单完成提醒数据收集（真实 DB，无飞书调用）、
+同批次同工段卡的延迟发送判定（下一工序已开始即放弃）、
 通知配置读取与额外人员合并去重。
 """
 
@@ -32,10 +33,12 @@ from app.modules.production.schemas import (
 from app.modules.production.service import assignment_service, route_service
 from app.modules.production.service.reminder_service import (
     NOTIFICATION_TYPES,
+    STEP_COMPLETED_OWNER_DELAY_SECONDS,
     NodeDurationStat,
     PlanClosedReminder,
     PlanItemReminder,
     RouteDurationStats,
+    StepCompletedEvent,
     _build_batch_start_content,
     _build_pending_batches_content,
     _build_plan_closed_content,
@@ -44,6 +47,7 @@ from app.modules.production.service.reminder_service import (
     _collect_plan_closed_reminders,
     _collect_plan_released_reminders,
     _collect_step_completed_reminders,
+    _delayed_owner_cards,
     _due_plan_batches,
     _first_stage_leaders,
     _fmt_dt,
@@ -288,6 +292,127 @@ class TestCollectStepCompletedReminders:
         assert len(result) == 1
         assert result[0].to_owner is False
         assert result[0].user_ids == [leader]
+
+
+def _make_execution_status(
+    db: AsyncSession, batch_id: Any, node_id: Any, status: str,
+) -> None:
+    """指定状态的工序执行记录（in_progress 不写结束时间）。"""
+    start = datetime(2026, 8, 28, 8, 0)
+    db.add(NodeExecution(
+        batch_id=batch_id, node_id=node_id, execution_seq=1,
+        status=status, started_at=start,
+        finished_at=start + timedelta(hours=1) if status != "in_progress" else None,
+    ))
+
+
+class TestDelayedOwnerCards:
+    """同批次同工段卡延迟发送的到期判定（30 分钟缓冲后的重新校验）。"""
+
+    def test_delay_constant_is_30_minutes(self) -> None:
+        assert STEP_COMPLETED_OWNER_DELAY_SECONDS == 30 * 60
+
+    async def test_next_not_started_returns_owner_card(
+        self, db_session: AsyncSession, same_stage_route: dict[str, Any],
+    ) -> None:
+        """下一工序未开始：照常返回批次负责人卡。"""
+        owner = uuid.uuid4()
+        batch = await _make_batch(db_session, same_stage_route["route"], "B-DLY1")
+        batch.owner_user_id = owner
+        await db_session.flush()
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=same_stage_route["node_d"].id,
+        )
+        result = await _delayed_owner_cards(db_session, payload)
+        assert len(result) == 1
+        assert result[0].to_owner is True
+        assert result[0].user_ids == [owner]
+
+    async def test_next_in_progress_skips(
+        self, db_session: AsyncSession, same_stage_route: dict[str, Any],
+    ) -> None:
+        """下一工序进行中：有人已接手，放弃提醒。"""
+        batch = await _make_batch(db_session, same_stage_route["route"], "B-DLY2")
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=same_stage_route["node_d"].id,
+        )
+        _make_execution_status(
+            db_session, batch.id, same_stage_route["node_e"].id, "in_progress",
+        )
+        await db_session.flush()
+        assert await _delayed_owner_cards(db_session, payload) == []
+
+    async def test_next_completed_skips(
+        self, db_session: AsyncSession, same_stage_route: dict[str, Any],
+    ) -> None:
+        """下一工序已完成：更无需提醒。"""
+        batch = await _make_batch(db_session, same_stage_route["route"], "B-DLY3")
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=same_stage_route["node_d"].id,
+        )
+        _make_execution_status(
+            db_session, batch.id, same_stage_route["node_e"].id, "completed",
+        )
+        await db_session.flush()
+        assert await _delayed_owner_cards(db_session, payload) == []
+
+    async def test_next_aborted_still_notifies(
+        self, db_session: AsyncSession, same_stage_route: dict[str, Any],
+    ) -> None:
+        """下一工序曾被中止：不算已开始，仍提醒。"""
+        owner = uuid.uuid4()
+        batch = await _make_batch(db_session, same_stage_route["route"], "B-DLY4")
+        batch.owner_user_id = owner
+        await db_session.flush()
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=same_stage_route["node_d"].id,
+        )
+        _make_execution_status(
+            db_session, batch.id, same_stage_route["node_e"].id, "aborted",
+        )
+        await db_session.flush()
+        result = await _delayed_owner_cards(db_session, payload)
+        assert len(result) == 1
+        assert result[0].user_ids == [owner]
+
+    @pytest.mark.parametrize("status", ["completed", "cancelled"])
+    async def test_finished_batch_skips(
+        self, db_session: AsyncSession, same_stage_route: dict[str, Any], status: str,
+    ) -> None:
+        """批次已完成/已取消：延迟任务到期后放弃。"""
+        batch = await _make_batch(db_session, same_stage_route["route"], "B-DLY5")
+        batch.status = status
+        await db_session.flush()
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=same_stage_route["node_d"].id,
+        )
+        assert await _delayed_owner_cards(db_session, payload) == []
+
+    async def test_cross_stage_card_filtered(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+    ) -> None:
+        """跨工段卡不延迟：即时路径已发，到期收集只留同批次同工段卡。"""
+        route = published_route["route"]
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=uuid.uuid4(), stage_name="精制",
+            route_id=route.id, created_by=uuid.uuid4(),
+        )
+        batch = await _make_batch(db_session, route, "B-DLY6")
+        payload = StepCompletedEvent(
+            batch_id=batch.id, execution_id=uuid.uuid4(),
+            node_id=published_route["node_b"].id,
+        )
+        # 对照：collect 产出的是跨工段（to_owner=False）卡
+        collected = await _collect_step_completed_reminders(
+            db_session, batch, published_route["node_b"],
+        )
+        assert collected and collected[0].to_owner is False
+        assert await _delayed_owner_cards(db_session, payload) == []
 
 
 class TestCollectPlanReleasedReminders:

@@ -24,4 +24,5 @@ from app.modules.production.repository.line import *  # noqa: F403
 from app.modules.production.repository.planning import *  # noqa: F403
 from app.modules.production.repository.product import *  # noqa: F403
 from app.modules.production.repository.route import *  # noqa: F403
+from app.modules.production.repository.timeout import *  # noqa: F403
 from app.modules.production.repository.trace import *  # noqa: F403

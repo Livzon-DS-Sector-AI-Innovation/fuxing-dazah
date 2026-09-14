@@ -1,5 +1,6 @@
 'use client'
 
+import { PageHeading } from '@/components/shared/PageHeading'
 import { useEffect, useRef, useState } from 'react'
 import { ConfigProvider } from 'antd'
 import {
@@ -1061,35 +1062,7 @@ export function StatsDashboard({ initialData }: StatsDashboardProps) {
         }}
       >
         {/* ========== 页面标题 ========== */}
-        <div
-          style={{
-            marginBottom: 28,
-            animation: 'fadeInUp 0.5s ease both',
-          }}
-        >
-          <h1
-            style={{
-              fontSize: 28,
-              fontWeight: 600,
-              color: '#1a1a1a',
-              lineHeight: 1.25,
-              margin: 0,
-              letterSpacing: '-0.01em',
-            }}
-          >
-            设备管理概览
-          </h1>
-          <p
-            style={{
-              fontSize: 14,
-              color: '#787671',
-              margin: '6px 0 0',
-              lineHeight: 1.5,
-            }}
-          >
-            实时数据仪表盘 · 设备部全景视图
-          </p>
-        </div>
+        <PageHeading className="stats-page-heading" title="设备管理概览" subtitle="实时数据仪表盘 · 设备部全景视图" />
 
         {/* ========== 快捷入口行 ========== */}
         <div

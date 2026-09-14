@@ -21,6 +21,7 @@ import {
 } from '@/lib/api/production-client'
 import type { IntermediateType, MaterialMovement } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 // ── 设计令牌（来自 DESIGN.md） ──
 const T = {
@@ -551,22 +552,7 @@ function MaterialsContent() {
   return (
     <div>
       {/* 页头 */}
-      <div style={{ marginBottom: 20 }}>
-        <h2
-          style={{
-            fontSize: 22,
-            fontWeight: 700,
-            margin: '0 0 4px',
-            color: T.ink,
-            letterSpacing: '-0.3px',
-          }}
-        >
-          产出物流水
-        </h2>
-        <span style={{ color: T.steel, fontSize: 14 }}>
-          追踪批次库存与物料追溯
-        </span>
-      </div>
+      <PageHeading title="产出物流水" subtitle="追踪批次库存与物料追溯" />
 
       {/* 双栏布局 */}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>

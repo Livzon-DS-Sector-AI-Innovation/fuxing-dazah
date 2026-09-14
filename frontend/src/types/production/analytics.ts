@@ -1,13 +1,17 @@
-/** 单工序周期统计 */
+/** 单工艺路径下的工序周期统计 */
 export interface StepCycleStat {
+  route_id: string
+  route_name: string
   node_id: string
   node_name: string
   stage_name: string
   sort_order: number
-  /** 样本数 */
+  /** 样本数（含路线血缘前版本的同工序样本） */
   n: number
   /** 平均耗时（小时） */
   avg_hours: number
+  /** P80 耗时（小时）；样本不足或尚未计算时为空 */
+  p80_hours?: number | null
   /** 最短耗时（小时） */
   min_hours: number | null
   /** 最长耗时（小时） */

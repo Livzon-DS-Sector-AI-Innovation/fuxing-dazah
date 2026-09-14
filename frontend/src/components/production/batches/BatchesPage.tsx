@@ -17,6 +17,7 @@ import { CompleteExecutionModal } from './CompleteExecutionModal'
 import { DeriveModal } from './DeriveModal'
 import { MergeModal } from './MergeModal'
 import { ProcessBoard } from './ProcessBoard'
+import { PageHeading } from '@/components/shared/PageHeading'
 
 function BatchesPageInner() {
   const router = useRouter()
@@ -28,7 +29,8 @@ function BatchesPageInner() {
   const selectedProductId = searchParams.get('product')
   const activeTab = searchParams.get('tab') ?? 'batches'
   const [createOpen, setCreateOpen] = useState(false)
-  const [detailBatchId, setDetailBatchId] = useState<string | null>(null)
+  // 超时提醒卡片通过 ?batch=<id> 深链接到批次详情；读取初始查询参数后直接打开抽屉。
+  const [detailBatchId, setDetailBatchId] = useState<string | null>(() => searchParams.get('batch'))
   const [startBatchId, setStartBatchId] = useState<string | null>(null)
   const [completeExec, setCompleteExec] = useState<{ execution: Execution; routeId: string } | null>(null)
   const [deriveBatchId, setDeriveBatchId] = useState<string | null>(null)
@@ -42,14 +44,7 @@ function BatchesPageInner() {
 
   return (
     <div>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 600, margin: '0 0 4px', color: '#1a1a1a' }}>
-          批次管理
-        </h2>
-        <span style={{ color: '#787671', fontSize: 14 }}>
-          批次执行记录、工序数据提交与全链路溯源
-        </span>
-      </div>
+      <PageHeading title="批次管理" subtitle="批次执行记录、工序数据提交与全链路溯源" />
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
         <ProductSidebar
           selectedId={selectedProductId}

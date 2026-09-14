@@ -12,7 +12,6 @@ from app.modules.production.schemas import (
     ExecutionAmendIn,
     ExecutionBackfillIn,
     ExecutionCompleteIn,
-    ExecutionOut,
     ExecutionStartIn,
     FieldValueOut,
 )
@@ -34,7 +33,9 @@ async def start_execution(
 ) -> JSONResponse:
     execution = await execution_service.start_execution(db, batch_id, payload, current_user)
     return success_response(
-        ExecutionOut.model_validate(execution).model_dump(mode="json")
+        (await execution_service.build_execution_output(db, execution)).model_dump(
+            mode="json"
+        )
     )
 
 
@@ -49,7 +50,9 @@ async def complete_execution(
         db, execution_id, payload, current_user
     )
     return success_response(
-        ExecutionOut.model_validate(execution).model_dump(mode="json")
+        (await execution_service.build_execution_output(db, execution)).model_dump(
+            mode="json"
+        )
     )
 
 
@@ -79,7 +82,9 @@ async def amend_execution(
         db, execution_id, payload, current_user
     )
     return success_response(
-        ExecutionOut.model_validate(execution).model_dump(mode="json")
+        (await execution_service.build_execution_output(db, execution)).model_dump(
+            mode="json"
+        )
     )
 
 
@@ -91,7 +96,9 @@ async def abort_execution(
 ) -> JSONResponse:
     execution = await execution_service.abort_execution(db, execution_id, current_user)
     return success_response(
-        ExecutionOut.model_validate(execution).model_dump(mode="json")
+        (await execution_service.build_execution_output(db, execution)).model_dump(
+            mode="json"
+        )
     )
 
 

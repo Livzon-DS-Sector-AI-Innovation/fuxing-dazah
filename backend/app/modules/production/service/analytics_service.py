@@ -1,5 +1,6 @@
 """生产分析服务。"""
 
+import math
 import uuid
 from datetime import date, datetime, time, timedelta
 
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppException
 from app.core.time import APP_TZ, now
 from app.modules.production import repository as repo
+from app.modules.production.models import ProcessRoute
 from app.modules.production.repository import assignment as assignment_repo
 from app.modules.production.repository import batch as batch_repo
 from app.modules.production.repository import execution as exec_repo
@@ -26,6 +28,56 @@ from app.modules.production.service import computed_service, lineage_service
 from app.modules.production.service.lineage_service import MergedFieldDef, NodeFamily
 
 _MIN_SAMPLE_FOR_CONFIDENCE = 30
+_MIN_SAMPLE_FOR_TIMEOUT = 5
+
+
+def _percentile(values: list[float], quantile: float) -> float | None:
+    """按 PostgreSQL ``percentile_cont`` 语义计算线性插值分位数。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
+
+
+async def _published_route_graphs(
+    db: AsyncSession,
+    *,
+    route_id: uuid.UUID | None,
+    product_id: uuid.UUID | None,
+) -> list[tuple[ProcessRoute, lineage_service.LineageGraph]]:
+    """获取周期分析作用域内的已发布路线及其血缘图。
+
+    周期分析展示的是当前可用的 published 路线；路线祖先只作为历史样本来源，
+    不单独生成一个路线分组。这样归档的旧版本仍能贡献时长，但不会继续出现在
+    看板的路线列表中。
+    """
+    if route_id is not None:
+        route = await route_repo.get_route(db, route_id)
+        if (
+            route is None
+            or route.status != "published"
+            or (product_id is not None and route.product_id != product_id)
+        ):
+            return []
+        routes = [route]
+    else:
+        # 路线列表接口单页上限只约束 HTTP 入参；分析内部需要拿到产品下全部已发布路线。
+        routes, _ = await route_repo.list_routes(
+            db, product_id, page=1, page_size=10_000, status="published",
+        )
+
+    result: list[tuple[ProcessRoute, lineage_service.LineageGraph]] = []
+    for route in routes:
+        graph = await lineage_service.resolve_lineage(db, route.id)
+        if graph is not None:
+            result.append((route, graph))
+    return result
 
 
 async def get_step_cycle_analytics(
@@ -35,34 +87,89 @@ async def get_step_cycle_analytics(
     product_id: uuid.UUID | None = None,
     days: int = 30,
 ) -> StepCycleResponse:
-    """获取路线/产品的工序周期统计。"""
+    """获取已发布路线的工序周期统计，并沿路线血缘合并历史样本。"""
     since = now() - timedelta(days=days) if days > 0 else None
 
-    rows = await repo.get_step_cycle_stats(
-        db, route_id=route_id, product_id=product_id, since=since,
+    route_graphs = await _published_route_graphs(
+        db, route_id=route_id, product_id=product_id,
     )
-    total_batches = await repo.count_active_batches(
-        db, route_id=route_id, product_id=product_id, since=since,
+    if not route_graphs:
+        return StepCycleResponse(steps=[], total_batches=0, sample_note="暂无数据")
+
+    # 一次查询拿到所有目标路线及其祖先路线的原始执行样本，之后按节点家族归并。
+    scope_route_ids: set[uuid.UUID] = set()
+    scope_node_ids: set[uuid.UUID] = set()
+    # 实际批次所属路线 → (目标路线, 节点成员→代表节点)；同一祖先可被多个目标路线复用。
+    target_by_source_route: dict[
+        uuid.UUID,
+        list[tuple[uuid.UUID, dict[uuid.UUID, uuid.UUID]]],
+    ] = {}
+    for target_route, graph in route_graphs:
+        scope_route_ids.update(graph.route_ids)
+        for family in graph.families:
+            scope_node_ids.update(family.member_id_set)
+        for source_route_id in graph.route_ids:
+            target_by_source_route.setdefault(source_route_id, []).append(
+                (target_route.id, graph.rep_by_member)
+            )
+
+    samples = await repo.list_step_cycle_samples(
+        db,
+        route_ids=scope_route_ids,
+        node_ids=scope_node_ids,
+        product_id=product_id,
+        since=since,
     )
+
+    durations_by_target_node: dict[tuple[uuid.UUID, uuid.UUID], list[float]] = {}
+    for sample in samples:
+        for target_route_id, rep_by_member in target_by_source_route.get(
+            sample["route_id"], []
+        ):
+            representative_id = rep_by_member.get(sample["node_id"])
+            if representative_id is None:
+                continue
+            durations_by_target_node.setdefault(
+                (target_route_id, representative_id), []
+            ).append(sample["duration_sec"] / 3600.0)
 
     steps = [
         StepCycleStat(
-            node_id=r["node_id"],
-            node_name=r["node_name"],
-            stage_name=r["stage_name"],
-            sort_order=r["sort_order"],
-            n=r["n"],
-            avg_hours=r["avg_hours"],
-            min_hours=r["min_hours"],
-            max_hours=r["max_hours"],
+            route_id=target_route.id,
+            route_name=target_route.route_name,
+            node_id=family.rep.id,
+            node_name=family.rep.name,
+            stage_name=family.rep.stage_name,
+            sort_order=family.rep.sort_order,
+            n=len(values := durations_by_target_node.get((target_route.id, family.rep.id), [])),
+            avg_hours=round(sum(values) / len(values), 2) if values else 0.0,
+            min_hours=round(min(values), 2) if values else None,
+            max_hours=round(max(values), 2) if values else None,
+            p80_hours=(
+                round(p80, 2)
+                if len(values) >= _MIN_SAMPLE_FOR_TIMEOUT
+                and (p80 := _percentile(values, 0.8)) is not None
+                else None
+            ),
         )
-        for r in rows
+        for target_route, graph in route_graphs
+        for family in graph.families
     ]
+
+    total_batches = await repo.count_active_batches(
+        db,
+        route_ids=scope_route_ids,
+        product_id=product_id,
+        since=since,
+    )
 
     min_n = min((s.n for s in steps), default=0)
     sample_note = None
-    if min_n == 0:
+    max_n = max((s.n for s in steps), default=0)
+    if not steps or max_n == 0:
         sample_note = "暂无数据"
+    elif min_n == 0:
+        sample_note = "部分工序暂无完成记录，其余数据仅供参考"
     elif min_n < _MIN_SAMPLE_FOR_CONFIDENCE:
         sample_note = f"数据较少（最少工序仅 {min_n} 条记录），仅供参考"
 
@@ -114,7 +221,10 @@ async def get_field_trend(
     for v in values:
         if v.value_numeric is None or v.filled_at is None:
             continue
-        batch_no = batch_no_by_id.get(batch_by_exec.get(v.execution_id))
+        batch_id = batch_by_exec.get(v.execution_id)
+        if batch_id is None:
+            continue
+        batch_no = batch_no_by_id.get(batch_id)
         if batch_no is None:
             continue
         points_by_field.setdefault(v.field_key, []).append(
