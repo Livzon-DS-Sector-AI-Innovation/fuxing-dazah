@@ -257,7 +257,7 @@ export default function AiConfigModelCard({
                 '模型',
                 <Input
                   disabled={saving}
-                  placeholder="模型名，如 deepseek-v4-flash"
+                  placeholder="模型名，如 deepseek-flash"
                   style={{ fontFamily: MONO_FONT, fontSize: 13 }}
                 />,
               )

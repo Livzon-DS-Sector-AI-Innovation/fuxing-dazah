@@ -32,7 +32,7 @@ from app.platform.integrations.ai.client import AIService
 ai = AIService(
     api_key="sk-xxx",
     base_url="https://api.deepseek.com",
-    model="deepseek-v4-flash-vision-exp",
+    model="deepseek-flash",
 )
 
 # 实例化插件

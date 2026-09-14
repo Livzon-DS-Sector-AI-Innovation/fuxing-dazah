@@ -177,7 +177,7 @@ def get_db_seed_config() -> dict:
     return {
         "script_number": 6,
         "script_name": "建议措施生成",
-        "model": "deepseek-v4-flash-vision-exp",
+        "model": "deepseek-flash",
         "temperature": 0.05,
         "max_tokens": 4096,
         "system_role": SYSTEM_ROLE,

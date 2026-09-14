@@ -90,7 +90,7 @@ class AICallAudit(BaseModel):
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # ── 调用 ──
-    model: Mapped[str] = mapped_column(String(128), comment="deepseek-v4-flash / qwen-vl-max 等")
+    model: Mapped[str] = mapped_column(String(128), comment="deepseek-flash / qwen-vl-max 等")
     prompt_version: Mapped[str | None] = mapped_column(
         String(32), nullable=True, comment="system prompt 内容 sha256 前 12 位"
     )

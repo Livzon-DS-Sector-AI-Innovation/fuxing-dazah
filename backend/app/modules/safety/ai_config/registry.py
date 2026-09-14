@@ -53,7 +53,7 @@ _PROFILES: tuple[ProfileInfo, ...] = (
         default_config={
             "api_key": "",
             "base_url": "https://api.deepseek.com",
-            "model": "deepseek-v4-flash-vision-exp",
+            "model": "deepseek-flash",
             "temperature": 0.1,
             "timeout": 120,
         },

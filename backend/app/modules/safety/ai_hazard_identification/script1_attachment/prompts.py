@@ -201,7 +201,7 @@ def get_db_seed_config() -> dict:
     return {
         "script_number": 1,
         "script_name": "附件解析",
-        "model": "deepseek-v4-flash-vision-exp",
+        "model": "deepseek-flash",
         "temperature": 0.05,
         "max_tokens": 4096,
         "system_role": SYSTEM_ROLE,

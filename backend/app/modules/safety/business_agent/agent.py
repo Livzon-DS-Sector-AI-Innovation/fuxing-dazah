@@ -45,7 +45,7 @@ _PROVIDER = DeepSeekProvider(
 )
 
 _MODEL = OpenAIChatModel(
-    os.environ.get("SAFETY_AI_TEXT_MODEL", "deepseek-v4-flash-vision-exp"),
+    os.environ.get("SAFETY_AI_TEXT_MODEL", "deepseek-flash"),
     provider=_PROVIDER,
 )
 

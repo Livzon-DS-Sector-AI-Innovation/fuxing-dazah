@@ -149,7 +149,7 @@ async def sop_review_document(
                     temperature=0.1,
                     # 审核输出内嵌 9 章 corrected_content，16K 上限会硬截断 → JSON 解析失败
                     # （验收复现：新线纯化 3 次重试均 "not valid JSON"，output_tokens=16384 顶格）。
-                    # 实际生效模型（本地代理 deepseek-v4-flash-vision-exp）支持 32K 输出。
+                    # 实际生效模型（deepseek-flash）支持 32K 输出（2026-09-14 实测 32768 可接受）。
                     max_tokens=32768,
                 )
             return _validate_review(result)
