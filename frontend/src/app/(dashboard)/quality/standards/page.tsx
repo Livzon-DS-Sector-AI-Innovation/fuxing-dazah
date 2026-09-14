@@ -11,6 +11,7 @@ import {
   FileTextOutlined, LinkOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
+import { usePermission } from '@/hooks/usePermission'
 
 import {
   fetchStandardDocuments, createStandardDocument, updateStandardDocument, deleteStandardDocument,
@@ -58,6 +59,9 @@ function similarityScore(doc: StandardDocument, templatePath: string): number {
 
 export default function StandardsPage() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('quality:standard:manage')
+  const canBindTemplate = hasPermission('quality:template:manage')
   const [docs, setDocs] = useState<StandardDocument[]>([])
   const [activeProduct, setActiveProduct] = useState<string | undefined>()
   const [activeCode, setActiveCode] = useState<string | undefined>()
@@ -350,10 +354,14 @@ export default function StandardsPage() {
     { title: '操作', key: 'actions', width: 110,
       render: (_: any, it: StandardItem) => (
         <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openItemModal(it)} />
-          <Popconfirm title="确认删除?" onConfirm={() => handleItemDelete(it.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canManage && (
+            <>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openItemModal(it)} />
+              <Popconfirm title="确认删除?" onConfirm={() => handleItemDelete(it.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />} />
+              </Popconfirm>
+            </>
+          )}
         </Space>
       ),
     },
@@ -368,9 +376,11 @@ export default function StandardsPage() {
             产品名称 → 产品代码 → 文件 → SOP 项目行；支持按产品名/产品代码/文件编号搜索（回车直达）。
           </Paragraph>
         </div>
-        <Upload accept=".doc,.docx" showUploadList={false} beforeUpload={handleImport}>
-          <Button type="primary" size="large" icon={<UploadOutlined />}>导入标准文档</Button>
-        </Upload>
+        {canManage && (
+          <Upload accept=".doc,.docx" showUploadList={false} beforeUpload={handleImport}>
+            <Button type="primary" size="large" icon={<UploadOutlined />}>导入标准文档</Button>
+          </Upload>
+        )}
       </div>
 
       <Row gutter={12}>
@@ -471,14 +481,20 @@ export default function StandardsPage() {
                   ]}
                 />
                 <Space>
-                  <Button size="small" icon={<LinkOutlined />} onClick={() => openBindModal(activeDoc)}>
-                    {activeDoc.template_path ? '更换模板' : '绑定模板'}
-                  </Button>
-                  <Button size="small" icon={<EditOutlined />} onClick={() => openDocModal(activeDoc)}>编辑文档</Button>
-                  <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openItemModal()}>添加标准行</Button>
-                  <Popconfirm title="确认删除该标准文档及其全部标准行?" onConfirm={() => handleDocDelete(activeDoc.id)}>
-                    <Button size="small" danger icon={<DeleteOutlined />}>删除文档</Button>
-                  </Popconfirm>
+                  {canBindTemplate && (
+                    <Button size="small" icon={<LinkOutlined />} onClick={() => openBindModal(activeDoc)}>
+                      {activeDoc.template_path ? '更换模板' : '绑定模板'}
+                    </Button>
+                  )}
+                  {canManage && (
+                    <>
+                      <Button size="small" icon={<EditOutlined />} onClick={() => openDocModal(activeDoc)}>编辑文档</Button>
+                      <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openItemModal()}>添加标准行</Button>
+                      <Popconfirm title="确认删除该标准文档及其全部标准行?" onConfirm={() => handleDocDelete(activeDoc.id)}>
+                        <Button size="small" danger icon={<DeleteOutlined />}>删除文档</Button>
+                      </Popconfirm>
+                    </>
+                  )}
                 </Space>
                 <Table
                   rowKey="id"

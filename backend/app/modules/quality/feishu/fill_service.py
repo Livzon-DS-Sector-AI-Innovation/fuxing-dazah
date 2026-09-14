@@ -137,6 +137,60 @@ async def _reply_existing_task(chat_id: str, batch: str, task: QualityTestTask) 
         await send_fill_card(chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)])
 
 
+async def _reply_today_report(chat_id: str) -> None:
+    """一句话查询「今天出报」：今日出报任务清单 + 待复核数。"""
+    from app.core.database import async_session_factory
+    from app.modules.quality.repository import (
+        list_test_results,
+        list_test_tasks,
+        list_test_tasks_by_report_date,
+    )
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    async with async_session_factory() as db:
+        tasks = await list_test_tasks_by_report_date(db, today)
+        review_items, _ = await list_test_tasks(
+            db, product_name=None, status="pending_review", page=1, page_size=200
+        )
+        lines: list[str] = []
+        for t in tasks:
+            rows = await list_test_results(db, t.id)
+            filled = sum(1 for r in rows if r.is_pass is not None)
+            status_label = {
+                "in_progress": "填报中",
+                "pending_review": "待复核",
+                "completed": "已完成",
+            }.get(t.status, t.status)
+            lines.append(
+                f"- {t.product_name} 批号 {t.batch_number}｜{status_label} {filled}/{len(rows)}"
+            )
+    text = f"📅 今日出报任务（{today}）：\n" + ("\n".join(lines) if lines else "无")
+    if review_items:
+        text += f"\n\n🔍 待复核：{len(review_items)} 项（可发「待复核」查看清单）"
+    await send_chat_text(chat_id, text)
+
+
+async def _reply_pending_review(chat_id: str) -> None:
+    """一句话查询「待复核」：待复核任务清单。"""
+    from app.core.database import async_session_factory
+    from app.modules.quality.repository import list_test_tasks
+
+    async with async_session_factory() as db:
+        items, _ = await list_test_tasks(
+            db, product_name=None, status="pending_review", page=1, page_size=200
+        )
+        lines = [
+            f"- {t.product_name} 批号 {t.batch_number}" + (
+                f"（出报日期 {t.report_date}）" if t.report_date else ""
+            )
+            for t in items
+        ]
+    await send_chat_text(
+        chat_id,
+        "🔍 待复核任务：" + ("\n" + "\n".join(lines) if lines else " 无"),
+    )
+
+
 async def _build_progress_text(db, batch: str, task: QualityTestTask) -> str:
     """进度查询文本：填报中（列已填/待填项目）/ 待分配（未到出报日）/ 已出报（出报时间）/ 已作废。"""
     from app.modules.quality.repository import get_latest_report_record_by_task
@@ -202,6 +256,14 @@ async def handle_fill_command(event: dict) -> None:
             send_menu_card,
         )
 
+        # 一句话查询：今天出报 / 待复核（无批号）
+        if "出报" in kw and ("今天" in kw or "今日" in kw):
+            await _reply_today_report(chat_id)
+            return
+        if "待复核" in kw or "待审核" in kw:
+            await _reply_pending_review(chat_id)
+            return
+
         # 机器人自定义菜单指令：无批号裸关键词 → 对应批号输入卡片
         if "建任务" in kw or kw == "新建任务":
             await send_batch_form_card(chat_id, "create_task")
@@ -257,8 +319,8 @@ async def handle_fill_command(event: dict) -> None:
                 await send_pick_doc_card(chat_id, batch, doc_dicts, set())
             return
 
-        # 「进度 批号 XXX」：进度查询（四态：未创建/待分配/填报中/已出报）
-        if not pairs and "进度" in text:
+        # 「进度 批号 XXX」/「批号 X 还差什么」：进度查询（五态：未创建/待分配/填报中/待复核/已出报）
+        if not pairs and ("进度" in text or "还差" in text or "待填" in text or "差什么" in text):
             t = await _resolve_task_by_batch(db, batch)
             if not t:
                 await send_chat_text(

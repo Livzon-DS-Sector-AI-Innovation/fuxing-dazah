@@ -7,13 +7,24 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# 每天推送时间（服务器本地时区）
-_PUSH_HOUR, _PUSH_MINUTE = 8, 5
-_REMIND_HOUR, _REMIND_MINUTE = 15, 0
+
+def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
+    """解析 HH:MM 配置（如 08:05），非法/为空回退默认值。"""
+    try:
+        h, m = value.strip().split(":")
+        return int(h), int(m)
+    except Exception:
+        return default
+
+
+# 每天推送时间（服务器本地时区），环境变量可调
+_PUSH_HOUR, _PUSH_MINUTE = _parse_hhmm(os.getenv("QUALITY_PUSH_MORNING", ""), (8, 5))
+_REMIND_HOUR, _REMIND_MINUTE = _parse_hhmm(os.getenv("QUALITY_PUSH_REMIND", ""), (15, 0))
 
 stop_flag = asyncio.Event()
 

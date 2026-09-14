@@ -349,13 +349,19 @@ async def all_placeholders():
 
 
 @router.post("/templates/folders", summary="创建文件夹")
-async def create_folder(name: str = Body(..., embed=True)):
+async def create_folder(
+    name: str = Body(..., embed=True),
+    _user: User = Depends(require_permission("quality:template:manage")),
+):
     (REPORT_TEMPLATE_DIR / name).mkdir(parents=True, exist_ok=True)
     return {"name": name}
 
 
 @router.delete("/templates/folders", summary="删除空文件夹")
-async def delete_folder(name: str = Body(..., embed=True)):
+async def delete_folder(
+    name: str = Body(..., embed=True),
+    _user: User = Depends(require_permission("quality:template:manage")),
+):
     p = REPORT_TEMPLATE_DIR / name
     if not p.exists():
         raise HTTPException(status_code=404, detail="不存在")
@@ -367,7 +373,10 @@ async def delete_folder(name: str = Body(..., embed=True)):
 
 
 @router.delete("/templates/file", summary="删除单个模板文件")
-async def delete_template_file(path: str = Body(..., embed=True)):
+async def delete_template_file(
+    path: str = Body(..., embed=True),
+    _user: User = Depends(require_permission("quality:template:manage")),
+):
     base = REPORT_TEMPLATE_DIR.resolve()
     p = (REPORT_TEMPLATE_DIR / path).resolve()
     if not str(p).startswith(str(base)) or not p.is_file():
@@ -384,6 +393,7 @@ async def upsert_template_binding(
     sop_no: str | None = Body(default=None, embed=True),
     description: str | None = Body(default=None, embed=True),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
 ) -> JSONResponse:
     if not quality_storage.ensure_template_local(template_path).is_file():
         raise HTTPException(status_code=404, detail=f"模板不存在：{template_path}")
@@ -406,6 +416,7 @@ async def upsert_template_binding(
 @router.delete("/templates/bindings/{template_path:path}", summary="解绑 COA 模板")
 async def delete_template_binding(
     template_path: str, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
 ) -> JSONResponse:
     binding = await delete_coa_binding(db, template_path)
     if not binding:
@@ -418,6 +429,7 @@ async def upload_template(
     folder: str = Form(""),
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:template:manage")),
 ):
     if not file.filename or not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="仅支持 .docx")
@@ -465,7 +477,10 @@ async def download_template(path: str):
 
 
 @router.delete("/templates/{path:path}", summary="删除模板")
-async def delete_template(path: str):
+async def delete_template(
+    path: str,
+    _user: User = Depends(require_permission("quality:template:manage")),
+):
     full = REPORT_TEMPLATE_DIR / path
     if not full.exists():
         raise HTTPException(status_code=404, detail="不存在")
@@ -875,6 +890,7 @@ async def preview_standard_doc(
 async def confirm_standard_doc(
     payload: StandardImportConfirm = Body(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     doc_data = payload.document
     existing = (await db.execute(
@@ -937,6 +953,7 @@ async def confirm_standard_doc(
 async def import_standard_doc(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     """上传 .doc/.docx 质量标准文件：解析文件头+项目行。
 
@@ -1053,6 +1070,7 @@ async def list_standard_docs(
 async def create_standard_doc(
     payload: StandardDocumentCreate = Body(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     doc = await create_standard_document(db, payload.model_dump())
     return success_response(data={"id": str(doc.id)}, message="标准文档创建成功", status_code=201)
@@ -1063,6 +1081,7 @@ async def update_standard_doc(
     doc_id: uuid.UUID,
     payload: StandardDocumentUpdate = Body(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     doc = await update_standard_document(db, doc_id, **updates)
@@ -1074,6 +1093,7 @@ async def update_standard_doc(
 @router.delete("/standards/documents/{doc_id}", summary="删除质量标准文档")
 async def delete_standard_doc(
     doc_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     doc = await delete_standard_document(db, doc_id)
     if not doc:
@@ -1109,6 +1129,7 @@ async def create_standard_doc_item(
     doc_id: uuid.UUID,
     payload: StandardItemCreate = Body(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     it = await create_standard_item(db, doc_id, payload.model_dump())
     return success_response(data={"id": str(it.id)}, message="已添加", status_code=201)
@@ -1119,6 +1140,7 @@ async def update_standard_doc_item(
     item_id: uuid.UUID,
     payload: StandardItemUpdate = Body(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     it = await update_standard_item(db, item_id, **updates)
@@ -1130,6 +1152,7 @@ async def update_standard_doc_item(
 @router.delete("/standards/items/{item_id}", summary="删除标准项目行")
 async def delete_standard_doc_item(
     item_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:standard:manage")),
 ) -> JSONResponse:
     it = await delete_standard_item(db, item_id)
     if not it:

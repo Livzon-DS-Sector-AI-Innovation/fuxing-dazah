@@ -7,6 +7,7 @@ import {
 import {
   UploadOutlined, FolderAddOutlined, DownloadOutlined, DeleteOutlined,
 } from '@ant-design/icons'
+import { usePermission } from '@/hooks/usePermission'
 import {
   fetchTemplates, uploadTemplate, createTemplateFolder, deleteTemplateFolder, deleteTemplateFile,
   bindTemplate, unbindTemplate, fetchStandardDocuments,
@@ -49,6 +50,8 @@ function flattenTree(items: any[], prefix = ''): FlatTemplate[] {
 
 export default function TemplatesManager() {
   const { message } = App.useApp()
+  const { hasPermission } = usePermission()
+  const canManage = hasPermission('quality:template:manage')
   const [tree, setTree] = useState<any[]>([])
   const [files, setFiles] = useState<FlatTemplate[]>([])
   const [folders, setFolders] = useState<string[]>([])
@@ -194,12 +197,12 @@ export default function TemplatesManager() {
       title: '操作', key: 'actions', width: 220,
       render: (_: any, r: FlatTemplate) => (
         <Space>
-          {r.binding?.sop_no ? (
+          {canManage && r.binding?.sop_no ? (
             <Button size="small" onClick={() => openBindModal(r.path)}>换绑</Button>
-          ) : (
+          ) : canManage ? (
             <Button size="small" type="primary" onClick={() => openBindModal(r.path)}>绑定SOP</Button>
-          )}
-          {r.binding?.sop_no && (
+          ) : null}
+          {canManage && r.binding?.sop_no && (
             <Popconfirm title="确认解绑?" onConfirm={() => handleUnbind(r.path)}>
               <Button size="small">解绑</Button>
             </Popconfirm>
@@ -208,9 +211,11 @@ export default function TemplatesManager() {
             onClick={() => window.open(`${API_BASE_URL}/api/v1/quality/templates/${encodeURI(r.path)}/download`, '_blank')}>
             下载
           </Button>
-          <Popconfirm title="确认删除该模板文件?" onConfirm={() => handleDeleteFile(r.path)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canManage && (
+            <Popconfirm title="确认删除该模板文件?" onConfirm={() => handleDeleteFile(r.path)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -226,15 +231,19 @@ export default function TemplatesManager() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 260 }}
         />
-        <Input
-          placeholder="新文件夹名（按产品名，如 妥布霉素）"
-          value={newFolderName}
-          onChange={(e) => setNewFolderName(e.target.value)}
-          onPressEnter={handleCreateFolder}
-          style={{ width: 240 }}
-        />
-        <Button icon={<FolderAddOutlined />} onClick={handleCreateFolder}>新建文件夹</Button>
-        <Button type="primary" icon={<UploadOutlined />} onClick={() => setUploadOpen(true)}>上传模板</Button>
+        {canManage && (
+          <>
+            <Input
+              placeholder="新文件夹名（按产品名，如 妥布霉素）"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onPressEnter={handleCreateFolder}
+              style={{ width: 240 }}
+            />
+            <Button icon={<FolderAddOutlined />} onClick={handleCreateFolder}>新建文件夹</Button>
+            <Button type="primary" icon={<UploadOutlined />} onClick={() => setUploadOpen(true)}>上传模板</Button>
+          </>
+        )}
       </Space>
 
       <Space wrap size={4}>

@@ -326,6 +326,15 @@ export default function TaskDetail({ id }: { id: string }) {
         {detail.status === 'pending_review' && canReview && (
           <>
             <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleStatus('completed', '审核通过，任务已完成')}>审核通过</Button>
+            {hasPermission('quality:report:generate') && (
+              <Button type="primary" icon={<FileTextOutlined />} loading={generatingCoa}
+                onClick={async () => {
+                  await handleStatus('completed', '审核通过，任务已完成')
+                  await handleGenerateCoa()
+                }}>
+                审核通过并生成 COA
+              </Button>
+            )}
             <Popconfirm title="驳回后任务回到填报中，确认驳回?" onConfirm={() => handleStatus('in_progress', '已驳回，任务回到填报中')}>
               <Button icon={<RedoOutlined />}>驳回重填</Button>
             </Popconfirm>
