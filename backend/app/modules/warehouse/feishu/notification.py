@@ -133,7 +133,7 @@ async def send_card(
 
     Args:
         chat_id: 飞书群聊 chat_id（如 "oc_xxx"）
-        card: 完整的飞书卡片 JSON dict（config/header/elements 由调用方构建）
+        card: 完整的飞书卡片 JSON dict（JSON 2.0 结构，schema/header/body 由调用方构建）
         dry_run: None=跟随模块级开关；True=只构建消息体并记录日志；False=真发送
 
     Returns:

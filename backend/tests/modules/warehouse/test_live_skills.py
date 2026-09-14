@@ -297,7 +297,7 @@ async def test_live_dead_stock_skill_flow(
     # 计划卡片（plan_task 进度卡首帧 + 更新）经 dry-run 捕获
     cards = _plan_cards(captured_sends)
     for i, card in enumerate(cards):
-        print(f"[计划卡{i}] {card['elements'][0]['content'][:160]}")
+        print(f"[计划卡{i}] {card['body']['elements'][0]['content'][:160]}")
     assert cards, "SOP 第 1 步 plan_task 应产生计划卡片（dry-run 捕获）"
 
     # plans 表落库：至少一步被更新过（update_plan 状态机运转）

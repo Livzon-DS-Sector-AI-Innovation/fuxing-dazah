@@ -22,7 +22,6 @@ from app.modules.warehouse.agent.pipeline.aligner import (
 from app.modules.warehouse.agent.pipeline.draft_flow import (
     ACTIVE_STATUSES,
     DRAFT_NO_RETRIES,
-    DRAFT_TTL_SECONDS,
     FINISHED_OUTBOUND_SCENE,
     GMP_OUTBOUND_SCENE,
     RECEIPT_SCENE,
@@ -74,7 +73,6 @@ __all__ = [
     "AlignedReceipt",
     "CHECK_FIELDS",
     "DRAFT_NO_RETRIES",
-    "DRAFT_TTL_SECONDS",
     "DraftFlowError",
     "FINISHED_CHECK_FIELDS",
     "FINISHED_OUTBOUND_SCENE",

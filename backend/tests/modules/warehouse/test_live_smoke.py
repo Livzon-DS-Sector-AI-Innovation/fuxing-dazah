@@ -17,10 +17,20 @@ def _target_chat_id() -> str | None:
 @pytest.mark.skipif(not _target_chat_id(), reason="WAREHOUSE_TEST_CHAT_ID 未配置，跳过真发冒烟")
 async def test_send_card_to_test_chat_smoke() -> None:
     card = {
-        "config": {"update_multi": True},
-        "elements": [
-            {"tag": "markdown", "content": "**S1 冒烟测试**\n仓库管理机器人消息链路真发验证，收到请忽略。"},
-        ],
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
+        "header": {
+            "title": {"tag": "plain_text", "content": "🧪 仓储助手卡片冒烟"},
+            "template": "blue",
+        },
+        "body": {
+            "elements": [
+                {
+                    "tag": "markdown",
+                    "content": "**S1 冒烟测试**\n仓库管理机器人消息链路真发验证（JSON 2.0 卡片），收到请忽略。",
+                },
+            ]
+        },
     }
     message_id = await notification.send_card(_target_chat_id(), card)
     assert message_id and message_id != "dry_run"

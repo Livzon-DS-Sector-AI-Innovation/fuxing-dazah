@@ -120,6 +120,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     import app.modules.warehouse.feishu.event_client as wh_event_client
     warehouse_ws_task = asyncio.create_task(wh_event_client.start_ws()) if settings.WAREHOUSE_FEISHU_WS_ENABLED else None
 
+    # ── 仓储模块系统配置启动预热（失败仅告警，读路径回退 env/默认）──
+    from app.modules.warehouse.ai_config.scenario_store import (
+        scenario_store as wh_scenario_store,
+    )
+    from app.modules.warehouse.ai_config.store import store as wh_ai_store
+    from app.modules.warehouse.bitable_config.store import (
+        bitable_store as wh_bitable_store,
+    )
+    from app.modules.warehouse.ops_config.runtime_store import (
+        runtime_store as wh_runtime_store,
+    )
+    from app.modules.warehouse.ops_config.scheduler_store import (
+        scheduler_store as wh_scheduler_store,
+    )
+
+    for _wh_store in (wh_ai_store, wh_scenario_store, wh_runtime_store, wh_bitable_store, wh_scheduler_store):
+        try:
+            await _wh_store.warmup()
+        except Exception:  # noqa: BLE001 — 预热失败不阻塞启动
+            logger.warning("仓储模块配置预热失败（%s），读路径将以 env/默认兜底", type(_wh_store).__name__)
+
     # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
     from app.modules.safety.feishu.catch_up import recover_unprocessed_records
 

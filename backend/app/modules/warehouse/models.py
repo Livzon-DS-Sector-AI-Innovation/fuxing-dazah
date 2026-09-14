@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Index,
@@ -371,4 +372,273 @@ class WarehouseAgentMemory(BaseModel):
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="记忆内容")
     hit_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="注入命中计数（淘汰用）"
+    )
+
+
+# ==================== 系统配置中心（设计稿 warehouse-system-config-design.md） ====================
+# 与 safety 模块同名表结构对齐（schema=warehouse）；回退链：DB 活行 → env → registry 默认。
+
+
+class AiModelProfile(BaseModel):
+    """AI 模型配置（一行一组配置）。DB 为唯一权威；缺行/停用时 store 回退 env/registry 默认值。"""
+
+    __tablename__ = "ai_model_profiles"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_ai_model_profiles_profile",
+            "profile",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_ai_model_profiles_profile", "profile"),
+        {"schema": "warehouse"},
+    )
+
+    profile: Mapped[str] = mapped_column(
+        String(32), nullable=False,
+        comment="profile key（registry 注册，如 agent/agent_backup）",
+    )
+    config: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict,
+        comment="模型配置（默认值来自 registry.default_config，api_key 恒为空串不回显）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否启用（false 时读路径整行回落 env/registry 默认）",
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class AiConfigAudit(BaseModel):
+    """AI 模型配置变更审计（append-only；before/after 中 api_key 脱敏为 ****后4位）。"""
+
+    __tablename__ = "ai_config_audits"
+    __table_args__ = (
+        Index("ix_warehouse_ai_config_audits_profile_created", "profile", "created_at"),
+        Index("ix_warehouse_ai_config_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    profile: Mapped[str] = mapped_column(String(32), nullable=False, comment="profile key")
+    action: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="动作: update/enable/disable"
+    )
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更前（compact，api_key 已脱敏）"
+    )
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更后（compact，api_key 已脱敏）"
+    )
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class AiScenarioConfig(BaseModel):
+    """AI 场景配置（一行一场景）。缺行 = 默认开启；enabled=false = 熔断。"""
+
+    __tablename__ = "ai_scenario_configs"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_ai_scenario_configs_scenario",
+            "scenario",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_ai_scenario_configs_scenario", "scenario"),
+        {"schema": "warehouse"},
+    )
+
+    scenario: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        comment="场景 key（registry 注册，DB 只能改值不能新增场景）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否启用（false = 熔断，统一入口抛 ScenarioDisabledError）",
+    )
+    model_profile: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+        comment="绑定 profile 名（agent/agent_backup）；NULL = 按场景默认",
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class AiScenarioConfigAudit(BaseModel):
+    """AI 场景配置变更审计（append-only；相位无密钥不脱敏）。"""
+
+    __tablename__ = "ai_scenario_config_audits"
+    __table_args__ = (
+        Index(
+            "ix_warehouse_ai_scenario_config_audits_scenario_created",
+            "scenario",
+            "created_at",
+        ),
+        Index("ix_warehouse_ai_scenario_config_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    scenario: Mapped[str] = mapped_column(String(64), nullable=False, comment="对应场景")
+    action: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作: update/enable/disable")
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更前（compact，{enabled, model_profile, note}）"
+    )
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更后（compact，{enabled, model_profile, note}）"
+    )
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class BitableConnection(BaseModel):
+    """Bitable 表级连接坐标（一行一张 Base 表）。DB 缺行/字段空 = 回落 env/代码快照。"""
+
+    __tablename__ = "bitable_connections"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_bitable_connections_table_key",
+            "table_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_bitable_connections_table_key", "table_key"),
+        {"schema": "warehouse"},
+    )
+
+    table_key: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        comment="表 key（bitable_schema.TABLES 注册，如 material_receipt）",
+    )
+    base_token: Mapped[str | None] = mapped_column(
+        String(128), nullable=True,
+        comment="Base app_token 覆盖（空 = 回落 env/快照）",
+    )
+    table_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="表 table_id 覆盖（空 = 回落代码快照）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否启用（false = 显式停用该表，不回退默认）",
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class BitableConfigAudit(BaseModel):
+    """Bitable 连接变更审计（append-only）。"""
+
+    __tablename__ = "bitable_config_audits"
+    __table_args__ = (
+        Index("ix_warehouse_bitable_config_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    table_key: Mapped[str] = mapped_column(String(64), nullable=False, comment="表 key")
+    action: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="动作: update/enable/disable"
+    )
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更前（compact，{base_token 脱敏, table_id, enabled, note}）"
+    )
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="变更后（compact）"
+    )
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class RuntimeConfig(BaseModel):
+    """Agent 运行参数（一行一键）。DB 缺行 = 回落 env/registry 默认。"""
+
+    __tablename__ = "runtime_configs"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_runtime_configs_key",
+            "key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_runtime_configs_key", "key"),
+        {"schema": "warehouse"},
+    )
+
+    key: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        comment="参数 key（runtime_registry 注册，DB 只能改值不能新增）",
+    )
+    value: Mapped[Any] = mapped_column(
+        JSONB, nullable=False, default=None, comment="参数值（按注册表类型写入）"
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class RuntimeConfigAudit(BaseModel):
+    """运行参数变更审计（append-only）。"""
+
+    __tablename__ = "runtime_config_audits"
+    __table_args__ = (
+        Index("ix_warehouse_runtime_config_audits_key_created", "key", "created_at"),
+        Index("ix_warehouse_runtime_config_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    key: Mapped[str] = mapped_column(String(64), nullable=False, comment="参数 key")
+    action: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作: update/reset")
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更前")
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更后")
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class SchedulerTaskConfig(BaseModel):
+    """定时任务/告警目标配置（一行一任务；只能改值不能新增 job）。"""
+
+    __tablename__ = "scheduler_task_configs"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_scheduler_task_configs_job",
+            "job_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_scheduler_task_configs_job", "job_name"),
+        {"schema": "warehouse"},
+    )
+
+    job_name: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        comment="任务 key（scheduler_registry 注册，如 system_alert）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", comment="是否启用"
+    )
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True,
+        comment='调度（{"type":"interval","seconds":300} / {"type":"cron","expr":"..."}；null=事件触发）',
+    )
+    target_chat_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="飞书投递目标（群 chat_id；空 = 回落 env 兜底）"
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class SchedulerConfigAudit(BaseModel):
+    """任务配置变更审计（append-only）。"""
+
+    __tablename__ = "scheduler_config_audits"
+    __table_args__ = (
+        Index("ix_warehouse_scheduler_config_audits_job_created", "job_name", "created_at"),
+        Index("ix_warehouse_scheduler_config_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    job_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="任务 key")
+    action: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作: update/enable/disable")
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更前")
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更后")
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
     )

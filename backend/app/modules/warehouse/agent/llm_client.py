@@ -5,7 +5,7 @@ S0 范围：仅 `chat_with_tools()` 单次调用原语；工具调用循环/提�
 与 `platform/integrations/ai/client.py`（AIService）的关系：本模块独立实现，
 platform 文件零改动（用户拍板）。差异点来自设计文档「A. 模型配置」的实测契约：
 - tool calling 往返：解析 tool_calls，arguments JSON 字符串 → dict（失败保留原始串）
-- reasoning 模型（deepseek-v4-flash-vision-exp）：透传 reasoning_content；
+- reasoning 模型（deepseek-flash）：透传 reasoning_content；
   max_tokens 过小会被 reasoning 耗尽导致 content 为空，调用方须给足
 - 请求体不传 response_format（tools 模式下与 json_object 不兼容）
 - 错误语义：5xx/网络瞬时错误指数退避重试（对齐 meter/ai_service 的 AI_MAX_RETRIES
@@ -235,6 +235,20 @@ class WarehouseLLMClient:
 
     async def __aexit__(self, *exc_info: object) -> None:
         await self.close()
+
+
+def get_llm_client() -> Any:
+    """LLM 客户端工厂——调用方的唯一取用点。
+
+    返回带审计的客户端（场景熔断 + 调用审计 + 备用降级 + 失败通知），
+    底层每次调用按当前 profile 配置新建传输客户端（不做模块级单例：
+    httpx 连接池绑定首次使用的 event loop，见 test_live_gateway 的
+    fresh_runner fixture 注记）。审计客户端自身无 per-call 资源，
+    进程级单例安全。
+    """
+    from app.modules.warehouse.ai_audit.audited_client import WarehouseAuditedLLMClient
+
+    return WarehouseAuditedLLMClient()
 
 
 def _parse_tool_calls(raw_tool_calls: Any) -> list[ToolCall]:

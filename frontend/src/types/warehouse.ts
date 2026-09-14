@@ -232,3 +232,281 @@ export interface WarehouseOverview {
 
 // 分页结果沿用全局结构
 export type Paginated<T> = PaginatedResponse<T>
+
+// ═══════════════════════════════════════════════════════════════
+// 系统配置中心（backend app/modules/warehouse/system_config_api.py，tickets 08+09）
+// 类型对齐各 store 的 *View dataclass（GET data.* 数组 / PUT 返回单视图）
+// ═══════════════════════════════════════════════════════════════
+
+/** 配置来源（DB 覆盖 > env 兜底 > 代码默认） */
+export type WarehouseConfigSource = 'db' | 'env' | 'default'
+/** AI 模型位整体状态（五态：含 disabled/missing） */
+export type WarehouseProfileStatus = WarehouseConfigSource | 'disabled' | 'missing'
+
+export type WarehouseProfileName = 'agent' | 'agent_backup'
+export type WarehouseScenarioName = 'agent_chat' | 'receipt_recognition'
+
+// ── AI 模型配置 ──
+
+export interface WarehouseAiModelConfig {
+  api_key?: string
+  base_url?: string
+  model?: string
+  temperature?: number
+  max_tokens?: number
+  timeout?: number
+}
+
+export interface WarehouseAiModelView {
+  profile: WarehouseProfileName
+  label: string
+  /** 最终合并值（DB→env→registry 默认）；api_key 恒为空串（脱敏见 api_key_masked） */
+  config: WarehouseAiModelConfig
+  api_key_masked: string
+  enabled: boolean
+  status: WarehouseProfileStatus
+  /** 字段级来源（field -> db/env/default） */
+  sources: Record<string, WarehouseConfigSource>
+}
+
+export interface WarehouseAiModelsData {
+  profiles: WarehouseAiModelView[]
+}
+
+/** PUT /ai-models/{profile}：api_key 空 = 不修改（前端留空即不带该键） */
+export interface WarehouseAiModelUpdateInput {
+  base_url?: string
+  model?: string
+  api_key?: string
+  temperature?: number
+  max_tokens?: number
+  timeout?: number
+  enabled?: boolean
+  note?: string
+}
+
+/** POST /ai-models/test（对已保存配置探测；ok=false 时 error 为摘要） */
+export interface WarehouseAiModelTestResult {
+  ok: boolean
+  model?: string | null
+  latency_ms?: number
+  status_code?: number
+  error?: string
+}
+
+// ── AI 场景配置 ──
+
+export interface WarehouseAiScenarioView {
+  scenario: WarehouseScenarioName
+  label: string
+  description: string
+  model_type: string
+  channel: string
+  enabled: boolean
+  /** raw 绑定；null = 按场景默认 */
+  model_profile: WarehouseProfileName | null
+  /** 已解析生效 profile */
+  effective_profile: WarehouseProfileName
+  allowed_profiles: WarehouseProfileName[]
+  source: WarehouseConfigSource | 'disabled'
+  status: 'enabled' | 'disabled'
+}
+
+export interface WarehouseAiScenariosData {
+  scenarios: WarehouseAiScenarioView[]
+}
+
+export interface WarehouseAiScenarioUpdateInput {
+  enabled?: boolean
+  model_profile?: WarehouseProfileName | null
+  note?: string
+}
+
+// ── 运行参数 ──
+
+export type WarehouseRuntimeValue = string | number | boolean | null
+
+export interface WarehouseRuntimeView {
+  key: string
+  label: string
+  group: string
+  value: WarehouseRuntimeValue
+  default: WarehouseRuntimeValue
+  source: WarehouseConfigSource
+  value_type: 'int' | 'float' | 'str'
+  min_value: number | null
+  max_value: number | null
+  max_length: number | null
+  description: string
+}
+
+export interface WarehouseRuntimeData {
+  configs: WarehouseRuntimeView[]
+}
+
+// ── 多维表格连接 ──
+
+export interface WarehouseBitableView {
+  table_key: string
+  base_key: string
+  name_cn: string
+  /** 脱敏值（****后4位 / 未配置） */
+  base_token: string
+  table_id: string
+  enabled: boolean
+  token_source: WarehouseConfigSource
+  table_id_source: WarehouseConfigSource
+}
+
+export interface WarehouseBitableData {
+  connections: WarehouseBitableView[]
+}
+
+/** PUT /bitable/connections/{table_key}：空串 = 清空覆盖（回落 env/快照默认） */
+export interface WarehouseBitableUpdateInput {
+  base_token?: string | null
+  table_id?: string | null
+  note?: string | null
+}
+
+export interface WarehouseBitableTestResult {
+  ok: boolean
+  table_key?: string
+  table_id?: string
+  field_count?: number
+  error?: string
+}
+
+export interface WarehouseBitableRefreshResult {
+  ok: boolean
+  field_count?: number
+  error?: string
+}
+
+// ── 定时任务 / 告警目标 ──
+
+/** schedule 三态：interval（seconds ≥30）/ cron（expr）/ null（事件触发，无调度） */
+export type WarehouseSchedule =
+  | { type: 'interval'; seconds: number }
+  | { type: 'cron'; expr: string }
+  | null
+
+export interface WarehouseSchedulerTaskView {
+  job_name: string
+  label: string
+  description: string
+  enabled: boolean
+  schedule: WarehouseSchedule
+  target_chat_id: string | null
+  source: 'db' | 'default'
+}
+
+export interface WarehouseSchedulerData {
+  tasks: WarehouseSchedulerTaskView[]
+}
+
+export interface WarehouseSchedulerUpdateInput {
+  enabled?: boolean
+  schedule?: WarehouseSchedule
+  target_chat_id?: string | null
+  note?: string | null
+}
+
+// ── 配置变更审计（五类端点共用结构，主体键因端点而异）──
+
+export interface WarehouseConfigAuditBase {
+  id: string
+  action: string
+  before_json: Record<string, unknown> | null
+  after_json: Record<string, unknown> | null
+  operator_name: string | null
+  created_at: string
+}
+
+export interface WarehouseAiModelAuditItem extends WarehouseConfigAuditBase {
+  profile: string
+}
+export interface WarehouseAiScenarioAuditItem extends WarehouseConfigAuditBase {
+  scenario: string
+}
+export interface WarehouseRuntimeAuditItem extends WarehouseConfigAuditBase {
+  key: string
+}
+export interface WarehouseBitableAuditItem extends WarehouseConfigAuditBase {
+  table_key: string
+}
+export interface WarehouseSchedulerAuditItem extends WarehouseConfigAuditBase {
+  job_name: string
+}
+
+/** ConfigAuditSection 的五类审计（决定取数 action 与「对象」列取值键） */
+export type WarehouseConfigAuditKind =
+  | 'ai-model'
+  | 'ai-scenario'
+  | 'runtime'
+  | 'bitable'
+  | 'scheduler'
+
+// ── AI 调用审计（warehouse.ai_call_audits）──
+
+export interface WarehouseAiAuditListItem {
+  id: string
+  created_at: string
+  scenario: string
+  resource: string | null
+  model: string
+  prompt_version: string | null
+  status: 'success' | 'failed'
+  error: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_hit_tokens: number | null
+  latency_ms: number | null
+  degradation_level: string | null
+  trace_id: string | null
+  chat_id: string | null
+  user_open_id: string | null
+  /** {"messages":[...]} 或超限时 {"truncated":true,"preview":"..."} */
+  input_json: Record<string, unknown> | null
+  /** {"content","tool_calls","reasoning_content"} 或超限截断形态 */
+  output_json: Record<string, unknown> | null
+  tool_names: string[] | null
+  channel: string | null
+}
+
+/** 详情端点返回全文形态，与行结构一致（列表已含 json 全文时直接复用） */
+export type WarehouseAiAuditDetail = WarehouseAiAuditListItem
+
+export interface WarehouseAiAuditListParams {
+  scenario?: string
+  status?: string
+  trace_id?: string
+  page?: number
+  page_size?: number
+}
+
+/** 统计结构对齐 safety ai-audits/stats（字段可缺省，前端渲染自行兜底） */
+export interface WarehouseAiAuditTotals {
+  calls: number
+  failed: number
+  input_tokens: number
+  output_tokens: number
+  cache_hit_tokens: number
+  cache_miss_tokens: number
+}
+
+export interface WarehouseAiAuditScenarioStats {
+  scenario: string
+  calls: number
+  failed: number
+  input_tokens: number
+  output_tokens: number
+  avg_latency_ms: number
+}
+
+export interface WarehouseAiAuditStats {
+  totals?: WarehouseAiAuditTotals
+  prev_totals?: WarehouseAiAuditTotals
+  by_scenario?: WarehouseAiAuditScenarioStats[]
+  daily?: { date: string; scenario: string; calls: number }[]
+}

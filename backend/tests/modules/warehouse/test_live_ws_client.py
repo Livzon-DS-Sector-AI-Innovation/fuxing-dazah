@@ -72,14 +72,17 @@ def _build_event_frame(event: dict[str, Any], service_id: int = 1) -> bytes:
 
 
 def _sample_card() -> dict[str, Any]:
-    """典型 Agent 结果卡片（msg_type=interactive 的 content 结构）。"""
+    """典型 Agent 结果卡片（msg_type=interactive 的 content 结构，JSON 2.0）。"""
     return {
-        "config": {"wide_screen_mode": True},
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": "库存查询结果"},
             "template": "blue",
         },
-        "elements": [{"tag": "markdown", "content": "**硫酸** 批号 A1，数量 100 kg"}],
+        "body": {
+            "elements": [{"tag": "markdown", "content": "**硫酸** 批号 A1，数量 100 kg"}]
+        },
     }
 
 
@@ -292,7 +295,7 @@ async def test_card_action_trigger_ack_envelope(clean_handlers: None) -> None:
     该 Response 信封（{"code": 200, "data": base64(card_json)}）是飞书 WS 协议
     让按钮状态变更的契约，gateway 卡片回调依赖此行为。
     """
-    card_return = {"config": {"update_multi": True}, "elements": []}
+    card_return = {"card": {"type": "raw", "data": {"schema": "2.0"}}}
 
     @event_client.on_event("card.action.trigger")
     async def card_handler(data: dict[str, Any]) -> dict[str, Any]:
@@ -382,7 +385,18 @@ def test_add_reaction_live_on_sent_card() -> None:
     async def _run() -> bool:
         mid = await notif.send_card(
             chat_id,
-            {"elements": [{"tag": "markdown", "content": "🧪 表情回复自动化验证"}]},
+            {
+                "schema": "2.0",
+                "header": {
+                    "title": {"tag": "plain_text", "content": "🧪 表情回复验证"},
+                    "template": "blue",
+                },
+                "body": {
+                    "elements": [
+                        {"tag": "markdown", "content": "🧪 表情回复自动化验证"}
+                    ]
+                },
+            },
         )
         assert mid and mid != notif.DRY_RUN_MESSAGE_ID
         return await notif.add_reaction(mid, "OK")

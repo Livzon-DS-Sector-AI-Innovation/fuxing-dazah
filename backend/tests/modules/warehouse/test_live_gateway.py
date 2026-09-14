@@ -79,6 +79,21 @@ def captured_sends(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
 
 
 @pytest.fixture
+def captured_updates(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+    """捕获 notification.update_card 的 PATCH 调用（确认结果落卡断言用）。"""
+    updates: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_update(
+        message_id: str, card: dict[str, Any], dry_run: bool | None = None
+    ) -> bool:
+        updates.append((message_id, card))
+        return True
+
+    monkeypatch.setattr(notification, "update_card", fake_update)
+    return updates
+
+
+@pytest.fixture
 def gateway_db(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncSession:
@@ -144,7 +159,8 @@ def _card_action_event(
             "tag": "button",
             "value": {"action": action, "scene": "confirm_action", "draft_id": draft_id},
         },
-        "host": "im",
+        "context": {"open_message_id": f"om_card_{draft_id[:8]}"},
+        "host": "im_message",
     }
 
 
@@ -152,7 +168,7 @@ def _bot_mention() -> list[dict[str, Any]]:
     return [
         {
             "key": "@_user_1",
-            "id": {"open_id": gateway.BOT_OPEN_ID, "union_id": "un_bot", "user_id": "bot"},
+            "id": {"open_id": gateway.bot_open_id(), "union_id": "un_bot", "user_id": "bot"},
             "name": "仓库管理机器人",
             "tenant_key": "tenant",
         }
@@ -186,7 +202,7 @@ async def test_text_private_message_e2e(
     assert only["msg_type"] == "interactive"
     result = _card_of(only)
     # 票03 起 Runner 为真实现（LLM 真调），回复内容不固定——断言非空即可
-    assert result["elements"][0]["content"].strip()
+    assert result["body"]["elements"][0]["content"].strip()
 
 
 # ── 2. 群聊非 @ 忽略 ──
@@ -233,7 +249,7 @@ async def test_group_mention_responded(
     assert captured_sends[0]["receive_id"] == chat_id
     result = _card_of(captured_sends[0])
     # 票03 起 Runner 为真实现（LLM 真调），回复内容不固定——断言非空即可
-    assert result["elements"][0]["content"].strip()
+    assert result["body"]["elements"][0]["content"].strip()
 
 
 # ── 4. 同 message_id 去重 ──
@@ -385,6 +401,7 @@ async def test_runner_error_degrades(
 async def test_confirm_flow(
     gateway_db: AsyncSession,
     captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """确认门机制：请求确认 → 点确认回调执行；非发起人拒绝；过期拒绝。"""
     calls: list[str] = []
@@ -406,7 +423,7 @@ async def test_confirm_flow(
         assert draft.expires_at is not None
 
         card = confirm.build_confirm_card(draft)
-        confirm_btn = card["elements"][1]["actions"][0]
+        confirm_btn = card["body"]["elements"][1]
         assert confirm_btn["value"]["scene"] == "confirm_action"
         assert confirm_btn["value"]["draft_id"] == str(draft.id)
 
@@ -415,8 +432,11 @@ async def test_confirm_flow(
                 operator_open_id="ou_req", action="confirm", draft_id=str(draft.id)
             )
         )
-        assert update is not None
-        assert "已执行测试动作" in update["elements"][0]["content"]
+        assert update is None  # 结果经 PATCH 落原卡（纯 ACK）
+        await asyncio.sleep(0.01)  # 让 PATCH 后台任务跑完
+        assert "已执行测试动作" in str(
+            captured_updates[-1][1]["body"]["elements"][0]["content"]
+        )
         assert calls == [draft.draft_no]
         assert draft.status == "confirmed"
 
@@ -429,8 +449,11 @@ async def test_confirm_flow(
                 operator_open_id="ou_hacker", action="confirm", draft_id=str(draft2.id)
             )
         )
-        assert update2 is not None
-        assert "仅发起人" in update2["elements"][0]["content"]
+        assert update2 is None
+        await asyncio.sleep(0.01)
+        assert "仅发起人" in str(
+            captured_updates[-1][1]["body"]["elements"][0]["content"]
+        )
         assert calls == [draft.draft_no]  # 回调未再执行
         assert draft2.status == "pending_confirm"
 
@@ -445,18 +468,25 @@ async def test_confirm_flow(
                 operator_open_id="ou_req3", action="confirm", draft_id=str(draft3.id)
             )
         )
-        assert update3 is not None
-        assert "已过期" in update3["elements"][0]["content"]
+        assert update3 is None
+        await asyncio.sleep(0.01)
+        assert "已过期" in str(
+            captured_updates[-1][1]["body"]["elements"][0]["content"]
+        )
         assert calls == [draft.draft_no]  # 过期后回调不执行
         assert draft3.status == "expired"
     finally:
         confirm.unregister_confirm_callback(confirm.CONFIRM_SCENE)
 
     # confirm 审计：确认 ok 一条、非发起人 denied 一条、过期 denied 一条
+    # （按本次三条草稿过滤——live 库存在历史运行提交的 confirm 审计残留，不范围过滤会误计）
     audits = (
         await gateway_db.execute(
             select(WarehouseAgentAudit)
-            .where(WarehouseAgentAudit.tool_name == "confirm")
+            .where(
+                WarehouseAgentAudit.tool_name == "confirm",
+                WarehouseAgentAudit.draft_id.in_([draft.id, draft2.id, draft3.id]),
+            )
             .order_by(WarehouseAgentAudit.created_at)
         )
     ).scalars().all()

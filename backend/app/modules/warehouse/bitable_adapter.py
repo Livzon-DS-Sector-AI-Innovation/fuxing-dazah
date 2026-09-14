@@ -93,16 +93,30 @@ class WarehouseBitableAdapter:
 
     def _base_token(self, table_key: str) -> str:
         meta = self._table(table_key)
-        token = self._base_tokens.get(meta.base_key) or getattr(
-            get_settings(), meta.base_token_setting, ""
-        )
+        # 连接配置链：DB 活行覆盖 → 注入参数/env（Settings）→ 缺失报错
+        from app.modules.warehouse.bitable_config.store import bitable_store
+
+        resolved = bitable_store.resolve(table_key)
+        if not resolved.enabled:
+            raise WarehouseBitableError(
+                f"表 {table_key!r} 已在连接配置中停用",
+                code="table_disabled",
+            )
+        token = resolved.base_token or self._base_tokens.get(meta.base_key, "")
         if not token:
             raise WarehouseBitableError(
                 f"缺少 {meta.base_key} Base 的 app_token"
-                f"（Settings.{meta.base_token_setting} 为空）",
+                f"（连接配置与 Settings.{meta.base_token_setting} 均为空）",
                 code="missing_credentials",
             )
         return token
+
+    def _table_id(self, table_key: str) -> str:
+        """表 ID：DB 活行覆盖 → 代码快照（bitable_schema.TABLES）。"""
+        self._table(table_key)  # 未知表校验
+        from app.modules.warehouse.bitable_config.store import bitable_store
+
+        return bitable_store.resolve(table_key).table_id
 
     def _wrap(self, exc: BitableAPIError) -> WarehouseBitableError:
         return WarehouseBitableError(str(exc), code=_parse_code(exc))
@@ -138,7 +152,7 @@ class WarehouseBitableAdapter:
         该接口必须携带 JSON body（无过滤条件时传空对象，实测缺 body 返
         9499 Invalid request parameters）。
         """
-        meta = self._table(table_key)
+        self._table(table_key)  # 未知表快速失败
         body: dict[str, Any] = {}
         if field_names:
             body["field_names"] = list(field_names)
@@ -147,7 +161,7 @@ class WarehouseBitableAdapter:
         data = await self._call(
             "POST",
             f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
-            f"/tables/{meta.table_id}/records/search",
+            f"/tables/{self._table_id(table_key)}/records/search",
             json_body=body,
             params={"page_size": max(1, min(int(limit), 500))},
         )
@@ -181,7 +195,7 @@ class WarehouseBitableAdapter:
         过滤需调用方拉取后本地做——本适配器支持 ``sort``（如
         ``[{"field_name": "入库日期", "desc": True}]``）配合分页拉最近数据。
         """
-        meta = self._table(table_key)
+        self._table(table_key)  # 未知表快速失败
         body: dict[str, Any] = {}
         if field_names:
             body["field_names"] = list(field_names)
@@ -195,7 +209,7 @@ class WarehouseBitableAdapter:
         data = await self._call(
             "POST",
             f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
-            f"/tables/{meta.table_id}/records/search",
+            f"/tables/{self._table_id(table_key)}/records/search",
             json_body=body,
             params=params,
         )
@@ -217,11 +231,11 @@ class WarehouseBitableAdapter:
 
         记录不存在抛 WarehouseBitableError（飞书业务码 1254040）。
         """
-        meta = self._table(table_key)
+        self._table(table_key)
         data = await self._call(
             "GET",
             f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
-            f"/tables/{meta.table_id}/records/{record_id}",
+            f"/tables/{self._table_id(table_key)}/records/{record_id}",
         )
         record = data.get("record") or {}
         return {
@@ -239,12 +253,12 @@ class WarehouseBitableAdapter:
         单选字段传纯字符串（读写不对称，禁止数组）；字段键用字段名。
         返回 {"record_id": str, "fields": {回读字段: 值}}。
         """
-        meta = self._table(table_key)
+        self._table(table_key)  # 未知表快速失败
         validate_write_fields(table_key, fields)
         data = await self._call(
             "POST",
             f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
-            f"/tables/{meta.table_id}/records",
+            f"/tables/{self._table_id(table_key)}/records",
             json_body={"fields": fields},
         )
         record = data.get("record") or {}
@@ -255,11 +269,11 @@ class WarehouseBitableAdapter:
 
     async def delete_record(self, table_key: str, record_id: str) -> None:
         """删除单条记录（测试数据清理用）。"""
-        meta = self._table(table_key)
+        self._table(table_key)  # 未知表快速失败
         await self._call(
             "DELETE",
             f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
-            f"/tables/{meta.table_id}/records/{record_id}",
+            f"/tables/{self._table_id(table_key)}/records/{record_id}",
         )
 
     # ── 字段定义刷新（选项集缓存） ──
@@ -271,17 +285,17 @@ class WarehouseBitableAdapter:
         避免静态快照滞后。返回 {"table_key", "table_id", "field_count",
         "fields": {字段名: {"type": 类型码, "options": [选项]}}}。
         """
-        meta = self._table(table_key)
+        self._table(table_key)  # 未知表快速失败
         raw = await list_fields(
             self._base_token(table_key),
-            meta.table_id,
+            self._table_id(table_key),
             app_id=self._app_id,
             app_secret=self._app_secret,
         )
         parsed: dict[str, FieldMeta] = apply_runtime_fields(table_key, raw)
         return {
             "table_key": table_key,
-            "table_id": meta.table_id,
+            "table_id": self._table_id(table_key),
             "field_count": len(parsed),
             "fields": {
                 name: {"type": fm.type, "options": list(fm.options)}

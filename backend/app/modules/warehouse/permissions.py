@@ -152,4 +152,21 @@ PERMISSIONS: list[PermissionDef] = [
         action="delete",
         description="删除草稿状态盘点单",
     ),
+    # ── 系统配置（管理页） ──
+    PermissionDef(
+        code="warehouse:system-config:read",
+        name="查看系统配置",
+        module="warehouse",
+        resource="system-config",
+        action="read",
+        description="查看仓库模块系统配置（AI 模型/场景/运行参数/多维表格/定时任务/AI 调用审计）",
+    ),
+    PermissionDef(
+        code="warehouse:system-config:update",
+        name="修改系统配置",
+        module="warehouse",
+        resource="system-config",
+        action="update",
+        description="修改仓库模块系统配置并触发审计",
+    ),
 ]

@@ -227,7 +227,7 @@ def _interactive_cards(sends: list[dict[str, str]]) -> list[dict[str, Any]]:
 def _card_content(card: dict[str, Any]) -> str:
     return "\n".join(
         element.get("content") or ""
-        for element in card.get("elements", [])
+        for element in card.get("body", {}).get("elements", [])
         if isinstance(element, dict)
     )
 
@@ -553,7 +553,11 @@ async def test_create_finished_draft_success_with_card(
     assert "4. 单位：十亿" in content
     assert "5. 销售客户：can" in content
     assert "快递号：SF123456" in content
-    buttons = card["elements"][2]["actions"]
+    buttons = [
+        button
+        for column in card["body"]["elements"][2]["columns"]
+        for button in column["elements"]
+    ]
     assert buttons[0]["value"]["scene"] == FINISHED_OUTBOUND_SCENE
     assert buttons[0]["value"]["draft_id"] == str(draft.id)
     assert buttons[1]["value"]["action"] == "cancel"
@@ -901,7 +905,11 @@ async def test_live_finished_dialog_submit_push_full_flow(
     preview = previews[-1]
     preview_content = _card_content(preview)
     assert "SF123456" in preview_content
-    buttons = preview["elements"][2]["actions"]
+    buttons = [
+        button
+        for column in preview["body"]["elements"][2]["columns"]
+        for button in column["elements"]
+    ]
     assert buttons[0]["value"]["scene"] == "send_card"
     send_draft_id = buttons[0]["value"]["draft_id"]
     assert buttons[0]["value"]["action"] == "confirm"

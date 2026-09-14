@@ -34,7 +34,7 @@ from app.modules.warehouse.agent import (  # noqa: F401 — pipeline 导入即�
     pipeline,
 )
 from app.modules.warehouse.agent import repository as agent_repository
-from app.modules.warehouse.agent.cards import render_reply_card
+from app.modules.warehouse.agent.cards import build_card, render_reply_card
 from app.modules.warehouse.agent.pipeline import (
     align_receipt,
     create_receipt_draft,
@@ -43,21 +43,28 @@ from app.modules.warehouse.agent.pipeline import (
     send_confirm_card,
 )
 from app.modules.warehouse.agent.runner import get_runner
+from app.modules.warehouse.ai_audit.context import warehouse_audit_scope
+from app.modules.warehouse.ai_config.exceptions import ScenarioDisabledError
 from app.modules.warehouse.feishu import media, notification
 from app.modules.warehouse.feishu.event_client import on_event
 from app.modules.warehouse.models import WarehouseAgentSession
+from app.modules.warehouse.ops_config.runtime_store import runtime_store
 
 logger = logging.getLogger(__name__)
 
-# 仓库管理机器人 open_id（spec：去重时排除机器人自身消息）
-BOT_OPEN_ID = "ou_260db4ff7c9b361b9374c9516d3766ab"
+# 仓库管理机器人 open_id（spec：去重时排除机器人自身消息）。
+# 部署身份走 env（WAREHOUSE_FEISHU_BOT_OPEN_ID），未配置回退默认值。
+_DEFAULT_BOT_OPEN_ID = "ou_260db4ff7c9b361b9374c9516d3766ab"
+
+
+def bot_open_id() -> str:
+    from app.core.config import get_settings
+
+    return get_settings().WAREHOUSE_FEISHU_BOT_OPEN_ID or _DEFAULT_BOT_OPEN_ID
 
 # Redis 去重（仿 platform event_handler：feishu:msg:{message_id} SETNX EX 120）
 DEDUP_KEY_PREFIX = "feishu:msg:"
 DEDUP_TTL_SECONDS = 120
-
-# 会话历史保留条数（user+assistant 交替，24 条 ≈ 12 轮，对齐 SESSION_ROUNDS=12）
-HISTORY_MAX_MESSAGES = 24
 
 
 # ── 数据库会话注入口 ──
@@ -97,7 +104,7 @@ def _mentioned_bot(mentions: list[dict[str, Any]] | None) -> bool:
     """群聊 @提及检测：mentions 中任一 id.open_id 为机器人即命中。"""
     for mention in mentions or []:
         mention_id = mention.get("id") or {}
-        if isinstance(mention_id, dict) and mention_id.get("open_id") == BOT_OPEN_ID:
+        if isinstance(mention_id, dict) and mention_id.get("open_id") == bot_open_id():
             return True
     return False
 
@@ -145,20 +152,17 @@ async def _try_acquire_dedup(message_id: str) -> bool:
         return True
 
 
-# ── 卡片构建（飞书卡片 1.0 结构，与票01 测试样例同构）──
+# ── 卡片构建（飞书卡片 JSON 2.0，根结构复用 cards.build_card）──
 
 
 def _build_card(
     *, title: str, template: str, markdown: str
 ) -> dict[str, Any]:
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": template,
-        },
-        "elements": [{"tag": "markdown", "content": markdown}],
-    }
+    return build_card(
+        title=title,
+        template=template,
+        elements=[{"tag": "markdown", "content": markdown}],
+    )
 
 
 def _build_image_processing_card() -> dict[str, Any]:
@@ -201,6 +205,17 @@ def _build_error_card() -> dict[str, Any]:
         markdown=(
             "抱歉，刚才的处理出了点问题，已记录并在排查。\n"
             "请稍后重试，或换个问法再试试。"
+        ),
+    )
+
+
+def _build_disabled_card(feature: str) -> dict[str, Any]:
+    return _build_card(
+        title="⏸️ 功能临时停用",
+        template="yellow",
+        markdown=(
+            f"{feature}已临时停用（管理员熔断）。\n"
+            "如需恢复请联系系统管理员。"
         ),
     )
 
@@ -301,7 +316,7 @@ async def handle_im_message(event: dict[str, Any]) -> None:
 
     # 1. 机器人自身消息排除（事件标记 sender_type=app 或机器人 open_id）
     sender_type = str((event.get("sender") or {}).get("sender_type") or "")
-    if sender_type == "app" or open_id == BOT_OPEN_ID:
+    if sender_type == "app" or open_id == bot_open_id():
         return
 
     # 2. Redis 去重（同 message_id 二次投递只处理一次）
@@ -442,10 +457,10 @@ async def _send_failure_reply(draft: Any, reason: str) -> None:
     """登记失败回执：按发起渠道发送（chat_id 优先，回落私聊）。"""
     from app.modules.warehouse.feishu import notification
 
-    card = {
-        "config": {"update_multi": True},
-        "header": {"title": {"tag": "plain_text", "content": "⚠️ 登记未完成"}, "template": "red"},
-        "elements": [
+    card = build_card(
+        title="⚠️ 登记未完成",
+        template="red",
+        elements=[
             {
                 "tag": "markdown",
                 "content": "**草稿**："
@@ -455,7 +470,7 @@ async def _send_failure_reply(draft: Any, reason: str) -> None:
                 + "\n请重新发起。",
             }
         ],
-    }
+    )
     chat_id = (draft.chat_id or "").strip()
     try:
         if chat_id:
@@ -479,12 +494,57 @@ async def _process_receipt_image(
 ) -> None:
     """图片识别 Pipeline 后台任务（票05，spec 决策 8）。
 
-    下载 im 原图（格式嗅探，非 JPG/PNG 降级）→ vision 识别 → 对齐 →
-    草稿落库 → 确认卡片；原图先经 upload_image 挂到 material_receipt
-    Base 名下拿 file_token 存 draft.source_image（spec 决策 3：submit
-    时写附件列，上传失败不阻塞识别）。任何一步失败 → 降级话术卡片
-    （含失败阶段）+ audit error。
+    审计作用域（scenario=receipt_recognition）覆盖整条管线，管线内两次
+    LLM 调用经 set_audit_resource 区分（rotate_detect / receipt_parse）。
     """
+    with warehouse_audit_scope(
+        "receipt_recognition",
+        trace_id=str(uuid.uuid4()),
+        chat_id=chat_id,
+        user_open_id=open_id,
+        channel="feishu",
+    ):
+        # 场景熔断前置检查：停用时直接回停用卡，不进入识别管线（不下载图片）
+        from app.modules.warehouse.ai_config.scenario_store import scenario_store
+
+        if not scenario_store.is_enabled("receipt_recognition"):
+            logger.warning("送货单识别场景已熔断: chat_id=%s", chat_id)
+            try:
+                await _send_card_to(
+                    chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                    card=_build_disabled_card("送货单识别"),
+                )
+            except Exception:
+                logger.exception("仓库网关熔断卡片发送失败")
+            await _record_gateway_audit(
+                started=started,
+                tool_name="gateway",
+                args_summary={"chat_type": chat_type, "message_type": "image"},
+                result_status="denied",
+                error_code="scenario_disabled",
+            )
+            return
+        await _process_receipt_image_inner(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            open_id=open_id,
+            message_id=message_id,
+            image_key=image_key,
+            started=started,
+        )
+
+
+async def _process_receipt_image_inner(
+    *,
+    chat_id: str,
+    chat_type: str,
+    open_id: str,
+    message_id: str,
+    image_key: str,
+    started: float,
+) -> None:
+    """图片识别 Pipeline 主体（docstring 见外层包装函数）。"""
+
     stage = "下载图片"
     try:
         content = await media.download_im_image(message_id, image_key)
@@ -626,7 +686,37 @@ async def _handle_text_message(
             raise RuntimeError("仓库网关会话定位失败")
         # 收到确认由 OK 表情承担（add_reaction）；不再发「正在处理」占位卡片
         # （用户反馈：与表情功能重复，2026-09-08）
-        reply = await get_runner().run(runner_session, text, scene_hint=_scene_hint(text))
+        try:
+            with warehouse_audit_scope(
+                "agent_chat",
+                trace_id=str(uuid.uuid4()),
+                resource="chat",
+                session_id=str(session_id) if session_id else None,
+                chat_id=chat_id,
+                user_open_id=open_id,
+                channel="feishu",
+            ):
+                reply = await get_runner().run(
+                    runner_session, text, scene_hint=_scene_hint(text)
+                )
+        except ScenarioDisabledError:
+            logger.warning("仓库助手场景已熔断，回兜底卡片: chat_id=%s", chat_id)
+            try:
+                await _send_card_to(
+                    chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                    card=_build_disabled_card("仓库助手"),
+                )
+            except Exception:
+                logger.exception("仓库网关熔断卡片发送失败")
+            await _record_gateway_audit(
+                started=started,
+                tool_name="gateway",
+                args_summary={"chat_type": chat_type, "text": text[:100]},
+                result_status="denied",
+                session_id=session_id,
+                error_code="scenario_disabled",
+            )
+            return
     except Exception as exc:
         logger.exception("仓库网关文本处理失败: message=%r", text[:50])
         try:
@@ -660,10 +750,10 @@ async def _handle_text_message(
         and draft_no
     ):
         # 草稿真正创建才替换为简短引导卡；missing/追问场景保留 LLM 文本
-        card = {
-            "config": {"update_multi": True},
-            "header": {"title": {"tag": "plain_text", "content": "📝 等待你确认"}, "template": "blue"},
-            "elements": [
+        card = build_card(
+            title="📝 等待你确认",
+            template="blue",
+            elements=[
                 {
                     "tag": "markdown",
                     "content": (
@@ -672,7 +762,7 @@ async def _handle_text_message(
                     ),
                 }
             ],
-        }
+        )
     else:
         card = render_reply_card(reply)
     await _send_card_to(
@@ -686,7 +776,7 @@ async def _handle_text_message(
         messages = list(history.get("messages") or [])
         messages.append({"role": "user", "content": text})
         messages.append({"role": "assistant", "content": reply.text})
-        history["messages"] = messages[-HISTORY_MAX_MESSAGES:]
+        history["messages"] = messages[-int(runtime_store.get_value("history_max_messages")) :]
         if session_id is not None:
             await agent_repository.update_session_history(db, session_id, history)
         await agent_repository.insert_agent_audit(
@@ -702,11 +792,59 @@ async def _handle_text_message(
 # ── card.action.trigger 处理器 ──
 
 
+def _message_id_of(event: dict[str, Any]) -> str:
+    """回调事件中的原卡 message_id（2.0 事件在 context；v1 平铺在顶层）。"""
+    context = event.get("context") or {}
+    return str(context.get("open_message_id") or event.get("open_message_id") or "")
+
+
+def _result_card(ok: bool, message: str) -> dict[str, Any]:
+    """确认操作结果卡（PATCH 原卡用；2.0 完整结构，按钮区移除）。"""
+    return build_card(
+        title="✅ 已处理" if ok else "⚠️ 未处理",
+        template="green" if ok else "red",
+        elements=[{"tag": "markdown", "content": message}],
+    )
+
+
+async def _patch_action_result(message_id: str, ok: bool, message: str) -> None:
+    """PATCH 原确认卡为操作结果（按钮移除）；失败只记日志不阻断。"""
+    from app.modules.warehouse.feishu import notification
+
+    await notification.update_card(message_id, _result_card(ok, message))
+
+
+async def _ack_with_patch(
+    message_id: str, ok: bool, message: str
+) -> dict[str, Any] | None:
+    """确认结果落卡：PATCH 原卡（实测可靠）+ 返回纯 ACK。
+
+    WS 回调响应里带卡片更新实测不生效（lark_oapi SDK 对 CARD 帧不处理，
+    2026-09-14 点击实测再次确认），故统一改走 PATCH——与 submit 场景
+    既有模式一致。无 message_id（极老事件形态）时退回响应信封兜底。
+    """
+    if message_id:
+        asyncio.create_task(_patch_action_result(message_id, ok, message))
+        return None  # 纯 ACK（event_client 回 {"code": 200}，卡片更新走 PATCH）
+    return _callback_update(ok, message)
+
+
+def _callback_update(ok: bool, message: str) -> dict[str, Any]:
+    """回调响应的卡片更新信封（仅无 message_id 时的兜底路径）。
+
+    2.0 协议要求 ``{"card": {"type": "raw", "data": 完整2.0卡片}}``
+    （错误码 200830：禁止更新为 1.0 结构/片段）；原卡标题取不到，重建。
+    """
+    card = _result_card(ok, message)
+    return {"card": {"type": "raw", "data": card}}
+
+
 @on_event("card.action.trigger")
 async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | None:
     """卡片按钮回调入口：解析 value 按 scene 分发。
 
-    返回卡片更新 dict（event_client 包装为 base64 Response 信封 ACK）；
+    确认结果经 PATCH 落到原卡（``_ack_with_patch``），本处理器返回 None
+    （event_client 回纯 ACK 信封）；无 message_id 的兜底才经响应信封返回。
     非本服务的 scene 返回 None（ACK 通用信封，S2 其他场景扩展位）。
     """
     action = event.get("action") or {}
@@ -728,9 +866,10 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
 
     operator = event.get("operator") or {}
     operator_open_id = str(operator.get("open_id") or "")
+    message_id = _message_id_of(event)
     logger.info(
-        "仓库网关卡片操作: scene=%s action=%s operator=%s",
-        scene, value.get("action"), operator_open_id[:20],
+        "仓库网关卡片操作: scene=%s action=%s operator=%s message_id=%s",
+        scene, value.get("action"), operator_open_id[:20], message_id[:20],
     )
 
     # submit 类场景（SceneConfig.submit 已注册）：确认门只置状态，ACK 更新
@@ -751,24 +890,14 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
                 draft = outcome.draft
         except Exception:
             logger.exception("仓库网关登记确认处理异常")
-            return {
-                "config": {"update_multi": True},
-                "elements": [
-                    {"tag": "markdown", "content": "⚠️ 处理失败，请稍后重试"}
-                ],
-            }
+            return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
         if outcome.ok and draft is not None:
             # PATCH 原确认卡片为「登记中」（按钮移除）——不依赖卡片回调 ACK
-            # 协议（lark_oapi SDK 对 CARD 帧不处理，回调响应更新不可靠，实测）
+            # 协议（WS 回调响应更新实测不生效）
             asyncio.create_task(_patch_confirm_card(draft, "processing"))
             _spawn_receipt_task(_run_submit_background(draft.id))
             return {"code": 200}  # ACK 通用信封（卡片更新走 PATCH）
-        return {
-            "config": {"update_multi": True},
-            "elements": [
-                {"tag": "markdown", "content": f"⚠️ {outcome.message}"}
-            ],
-        }
+        return await _ack_with_patch(message_id, False, f"⚠️ {outcome.message}")
 
     # 非submit场景（send_card 等）：原同步路径
     try:
@@ -787,12 +916,6 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
             ok=False, status="error", message="处理失败，请稍后重试"
         )
 
-    return {
-        "config": {"update_multi": True},
-        "elements": [
-            {
-                "tag": "markdown",
-                "content": f"{'✅' if outcome.ok else '⚠️'} {outcome.message}",
-            }
-        ],
-    }
+    return await _ack_with_patch(
+        message_id, outcome.ok, f"{'✅' if outcome.ok else '⚠️'} {outcome.message}"
+    )

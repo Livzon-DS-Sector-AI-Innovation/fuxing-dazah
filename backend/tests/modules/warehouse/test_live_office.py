@@ -76,6 +76,23 @@ def captured_sends(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
 
 
 @pytest.fixture
+def captured_updates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, dict[str, Any]]]:
+    """捕获 notification.update_card 的 PATCH 调用（确认结果落卡断言用）。"""
+    updates: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_update(
+        message_id: str, card: dict[str, Any], dry_run: bool | None = None
+    ) -> bool:
+        updates.append((message_id, card))
+        return True
+
+    monkeypatch.setattr(notification, "update_card", fake_update)
+    return updates
+
+
+@pytest.fixture
 async def fresh_redis(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[aioredis.Redis]:
     """每测试独立 Redis 客户端（gateway 去重用；模块级单例跨 loop 会抛异常）。"""
     from app.core.config import get_settings
@@ -94,11 +111,16 @@ def _card_of(payload: dict[str, str]) -> dict[str, Any]:
 
 
 def _buttons_of(card: dict[str, Any]) -> list[dict[str, Any]]:
-    """卡片内全部按钮（elements 中 action 元素的 actions 摊平）。"""
+    """卡片内全部按钮（2.0：column_set 按钮行摊平 + 直排按钮）。"""
     buttons: list[dict[str, Any]] = []
-    for element in card.get("elements") or []:
-        if element.get("tag") == "action":
-            buttons.extend(element.get("actions") or [])
+    for element in card.get("body", {}).get("elements") or []:
+        if element.get("tag") == "column_set":
+            for column in element.get("columns") or []:
+                buttons.extend(
+                    b for b in (column.get("elements") or []) if b.get("tag") == "button"
+                )
+        elif element.get("tag") == "button":
+            buttons.append(element)
     return buttons
 
 
@@ -113,7 +135,8 @@ def _card_action_event(
             "tag": "button",
             "value": {"action": action, "scene": office_tools.SEND_CARD_SCENE, "draft_id": draft_id},
         },
-        "host": "im",
+        "context": {"open_message_id": f"om_card_{draft_id[:8]}"},
+        "host": "im_message",
     }
 
 
@@ -156,7 +179,9 @@ def test_office_tools_registered() -> None:
 
 
 async def test_send_card_confirm_gate_full_flow(
-    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+    office_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """确认门全流程：工具调用 → 预览卡片（目标零发送）→ 发起人点确认 →
     dry-run 捕获发往目标的真实卡片 → drafts 状态 confirmed。"""
@@ -176,7 +201,7 @@ async def test_send_card_confirm_gate_full_flow(
     preview_payload = next(p for p in captured_sends if p["receive_id"] == chat_id)
     preview = _card_of(preview_payload)
     assert "待发送确认" in preview["header"]["title"]["content"]
-    body = preview["elements"][0]["content"]
+    body = preview["body"]["elements"][0]["content"]
     assert "呆料周报" in body
     assert "user:ou_target_person" in body
     assert "本周呆料共 12 批" in body
@@ -192,14 +217,17 @@ async def test_send_card_confirm_gate_full_flow(
             operator_open_id=requester, action="confirm", draft_id=draft_id
         )
     )
-    assert update is not None
-    assert "已发送到" in update["elements"][0]["content"]
+    assert update is None  # 结果经 PATCH 落原卡（纯 ACK）
+    await asyncio.sleep(0.01)  # 让 PATCH 后台任务跑完
+    assert "已发送到" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     target_sends = [p for p in captured_sends if p["receive_id"] == "ou_target_person"]
     assert len(target_sends) == 1
     assert target_sends[0]["receive_id_type"] == "open_id"
     real_card = _card_of(target_sends[0])
     assert real_card["header"]["title"]["content"] == "呆料周报"
-    assert "本周呆料共 12 批" in real_card["elements"][0]["content"]
+    assert "本周呆料共 12 批" in real_card["body"]["elements"][0]["content"]
 
     draft = await office_db.get(WarehouseAgentDraft, uuid.UUID(draft_id))
     assert draft is not None
@@ -207,7 +235,9 @@ async def test_send_card_confirm_gate_full_flow(
 
 
 async def test_send_card_non_requester_rejected(
-    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+    office_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """非发起人点确认：拒绝、不发送、草稿保持 pending_confirm。"""
     result = await _request_via_tool(
@@ -221,8 +251,11 @@ async def test_send_card_non_requester_rejected(
             operator_open_id="ou_hacker", action="confirm", draft_id=draft_id
         )
     )
-    assert update is not None
-    assert "仅发起人" in update["elements"][0]["content"]
+    assert update is None
+    await asyncio.sleep(0.01)
+    assert "仅发起人" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     assert len(captured_sends) == sends_before  # 零新增发送
     assert all(p["receive_id"] != "oc_target_grp_a" for p in captured_sends)
     draft = await office_db.get(WarehouseAgentDraft, uuid.UUID(draft_id))
@@ -231,7 +264,9 @@ async def test_send_card_non_requester_rejected(
 
 
 async def test_send_card_cancel_no_send(
-    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+    office_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """发起人点取消：状态 cancelled，不发送。"""
     result = await _request_via_tool(
@@ -242,8 +277,11 @@ async def test_send_card_cancel_no_send(
     update = await gateway.handle_card_action_trigger(
         _card_action_event(operator_open_id="ou_owner", action="cancel", draft_id=draft_id)
     )
-    assert update is not None
-    assert "已取消" in update["elements"][0]["content"]
+    assert update is None
+    await asyncio.sleep(0.01)
+    assert "已取消" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     assert all(p["receive_id"] != "oc_target_grp_b" for p in captured_sends)
     draft = await office_db.get(WarehouseAgentDraft, uuid.UUID(draft_id))
     assert draft is not None
@@ -253,13 +291,18 @@ async def test_send_card_cancel_no_send(
     update2 = await gateway.handle_card_action_trigger(
         _card_action_event(operator_open_id="ou_owner", action="confirm", draft_id=draft_id)
     )
-    assert update2 is not None
-    assert "已被处理" in update2["elements"][0]["content"]
+    assert update2 is None
+    await asyncio.sleep(0.01)
+    assert "已被处理" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     assert all(p["receive_id"] != "oc_target_grp_b" for p in captured_sends)
 
 
 async def test_send_card_expired_no_send(
-    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+    office_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """TTL 过期（注入：回拨 expires_at）点确认：拒绝、状态 expired、不发送。"""
     result = await _request_via_tool(
@@ -275,8 +318,11 @@ async def test_send_card_expired_no_send(
     update = await gateway.handle_card_action_trigger(
         _card_action_event(operator_open_id="ou_owner", action="confirm", draft_id=str(draft_id))
     )
-    assert update is not None
-    assert "已过期" in update["elements"][0]["content"]
+    assert update is None
+    await asyncio.sleep(0.01)
+    assert "已过期" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     assert all(p["receive_id"] != "oc_target_grp_c" for p in captured_sends)
     refreshed = await office_db.get(WarehouseAgentDraft, draft_id)
     assert refreshed is not None
@@ -318,7 +364,7 @@ async def test_create_reminder_fires_and_captured(
     assert len(reminder_payloads) == 1
     assert reminder_payloads[0]["receive_id"] == "oc_rem_chat"
     card = _card_of(reminder_payloads[0])
-    assert "该看出报情况了" in card["elements"][0]["content"]
+    assert "该看出报情况了" in card["body"]["elements"][0]["content"]
 
     draft = await office_db.get(WarehouseAgentDraft, uuid.UUID(reminder_id))
     assert draft is not None
@@ -419,6 +465,7 @@ async def test_create_reminder_in_seconds_invalid() -> None:
 async def test_live_send_card_via_gateway(
     office_db: AsyncSession,
     captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
     fresh_redis: aioredis.Redis,
 ) -> None:
     """「把呆料清单发给 group:XXX 测试群」→ 真实 LLM 调 send_card → 预览卡片
@@ -471,8 +518,11 @@ async def test_live_send_card_via_gateway(
             operator_open_id=requester, action="confirm", draft_id=draft_id
         )
     )
-    assert update is not None
-    assert "已发送到" in update["elements"][0]["content"]
+    assert update is None  # 结果经 PATCH 落原卡（纯 ACK）
+    await asyncio.sleep(0.01)
+    assert "已发送到" in str(
+        captured_updates[-1][1]["body"]["elements"][0]["content"]
+    )
     target_sends = [p for p in captured_sends if p["receive_id"] == target_group]
     assert len(target_sends) == 1
     assert target_sends[0]["receive_id_type"] == "chat_id"
@@ -483,7 +533,9 @@ async def test_live_send_card_via_gateway(
 
 
 async def test_send_card_second_confirm_rejected_after_confirmed(
-    office_db: AsyncSession, captured_sends: list[dict[str, str]]
+    office_db: AsyncSession,
+    captured_sends: list[dict[str, str]],
+    captured_updates: list[tuple[str, dict[str, Any]]],
 ) -> None:
     """审查修复验证：确认成功后重复点击被状态机拒绝（防重复发送）。"""
     requester = "ou_worker_a"
@@ -507,13 +559,17 @@ async def test_send_card_second_confirm_rejected_after_confirmed(
     update1 = await gateway.handle_card_action_trigger(
         _card_action_event(operator_open_id=requester, action="confirm", draft_id=draft_id)
     )
-    assert update1 is not None and "✅" in str(update1["elements"][0]["content"])
+    assert update1 is None
+    await asyncio.sleep(0.01)
+    assert "✅" in str(captured_updates[-1][1]["body"]["elements"][0]["content"])
 
     # 第二次点击 → 状态已非 pending_confirm，拒绝（不重复执行发送）
     sends_before = len([p for p in captured_sends if p["receive_id"] == "ou_target_person"])
     update2 = await gateway.handle_card_action_trigger(
         _card_action_event(operator_open_id=requester, action="confirm", draft_id=draft_id)
     )
-    assert update2 is not None and "⚠️" in str(update2["elements"][0]["content"])
+    assert update2 is None
+    await asyncio.sleep(0.01)
+    assert "⚠️" in str(captured_updates[-1][1]["body"]["elements"][0]["content"])
     sends_after = len([p for p in captured_sends if p["receive_id"] == "ou_target_person"])
     assert sends_after == sends_before  # 零重复发送

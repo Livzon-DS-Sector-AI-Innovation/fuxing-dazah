@@ -27,12 +27,14 @@ from app.modules.warehouse.schemas import (
     StocktakeCreate,
     StocktakeUpdate,
 )
+from app.modules.warehouse.system_config_api import system_config_router
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
 from app.shared.module_registry import MODULES_BY_CODE
 
 router = create_module_router(MODULES_BY_CODE["warehouse"])
+router.include_router(system_config_router)
 
 
 def _clean(value: str | None) -> str | None:

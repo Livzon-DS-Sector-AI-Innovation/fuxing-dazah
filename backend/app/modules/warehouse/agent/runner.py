@@ -39,6 +39,7 @@ from app.modules.warehouse.agent.llm_client import (
     AssistantMessage,
     ToolCall,
     WarehouseLLMClient,
+    get_llm_client,
 )
 from app.modules.warehouse.agent.prompts import build_system_prompt
 from app.modules.warehouse.agent.tools.query import (
@@ -106,26 +107,39 @@ class Runner:
         session_rounds: int | None = None,
     ) -> None:
         self._llm = llm
-        if max_turns is None or session_rounds is None:
-            from app.core.config import get_settings
+        # 显式注入优先（测试/特殊调用）；未注入时 run() 每次读运行参数配置
+        # （DB → env → 默认），管理员改值即时生效、无需重启。
+        self._max_turns_injected = max_turns is not None
+        self._session_rounds_injected = session_rounds is not None
+        self._max_turns = max(1, int(
+            max_turns if max_turns is not None
+            else runtime_registry.RUNTIME_REGISTRY["max_turns"].default
+        ))
+        self._session_rounds = max(1, int(
+            session_rounds if session_rounds is not None
+            else runtime_registry.RUNTIME_REGISTRY["session_rounds"].default
+        ))
 
-            settings = get_settings()
-            max_turns = (
-                max_turns
-                if max_turns is not None
-                else int(settings.WAREHOUSE_AGENT_MAX_TURNS)
-            )
-            session_rounds = (
-                session_rounds
-                if session_rounds is not None
-                else int(settings.WAREHOUSE_AGENT_SESSION_ROUNDS)
-            )
-        self._max_turns = max(1, int(max_turns))
-        self._session_rounds = max(1, int(session_rounds))
+    def _effective_turns(self) -> tuple[int, int]:
+        """本轮生效的 (max_turns, session_rounds)。"""
+        from app.modules.warehouse.ops_config.runtime_store import runtime_store
 
-    def _ensure_llm(self) -> WarehouseLLMClient:
+        max_turns = (
+            self._max_turns
+            if self._max_turns_injected
+            else max(1, int(runtime_store.get_value("max_turns")))
+        )
+        session_rounds = (
+            self._session_rounds
+            if self._session_rounds_injected
+            else max(1, int(runtime_store.get_value("session_rounds")))
+        )
+        return max_turns, session_rounds
+
+    def _ensure_llm(self) -> Any:
+        """取 LLM 客户端（工厂返回带审计的客户端，鸭子类型兼容 chat_with_tools）。"""
         if self._llm is None:
-            self._llm = WarehouseLLMClient()
+            self._llm = get_llm_client()
         return self._llm
 
     async def _pending_summary(self, session: WarehouseAgentSession) -> str:
@@ -184,8 +198,9 @@ class Runner:
         self, session: WarehouseAgentSession, text: str, scene_hint: str | None = None
     ) -> Reply:
         llm = self._ensure_llm()
+        max_turns, session_rounds = self._effective_turns()
         history_messages = list((session.history or {}).get("messages") or [])
-        trimmed = history_messages[-(self._session_rounds * 2) :]
+        trimmed = history_messages[-(session_rounds * 2) :]
         system_text = await build_system_prompt(session.user_open_id)
         pending_note = await self._pending_summary(session)
         if pending_note:
@@ -209,7 +224,7 @@ class Runner:
         tool_logs: list[dict[str, Any]] = []
         reply_data: dict[str, Any] | None = None
         final_text: str | None = None
-        for _turn in range(self._max_turns):
+        for _turn in range(max_turns):
             msg = await llm.chat_with_tools(messages, tools=TOOLS)
             messages.append(self._assistant_message(msg))
 
@@ -238,7 +253,7 @@ class Runner:
             logger.warning(
                 "仓库 Runner 达到最大轮次: session_id=%s turns=%s tools=%s",
                 session.id,
-                self._max_turns,
+                max_turns,
                 [log["tool"] for log in tool_logs],
             )
             final_text = FALLBACK_REPLY

@@ -18,6 +18,34 @@ import {
   StocktakeCreate,
   StocktakeRecord,
   StocktakeUpdate,
+  WarehouseAiAuditDetail,
+  WarehouseAiAuditListParams,
+  WarehouseAiAuditListItem,
+  WarehouseAiAuditStats,
+  WarehouseAiModelAuditItem,
+  WarehouseAiModelTestResult,
+  WarehouseAiModelUpdateInput,
+  WarehouseAiModelView,
+  WarehouseAiModelsData,
+  WarehouseAiScenarioAuditItem,
+  WarehouseAiScenarioUpdateInput,
+  WarehouseAiScenarioView,
+  WarehouseAiScenariosData,
+  WarehouseBitableAuditItem,
+  WarehouseBitableData,
+  WarehouseBitableRefreshResult,
+  WarehouseBitableTestResult,
+  WarehouseBitableUpdateInput,
+  WarehouseBitableView,
+  WarehouseConfigAuditKind,
+  WarehouseRuntimeAuditItem,
+  WarehouseRuntimeData,
+  WarehouseRuntimeValue,
+  WarehouseRuntimeView,
+  WarehouseSchedulerAuditItem,
+  WarehouseSchedulerData,
+  WarehouseSchedulerTaskView,
+  WarehouseSchedulerUpdateInput,
   WarehouseOverview,
 } from '@/types/warehouse'
 import { apiDelete, apiGet, apiPost, apiPut, apiFetchPaginated } from '@/lib/http-client'
@@ -194,4 +222,199 @@ export async function confirmStocktake(id: string): Promise<StocktakeRecord> {
 
 export async function deleteStocktake(id: string): Promise<void> {
   return apiDelete<void>(`${SERVER_API}${BASE}/stocktakes/${id}`)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 系统配置中心（backend system_config_api.py，tickets 08+09）
+// 统一响应包 {code,message,data,meta}：apiGet/apiPut 解包 data，非 2xx 抛
+// Error（message 为后端中文可读错误）。GET 供 Server Actions 包装；
+// PUT/POST 低层封装仅供 actions/warehouse.ts 调用（写操作走 Server Actions）。
+// ═══════════════════════════════════════════════════════════════
+
+const SC_BASE = `${BASE}/system-config`
+
+function encode(v: string): string {
+  return encodeURIComponent(v)
+}
+
+// ── AI 模型配置 ──
+
+export async function fetchWarehouseAiModels(): Promise<WarehouseAiModelsData> {
+  return apiGet<WarehouseAiModelsData>(`${SERVER_API}${SC_BASE}/ai-models`)
+}
+
+export async function fetchWarehouseAiModelAudits(limit = 50): Promise<WarehouseAiModelAuditItem[]> {
+  const data = await apiGet<{ audits: WarehouseAiModelAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/ai-models/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehouseAiModel(
+  profile: string,
+  data: WarehouseAiModelUpdateInput,
+): Promise<WarehouseAiModelView> {
+  return apiPut<WarehouseAiModelView>(`${SERVER_API}${SC_BASE}/ai-models/${encode(profile)}`, data)
+}
+
+export async function testWarehouseAiModel(profile: string): Promise<WarehouseAiModelTestResult> {
+  return apiPost<WarehouseAiModelTestResult>(`${SERVER_API}${SC_BASE}/ai-models/test`, { profile })
+}
+
+// ── AI 场景配置 ──
+
+export async function fetchWarehouseAiScenarios(): Promise<WarehouseAiScenariosData> {
+  return apiGet<WarehouseAiScenariosData>(`${SERVER_API}${SC_BASE}/ai-scenarios`)
+}
+
+export async function fetchWarehouseAiScenarioAudits(
+  limit = 50,
+): Promise<WarehouseAiScenarioAuditItem[]> {
+  const data = await apiGet<{ audits: WarehouseAiScenarioAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/ai-scenarios/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehouseAiScenario(
+  scenario: string,
+  input: WarehouseAiScenarioUpdateInput,
+): Promise<WarehouseAiScenarioView> {
+  return apiPut<WarehouseAiScenarioView>(
+    `${SERVER_API}${SC_BASE}/ai-scenarios/${encode(scenario)}`,
+    input,
+  )
+}
+
+// ── 运行参数 ──
+
+export async function fetchWarehouseRuntimeConfigs(): Promise<WarehouseRuntimeData> {
+  return apiGet<WarehouseRuntimeData>(`${SERVER_API}${SC_BASE}/runtime`)
+}
+
+export async function fetchWarehouseRuntimeAudits(limit = 50): Promise<WarehouseRuntimeAuditItem[]> {
+  const data = await apiGet<{ audits: WarehouseRuntimeAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/runtime/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehouseRuntimeConfig(
+  key: string,
+  value: WarehouseRuntimeValue,
+): Promise<WarehouseRuntimeView> {
+  return apiPut<WarehouseRuntimeView>(`${SERVER_API}${SC_BASE}/runtime/${encode(key)}`, { value })
+}
+
+// ── 多维表格连接 ──
+
+export async function fetchWarehouseBitableConnections(): Promise<WarehouseBitableData> {
+  return apiGet<WarehouseBitableData>(`${SERVER_API}${SC_BASE}/bitable/connections`)
+}
+
+export async function fetchWarehouseBitableAudits(limit = 50): Promise<WarehouseBitableAuditItem[]> {
+  const data = await apiGet<{ audits: WarehouseBitableAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/bitable/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehouseBitableConnection(
+  tableKey: string,
+  input: WarehouseBitableUpdateInput,
+): Promise<WarehouseBitableView> {
+  return apiPut<WarehouseBitableView>(
+    `${SERVER_API}${SC_BASE}/bitable/connections/${encode(tableKey)}`,
+    input,
+  )
+}
+
+export async function testWarehouseBitableConnection(
+  tableKey: string,
+): Promise<WarehouseBitableTestResult> {
+  return apiPost<WarehouseBitableTestResult>(`${SERVER_API}${SC_BASE}/bitable/test-connection`, {
+    table_key: tableKey,
+  })
+}
+
+export async function refreshWarehouseBitableFields(
+  tableKey: string,
+): Promise<WarehouseBitableRefreshResult> {
+  return apiPost<WarehouseBitableRefreshResult>(
+    `${SERVER_API}${SC_BASE}/bitable/refresh-fields/${encode(tableKey)}`,
+  )
+}
+
+// ── 定时任务 / 告警目标 ──
+
+export async function fetchWarehouseSchedulerTasks(): Promise<WarehouseSchedulerData> {
+  return apiGet<WarehouseSchedulerData>(`${SERVER_API}${SC_BASE}/scheduler-tasks`)
+}
+
+export async function fetchWarehouseSchedulerAudits(
+  limit = 50,
+): Promise<WarehouseSchedulerAuditItem[]> {
+  const data = await apiGet<{ audits: WarehouseSchedulerAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/scheduler-tasks/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehouseSchedulerTask(
+  jobName: string,
+  input: WarehouseSchedulerUpdateInput,
+): Promise<WarehouseSchedulerTaskView> {
+  return apiPut<WarehouseSchedulerTaskView>(
+    `${SERVER_API}${SC_BASE}/scheduler-tasks/${encode(jobName)}`,
+    input,
+  )
+}
+
+// ── AI 调用审计（/warehouse/ai-audits）──
+
+function setAiAuditParams(sp: URLSearchParams, params: WarehouseAiAuditListParams) {
+  if (params.scenario) sp.set('scenario', params.scenario)
+  if (params.status) sp.set('status', params.status)
+  if (params.trace_id) sp.set('trace_id', params.trace_id.trim())
+  if (params.page) sp.set('page', String(params.page))
+  if (params.page_size) sp.set('page_size', String(params.page_size))
+}
+
+export async function fetchWarehouseAiAudits(
+  params: WarehouseAiAuditListParams = {},
+): Promise<Paginated<WarehouseAiAuditListItem>> {
+  const sp = new URLSearchParams()
+  setAiAuditParams(sp, params)
+  const qs = sp.toString()
+  return apiFetchPaginated<WarehouseAiAuditListItem>(
+    `${SERVER_API}${BASE}/ai-audits${qs ? `?${qs}` : ''}`,
+  )
+}
+
+export async function fetchWarehouseAiAuditStats(params: { days?: number } = {}): Promise<WarehouseAiAuditStats> {
+  const qs = params.days ? `?days=${params.days}` : ''
+  return apiGet<WarehouseAiAuditStats>(`${SERVER_API}${BASE}/ai-audits/stats${qs}`)
+}
+
+export async function fetchWarehouseAiAuditDetail(id: string): Promise<WarehouseAiAuditDetail> {
+  return apiGet<WarehouseAiAuditDetail>(`${SERVER_API}${BASE}/ai-audits/${encode(id)}`)
+}
+
+/** 五类配置变更审计取数分发（ConfigAuditSection 用；行为对应端点的 audits[]） */
+export async function fetchWarehouseConfigAudits(
+  kind: WarehouseConfigAuditKind,
+  limit = 50,
+): Promise<unknown[]> {
+  switch (kind) {
+    case 'ai-model':
+      return fetchWarehouseAiModelAudits(limit)
+    case 'ai-scenario':
+      return fetchWarehouseAiScenarioAudits(limit)
+    case 'runtime':
+      return fetchWarehouseRuntimeAudits(limit)
+    case 'bitable':
+      return fetchWarehouseBitableAudits(limit)
+    case 'scheduler':
+      return fetchWarehouseSchedulerAudits(limit)
+  }
 }

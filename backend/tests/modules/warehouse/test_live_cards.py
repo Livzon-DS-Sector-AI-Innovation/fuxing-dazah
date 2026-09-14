@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.warehouse.agent import gateway
 from app.modules.warehouse.agent import runner as runner_module
 from app.modules.warehouse.agent.cards import (
-    STOCK_TABLE_HEADER,
+    STOCK_TABLE_COLUMNS,
     render_reply_card,
     render_text_card,
 )
@@ -163,24 +163,52 @@ def _report_data(kind: str) -> dict[str, Any]:
 # ── 断言 helper ──
 
 
+def _elements(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """卡片 2.0 body.elements。"""
+    return card["body"]["elements"]
+
+
 def _body(card: dict[str, Any]) -> str:
-    """卡片全部 markdown 元素拼接（表格/提示断言用）。"""
+    """卡片全部 markdown 元素拼接（文案/提示断言用）。"""
     return "\n".join(
         str(el.get("content") or "")
-        for el in card["elements"]
+        for el in _elements(card)
         if el.get("tag") == "markdown"
     )
+
+
+def _tables(card: dict[str, Any]) -> list[dict[str, Any]]:
+    """卡片全部原生 table 元素。"""
+    return [el for el in _elements(card) if el.get("tag") == "table"]
+
+
+def _table_text(card: dict[str, Any]) -> str:
+    """原生 table 的列名+单元格值拼接（数据断言用）。"""
+    chunks: list[str] = []
+    for table in _tables(card):
+        chunks.extend(str(col.get("display_name") or "") for col in table["columns"])
+        for row in table["rows"]:
+            chunks.extend(str(value) for value in row.values())
+    return "\n".join(chunks)
+
+
+def _all_text(card: dict[str, Any]) -> str:
+    return _body(card) + "\n" + _table_text(card)
 
 
 def _title(card: dict[str, Any]) -> str:
     return str(card["header"]["title"]["content"])
 
 
+def _stock_column_titles() -> list[str]:
+    return [display for _name, display, _dtype in STOCK_TABLE_COLUMNS]
+
+
 # ── 1. 库存卡片 ──
 
 
 def test_stock_card_structure() -> None:
-    """库存卡片：表头行 + 数据行（批号/数量/库位/三态）+ LLM 总结。"""
+    """库存卡片：原生 table（批号/数量/库位/三态列）+ LLM 总结。"""
     data = _stock_data([
         _stock_row("10228-251001", qty="0"),
         _stock_row("10228-251002", qty="120", status="条件放行"),
@@ -190,14 +218,16 @@ def test_stock_card_structure() -> None:
     )
     assert "库存" in _title(card)
     assert _title(card) != "仓储助手"  # 专用卡片而非兜底文本卡片
-    body = _body(card)
-    assert STOCK_TABLE_HEADER in body  # 表头行：物料｜批号｜剩余数量｜单位｜库位｜三态
-    assert "10228-251001" in body
-    assert "24#仓库四-3区" in body
-    assert "放行" in body
-    assert "条件放行" in body
-    assert "120" in body
-    assert "共查到 2 个批次的硫酸。" in body  # LLM 文字回复保留在卡片顶部
+    tables = _tables(card)
+    assert len(tables) == 1
+    assert [c["display_name"] for c in tables[0]["columns"]] == _stock_column_titles()
+    rows = tables[0]["rows"]
+    assert rows[0]["batch"] == "10228-251001"
+    assert rows[0]["location"] == "24#仓库四-3区"
+    assert rows[0]["qc"] == "✅放行"
+    assert rows[1]["qc"] == "⚠️条件放行"
+    assert rows[1]["qty"] == "**120**"  # 数量列 lark_md 保留加粗
+    assert "共查到 2 个批次的硫酸。" in _body(card)  # LLM 文字回复保留在卡片顶部
 
 
 def test_stock_card_empty_state() -> None:
@@ -206,9 +236,8 @@ def test_stock_card_empty_state() -> None:
         Reply(text="没查到。", data={"tool": "query_stock", "result": _stock_data([], total=0)})
     )
     assert "库存" in _title(card)
-    body = _body(card)
-    assert "未查询到" in body
-    assert STOCK_TABLE_HEADER not in body  # 空态不渲染表格
+    assert "未查询到" in _body(card)
+    assert _tables(card) == []  # 空态不渲染表格
 
 
 def test_stock_card_truncation_hint() -> None:
@@ -221,8 +250,10 @@ def test_stock_card_truncation_hint() -> None:
     body = _body(card)
     assert "共 23 条" in body
     assert "更多" in body
-    assert "10228-0009" in body  # 第 10 条在内
-    assert "10228-0010" not in body  # 第 11 条起截断
+    table_rows = [r["batch"] for r in _tables(card)[0]["rows"]]
+    assert len(table_rows) == 10
+    assert "10228-0009" in table_rows  # 第 10 条在内
+    assert "10228-0010" not in table_rows  # 第 11 条起截断
 
 
 def test_stock_card_note_shown() -> None:
@@ -256,21 +287,22 @@ def test_material_card_single_record_block() -> None:
 
 
 def test_material_card_multi_record_table() -> None:
-    """多条主数据 → 行式表格（含表头）。"""
+    """多条主数据 → 原生表格（含列名）。"""
     rows = [_material_row("活性炭", "10103"), _material_row("活性炭纤维", "10104")]
     card = render_reply_card(
         Reply(text="", data={"tool": "query_material", "result": _material_data(rows)})
     )
-    body = _body(card)
-    assert "10104" in body
-    assert "物料｜代码" in body  # 多条时渲染表头行
+    tables = _tables(card)
+    assert len(tables) == 1
+    assert [c["display_name"] for c in tables[0]["columns"]][0] == "物料"
+    assert tables[0]["rows"][1]["code"] == "10104"
 
 
 # ── 3. 出入库汇总卡片 ──
 
 
 def test_movements_card_summary_and_detail() -> None:
-    """出入库卡片：方向汇总节（聚合数字）+ 明细表。"""
+    """出入库卡片：方向汇总节（聚合数字）+ 原生明细表。"""
     card = render_reply_card(
         Reply(text="", data={"tool": "query_movements", "result": _movements_data()})
     )
@@ -278,8 +310,9 @@ def test_movements_card_summary_and_detail() -> None:
     body = _body(card)
     assert "入库汇总" in body and "出库汇总" in body
     assert "1100810" in body and "乙醇" in body
-    assert "10407-250901" in body  # 明细批号
-    assert "一车间" in body  # 出库明细字段
+    text = _all_text(card)
+    assert "10407-250901" in text  # 明细批号（原生表格内）
+    assert "一车间" in text  # 出库明细字段
 
 
 # ── 4. 报告清单卡片 ──
@@ -291,18 +324,18 @@ def test_report_card_title_by_type() -> None:
         Reply(text="", data={"tool": "query_report", "result": _report_data("dead")})
     )
     assert "呆料" in _title(dead)
-    dead_body = _body(dead)
-    assert "SRM25122907" in dead_body and "16#旧原料库一" in dead_body
+    dead_text = _all_text(dead)
+    assert "SRM25122907" in dead_text and "16#旧原料库一" in dead_text
 
     unq = render_reply_card(
         Reply(text="", data={"tool": "query_report", "result": _report_data("unqualified")})
     )
     assert "不合格" in _title(unq)
-    unq_body = _body(unq)
-    assert "电导率" in unq_body and "返工" in unq_body
+    unq_text = _all_text(unq)
+    assert "电导率" in unq_text and "返工" in unq_text
 
 
-# ── 5. 文本卡片兜底（现行为保持）──
+# ── 5. 文本卡片兜底（2.0 结构 + markdown 表格转换）──
 
 
 def test_reply_without_data_falls_back_to_text_card() -> None:
@@ -323,12 +356,56 @@ def test_reply_without_data_falls_back_to_text_card() -> None:
 
 
 def test_render_text_card_is_gateway_compatible() -> None:
-    """render_text_card 产出旧版 interactive 结构（notification.send_card 可发）。"""
+    """render_text_card 产出 JSON 2.0 结构（notification.send_card 可发）。"""
     card = render_text_card("仓储助手", "**hi**")
-    assert card["config"] == {"wide_screen_mode": True}
+    assert card["schema"] == "2.0"
+    assert card["config"]["update_multi"] is True
     assert card["header"]["title"] == {"tag": "plain_text", "content": "仓储助手"}
     assert card["header"]["template"] == "blue"
-    assert card["elements"] == [{"tag": "markdown", "content": "**hi**"}]
+    assert card["body"]["elements"] == [{"tag": "markdown", "content": "**hi**"}]
+
+
+def test_render_text_card_converts_markdown_table() -> None:
+    """LLM 标准表格（|---|）→ 原生 table 组件（到点提醒确认回复场景）。"""
+    text = (
+        "⏰ 提醒已设置好了：\n\n"
+        "| 项 | 内容 |\n"
+        "|---|---|\n"
+        "| 提醒内容 | 该盘点啦：请开始物料盘点 |\n"
+        "| 触发时间 | 30 秒后（**2026-09-14 09:14:17**） |\n"
+        "| 接收 | 当前会话 |\n"
+        "\n"
+        "到点会自动发出提醒卡片。需要改时间或内容随时说。"
+    )
+    card = render_text_card("仓储助手", text)
+    tables = _tables(card)
+    assert len(tables) == 1
+    assert [c["display_name"] for c in tables[0]["columns"]] == ["项", "内容"]
+    rows = tables[0]["rows"]
+    assert rows[0] == {"c0": "提醒内容", "c1": "该盘点啦：请开始物料盘点"}
+    assert rows[1]["c1"] == "30 秒后（**2026-09-14 09:14:17**）"  # lark_md 保留加粗
+    assert rows[2]["c1"] == "当前会话"
+    body = _body(card)
+    assert "提醒已设置好了" in body
+    assert "到点会自动发出提醒卡片" in body
+    assert "|---|" not in _all_text(card)  # 原始管道符不再露出
+
+
+def test_render_text_card_keeps_non_table_pipes_untouched() -> None:
+    """无分隔行的管道文本（伪表格/普通句子）不转换，原样 markdown。"""
+    pseudo = "物料｜批号｜数量\n1. 硫酸｜10228｜120"
+    card = render_text_card("仓储助手", pseudo)
+    assert _tables(card) == []
+    assert pseudo in _body(card)
+
+
+def test_render_text_card_table_missing_trailing_pipe() -> None:
+    """数据行缺尾管道仍可转换（LLM 输出常见形态）。"""
+    text = "| 项 | 内容 |\n|---|---|\n| 提醒内容 | 该盘点啦 |\n| 接收 | 当前会话"
+    card = render_text_card("仓储助手", text)
+    tables = _tables(card)
+    assert len(tables) == 1
+    assert tables[0]["rows"][1] == {"c0": "接收", "c1": "当前会话"}
 
 
 # ── 6. 畸形数据降级（永不因渲染抛错中断回复）──
@@ -360,7 +437,7 @@ def test_none_field_values_render_tolerantly() -> None:
     data = {"tool": "query_stock", "result": {"records": [{"物料名称": None}], "total": "x"}}
     card = render_reply_card(Reply(text="ok", data=data))
     assert "库存" in _title(card)
-    assert STOCK_TABLE_HEADER in _body(card)
+    assert [c["display_name"] for c in _tables(card)[0]["columns"]] == _stock_column_titles()
 
 
 def test_oversized_cell_values_are_clamped() -> None:
@@ -371,9 +448,9 @@ def test_oversized_cell_values_are_clamped() -> None:
         Reply(text="x" * 5000, data={"tool": "query_stock", "result": data})
     )
     assert "库存" in _title(card)
-    body = _body(card)
-    assert huge not in body  # 超长值被截断
-    assert STOCK_TABLE_HEADER in body  # 表格结构完好
+    text = _all_text(card)
+    assert huge not in text  # 超长值被截断
+    assert all(t in _table_text(card) for t in _stock_column_titles())  # 表格结构完好
     assert len(json.dumps(card, ensure_ascii=False)) < 30_000  # 飞书卡片体积安全线
 
 
@@ -470,10 +547,12 @@ async def test_live_stock_query_renders_dedicated_stock_card(
     print(f"[结果卡片] title={title}")
     assert "库存" in title, f"结果卡片应为专用库存卡片，实际标题: {title}"
     assert title != "仓储助手"
-    body = _body(card)
-    assert STOCK_TABLE_HEADER in body, f"应含库存表格表头行: {body[:300]}"
-    assert any(b in body for b in expected_batches), (
-        f"表格应含真实批号（{expected_batches}）: {body[:300]}"
+    table_text = _table_text(card)
+    assert all(t in table_text for t in _stock_column_titles()), (
+        f"应含库存表格列名（{_stock_column_titles()}）: {table_text[:300]}"
+    )
+    assert any(b in table_text for b in expected_batches), (
+        f"表格应含真实批号（{expected_batches}）: {table_text[:300]}"
     )
 
 
@@ -504,7 +583,7 @@ async def test_live_dead_report_renders_report_card(
     cards = [_card_of(payload) for payload in captured_sends]
     print(f"[卡片序列] {[_title(c) for c in cards]}")
     card = cards[-1]  # 终局结果卡在捕获序列末尾（技能计划卡居中）
-    body = _body(card)
-    assert any(n in body for n in names[:5]), (
-        f"结果卡应含真实呆料物料（{names[:5]}）: {body[:300]}"
+    text = _all_text(card)
+    assert any(n in text for n in names[:5]), (
+        f"结果卡应含真实呆料物料（{names[:5]}）: {text[:300]}"
     )

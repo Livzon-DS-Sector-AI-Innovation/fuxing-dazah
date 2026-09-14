@@ -29,7 +29,7 @@ def test_warehouse_agent_model_config_loaded() -> None:
     settings = get_settings()
     assert settings.WAREHOUSE_AGENT_BASE_URL == "https://api.deepseek.com"
     assert settings.WAREHOUSE_AGENT_API_KEY  # 非空即可
-    assert settings.WAREHOUSE_AGENT_MODEL == "deepseek-v4-flash-vision-exp"
+    assert settings.WAREHOUSE_AGENT_MODEL == "deepseek-flash"
     assert settings.WAREHOUSE_AGENT_TIMEOUT == 120
 
 
@@ -38,3 +38,9 @@ def test_warehouse_keys_not_required_by_check() -> None:
     settings = get_settings()
     # check() 只校验白名单必填键，WAREHOUSE_* 不在其中——直接调用不应抛错
     settings.check()
+
+
+def test_warehouse_bot_open_id_loaded() -> None:
+    """机器人 open_id 部署身份走 env（gateway 去重排除自身用），未配置回退代码常量。"""
+    settings = get_settings()
+    assert settings.WAREHOUSE_FEISHU_BOT_OPEN_ID.startswith("ou_")

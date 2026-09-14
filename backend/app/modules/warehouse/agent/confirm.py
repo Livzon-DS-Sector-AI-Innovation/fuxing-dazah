@@ -86,13 +86,19 @@ async def request_confirm(
     summary: str,
     payload: dict[str, Any] | None = None,
     scene: str = CONFIRM_SCENE,
-    expires_in_seconds: int = DEFAULT_TTL_SECONDS,
+    expires_in_seconds: int | None = None,
 ) -> WarehouseAgentDraft:
     """发起一次确认：写 pending_confirm 草稿（含摘要、业务载荷、TTL）。
 
+    TTL 缺省读运行参数配置 confirm_ttl_seconds（DB → env → 默认 600），
+    管理员改值即时生效；显式传入 expires_in_seconds 时以调用方为准。
     调用方随后用 build_confirm_card(draft) 渲染卡片发给用户；
     payload 为点确认后透传给回调的业务数据（票07：收件人/内容等）。
     """
+    if expires_in_seconds is None:
+        from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+        expires_in_seconds = int(runtime_store.get_value("confirm_ttl_seconds"))
     return await agent_repository.create_agent_draft(
         db,
         draft_no=_generate_draft_no(),
@@ -105,35 +111,41 @@ async def request_confirm(
 
 
 def build_confirm_card(draft: WarehouseAgentDraft) -> dict[str, Any]:
-    """确认卡片（预览摘要 + 确认/取消按钮，value 携带 scene/draft_id 供回调路由）。"""
+    """确认卡片（预览摘要 + 确认/取消按钮，value 携带 scene/draft_id 供回调路由）。
+
+    卡片为 JSON 2.0 结构（与 cards.build_card 同构；不直接导入 cards——
+    cards→runner→query→office→confirm 存在模块环，保持本模块零依赖 cards）。
+    按钮直接放 body.elements（2.0 无 action 容器）；回调数据 value 与
+    behaviors[type=callback].value 双写同值（2.0 字段表首选 behaviors，
+    旧式 value 官方 Demo 仍在用，回调取哪个都一致）。
+    """
     aligned = draft.aligned or {}
     summary = str(aligned.get("summary") or "（无摘要）")
     value_base = {"scene": draft.scene, "draft_id": str(draft.id)}
+    buttons: list[dict[str, Any]] = []
+    for label, action, btype in (
+        ("✅ 确认", "confirm", "primary"),
+        ("✖ 取消", "cancel", "default"),
+    ):
+        buttons.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": label},
+                "type": btype,
+                "value": {**value_base, "action": action},
+                "behaviors": [
+                    {"type": "callback", "value": {**value_base, "action": action}}
+                ],
+            }
+        )
     return {
-        "config": {"wide_screen_mode": True},
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": "🔔 待确认操作"},
             "template": "orange",
         },
-        "elements": [
-            {"tag": "markdown", "content": summary},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "✅ 确认"},
-                        "type": "primary",
-                        "value": {**value_base, "action": "confirm"},
-                    },
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "✖ 取消"},
-                        "value": {**value_base, "action": "cancel"},
-                    },
-                ],
-            },
-        ],
+        "body": {"elements": [{"tag": "markdown", "content": summary}, *buttons]},
     }
 
 

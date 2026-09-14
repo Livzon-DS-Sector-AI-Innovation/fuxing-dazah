@@ -134,8 +134,18 @@ class Settings(BaseSettings):
     WAREHOUSE_AGENT_API_KEY: str = ""
     WAREHOUSE_AGENT_MODEL: str = ""
     WAREHOUSE_AGENT_TIMEOUT: int = 120
+    # Agent 备用模型（主模型 401/429/5xx/超时自动降级；三项齐备才启用）
+    WAREHOUSE_AGENT_BACKUP_API_KEY: str = ""
+    WAREHOUSE_AGENT_BACKUP_BASE_URL: str = ""
+    WAREHOUSE_AGENT_BACKUP_MODEL: str = ""
+    # 系统提示词追加段（runtime_configs.system_prompt_override 缺行时兜底）
+    WAREHOUSE_AGENT_SYSTEM_PROMPT: str = ""
+    # 系统告警目标群（scheduler_task_configs.system_alert.target 缺行时兜底）
+    WAREHOUSE_ALERT_CHAT_ID: str = ""
     # 冒烟测试目标群（可选；配置后 test_live_smoke 真发一条卡片）
     WAREHOUSE_TEST_CHAT_ID: str = ""
+    # 仓库机器人 open_id（部署身份：gateway 去重排除自身消息；未配置回退 gateway 代码常量）
+    WAREHOUSE_FEISHU_BOT_OPEN_ID: str = ""
     # Runner tool-calling 循环上限 / 会话历史注入轮数（S1 ticket 03）
     WAREHOUSE_AGENT_MAX_TURNS: int = 10
     WAREHOUSE_AGENT_SESSION_ROUNDS: int = 12

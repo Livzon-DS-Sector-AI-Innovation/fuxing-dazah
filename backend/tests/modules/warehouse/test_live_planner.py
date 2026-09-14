@@ -147,7 +147,7 @@ async def test_create_plan_sends_first_card(
     assert "error" not in result
     cards = _plan_cards(captured_sends)
     assert len(cards) == 1
-    content = cards[0]["elements"][0]["content"]
+    content = cards[0]["body"]["elements"][0]["content"]
     assert result["plan_no"] in content
     assert content.count("⬜") == 3, f"首帧应 3 个 pending 图标: {content}"
 
@@ -243,7 +243,7 @@ async def test_update_step_resends_progress_card(
     )
     cards = _plan_cards(captured_sends)
     assert len(cards) == 2, f"首帧 + 1 次更新应 2 张卡片，实际 {len(cards)}"
-    second = cards[1]["elements"][0]["content"]
+    second = cards[1]["body"]["elements"][0]["content"]
     assert "✅" in second and "1. 甲" in second
     assert "进度 1/2" in second
 
@@ -310,7 +310,7 @@ def test_render_progress_card_all_statuses() -> None:
         }
     )
     assert card["header"]["title"]["content"] == "📋 任务计划"
-    content = card["elements"][0]["content"]
+    content = card["body"]["elements"][0]["content"]
     assert "WP20260904-001" in content and "盘点呆料" in content
     assert "✅ 1. 查询呆料批次清单" in content
     assert "⏳ 2. 按物料大类分组统计" in content
@@ -332,7 +332,7 @@ def test_render_progress_card_done_template() -> None:
         }
     )
     assert card["header"]["template"] == "green"
-    assert "进度 1/1" in card["elements"][0]["content"]
+    assert "进度 1/1" in card["body"]["elements"][0]["content"]
 
 
 # ══ live 主接缝：多步任务规划执行 ══
@@ -372,14 +372,14 @@ async def test_live_planned_task_flow(
 
     cards = _plan_cards(captured_sends)
     for i, card in enumerate(cards):
-        print(f"[计划卡{i}] {card['elements'][0]['content'][:200]}")
+        print(f"[计划卡{i}] {card['body']['elements'][0]['content'][:200]}")
     assert len(cards) >= 3, (
         f"计划首帧 + ≥2 次进度更新应 ≥3 张计划卡，实际 {len(cards)}"
     )
-    first_content = cards[0]["elements"][0]["content"]
+    first_content = cards[0]["body"]["elements"][0]["content"]
     assert "⬜" in first_content, "首帧应含 pending 步骤"
     assert any(
-        ("✅" in c["elements"][0]["content"] or "⏳" in c["elements"][0]["content"])
+        ("✅" in c["body"]["elements"][0]["content"] or "⏳" in c["body"]["elements"][0]["content"])
         for c in cards[1:]
     ), "进度卡片应出现 done/in_progress 状态"
 

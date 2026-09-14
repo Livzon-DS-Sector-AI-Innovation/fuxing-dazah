@@ -503,6 +503,14 @@ TABLES: dict[str, TableMeta] = {
 _runtime_fields_cache: dict[str, tuple[float, dict[str, FieldMeta]]] = {}
 
 
+def invalidate_field_cache(table_key: str | None = None) -> None:
+    """失效运行时字段缓存（连接坐标变更后调用；零网络，下次读取回落快照）。"""
+    if table_key is None:
+        _runtime_fields_cache.clear()
+    else:
+        _runtime_fields_cache.pop(table_key, None)
+
+
 def get_table_fields(table_key: str) -> dict[str, FieldMeta]:
     """取表字段元数据：运行时缓存优先（TTL 内），回落静态快照。
 

@@ -179,7 +179,7 @@ def _interactive_cards(sends: list[dict[str, str]]) -> list[dict[str, Any]]:
 def _card_content(card: dict[str, Any]) -> str:
     return "\n".join(
         element.get("content") or ""
-        for element in card.get("elements", [])
+        for element in card.get("body", {}).get("elements", [])
         if isinstance(element, dict)
     )
 
@@ -314,7 +314,7 @@ async def test_live_same_session_gmp_then_finished(
         gmp_cards = _cards_with_title(captured_sends, GMP_CONFIRM_CARD_TITLE)
         assert gmp_cards, "GMP 确认卡片未被捕获"
         assert (
-            gmp_cards[-1]["elements"][2]["actions"][0]["value"]["scene"]
+            gmp_cards[-1]["body"]["elements"][2]["columns"][0]["elements"][0]["value"]["scene"]
             == GMP_OUTBOUND_SCENE
         )
 
@@ -386,7 +386,7 @@ async def test_live_same_session_gmp_then_finished(
         finished_cards = _cards_with_title(captured_sends, FINISHED_CONFIRM_CARD_TITLE)
         assert finished_cards, "成品确认卡片未被捕获"
         assert (
-            finished_cards[-1]["elements"][2]["actions"][0]["value"]["scene"]
+            finished_cards[-1]["body"]["elements"][2]["columns"][0]["elements"][0]["value"]["scene"]
             == FINISHED_OUTBOUND_SCENE
         )
 
@@ -477,7 +477,7 @@ async def test_live_scene_isolation_cross_field_and_confirm_gate(
     cards = _cards_with_title(captured_sends, GMP_CONFIRM_CARD_TITLE)
     assert len(cards) == 2, "修改后应重发 GMP 确认卡片"
     resent = cards[-1]
-    assert resent["elements"][2]["actions"][0]["value"]["scene"] == GMP_OUTBOUND_SCENE
+    assert resent["body"]["elements"][2]["columns"][0]["elements"][0]["value"]["scene"] == GMP_OUTBOUND_SCENE
     assert "快递号" not in _card_content(resent), "成品字段不应出现在 GMP 卡片上"
 
     # 确认门路由：gmp 草稿的确认点击走 gmp submit（不是 finished）

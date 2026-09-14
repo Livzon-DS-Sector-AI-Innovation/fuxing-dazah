@@ -327,4 +327,10 @@ async def build_system_prompt(
             "查询工具作答。",
             skill_catalog.strip(),
         ]
+    # 运行参数 system_prompt_override（管理员配置追加段，调优不发版）
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    override = str(runtime_store.get_value("system_prompt_override") or "").strip()
+    if override:
+        parts += ["", "## 运行时补充指令（管理员配置，必须遵守）", override]
     return "\n".join(parts)

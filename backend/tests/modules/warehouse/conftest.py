@@ -45,6 +45,9 @@ WAREHOUSE_PERMS = {
     "warehouse:stocktake:update",
     "warehouse:stocktake:confirm",
     "warehouse:stocktake:delete",
+    # ── 系统配置 ──
+    "warehouse:system-config:read",
+    "warehouse:system-config:update",
 }
 
 

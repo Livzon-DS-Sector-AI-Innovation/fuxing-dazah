@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from app.modules.warehouse.agent.pipeline.recognizer import RecognizedReceipt
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+from app.modules.warehouse.ops_config.runtime_store import runtime_store
 
 logger = logging.getLogger(__name__)
 
@@ -248,14 +249,15 @@ def match_material(
         )
         return _finalize(best, "prefix", direction="forward" if forward else "reverse")
 
-    # 3. fuzzy：ratio ≥0.6 取最高（同 ratio 生产商/供应商加分）
+    # 3. fuzzy：ratio ≥阈值取最高（同 ratio 生产商/供应商加分）
     fuzzy_best: MaterialMasterEntry | None = None
     fuzzy_key: tuple[float, ...] = (0.0,)
+    fuzzy_min_ratio = float(runtime_store.get_value("align_fuzzy_min_ratio"))
     for entry in entries:
         if not entry.name:
             continue  # 空名主数据不参与匹配
         ratio = SequenceMatcher(None, key, normalize_name(entry.name)).ratio()
-        if ratio < FUZZY_MIN_RATIO:
+        if ratio < fuzzy_min_ratio:
             continue
         cand_key = (
             round(ratio, 3),

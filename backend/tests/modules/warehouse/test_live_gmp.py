@@ -205,7 +205,7 @@ def _interactive_cards(sends: list[dict[str, str]]) -> list[dict[str, Any]]:
 def _card_content(card: dict[str, Any]) -> str:
     return "\n".join(
         element.get("content") or ""
-        for element in card.get("elements", [])
+        for element in card.get("body", {}).get("elements", [])
         if isinstance(element, dict)
     )
 
@@ -448,7 +448,11 @@ async def test_create_gmp_draft_success_with_card(
     assert "3. 单位：kg" in content
     assert "4. 生产批号：MA-ET-2026-050A" in content
     assert "物料名称：三氯甲烷" in content  # 仅展示
-    buttons = card["elements"][2]["actions"]
+    buttons = [
+        button
+        for column in card["body"]["elements"][2]["columns"]
+        for button in column["elements"]
+    ]
     assert buttons[0]["value"]["scene"] == GMP_OUTBOUND_SCENE
     assert buttons[0]["value"]["draft_id"] == str(draft.id)
     assert buttons[1]["value"]["action"] == "cancel"
@@ -737,7 +741,7 @@ async def test_live_gmp_missing_field_asks(
     # 回复含追问（问句或明确点名缺失字段）；无占位卡（OK 表情承担确认）
     assert len(captured_sends) >= 1
     reply = _card_of(captured_sends[-1])
-    text = reply["elements"][0]["content"]
+    text = reply["body"]["elements"][0]["content"]
     assert "？" in text or "?" in text or "生产批号" in text, (
         f"应追问缺失的生产批号，实际回复: {text[:120]}"
     )

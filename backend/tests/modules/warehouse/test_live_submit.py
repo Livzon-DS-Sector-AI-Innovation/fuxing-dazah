@@ -180,7 +180,7 @@ def _interactive_cards(sends: list[dict[str, str]]) -> list[dict[str, Any]]:
 def _card_content(card: dict[str, Any]) -> str:
     return "\n".join(
         element.get("content") or ""
-        for element in card.get("elements", [])
+        for element in card.get("body", {}).get("elements", [])
         if isinstance(element, dict)
     )
 

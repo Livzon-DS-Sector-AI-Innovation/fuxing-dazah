@@ -23,12 +23,13 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.modules.warehouse.agent.llm_client import WarehouseLLMClient, WarehouseLLMError
+from app.modules.warehouse.agent.llm_client import WarehouseLLMError, get_llm_client
+from app.modules.warehouse.ai_audit.context import set_audit_resource
 
 logger = logging.getLogger(__name__)
 
 # 识别调用参数（独立于 Runner，spec Further Notes：温度/token 独立配置）。
-# max_tokens 必须给足：vision 模型（deepseek-v4-flash-vision-exp）是 reasoning
+# max_tokens 必须给足：vision 模型（deepseek-flash）是 reasoning
 # 模型，reasoning_tokens 实测波动 3k-8k+，给小了 content 被耗尽为空
 # （llm_client.py 模块注释同款契约，默认 16384）。
 RECOGNIZE_TEMPERATURE = 0.1
@@ -230,7 +231,7 @@ def required_all_missing(payload: dict[str, Any]) -> bool:
 
 
 async def _call_recognize(
-    client: WarehouseLLMClient, messages: list[dict[str, Any]]
+    client: Any, messages: list[dict[str, Any]]
 ) -> str:
     """单次识别调用，返回 LLM 原始文本输出。"""
     response = await client.chat_with_tools(
@@ -295,7 +296,8 @@ async def detect_rotation(
         }
     ]
     try:
-        async with WarehouseLLMClient() as client:
+        set_audit_resource("rotate_detect")
+        async with get_llm_client() as client:
             msg = await client.chat_with_tools(
                 messages, tools=None, temperature=0.0, max_tokens=2000
             )
@@ -319,7 +321,8 @@ async def recognize_receipt(
     （图片确实无文字的场景）。LLM 调用本身的网络/网关错误由客户端重试
     语义处理。
     """
-    async with WarehouseLLMClient() as client:
+    set_audit_resource("receipt_parse")
+    async with get_llm_client() as client:
         messages = [build_vision_message(image_b64, content_type)]
         content = await _call_recognize(client, messages)
 

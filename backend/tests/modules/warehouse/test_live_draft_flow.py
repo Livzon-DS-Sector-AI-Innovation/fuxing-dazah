@@ -526,7 +526,7 @@ def test_receipt_card_sections_warn_and_buttons() -> None:
         "match_confidence": "exact",
     })
     assert card["header"]["title"]["content"] == RECEIPT_CONFIRM_CARD_TITLE
-    content = card["elements"][0]["content"]
+    content = card["body"]["elements"][0]["content"]
     # 必提分区：高置信无 ⚠、低置信 ⚠、缺失必提 — ⚠
     assert "必提信息" in content
     assert "1. 物料名称：硫酸铵" in content  # conf 0.95 无 ⚠
@@ -542,8 +542,12 @@ def test_receipt_card_sections_warn_and_buttons() -> None:
     assert "**物料对齐**：硫酸铵（代码 C001｜大类 原辅料）" in content
     # 修改引导（[修改] 无按钮，引导文本对话）
     assert "数量改成 200" in content
-    # 按钮 value：scene=receipt + draft_id + confirm/cancel
-    actions = card["elements"][2]["actions"]
+    # 按钮 value：scene=receipt + draft_id + confirm/cancel（column_set 按钮行摊平）
+    actions = [
+        button
+        for column in card["body"]["elements"][2]["columns"]
+        for button in column["elements"]
+    ]
     confirm_btn, cancel_btn = actions[0], actions[1]
     assert confirm_btn["value"] == {
         "scene": RECEIPT_SCENE,
@@ -561,7 +565,7 @@ def test_receipt_card_match_none_warning() -> None:
         recognized=_recognized_payload(),
         aligned={"material_name": "硫酸铵", "match_confidence": "none"},
     )
-    content = card["elements"][0]["content"]
+    content = card["body"]["elements"][0]["content"]
     assert "⚠ 物料名称未匹配主数据，请核对" in content
     assert "物料对齐" not in content
 
@@ -569,11 +573,11 @@ def test_receipt_card_match_none_warning() -> None:
 def test_receipt_card_degrade_missing_fields() -> None:
     """防御：recognized/aligned 全缺 → 不抛错，全 — 展示，按钮仍在。"""
     card = _render_card(recognized={}, aligned={})
-    content = card["elements"][0]["content"]
+    content = card["body"]["elements"][0]["content"]
     assert "1. 物料名称：— ⚠" in content
     assert "1. 包装规格：—" in content
     assert "物料对齐" not in content
-    assert card["elements"][2]["actions"][0]["value"]["action"] == "confirm"
+    assert card["body"]["elements"][2]["columns"][0]["elements"][0]["value"]["action"] == "confirm"
 
 
 def test_receipt_card_manual_override_no_warn() -> None:
@@ -583,7 +587,7 @@ def test_receipt_card_manual_override_no_warn() -> None:
         aligned={"material_name": "硫酸铵", "quantity": 200, "match_confidence": "exact",
                  "code": "C001", "material_category": "原辅料"},
     )
-    content = card["elements"][0]["content"]
+    content = card["body"]["elements"][0]["content"]
     assert "3. 数量：200" in content  # 人工改过，无 ⚠
     assert "3. 数量：200 ⚠" not in content
 
@@ -610,7 +614,7 @@ async def test_update_draft_by_no_updates_and_resends(
 
     cards = _confirm_card_payloads(captured_sends)
     assert len(cards) == 1
-    content = cards[0]["elements"][0]["content"]
+    content = cards[0]["body"]["elements"][0]["content"]
     assert "3. 数量：200" in content
     assert "2. 厂家批号：B999" in content
 
@@ -720,7 +724,11 @@ async def test_live_pipeline_front_segment(
     assert len(cards) == 1
     card = cards[0]
     assert card["header"]["title"]["content"] == RECEIPT_CONFIRM_CARD_TITLE
-    actions = card["elements"][2]["actions"]
+    actions = [
+        button
+        for column in card["body"]["elements"][2]["columns"]
+        for button in column["elements"]
+    ]
     assert actions[0]["value"] == {
         "scene": RECEIPT_SCENE,
         "draft_id": str(draft.id),
@@ -795,7 +803,7 @@ async def test_live_conversation_update_draft(
     # 新确认卡片（dry-run 捕获）：数量 200 已上卡
     cards = _confirm_card_payloads(captured_sends)
     assert len(cards) == 1
-    content = cards[0]["elements"][0]["content"]
+    content = cards[0]["body"]["elements"][0]["content"]
     assert f"**草稿**：{draft.draft_no}" in content
     assert "数量：200" in content
 

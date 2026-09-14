@@ -1,25 +1,31 @@
-"""仓储 Agent 查询结果卡片渲染器（S1 ticket 04）。
+"""仓储 Agent 查询结果卡片渲染器（S1 ticket 04，飞书卡片 JSON 2.0）。
 
-Runner 的 Reply → 飞书交互卡片。卡片为旧版 interactive 结构
-（config/header/elements，与 gateway._build_card 同构），
+Runner 的 Reply → 飞书交互卡片。卡片为 **JSON 2.0 结构**
+（schema/config/header/body.elements；2026-09-14 由旧版 1.0 迁移，
+实证规格：table 组件列字段为 display_name、按钮直接放 body.elements、
+旧 action 容器在 2.0 已不支持——横排按钮用 column_set 双列），
 ``notification.send_card`` / ``send_card_to_user`` 直接可发。
 
 渲染策略（ticket 04）：
 - Reply.data 携带结构化工具结果（runner 工具循环填充：最后使用的工具名 +
   原始结果 dict，见 runner.Reply 注释）→ 按工具名分发专用卡片：
   query_stock → 库存卡片（批号/剩余数量/单位/库位/三态列）；
-  query_material → 物料主数据卡片（单条块式全字段 / 多条行式表格）；
+  query_material → 物料主数据卡片（单条块式全字段 / 多条原生表格）；
   query_movements → 出入库汇总卡片（方向聚合 + 明细表）；
   query_report → 呆料/不合格清单卡片（report_type 区分标题）；
 - 无 data / 未知工具 / result 非 dict → ``render_text_card`` 文本卡片兜底
   （即票02 的「仓储助手」markdown 卡片行为）；
 - 渲染防御：任何渲染异常降级文本卡片，**永不因渲染抛错中断回复**。
 
-lark_md 约定：旧版卡片 markdown 元素不支持表格语法，表格用「全角｜分隔的
-行式伪表格」呈现（表头行 + 序号数据行，\n 换行）；单元格统一经 ``_clean``
-清洗（去 markdown 特殊字符/换行、超长截断，空值显示 -），防止数据内容
-破坏排版或撑爆卡片体积。明细默认前 10 条（对齐工具层 DETAIL_LIMIT），
-超出追加「共 N 条，回复「更多」查看」提示（S1 不做真分页，仅提示）。
+表格约定：lark_md（含 2.0 markdown 组件）不支持表格语法，数据表格一律用
+2.0 原生 table 组件（列定义见各 *_COLUMNS 常量，单元格 data_type=text，
+数量列 lark_md 保留加粗）；单元格统一经 ``_clean`` 清洗（去 markdown
+特殊字符/换行、超长截断，空值显示 -），防止数据内容破坏排版或撑爆卡片
+体积。明细默认前 10 条（对齐工具层 DETAIL_LIMIT），超出追加「共 N 条，
+回复「更多」查看」提示（原生 table 行数 ≤ page_size 不出分页器，行为
+与旧伪表格一致）。兜底文本卡片会把 LLM 回复中的标准 markdown 表格
+（|---| 分隔）自动转成原生 table 组件（``_markdown_with_tables``），
+其余文本原样保持 markdown。
 """
 
 from __future__ import annotations
@@ -33,11 +39,17 @@ from app.modules.warehouse.models import WarehouseAgentSession
 
 logger = logging.getLogger(__name__)
 
+# 卡片 JSON schema 版本（2.0：原生 table 组件 / 按钮直排 / column_set）
+CARD_SCHEMA = "2.0"
+
 # 兜底文本卡片标题（与 gateway 票02 行为一致）
 TEXT_CARD_TITLE = "仓储助手"
 
 # 明细最多展示行数（对齐 tools/query.py 的 DETAIL_LIMIT）
 MAX_DETAIL_ROWS = 10
+
+# 原生 table 每页行数（行数 ≤ page_size 不出分页器，与旧行式伪表格观感一致）
+TABLE_PAGE_SIZE = 10
 
 # LLM 文字回复在专用卡片顶部的截断长度（超出以 … 结尾）
 REPLY_TEXT_MAX = 600
@@ -46,8 +58,19 @@ REPLY_TEXT_MAX = 600
 _CELL_MAX = 40
 _NOTE_MAX = 200
 
-# 库存卡片表头（全角分隔行式伪表格；测试断言用）
-STOCK_TABLE_HEADER = "物料｜批号｜剩余数量｜单位｜库位｜三态"
+# 兜底文本卡片转原生 table 的安全上限（防 LLM 超大表撑爆卡片体积）
+_MD_TABLE_MAX_ROWS = 30
+_MD_TABLE_MAX_COLS = 8
+
+# 库存卡片列定义（(name, display_name, data_type)；测试断言用）
+STOCK_TABLE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("material", "物料", "text"),
+    ("batch", "批号", "text"),
+    ("qty", "剩余数量", "lark_md"),
+    ("unit", "单位", "text"),
+    ("location", "库位", "text"),
+    ("qc", "三态", "text"),
+)
 
 # 三态标记（QA放行 单选：放行/条件放行/否决，V1.0-5 契约）
 _QC_STATUS_MARKS = {"放行": "✅", "条件放行": "⚠️", "否决": "❌"}
@@ -67,17 +90,85 @@ def _md(content: str) -> dict[str, Any]:
     return {"tag": "markdown", "content": content}
 
 
-def _build_card(
+def build_card(
     *, title: str, template: str, elements: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    """飞书卡片 JSON 2.0 根结构（gateway/confirm 内联卡片同构复用）。"""
     return {
-        "config": {"wide_screen_mode": True},
+        "schema": CARD_SCHEMA,
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": title},
             "template": template,
         },
-        "elements": elements,
+        "body": {"elements": elements},
     }
+
+
+def _table(
+    columns: tuple[tuple[str, str, str], ...], rows: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """2.0 原生 table 组件：columns=(name, display_name, data_type)，
+    rows 键=列 name（值须为字符串）。行数 ≤ page_size 不出分页器。"""
+    return {
+        "tag": "table",
+        "page_size": TABLE_PAGE_SIZE,
+        "row_height": "low",
+        "header_style": {"background_style": "grey", "bold": True},
+        "columns": [
+            {"name": name, "display_name": display, "data_type": data_type}
+            for name, display, data_type in columns
+        ],
+        "rows": rows,
+    }
+
+
+def _button_row(buttons: list[dict[str, Any]]) -> dict[str, Any]:
+    """横排按钮行（2.0 无 action 容器：column_set auto 宽双列承载）。"""
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "auto",
+                "vertical_align": "top",
+                "elements": [button],
+            }
+            for button in buttons
+        ],
+    }
+
+
+def _confirm_cancel_buttons(
+    value_base: dict[str, Any], *, confirm_label: str, cancel_label: str
+) -> dict[str, Any]:
+    """确认门按钮行（value 携带 scene/draft_id/action 供回调路由）。
+
+    2.0 按钮回调数据官方字段为 behaviors[type=callback].value（字段表必填），
+    旧式 value 官方 Demo 仍在用且发送合法——两处双写同值，回调取哪个都一致。
+    """
+    return _button_row(
+        [
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": confirm_label},
+                "type": "primary",
+                "value": {**value_base, "action": "confirm"},
+                "behaviors": [
+                    {"type": "callback", "value": {**value_base, "action": "confirm"}}
+                ],
+            },
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": cancel_label},
+                "value": {**value_base, "action": "cancel"},
+                "behaviors": [
+                    {"type": "callback", "value": {**value_base, "action": "cancel"}}
+                ],
+            },
+        ]
+    )
 
 
 def _clean(value: Any, max_len: int = _CELL_MAX) -> str:
@@ -99,6 +190,95 @@ def _clip(text: str, max_len: int) -> str:
     """LLM 文本截断（保留 markdown 原貌，仅控制长度）。"""
     text = (text or "").strip()
     return text if len(text) <= max_len else text[:max_len] + "…"
+
+
+# ── 兜底文本卡片：标准 markdown 表格 → 原生 table 转换 ──
+# LLM 回复里可能出现标准 markdown 表格（| a | b | + |---|---|），lark_md
+# 不渲染表格语法（原样露管道符）。此处把表格块解析成 2.0 table 组件，
+# 其余文本行原样保持 markdown 元素。
+
+_MD_TABLE_ROW_RE = re.compile(r"^\s*\|")  # 表格行：以 | 开头（容忍缺尾管道）
+_MD_TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]*-{3,}[\s:|-]*\|?\s*$")
+_MD_TABLE_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+
+def _is_md_table_separator(line: str) -> bool:
+    """分隔行：仅含 | : - 空格 且至少一段 3 连字符（|---|---| / | --- |）。"""
+    return bool(line.strip()) and bool(_MD_TABLE_SEP_RE.match(line))
+
+
+def _split_md_table_cells(line: str) -> list[str]:
+    """表格行 → 单元格文本（去首尾管道、按未转义 | 切分、还原 \\|）。"""
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.replace("\\|", "|").strip() for cell in _MD_TABLE_CELL_SPLIT_RE.split(stripped)]
+
+
+def _md_table_element(header: list[str], data_lines: list[str]) -> dict[str, Any] | None:
+    """解析后的表头/数据行 → table 组件；畸形（0 列/超限）返回 None 回落原文。"""
+    if not header or len(header) > _MD_TABLE_MAX_COLS:
+        return None
+    columns = tuple(
+        (f"c{index}", _clean(cell, 24) if cell else f"列{index + 1}", "lark_md")
+        for index, cell in enumerate(header)
+    )
+    rows: list[dict[str, Any]] = []
+    for line in data_lines[:_MD_TABLE_MAX_ROWS]:
+        cells = _split_md_table_cells(line)
+        cells = (cells + [""] * len(header))[: len(header)]
+        rows.append({f"c{index}": cell for index, cell in enumerate(cells)})
+    if not rows:
+        return None
+    return _table(columns, rows)
+
+
+def _markdown_with_tables(text: str) -> list[dict[str, Any]]:
+    """LLM 文本 → 元素列表：标准 markdown 表格块转原生 table，其余保持 markdown。"""
+    lines = (text or "").splitlines()
+    elements: list[dict[str, Any]] = []
+    plain: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        # 表格块识别：当前行是管道行，下一行是分隔行
+        if (
+            "|" in line
+            and _MD_TABLE_ROW_RE.match(line)
+            and index + 1 < len(lines)
+            and _is_md_table_separator(lines[index + 1])
+        ):
+            header = _split_md_table_cells(line)
+            data_start = index + 2
+            data_end = data_start
+            while data_end < len(lines) and _MD_TABLE_ROW_RE.match(lines[data_end]):
+                data_end += 1
+            table = _md_table_element(header, lines[data_start:data_end])
+            if table is not None:
+                # 剔除紧邻表格的空行（markdown 块收口干净）
+                while plain and not plain[-1].strip():
+                    plain.pop()
+                if plain:
+                    elements.append(_md("\n".join(plain)))
+                    plain = []
+                elements.append(table)
+                index = data_end
+                # 跳过表格后紧邻的一个空行
+                if index < len(lines) and not lines[index].strip():
+                    index += 1
+                continue
+        plain.append(line)
+        index += 1
+    if plain:
+        elements.append(_md("\n".join(plain)))
+    return elements or [_md("")]
+
+
+def render_text_card(title: str, markdown: str) -> dict[str, Any]:
+    """通用文本卡片（无结构化数据/渲染降级时的兜底）：markdown 表格自动转原生 table。"""
+    return build_card(title=title, template="blue", elements=_markdown_with_tables(markdown or ""))
 
 
 def _list_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -141,11 +321,11 @@ def _dict_rows(records: list[Any]) -> list[dict[str, Any]]:
 
 
 def _summary_elements(reply_text: str) -> list[dict[str, Any]]:
-    """专用卡片顶部的 LLM 文字回复（保留其总结价值），后随分割线。"""
+    """专用卡片顶部的 LLM 文字回复（保留其总结价值；分割线由各渲染器统一加）。"""
     text = (reply_text or "").strip()
     if not text:
         return []
-    return [_md(_clip(text, REPLY_TEXT_MAX)), {"tag": "hr"}]
+    return [_md(_clip(text, REPLY_TEXT_MAX))]
 
 
 def _note_elements(note: str) -> list[dict[str, Any]]:
@@ -166,23 +346,16 @@ def _status_mark(status: str) -> str:
     return f"{_QC_STATUS_MARKS.get(status, '')}{status}"
 
 
-def _generic_table(rows: list[dict[str, Any]], max_rows: int = MAX_DETAIL_ROWS) -> str:
-    """通用行式伪表格：列取首条记录的键（工具输出的中文键即展示名）。"""
-    if not rows:
-        return ""
-    columns = [str(key) for key in rows[0].keys()]
-    lines = ["｜".join(columns)]
-    for index, rec in enumerate(rows[:max_rows], 1):
-        lines.append(f"{index}. " + "｜".join(_clean(rec.get(col)) for col in columns))
-    return "\n".join(lines)
-
-
-# ── 兜底文本卡片（票02 行为保持）──
-
-
-def render_text_card(title: str, markdown: str) -> dict[str, Any]:
-    """通用 markdown 文本卡片（无结构化数据/渲染降级时的兜底）。"""
-    return _build_card(title=title, template="blue", elements=[_md(markdown or "")])
+def _generic_table(rows: list[dict[str, Any]], max_rows: int = MAX_DETAIL_ROWS) -> dict[str, Any]:
+    """通用原生表格：列取首条记录的键（工具输出的中文键即展示名）。"""
+    columns: tuple[tuple[str, str, str], ...] = tuple(
+        (str(key), str(key), "text") for key in rows[0].keys()
+    )
+    table_rows = [
+        {str(key): _clean(rec.get(str(key))) for key in rows[0].keys()}
+        for rec in rows[:max_rows]
+    ]
+    return _table(columns, table_rows)
 
 
 # ── 1. 库存卡片 ──
@@ -193,27 +366,26 @@ _EMPTY_STOCK_TEXT = (
 )
 
 
-def _stock_row(index: int, rec: dict[str, Any]) -> str:
+def _stock_table_row(rec: dict[str, Any]) -> dict[str, str]:
+    """库存记录 → table 行（键=STOCK_TABLE_COLUMNS 列 name）。"""
     qty = _clean(rec.get("剩余数量"), 16)
-    cells = [
-        _clean(rec.get("物料名称")),
-        _clean(rec.get("物料批号")),
-        f"**{qty}**" if qty != "-" else qty,
-        _clean(rec.get("单位"), 10),
-        _clean(rec.get("贮存位置"), 24),
-        _status_mark(_clean(rec.get("QA放行"), 10)),
-    ]
-    return f"{index}. " + "｜".join(cells)
+    return {
+        "material": _clean(rec.get("物料名称")),
+        "batch": _clean(rec.get("物料批号")),
+        "qty": f"**{qty}**" if qty != "-" else qty,
+        "unit": _clean(rec.get("单位"), 10),
+        "location": _clean(rec.get("贮存位置"), 24),
+        "qc": _status_mark(_clean(rec.get("QA放行"), 10)),
+    }
 
 
-def _stock_table(rows: list[dict[str, Any]], total: int | None) -> str:
-    lines = [STOCK_TABLE_HEADER]
-    for index, rec in enumerate(rows[:MAX_DETAIL_ROWS], 1):
-        lines.append(_stock_row(index, rec))
+def _stock_table(rows: list[dict[str, Any]], total: int | None) -> list[dict[str, Any]]:
+    """库存数据 → [table 元素]（+ 截断提示 markdown 元素）。"""
+    elements = [_table(STOCK_TABLE_COLUMNS, [_stock_table_row(r) for r in rows[:MAX_DETAIL_ROWS]])]
     hint = _truncation_hint(total, min(len(rows), MAX_DETAIL_ROWS))
     if hint:
-        lines.append(hint)
-    return "\n".join(lines)
+        elements.append(_md(hint))
+    return elements
 
 
 def render_stock_card(data: dict[str, Any], *, reply_text: str = "") -> dict[str, Any]:
@@ -222,18 +394,26 @@ def render_stock_card(data: dict[str, Any], *, reply_text: str = "") -> dict[str
     elements = _summary_elements(reply_text)
     if not rows:
         elements.append(_md(_EMPTY_STOCK_TEXT))
-        return _build_card(title="📦 库存查询", template="blue", elements=elements)
+        return build_card(title="📦 库存查询", template="blue", elements=elements)
     elements.append({"tag": "hr"})
-    elements.append(_md(_stock_table(rows, _total_of(data))))
+    elements.extend(_stock_table(rows, _total_of(data)))
     note = _note_of(data)
     if note:
         elements.extend(_note_elements(note))
-    return _build_card(title="📦 库存查询", template="blue", elements=elements)
+    return build_card(title="📦 库存查询", template="blue", elements=elements)
 
 
 # ── 2. 物料主数据卡片 ──
 
-_MATERIAL_TABLE_HEADER = "物料｜代码｜级别｜规格｜大类｜生产商"
+# 多条记录行式表格列定义（(name, display_name, data_type)）
+_MATERIAL_TABLE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("material", "物料", "text"),
+    ("code", "代码", "text"),
+    ("grade", "级别", "text"),
+    ("spec", "规格", "text"),
+    ("category", "大类", "text"),
+    ("manufacturer", "生产商", "text"),
+)
 # 单条记录块式展示的字段分组（键 = 工具输出键）
 _MATERIAL_BLOCK_GROUPS: tuple[tuple[str, ...], ...] = (
     ("级别", "物料大类"),
@@ -254,54 +434,57 @@ def _material_block(index: int, rec: dict[str, Any]) -> str:
     return "\n".join([title, *lines])
 
 
+def _material_table_row(rec: dict[str, Any]) -> dict[str, str]:
+    """物料主数据记录 → table 行（键=_MATERIAL_TABLE_COLUMNS 列 name）。"""
+    return {
+        "material": _clean(rec.get("物料名称")),
+        "code": _clean(rec.get("代码"), 20),
+        "grade": _clean(rec.get("级别"), 16),
+        "spec": _clean(rec.get("规格"), 24),
+        "category": _clean(rec.get("物料大类"), 16),
+        "manufacturer": _clean(rec.get("生产商"), 24),
+    }
+
+
 def render_material_card(
     data: dict[str, Any], *, reply_text: str = ""
 ) -> dict[str, Any]:
-    """物料主数据卡片：单条块式全字段，多条行式精选列表格。"""
+    """物料主数据卡片：单条块式全字段，多条原生表格。"""
     rows = _list_rows(data)
     elements = _summary_elements(reply_text)
     if not rows:
         elements.append(
             _md("未查询到符合条件的物料主数据。\n可换个名称/代码关键词试试。")
         )
-        return _build_card(title="🧪 物料信息", template="blue", elements=elements)
+        return build_card(title="🧪 物料信息", template="blue", elements=elements)
     elements.append({"tag": "hr"})
     if len(rows) == 1:
         elements.append(_md(_material_block(1, rows[0])))
         shown = 1
     else:
-        lines = [_MATERIAL_TABLE_HEADER]
-        for index, rec in enumerate(rows[:MAX_DETAIL_ROWS], 1):
-            cells = [
-                _clean(rec.get("物料名称")),
-                _clean(rec.get("代码"), 20),
-                _clean(rec.get("级别"), 16),
-                _clean(rec.get("规格"), 24),
-                _clean(rec.get("物料大类"), 16),
-                _clean(rec.get("生产商"), 24),
-            ]
-            lines.append(f"{index}. " + "｜".join(cells))
+        elements.append(
+            _table(_MATERIAL_TABLE_COLUMNS, [_material_table_row(r) for r in rows[:MAX_DETAIL_ROWS]])
+        )
         shown = min(len(rows), MAX_DETAIL_ROWS)
-        elements.append(_md("\n".join(lines)))
     hint = _truncation_hint(_total_of(data), shown)
     if hint:
         elements.append(_md(hint))
     note = _note_of(data)
     if note:
         elements.extend(_note_elements(note))
-    return _build_card(title="🧪 物料信息", template="blue", elements=elements)
+    return build_card(title="🧪 物料信息", template="blue", elements=elements)
 
 
 # ── 3. 出入库汇总卡片 ──
 
 
-def _movement_section_lines(heading: str, rows: Any) -> list[str]:
-    """单方向汇总节：`📥 入库汇总` + 聚合行（物料｜数量 单位）。"""
+def _movement_section_lines(heading: str, rows: Any) -> str:
+    """单方向汇总节 markdown：`📥 入库汇总` + 聚合行（物料 数量 单位）。"""
     if not isinstance(rows, list) or not rows:
-        return []
+        return ""
     dict_rows = _dict_rows(rows)
     if not dict_rows:
-        return []
+        return ""
     icon = "📥" if "入库" in heading else "📤" if "出库" in heading else "•"
     lines = [f"{icon} **{heading}**（共 {len(dict_rows)} 种物料）"]
     for index, rec in enumerate(dict_rows[:MAX_DETAIL_ROWS], 1):
@@ -314,53 +497,55 @@ def _movement_section_lines(heading: str, rows: Any) -> list[str]:
         lines.append(f"{index}. " + "｜".join(cells))
     if len(dict_rows) > MAX_DETAIL_ROWS:
         lines.append(f"……汇总仅展示前 {MAX_DETAIL_ROWS} 种物料")
-    return lines
+    return "\n".join(lines)
 
 
-def _movement_detail_lines(heading: str, rows: Any) -> list[str]:
-    """单方向明细节：`📥 入库明细` + 通用表格 + 记录数提示。"""
+def _movement_detail_elements(heading: str, rows: Any) -> list[dict[str, Any]]:
+    """单方向明细节元素：`📥 入库明细` markdown + 原生 table。"""
     if not isinstance(rows, list) or not rows:
         return []
     dict_rows = _dict_rows(rows)
     if not dict_rows:
         return []
     icon = "📥" if "入库" in heading else "📤" if "出库" in heading else "•"
-    table = _generic_table(dict_rows)
-    if not table:
-        return []
-    return [f"{icon} **{heading}**", table]
+    return [_md(f"{icon} **{heading}**"), _generic_table(dict_rows)]
 
 
 def render_movements_card(
     data: dict[str, Any], *, reply_text: str = ""
 ) -> dict[str, Any]:
-    """出入库总账卡片：按方向的聚合汇总数字 + 明细表。"""
+    """出入库总账卡片：按方向的聚合汇总数字 + 原生明细表。"""
     elements = _summary_elements(reply_text)
-    body: list[str] = []
+    body: list[dict[str, Any]] = []
+    summary_chunks: list[str] = []
     summary = _list_field(data, "summary")
     records = _list_field(data, "records")
     for section in summary:
         if isinstance(section, dict):
             for heading, rows in section.items():
-                body.extend(_movement_section_lines(str(heading), rows))
+                chunk = _movement_section_lines(str(heading), rows)
+                if chunk:
+                    summary_chunks.append(chunk)
+    if summary_chunks:
+        body.append(_md("\n\n".join(summary_chunks)))
     for section in records:
         if isinstance(section, dict):
             for heading, rows in section.items():
-                body.extend(_movement_detail_lines(str(heading), rows))
+                body.extend(_movement_detail_elements(str(heading), rows))
     if not body:
         elements.append(
             _md("未查询到符合条件的出入库记录。\n可放宽日期范围或换物料关键词试试。")
         )
-        return _build_card(title="🔄 出入库汇总", template="blue", elements=elements)
+        return build_card(title="🔄 出入库汇总", template="blue", elements=elements)
     total = _total_of(data)
     if total is not None and total > MAX_DETAIL_ROWS:
-        body.append(_truncation_hint(total, MAX_DETAIL_ROWS))
+        body.append(_md(_truncation_hint(total, MAX_DETAIL_ROWS)))
     elements.append({"tag": "hr"})
-    elements.append(_md("\n\n".join(body)))
+    elements.extend(body)
     note = _note_of(data)
     if note:
         elements.extend(_note_elements(note))
-    return _build_card(title="🔄 出入库汇总", template="blue", elements=elements)
+    return build_card(title="🔄 出入库汇总", template="blue", elements=elements)
 
 
 # ── 4. 呆料/不合格报告卡片 ──
@@ -378,16 +563,16 @@ def render_report_card(data: dict[str, Any], *, reply_text: str = "") -> dict[st
     elements = _summary_elements(reply_text)
     if not rows:
         elements.append(_md("当前没有符合条件的报告记录。"))
-        return _build_card(title=title, template=template, elements=elements)
+        return build_card(title=title, template=template, elements=elements)
     elements.append({"tag": "hr"})
-    elements.append(_md(_generic_table(rows)))
+    elements.append(_generic_table(rows))
     hint = _truncation_hint(_total_of(data), min(len(rows), MAX_DETAIL_ROWS))
     if hint:
         elements.append(_md(hint))
     note = _note_of(data)
     if note:
         elements.extend(_note_elements(note))
-    return _build_card(title=title, template=template, elements=elements)
+    return build_card(title=title, template=template, elements=elements)
 
 
 # ── 5. 任务计划进度卡片（ticket 05，工具侧发送）──
@@ -435,7 +620,7 @@ def render_progress_card(plan: dict[str, Any]) -> dict[str, Any]:
     if not steps:
         lines.append("（该计划没有步骤）")
     template = "green" if plan_status == "done" else "blue"
-    return _build_card(
+    return build_card(
         title=PLAN_CARD_TITLE, template=template, elements=[_md("\n".join(lines))]
     )
 
@@ -477,41 +662,24 @@ def render_confirm_preview_card(
         _clip(content, _PREVIEW_CONTENT_MAX) or "（无内容）",
     ]
     value_base = {"scene": scene, "draft_id": draft_id}
-    return _build_card(
+    return build_card(
         title=SEND_PREVIEW_CARD_TITLE,
         template="orange",
         elements=[
             _md("\n".join(lines)),
             {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CONFIRM_SEND_BUTTON_LABEL,
-                        },
-                        "type": "primary",
-                        "value": {**value_base, "action": "confirm"},
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CANCEL_SEND_BUTTON_LABEL,
-                        },
-                        "value": {**value_base, "action": "cancel"},
-                    },
-                ],
-            },
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_SEND_BUTTON_LABEL,
+                cancel_label=CANCEL_SEND_BUTTON_LABEL,
+            ),
         ],
     )
 
 
 def render_outgoing_card(title: str, content: str) -> dict[str, Any]:
     """确认后真正外发的卡片（send_card 工具的最终投递内容）。"""
-    return _build_card(
+    return build_card(
         title=_clean(title, 60) or "通知",
         template="blue",
         elements=[_md(content or "")],
@@ -528,7 +696,7 @@ def render_reminder_card(reminder: dict[str, Any]) -> dict[str, Any]:
     trigger_at = str(reminder.get("trigger_at") or "").strip()
     if trigger_at:
         lines.append(f"设定时间：{_clean(trigger_at, 40)}")
-    return _build_card(
+    return build_card(
         title=REMINDER_CARD_TITLE, template="yellow", elements=[_md("\n".join(lines))]
     )
 
@@ -709,34 +877,17 @@ def _render_gmp_confirm_card(draft: Any) -> dict[str, Any]:
     lines.extend(["", GMP_MODIFY_HINT])
 
     value_base = {"scene": scene, "draft_id": draft_id}
-    return _build_card(
+    return build_card(
         title=GMP_CONFIRM_CARD_TITLE,
         template="orange",
         elements=[
             _md("\n".join(lines)),
             {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CONFIRM_GMP_BUTTON_LABEL,
-                        },
-                        "type": "primary",
-                        "value": {**value_base, "action": "confirm"},
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CANCEL_GMP_BUTTON_LABEL,
-                        },
-                        "value": {**value_base, "action": "cancel"},
-                    },
-                ],
-            },
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_GMP_BUTTON_LABEL,
+                cancel_label=CANCEL_GMP_BUTTON_LABEL,
+            ),
         ],
     )
 
@@ -767,34 +918,17 @@ def _render_finished_confirm_card(draft: Any) -> dict[str, Any]:
     lines.extend(["", FINISHED_MODIFY_HINT])
 
     value_base = {"scene": scene, "draft_id": draft_id}
-    return _build_card(
+    return build_card(
         title=FINISHED_CONFIRM_CARD_TITLE,
         template="orange",
         elements=[
             _md("\n".join(lines)),
             {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CONFIRM_FINISHED_BUTTON_LABEL,
-                        },
-                        "type": "primary",
-                        "value": {**value_base, "action": "confirm"},
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CANCEL_FINISHED_BUTTON_LABEL,
-                        },
-                        "value": {**value_base, "action": "cancel"},
-                    },
-                ],
-            },
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_FINISHED_BUTTON_LABEL,
+                cancel_label=CANCEL_FINISHED_BUTTON_LABEL,
+            ),
         ],
     )
 
@@ -818,10 +952,10 @@ def render_confirm_status_card(
     elements = [
         {"tag": "markdown", "content": status_line},
     ]
-    # 保留字段清单，移除确认/取消按钮（tag=action）与确认引导行——
-    # 状态卡不再提供操作入口，防止重复登记/取消（后端状态机同样拦截）
-    for el in confirm_card.get("elements", []):
-        if el.get("tag") == "action":
+    # 保留字段清单，移除确认/取消按钮行（2.0 按钮行=column_set）与确认引导
+    # 行——状态卡不再提供操作入口，防止重复登记/取消（后端状态机同样拦截）
+    for el in confirm_card.get("body", {}).get("elements", []):
+        if el.get("tag") == "column_set":
             continue
         content = str(el.get("content") or "")
         if "💡 确认前请核对" in content:
@@ -829,9 +963,10 @@ def render_confirm_status_card(
         if content:
             elements.append({"tag": "markdown", "content": content})
     return {
+        "schema": CARD_SCHEMA,
         "config": {"update_multi": True},
         "header": {"title": {"tag": "plain_text", "content": title}, "template": "blue"},
-        "elements": elements,
+        "body": {"elements": elements},
     }
 
 
@@ -878,34 +1013,17 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     lines.extend(["", RECEIPT_MODIFY_HINT])
 
     value_base = {"scene": scene, "draft_id": draft_id}
-    return _build_card(
+    return build_card(
         title=RECEIPT_CONFIRM_CARD_TITLE,
         template="orange",
         elements=[
             _md("\n".join(lines)),
             {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CONFIRM_RECEIPT_BUTTON_LABEL,
-                        },
-                        "type": "primary",
-                        "value": {**value_base, "action": "confirm"},
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": CANCEL_RECEIPT_BUTTON_LABEL,
-                        },
-                        "value": {**value_base, "action": "cancel"},
-                    },
-                ],
-            },
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_RECEIPT_BUTTON_LABEL,
+                cancel_label=CANCEL_RECEIPT_BUTTON_LABEL,
+            ),
         ],
     )
 
@@ -1068,7 +1186,7 @@ def render_receipt_result_card(
         )
 
     title = title_ok if consistent else title_mismatch
-    return _build_card(
+    return build_card(
         title=title,
         template="green" if consistent else "red",
         elements=[_md("\n".join(lines))],

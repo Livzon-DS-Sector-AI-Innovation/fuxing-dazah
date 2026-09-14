@@ -128,7 +128,7 @@ def _captured_text(sent: list[dict[str, str]]) -> str:
             card = json.loads(payload["content"])
         except json.JSONDecodeError:
             continue
-        for element in card.get("elements") or []:
+        for element in card.get("body", {}).get("elements") or []:
             if element.get("tag") == "markdown":
                 parts.append(str(element.get("content") or ""))
     return "\n".join(parts)

@@ -60,8 +60,11 @@ RECEIPT_SCENE = "receipt"
 GMP_OUTBOUND_SCENE = "gmp_outbound"
 FINISHED_OUTBOUND_SCENE = "finished_outbound"  # 票02：成品出库登记（预留）
 
-# pending_confirm TTL（秒）：spec Implementation Decisions 4 —— 10 分钟
-DRAFT_TTL_SECONDS = confirm.DEFAULT_TTL_SECONDS
+# pending_confirm TTL（秒）：读运行参数配置（DB → env → 默认 600），改值即时生效
+def _draft_ttl_seconds() -> int:
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    return int(runtime_store.get_value("draft_ttl_seconds"))
 
 # 活跃状态（expire/cancel 的作用域）；其余为终态，不可再迁移
 ACTIVE_STATUSES: tuple[str, ...] = ("created", "aligned", "pending_confirm")
@@ -188,7 +191,7 @@ async def create_receipt_draft(
     """
     started = time.monotonic()
     recognized_json = recognized.model_dump(mode="json")
-    expires_at = datetime.now(UTC) + timedelta(seconds=DRAFT_TTL_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=_draft_ttl_seconds())
     for _ in range(DRAFT_NO_RETRIES):
         draft_no = await _generate_draft_no(db)
         draft = WarehouseAgentDraft(
@@ -247,7 +250,7 @@ async def create_dialog_draft(
         )
     started = time.monotonic()
     fields_json = dict(fields)
-    expires_at = datetime.now(UTC) + timedelta(seconds=DRAFT_TTL_SECONDS)
+    expires_at = datetime.now(UTC) + timedelta(seconds=_draft_ttl_seconds())
     for _ in range(DRAFT_NO_RETRIES):
         draft_no = await _generate_draft_no(db)
         draft = WarehouseAgentDraft(
@@ -400,7 +403,7 @@ async def send_confirm_card(
                 redis_client.set(
                     f"wh:draft:card:{draft.id}",
                     confirm_message_id,
-                    ex=600,
+                    ex=_draft_ttl_seconds(),
                 ),
                 timeout=3.0,
             )
