@@ -335,9 +335,6 @@ export default function TaskDetail({ id }: { id: string }) {
                 审核通过并生成 COA
               </Button>
             )}
-            <Popconfirm title="驳回后任务回到填报中，确认驳回?" onConfirm={() => handleStatus('in_progress', '已驳回，任务回到填报中')}>
-              <Button icon={<RedoOutlined />}>驳回重填</Button>
-            </Popconfirm>
             <Popconfirm title="确认作废该任务?" onConfirm={() => handleStatus('void', '任务已作废')}>
               <Button icon={<StopOutlined />}>作废任务</Button>
             </Popconfirm>

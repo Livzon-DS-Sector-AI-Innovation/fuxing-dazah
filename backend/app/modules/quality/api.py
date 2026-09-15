@@ -686,15 +686,6 @@ async def generate_task_report(
             "file_no": split["doc"].file_no,
             "template_path": template,
         })
-    # COA 生成成功后群内提醒（fire-and-forget）
-    if generated:
-        import asyncio as _asyncio
-
-        from app.modules.quality.feishu.fill_service import notify_coa_generated
-
-        _asyncio.create_task(notify_coa_generated(
-            split["batch_number"], split["product_name"], [g["file_no"] for g in generated],
-        ))
     return success_response(
         data=generated,
         message=f"已按标准文件逐份生成 {len(generated)} 份 COA",

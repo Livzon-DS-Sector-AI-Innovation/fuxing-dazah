@@ -78,13 +78,14 @@ async def test_review_approve(db_session):
     assert detail.status == "completed"
 
 
-async def test_review_reject_back_to_fill(db_session):
+async def test_reject_transition_removed(db_session):
+    """驳回链路已删除（专员复核时直接改结果），pending_review→in_progress 应被拒绝。"""
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
-    detail = await TestTaskService.update_status(
-        db_session, task.id, TestTaskStatusUpdate(status="in_progress")
-    )
-    assert detail.status == "in_progress"
+    with pytest.raises(AppException):
+        await TestTaskService.update_status(
+            db_session, task.id, TestTaskStatusUpdate(status="in_progress")
+        )
 
 
 async def test_completed_reopen(db_session):

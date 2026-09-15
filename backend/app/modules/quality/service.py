@@ -1057,15 +1057,7 @@ class TestTaskService:
                     detail=f"存在 {len(unfilled)} 项未判定，无法进入待复核：{'、'.join(unfilled[:5])}",
                 )
         elif task.status == "pending_review" and target == "completed":
-            pass  # 专员审核通过
-        elif task.status == "pending_review" and target == "in_progress":
-            # 专员驳回重填：飞书提醒检验员（fire-and-forget）
-            try:
-                from app.modules.quality.feishu.fill_service import notify_rejected
-
-                asyncio.create_task(notify_rejected(str(task_id)))
-            except Exception:
-                logger.exception("驳回通知推送失败")
+            pass  # 专员审核通过（复核时可直接改结果，无需驳回流程）
         elif task.status == "completed" and target == "in_progress":
             pass  # completed → in_progress 重新打开
         else:
