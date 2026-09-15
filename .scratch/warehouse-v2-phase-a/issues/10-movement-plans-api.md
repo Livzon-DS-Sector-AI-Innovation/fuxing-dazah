@@ -4,8 +4,8 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 迁移在空库可执行；软删唯一约束对齐既有惯例
-- [ ] CRUD + start/cancel 路由测试全绿（含非法流转 4xx、无权限 403）
-- [ ] 权限键注册并对齐既有 PermissionDef 声明模式
+- [x] 迁移在空库可执行；软删唯一约束对齐既有惯例
+- [x] CRUD + start/cancel 路由测试全绿（含非法流转 400、缺原因 422、无权限 403）
+- [x] 权限键注册并对齐既有 PermissionDef 声明模式（plans:list/create/update/cancel）

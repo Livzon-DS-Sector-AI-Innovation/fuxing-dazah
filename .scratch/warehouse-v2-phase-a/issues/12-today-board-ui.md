@@ -4,9 +4,11 @@
 
 **Blocked by:** 01 (前端测试设施与脚本), 10 (计划单数据底座), 11 (计划单联动登记)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 三列看板数据按今日/状态正确分组（组件测试 mock 数据）
-- [ ] 创建→开始→生成登记→完成全流程 UI 走通
-- [ ] 取消必填原因；非法操作按钮隐藏
-- [ ] PageHeader/DataTable 封装组件落地并被本页使用
+- [x] 三列看板数据按今日/状态正确分组（组件测试 mock 数据）
+- [x] 创建→开始→生成登记→完成全流程 UI 走通（写操作走 Server Actions，读走 client 直连）
+- [x] 取消必填原因；非法操作按钮隐藏
+- [x] PageHeader/DataTable 封装组件落地并被本页使用
+
+> 备注：踩坑记录——antd Button 对两字文案自动插空格（“取 消”），测试需宽容匹配；actions 追加块经 PowerShell here-string 写入时单引号会被吞，改用 Edit 工具修复；看板按 planned/in_progress 两桶取数后客户端按方向分组（避免漏掉 outbound-planned）。

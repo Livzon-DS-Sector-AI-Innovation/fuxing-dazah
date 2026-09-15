@@ -11,6 +11,9 @@ import {
   MaterialUpdate,
   MovementCreate,
   MovementFilter,
+  MovementPlanCreateInput,
+  MovementPlanFilter,
+  MovementPlanRecord,
   MovementRecord,
   Paginated,
   StockFilter,
@@ -83,6 +86,43 @@ export async function fetchDashboardTodosClient(): Promise<DashboardTodos> {
   return apiGet<DashboardTodos>(`${CLIENT_API}${BASE}/dashboard/todos`)
 }
 
+// ── 出入库计划单（V2.0 分期A） ──
+
+export async function fetchPlansClient(
+  params: MovementPlanFilter = {},
+): Promise<Paginated<MovementPlanRecord>> {
+  const sp = new URLSearchParams()
+  if (params.direction) sp.set('direction', params.direction)
+  if (params.status) sp.set('status', params.status)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.page) sp.set('page', String(params.page))
+  if (params.page_size) sp.set('page_size', String(params.page_size))
+  const qs = sp.toString()
+  return apiFetchPaginated<MovementPlanRecord>(`${CLIENT_API}${BASE}/plans${qs ? `?${qs}` : ''}`)
+}
+
+export async function createPlan(payload: MovementPlanCreateInput): Promise<MovementPlanRecord> {
+  return apiPost<MovementPlanRecord>(`${SERVER_API}${BASE}/plans`, payload)
+}
+
+export async function startPlan(planId: string): Promise<MovementPlanRecord> {
+  return apiPost<MovementPlanRecord>(`${SERVER_API}${BASE}/plans/${planId}/start`, {})
+}
+
+export async function cancelPlan(planId: string, reason: string): Promise<MovementPlanRecord> {
+  return apiPost<MovementPlanRecord>(`${SERVER_API}${BASE}/plans/${planId}/cancel`, { reason })
+}
+
+export async function generatePlanMovement(
+  planId: string,
+  payload: { quantity?: number; remark?: string | null } = {},
+): Promise<{ plan: MovementPlanRecord; movement: MovementRecord }> {
+  return apiPost<{ plan: MovementPlanRecord; movement: MovementRecord }>(
+    `${SERVER_API}${BASE}/plans/${planId}/movement`,
+    payload,
+  )
+}
+
 // ── 概览 ──
 
 export async function fetchWarehouseOverview(): Promise<WarehouseOverview> {
@@ -151,6 +191,9 @@ export async function deleteLocation(id: string): Promise<void> {
 // ── 库存 ──
 
 function setStockParams(sp: URLSearchParams, params: StockFilter) {
+  if (params.batch_no) sp.set("batch_no", params.batch_no)
+  if (params.expiry_from) sp.set("expiry_from", params.expiry_from)
+  if (params.expiry_to) sp.set("expiry_to", params.expiry_to)
   if (params.category) sp.set('category', params.category)
   if (params.keyword) sp.set('keyword', params.keyword)
   if (params.location_id) sp.set('location_id', params.location_id)
@@ -175,6 +218,7 @@ export async function fetchStocksClient(params: StockFilter = {}): Promise<Pagin
 // ── 出入库 ──
 
 function setMovementParams(sp: URLSearchParams, params: MovementFilter) {
+  if (params.material_id) sp.set('material_id', params.material_id)
   if (params.direction) sp.set('direction', params.direction)
   if (params.source_type) sp.set('source_type', params.source_type)
   if (params.keyword) sp.set('keyword', params.keyword)

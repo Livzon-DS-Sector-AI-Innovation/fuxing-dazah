@@ -39,6 +39,10 @@ import {
   updateStocktake as apiUpdateStocktake,
   confirmStocktake as apiConfirmStocktake,
   deleteStocktake as apiDeleteStocktake,
+  createPlan as apiCreatePlan,
+  startPlan as apiStartPlan,
+  cancelPlan as apiCancelPlan,
+  generatePlanMovement as apiGeneratePlanMovement,
 } from '@/lib/api/warehouse'
 import {
   MaterialCreate,
@@ -48,6 +52,7 @@ import {
   LocationUpdate,
   MovementCreate,
   MovementFilter,
+  MovementPlanCreateInput,
   StockFilter,
   StocktakeCreate,
   StocktakeUpdate,
@@ -287,4 +292,36 @@ export async function getWarehouseAiAuditDetail(id: string) {
 /** 五类配置变更审计（ConfigAuditSection 按 kind 分发取数） */
 export async function getWarehouseConfigAudits(kind: WarehouseConfigAuditKind, limit = 50) {
   return fetchWarehouseConfigAudits(kind, limit)
+}
+
+// ═══════════════════════════════════════════
+// 出入库计划单（V2.0 分期A）—— 写操作一律走 Server Actions
+// ═══════════════════════════════════════════
+
+export async function createMovementPlan(input: MovementPlanCreateInput) {
+  const result = await apiCreatePlan(input)
+  revalidatePath('/warehouse/board')
+  return result
+}
+
+export async function startMovementPlan(planId: string) {
+  const result = await apiStartPlan(planId)
+  revalidatePath('/warehouse/board')
+  return result
+}
+
+export async function cancelMovementPlan(planId: string, reason: string) {
+  const result = await apiCancelPlan(planId, reason)
+  revalidatePath('/warehouse/board')
+  return result
+}
+
+export async function generatePlanMovementAction(
+  planId: string,
+  payload: { quantity?: number; remark?: string | null } = {},
+) {
+  const result = await apiGeneratePlanMovement(planId, payload)
+  revalidatePath('/warehouse/board')
+  revalidatePath('/warehouse/inventory')
+  return result
 }

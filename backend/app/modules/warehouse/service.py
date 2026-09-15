@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -177,8 +177,12 @@ async def _add_stock_delta(
     location: WarehouseLocation,
     batch_no: str,
     delta: Decimal,
+    expiry_date: date | None = None,
 ) -> None:
-    """按物料+批次+库位增减库存，行不存在则新建；不允许出现负库存。"""
+    """按物料+批次+库位增减库存，行不存在则新建；不允许出现负库存。
+
+    expiry_date 仅在入库时传入：新建行直接写入，已有行随最近一次入库更新。
+    """
     stock = await repository.get_stock_row(
         db, material_id=material.id, batch_no=batch_no, location_id=location.id
     )
@@ -193,9 +197,12 @@ async def _add_stock_delta(
             location_id=location.id,
             location_code=location.code,
             location_name=location.name,
+            expiry_date=expiry_date,
             quantity=Decimal("0"),
         )
         db.add(stock)
+    elif expiry_date is not None:
+        stock.expiry_date = expiry_date
     new_quantity = (stock.quantity + delta).quantize(_QUANTITY_QUANTUM)
     if new_quantity < 0:
         raise AppException(
@@ -268,7 +275,12 @@ async def create_movement(
     db.add(movement)
     delta = quantity if payload.direction == "inbound" else -quantity
     await _add_stock_delta(
-        db, material=material, location=location, batch_no=movement.batch_no, delta=delta
+        db,
+        material=material,
+        location=location,
+        batch_no=movement.batch_no,
+        delta=delta,
+        expiry_date=payload.expiry_date if payload.direction == "inbound" else None,
     )
     await db.flush()
     await record_audit_log(
@@ -511,6 +523,9 @@ async def list_stocks(
     category: str | None,
     keyword: str | None,
     location_id: UUID | None,
+    batch_no: str | None = None,
+    expiry_from: date | None = None,
+    expiry_to: date | None = None,
 ) -> tuple[list[WarehouseStock], int]:
     return await repository.list_stocks(
         db,
@@ -519,6 +534,9 @@ async def list_stocks(
         category=category,
         keyword=keyword,
         location_id=location_id,
+        batch_no=batch_no,
+        expiry_from=expiry_from,
+        expiry_to=expiry_to,
     )
 
 
@@ -531,8 +549,9 @@ async def list_movements(
     source_type: str | None,
     keyword: str | None,
     location_id: UUID | None,
-    occurred_from: datetime | None,
-    occurred_to: datetime | None,
+    material_id: UUID | None = None,
+    occurred_from: datetime | None = None,
+    occurred_to: datetime | None = None,
 ) -> tuple[list[WarehouseMovement], int]:
     return await repository.list_movements(
         db,
@@ -542,6 +561,7 @@ async def list_movements(
         source_type=source_type,
         keyword=keyword,
         location_id=location_id,
+        material_id=material_id,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )

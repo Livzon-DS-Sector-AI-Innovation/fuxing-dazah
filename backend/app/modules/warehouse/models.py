@@ -120,6 +120,9 @@ class WarehouseStock(BaseModel):
     location_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     location_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="库位编码（冗余）")
     location_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="库位名称（冗余）")
+    expiry_date: Mapped[date | None] = mapped_column(
+        Date, nullable=True, comment="批次效期（入库登记时录入，随入库更新）"
+    )
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0", comment="库存数量"
     )
@@ -407,6 +410,61 @@ class WarehouseAgentMemory(BaseModel):
     hit_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0", comment="注入命中计数（淘汰用）"
     )
+
+
+class WarehouseMovementPlan(BaseModel):
+    """出入库计划单：到货/领料的预计单据。
+
+    状态机 planned → in_progress → completed（完成在生成出入库登记时回填
+    movement_id）；非完成态可取消（必填原因）。计划单本身不直接变更库存。
+    """
+
+    __tablename__ = "movement_plans"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_movement_plans_no",
+            "plan_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        CheckConstraint(
+            "direction IN ('inbound', 'outbound')",
+            name="ck_warehouse_movement_plans_direction",
+        ),
+        CheckConstraint(
+            "status IN ('planned', 'in_progress', 'completed', 'cancelled')",
+            name="ck_warehouse_movement_plans_status",
+        ),
+        {"schema": "warehouse"},
+    )
+
+    plan_no: Mapped[str] = mapped_column(String(50), nullable=False, comment="计划单号")
+    direction: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="方向: inbound入库/outbound出库"
+    )
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, comment="业务来源")
+    material_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    material_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="物料编码（冗余）")
+    material_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="物料名称（冗余）")
+    batch_no: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default="", comment="批次号，空表示无批次"
+    )
+    quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="计划数量，恒为正"
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    location_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="库位编码（冗余）")
+    location_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="库位名称（冗余）")
+    planned_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="预计日期")
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="planned", server_default="planned",
+        comment="planned/in_progress/completed/cancelled",
+    )
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="取消原因")
+    movement_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="生成登记后回填的出入库记录ID"
+    )
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
 
 
 # ==================== 系统配置中心（设计稿 warehouse-system-config-design.md） ====================

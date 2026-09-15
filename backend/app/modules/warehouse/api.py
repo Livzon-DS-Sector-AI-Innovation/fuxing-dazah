@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.warehouse import dashboard as dashboard_service
+from app.modules.warehouse import plans as plans_service
 from app.modules.warehouse import service
 from app.modules.warehouse.schemas import (
     LocationCreate,
@@ -24,6 +25,10 @@ from app.modules.warehouse.schemas import (
     MovementCreate,
     MovementResponse,
     OverviewResponse,
+    PlanCancel,
+    PlanCreate,
+    PlanMovementCreate,
+    PlanResponse,
     StockResponse,
     StocktakeCreate,
     StocktakeUpdate,
@@ -202,6 +207,93 @@ async def delete_location(
     return success_response(message="删除成功")
 
 
+# ── 出入库计划单（V2.0 分期A） ──
+
+
+@router.get("/plans", summary="出入库计划单分页列表")
+async def list_plans(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    direction: str | None = Query(default=None, description="inbound/outbound"),
+    status: str | None = Query(default=None, description="planned/in_progress/completed/cancelled"),
+    keyword: str | None = Query(default=None, description="单号/物料/批次关键词"),
+    planned_before: date | None = Query(default=None, description="预计日期不晚于（含未填日期）"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:list")),
+) -> JSONResponse:
+    items, total = await plans_service.list_plans(
+        db,
+        page=page,
+        page_size=page_size,
+        direction=_clean(direction),
+        status=_clean(status),
+        keyword=_clean(keyword),
+        planned_before=planned_before,
+    )
+    data = [PlanResponse.model_validate(p).model_dump(mode="json") for p in items]
+    return paginated_response(data, page, page_size, total)
+
+
+@router.get("/plans/{plan_id}", summary="出入库计划单详情")
+async def get_plan(
+    plan_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:list")),
+) -> JSONResponse:
+    plan = await plans_service.get_plan(db, plan_id)
+    return success_response(PlanResponse.model_validate(plan).model_dump(mode="json"))
+
+
+@router.post("/plans", status_code=201, summary="创建出入库计划单")
+async def create_plan(
+    payload: PlanCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:create")),
+) -> JSONResponse:
+    plan = await plans_service.create_plan(db, payload, user)
+    return success_response(
+        PlanResponse.model_validate(plan).model_dump(mode="json"), status_code=201
+    )
+
+
+@router.post("/plans/{plan_id}/start", summary="开始执行计划单")
+async def start_plan(
+    plan_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:update")),
+) -> JSONResponse:
+    plan = await plans_service.start_plan(db, plan_id, user)
+    return success_response(PlanResponse.model_validate(plan).model_dump(mode="json"))
+
+
+@router.post("/plans/{plan_id}/cancel", summary="取消计划单（必填原因）")
+async def cancel_plan(
+    plan_id: UUID,
+    payload: PlanCancel,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:cancel")),
+) -> JSONResponse:
+    plan = await plans_service.cancel_plan(db, plan_id, payload.reason, user)
+    return success_response(PlanResponse.model_validate(plan).model_dump(mode="json"))
+
+
+@router.post("/plans/{plan_id}/movement", status_code=201, summary="从计划单生成出入库登记")
+async def create_plan_movement(
+    plan_id: UUID,
+    payload: PlanMovementCreate | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:plans:update")),
+) -> JSONResponse:
+    plan, movement = await plans_service.generate_plan_movement(db, plan_id, payload, user)
+    return success_response(
+        {
+            "plan": PlanResponse.model_validate(plan).model_dump(mode="json"),
+            "movement": MovementResponse.model_validate(movement).model_dump(mode="json"),
+        },
+        status_code=201,
+    )
+
+
 # ── 库存 ──
 
 
@@ -212,6 +304,9 @@ async def list_stocks(
     category: str | None = Query(default=None, description="物料分类"),
     keyword: str | None = Query(default=None, description="物料/批次关键词"),
     location_id: UUID | None = Query(default=None, description="库位ID"),
+    batch_no: str | None = Query(default=None, description="批次号（模糊）"),
+    expiry_from: date | None = Query(default=None, description="效期起"),
+    expiry_to: date | None = Query(default=None, description="效期止"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
@@ -222,6 +317,9 @@ async def list_stocks(
         category=_clean(category),
         keyword=_clean(keyword),
         location_id=location_id,
+        batch_no=_clean(batch_no),
+        expiry_from=expiry_from,
+        expiry_to=expiry_to,
     )
     data = [StockResponse.model_validate(s).model_dump(mode="json") for s in items]
     return paginated_response(data, page, page_size, total)
@@ -238,6 +336,7 @@ async def list_movements(
     source_type: str | None = Query(default=None, description="业务来源"),
     keyword: str | None = Query(default=None, description="单号/物料/批次关键词"),
     location_id: UUID | None = Query(default=None, description="库位ID"),
+    material_id: UUID | None = Query(default=None, description="物料ID（详情时间线用）"),
     occurred_from: datetime | None = Query(default=None, description="发生时间起"),
     occurred_to: datetime | None = Query(default=None, description="发生时间止"),
     db: AsyncSession = Depends(get_db),
@@ -251,6 +350,7 @@ async def list_movements(
         source_type=_clean(source_type),
         keyword=_clean(keyword),
         location_id=location_id,
+        material_id=material_id,
         occurred_from=occurred_from,
         occurred_to=occurred_to,
     )

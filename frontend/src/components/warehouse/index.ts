@@ -1,5 +1,9 @@
 // warehouse module components
 export { WarehouseDashboard } from './WarehouseDashboard'
+export { TodayBoard } from './TodayBoard'
+export { QueryFilter } from './QueryFilter'
+export { PageHeader } from './PageHeader'
+export { DataTable } from './DataTable'
 export { WarehouseOverviewCards } from './WarehouseOverviewCards'
 export { StockTable } from './StockTable'
 export { MaterialTable } from './MaterialTable'

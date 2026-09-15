@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, computed_field
+from pydantic import BaseModel, BeforeValidator, Field, computed_field, model_validator
 
 StrUUID = Annotated[str, BeforeValidator(str)]
 
@@ -95,6 +95,7 @@ class StockResponse(BaseModel):
     location_id: StrUUID
     location_code: str
     location_name: str
+    expiry_date: date | None = None
     quantity: float
 
     model_config = {"from_attributes": True}
@@ -111,7 +112,14 @@ class MovementCreate(BaseModel):
     quantity: float = Field(..., gt=0, description="数量")
     location_id: StrUUID = Field(..., description="库位ID")
     occurred_at: datetime | None = Field(default=None, description="业务发生时间，空则取当前时间")
+    expiry_date: date | None = Field(default=None, description="批次效期（仅入库时录入）")
     remark: str | None = Field(default=None, description="备注")
+
+    @model_validator(mode="after")
+    def _expiry_only_on_inbound(self) -> MovementCreate:
+        if self.expiry_date is not None and self.direction != "inbound":
+            raise ValueError("批次效期仅在入库时可录入")
+        return self
 
 
 class MovementResponse(BaseModel):
@@ -203,3 +211,51 @@ class OverviewResponse(BaseModel):
     low_stock_materials: list[str]
     today_inbound_quantity: float
     today_outbound_quantity: float
+
+
+# ── 出入库计划单（V2.0 分期A） ──
+
+
+class PlanCreate(BaseModel):
+    direction: MovementDirection = Field(..., description="inbound入库/outbound出库")
+    source_type: MovementSourceType = Field(..., description="业务来源")
+    material_id: StrUUID = Field(..., description="物料ID")
+    batch_no: str = Field(default="", max_length=100, description="批次号，空表示无批次")
+    quantity: float = Field(..., gt=0, description="计划数量")
+    location_id: StrUUID = Field(..., description="库位ID")
+    planned_date: date | None = Field(default=None, description="预计日期")
+    remark: str | None = Field(default=None, description="备注")
+
+
+class PlanCancel(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=500, description="取消原因（必填）")
+
+
+class PlanMovementCreate(BaseModel):
+    """从计划单生成出入库登记的可选覆盖项（缺省沿用计划内容）。"""
+
+    quantity: float | None = Field(default=None, gt=0, description="实际数量（默认计划数量）")
+    occurred_at: datetime | None = Field(default=None, description="业务发生时间，空则取当前时间")
+    remark: str | None = Field(default=None, description="备注覆盖")
+
+
+class PlanResponse(BaseModel):
+    id: StrUUID
+    plan_no: str
+    direction: str
+    source_type: str
+    material_id: StrUUID
+    material_code: str
+    material_name: str
+    batch_no: str
+    quantity: float
+    location_id: StrUUID
+    location_code: str
+    location_name: str
+    planned_date: date | None = None
+    status: str
+    cancel_reason: str | None = None
+    movement_id: StrUUID | None = None
+    remark: str | None = None
+
+    model_config = {"from_attributes": True}

@@ -4,8 +4,10 @@
 
 **Blocked by:** 01 (前端测试设施与脚本)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] movements 端点支持 material_id 参数（路由测试覆盖）
-- [ ] Drawer 打开/关闭/加载/空流水四态正确
-- [ ] 时间线倒序且字段齐全（组件测试）
+- [x] movements 端点支持 material_id 参数（路由测试覆盖：双物料造数断言 total=1 且全部命中）
+- [x] Drawer 打开/关闭/加载/空流水四态正确
+- [x] 时间线倒序且字段齐全（组件测试：点击行 → 抽屉标题 + 时间线条目）
+
+> 备注：MovementFilter 类型与 setMovementParams 同步补 material_id；前端抽屉用 useQuery enabled=!!detail 惰性取数；antd Table 点击行用 findAllByText 首个匹配规避测量行文本重复。

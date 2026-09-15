@@ -86,6 +86,8 @@ describe('WarehouseDashboard', () => {
   it('渲染全部图表区块', async () => {
     renderWithQuery(<WarehouseDashboard />)
 
+    // 等查询完成后各图区块才渲染（数据未到时显示 Spin）
+    expect(await screen.findByText(/低库存物料/)).toBeInTheDocument()
     expect(screen.getAllByTestId('echart')).toHaveLength(5)
   })
 })

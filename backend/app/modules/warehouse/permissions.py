@@ -169,4 +169,37 @@ PERMISSIONS: list[PermissionDef] = [
         action="update",
         description="修改仓库模块系统配置并触发审计",
     ),
+    # ── 出入库计划单（V2.0 分期A） ──
+    PermissionDef(
+        code="warehouse:plans:list",
+        name="查看出入库计划",
+        module="warehouse",
+        resource="plans",
+        action="list",
+        description="查看出入库计划单列表和详情",
+    ),
+    PermissionDef(
+        code="warehouse:plans:create",
+        name="创建出入库计划",
+        module="warehouse",
+        resource="plans",
+        action="create",
+        description="创建入库/出库计划单",
+    ),
+    PermissionDef(
+        code="warehouse:plans:update",
+        name="执行出入库计划",
+        module="warehouse",
+        resource="plans",
+        action="update",
+        description="开始执行计划单、从计划单生成出入库登记",
+    ),
+    PermissionDef(
+        code="warehouse:plans:cancel",
+        name="取消出入库计划",
+        module="warehouse",
+        resource="plans",
+        action="cancel",
+        description="取消未完成的出入库计划单（必填原因）",
+    ),
 ]

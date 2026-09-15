@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
@@ -13,6 +13,7 @@ from app.modules.warehouse.models import (
     WarehouseLocation,
     WarehouseMaterial,
     WarehouseMovement,
+    WarehouseMovementPlan,
     WarehouseStock,
     WarehouseStocktake,
     WarehouseStocktakeItem,
@@ -100,6 +101,9 @@ async def list_stocks(
     category: str | None = None,
     keyword: str | None = None,
     location_id: uuid.UUID | None = None,
+    batch_no: str | None = None,
+    expiry_from: date | None = None,
+    expiry_to: date | None = None,
 ) -> tuple[list[WarehouseStock], int]:
     stmt = select(WarehouseStock).where(WarehouseStock.is_deleted == False)  # noqa: E712
     if category:
@@ -121,6 +125,12 @@ async def list_stocks(
         )
     if location_id:
         stmt = stmt.where(WarehouseStock.location_id == location_id)
+    if batch_no:
+        stmt = stmt.where(WarehouseStock.batch_no.ilike(f"%{batch_no}%"))
+    if expiry_from:
+        stmt = stmt.where(WarehouseStock.expiry_date >= expiry_from)
+    if expiry_to:
+        stmt = stmt.where(WarehouseStock.expiry_date <= expiry_to)
     total = await db.scalar(
         select(func.count()).select_from(stmt.order_by(None).subquery())
     )
@@ -205,6 +215,7 @@ async def list_movements(
     source_type: str | None = None,
     keyword: str | None = None,
     location_id: uuid.UUID | None = None,
+    material_id: uuid.UUID | None = None,
     occurred_from: datetime | None = None,
     occurred_to: datetime | None = None,
 ) -> tuple[list[WarehouseMovement], int]:
@@ -225,6 +236,8 @@ async def list_movements(
         )
     if location_id:
         stmt = stmt.where(WarehouseMovement.location_id == location_id)
+    if material_id:
+        stmt = stmt.where(WarehouseMovement.material_id == material_id)
     if occurred_from:
         stmt = stmt.where(WarehouseMovement.occurred_at >= occurred_from)
     if occurred_to:
@@ -384,3 +397,59 @@ async def exists_stock_in_location(db: AsyncSession, location_id: uuid.UUID) -> 
         )
     )
     return int(await db.scalar(stmt) or 0) > 0
+
+
+# ── 计划单（V2.0 分期A） ──
+
+
+async def get_plan(db: AsyncSession, plan_id: uuid.UUID) -> WarehouseMovementPlan | None:
+    stmt = select(WarehouseMovementPlan).where(
+        WarehouseMovementPlan.id == plan_id,
+        WarehouseMovementPlan.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def list_plans(
+    db: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    direction: str | None = None,
+    status: str | None = None,
+    keyword: str | None = None,
+    planned_before: date | None = None,
+) -> tuple[list[WarehouseMovementPlan], int]:
+    stmt = select(WarehouseMovementPlan).where(WarehouseMovementPlan.is_deleted == False)  # noqa: E712
+    if direction:
+        stmt = stmt.where(WarehouseMovementPlan.direction == direction)
+    if status:
+        stmt = stmt.where(WarehouseMovementPlan.status == status)
+    if keyword:
+        like = f"%{keyword}%"
+        stmt = stmt.where(
+            or_(
+                WarehouseMovementPlan.plan_no.ilike(like),
+                WarehouseMovementPlan.material_code.ilike(like),
+                WarehouseMovementPlan.material_name.ilike(like),
+                WarehouseMovementPlan.batch_no.ilike(like),
+            )
+        )
+    if planned_before:
+        # 作业看板"今日"口径：预计日期不晚于截止日，或未填预计日期的都算
+        stmt = stmt.where(
+            or_(
+                WarehouseMovementPlan.planned_date.is_(None),
+                WarehouseMovementPlan.planned_date <= planned_before,
+            )
+        )
+    total = await db.scalar(
+        select(func.count()).select_from(stmt.order_by(None).subquery())
+    )
+    stmt = (
+        stmt.order_by(WarehouseMovementPlan.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = list((await db.execute(stmt)).scalars().all())
+    return items, int(total or 0)

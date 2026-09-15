@@ -147,16 +147,20 @@ export function MovementTable() {
   const handleSave = async () => {
     const values = await form.validateFields()
     const material = materialOptions.find(m => m.value === values.material_id)
-    const payload: MovementCreate = {
-      direction: values.direction,
-      source_type: values.source_type,
-      material_id: values.material_id,
-      batch_no: values.batch_no ?? '',
-      quantity: values.quantity,
-      location_id: values.location_id,
-      occurred_at: values.occurred_at ? (values.occurred_at as Dayjs).toISOString() : null,
-      remark: values.remark || null,
-    }
+      const payload: MovementCreate = {
+        direction: values.direction,
+        source_type: values.source_type,
+        material_id: values.material_id,
+        batch_no: values.batch_no ?? '',
+        quantity: values.quantity,
+        location_id: values.location_id,
+        occurred_at: values.occurred_at ? (values.occurred_at as Dayjs).toISOString() : null,
+        expiry_date:
+          values.direction === 'inbound' && values.expiry_date
+            ? (values.expiry_date as Dayjs).format('YYYY-MM-DD')
+            : null,
+        remark: values.remark || null,
+      }
     createMutation.mutate(payload, {
       onSuccess: () => {
         message.success(
@@ -349,6 +353,11 @@ export function MovementTable() {
             <Form.Item name="occurred_at" label="发生时间（默认当前）">
               <DatePicker showTime style={{ width: '100%' }} />
             </Form.Item>
+            {(watchedDirection ?? 'inbound') === 'inbound' && (
+              <Form.Item name="expiry_date" label="批次效期（入库）">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            )}
             <Form.Item name="remark" label="备注">
               <Input.TextArea rows={2} />
             </Form.Item>

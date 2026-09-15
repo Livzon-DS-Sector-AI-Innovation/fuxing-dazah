@@ -119,6 +119,7 @@ export interface StockRecord {
   location_id: string
   location_code: string
   location_name: string
+  expiry_date?: string | null
   quantity: number
 }
 
@@ -128,6 +129,9 @@ export interface StockFilter {
   category?: MaterialCategory
   keyword?: string
   location_id?: string
+  batch_no?: string
+  expiry_from?: string
+  expiry_to?: string
 }
 
 // ── 出入库 ──
@@ -159,10 +163,12 @@ export interface MovementCreate {
   quantity: number
   location_id: string
   occurred_at?: string | null
+  expiry_date?: string | null
   remark?: string | null
 }
 
 export interface MovementFilter {
+  material_id?: string | null
   page?: number
   page_size?: number
   direction?: MovementDirection
@@ -572,4 +578,49 @@ export interface DashboardTodos {
     unit: string
     occurred_at: string
   }[]
+}
+
+// ==================== 出入库计划单（V2.0 分期A） ====================
+
+export type PlanDirection = 'inbound' | 'outbound'
+export type PlanStatus = 'planned' | 'in_progress' | 'completed' | 'cancelled'
+
+export interface MovementPlanRecord {
+  id: string
+  plan_no: string
+  direction: PlanDirection
+  source_type: string
+  material_id: string
+  material_code: string
+  material_name: string
+  batch_no: string
+  quantity: number
+  location_id: string
+  location_code: string
+  location_name: string
+  planned_date?: string | null
+  status: PlanStatus
+  cancel_reason?: string | null
+  movement_id?: string | null
+  remark?: string | null
+}
+
+export interface MovementPlanFilter {
+  direction?: PlanDirection
+  status?: PlanStatus
+  keyword?: string
+  planned_before?: string
+  page?: number
+  page_size?: number
+}
+
+export interface MovementPlanCreateInput {
+  direction: PlanDirection
+  source_type: string
+  material_id: string
+  batch_no?: string
+  quantity: number
+  location_id: string
+  planned_date?: string | null
+  remark?: string | null
 }
