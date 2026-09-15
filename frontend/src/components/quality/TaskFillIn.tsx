@@ -367,7 +367,7 @@ export default function TaskFillIn() {
         onOk={handleCreate}
         okText="创建"
         confirmLoading={creating}
-        width={560}
+        width="min(560px, 92vw)"
       >
         <Form form={createForm} layout="vertical" className="mt-4">
           <Form.Item name="product_name" label="产品名称" rules={[{ required: true, message: '请选择产品' }]}>

@@ -606,3 +606,13 @@ export async function markUnqualifiedEventHandled(
   if (!res.ok) throw new Error('更新处理状态失败')
   return res.json()
 }
+
+export async function exportUnqualifiedEvents(handled?: boolean): Promise<Blob> {
+  const params = new URLSearchParams()
+  if (handled !== undefined) params.set('handled', String(handled))
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/unqualified-events/export?${params.toString()}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  return res.blob()
+}

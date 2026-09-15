@@ -686,6 +686,15 @@ async def generate_task_report(
             "file_no": split["doc"].file_no,
             "template_path": template,
         })
+    # COA 生成成功后群内提醒（fire-and-forget）
+    if generated:
+        import asyncio as _asyncio
+
+        from app.modules.quality.feishu.fill_service import notify_coa_generated
+
+        _asyncio.create_task(notify_coa_generated(
+            split["batch_number"], split["product_name"], [g["file_no"] for g in generated],
+        ))
     return success_response(
         data=generated,
         message=f"已按标准文件逐份生成 {len(generated)} 份 COA",
@@ -1188,6 +1197,38 @@ async def list_test_task_endpoint(
     return paginated_response(
         data=[it.model_dump(mode="json") for it in items],
         page=page, page_size=page_size, total=total,
+    )
+
+
+@router.get("/unqualified-events/export", summary="导出不合格台账 CSV")
+async def export_unqualified_events_endpoint(
+    handled: bool | None = Query(default=None, description="按处理状态过滤"),
+    db: AsyncSession = Depends(get_db),
+):
+    import csv
+    import io as _io
+
+    items = await list_unqualified_events(db, handled=handled, limit=5000)
+    buf = _io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["时间", "产品", "批号", "SOP号", "项目", "实测值", "限度", "来源", "状态"])
+    for e in items:
+        writer.writerow([
+            e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
+            e.product_name,
+            e.batch_number,
+            e.sop_no or "",
+            e.item_name,
+            e.result_value if e.result_value is not None else "",
+            e.limit_text or "",
+            e.source,
+            "已处理" if e.handled else "待处理",
+        ])
+    data = "﻿" + buf.getvalue()  # BOM：Excel 正确识别 UTF-8 中文
+    return StreamingResponse(
+        BytesIO(data.encode("utf-8")),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="unqualified_events.csv"'},
     )
 
 

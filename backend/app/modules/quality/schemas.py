@@ -166,6 +166,7 @@ class ProductSummaryOut(BaseModel):
     total: int
     pass_count: int
     fail_count: int
+    in_progress: int = 0
 
 
 class HistorySummaryOut(BaseModel):
@@ -175,6 +176,7 @@ class HistorySummaryOut(BaseModel):
     pass_count: int
     fail_count: int
     pass_rate: float
+    in_progress: int = 0
     products: list[ProductSummaryOut]
 
 

@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Table, Tag, Space, Button, App, Segmented, Popconfirm } from 'antd'
-import { CheckOutlined, UndoOutlined } from '@ant-design/icons'
+import { CheckOutlined, UndoOutlined, DownloadOutlined } from '@ant-design/icons'
 import { usePermission } from '@/hooks/usePermission'
 import type { UnqualifiedEvent } from '@/types/quality'
-import { fetchUnqualifiedEvents, markUnqualifiedEventHandled } from '@/actions/quality'
+import { fetchUnqualifiedEvents, markUnqualifiedEventHandled, exportUnqualifiedEvents } from '@/actions/quality'
 
 const SOURCE_LABEL: Record<string, string> = {
   manual: '机器人填报',
@@ -85,7 +85,7 @@ export default function UnqualifiedEvents() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <Segmented
           value={filter}
           onChange={(v) => setFilter(v as typeof filter)}
@@ -95,6 +95,19 @@ export default function UnqualifiedEvents() {
             { label: '全部', value: 'all' },
           ]}
         />
+        <Button icon={<DownloadOutlined />} onClick={async () => {
+          try {
+            const blob = await exportUnqualifiedEvents(filter === 'all' ? undefined : filter === 'done')
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = '不合格台账.csv'
+            a.click()
+            URL.revokeObjectURL(url)
+          } catch (err: any) {
+            message.error(err.message || '导出失败')
+          }
+        }}>导出 CSV</Button>
       </Space>
       <Table
         rowKey="id"

@@ -132,6 +132,7 @@ export interface ProductSummary {
   total: number
   pass_count: number
   fail_count: number
+  in_progress: number
 }
 
 export interface HistorySummary {
@@ -139,6 +140,7 @@ export interface HistorySummary {
   pass_count: number
   fail_count: number
   pass_rate: number
+  in_progress: number
   products: ProductSummary[]
 }
 

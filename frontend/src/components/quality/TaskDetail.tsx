@@ -361,7 +361,7 @@ export default function TaskDetail({ id }: { id: string }) {
       </Space>
 
       <Card size="small">
-        <Descriptions size="small" column={4}>
+        <Descriptions size="small" column={{ xs: 1, sm: 2, md: 4 }}>
           <Descriptions.Item label="产品">{detail.product_name}</Descriptions.Item>
           <Descriptions.Item label="批号">{detail.batch_number}</Descriptions.Item>
           <Descriptions.Item label="生产日期">{detail.production_date || '-'}</Descriptions.Item>

@@ -1059,7 +1059,13 @@ class TestTaskService:
         elif task.status == "pending_review" and target == "completed":
             pass  # 专员审核通过
         elif task.status == "pending_review" and target == "in_progress":
-            pass  # 专员驳回重填
+            # 专员驳回重填：飞书提醒检验员（fire-and-forget）
+            try:
+                from app.modules.quality.feishu.fill_service import notify_rejected
+
+                asyncio.create_task(notify_rejected(str(task_id)))
+            except Exception:
+                logger.exception("驳回通知推送失败")
         elif task.status == "completed" and target == "in_progress":
             pass  # completed → in_progress 重新打开
         else:

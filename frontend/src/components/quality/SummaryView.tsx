@@ -42,6 +42,7 @@ export default function SummaryView() {
   const productColumns = [
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name' },
     { title: '检验次数', dataIndex: 'total', key: 'total' },
+    { title: '在途批次', dataIndex: 'in_progress', key: 'in_progress' },
     {
       title: '合格率', key: 'pass_rate',
       render: (_: any, r: ProductSummary) =>
@@ -73,23 +74,29 @@ export default function SummaryView() {
       {summary && (
         <>
           <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col span={6}>
+            <Col xs={12} sm={12} md={6}>
               <Card size="small">
                 <Statistic title="检验总次数" value={summary.total} prefix={<BarChartOutlined />} />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col xs={12} sm={12} md={6}>
               <Card size="small">
                 <Statistic title="合格率" value={summary.pass_rate}
                   suffix="%" valueStyle={{ color: summary.pass_rate >= 95 ? '#52c41a' : '#faad14' }}
                   prefix={<CheckCircleOutlined />} />
               </Card>
             </Col>
-            <Col span={6}>
+            <Col xs={12} sm={12} md={6}>
               <Card size="small">
                 <Statistic title="不合格" value={summary.fail_count}
                   valueStyle={{ color: summary.fail_count > 0 ? '#ff4d4f' : '#52c41a' }}
                   prefix={<CloseCircleOutlined />} />
+              </Card>
+            </Col>
+            <Col xs={12} sm={12} md={6}>
+              <Card size="small">
+                <Statistic title="在途批次（填报中/待复核）" value={summary.in_progress}
+                  prefix={<WarningOutlined />} />
               </Card>
             </Col>
           </Row>

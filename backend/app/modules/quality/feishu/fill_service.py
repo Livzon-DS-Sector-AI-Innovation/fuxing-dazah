@@ -969,6 +969,60 @@ async def notify_unqualified(
         await send_alert_post(chat_id, QUALITY_FEISHU_ALERT_USER_IDS, title, lines)
 
 
+def _frontend_task_link(task_id: str) -> str:
+    """系统任务详情页链接（推送消息附带，飞书自动识别可点）。"""
+    from app.core.config import get_settings
+
+    base = (get_settings().FRONTEND_URL or "http://localhost:3000").rstrip("/")
+    return f"{base}/quality/task/{task_id}"
+
+
+async def notify_rejected(task_id: str) -> None:
+    """审核驳回后提醒（fire-and-forget，通知群内检验员重新填报）。"""
+    from app.core.database import async_session_factory
+    from app.modules.quality.feishu.client import (
+        QUALITY_FEISHU_CHAT_IDS,
+        feishu_configured,
+    )
+    from app.modules.quality.feishu.message import send_chat_text
+    from app.modules.quality.repository import get_test_task
+
+    if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
+        return
+    task = None
+    for _ in range(10):
+        async with async_session_factory() as db:
+            task = await get_test_task(db, uuid.UUID(task_id))
+        if task:
+            break
+        await asyncio.sleep(0.5)
+    if not task or task.status != "in_progress":
+        return
+    for chat_id in QUALITY_FEISHU_CHAT_IDS:
+        await send_chat_text(
+            chat_id,
+            f"🔁 批号 {task.batch_number}（{task.product_name}）已被驳回，请重新填报\n"
+            f"任务详情：{_frontend_task_link(task_id)}",
+        )
+
+
+async def notify_coa_generated(batch: str, product_name: str, file_nos: list[str]) -> None:
+    """COA 生成成功后群内提醒（fire-and-forget）。"""
+    from app.modules.quality.feishu.client import (
+        QUALITY_FEISHU_CHAT_IDS,
+        feishu_configured,
+    )
+    from app.modules.quality.feishu.message import send_chat_text
+
+    if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
+        return
+    for chat_id in QUALITY_FEISHU_CHAT_IDS:
+        await send_chat_text(
+            chat_id,
+            f"✅ 批号 {batch}（{product_name}）已生成 {len(file_nos)} 份 COA：{'、'.join(file_nos)}",
+        )
+
+
 async def notify_pending_review(task_id: str) -> None:
     """任务自动进入待复核后提醒配置群（fire-and-forget，专员进系统审核）。"""
     from app.core.database import async_session_factory
