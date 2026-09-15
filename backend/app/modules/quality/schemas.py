@@ -318,6 +318,12 @@ class TestTaskStatusUpdate(BaseModel):
     status: Literal["in_progress", "pending_review", "completed", "void"]
 
 
+class TestTaskReviewRequest(BaseModel):
+    """复核通过请求（双人复核：两名不同复核人通过后任务完成）。"""
+
+    comment: str | None = Field(default=None, max_length=300, description="复核备注")
+
+
 class TestTaskReportDateUpdate(BaseModel):
     """补录/修改出报日期（传 null 清空）。"""
 

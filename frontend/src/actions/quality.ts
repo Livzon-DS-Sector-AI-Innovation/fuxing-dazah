@@ -14,6 +14,8 @@ import type {
   TestTaskStatus,
   SopSummaryItem,
   UnqualifiedEvent,
+  TaskAttachment,
+  TaskReviewRecord,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -615,4 +617,64 @@ export async function exportUnqualifiedEvents(handled?: boolean): Promise<Blob> 
   })
   if (!res.ok) throw new Error('导出失败')
   return res.blob()
+}
+
+// ─── 任务原始证据附件 / 双人复核 ───
+
+export async function fetchTaskAttachments(taskId: string): Promise<{ data: TaskAttachment[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/attachments`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取附件列表失败')
+  return res.json()
+}
+
+export async function uploadTaskAttachment(taskId: string, formData: FormData): Promise<{ message: string; data: { id: string; filename: string } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/attachments`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '上传附件失败')
+  }
+  return res.json()
+}
+
+export async function downloadTaskAttachment(taskId: string, attachmentId: string): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/attachments/${attachmentId}/download`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('下载附件失败')
+  return res.blob()
+}
+
+export async function deleteTaskAttachment(taskId: string, attachmentId: string): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/attachments/${attachmentId}`, {
+    method: 'DELETE', headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('删除附件失败')
+  return res.json()
+}
+
+export async function fetchTaskReviews(taskId: string): Promise<{ data: TaskReviewRecord[] }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/reviews`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取复核记录失败')
+  return res.json()
+}
+
+export async function approveTaskReview(taskId: string, comment?: string): Promise<{
+  message: string
+  data: TestTaskDetail & { approved_count: number; review_required: number }
+}> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/${taskId}/review`, {
+    method: 'POST', headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comment }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '复核失败')
+  }
+  return res.json()
 }

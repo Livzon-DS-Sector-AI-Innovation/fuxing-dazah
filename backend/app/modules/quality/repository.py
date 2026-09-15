@@ -15,6 +15,8 @@ from app.modules.quality.models import (
     LcTemplateConfig,
     QualityStandardDocument,
     QualityStandardItem,
+    QualityTaskAttachment,
+    QualityTaskReview,
     QualityTestResult,
     QualityTestTask,
     QualityUnqualifiedEvent,
@@ -856,6 +858,78 @@ async def list_unqualified_events(
         stmt = stmt.where(QualityUnqualifiedEvent.handled == handled)
     stmt = stmt.order_by(QualityUnqualifiedEvent.created_at.desc()).limit(limit)
     return list((await db.execute(stmt)).scalars())
+
+
+async def create_task_attachment(
+    db: AsyncSession, data: dict[str, Any]
+) -> QualityTaskAttachment:
+    """创建任务附件记录。INSERT 后 flush 返回。"""
+    att = QualityTaskAttachment(**data)
+    db.add(att)
+    await db.flush()
+    return att
+
+
+async def list_task_attachments(
+    db: AsyncSession, task_id: uuid.UUID
+) -> list[QualityTaskAttachment]:
+    """任务全部未删除附件，按时间倒序。"""
+    stmt = select(QualityTaskAttachment).where(
+        QualityTaskAttachment.task_id == task_id,
+        QualityTaskAttachment.is_deleted == False,  # noqa: E712
+    ).order_by(QualityTaskAttachment.created_at.desc())
+    return list((await db.execute(stmt)).scalars())
+
+
+async def get_task_attachment(
+    db: AsyncSession, attachment_id: uuid.UUID
+) -> QualityTaskAttachment | None:
+    """按 ID 查附件（过滤软删）。"""
+    stmt = select(QualityTaskAttachment).where(
+        QualityTaskAttachment.id == attachment_id,
+        QualityTaskAttachment.is_deleted == False,  # noqa: E712
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def delete_task_attachment(
+    db: AsyncSession, attachment_id: uuid.UUID
+) -> QualityTaskAttachment | None:
+    """软删除附件并返回其对象键（供清理存储）。"""
+    att = await get_task_attachment(db, attachment_id)
+    if not att:
+        return None
+    att.is_deleted = True
+    await db.flush()
+    return att
+
+
+async def create_task_review(
+    db: AsyncSession, task_id: uuid.UUID, reviewer_id: uuid.UUID, comment: str | None
+) -> QualityTaskReview:
+    """记录一次复核通过。INSERT 后 flush 返回。"""
+    review = QualityTaskReview(task_id=task_id, reviewer_id=reviewer_id, comment=comment)
+    db.add(review)
+    await db.flush()
+    return review
+
+
+async def list_task_reviews(db: AsyncSession, task_id: uuid.UUID) -> list[QualityTaskReview]:
+    """任务全部未删除复核记录。"""
+    stmt = select(QualityTaskReview).where(
+        QualityTaskReview.task_id == task_id,
+        QualityTaskReview.is_deleted == False,  # noqa: E712
+    ).order_by(QualityTaskReview.created_at)
+    return list((await db.execute(stmt)).scalars())
+
+
+async def soft_delete_task_reviews(db: AsyncSession, task_id: uuid.UUID) -> None:
+    """软删任务全部复核记录（重新进入待复核时清空上一轮）。"""
+    reviews = await list_task_reviews(db, task_id)
+    for r in reviews:
+        r.is_deleted = True
+    if reviews:
+        await db.flush()
 
 
 async def get_standard_item_doc_map(

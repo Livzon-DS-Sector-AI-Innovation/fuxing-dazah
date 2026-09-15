@@ -22,6 +22,7 @@ from app.modules.quality.repository import (
     count_report_records_since,
     create_impurities,
     create_inspection_record,
+    create_task_review,
     create_test_results,
     create_test_task,
     create_unqualified_event,
@@ -39,9 +40,11 @@ from app.modules.quality.repository import (
     list_coa_bindings_by_docs,
     list_standard_documents_by_product,
     list_standard_items,
+    list_task_reviews,
     list_task_standard_document_ids,
     list_test_results,
     list_test_tasks,
+    soft_delete_task_reviews,
     update_test_results_fill,
     update_test_task,
     update_test_task_report_date,
@@ -664,6 +667,8 @@ class TestTaskService:
             rows = await list_test_results(db, task_id)
         if not rows or any(r.is_pass is None for r in rows):
             return False
+        # 新一轮复核：清空上一轮复核记录
+        await soft_delete_task_reviews(db, task_id)
         await update_test_task(db, task_id, status="pending_review")
         try:
             from app.modules.quality.feishu.fill_service import notify_pending_review
@@ -672,6 +677,39 @@ class TestTaskService:
         except Exception:
             logger.exception("待复核提醒推送失败")
         return True
+
+    # ── 双人复核 ──
+
+    REVIEW_REQUIRED_COUNT = 2
+
+    @staticmethod
+    async def add_review(
+        db: AsyncSession,
+        task_id: uuid.UUID,
+        reviewer_id: uuid.UUID,
+        comment: str | None = None,
+    ) -> tuple[TestTaskDetail, int, bool]:
+        """复核通过：记录复核人；两名不同复核人通过后任务自动完成。
+
+        返回 (任务详情, 已通过人数, 是否已转为完成)。
+        """
+        task = await get_test_task(db, task_id)
+        if not task:
+            raise AppException(status_code=404, detail="检验任务不存在")
+        if task.status != "pending_review":
+            raise AppException(status_code=400, detail=f"任务状态为 {task.status}，不可复核")
+        reviews = await list_task_reviews(db, task_id)
+        if any(r.reviewer_id == reviewer_id for r in reviews):
+            raise AppException(status_code=400, detail="你已复核过该任务，请等待另一位复核人复核")
+        await create_task_review(db, task_id, reviewer_id, comment)
+        reviews = await list_task_reviews(db, task_id)
+        approved = len({r.reviewer_id for r in reviews})
+        advanced = False
+        if approved >= TestTaskService.REVIEW_REQUIRED_COUNT:
+            await update_test_task(db, task_id, status="completed")
+            advanced = True
+        fresh = await get_test_task(db, task_id)
+        return TestTaskService._to_detail(fresh, await list_test_results(db, task_id)), approved, advanced
 
     # ── 不合格事件台账 ──
 
@@ -1057,7 +1095,11 @@ class TestTaskService:
                     detail=f"存在 {len(unfilled)} 项未判定，无法进入待复核：{'、'.join(unfilled[:5])}",
                 )
         elif task.status == "pending_review" and target == "completed":
-            pass  # 专员审核通过（复核时可直接改结果，无需驳回流程）
+            # 双人复核：完成只能经复核接口（add_review）达成，禁止直接改状态
+            raise AppException(
+                status_code=400,
+                detail="请通过复核流程完成（需两名不同复核人通过）",
+            )
         elif task.status == "completed" and target == "in_progress":
             pass  # completed → in_progress 重新打开
         else:

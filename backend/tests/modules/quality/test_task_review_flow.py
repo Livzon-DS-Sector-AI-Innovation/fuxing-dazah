@@ -69,13 +69,44 @@ async def test_no_advance_when_unfilled(db_session):
     assert fresh.status == "in_progress"
 
 
-async def test_review_approve(db_session):
+async def test_review_requires_two_distinct_reviewers(db_session):
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
-    detail = await TestTaskService.update_status(
-        db_session, task.id, TestTaskStatusUpdate(status="completed")
+    reviewer_a = uuid.uuid4()
+    # 第一人通过：仍待复核
+    detail1, approved1, advanced1 = await TestTaskService.add_review(
+        db_session, task.id, reviewer_a, "首次复核"
     )
-    assert detail.status == "completed"
+    assert approved1 == 1 and advanced1 is False
+    assert detail1.status == "pending_review"
+    # 同一人重复通过：拒绝
+    with pytest.raises(AppException):
+        await TestTaskService.add_review(db_session, task.id, reviewer_a, "再来一次")
+    # 第二人（不同）通过：转完成
+    detail2, approved2, advanced2 = await TestTaskService.add_review(
+        db_session, task.id, uuid.uuid4(), "复核通过"
+    )
+    assert approved2 == 2 and advanced2 is True
+    assert detail2.status == "completed"
+
+
+async def test_review_same_reviewer_not_counted(db_session):
+    task = await _make_task(db_session)
+    await TestTaskService.auto_advance_pending_review(db_session, task.id)
+    reviewer = uuid.uuid4()
+    await TestTaskService.add_review(db_session, task.id, reviewer, None)
+    with pytest.raises(AppException):
+        await TestTaskService.add_review(db_session, task.id, reviewer, None)
+
+
+async def test_direct_complete_from_review_rejected(db_session):
+    """完成只能经双人复核接口，直接改状态应被拒绝。"""
+    task = await _make_task(db_session)
+    await TestTaskService.auto_advance_pending_review(db_session, task.id)
+    with pytest.raises(AppException):
+        await TestTaskService.update_status(
+            db_session, task.id, TestTaskStatusUpdate(status="completed")
+        )
 
 
 async def test_reject_transition_removed(db_session):
@@ -91,7 +122,8 @@ async def test_reject_transition_removed(db_session):
 async def test_completed_reopen(db_session):
     task = await _make_task(db_session)
     await TestTaskService.auto_advance_pending_review(db_session, task.id)
-    await TestTaskService.update_status(db_session, task.id, TestTaskStatusUpdate(status="completed"))
+    await TestTaskService.add_review(db_session, task.id, uuid.uuid4(), None)
+    await TestTaskService.add_review(db_session, task.id, uuid.uuid4(), None)
     detail = await TestTaskService.update_status(
         db_session, task.id, TestTaskStatusUpdate(status="in_progress")
     )

@@ -36,20 +36,26 @@ from app.modules.quality.repository import (
     create_report_record,
     create_standard_document,
     create_standard_item,
+    create_task_attachment,
     delete_coa_binding,
     delete_inspection_record,
     delete_standard_document,
     delete_standard_item,
+    delete_task_attachment,
     get_product_names,
     get_report_record,
     get_standard_document,
     get_summary_by_product,
+    get_task_attachment,
+    get_test_task,
     get_test_task_by_batch,
     list_coa_bindings,
     list_inspection_records,
     list_report_records,
     list_standard_documents,
     list_standard_items,
+    list_task_attachments,
+    list_task_reviews,
     list_unqualified_events,
     update_standard_document,
     update_standard_item,
@@ -70,6 +76,7 @@ from app.modules.quality.schemas import (
     TestResultsUpdate,
     TestTaskCreate,
     TestTaskReportDateUpdate,
+    TestTaskReviewRequest,
     TestTaskStatusUpdate,
     UploadLcResponse,
 )
@@ -1321,6 +1328,21 @@ async def parse_lc_into_task_endpoint(
     detail, filled, unmatched = await test_task_service.parse_lc_into_task(
         db, task_id, content, filename
     )
+    # 原始计算表自动归档为任务附件（电子审核原始证据）
+    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{filename}"
+    quality_storage.upload_attachment(
+        object_key, content,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    await create_task_attachment(db, {
+        "task_id": task_id,
+        "filename": filename,
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "object_key": object_key,
+        "size": len(content),
+        "source": "parse",
+        "remark": "液相计算表（上传解析自动归档）",
+    })
     msg = f"解析映射完成：已填入 {len(filled)} 项"
     if filled:
         msg += f"（{'、'.join(filled)}）"
@@ -1329,7 +1351,127 @@ async def parse_lc_into_task_endpoint(
     return success_response(data=detail.model_dump(mode="json"), message=msg)
 
 
-@router.put("/tasks/{task_id}/status", summary="任务状态流转（审核通过/驳回/重开/作废）")
+@router.post("/tasks/{task_id}/attachments", summary="上传任务原始证据附件（计算表/图谱等）")
+async def upload_task_attachment_endpoint(
+    task_id: uuid.UUID,
+    file: UploadFile = File(...),
+    remark: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    task = await get_test_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="检验任务不存在")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="文件名为空")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="超过20MB")
+    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{file.filename}"
+    quality_storage.upload_attachment(object_key, content, file.content_type or "application/octet-stream")
+    att = await create_task_attachment(db, {
+        "task_id": task_id,
+        "filename": file.filename,
+        "content_type": file.content_type or "application/octet-stream",
+        "object_key": object_key,
+        "size": len(content),
+        "uploaded_by": user.id,
+        "source": "manual",
+        "remark": remark or None,
+    })
+    return success_response(
+        data={"id": str(att.id), "filename": att.filename}, message="附件已上传", status_code=201,
+    )
+
+
+@router.get("/tasks/{task_id}/attachments", summary="任务原始证据附件列表")
+async def list_task_attachments_endpoint(
+    task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    items = await list_task_attachments(db, task_id)
+    return success_response(data=[
+        {
+            "id": str(a.id),
+            "filename": a.filename,
+            "content_type": a.content_type,
+            "size": a.size,
+            "source": a.source,
+            "remark": a.remark,
+            "uploaded_by": str(a.uploaded_by) if a.uploaded_by else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in items
+    ])
+
+
+@router.get("/tasks/{task_id}/attachments/{attachment_id}/download", summary="下载任务附件")
+async def download_task_attachment_endpoint(
+    task_id: uuid.UUID, attachment_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+):
+    att = await get_task_attachment(db, attachment_id)
+    if not att or att.task_id != task_id:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    data = quality_storage.read_attachment(att.object_key)
+    if data is None:
+        raise HTTPException(status_code=404, detail="附件文件已丢失")
+    encoded = quote(att.filename)
+    return StreamingResponse(
+        BytesIO(data),
+        media_type=att.content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{att.filename}"; filename*=UTF-8\'\'{encoded}'},
+    )
+
+
+@router.delete("/tasks/{task_id}/attachments/{attachment_id}", summary="删除任务附件（软删除）")
+async def delete_task_attachment_endpoint(
+    task_id: uuid.UUID, attachment_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:review")),
+) -> JSONResponse:
+    att = await delete_task_attachment(db, attachment_id)
+    if not att or att.task_id != task_id:
+        raise HTTPException(status_code=404, detail="附件不存在")
+    quality_storage.delete_attachment(att.object_key)
+    return success_response(message="已删除")
+
+
+@router.post("/tasks/{task_id}/review", summary="复核通过（双人复核：两名不同复核人通过后任务完成）")
+async def review_task_endpoint(
+    task_id: uuid.UUID,
+    payload: TestTaskReviewRequest = Body(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("quality:task:review")),
+) -> JSONResponse:
+    detail, approved_count, advanced = await test_task_service.add_review(
+        db, task_id, user.id, payload.comment if payload else None,
+    )
+    data = detail.model_dump(mode="json")
+    data["approved_count"] = approved_count
+    data["review_required"] = test_task_service.REVIEW_REQUIRED_COUNT
+    if advanced:
+        msg = f"复核通过（{approved_count}/{test_task_service.REVIEW_REQUIRED_COUNT}），任务已完成"
+    else:
+        msg = f"复核已记录（{approved_count}/{test_task_service.REVIEW_REQUIRED_COUNT}），等待另一位复核人"
+    return success_response(data=data, message=msg)
+
+
+@router.get("/tasks/{task_id}/reviews", summary="任务复核记录")
+async def list_task_reviews_endpoint(
+    task_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    reviews = await list_task_reviews(db, task_id)
+    return success_response(data=[
+        {
+            "reviewer_id": str(r.reviewer_id),
+            "comment": r.comment,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in reviews
+    ])
+
+
+@router.put("/tasks/{task_id}/status", summary="任务状态流转（重开/作废）")
 async def update_test_task_status_endpoint(
     task_id: uuid.UUID,
     payload: TestTaskStatusUpdate = Body(...),

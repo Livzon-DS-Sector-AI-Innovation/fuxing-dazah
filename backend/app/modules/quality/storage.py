@@ -96,6 +96,42 @@ def ensure_template_local(rel_path: str) -> Path:
 
 PRODUCTS_KEY = "config/products.json"
 
+ATTACH_PREFIX = "attachments/"
+ATTACH_LOCAL_DIR = BASE_DIR / "质量附件"
+
+
+def upload_attachment(object_key: str, data: bytes, content_type: str) -> None:
+    """任务原始证据附件：本地副本总是写（MinIO 未启用时的兜底），MinIO 启用时同步上传。"""
+    local = ATTACH_LOCAL_DIR / object_key
+    local.parent.mkdir(parents=True, exist_ok=True)
+    local.write_bytes(data)
+    if s3.is_enabled():
+        try:
+            s3.upload_object("quality", ATTACH_PREFIX + object_key, data, len(data), content_type)
+        except Exception:
+            logger.exception("附件同步 MinIO 失败: %s", object_key)
+
+
+def read_attachment(object_key: str) -> bytes | None:
+    """读取任务附件（MinIO 优先，本地副本兜底）；不存在返回 None。"""
+    if s3.is_enabled():
+        result = s3.get_object("quality", ATTACH_PREFIX + object_key)
+        if result:
+            return result[0]
+    local = ATTACH_LOCAL_DIR / object_key
+    return local.read_bytes() if local.is_file() else None
+
+
+def delete_attachment(object_key: str) -> None:
+    """删除任务附件（MinIO 对象 + 本地副本）。"""
+    if s3.is_enabled():
+        try:
+            s3.delete_object("quality", ATTACH_PREFIX + object_key)
+        except Exception:
+            logger.exception("附件 MinIO 删除失败: %s", object_key)
+    local = ATTACH_LOCAL_DIR / object_key
+    local.unlink(missing_ok=True)
+
 
 def upload_products(data: bytes) -> None:
     """产品代码映射配置同步到 MinIO（未启用则跳过）。"""

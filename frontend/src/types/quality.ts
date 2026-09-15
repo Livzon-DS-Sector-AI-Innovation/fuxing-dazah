@@ -198,6 +198,23 @@ export interface TestTaskDetail {
   results: TestResultItem[]
 }
 
+export interface TaskAttachment {
+  id: string
+  filename: string
+  content_type: string
+  size: number
+  source: string
+  remark: string | null
+  uploaded_by: string | null
+  created_at: string | null
+}
+
+export interface TaskReviewRecord {
+  reviewer_id: string
+  comment: string | null
+  created_at: string | null
+}
+
 export interface UnqualifiedEvent {
   id: string
   task_id: string | null

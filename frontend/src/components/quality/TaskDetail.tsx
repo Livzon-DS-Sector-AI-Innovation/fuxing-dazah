@@ -11,11 +11,13 @@ import {
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
-import type { TestResultItem, TestTaskDetail } from '@/types/quality'
+import type { TestResultItem, TestTaskDetail, TaskAttachment, TaskReviewRecord } from '@/types/quality'
 import {
   fetchTestTaskDetail, updateTestResults, addTestResult,
   updateTestTaskStatus, deleteTestResult, parseLcIntoTask,
   generateTaskReports, downloadReportFile,
+  fetchTaskAttachments, uploadTaskAttachment, downloadTaskAttachment, deleteTaskAttachment,
+  fetchTaskReviews, approveTaskReview,
 } from '@/actions/quality'
 
 const { Text } = Typography
@@ -65,11 +67,21 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const [generatingCoa, setGeneratingCoa] = useState(false)
 
+  const [attachments, setAttachments] = useState<TaskAttachment[]>([])
+  const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
+  const [attPreview, setAttPreview] = useState<{ filename: string; url: string; type: string } | null>(null)
+
   const loadDetail = useCallback(async () => {
     setLoading(true)
     try {
       const d = await fetchTestTaskDetail(id)
       setDetail(d)
+      const [atts, revs] = await Promise.all([
+        fetchTaskAttachments(id),
+        fetchTaskReviews(id),
+      ])
+      setAttachments(atts.data || [])
+      setReviews(revs.data || [])
     } catch (err: any) {
       message.error(err.message || '加载失败')
     } finally {
@@ -224,6 +236,72 @@ export default function TaskDetail({ id }: { id: string }) {
     }
   }
 
+  // 附件上传：原始证据（计算表/图谱 PDF/图片等）持久化归档，随时调取
+  const handleAttUpload = async (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    try {
+      await uploadTaskAttachment(id, formData)
+      message.success('附件已归档')
+      loadDetail()
+    } catch (err: any) {
+      message.error(err.message || '上传失败')
+    }
+    return false
+  }
+
+  const handleAttDownload = async (att: TaskAttachment) => {
+    try {
+      const blob = await downloadTaskAttachment(id, att.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = att.filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      message.error(err.message || '下载失败')
+    }
+  }
+
+  const handleAttPreview = async (att: TaskAttachment) => {
+    try {
+      const blob = await downloadTaskAttachment(id, att.id)
+      setAttPreview({ filename: att.filename, url: URL.createObjectURL(blob), type: att.content_type })
+    } catch (err: any) {
+      message.error(err.message || '预览失败')
+    }
+  }
+
+  const handleAttDelete = async (att: TaskAttachment) => {
+    try {
+      await deleteTaskAttachment(id, att.id)
+      message.success('已删除')
+      loadDetail()
+    } catch (err: any) {
+      message.error(err.message || '删除失败')
+    }
+  }
+
+  // 双人复核：两名不同复核人通过后任务完成
+  const handleApprove = async (thenGenerateCoa: boolean) => {
+    try {
+      const res = await approveTaskReview(id)
+      const count = res.data?.approved_count ?? 0
+      const required = res.data?.review_required ?? 2
+      if (res.data?.status === 'completed') {
+        message.success(`复核通过（${count}/${required}），任务已完成`)
+        await loadDetail()
+        if (thenGenerateCoa) await handleGenerateCoa()
+      } else {
+        message.info(`复核已记录（${count}/${required}），等待另一位复核人`)
+        await loadDetail()
+      }
+    } catch (err: any) {
+      message.error(err.message || '复核失败')
+    }
+  }
+
   const renderFillCell = (row: TestResultItem) => {
     const draft = edits[row.id]
     if (row.judge_mode === 'auto') {
@@ -325,14 +403,11 @@ export default function TaskDetail({ id }: { id: string }) {
         )}
         {detail.status === 'pending_review' && canReview && (
           <>
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleStatus('completed', '审核通过，任务已完成')}>审核通过</Button>
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={() => handleApprove(false)}>复核通过（{Math.min(reviews.length, 2)}/2）</Button>
             {hasPermission('quality:report:generate') && (
               <Button type="primary" icon={<FileTextOutlined />} loading={generatingCoa}
-                onClick={async () => {
-                  await handleStatus('completed', '审核通过，任务已完成')
-                  await handleGenerateCoa()
-                }}>
-                审核通过并生成 COA
+                onClick={() => handleApprove(true)}>
+                复核通过并生成 COA
               </Button>
             )}
             <Popconfirm title="确认作废该任务?" onConfirm={() => handleStatus('void', '任务已作废')}>
@@ -386,6 +461,57 @@ export default function TaskDetail({ id }: { id: string }) {
         />
       </Card>
 
+      <Card size="small" title="🔎 原始证据（计算表 / 电子图谱，持久化归档随时调取）">
+        <Space style={{ marginBottom: 12 }} wrap>
+          {(canFill || canReview) && (
+            <Upload showUploadList={false} beforeUpload={handleAttUpload}>
+              <Button icon={<UploadOutlined />}>上传原始证据</Button>
+            </Upload>
+          )}
+          {detail.status === 'pending_review' && (
+            <Text type="warning">
+              复核进度：{Math.min(reviews.length, 2)}/2 人已通过
+              {reviews.length > 0 && `（复核时间：${reviews.map(r => r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-').join('；')}）`}
+            </Text>
+          )}
+        </Space>
+        {attachments.length === 0 ? (
+          <Text type="secondary">暂无附件。上传计算表解析时会自动归档原始文件，也可手动上传图谱等证据。</Text>
+        ) : (
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            dataSource={attachments}
+            columns={[
+              { title: '文件名', dataIndex: 'filename', key: 'filename', ellipsis: true },
+              { title: '来源', dataIndex: 'source', key: 'source', width: 100,
+                render: (v: string) => v === 'parse' ? <Tag color="blue">自动归档</Tag> : <Tag>人工上传</Tag> },
+              { title: '大小', dataIndex: 'size', key: 'size', width: 90,
+                render: (v: number) => `${(v / 1024).toFixed(1)}KB` },
+              { title: '备注', dataIndex: 'remark', key: 'remark', width: 160, render: (v: string | null) => v || '-' },
+              { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160,
+                render: (v: string | null) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+              { title: '操作', key: 'actions', width: 180,
+                render: (_: unknown, a: TaskAttachment) => (
+                  <Space size={4}>
+                    {(a.content_type.startsWith('image/') || a.content_type === 'application/pdf') && (
+                      <Button size="small" onClick={() => handleAttPreview(a)}>预览</Button>
+                    )}
+                    <Button size="small" onClick={() => handleAttDownload(a)}>下载</Button>
+                    {canReview && (
+                      <Popconfirm title="确认删除该附件?" onConfirm={() => handleAttDelete(a)}>
+                        <Button size="small" danger icon={<DeleteOutlined />} />
+                      </Popconfirm>
+                    )}
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        )}
+      </Card>
+
       <Modal
         title="追加临时项目行"
         open={addOpen}
@@ -430,6 +556,22 @@ export default function TaskDetail({ id }: { id: string }) {
             <Input />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={attPreview?.filename}
+        open={!!attPreview}
+        footer={null}
+        onCancel={() => { if (attPreview) URL.revokeObjectURL(attPreview.url); setAttPreview(null) }}
+        width="min(900px, 94vw)"
+      >
+        {attPreview && attPreview.type.startsWith('image/') && (
+          <img src={attPreview.url} alt={attPreview.filename} style={{ maxWidth: '100%' }} />
+        )}
+        {attPreview && attPreview.type === 'application/pdf' && (
+          <iframe src={attPreview.url} title={attPreview.filename}
+            style={{ width: '100%', height: '70vh', border: 'none' }} />
+        )}
       </Modal>
 
     </div>

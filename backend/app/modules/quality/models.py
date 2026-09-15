@@ -368,6 +368,59 @@ class QualityUnqualifiedEvent(BaseModel):
     )
 
 
+class QualityTaskAttachment(BaseModel):
+    """检验任务原始证据附件：计算表/电子图谱等，MinIO 持久化随时调取。"""
+
+    __tablename__ = "quality_task_attachments"
+    __table_args__ = (
+        Index("ix_quality_task_attachment_task", "task_id"),
+        {"schema": "quality"},
+    )
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        comment="关联检验任务，逻辑引用 quality.quality_test_tasks.id"
+    )
+    filename: Mapped[str] = mapped_column(String(255), comment="原始文件名")
+    content_type: Mapped[str] = mapped_column(
+        String(100), default="application/octet-stream", server_default="application/octet-stream"
+    )
+    object_key: Mapped[str] = mapped_column(
+        String(500), comment="MinIO 对象键/本地相对路径（attachments/{task_id}/{uuid}_{filename}）"
+    )
+    size: Mapped[int] = mapped_column(Integer, default=0, server_default="0", comment="文件大小（字节）")
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
+        nullable=True, comment="上传人，逻辑引用 identity.users.id"
+    )
+    source: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual",
+        comment="来源：manual 人工上传 / parse 液相计算表自动归档",
+    )
+    remark: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="备注")
+
+
+class QualityTaskReview(BaseModel):
+    """任务复核记录：两名不同复核人通过后任务完成（电子审核）。"""
+
+    __tablename__ = "quality_task_reviews"
+    __table_args__ = (
+        Index("ix_quality_task_review_task", "task_id"),
+        Index(
+            "uq_quality_task_review_task_reviewer",
+            "task_id",
+            "reviewer_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "quality"},
+    )
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        comment="关联检验任务，逻辑引用 quality.quality_test_tasks.id"
+    )
+    reviewer_id: Mapped[uuid.UUID] = mapped_column(comment="复核人，逻辑引用 identity.users.id")
+    comment: Mapped[str | None] = mapped_column(String(300), nullable=True, comment="复核备注")
+
+
 class QualityTestResult(BaseModel):
     """检验任务结果行：标准快照 + 填报结果（一手数据本体）。"""
 
