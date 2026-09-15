@@ -82,14 +82,14 @@ export default function SummaryView() {
             <Col xs={12} sm={12} md={6}>
               <Card size="small">
                 <Statistic title="合格率" value={summary.pass_rate}
-                  suffix="%" valueStyle={{ color: summary.pass_rate >= 95 ? '#52c41a' : '#faad14' }}
+                  suffix="%" styles={{ content: { color: summary.pass_rate >= 95 ? '#52c41a' : '#faad14' } }}
                   prefix={<CheckCircleOutlined />} />
               </Card>
             </Col>
             <Col xs={12} sm={12} md={6}>
               <Card size="small">
                 <Statistic title="不合格" value={summary.fail_count}
-                  valueStyle={{ color: summary.fail_count > 0 ? '#ff4d4f' : '#52c41a' }}
+                  styles={{ content: { color: summary.fail_count > 0 ? '#ff4d4f' : '#52c41a' } }}
                   prefix={<CloseCircleOutlined />} />
               </Card>
             </Col>
