@@ -91,14 +91,15 @@ export default function TaskDetail({ id }: { id: string }) {
 
   useEffect(() => { loadDetail() }, [loadDetail])
 
-  if (!detail) {
-    return loading ? <Text type="secondary">加载中…</Text> : null
-  }
-
   // 填报中可填；待复核时专员可改结果（不留痕）
   const { hasPermission } = usePermission()
   const canFill = hasPermission('quality:task:fill')
   const canReview = hasPermission('quality:task:review')
+
+  if (!detail) {
+    return loading ? <Text type="secondary">加载中…</Text> : null
+  }
+
   const editable =
     (detail.status === 'in_progress' && canFill) ||
     (detail.status === 'pending_review' && canReview)
