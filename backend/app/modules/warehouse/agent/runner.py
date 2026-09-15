@@ -42,6 +42,7 @@ from app.modules.warehouse.agent.llm_client import (
     get_llm_client,
 )
 from app.modules.warehouse.agent.prompts import build_system_prompt
+from app.modules.warehouse.ops_config import runtime_registry
 from app.modules.warehouse.agent.tools.query import (
     TOOLS,
     execute_tool,
