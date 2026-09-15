@@ -34,8 +34,10 @@ setup_logging(
 logger = logging.getLogger(__name__)
 
 # ── MCP 服务初始化（模块级别，确保 lifespan 可合并）──
-import app.modules.production.mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
 from app.modules.equipment import mcp_tools  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+from app.modules.production import (  # noqa: E402, F401 — 触发 @mcp.tool() 注册
+    mcp_tools as _production_mcp_tools,
+)
 from app.modules.toolbox.registry import TOOL_IMAGE_URL_PREFIX  # noqa: E402
 from app.platform.identity import (  # noqa: E402
     mcp_tools as identity_mcp_tools,  # noqa: F401 触发 @mcp.tool() 注册
@@ -147,6 +149,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     scheduler_registry.register_task(BATCH_START_REMINDER_TASK)
     scheduler_registry.register_task(EXECUTION_TIMEOUT_SCAN_TASK)
+
+    # QA 文档正文提取：任务状态持久化在 qa.document_files，服务重启后可继续。
+    from app.modules.qa.scheduler import GENERATOR as QA_TEXT_EXTRACTION_GENERATOR
+
+    scheduler_registry.register_generator(QA_TEXT_EXTRACTION_GENERATOR)
 
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)

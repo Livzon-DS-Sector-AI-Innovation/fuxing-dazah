@@ -51,6 +51,7 @@ from app.modules.production.service.reminder_service import (
     schedule_plan_closed_notification,
     schedule_plan_released_notification,
 )
+from app.modules.production.service.route_service import require_published_route
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
@@ -135,15 +136,6 @@ def _validate_item_releasable(item: PlanItem) -> None:
             status_code=400,
             message=f"计划项 {item.item_no} 未指定工艺路线，无法生成批次",
         )
-
-
-async def _require_route_not_draft(db: AsyncSession, route_id: uuid.UUID) -> None:
-    """校验工艺路线存在且非草稿。ponytail: 4 处调用共享。"""
-    route = await repo.get_route(db, route_id)
-    if not route:
-        raise NotFoundException("工艺路线", str(route_id))
-    if route.status == "draft":
-        raise AppException(status_code=400, message="不能选择草稿状态的工艺路线")
 
 
 def _merge_chain_batch_status(chain: list[Batch]) -> str:
@@ -349,7 +341,9 @@ async def create_plan_order(
         payload.order_no = _generate_order_no()
     if await repo.get_plan_order_by_no(db, payload.order_no):
         raise DuplicateException("计划单号", payload.order_no)
-    await _require_route_not_draft(db, payload.route_id)
+    await require_published_route(
+        db, payload.route_id, product_id=payload.product_id, purpose="绑定计划",
+    )
     order = PlanOrder(
         order_no=payload.order_no,
         title=payload.title,
@@ -376,9 +370,12 @@ async def update_plan_order(
     if order.status != "draft":
         raise AppException(status_code=400, message="仅 draft 状态的计划单可编辑")
     update_data = payload.model_dump(exclude_unset=True)
-    # 校验工艺路线非 draft
+    # 计划只能绑定已发布路线（草稿未定稿、归档已退役）
     if "route_id" in update_data and update_data["route_id"] is not None:
-        await _require_route_not_draft(db, update_data["route_id"])
+        product_id = update_data.get("product_id", order.product_id)
+        await require_published_route(
+            db, update_data["route_id"], product_id=product_id, purpose="绑定计划",
+        )
     for field, value in update_data.items():
         setattr(order, field, value)
     order.updated_by = user.id if user else None
@@ -420,10 +417,16 @@ async def release_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User |
             status_code=400,
             message=f"以下计划项未排程: {[i.item_no for i in unscheduled]}",
         )
+    # 先统一校验全部路线状态，避免创建到一半才报错（与手工建批同口径）
+    for item in items:
+        _validate_item_releasable(item)
+        assert item.route_id is not None  # _validate_item_releasable 已保证
+        await require_published_route(
+            db, item.route_id, product_id=item.product_id,
+        )
     # 事务内：为每个 PlanItem 创建 Batch + Allocation
     item_batch_nos: dict[uuid.UUID, str] = {}
     for item in items:
-        _validate_item_releasable(item)
         base_no = item.batch_no if item.batch_no else f"{order.order_no}-{item.item_no}"
         batch_no = await _ensure_unique_batch_no(db, base_no)
         batch = Batch(
@@ -582,6 +585,27 @@ async def change_plan_order(
                 if ci.batch_no is not None and ci.batch_no != item.batch_no:
                     await _check_batch_no_unique(db, ci.batch_no, ci.id)
                 update_data = ci.model_dump(exclude_unset=True, exclude={"id"})
+                # 已生成批次的计划项禁止改路线：批次 route_id 创建时锁定，
+                # 只改计划项会造成"计划显示 B、执行仍在 A"的假象。
+                if (
+                    "route_id" in update_data
+                    and update_data["route_id"] != item.route_id
+                ):
+                    if item_batch_map.get(ci.id) is not None:
+                        raise AppException(
+                            status_code=400,
+                            message=f"计划项 {item.item_no} 已生成批次，不能变更工艺路线",
+                        )
+                    if update_data["route_id"] is None:
+                        raise AppException(status_code=400, message="工艺路线不能为空")
+                    await require_published_route(
+                        db,
+                        update_data["route_id"],
+                        # 与 update_plan_order / update_plan_item 同口径：本条 upsert
+                        # 同时改产品+路线时，要用新 product_id 校验，否则合法改动被误拒
+                        product_id=update_data.get("product_id", item.product_id),
+                        purpose="变更计划项",
+                    )
                 qty_changed = "planned_quantity" in update_data
                 for field, value in update_data.items():
                     setattr(item, field, value)
@@ -603,6 +627,10 @@ async def change_plan_order(
                 route_id = ci.route_id if ci.route_id else order.route_id
                 if not route_id:
                     raise AppException(status_code=400, message="新增计划项缺少 route_id")
+                # 与手工建批同口径：归档/草稿路线不得生成新批次
+                await require_published_route(
+                    db, route_id, product_id=product_id,
+                )
                 batch_no_input = ci.batch_no or ""
                 if batch_no_input:
                     await _check_batch_no_unique(db, batch_no_input)
@@ -816,9 +844,11 @@ async def create_plan_item(
     # 继承：若未传则使用计划单的 product_id / route_id
     product_id = payload.product_id if payload.product_id else order.product_id
     route_id = payload.route_id if payload.route_id else order.route_id
-    # 校验工艺路线非 draft
+    # 计划只能绑定已发布路线（草稿未定稿、归档已退役）
     if route_id:
-        await _require_route_not_draft(db, route_id)
+        await require_published_route(
+            db, route_id, product_id=product_id, purpose="加入计划",
+        )
     # 未显式配置工段时长时不快照计划单 stage_config，展示时继承（改配置自动生效）
     stage_durations = _stage_config_to_dict(payload.stage_durations)
     item = PlanItem(
@@ -852,9 +882,12 @@ async def update_plan_item(
     if payload.batch_no is not None:
         await _check_batch_no_unique(db, payload.batch_no, item.id)
     update_data = payload.model_dump(exclude_unset=True)
-    # 校验工艺路线非 draft
+    # 计划只能绑定已发布路线（草稿未定稿、归档已退役）
     if "route_id" in update_data and update_data["route_id"] is not None:
-        await _require_route_not_draft(db, update_data["route_id"])
+        product_id = update_data.get("product_id", item.product_id)
+        await require_published_route(
+            db, update_data["route_id"], product_id=product_id, purpose="加入计划",
+        )
     for field, value in update_data.items():
         setattr(item, field, value)
     item.updated_by = user.id if user else None
@@ -998,6 +1031,11 @@ async def allocate_plan_item(
     if item.status != "scheduled":
         raise AppException(status_code=400, message="仅 scheduled 状态的计划项可分配")
     _validate_item_releasable(item)
+    assert item.route_id is not None  # _validate_item_releasable 已保证
+    # 与手工建批同口径：归档/草稿路线不得生成新批次
+    await require_published_route(
+        db, item.route_id, product_id=item.product_id,
+    )
     order = await repo.get_plan_order(db, item.plan_order_id)
     if not order:
         raise NotFoundException("计划单", str(item.plan_order_id))

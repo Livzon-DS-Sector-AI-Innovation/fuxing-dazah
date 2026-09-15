@@ -142,6 +142,102 @@ class TestGraph:
         assert len(graph.nodes) == 3
         assert len(graph.edges) == 3
 
+    async def test_copy_route_carries_assignments_suffixes_computed_fields(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """默认复制新版本时携带负责人、工段尾缀与计算字段（版本升级不丢配置）。"""
+        from app.modules.production.repository import assignment as assignment_repo
+
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B",
+                field_key="C1",
+                field_label="收率",
+                formula="{B.temp} / {B.yield_qty}",
+            )
+        ]
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        await route_service.publish_route(db_session, route.id, user=None)
+        source_graph = await route_service.get_graph(db_session, route.id)
+        node_b = next(n for n in source_graph.nodes if n.node_code == "B")
+
+        user_id = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=user_id, stage_name="提炼",
+            route_id=route.id, created_by=user_id,
+        )
+        await assignment_service.create_node_assignment(
+            db_session, user_id=user_id, node_id=node_b.id,
+            route_id=route.id, assigned_by=user_id,
+        )
+        await assignment_repo.set_stage_suffix(
+            db_session, route_id=route.id, stage_name="提炼",
+            suffix="-L", updated_by=user_id,
+        )
+
+        copied = await route_service.copy_route(
+            db_session, route.id, "复制路线", user=None,
+        )
+        copied_graph = await route_service.get_graph(db_session, copied.id)
+        copied_node_b = next(n for n in copied_graph.nodes if n.node_code == "B")
+        assert [c.field_key for c in copied_graph.computed_fields] == ["C1"]
+
+        stage_assigns = await assignment_service.list_stage_assignments(
+            db_session, route_id=copied.id,
+        )
+        assert [(s.user_id, s.stage_name) for s in stage_assigns] == [
+            (user_id, "提炼")
+        ]
+        node_assigns = await assignment_service.list_node_assignments(
+            db_session, route_id=copied.id,
+        )
+        assert [(a.user_id, a.node_id) for a in node_assigns] == [
+            (user_id, copied_node_b.id)
+        ]
+        suffixes = await assignment_repo.list_stage_suffixes(db_session, [copied.id])
+        assert [(s.stage_name, s.suffix) for s in suffixes] == [("提炼", "-L")]
+
+    async def test_copy_route_can_skip_config_carryover(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """显式关闭开关时不复制负责人/尾缀/计算字段。"""
+        from app.modules.production.repository import assignment as assignment_repo
+
+        _, route = await _draft_route(db_session)
+        graph = build_graph_in()
+        graph.computed_fields = [
+            ComputedFieldIn(
+                node_code="B",
+                field_key="C1",
+                field_label="收率",
+                formula="{B.temp} / {B.yield_qty}",
+            )
+        ]
+        await route_service.save_graph(db_session, route.id, graph, user=None)
+        await route_service.publish_route(db_session, route.id, user=None)
+        user_id = uuid.uuid4()
+        await assignment_service.create_stage_assignment(
+            db_session, user_id=user_id, stage_name="提炼",
+            route_id=route.id, created_by=user_id,
+        )
+
+        copied = await route_service.copy_route(
+            db_session, route.id, "复制路线", user=None,
+            copy_assignments=False,
+            copy_suffixes=False,
+            copy_computed_fields=False,
+        )
+        copied_graph = await route_service.get_graph(db_session, copied.id)
+        assert copied_graph.computed_fields == []
+        stage_assigns = await assignment_service.list_stage_assignments(
+            db_session, route_id=copied.id,
+        )
+        assert stage_assigns == []
+        suffixes = await assignment_repo.list_stage_suffixes(db_session, [copied.id])
+        assert suffixes == []
+
     async def test_batch_boundary_with_allow_overlap_rejected(
         self, db_session: AsyncSession,
     ) -> None:

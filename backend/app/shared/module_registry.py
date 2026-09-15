@@ -129,6 +129,14 @@ BUSINESS_MODULES: tuple[ModuleDefinition, ...] = (
         description="偏差、CAPA、检验、放行、变更和质量体系数据入口。",
     ),
     ModuleDefinition(
+        code="qa",
+        name="QA",
+        path="/qa",
+        db_schema="qa",
+        owner_hint="QA负责人",
+        description="已批准质量文件、质量主数据及其可追溯关联的集中知识库。",
+    ),
+    ModuleDefinition(
         code="meter",
         name="仪表管理",
         path="/meter",

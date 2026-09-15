@@ -81,6 +81,34 @@ class TestArchive:
         with pytest.raises(AppException, match="无法归档"):
             await route_service.archive_route(db_session, route.id, user=None)
 
+    async def test_archive_with_scheduled_batch_rejected(
+        self, db_session: AsyncSession,
+    ) -> None:
+        """计划下达产生的 scheduled 批次同样阻止归档。
+
+        归档此前只统计 pending/in_progress，会让"已下达未开工"的计划批次
+        在归档后从工作台待办里消失。
+        """
+        from app.modules.production.models import Batch
+
+        product, route = await _draft_route(db_session)
+        await route_service.save_graph(
+            db_session, route.id, build_graph_in(), user=None,
+        )
+        await route_service.publish_route(db_session, route.id, user=None)
+        db_session.add(
+            Batch(
+                batch_no=rand_code("批"),
+                product_id=product.id,
+                route_id=route.id,
+                status="scheduled",
+                creation_type="plan",
+            )
+        )
+        await db_session.flush()
+        with pytest.raises(AppException, match="无法归档"):
+            await route_service.archive_route(db_session, route.id, user=None)
+
 
 class TestDeleteRoute:
     async def test_delete_draft_route(self, db_session: AsyncSession) -> None:

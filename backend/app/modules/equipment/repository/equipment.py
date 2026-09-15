@@ -20,14 +20,10 @@ from app.modules.equipment.models.maintenance_plan import MaintenancePlan
 from app.modules.equipment.models.personnel import EquipmentPersonnelCategory
 from app.modules.equipment.service.data_scope import apply_equipment_scope
 from app.platform.identity.models import Department, User
-
-
-def _escape_like(value: str) -> str:
-    """Escape special characters in LIKE patterns."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
+from app.shared.sql import escape_like as _escape_like
 
 # ==================== 设备分类 ====================
+
 async def exists_category_by_code(
     db: AsyncSession,
     code: str,

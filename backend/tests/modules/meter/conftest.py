@@ -21,7 +21,7 @@ from httpx import ASGITransport, AsyncClient
 from openpyxl import Workbook
 
 from app.core.database import get_db
-from app.main import app as fastapi_app  # type: ignore[attr-defined]
+from app.main import app as fastapi_app
 from app.modules.meter.models import (
     CalibrationReport,
     Department,
@@ -203,11 +203,11 @@ async def client_with_noop_commit() -> AsyncIterator[AsyncClient]:
         async def _override_get_db() -> AsyncIterator[Any]:
             yield session
 
-        fastapi_app.dependency_overrides[get_db] = _override_get_db  # type: ignore[attr-defined]
-        transport = ASGITransport(app=fastapi_app)  # type: ignore[arg-type]
+        fastapi_app.dependency_overrides[get_db] = _override_get_db
+        transport = ASGITransport(app=fastapi_app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
-        fastapi_app.dependency_overrides.clear()  # type: ignore[attr-defined]
+        fastapi_app.dependency_overrides.clear()
         await session.rollback()
 
 
@@ -221,9 +221,9 @@ async def api_context() -> AsyncIterator[tuple[AsyncClient, Any]]:
         async def _override_get_db() -> AsyncIterator[Any]:
             yield session
 
-        fastapi_app.dependency_overrides[get_db] = _override_get_db  # type: ignore[attr-defined]
-        transport = ASGITransport(app=fastapi_app)  # type: ignore[arg-type]
+        fastapi_app.dependency_overrides[get_db] = _override_get_db
+        transport = ASGITransport(app=fastapi_app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac, session
-        fastapi_app.dependency_overrides.clear()  # type: ignore[attr-defined]
+        fastapi_app.dependency_overrides.clear()
         await session.rollback()

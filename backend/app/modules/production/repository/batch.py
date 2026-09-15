@@ -9,6 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.production.models import Batch
 from app.modules.production.repository.trace import trace_links_multi
 
+# 未完工批次 = 非终态。计划下达生成的是 scheduled（不是 pending），
+# 只统计 pending/in_progress 会让"未开工的计划批次"绕过产品删除/路线归档校验。
+UNFINISHED_BATCH_STATUSES = (
+    "draft",
+    "scheduled",
+    "released",
+    "pending",
+    "in_progress",
+)
+
 __all__ = [
     "get_batch",
     "get_batch_by_no",
@@ -120,7 +130,7 @@ async def count_unfinished_batches(db: AsyncSession, product_id: uuid.UUID) -> i
         .select_from(Batch)
         .where(
             Batch.product_id == product_id,
-            Batch.status.in_(("pending", "in_progress")),
+            Batch.status.in_(UNFINISHED_BATCH_STATUSES),
             Batch.is_deleted == False,  # noqa: E712
         )
     )
@@ -133,7 +143,7 @@ async def count_unfinished_batches_by_route(db: AsyncSession, route_id: uuid.UUI
         .select_from(Batch)
         .where(
             Batch.route_id == route_id,
-            Batch.status.in_(("pending", "in_progress")),
+            Batch.status.in_(UNFINISHED_BATCH_STATUSES),
             Batch.is_deleted == False,  # noqa: E712
         )
     )

@@ -348,7 +348,7 @@ class TestStartBatch:
                 user,
             )
         assert exc_info.value.status_code == 400
-        assert "published" in exc_info.value.message
+        assert "已发布" in exc_info.value.message
 
     async def test_creatable_routes_for_first_stage_owner(
         self, db_session: AsyncSession, published_route: dict[str, Any],

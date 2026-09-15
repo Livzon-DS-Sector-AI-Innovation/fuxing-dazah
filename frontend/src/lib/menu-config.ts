@@ -260,6 +260,19 @@ export const moduleMenus: ModuleMenu[] = [
     ],
   },
   {
+    key: "qa",
+    label: "QA",
+    icon: "document",
+    path: "/qa",
+    // 所有登录用户可读；写操作在页面内按 QA 权限码显示。
+    children: [
+      { key: "overview", label: "概览", path: "/qa" },
+      { key: "master-data", label: "质量主数据", path: "/qa/master-data" },
+      { key: "documents", label: "批准文件台账", path: "/qa/documents" },
+      { key: "audit", label: "审计日志", path: "/qa/audit", permissions: ["qa:audit:read"] },
+    ],
+  },
+  {
     key: "admin",
     label: "行政管理",
     icon: "building",

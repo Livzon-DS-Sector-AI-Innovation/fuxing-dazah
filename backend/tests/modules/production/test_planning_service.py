@@ -30,14 +30,15 @@ from app.modules.production.schemas import (
     PlanItemScheduleIn,
     PlanOrderCreate,
     PlanOrderUpdate,
+    RouteCreate,
 )
 from app.modules.production.schemas.planning import (
     PlanItemChangeItem,
     PlanOrderChangeRequest,
 )
-from app.modules.production.service import planning_service
+from app.modules.production.service import planning_service, route_service
 from app.platform.identity.models import User
-from tests.modules.production.conftest import rand_code
+from tests.modules.production.conftest import build_graph_in, rand_code
 
 
 async def _make_demand(
@@ -389,6 +390,24 @@ class TestPlanOrder:
         refreshed_item = await repo.get_plan_item(db_session, item.id)
         assert refreshed_item is not None and refreshed_item.status == "allocated"
 
+    async def test_release_rejects_archived_route(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """路线归档后不能下达：与手工建批同口径，禁止再生成批次。"""
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.confirm_plan_order(db_session, order.id, test_user)
+        # 尚无批次，归档可成功；随后下达必须被 published 门禁拦下
+        await route_service.archive_route(
+            db_session, published_route["route"].id, user=None,
+        )
+        with pytest.raises(AppException, match="仅已发布路线"):
+            await planning_service.release_plan_order(db_session, order.id, test_user)
+        # 幂等校验：没有产生任何批次
+        assert await repo.get_plan_allocations_by_item(db_session, item.id) == []
+
     async def test_release_writes_back_actual_batch_no(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,
@@ -622,6 +641,21 @@ class TestPlanItem:
         assert len(allocs) == 1
         batch = await repo.get_batch(db_session, allocs[0].batch_id)
         assert batch is not None and batch.status == "scheduled"
+
+    async def test_allocate_rejects_archived_route(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """路线归档后不能单独分配：与手工建批同口径，禁止再生成批次。"""
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        await _schedule_item(db_session, item, test_user)
+        await route_service.archive_route(
+            db_session, published_route["route"].id, user=None,
+        )
+        with pytest.raises(AppException, match="仅已发布路线"):
+            await planning_service.allocate_plan_item(db_session, item.id, test_user)
+        assert await repo.get_plan_allocations_by_item(db_session, item.id) == []
 
     async def test_allocate_requires_scheduled(
         self, db_session: AsyncSession, published_route: dict[str, Any],
@@ -927,6 +961,73 @@ class TestChangePlanOrder:
         assert len(allocs) == 1
         batch = await repo.get_batch(db_session, allocs[0].batch_id)
         assert batch is not None and batch.status == "scheduled"
+
+    async def test_change_add_item_rejects_archived_route(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """变更新增计划项时归档路线被拒：与手工建批同口径。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        # 报废已生成批次后归档路线（归档服务会拦未完工批次）
+        allocs = await repo.get_plan_allocations_by_item(db_session, item.id)
+        batch = await repo.get_batch(db_session, allocs[0].batch_id)
+        assert batch is not None
+        batch.status = "cancelled"
+        await db_session.flush()
+        await route_service.archive_route(
+            db_session, published_route["route"].id, user=None,
+        )
+        with pytest.raises(AppException, match="仅已发布路线"):
+            await planning_service.change_plan_order(
+                db_session, order.id,
+                PlanOrderChangeRequest(
+                    change_reason="追加一个批次",
+                    items_upsert=[PlanItemChangeItem(
+                        product_id=published_route["product"].id,
+                        product_name="追加品",
+                        route_id=published_route["route"].id,
+                        batch_no=rand_code("ITM"),
+                        planned_quantity=30,
+                    )],
+                ),
+                test_user,
+            )
+
+    async def test_change_existing_item_route_rejected(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """已生成批次的计划项禁止变更工艺路线（批次 route_id 创建时锁定）。"""
+        order, item = await self._released_order(
+            db_session, published_route, test_user,
+        )
+        other = await route_service.create_route(
+            db_session,
+            RouteCreate(
+                product_id=published_route["product"].id,
+                route_name=rand_code("V2"),
+            ),
+            user=None,
+        )
+        await route_service.save_graph(
+            db_session, other.id, build_graph_in(), user=None,
+        )
+        await route_service.publish_route(db_session, other.id, user=None)
+
+        with pytest.raises(AppException, match="不能变更工艺路线"):
+            await planning_service.change_plan_order(
+                db_session, order.id,
+                PlanOrderChangeRequest(
+                    change_reason="尝试换路线",
+                    items_upsert=[PlanItemChangeItem(id=item.id, route_id=other.id)],
+                ),
+                test_user,
+            )
+        refreshed = await repo.get_plan_item(db_session, item.id)
+        assert refreshed is not None
+        assert refreshed.route_id == published_route["route"].id
 
     async def test_change_writes_back_actual_batch_no(
         self, db_session: AsyncSession, published_route: dict[str, Any],

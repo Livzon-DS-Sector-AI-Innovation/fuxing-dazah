@@ -9,6 +9,7 @@ from app.modules.hr import router as hr_router
 from app.modules.meter import router as meter_router
 from app.modules.procurement import router as procurement_router
 from app.modules.production import router as production_router
+from app.modules.qa.api import router as qa_router
 from app.modules.quality import router as quality_router
 from app.modules.registration import router as registration_router
 from app.modules.research import router as research_router
@@ -59,5 +60,6 @@ api_router.include_router(
     tags=["注册管理"],
 )
 api_router.include_router(quality_router, prefix="/quality", tags=["质量管理"])
+api_router.include_router(qa_router, prefix="/qa", tags=["QA"])
 api_router.include_router(meter_router, prefix="/meter", tags=["仪表管理"])
 api_router.include_router(permission_router, prefix="/permission", tags=["权限管理"])

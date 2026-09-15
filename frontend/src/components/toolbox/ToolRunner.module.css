@@ -3,10 +3,6 @@
   isolation: isolate;
   min-height: 100%;
   padding: 24px 32px 56px;
-  background:
-    radial-gradient(ellipse at 5% 5%, color-mix(in srgb, var(--tool-tint) 75%, transparent), transparent 48%),
-    radial-gradient(ellipse at 100% 50%, #dcecfa80, transparent 55%),
-    linear-gradient(145deg, #fafaf9, #f0eeec 65%, #f8f5e8);
   transform-style: preserve-3d;
   perspective: 1200px;
 }
@@ -20,20 +16,6 @@
   background-image: radial-gradient(#1a2a5217 0.7px, transparent 0.7px);
   background-size: 20px 20px;
   mask-image: linear-gradient(#000, transparent 650px);
-}
-
-.page::after {
-  content: '';
-  position: absolute;
-  inset: -8% auto auto -8%;
-  width: 360px;
-  height: 360px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--tool-tint) 55%, transparent), transparent 68%);
-  filter: blur(14px);
-  z-index: -1;
-  transform: translateZ(-20px) rotateX(40deg);
-  pointer-events: none;
 }
 
 .content { max-width: 1080px; margin: 0 auto; min-width: 0; }
@@ -139,10 +121,10 @@
   transform: translateZ(16px);
   will-change: transform, box-shadow;
 }
+/* 当前步骤只靠描边与序号芯片区分，不再铺 tint 底色（整条轨道保持中性） */
 .stepCard[data-current='true'] {
-  background: linear-gradient(130deg, white, color-mix(in srgb, var(--tool-tint) 65%, white));
   border-color: color-mix(in srgb, var(--tool-ink) 28%, white);
-  box-shadow: inset 0 1px 0 white, 0 4px 0 color-mix(in srgb, var(--tool-tint) 75%, #d5d5df), 0 9px 18px -10px #0a153040;
+  box-shadow: inset 0 1px 0 white, 0 4px 0 #d5d5df, 0 9px 18px -10px #0a153040;
 }
 .stepCard:disabled { cursor: default; }
 .stepNumber { display: flex; height: 34px; width: 34px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: inset 0 1px 1px #ffffff80, 0 3px 5px #0a153015; }

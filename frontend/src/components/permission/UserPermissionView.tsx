@@ -391,8 +391,7 @@ export function UserPermissionView({ apiToken, availableRoles }: Props) {
 
   return (
     <div
-      className={`${styles.shell} ${styles.users} h-full flex flex-col gap-4 sm:gap-5 p-4 sm:p-5 overflow-hidden`}
-      style={{ backgroundColor: 'var(--color-surface)' }}
+      className={`${styles.users} h-full flex flex-col gap-4 sm:gap-5 overflow-hidden`}
     >
       {/* ═══ Layer 1: Header Card ═══ */}
       <div

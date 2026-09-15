@@ -104,6 +104,14 @@ class RouteRename(BaseModel):
     route_name: str = Field(max_length=200)
 
 
+class RouteCopy(RouteRename):
+    """复制新版本时的可选携带项（默认携带，版本升级场景基本都需要）。"""
+
+    copy_assignments: bool = True  # 工段负责人 + 工序负责人
+    copy_suffixes: bool = True  # 工段批次尾缀
+    copy_computed_fields: bool = True  # 路线计算字段
+
+
 class RouteOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

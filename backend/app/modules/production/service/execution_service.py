@@ -98,7 +98,14 @@ def _build_field_values(
     必填完整性由 complete_batch 统一把关）。
     """
     defs_by_key = {d.field_key: d for d in defs if d.phase == phase}
-    input_map = {v.field_key: v.value for v in inputs}
+    # 空串统一归一为未填：必填校验与落行必须共用同一判据。否则传 value="" 会被必填
+    # 校验判为"已填"、又被落行跳过，静默漏掉一条必填数据——start 阶段尤其危险，
+    # 开工后没有任何一线补录通道，缺口不会在任何环节暴露。
+    # False/0 是合法取值（布尔"否"、数值 0），只在 `== ""` 时归一。
+    input_map: dict[str, bool | float | str | None] = {
+        v.field_key: None if v.value is None or v.value == "" else v.value
+        for v in inputs
+    }
 
     unknown = set(input_map) - set(defs_by_key)
     if unknown:
@@ -118,8 +125,8 @@ def _build_field_values(
 
     rows: list[NodeFieldValue] = []
     for key, value in input_map.items():
-        # 空串视为未填：避免 value='' 生成"已填"行绕过批次完成时的必填门禁
-        if value is None or value == "":
+        # 空值视为未填（空串已在上方归一）：不生成"已填"行绕过必填门禁
+        if value is None:
             continue
         d = defs_by_key[key]
         row = NodeFieldValue(
@@ -775,6 +782,7 @@ async def backfill_execution_fields(
 ) -> list[NodeFieldValue]:
     """工序结束后补录 end 阶段字段值（upsert）。批次完成后禁止补录。
 
+    start 阶段字段不属于补录范围（开工先决条件，开工时必须已填报），命中即拒绝。
     filled_at/filled_by 刷新为补录时间与补录人，与首次填报的 created_at/created_by 区分。
     """
     execution = await repo.get_execution(db, execution_id)
@@ -800,6 +808,21 @@ async def backfill_execution_fields(
         raise AppException(status_code=400, message="没有要补录的字段值")
 
     defs = await repo.get_field_defs_by_nodes(db, [execution.node_id])
+    # start 字段不在补录范围：它是"开工先决条件"，开工时必须已取得，事后补录等于
+    # 事后制造一条"当时满足条件"的记录。命中时给出明确指引，而不是让
+    # _build_field_values 报"未定义的字段"（易被误读成工艺路线配置错误）。
+    submitted_keys = {v.field_key for v in field_values}
+    start_keys = sorted(
+        d.field_key for d in defs if d.phase == "start" and d.field_key in submitted_keys
+    )
+    if start_keys:
+        raise AppException(
+            status_code=400,
+            message=(
+                f"以下字段属于开始阶段，须在开工时填报，不能补录: {', '.join(start_keys)}。"
+                "如需修正请联系有「修改批次填报数据」权限的人员"
+            ),
+        )
     end_defs = [d for d in defs if d.phase == "end"]
     rows = _build_field_values(
         end_defs, field_values, "end", execution.id, user, enforce_required=False
@@ -835,7 +858,8 @@ async def _apply_amended_field_values(
 ) -> dict[str, dict[str, Any]]:
     """修改语义的字段值处理：非空值 upsert（start/end 两阶段），空值清空已有行。
 
-    与补录不同：不限阶段（start 字段也可改）、支持清空（value=None 即清空该字段）。
+    与补录不同：不限阶段（start 字段也可改）、支持清空（value=None 即清空该字段），
+    但必填字段已有值不可清空（须改为正确值）。
     返回 {field_key: {"old": …, "new": …}}（仅有实际变化的字段），供审计记录。
     """
     if len({v.field_key for v in inputs}) != len(inputs):
@@ -861,6 +885,21 @@ async def _apply_amended_field_values(
             cleared_keys.append(v.field_key)
         else:
             filled_by_phase[defs_by_key[v.field_key].phase].append(v)
+
+    # 必填字段不可清空：必填的语义就是"必须有值"，把已有值清空会造出一个没有任何
+    # 环节能查出来的完整性缺口（start 阶段开工后更没有一线补录通道）。需要修正时
+    # 应改为填写正确值。只拦"把已有值变空"——本来就为空的 end 字段（待补录态）
+    # 传空属无操作，不拦。检查置于全部写操作之前，拒绝时不落任何变更。
+    blocked = sorted(
+        key
+        for key in cleared_keys
+        if defs_by_key[key].required and old_values.get(key) is not None
+    )
+    if blocked:
+        raise AppException(
+            status_code=400,
+            message=f"必填字段不可清空，请填写正确值: {', '.join(blocked)}",
+        )
 
     rows: list[NodeFieldValue] = []
     for phase, phase_inputs in filled_by_phase.items():
@@ -914,7 +953,8 @@ async def amend_execution(
 
     独立权限 production:batch:amend，不走工段/工序负责人豁免；
     与补录互补：补录仅 end 字段且批次结束后禁止，本函数不限批次状态、
-    不限阶段、可清空字段值。修改会重算批次首末时间并记录审计 old/new。
+    不限阶段、可清空字段值（必填字段已有值除外）。修改会重算批次首末时间
+    并记录审计 old/new。
     """
     execution = await repo.get_execution(db, execution_id)
     if not execution:

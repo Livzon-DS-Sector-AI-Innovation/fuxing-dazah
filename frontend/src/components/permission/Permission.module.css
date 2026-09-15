@@ -1,9 +1,7 @@
-.shell {
-  background: linear-gradient(180deg, rgba(248,249,252,.72), rgba(241,243,248,.72));
-}
-
 .hero {
   position: relative;
+  /* 角色较多时 workspace 自然高度会超出容器，默认 shrink 会把头部压瘪并裁掉标题/图标 */
+  flex-shrink: 0;
   overflow: hidden;
   border-color: rgba(218,220,231,.82) !important;
   background: linear-gradient(115deg, rgba(255,255,255,.94), rgba(247,248,253,.82)) !important;
