@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import {
   App,
   Button,
@@ -19,28 +20,23 @@ import { PlusOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import type { TableColumnsType } from 'antd'
 import {
-  Paginated,
   StocktakeCreate,
   StocktakeItemRecord,
   StocktakeItemUpdateInput,
   StocktakeRecord,
 } from '@/types/warehouse'
+import { fetchLocationsClient, fetchStocktakeClient, fetchStocktakesClient } from '@/lib/api/warehouse'
 import {
   confirmStocktake,
   createStocktake,
   deleteStocktake,
-  getLocations,
-  getStocktake,
-  getStocktakes,
   updateStocktake,
 } from '@/actions/warehouse'
 import type { LocationRecord } from '@/types/warehouse'
 
 export function StocktakeBoard() {
   const { message } = App.useApp()
-  const [data, setData] = useState<StocktakeRecord[]>([])
-  const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [status, setStatus] = useState<string | undefined>(undefined)
@@ -48,38 +44,26 @@ export function StocktakeBoard() {
   const [createOpen, setCreateOpen] = useState(false)
   const [detailId, setDetailId] = useState<string | null>(null)
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res: Paginated<StocktakeRecord> = await getStocktakes({
-        page,
-        page_size: pageSize,
-        status,
-      })
-      setData(res.items)
-      setTotal(res.total)
-    } catch {
-      message.error('获取盘点单列表失败')
-    } finally {
-      setLoading(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, status])
+  const { data: res, isLoading, isError } = useQuery({
+    queryKey: ['warehouse', 'stocktakes', { page, pageSize, status }],
+    queryFn: () => fetchStocktakesClient({ page, page_size: pageSize, status }),
+    placeholderData: keepPreviousData,
+  })
 
   useEffect(() => {
-    const t = setTimeout(fetchData, 0)
-    return () => clearTimeout(t)
-  }, [fetchData])
+    if (isError) message.error('获取盘点单列表失败')
+  }, [isError, message])
 
-  const handleDelete = async (record: StocktakeRecord) => {
-    try {
-      await deleteStocktake(record.id)
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteStocktake(id),
+    onSuccess: () => {
       message.success('盘点单已删除')
-      fetchData()
-    } catch (e) {
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'stocktakes'] })
+    },
+    onError: (e: unknown) => {
       message.error(e instanceof Error ? e.message : '删除失败')
-    }
-  }
+    },
+  })
 
   const columns: TableColumnsType<StocktakeRecord> = [
     { title: '盘点单号', dataIndex: 'stocktake_no', width: 180 },
@@ -135,7 +119,10 @@ export function StocktakeBoard() {
             {record.status === 'draft' ? '盘点' : '查看'}
           </Button>
           {record.status === 'draft' && (
-            <Popconfirm title="确定删除该草稿盘点单？" onConfirm={() => handleDelete(record)}>
+            <Popconfirm
+              title="确定删除该草稿盘点单？"
+              onConfirm={() => deleteMutation.mutate(record.id)}
+            >
               <Button size="small" type="link" danger>
                 删除
               </Button>
@@ -172,12 +159,12 @@ export function StocktakeBoard() {
         rowKey="id"
         size="small"
         columns={columns}
-        dataSource={data}
-        loading={loading}
+        dataSource={res?.items ?? []}
+        loading={isLoading}
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: res?.total ?? 0,
           showSizeChanger: true,
           showTotal: t => `共 ${t} 条`,
           onChange: (p, ps) => {
@@ -191,17 +178,14 @@ export function StocktakeBoard() {
       {createOpen && (
         <StocktakeCreateModal
           onClose={() => setCreateOpen(false)}
-          onCreated={() => {
-            setCreateOpen(false)
-            fetchData()
-          }}
+          onCreated={() => setCreateOpen(false)}
         />
       )}
 
       {detailId && (
         <StocktakeDetailDrawer
           stocktakeId={detailId}
-          onChanged={fetchData}
+          onChanged={() => setDetailId(null)}
           onClose={() => setDetailId(null)}
         />
       )}
@@ -211,21 +195,14 @@ export function StocktakeBoard() {
 
 function StocktakeCreateModal(props: { onClose: () => void; onCreated: () => void }) {
   const { message } = App.useApp()
-  const [locations, setLocations] = useState<LocationRecord[]>([])
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm<StocktakeCreate>()
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLocations(await getLocations())
-      } catch {
-        // 下拉加载失败不阻断弹窗
-      }
-    }
-    const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
-  }, [])
+  const { data: locations } = useQuery({
+    queryKey: ['warehouse', 'locations'],
+    queryFn: () => fetchLocationsClient(),
+  })
 
   const handleCreate = async () => {
     const values = await form.validateFields()
@@ -236,6 +213,7 @@ function StocktakeCreateModal(props: { onClose: () => void; onCreated: () => voi
         remark: values.remark || null,
       })
       message.success(`盘点单 ${record.stocktake_no} 已创建，共 ${record.items.length} 条明细`)
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'stocktakes'] })
       props.onCreated()
     } catch (e) {
       message.error(e instanceof Error ? e.message : '创建失败')
@@ -261,7 +239,7 @@ function StocktakeCreateModal(props: { onClose: () => void; onCreated: () => voi
           <Select
             allowClear
             placeholder="全库"
-            options={locations.map(loc => ({
+            options={(locations ?? []).map(loc => ({
               value: loc.id,
               label: `${loc.code} ${loc.name}`,
             }))}
@@ -281,34 +259,37 @@ function StocktakeDetailDrawer(props: {
   onClose: () => void
 }) {
   const { message } = App.useApp()
-  const [record, setRecord] = useState<StocktakeRecord | null>(null)
-  const [loading, setLoading] = useState(false)
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [counted, setCounted] = useState<Record<string, number>>({})
 
-  const fetchDetail = useCallback(async () => {
-    setLoading(true)
-    try {
-      const detail = await getStocktake(props.stocktakeId)
-      setRecord(detail)
-      // 以服务端数据初始化实盘输入（key={record.id} 重建时自动重置）
-      const next: Record<string, number> = {}
-      for (const item of detail.items) {
-        if (item.counted_quantity != null) next[item.id] = item.counted_quantity
-      }
-      setCounted(next)
-    } catch {
-      message.error('获取盘点单详情失败')
-    } finally {
-      setLoading(false)
+  const {
+    data: record,
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['warehouse', 'stocktakes', props.stocktakeId],
+    queryFn: () => fetchStocktakeClient(props.stocktakeId),
+  })
+
+  // 以服务端数据初始化实盘输入（key={record.id} 重建时自动重置）
+  useEffect(() => {
+    if (!record) return
+    const next: Record<string, number> = {}
+    for (const item of record.items) {
+      if (item.counted_quantity != null) next[item.id] = item.counted_quantity
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.stocktakeId])
+    setCounted(next)
+  }, [record])
 
   useEffect(() => {
-    const t = setTimeout(fetchDetail, 0)
-    return () => clearTimeout(t)
-  }, [fetchDetail])
+    if (isError) message.error('获取盘点单详情失败')
+  }, [isError, message])
+
+  const invalidate = async () => {
+    await queryClient.invalidateQueries({ queryKey: ['warehouse', 'stocktakes'] })
+    props.onChanged()
+  }
 
   const isDraft = record?.status === 'draft'
 
@@ -323,8 +304,7 @@ function StocktakeDetailDrawer(props: {
     try {
       await updateStocktake(record.id, { items })
       message.success('实盘结果已保存')
-      await fetchDetail()
-      props.onChanged()
+      await invalidate()
     } catch (e) {
       message.error(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -338,8 +318,7 @@ function StocktakeDetailDrawer(props: {
     try {
       await confirmStocktake(record.id)
       message.success('盘点单已确认，库存已按实盘调整')
-      await fetchDetail()
-      props.onChanged()
+      await invalidate()
     } catch (e) {
       message.error(e instanceof Error ? e.message : '确认失败')
     } finally {
@@ -425,7 +404,7 @@ function StocktakeDetailDrawer(props: {
         size="small"
         columns={itemColumns}
         dataSource={record?.items ?? []}
-        loading={loading}
+        loading={isLoading}
         pagination={false}
         scroll={{ x: 780, y: 480 }}
       />

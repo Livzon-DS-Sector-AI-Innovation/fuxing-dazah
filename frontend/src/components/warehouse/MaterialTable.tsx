@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
@@ -10,9 +11,9 @@ import {
   MaterialCreate,
   MaterialRecord,
   MaterialUpdate,
-  Paginated,
 } from '@/types/warehouse'
-import { createMaterial, deleteMaterial, getMaterials, updateMaterial } from '@/actions/warehouse'
+import { fetchMaterialsClient } from '@/lib/api/warehouse'
+import { createMaterial, deleteMaterial, updateMaterial } from '@/actions/warehouse'
 
 const CATEGORY_OPTIONS = Object.entries(MATERIAL_CATEGORY_LABEL).map(([value, label]) => ({
   value,
@@ -21,9 +22,7 @@ const CATEGORY_OPTIONS = Object.entries(MATERIAL_CATEGORY_LABEL).map(([value, la
 
 export function MaterialTable() {
   const { message } = App.useApp()
-  const [data, setData] = useState<MaterialRecord[]>([])
-  const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
@@ -32,32 +31,52 @@ export function MaterialTable() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<MaterialRecord | null>(null)
   const [initialValues, setInitialValues] = useState<MaterialCreate | null>(null)
-  const [saving, setSaving] = useState(false)
   const [form] = Form.useForm<MaterialCreate>()
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res: Paginated<MaterialRecord> = await getMaterials({
+  const { data: res, isLoading, isError } = useQuery({
+    queryKey: ['warehouse', 'materials', { page, pageSize, keyword, category }],
+    queryFn: () =>
+      fetchMaterialsClient({
         page,
         page_size: pageSize,
         keyword: keyword || undefined,
         category,
-      })
-      setData(res.items)
-      setTotal(res.total)
-    } catch {
-      message.error('获取物料列表失败')
-    } finally {
-      setLoading(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, keyword, category])
+      }),
+    placeholderData: keepPreviousData,
+  })
 
   useEffect(() => {
-    const t = setTimeout(fetchData, 0)
-    return () => clearTimeout(t)
-  }, [fetchData])
+    if (isError) message.error('获取物料列表失败')
+  }, [isError, message])
+
+  const saveMutation = useMutation({
+    mutationFn: async (values: MaterialCreate) => {
+      if (editing) {
+        await updateMaterial(editing.id, values as MaterialUpdate)
+      } else {
+        await createMaterial(values)
+      }
+    },
+    onSuccess: () => {
+      message.success(editing ? '物料已更新' : '物料已创建')
+      setModalOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'materials'] })
+    },
+    onError: (e: unknown) => {
+      if (e instanceof Error) message.error(e.message)
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteMaterial(id),
+    onSuccess: () => {
+      message.success('物料已删除')
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'materials'] })
+    },
+    onError: (e: unknown) => {
+      message.error(e instanceof Error ? e.message : '删除失败')
+    },
+  })
 
   const openCreate = () => {
     setEditing(null)
@@ -81,32 +100,7 @@ export function MaterialTable() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
-    setSaving(true)
-    try {
-      if (editing) {
-        await updateMaterial(editing.id, values as MaterialUpdate)
-        message.success('物料已更新')
-      } else {
-        await createMaterial(values)
-        message.success('物料已创建')
-      }
-      setModalOpen(false)
-      fetchData()
-    } catch (e) {
-      if (e instanceof Error) message.error(e.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleDelete = async (record: MaterialRecord) => {
-    try {
-      await deleteMaterial(record.id)
-      message.success('物料已删除')
-      fetchData()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '删除失败')
-    }
+    saveMutation.mutate(values)
   }
 
   const columns: TableColumnsType<MaterialRecord> = [
@@ -133,7 +127,7 @@ export function MaterialTable() {
           <Button size="small" type="link" onClick={() => openEdit(record)}>
             编辑
           </Button>
-          <Popconfirm title="确定删除该物料？" onConfirm={() => handleDelete(record)}>
+          <Popconfirm title="确定删除该物料？" onConfirm={() => deleteMutation.mutate(record.id)}>
             <Button size="small" type="link" danger>
               删除
             </Button>
@@ -176,12 +170,12 @@ export function MaterialTable() {
         rowKey="id"
         size="small"
         columns={columns}
-        dataSource={data}
-        loading={loading}
+        dataSource={res?.items ?? []}
+        loading={isLoading}
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: res?.total ?? 0,
           showSizeChanger: true,
           showTotal: t => `共 ${t} 条`,
           onChange: (p, ps) => {
@@ -196,7 +190,7 @@ export function MaterialTable() {
         <Modal
           title={editing ? `编辑物料：${editing.code}` : '新增物料'}
           open
-          confirmLoading={saving}
+          confirmLoading={saveMutation.isPending}
           onOk={handleSave}
           onCancel={() => setModalOpen(false)}
           destroyOnHidden

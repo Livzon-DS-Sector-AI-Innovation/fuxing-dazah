@@ -510,3 +510,66 @@ export interface WarehouseAiAuditStats {
   by_scenario?: WarehouseAiAuditScenarioStats[]
   daily?: { date: string; scenario: string; calls: number }[]
 }
+
+// ==================== 驾驶舱（V2.0 分期A） ====================
+
+export interface DashboardSummary {
+  total_quantity: number
+  total_quantity_change: number | null
+  material_count: number
+  stock_sku_count: number
+  today_inbound_quantity: number
+  today_inbound_count: number
+  today_outbound_quantity: number
+  today_outbound_count: number
+  yesterday_inbound_quantity: number
+  yesterday_outbound_quantity: number
+  low_stock_count: number
+  draft_stocktake_count: number
+  summary_text: string
+}
+
+export interface MovementTrendPoint {
+  date: string
+  inbound: number
+  outbound: number
+}
+
+export interface StockDistribution {
+  by_category: { category: string; total_quantity: number }[]
+  by_location_type: { location_type: string; total_quantity: number }[]
+}
+
+export interface LowStockItem {
+  material_code: string
+  material_name: string
+  total_quantity: number
+  safety_stock: number
+}
+
+export interface IdleStockItem {
+  material_code: string
+  material_name: string
+  total_quantity: number
+  days_idle: number
+  last_inbound_at: string
+}
+
+export interface LowStockTop {
+  low_stock: LowStockItem[]
+  idle: IdleStockItem[]
+}
+
+export interface DashboardTodos {
+  low_stock_count: number
+  low_stock_items: LowStockItem[]
+  draft_stocktakes: { stocktake_no: string; remark: string | null; created_at: string | null }[]
+  recent_movements: {
+    movement_no: string
+    direction: string
+    material_name: string
+    quantity: number
+    unit: string
+    occurred_at: string
+  }[]
+}

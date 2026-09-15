@@ -347,6 +347,7 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/warehouse",
     permissions: ["warehouse:*:read"],
     children: [
+      { key: "dashboard", label: "驾驶舱", path: "/warehouse" },
       { key: "inventory", label: "库存管理", path: "/warehouse/inventory" },
       { key: "inout", label: "出入库记录", path: "/warehouse/inout" },
       { key: "stocktake", label: "库存盘点", path: "/warehouse/stocktake" },

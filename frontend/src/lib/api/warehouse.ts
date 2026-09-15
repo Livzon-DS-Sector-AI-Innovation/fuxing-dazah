@@ -47,6 +47,11 @@ import {
   WarehouseSchedulerTaskView,
   WarehouseSchedulerUpdateInput,
   WarehouseOverview,
+  DashboardSummary,
+  MovementTrendPoint,
+  StockDistribution,
+  LowStockTop,
+  DashboardTodos,
 } from '@/types/warehouse'
 import { apiDelete, apiGet, apiPost, apiPut, apiFetchPaginated } from '@/lib/http-client'
 
@@ -55,6 +60,28 @@ const SERVER_API = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_
  *  未配置时回退相对路径（开发走 next.config rewrites，生产需在构建时配置该变量）。 */
 const CLIENT_API = process.env.NEXT_PUBLIC_API_BASE_URL || ''
 const BASE = '/api/v1/warehouse'
+
+// ── 驾驶舱（V2.0 分期A）──
+
+export async function fetchDashboardSummaryClient(): Promise<DashboardSummary> {
+  return apiGet<DashboardSummary>(`${CLIENT_API}${BASE}/dashboard/summary`)
+}
+
+export async function fetchMovementTrendClient(days = 30): Promise<MovementTrendPoint[]> {
+  return apiGet<MovementTrendPoint[]>(`${CLIENT_API}${BASE}/dashboard/movement-trend?days=${days}`)
+}
+
+export async function fetchStockDistributionClient(): Promise<StockDistribution> {
+  return apiGet<StockDistribution>(`${CLIENT_API}${BASE}/dashboard/stock-distribution`)
+}
+
+export async function fetchLowStockTopClient(limit = 10): Promise<LowStockTop> {
+  return apiGet<LowStockTop>(`${CLIENT_API}${BASE}/dashboard/low-stock-top?limit=${limit}`)
+}
+
+export async function fetchDashboardTodosClient(): Promise<DashboardTodos> {
+  return apiGet<DashboardTodos>(`${CLIENT_API}${BASE}/dashboard/todos`)
+}
 
 // ── 概览 ──
 
@@ -203,6 +230,17 @@ export async function fetchStocktake(id: string): Promise<StocktakeRecord> {
 
 export async function fetchStocktakeClient(id: string): Promise<StocktakeRecord> {
   return apiGet<StocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes/${id}`)
+}
+
+export async function fetchStocktakesClient(
+  params: { page?: number; page_size?: number; status?: string } = {}
+): Promise<Paginated<StocktakeRecord>> {
+  const sp = new URLSearchParams()
+  if (params.page) sp.set('page', String(params.page))
+  if (params.page_size) sp.set('page_size', String(params.page_size))
+  if (params.status) sp.set('status', params.status)
+  const qs = sp.toString()
+  return apiFetchPaginated<StocktakeRecord>(`${CLIENT_API}${BASE}/stocktakes${qs ? `?${qs}` : ''}`)
 }
 
 export async function createStocktake(data: StocktakeCreate): Promise<StocktakeRecord> {

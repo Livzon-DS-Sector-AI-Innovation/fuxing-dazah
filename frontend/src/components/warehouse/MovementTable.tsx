@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import {
   App,
   Button,
@@ -26,17 +27,13 @@ import {
   MovementFilter,
   MovementRecord,
   MovementSourceType,
-  Paginated,
-  LocationRecord,
-  MaterialRecord,
 } from '@/types/warehouse'
 import {
-  createMovement,
-  deleteMovement,
-  getLocations,
-  getMaterials,
-  getMovements,
-} from '@/actions/warehouse'
+  fetchLocationsClient,
+  fetchMaterialsClient,
+  fetchMovementsClient,
+} from '@/lib/api/warehouse'
+import { createMovement, deleteMovement } from '@/actions/warehouse'
 
 const DIRECTION_COLOR: Record<MovementDirection, string> = {
   inbound: 'green',
@@ -58,62 +55,75 @@ interface MaterialOption {
 
 export function MovementTable() {
   const { message } = App.useApp()
-  const [data, setData] = useState<MovementRecord[]>([])
-  const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [keyword, setKeyword] = useState('')
   const [direction, setDirection] = useState<MovementDirection | undefined>(undefined)
 
   const [modalOpen, setModalOpen] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [locations, setLocations] = useState<LocationRecord[]>([])
   const [materialOptions, setMaterialOptions] = useState<MaterialOption[]>([])
   const [materialSearching, setMaterialSearching] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [form] = Form.useForm()
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
+  const { data: res, isLoading, isError } = useQuery({
+    queryKey: ['warehouse', 'movements', { page, pageSize, keyword, direction }],
+    queryFn: () => {
       const params: MovementFilter = { page, page_size: pageSize }
       if (keyword) params.keyword = keyword
       if (direction) params.direction = direction
-      const res: Paginated<MovementRecord> = await getMovements(params)
-      setData(res.items)
-      setTotal(res.total)
-    } catch {
-      message.error('获取出入库记录失败')
-    } finally {
-      setLoading(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, keyword, direction])
+      return fetchMovementsClient(params)
+    },
+    placeholderData: keepPreviousData,
+  })
+
+  const { data: locations } = useQuery({
+    queryKey: ['warehouse', 'locations'],
+    queryFn: () => fetchLocationsClient(),
+  })
 
   useEffect(() => {
-    const t = setTimeout(fetchData, 0)
-    return () => clearTimeout(t)
-  }, [fetchData])
+    if (isError) message.error('获取出入库记录失败')
+  }, [isError, message])
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLocations(await getLocations())
-      } catch {
-        // 库位下拉加载失败不阻断页面
-      }
-    }
-    const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
-  }, [])
+  const invalidateLists = () => {
+    queryClient.invalidateQueries({ queryKey: ['warehouse', 'movements'] })
+    queryClient.invalidateQueries({ queryKey: ['warehouse', 'stocks'] })
+  }
 
-  const searchMaterials = async (keyword: string) => {
+  const createMutation = useMutation({
+    mutationFn: (payload: MovementCreate) => createMovement(payload),
+    onSuccess: () => {
+      setModalOpen(false)
+      invalidateLists()
+    },
+    onError: (e: unknown) => {
+      if (e instanceof Error) message.error(e.message)
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteMovement(id),
+    onSuccess: () => {
+      message.success('记录已撤销，库存已冲销')
+      invalidateLists()
+    },
+    onError: (e: unknown) => {
+      message.error(e instanceof Error ? e.message : '撤销失败')
+    },
+  })
+
+  const searchMaterials = async (search: string) => {
     setMaterialSearching(true)
     try {
-      const res = await getMaterials({ page: 1, page_size: 50, keyword: keyword || undefined })
+      const result = await fetchMaterialsClient({
+        page: 1,
+        page_size: 50,
+        keyword: search || undefined,
+      })
       setMaterialOptions(
-        res.items.map(m => ({ value: m.id, label: `${m.code} ${m.name}`, unit: m.unit }))
+        result.items.map(m => ({ value: m.id, label: `${m.code} ${m.name}`, unit: m.unit })),
       )
     } catch {
       // 搜索失败保持原选项
@@ -122,9 +132,9 @@ export function MovementTable() {
     }
   }
 
-  const handleMaterialSearch = (keyword: string) => {
+  const handleMaterialSearch = (search: string) => {
     if (searchTimer.current) clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => searchMaterials(keyword), 300)
+    searchTimer.current = setTimeout(() => searchMaterials(search), 300)
   }
 
   const openCreate = () => {
@@ -136,40 +146,25 @@ export function MovementTable() {
 
   const handleSave = async () => {
     const values = await form.validateFields()
-    setSaving(true)
-    try {
-      const material = materialOptions.find(m => m.value === values.material_id)
-      const payload: MovementCreate = {
-        direction: values.direction,
-        source_type: values.source_type,
-        material_id: values.material_id,
-        batch_no: values.batch_no ?? '',
-        quantity: values.quantity,
-        location_id: values.location_id,
-        occurred_at: values.occurred_at ? (values.occurred_at as Dayjs).toISOString() : null,
-        remark: values.remark || null,
-      }
-      await createMovement(payload)
-      message.success(
-        `${MOVEMENT_DIRECTION_LABEL[values.direction as MovementDirection]}单已登记${material ? `：${material.label}` : ''}`
-      )
-      setModalOpen(false)
-      fetchData()
-    } catch (e) {
-      if (e instanceof Error) message.error(e.message)
-    } finally {
-      setSaving(false)
+    const material = materialOptions.find(m => m.value === values.material_id)
+    const payload: MovementCreate = {
+      direction: values.direction,
+      source_type: values.source_type,
+      material_id: values.material_id,
+      batch_no: values.batch_no ?? '',
+      quantity: values.quantity,
+      location_id: values.location_id,
+      occurred_at: values.occurred_at ? (values.occurred_at as Dayjs).toISOString() : null,
+      remark: values.remark || null,
     }
-  }
-
-  const handleDelete = async (record: MovementRecord) => {
-    try {
-      await deleteMovement(record.id)
-      message.success('记录已撤销，库存已冲销')
-      fetchData()
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : '撤销失败')
-    }
+    createMutation.mutate(payload, {
+      onSuccess: () => {
+        message.success(
+          `${MOVEMENT_DIRECTION_LABEL[payload.direction as MovementDirection]}单已登记${material ? `：${material.label}` : ''}`,
+        )
+        setModalOpen(false)
+      },
+    })
   }
 
   const columns: TableColumnsType<MovementRecord> = [
@@ -215,7 +210,7 @@ export function MovementTable() {
         ) : (
           <Popconfirm
             title="撤销该记录会反向冲销库存，确定？"
-            onConfirm={() => handleDelete(record)}
+            onConfirm={() => deleteMutation.mutate(record.id)}
           >
             <Button size="small" type="link" danger>
               撤销
@@ -263,12 +258,12 @@ export function MovementTable() {
         rowKey="id"
         size="small"
         columns={columns}
-        dataSource={data}
-        loading={loading}
+        dataSource={res?.items ?? []}
+        loading={isLoading}
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: res?.total ?? 0,
           showSizeChanger: true,
           showTotal: t => `共 ${t} 条`,
           onChange: (p, ps) => {
@@ -283,7 +278,7 @@ export function MovementTable() {
         <Modal
           title="登记出入库"
           open
-          confirmLoading={saving}
+          confirmLoading={createMutation.isPending}
           onOk={handleSave}
           onCancel={() => setModalOpen(false)}
           destroyOnHidden
@@ -345,7 +340,7 @@ export function MovementTable() {
               <Select
                 showSearch
                 optionFilterProp="label"
-                options={locations.map(loc => ({
+                options={(locations ?? []).map(loc => ({
                   value: loc.id,
                   label: `${loc.code} ${loc.name}`,
                 }))}

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
+from app.modules.warehouse import dashboard as dashboard_service
 from app.modules.warehouse import service
 from app.modules.warehouse.schemas import (
     LocationCreate,
@@ -52,6 +53,51 @@ async def get_overview(
 ) -> JSONResponse:
     data = await service.get_overview(db)
     return success_response(OverviewResponse(**data).model_dump(mode="json"))
+
+
+# ── 驾驶舱 ──
+
+
+@router.get("/dashboard/summary", summary="驾驶舱：KPI 与规则摘要")
+async def dashboard_summary(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await dashboard_service.get_summary(db))
+
+
+@router.get("/dashboard/movement-trend", summary="驾驶舱：出入库趋势（北京时间按天聚合）")
+async def dashboard_movement_trend(
+    days: int = Query(default=30, ge=1, le=90, description="统计天数"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await dashboard_service.get_movement_trend(db, days))
+
+
+@router.get("/dashboard/stock-distribution", summary="驾驶舱：库存分布（分类/库位类型）")
+async def dashboard_stock_distribution(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await dashboard_service.get_stock_distribution(db))
+
+
+@router.get("/dashboard/low-stock-top", summary="驾驶舱：低库存与呆滞 Top")
+async def dashboard_low_stock_top(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await dashboard_service.get_low_stock_top(db, limit))
+
+
+@router.get("/dashboard/todos", summary="驾驶舱：待办与预警流")
+async def dashboard_todos(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await dashboard_service.get_todos(db))
 
 
 # ── 物料主数据 ──

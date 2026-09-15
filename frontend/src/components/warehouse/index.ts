@@ -1,4 +1,5 @@
 // warehouse module components
+export { WarehouseDashboard } from './WarehouseDashboard'
 export { WarehouseOverviewCards } from './WarehouseOverviewCards'
 export { StockTable } from './StockTable'
 export { MaterialTable } from './MaterialTable'

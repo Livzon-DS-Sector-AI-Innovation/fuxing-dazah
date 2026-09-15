@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Index,
     Integer,
@@ -238,6 +239,39 @@ class WarehouseStocktakeItem(BaseModel):
         Numeric(18, 4), nullable=True, comment="实盘数量，空表示未盘"
     )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
+
+
+class WarehouseStockDailySnapshot(BaseModel):
+    """库存日快照：按物料聚合的每日库存总量（驾驶舱环比/趋势的数据底座）。
+
+    口径：仅 is_deleted=false 的库存行，按物料求和（跨批次/库位）。
+    同日重跑幂等覆盖（唯一键 snapshot_date + material_id，部分索引）。
+    """
+
+    __tablename__ = "stock_daily_snapshots"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_stock_daily_snapshots_key",
+            "snapshot_date",
+            "material_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_stock_daily_snapshots_date", "snapshot_date"),
+        {"schema": "warehouse"},
+    )
+
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, comment="快照业务日")
+    material_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    material_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="物料编码（冗余）")
+    material_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="物料名称（冗余）")
+    total_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0",
+        comment="当日库存总量（跨批次/库位求和）",
+    )
+    stock_rows: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="当日库存行数（批次×库位）",
+    )
 
 
 class WarehouseAgentDraft(BaseModel):

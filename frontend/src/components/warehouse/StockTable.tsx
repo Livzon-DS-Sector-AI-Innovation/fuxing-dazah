@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { App, Input, Select, Space, Table, Tag } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import type { TableColumnsType } from 'antd'
@@ -8,58 +9,44 @@ import {
   MATERIAL_CATEGORY_LABEL,
   MaterialCategory,
   StockRecord,
-  LocationRecord,
 } from '@/types/warehouse'
-import { getLocations, getStocks } from '@/actions/warehouse'
+import { fetchLocationsClient, fetchStocksClient } from '@/lib/api/warehouse'
 
-export function StockTable() {
+export function StockTable(props: {
+  /** 驾驶舱下钻带入的初始筛选 */
+  initialKeyword?: string
+  initialCategory?: string
+} = {}) {
   const { message } = App.useApp()
-  const [data, setData] = useState<StockRecord[]>([])
-  const [loading, setLoading] = useState(false)
-  const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [keyword, setKeyword] = useState('')
-  const [category, setCategory] = useState<MaterialCategory | undefined>(undefined)
+  const [keyword, setKeyword] = useState(props.initialKeyword ?? '')
+  const [category, setCategory] = useState<MaterialCategory | undefined>(
+    props.initialCategory as MaterialCategory | undefined,
+  )
   const [locationId, setLocationId] = useState<string | undefined>(undefined)
-  const [locations, setLocations] = useState<LocationRecord[]>([])
 
-  const fetchData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await getStocks({
+  const { data: res, isLoading, isError } = useQuery({
+    queryKey: ['warehouse', 'stocks', { page, pageSize, keyword, category, locationId }],
+    queryFn: () =>
+      fetchStocksClient({
         page,
         page_size: pageSize,
         keyword: keyword || undefined,
         category,
         location_id: locationId,
-      })
-      setData(res.items)
-      setTotal(res.total)
-    } catch {
-      message.error('获取库存列表失败')
-    } finally {
-      setLoading(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize, keyword, category, locationId])
+      }),
+    placeholderData: keepPreviousData,
+  })
+
+  const { data: locations } = useQuery({
+    queryKey: ['warehouse', 'locations'],
+    queryFn: () => fetchLocationsClient(),
+  })
 
   useEffect(() => {
-    const t = setTimeout(fetchData, 0)
-    return () => clearTimeout(t)
-  }, [fetchData])
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLocations(await getLocations())
-      } catch {
-        // 库位下拉加载失败不阻断页面
-      }
-    }
-    const t = setTimeout(load, 0)
-    return () => clearTimeout(t)
-  }, [])
+    if (isError) message.error('获取库存列表失败')
+  }, [isError, message])
 
   const columns: TableColumnsType<StockRecord> = [
     { title: '物料编码', dataIndex: 'material_code', width: 140 },
@@ -105,7 +92,7 @@ export function StockTable() {
             setLocationId(value)
             setPage(1)
           }}
-          options={locations.map(loc => ({ value: loc.id, label: `${loc.code} ${loc.name}` }))}
+          options={(locations ?? []).map(loc => ({ value: loc.id, label: `${loc.code} ${loc.name}` }))}
         />
         <Select
           allowClear
@@ -137,12 +124,12 @@ export function StockTable() {
         rowKey="id"
         size="small"
         columns={columns}
-        dataSource={data}
-        loading={loading}
+        dataSource={res?.items ?? []}
+        loading={isLoading}
         pagination={{
           current: page,
           pageSize,
-          total,
+          total: res?.total ?? 0,
           showSizeChanger: true,
           showTotal: t => `共 ${t} 条`,
           onChange: (p, ps) => {
