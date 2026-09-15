@@ -31,7 +31,17 @@ special_operation_daily_report_router = APIRouter()
     summary="手动触发 Bitable 数据同步",
 )
 async def sync_from_bitable(db: AsyncSession = Depends(get_db)):
-    """从飞书 Bitable 同步特殊作业数据到 SpecialOperationReport。"""
+    """从飞书 Bitable 同步特殊作业数据到 SpecialOperationReport。
+
+    直读模式下镜像同步已关闭（数据直接读多维表格），返回明确提示而不是静默成功。
+    """
+    from app.modules.safety.service.special_op_direct import config as direct_config
+
+    if not direct_config.legacy_sync_job_active():
+        return ApiResponse(
+            data={"synced_count": 0, "disabled": True},
+            message="镜像同步已关闭（直读模式）：日报直接读多维表格，无需同步到平台库",
+        )
     service = SpecialOperationDailyReportService(db)
     try:
         synced = await service.sync_from_bitable()
@@ -52,10 +62,13 @@ async def generate_daily_report(
     db: AsyncSession = Depends(get_db),
 ):
     """手动触发：同步 → 风险分析 → 生成日报 → 推送飞书群。"""
+    from app.modules.safety.service.special_op_direct import config as direct_config
+
     service = SpecialOperationDailyReportService(db)
     try:
-        # 先同步最新数据
-        await service.sync_from_bitable()
+        # 先同步最新数据（直读模式下镜像同步已关闭，跳过）
+        if direct_config.legacy_sync_job_active():
+            await service.sync_from_bitable()
         # 再生成日报
         result = await service.generate_and_push(
             target_date=data.target_date if data else None,

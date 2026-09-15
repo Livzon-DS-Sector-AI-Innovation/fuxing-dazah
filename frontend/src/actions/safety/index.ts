@@ -158,6 +158,21 @@ import type {
   BitableResubscribeResult,
   BitableTestResult,
   UpdateBitableConnectionInput,
+  // accident / check / daily risk report / oh hazard monitor（迁移补齐）
+  Accident,
+  AccidentFormData,
+  AccidentQueryParams,
+  SafetyCheck,
+  SafetyCheckFormData,
+  SafetyCheckQueryParams,
+  DailyRiskReport,
+  DailyRiskReportFormData,
+  DailyRiskReportQueryParams,
+  OhHazardMonitor,
+  OhHazardMonitorFormData,
+  OhHazardMonitorQueryParams,
+  HazardRiskOption,
+  ConfirmCheckRequest,
 } from '@/types/safety'
 
 // ============ HazardReport Actions ============
@@ -2647,4 +2662,347 @@ export async function exportKeyRiskOpsReports(filters: Record<string, unknown>):
   const arrayBuffer = await res.arrayBuffer()
   const base64 = Buffer.from(arrayBuffer).toString('base64')
   return { blob: base64, filename: '关键风险作业台账.xlsx' }
+}
+
+
+// ============ SafetyCheck Actions（安全检查） ============
+
+export async function getChecks(params: SafetyCheckQueryParams = {}) {
+  return fetchApi<SafetyCheck[]>(`/safety/checks${buildQueryString(params)}`)
+}
+
+export async function getCheck(id: string) {
+  return fetchApi<SafetyCheck>(`/safety/checks/${id}`)
+}
+
+export async function createCheck(data: SafetyCheckFormData) {
+  const response = await fetchApi<SafetyCheck>('/safety/checks', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/check')
+  return response
+}
+
+export async function updateCheck(id: string, data: Partial<SafetyCheckFormData>) {
+  const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/check')
+  return response
+}
+
+export async function submitCheck(id: string) {
+  const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}/submit`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/check')
+  return response
+}
+
+export async function reviewCheck(id: string, result: string) {
+  const response = await fetchApi<SafetyCheck>(
+    `/safety/checks/${id}/review?result=${result}`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/check')
+  return response
+}
+
+export async function confirmCheck(id: string, data: ConfirmCheckRequest) {
+  const response = await fetchApi<SafetyCheck>(`/safety/checks/${id}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/check')
+  return response
+}
+
+export async function deleteCheck(id: string) {
+  const response = await fetchApi<null>(`/safety/checks/${id}`, {
+    method: 'DELETE',
+  })
+  revalidatePath('/safety/check')
+  return response
+}
+
+// ============ Accident Actions（事故管理） ============
+
+export async function getAccidents(params: AccidentQueryParams = {}) {
+  return fetchApi<Accident[]>(`/safety/accidents${buildQueryString(params)}`)
+}
+
+export async function getAccident(id: string) {
+  return fetchApi<Accident>(`/safety/accidents/${id}`)
+}
+
+export async function createAccident(data: AccidentFormData) {
+  const response = await fetchApi<Accident>('/safety/accidents', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function updateAccident(id: string, data: Partial<AccidentFormData>) {
+  const response = await fetchApi<Accident>(`/safety/accidents/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function investigateAccident(id: string) {
+  const response = await fetchApi<Accident>(
+    `/safety/accidents/${id}/investigate`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function resolveAccident(
+  id: string,
+  directCause: string,
+  rootCause: string,
+  handlingMeasures: string,
+  correctiveActions?: string,
+  investigationFindings?: string,
+  investigationMethod?: string,
+) {
+  const params = new URLSearchParams({
+    direct_cause: directCause,
+    root_cause: rootCause,
+    handling_measures: handlingMeasures,
+  })
+  if (correctiveActions) params.set('corrective_actions', correctiveActions)
+  if (investigationFindings) params.set('investigation_findings', investigationFindings)
+  if (investigationMethod) params.set('investigation_method', investigationMethod)
+
+  const response = await fetchApi<Accident>(
+    `/safety/accidents/${id}/resolve?${params.toString()}`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function startCapa(id: string, deadline: string, responsible: string) {
+  const params = new URLSearchParams({
+    corrective_action_deadline: deadline,
+    corrective_action_responsible: responsible,
+  })
+  const response = await fetchApi<Accident>(
+    `/safety/accidents/${id}/start-capa?${params.toString()}`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function verifyCapa(id: string) {
+  const response = await fetchApi<Accident>(
+    `/safety/accidents/${id}/verify-capa`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function closeAccident(id: string) {
+  const response = await fetchApi<Accident>(`/safety/accidents/${id}/close`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/accident')
+  return response
+}
+
+export async function deleteAccident(id: string) {
+  const response = await fetchApi<null>(`/safety/accidents/${id}`, {
+    method: 'DELETE',
+  })
+  revalidatePath('/safety/accident')
+  return response
+}
+
+// ============ DailyRiskReport Actions（每日风险作业报备） ============
+
+export async function getDailyRiskReports(params?: DailyRiskReportQueryParams) {
+  return fetchApi<DailyRiskReport[]>(`/safety/daily-risk-reports${buildQueryString(params ?? {})}`)
+}
+
+export async function getDailyRiskReport(id: string) {
+  return fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}`)
+}
+
+export async function createDailyRiskReport(data: DailyRiskReportFormData) {
+  const response = await fetchApi<DailyRiskReport>('/safety/daily-risk-reports', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+export async function updateDailyRiskReport(id: string, data: Partial<DailyRiskReportFormData>) {
+  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+export async function deleteDailyRiskReport(id: string) {
+  const response = await fetchApi<null>(`/safety/daily-risk-reports/${id}`, {
+    method: 'DELETE',
+  })
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+export async function submitDailyRiskReport(id: string) {
+  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}/submit`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+export async function approveDailyRiskReport(id: string) {
+  const response = await fetchApi<DailyRiskReport>(`/safety/daily-risk-reports/${id}/approve`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+export async function rejectDailyRiskReport(id: string, reason: string) {
+  const response = await fetchApi<DailyRiskReport>(
+    `/safety/daily-risk-reports/${id}/reject?reason=${encodeURIComponent(reason)}`,
+    { method: 'POST' },
+  )
+  revalidatePath('/safety/daily-risk-report')
+  return response
+}
+
+/** 危险源风险选项（常规作业报备关联危险源） */
+export async function getHazardRiskOptions(params?: {
+  department?: string
+  keyword?: string
+  page?: number
+  page_size?: number
+}) {
+  return fetchApi<HazardRiskOption[]>(
+    `/safety/hazard-identifications/risk-options${buildQueryString(params ?? {})}`,
+  )
+}
+
+// ============ OhHazardMonitor Actions（职业危害因素监测） ============
+
+export async function getOhHazardMonitors(params: OhHazardMonitorQueryParams = {}) {
+  return fetchApi<OhHazardMonitor[]>(`/safety/oh-hazard-monitors${buildQueryString(params)}`)
+}
+
+export async function getOhHazardMonitor(id: string) {
+  return fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}`)
+}
+
+export async function createOhHazardMonitor(data: OhHazardMonitorFormData) {
+  const response = await fetchApi<OhHazardMonitor>('/safety/oh-hazard-monitors', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function updateOhHazardMonitor(id: string, data: Partial<OhHazardMonitorFormData>) {
+  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function deleteOhHazardMonitor(id: string) {
+  const response = await fetchApi<null>(`/safety/oh-hazard-monitors/${id}`, { method: 'DELETE' })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+// 监测工作流
+export async function startMonitor(id: string) {
+  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/start`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function completeMonitor(id: string) {
+  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/complete`, {
+    method: 'POST',
+  })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function verifyMonitor(id: string, data: { verified_by?: string; comments?: string }) {
+  const response = await fetchApi<OhHazardMonitor>(`/safety/oh-hazard-monitors/${id}/verify`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+// 监测 JSON 子记录
+export async function addDetectionResult(id: string, data: Record<string, unknown>) {
+  const response = await fetchApi<OhHazardMonitor>(
+    `/safety/oh-hazard-monitors/${id}/detection-results`,
+    { method: 'POST', body: JSON.stringify(data) },
+  )
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function updateDetectionResult(id: string, index: number, data: Record<string, unknown>) {
+  const response = await fetchApi<OhHazardMonitor>(
+    `/safety/oh-hazard-monitors/${id}/detection-results/${index}`,
+    { method: 'PUT', body: JSON.stringify(data) },
+  )
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function removeDetectionResult(id: string, index: number) {
+  const response = await fetchApi<OhHazardMonitor>(
+    `/safety/oh-hazard-monitors/${id}/detection-results/${index}`,
+    { method: 'DELETE' },
+  )
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function addAbnormalityRecord(id: string, data: Record<string, unknown>) {
+  const response = await fetchApi<OhHazardMonitor>(
+    `/safety/oh-hazard-monitors/${id}/abnormality-records`,
+    { method: 'POST', body: JSON.stringify(data) },
+  )
+  revalidatePath('/safety/occupational-health')
+  return response
+}
+
+export async function updateAbnormalityRecordStatus(id: string, index: number, status: string) {
+  const response = await fetchApi<OhHazardMonitor>(
+    `/safety/oh-hazard-monitors/${id}/abnormality-records/${index}?status=${encodeURIComponent(status)}`,
+    { method: 'PUT' },
+  )
+  revalidatePath('/safety/occupational-health')
+  return response
 }

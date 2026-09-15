@@ -182,7 +182,10 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                 kind="collection",
                 label="安全法规标准",
                 default_connection=DefaultConnection(
-                    app_token="IkYTw6PJPiKZTCkfuNQc7IqEnzd",
+                    # 底层 Base token（wiki 挂载文档；知识库 URL 中的 wiki 节点
+                    # token 是 IkYTw6PJPiKZTCkfuNQc7IqEnzd，drive 订阅不认，
+                    # 必须用 bitable 元信息回显的底层 Base token）
+                    app_token="AWi8bXQRgaeTNusUDM3cYKQenUe",
                     table_id="tbl85HKWCTfyf6rw",
                     note="安全法规标准表（法规同步+编号回写）",
                 ),
@@ -220,7 +223,8 @@ _DOMAINS: tuple[DomainInfo, ...] = (
                 kind="collection_env",
                 label="环保法规标准",
                 default_connection=DefaultConnection(
-                    app_token="IkYTw6PJPiKZTCkfuNQc7IqEnzd",
+                    # 同 collection：底层 Base token（wiki 节点 token 见上）
+                    app_token="AWi8bXQRgaeTNusUDM3cYKQenUe",
                     table_id="tbltLzMUiur8rBAL",
                     note="环保法规标准表（法规同步+编号回写）",
                 ),
@@ -818,20 +822,22 @@ _DOMAINS: tuple[DomainInfo, ...] = (
             ),
         ),
     ),
-    # ── cert 持证台账（特种作业证 wiki + 监护人 A/B 证 base）──────
+    # ── cert 持证台账（特种作业证 wiki 挂载 + 监护人 A/B 证 base）──────
     DomainInfo(
         key="cert",
         label="持证台账",
-        purpose="特种作业证（独立 wiki token）+ 监护人 A/B 证（共用 base token）镜像",
+        purpose="特种作业证（wiki 挂载文档，存底层 Base token）+ 监护人 A/B 证（共用 base token）镜像",
         subscribe="drive",
         kinds=(
             KindInfo(
                 kind="special_op",
                 label="特种作业证表",
                 default_connection=DefaultConnection(
-                    app_token="VyYmwLlZsi2sXDkkIa6cEISsnpg",
+                    # 底层 Base token（wiki 挂载文档；知识库 URL 中的 wiki 节点
+                    # token 是 VyYmwLlZsi2sXDkkIa6cEISsnpg，drive 订阅不认）
+                    app_token="WFxObPFLFaD2zCsQlKpcatssnOg",
                     table_id="tblVapKErODx0sbi",
-                    note="特种作业证台账（独立 wiki token）",
+                    note="特种作业证台账（wiki 挂载文档，存底层 Base token）",
                 ),
                 default_mappings=(
                     # ← feishu/cert_bitable.py map_special_op_cert_fields

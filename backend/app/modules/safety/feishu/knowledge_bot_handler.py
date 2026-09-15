@@ -172,27 +172,23 @@ def _build_knowledge_card(answer: str, sources: list[dict], query: str) -> dict:
 
     ref_text = "\n".join(ref_lines)
 
-    # ── Assemble card ──
+    # ── Assemble card（JSON 2.0；note 组件 2.0 已废弃 → markdown 页脚替代）──
     card = {
-        "config": {"wide_screen_mode": True},
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": _CARD_TITLE},
             "template": "blue",
         },
-        "elements": [
-            {"tag": "markdown", "content": answer_text},
-            {"tag": "hr"},
-            {"tag": "markdown", "content": ref_text},
-        ],
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": answer_text},
+                {"tag": "hr"},
+                {"tag": "markdown", "content": ref_text},
+                {"tag": "markdown", "content": f"🔍 查询：{query[:100]}"},
+            ],
+        },
     }
-
-    # Add footer with query context
-    card["elements"].append({
-        "tag": "note",
-        "elements": [
-            {"tag": "plain_text", "content": f"🔍 查询：{query[:100]}"},
-        ],
-    })
 
     return card
 

@@ -23,3 +23,11 @@ export { useContractorStore } from './contractorStore'
 // ============================================================
 export { useSafetyStore } from './deprecatedStore'
 export type { SafetyState } from './types'
+
+// ============================================================
+// 每日风险作业报备 / 职业危害因素监测
+// ============================================================
+export { useDailyRiskReportStore } from './dailyRiskReportStore'
+export { useOhHazardMonitorStore } from './ohHazardMonitorStore'
+export { useAccidentStore } from './accidentStore'
+export { useSafetyCheckStore } from './safetyCheckStore'

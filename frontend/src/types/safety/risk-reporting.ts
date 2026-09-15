@@ -161,3 +161,79 @@ export interface SpecialOperationLedgerStats {
 
 // ── 关键风险作业报备（Bitable 只读）→ 见 ./key-risk-operation.ts ──
 
+
+// ── 每日风险作业报备 ──
+
+export interface DailyRiskReport {
+  id: string
+  report_no: string
+  report_date: string
+  report_type?: string
+  department?: string
+  hazard_identification_id?: string
+  operation_description: string
+  operation_steps?: string
+  hazard_factors?: string
+  risk_level?: string
+  control_measures?: string
+  responsible_person?: string
+  operator_count?: number
+  location?: string
+  planned_start_time?: string
+  planned_end_time?: string
+  applicant_name?: string
+  approver_name?: string
+  approved_at?: string
+  rejection_reason?: string
+  status: string
+  notes?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DailyRiskReportFormData {
+  report_no: string
+  report_date: string
+  report_type?: string
+  department?: string
+  hazard_identification_id?: string
+  operation_description: string
+  operation_steps?: string
+  hazard_factors?: string
+  risk_level?: string
+  control_measures?: string
+  responsible_person?: string
+  operator_count?: number
+  location?: string
+  planned_start_time?: string
+  planned_end_time?: string
+  applicant_name?: string
+  approver_name?: string
+  notes?: string
+}
+
+export interface DailyRiskReportQueryParams {
+  page?: number
+  page_size?: number
+  status?: string
+  department?: string
+  report_date?: string
+  report_type?: string
+  keyword?: string
+}
+
+// ── 危险源选项（用于每日风险报备关联） ──
+
+export interface HazardRiskOption {
+  id: string
+  hazard_id_no: string
+  department?: string | null
+  position?: string | null
+  specific_activity?: string | null
+  inherent_risk_level: string
+  inherent_risk_label: string
+  existing_engineering_controls?: string
+  existing_management_controls?: string
+  existing_ppe?: string
+  existing_emergency_measures?: string
+}

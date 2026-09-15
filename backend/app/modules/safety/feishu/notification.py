@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -17,6 +18,62 @@ from app.modules.safety.feishu.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 卡片 JSON schema 版本（2.0：body.elements / 按钮直排或 column_set /
+# note 组件已废弃——2026-09 实证 unsupported tag note，用 markdown 替代）
+CARD_SCHEMA = "2.0"
+
+
+def build_card_dict(
+    title: str,
+    content: str,
+    header_template: str = "orange",
+    elements: list[dict] | None = None,
+    *,
+    subtitle: str | None = None,
+    header_tags: list[dict[str, Any]] | None = None,
+) -> dict:
+    """飞书卡片 JSON 2.0 根结构（safety 各卡片构建点的统一信封）。
+
+    content 为正文 markdown（首个元素），elements 为附加元素
+    （按钮行/分割线/照片列等，需已按 2.0 组件规范构建）。
+    subtitle 为头部副标题（纯文本）；header_tags 为标题后缀标签
+    （如 [{"tag": "plain_text", "text": "午后更新", "color": "orange"}]，最多 3 个）。
+    """
+    body: list[dict] = [{"tag": "markdown", "content": content}]
+    if elements:
+        body.extend(elements)
+    header: dict[str, Any] = {
+        "title": {"tag": "plain_text", "content": title},
+        "template": header_template,
+    }
+    if subtitle:
+        header["subtitle"] = {"tag": "plain_text", "content": subtitle}
+    if header_tags:
+        header["text_tag_list"] = header_tags
+    return {
+        "schema": CARD_SCHEMA,
+        "config": {"update_multi": True, "width_mode": "fill"},
+        "header": header,
+        "body": {"elements": body},
+    }
+
+
+def button_row(*buttons: dict) -> dict:
+    """横排按钮行（2.0 无 action 容器：column_set auto 宽单按钮列承载）。"""
+    return {
+        "tag": "column_set",
+        "flex_mode": "none",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "auto",
+                "vertical_align": "top",
+                "elements": [button],
+            }
+            for button in buttons
+        ],
+    }
 
 
 def _json_dumps(obj) -> str:
@@ -31,6 +88,9 @@ async def send_user_card(
     elements: list[dict] | None = None,
     id_type: str = "open_id",
     header_template: str = "orange",
+    *,
+    subtitle: str | None = None,
+    header_tags: list[dict[str, Any]] | None = None,
 ) -> bool:
     """使用安全模块飞书应用发送卡片消息给单个用户（DM）。
 
@@ -41,6 +101,8 @@ async def send_user_card(
         elements: 额外的卡片元素（按钮、分割线等）
         id_type: 用户标识类型，"open_id"（默认）或 "union_id"（跨应用一致）
         header_template: 标题颜色模板（orange/blue/green/red/purple）
+        subtitle: 头部副标题（纯文本，可选）
+        header_tags: 标题后缀标签列表（可选，最多 3 个）
 
     Returns:
         True 表示发送成功，False 表示失败（不抛异常）
@@ -55,22 +117,10 @@ async def send_user_card(
             CreateMessageRequestBody,
         )
 
-        card = {
-            "schema": "2.0",
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": title},
-                "template": header_template,
-            },
-            "body": {
-                "elements": [
-                    {"tag": "markdown", "content": content},
-                ],
-            },
-        }
-        if elements:
-            card["body"]["elements"].extend(elements)
-
+        card = build_card_dict(
+            title, content, header_template, elements,
+            subtitle=subtitle, header_tags=header_tags,
+        )
         card_json = _json_dumps(card)
 
         req = (
@@ -153,6 +203,9 @@ async def send_group_card(
     content: str,
     elements: list[dict] | None = None,
     header_template: str = "orange",
+    *,
+    subtitle: str | None = None,
+    header_tags: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """使用安全模块飞书应用发送卡片消息到群聊。
 
@@ -162,6 +215,8 @@ async def send_group_card(
         content: 卡片正文（支持 markdown）
         elements: 额外的卡片元素
         header_template: 标题颜色模板（orange/blue/green/red/purple）
+        subtitle: 头部副标题（纯文本，可选）
+        header_tags: 标题后缀标签列表（可选，最多 3 个）
 
     Returns:
         成功返回飞书 message_id（如 "om_xxx"），失败返回 None（不抛异常）
@@ -175,21 +230,10 @@ async def send_group_card(
             CreateMessageRequestBody,
         )
 
-        card = {
-            "schema": "2.0",
-            "config": {"wide_screen_mode": True},
-            "header": {
-                "title": {"tag": "plain_text", "content": title},
-                "template": header_template,
-            },
-            "body": {
-                "elements": [
-                    {"tag": "markdown", "content": content},
-                ],
-            },
-        }
-        if elements:
-            card["body"]["elements"].extend(elements)
+        card = build_card_dict(
+            title, content, header_template, elements,
+            subtitle=subtitle, header_tags=header_tags,
+        )
 
         card_json = _json_dumps(card)
 
@@ -227,7 +271,7 @@ async def build_card(
     header_template: str = "orange",
     elements: list[dict] | None = None,
 ) -> str:
-    """构建飞书卡片 JSON 字符串。
+    """构建飞书卡片 JSON 字符串（JSON 2.0 结构）。
 
     Args:
         title: 卡片标题
@@ -238,19 +282,7 @@ async def build_card(
     Returns:
         飞书卡片 JSON 字符串
     """
-    card = {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": title},
-            "template": header_template,
-        },
-        "elements": [
-            {"tag": "markdown", "content": content},
-        ],
-    }
-    if elements:
-        card["elements"].extend(elements)
-    return _json_dumps(card)
+    return _json_dumps(build_card_dict(title, content, header_template, elements))
 
 
 def _resolve_local_image_path(file_path: str) -> str | None:
@@ -285,13 +317,18 @@ def _resolve_local_image_path(file_path: str) -> str | None:
     return None
 
 
-async def upload_image_to_feishu(file_path: str) -> str | None:
+async def upload_image_to_feishu(
+    file_path: str,
+    *,
+    content_type: str = "image/jpeg",
+) -> str | None:
     """上传图片到飞书 CDN，返回 image_key（用于卡片 img 元素）。
 
     支持 MinIO object_key 和本地文件路径。
 
     Args:
         file_path: object_key（如 hazard/xxx.jpg）或本地路径（如 uploads/safety/hazard/xxx.jpg）
+        content_type: 上传的 MIME 类型（jpg 用默认值，PNG 素材传 image/png）
 
     Returns:
         飞书 image_key（如 img_v3_xxx），失败返回 None
@@ -333,7 +370,7 @@ async def upload_image_to_feishu(file_path: str) -> str | None:
             resp = await http_client.post(
                 "https://open.feishu.cn/open-apis/im/v1/images",
                 headers={"Authorization": f"Bearer {token}"},
-                files={"image": (image_filename, image_data, "image/jpeg")},
+                files={"image": (image_filename, image_data, content_type)},
                 data={"image_type": "message"},
             )
             if resp.status_code == 200:

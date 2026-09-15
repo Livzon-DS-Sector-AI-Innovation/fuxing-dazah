@@ -9,21 +9,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.safety.models import (
+    Accident,
     ChemicalInventoryRecord,
     Contractor,
     ContractorAdmission,
     ContractorWorkRecord,
+    DailyRiskReport,
     EhsChange,
     HazardIdentification,
     HazardReport,
     KeyRiskOperationReport,
     OhFollowup,
     OhHazardFactor,
+    OhHazardMonitor,
     OhHealthExam,
     OhPerson,
     OhPosition,
     OperationRegulation,
     RegulationRevision,
+    SafetyCheck,
     SafetyKnowledgeArticle,
     SafetyTraining,
     SpecialOperationPermit,
@@ -2813,3 +2817,378 @@ class SafetyRepository:
         ).all()
         return {row.risk_flag: int(row.cnt) for row in rows}
 
+
+    # ==================== SafetyCheck Operations ====================
+
+    async def get_checks(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        check_type: str | None = None,
+        department: str | None = None,
+    ) -> tuple[list[SafetyCheck], int]:
+        """获取安全检查列表"""
+        query = select(SafetyCheck).where(SafetyCheck.is_deleted.is_(False))
+        count_query = select(func.count(SafetyCheck.id)).where(SafetyCheck.is_deleted.is_(False))
+
+        if status:
+            query = query.where(SafetyCheck.status == status)
+            count_query = count_query.where(SafetyCheck.status == status)
+        if check_type:
+            query = query.where(SafetyCheck.check_type == check_type)
+            count_query = count_query.where(SafetyCheck.check_type == check_type)
+        if department:
+            query = query.where(SafetyCheck.department == department)
+            count_query = count_query.where(SafetyCheck.department == department)
+
+        total = await self.session.scalar(count_query)
+        query = query.offset(skip).limit(limit).order_by(SafetyCheck.created_at.desc())
+        result = await self.session.execute(query)
+        items = list(result.scalars().all())
+        return items, total or 0
+
+    async def get_check_by_id(self, check_id: uuid.UUID) -> SafetyCheck | None:
+        """获取安全检查详情"""
+        query = (
+            select(SafetyCheck)
+            .options(selectinload(SafetyCheck.hazards))
+            .where(SafetyCheck.id == check_id, SafetyCheck.is_deleted.is_(False))
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_check(self, data: dict[str, Any]) -> SafetyCheck:
+        """创建安全检查"""
+        item = SafetyCheck(**data)
+        self.session.add(item)
+        await self.session.flush()
+        stmt = select(SafetyCheck).where(SafetyCheck.id == item.id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def update_check(self, check_id: uuid.UUID, data: dict[str, Any]) -> SafetyCheck | None:
+        """更新安全检查"""
+        query = (
+            update(SafetyCheck)
+            .where(SafetyCheck.id == check_id, SafetyCheck.is_deleted.is_(False))
+            .values(**data, updated_at=func.now())
+            .returning(SafetyCheck)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def delete_check(self, check_id: uuid.UUID) -> bool:
+        """删除安全检查（软删除）"""
+        query = (
+            update(SafetyCheck)
+            .where(SafetyCheck.id == check_id, SafetyCheck.is_deleted.is_(False))
+            .values(is_deleted=True)
+        )
+        result = await self.session.execute(query)
+        return result.rowcount > 0
+
+    # ==================== Accident Operations ====================
+
+    async def get_accidents(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        accident_type: str | None = None,
+        accident_level: str | None = None,
+        department: str | None = None,
+        date_from: datetime | None = None,
+        date_to: datetime | None = None,
+        keyword: str | None = None,
+    ) -> tuple[list[Accident], int]:
+        """获取事故列表"""
+        query = select(Accident).where(Accident.is_deleted.is_(False))
+        count_query = select(func.count(Accident.id)).where(Accident.is_deleted.is_(False))
+
+        if status:
+            query = query.where(Accident.status == status)
+            count_query = count_query.where(Accident.status == status)
+        if accident_type:
+            query = query.where(Accident.accident_type == accident_type)
+            count_query = count_query.where(Accident.accident_type == accident_type)
+        if accident_level:
+            query = query.where(Accident.accident_level == accident_level)
+            count_query = count_query.where(Accident.accident_level == accident_level)
+        if department:
+            query = query.where(Accident.department == department)
+            count_query = count_query.where(Accident.department == department)
+        if date_from:
+            query = query.where(Accident.happened_at >= date_from)
+            count_query = count_query.where(Accident.happened_at >= date_from)
+        if date_to:
+            query = query.where(Accident.happened_at <= date_to)
+            count_query = count_query.where(Accident.happened_at <= date_to)
+        if keyword:
+            like = f"%{keyword}%"
+            filters = (
+                Accident.description.ilike(like)
+                | Accident.location.ilike(like)
+                | Accident.accident_no.ilike(like)
+                | Accident.handling_measures.ilike(like)
+            )
+            query = query.where(filters)
+            count_query = count_query.where(filters)
+
+        total = await self.session.scalar(count_query)
+        query = query.offset(skip).limit(limit).order_by(Accident.created_at.desc())
+        result = await self.session.execute(query)
+        items = list(result.scalars().all())
+        return items, total or 0
+
+    async def get_accident_by_id(self, accident_id: uuid.UUID) -> Accident | None:
+        """获取事故详情"""
+        query = select(Accident).where(
+            Accident.id == accident_id, Accident.is_deleted.is_(False)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_accident(self, data: dict[str, Any]) -> Accident:
+        """创建事故"""
+        item = Accident(**data)
+        self.session.add(item)
+        await self.session.flush()
+        stmt = select(Accident).where(Accident.id == item.id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def update_accident(
+        self, accident_id: uuid.UUID, data: dict[str, Any]
+    ) -> Accident | None:
+        """更新事故"""
+        # 两步模式：先 UPDATE，再 SELECT + populate_existing 强制刷新 identity map 缓存
+        stmt_update = (
+            update(Accident)
+            .where(Accident.id == accident_id, Accident.is_deleted.is_(False))
+            .values(**data, updated_at=func.now())
+        )
+        await self.session.execute(stmt_update)
+        stmt_select = (
+            select(Accident)
+            .where(Accident.id == accident_id, Accident.is_deleted.is_(False))
+            .execution_options(populate_existing=True)
+        )
+        result = await self.session.execute(stmt_select)
+        return result.scalar_one_or_none()
+
+    async def delete_accident(self, accident_id: uuid.UUID) -> bool:
+        """删除事故（软删除）"""
+        query = (
+            update(Accident)
+            .where(Accident.id == accident_id, Accident.is_deleted.is_(False))
+            .values(is_deleted=True)
+        )
+        result = await self.session.execute(query)
+        return result.rowcount > 0
+
+    # ==================== DailyRiskReport Operations ====================
+
+    async def get_daily_risk_reports(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        department: str | None = None,
+        report_date: datetime | None = None,
+        keyword: str | None = None,
+    ) -> tuple[list[DailyRiskReport], int]:
+        """获取每日风险作业报备列表"""
+        query = select(DailyRiskReport).where(DailyRiskReport.is_deleted.is_(False))
+
+        if status:
+            query = query.where(DailyRiskReport.status == status)
+        if department:
+            query = query.where(DailyRiskReport.department == department)
+        if report_date:
+            query = query.where(
+                func.date(DailyRiskReport.report_date) == report_date.date()
+            )
+        if keyword:
+            like = f"%{keyword}%"
+            query = query.where(
+                DailyRiskReport.report_no.ilike(like)
+                | DailyRiskReport.operation_description.ilike(like)
+                | DailyRiskReport.department.ilike(like)
+            )
+
+        count_query = select(func.count(DailyRiskReport.id)).where(
+            DailyRiskReport.is_deleted.is_(False)
+        )
+        if status:
+            count_query = count_query.where(DailyRiskReport.status == status)
+        if department:
+            count_query = count_query.where(DailyRiskReport.department == department)
+        if report_date:
+            count_query = count_query.where(
+                func.date(DailyRiskReport.report_date) == report_date.date()
+            )
+        if keyword:
+            like = f"%{keyword}%"
+            count_query = count_query.where(
+                DailyRiskReport.report_no.ilike(like)
+                | DailyRiskReport.operation_description.ilike(like)
+                | DailyRiskReport.department.ilike(like)
+            )
+
+        total = await self.session.scalar(count_query)
+        query = query.offset(skip).limit(limit).order_by(
+            DailyRiskReport.report_date.desc(), DailyRiskReport.created_at.desc()
+        )
+        result = await self.session.execute(query)
+        items = list(result.scalars().all())
+        return items, total or 0
+
+    async def get_daily_risk_report_by_id(
+        self, report_id: uuid.UUID
+    ) -> DailyRiskReport | None:
+        """获取每日风险作业报备详情"""
+        query = select(DailyRiskReport).where(
+            DailyRiskReport.id == report_id,
+            DailyRiskReport.is_deleted.is_(False),
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_daily_risk_report(
+        self, data: dict[str, Any]
+    ) -> DailyRiskReport:
+        """创建每日风险作业报备"""
+        item = DailyRiskReport(**data)
+        self.session.add(item)
+        await self.session.flush()
+        stmt = select(DailyRiskReport).where(DailyRiskReport.id == item.id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def update_daily_risk_report(
+        self, report_id: uuid.UUID, data: dict[str, Any]
+    ) -> DailyRiskReport | None:
+        """更新每日风险作业报备"""
+        query = (
+            update(DailyRiskReport)
+            .where(
+                DailyRiskReport.id == report_id,
+                DailyRiskReport.is_deleted.is_(False),
+            )
+            .values(**data, updated_at=func.now())
+            .returning(DailyRiskReport)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def delete_daily_risk_report(self, report_id: uuid.UUID) -> bool:
+        """删除每日风险作业报备（软删除）"""
+        query = (
+            update(DailyRiskReport)
+            .where(
+                DailyRiskReport.id == report_id,
+                DailyRiskReport.is_deleted.is_(False),
+            )
+            .values(is_deleted=True)
+        )
+        result = await self.session.execute(query)
+        return result.rowcount > 0
+
+    # ==================== OhHazardMonitor Operations ====================
+
+    async def get_hazard_monitors(
+        self,
+        skip: int = 0,
+        limit: int = 20,
+        status: str | None = None,
+        detection_type: str | None = None,
+        workplace: str | None = None,
+        keyword: str | None = None,
+    ) -> tuple[list[OhHazardMonitor], int]:
+        """获取职业危害因素监测列表"""
+        query = select(OhHazardMonitor).where(OhHazardMonitor.is_deleted.is_(False))
+
+        if status:
+            query = query.where(OhHazardMonitor.status == status)
+        if detection_type:
+            query = query.where(OhHazardMonitor.detection_type == detection_type)
+        if workplace:
+            query = query.where(OhHazardMonitor.workplace == workplace)
+        if keyword:
+            like = f"%{keyword}%"
+            query = query.where(
+                OhHazardMonitor.monitor_no.ilike(like)
+                | OhHazardMonitor.workplace.ilike(like)
+                | OhHazardMonitor.location.ilike(like)
+            )
+
+        count_query = select(func.count(OhHazardMonitor.id)).where(
+            OhHazardMonitor.is_deleted.is_(False)
+        )
+        if status:
+            count_query = count_query.where(OhHazardMonitor.status == status)
+        if detection_type:
+            count_query = count_query.where(OhHazardMonitor.detection_type == detection_type)
+        if workplace:
+            count_query = count_query.where(OhHazardMonitor.workplace == workplace)
+        if keyword:
+            count_query = count_query.where(
+                OhHazardMonitor.monitor_no.ilike(like)
+                | OhHazardMonitor.workplace.ilike(like)
+                | OhHazardMonitor.location.ilike(like)
+            )
+
+        query = query.order_by(OhHazardMonitor.created_at.desc()).offset(skip).limit(limit)
+        result = await self.session.execute(query)
+        items = list(result.scalars().all())
+        total = await self.session.scalar(count_query)
+        return items, total or 0
+
+    async def get_hazard_monitor_by_id(self, monitor_id: uuid.UUID) -> OhHazardMonitor | None:
+        """获取职业危害因素监测详情"""
+        query = select(OhHazardMonitor).where(
+            OhHazardMonitor.id == monitor_id, OhHazardMonitor.is_deleted.is_(False)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_hazard_monitor_by_no(self, monitor_no: str) -> OhHazardMonitor | None:
+        """按编号获取职业危害因素监测"""
+        query = select(OhHazardMonitor).where(
+            OhHazardMonitor.monitor_no == monitor_no, OhHazardMonitor.is_deleted.is_(False)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_hazard_monitor(self, data: dict[str, Any]) -> OhHazardMonitor:
+        """创建职业危害因素监测"""
+        item = OhHazardMonitor(**data)
+        self.session.add(item)
+        await self.session.flush()
+        stmt = select(OhHazardMonitor).where(OhHazardMonitor.id == item.id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one()
+
+    async def update_hazard_monitor(
+        self, monitor_id: uuid.UUID, data: dict[str, Any]
+    ) -> OhHazardMonitor | None:
+        """更新职业危害因素监测"""
+        query = (
+            update(OhHazardMonitor)
+            .where(OhHazardMonitor.id == monitor_id, OhHazardMonitor.is_deleted.is_(False))
+            .values(**data, updated_at=func.now())
+            .returning(OhHazardMonitor)
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def delete_hazard_monitor(self, monitor_id: uuid.UUID) -> bool:
+        """软删除职业危害因素监测"""
+        query = (
+            update(OhHazardMonitor)
+            .where(OhHazardMonitor.id == monitor_id, OhHazardMonitor.is_deleted.is_(False))
+            .values(is_deleted=True)
+        )
+        result = await self.session.execute(query)
+        return result.rowcount > 0

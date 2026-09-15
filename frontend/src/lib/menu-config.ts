@@ -113,7 +113,13 @@ export const moduleMenus: ModuleMenu[] = [
         key: "system-config",
         label: "系统配置",
         path: "",
-        children: [],
+        children: [
+          { key: "ai-config", label: "AI 配置中心", path: "/safety/system/ai-config" },
+          { key: "bitable-config", label: "多维表格配置", path: "/safety/system/bitable-config" },
+          { key: "scheduled-tasks", label: "定时任务", path: "/safety/system/scheduled-tasks" },
+          { key: "ai-audit", label: "AI 调用审计", path: "/safety/ai-audit" },
+          { key: "agent-chat", label: "AI 助手对话", path: "/safety/agent-chat" },
+        ],
       },
       // ── 作业安全 ──
       {
@@ -123,6 +129,7 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "special-ops-mgmt", label: "特殊作业管理", path: "/safety/special-ops" },
           { key: "daily-risk-report", label: "关键风险作业报备", path: "/safety/risk-reporting" },
+          { key: "daily-risk-report-flow", label: "每日风险作业报备", path: "/safety/daily-risk-report" },
         ],
       },
       // ── 风险与隐患 ──
@@ -146,6 +153,7 @@ export const moduleMenus: ModuleMenu[] = [
             path: "",
             children: [
               { key: "hazard-inspection-ledger", label: "隐患台账", path: "/safety/hazard-ledger" },
+              { key: "safety-check", label: "安全检查", path: "/safety/check" },
             ],
           },
           {
@@ -163,7 +171,8 @@ export const moduleMenus: ModuleMenu[] = [
             path: "",
             children: [
               { key: "ehs-change-apply", label: "EHS变更申请", path: "/safety/ehs-change" },
-              { key: "ehs-change-accept", label: "EHS变更验收", path: "/safety/ehs-change" },
+              { key: "ehs-change-accept", label: "EHS变更验收", path: "/safety/ehs-change/acceptance" },
+              { key: "ehs-change-urs", label: "URS 智能审核", path: "/safety/ehs-change/urs" },
             ],
           },
 
@@ -177,7 +186,10 @@ export const moduleMenus: ModuleMenu[] = [
         path: "",
         children: [
           { key: "emergency-plan", label: "应急预案管理", path: "", disabled: true },
-          { key: "emergency-drill", label: "应急演练管理", path: "", disabled: true },
+          { key: "emergency-drill", label: "应急演练管理", path: "/safety/emergency-drill" },
+          { key: "fire-alarms", label: "消防报警分析", path: "/safety/fire-alarms" },
+          { key: "central-alarms", label: "中控报警分析", path: "/safety/central-alarms" },
+          { key: "accident", label: "事故管理", path: "/safety/accident" },
         ],
       },
 
@@ -190,6 +202,8 @@ export const moduleMenus: ModuleMenu[] = [
           { key: "training", label: "安全培训管理", path: "/safety/training" },
           { key: "personnel-qual", label: "厂内人员资质", path: "/safety/special-ops/personnel" },
           { key: "contractor", label: "承包商管理", path: "/safety/contractor" },
+          { key: "contractor-admission", label: "相关方准入审核", path: "/safety/contractor-admission" },
+          { key: "cert-warnings", label: "持证到期预警", path: "/safety/cert-warnings" },
         ],
       },
 
@@ -201,6 +215,8 @@ export const moduleMenus: ModuleMenu[] = [
         children: [
           { key: "oh-monitor", label: "职业危害因素监测", path: "/safety/occupational-health" },
           { key: "oh-exam", label: "职业健康体检", path: "/safety/occupational-health" },
+          { key: "chemical-inventory", label: "危化品库存", path: "/safety/chemical-inventory" },
+          { key: "msds", label: "MSDS 管理", path: "/safety/msds" },
           { key: "ppe", label: "劳动防护用品管理", path: "", disabled: true },
         ],
       },
@@ -334,6 +350,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "inventory", label: "库存管理", path: "/warehouse/inventory" },
       { key: "inout", label: "出入库记录", path: "/warehouse/inout" },
       { key: "stocktake", label: "库存盘点", path: "/warehouse/stocktake" },
+      { key: "system", label: "系统配置", path: "/warehouse/system", permissions: ["warehouse:system-config:read"] },
     ],
   },
   {

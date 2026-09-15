@@ -141,3 +141,8 @@ export {
   ConfigStatusTag,
   ACTION_TAG_UI,
 } from './bitableConfigConstants'
+
+// ── 每日风险作业报备 / 安全检查（迁移补齐）──
+export { default as DailyRiskReportPanel } from './DailyRiskReportPanel'
+export { default as RiskReportPanel } from './RiskReportPanel'
+export { default as HazardSelectModal } from './HazardSelectModal'

@@ -233,3 +233,17 @@ __all__ = [
     'WorkTicketReview',
     'WorkTicketReviewViolation',
 ]
+
+from app.modules.safety.models.safety_ops import (  # noqa: F401
+    Accident,
+    DailyRiskReport,
+    OhHazardMonitor,
+    SafetyCheck,
+)
+
+__all__ += [
+    'Accident',
+    'DailyRiskReport',
+    'OhHazardMonitor',
+    'SafetyCheck',
+]

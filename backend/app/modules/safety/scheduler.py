@@ -504,38 +504,64 @@ async def _run_progress_dunning(chat_id: str | None = None) -> None:
 async def _run_special_op_daily_report(
     job: dict[str, Any], today: date, chat_id: str | None = None,
 ) -> None:
-    """执行特殊作业日报任务（兼容旧接口）。"""
+    """执行特殊作业日报任务：直读总开关决定数据源（真双路径切换）。
+
+    - 旧链路（08:00 全量对账 / 17:00 增量同步）：由 ``legacy_sync_job_active()`` 闸门控制，
+      默认部署照常运行；打开直读总开关后默认停止（单项开关可显式恢复）
+    - 日报渲染：``SAFETY_SPECIAL_OP_DIRECT_ENABLED`` 打开走直读编排（不写平台库），
+      关闭走既有镜像链路（行为与改造前一致）
+    """
     from app.core.database import async_session_factory
+    from app.modules.safety.service.special_op_direct import config as direct_config
     from app.modules.safety.service.special_operation_daily_report import (
         SpecialOperationDailyReportService,
     )
 
+    mode = job["mode"]
+    target_chats = [chat_id] if chat_id else []  # 无目标  不推送（统一来源：DB 配置）
+
+    if direct_config.legacy_sync_job_active():
+        async with async_session_factory() as session:
+            service = SpecialOperationDailyReportService(session)
+            if mode == "today":
+                # 08:00：每日唯一一次全量对账。删除记录、旧记录编辑只有全量能发现，
+                # 增量（发起时间过滤）覆盖不了；这是该表当天的兜底基线。
+                synced = await service.sync_from_bitable()
+                if synced > 0:
+                    await session.commit()
+                logger.info("特殊作业全量对账完成: synced=%s", synced)
+            else:
+                # 17点：改用增量同步（2026-09-03）。白天新增由 WS 事件实时同步，
+                # 增量按「发起时间 > 本地水位-24h」补漏，秒级完成；失败自动退化为
+                # 全量。此前每次全量拉 2033 条逐条 upsert 纯属浪费。
+                inc = await service.check_and_sync_incremental()
+                logger.info(
+                    "特殊作业增量同步: status=%s recent=%s pulled=%s elapsed=%sms",
+                    inc.get("status"), inc.get("bitable_recent"),
+                    inc.get("pulled"), inc.get("elapsed_ms"),
+                )
+    else:
+        logger.info("特殊作业旧同步任务已关闭（直读模式）: mode=%s", mode)
+
+    if direct_config.direct_enabled():
+        from app.modules.safety.service.special_op_direct import daily
+
+        result = await daily.run(today, mode, target_chats=target_chats)
+        logger.info(
+            "  日报完成(直读): total=%d high=%d medium=%d low=%d excluded=%d push_ok=%d",
+            result.total, result.high_risk, result.medium_risk,
+            result.low_risk, result.excluded,
+            sum(1 for p in result.push_results if p.get("success")),
+        )
+        return
+
     async with async_session_factory() as session:
         service = SpecialOperationDailyReportService(session)
-        if job.get("mode") == "today":
-            # 08:00：每日唯一一次全量对账。删除记录、旧记录编辑只有全量能发现，
-            # 增量（发起时间过滤）覆盖不了；这是该表当天的兜底基线。
-            synced = await service.sync_from_bitable()
-            if synced > 0:
-                await session.commit()
-            logger.info("特殊作业全量对账完成: synced=%s", synced)
-        else:
-            # 17点：改用增量同步（2026-09-03）。白天新增由 WS 事件实时同步，
-            # 增量按「发起时间 > 本地水位-24h」补漏，秒级完成；失败自动退化为
-            # 全量。此前每次全量拉 2033 条逐条 upsert 纯属浪费。
-            inc = await service.check_and_sync_incremental()
-            logger.info(
-                "特殊作业增量同步: status=%s recent=%s pulled=%s elapsed=%sms",
-                inc.get("status"), inc.get("bitable_recent"),
-                inc.get("pulled"), inc.get("elapsed_ms"),
-            )
-
-        target_chats = [chat_id] if chat_id else []  # 无目标 → 不推送（统一来源：DB 配置）
         result = await service.generate_and_push(
-            target_date=today, mode=job["mode"], target_chats=target_chats,
+            target_date=today, mode=mode, target_chats=target_chats,
         )
         # 2026-09-03：不再在此处 commit。generate_and_push 已在推送前提交
-        # （收口长事务），推送成功后无任何待提交内容——推送后 commit 一旦
+        # （收口长事务），推送成功后无任何待提交内容推送后 commit 一旦
         # 因连接死亡失败，任务会被误标 failed 触发重试造成重复推送。
         logger.info(
             "  日报完成: total=%d high=%d medium=%d low=%d excluded=%d push_ok=%d",
@@ -543,7 +569,6 @@ async def _run_special_op_daily_report(
             result.low_risk, result.excluded,
             sum(1 for p in result.push_results if p.get("success")),
         )
-
 
 async def _run_work_ticket_review(today: date, chat_id: str | None = None) -> None:
     """作业票审核定时任务（每日 17:00）：拉取当日标准8类作业票 → 规则审核 → 落库 → 推送群。

@@ -12,7 +12,7 @@ work_ticket / hazard_id 五个只读工具）。
 - permissions：五个工具进入 _READ_TOOLS（viewer 也可查）；
 - tool_selector 关键词激活（用户原话"提炼工程五部作业判定记录"命中）；
 - 参数规范化 _norm_choice（中文→code / code 兼容 / 未知原样）；
-- 各工具返回结构与 where 骨架（部门模糊、风险等级、not_applicable 默认排除）。
+- 各工具返回结构与筛选骨架（特殊作业工具已切多维表格直读，见 Ticket 07）。
 """
 
 from __future__ import annotations
@@ -164,45 +164,66 @@ def _sp_row(**overrides: Any) -> SpecialOperationReport:
 
 
 @pytest.mark.asyncio
-async def test_special_op_records_query() -> None:
-    db = FakeSession([
-        _FakeResult(scalar=2),
-        _FakeResult(rows=[_sp_row(), _sp_row(report_no="BT-0002")]),
-    ])
-    r = await query_special_op_records(
-        _ctx(db), department="提炼工程五部", date_from="2026-09-02",
-        date_to="2026-09-03", daily_risk_level="高风险",
+async def test_special_op_records_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ticket 07：工具改为直读多维表格（不再走 ctx.deps.db）。"""
+    from app.modules.safety.service.special_op_direct import bitable_repo, contract
+    from app.modules.safety.service.special_op_direct.tests.factories import (
+        HIGH_FIELDS,
+        LOW_FIELDS,
+        FakeReader,
+        record,
     )
+
+    reader = FakeReader(records=[
+        record("rec-high", **HIGH_FIELDS),
+        record("rec-low", **LOW_FIELDS),
+    ])
+    monkeypatch.setattr(bitable_repo, "resolve_client", lambda: reader)
+
+    db = FakeSession([])
+    r = await query_special_op_records(
+        _ctx(db), department="生产", date_from="2026-09-11",
+        date_to="2026-09-11", daily_risk_level="高风险",
+    )
+    assert db.statements == []  # 不再读平台库镜像表（Ticket 07）
+
     assert r["success"] is True
-    assert r["total"] == 2
-    assert len(r["items"]) == 2
-    assert r["items"][0]["department"] == "提炼工程五部"
-    assert r["items"][0]["daily_risk_level"] == "medium"
-    # where 骨架：部门模糊 + 日期区间 + 风险等级（"高风险"已规范化）
-    sql = str(db.statements[0])
-    assert "department" in sql
-    assert "LIKE" in sql  # ilike → lower(x) LIKE lower(:y)（default 方言）
-    assert "planned_start_time >=" in sql
-    assert "daily_risk_level =" in sql
-    compiled = db.statements[0].compile()
-    assert "high" in str(compiled.params)
+    assert r["total"] == 1
+    assert len(r["items"]) == 1
+    assert r["items"][0]["department"] == "生产部"
+    assert r["items"][0]["daily_risk_level"] == "high"
+
+    # 下推：部门 2 分支 x 风险 2 分支 = 4 条 flat-AND 查询
+    assert len(reader.calls) == 4
+    fields = {
+        c["field_name"]
+        for call in reader.calls
+        for c in call["filter_info"]["conditions"]
+    }
+    assert "作业时间_开始时间" in fields
+    assert "申请部门" in fields
+    assert "发起人部门" in fields
+    assert contract.RISK_FIELD_NAME in fields
+    assert all(call["strict"] is True for call in reader.calls)
 
 
 @pytest.mark.asyncio
-async def test_special_op_records_error_path() -> None:
-    class Boom(FakeSession):
-        async def execute(self, stmt: Any) -> Any:
-            raise RuntimeError("db down")
+async def test_special_op_records_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.modules.safety.feishu.bitable_client import BitableQueryError
+    from app.modules.safety.service.special_op_direct import bitable_repo
+    from app.modules.safety.service.special_op_direct.tests.factories import FakeReader
 
-    r = await query_special_op_records(_ctx(Boom([])), department="x")
+    monkeypatch.setattr(
+        bitable_repo, "resolve_client",
+        lambda: FakeReader(error=BitableQueryError(1254001, "table not found")),
+    )
+
+    r = await query_special_op_records(_ctx(FakeSession([])), department="x")
+
     assert r["success"] is False
     assert "查询失败" in r["error"]
 
 
-# ── 关键风险作业 ──────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
 async def test_key_risk_ops_query() -> None:
     row = KeyRiskOperationReport(
         report_no="KR-001", department="提炼工程五部", area="一车间",

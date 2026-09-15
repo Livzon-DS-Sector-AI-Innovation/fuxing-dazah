@@ -20,8 +20,10 @@ from app.modules.safety.schemas import (
     HazardIdentificationRunScript,
     HazardIdentificationUpdate,
     HazardLedgerExportRequest,
+    HazardRiskOption,
 )
 from app.modules.safety.service import (
+    DailyRiskReportService,
     SafetyService,
 )
 
@@ -97,6 +99,29 @@ async def get_hazard_identification_ledger_stats(
         department, position, risk_level, date_from, date_to,
     )
     return ApiResponse(data=stats)
+
+
+@hazard_identifications_router.get(
+    "/hazard-identifications/risk-options",
+    response_model=ApiResponse,
+    summary="获取危险源风险选项（常规作业报备用）",
+)
+async def get_hazard_risk_options(
+    department: str | None = Query(None, description="部门筛选"),
+    keyword: str | None = Query(None, description="搜索关键字（编号/部门/岗位）"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser | None = Depends(get_current_user),
+):
+    """返回风险等级为 level_1/level_2 且 overall_status=completed 的危险源辨识项"""
+    service = DailyRiskReportService(db)
+    skip = (page - 1) * page_size
+    items, total = await service.get_hazard_risk_options(department, keyword, skip, page_size)
+    return ApiResponse(
+        data=[HazardRiskOption.model_validate(i) for i in items],
+        meta={"page": page, "page_size": page_size, "total": total},
+    )
 
 
 @hazard_identifications_router.get(

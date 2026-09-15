@@ -12,6 +12,7 @@ import logging
 from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.event_client import on_event
+from app.modules.safety.service.special_op_direct import config as direct_config
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,17 @@ async def handle_special_ops_record_changed(event: dict) -> None:
             {"action": "record_added|record_edited|record_deleted", "record_id": "recxxx", ...}
         ]
     }
+
+    闸门（Ticket 06）：直读模式下默认停止镜像写入（事件不再落平台库），
+    仅当显式打开 SAFETY_SPECIAL_OP_EVENT_SYNC_ENABLED 时恢复。
     """
+    if not direct_config.legacy_event_sync_active():
+        logger.info(
+            "特殊作业事件镜像已关闭（直读模式），忽略事件: table_id=%s",
+            event.get("table_id", ""),
+        )
+        return
+
     file_token = event.get("file_token", "")
     table_id = event.get("table_id", "")
 

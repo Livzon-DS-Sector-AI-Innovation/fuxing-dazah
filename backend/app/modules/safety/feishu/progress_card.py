@@ -143,7 +143,7 @@ def build_submitted_card(hazard_no: str, text: str) -> dict:
     now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M")
     return {
         "schema": "2.0",
-        "config": {"wide_screen_mode": True},
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": "✅ 进展已提交"},
             "template": "green",

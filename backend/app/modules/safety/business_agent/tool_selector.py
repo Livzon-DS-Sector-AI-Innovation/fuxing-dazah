@@ -18,16 +18,24 @@ logger = logging.getLogger(__name__)
 TOOL_GROUPS: dict[str, list[str]] = {
     "hazard": [
         "query_hazards", "query_hazard_stats",
+        # 隐患直读模式：督办通报（只读生成 / 推群）+ 轮询触发。
+        # agent.md 明确要求这些意图调用它们，漏登记会让关键词收窄时被摘掉。
+        "generate_supervision_bulletin", "send_hazard_supervision_bulletin",
+        "poll_hazard_ai_analysis", "poll_hazard_rectification_review",
     ],
     "knowledge": [
         "knowledge_search", "web_search", "query_latest_regulations",
+        "run_regulation_ai_review",
     ],
     "contractor_admission": ["query_contractor_admissions"],
     "drill": [
         "query_drill_plans", "query_drill_records",
         "generate_drill_plan", "sync_drill_plan_to_feishu",
     ],
-    "audit": ["query_ai_audits"],
+    "audit": [
+        "query_ai_audits",
+        "query_ai_config", "query_bitable_config", "query_scheduler_tasks",
+    ],
     "daily_report": [
         "generate_daily_report",
         "office_create_docx",
@@ -57,11 +65,17 @@ TOOL_GROUPS: dict[str, list[str]] = {
     "office": [
         "office_search_files", "office_read_docx", "office_read_sheet",
         "office_read_base", "office_read_drive_file",
+        # 写工具一并入组：用户「把结果导出成表格/文档」这类话里没有链接或 token，
+        # 走不到 has_office_reference 全量回退，缺了它们同样会出现「未挂载」。
+        "office_create_docx", "office_create_sheet", "office_write_sheet",
+        "office_create_base", "office_create_slides", "office_generate_docx_pdf",
+        "office_upload_file", "office_set_permission", "rollback_office_file",
     ],
     "urs": [
         "query_urs_records", "query_urs_review_detail",
         "create_urs_review", "parse_urs_document", "run_urs_assessment",
         "update_urs_item", "confirm_urs_assessment", "submit_urs_appeal",
+        "generate_urs_report_pdf",
     ],
     "chemical_inventory": [
         "query_chemical_inventory", "analyze_chemical_risk",
@@ -83,14 +97,20 @@ INTENT_KEYWORDS: dict[str, list[str]] = {
     "hazard": [
         "隐患", "整改", "缺陷", "堵头", "泄漏", "防爆",
         "危险源", "风险", "关闭",
+        # 「督办通报」本身不含「隐患」二字，必须单独给词，否则这类问法收不到工具
+        "督办", "通报",
     ],
     "knowledge": [
         "法规", "标准", "规范", "条款", "规定", "制度",
         "GB", "AQ", "HG", "SH", "TSG", "GB/T", "AQ/T",
+        "操规", "操作规程",
     ],
     "contractor_admission": ["准入", "承包商", "相关方", "劳务派遣", "外包单位"],
     "drill": ["演练", "应急", "预案", "逃生", "疏散"],
-    "audit": ["审计", "AI调用", "token", "调用记录"],
+    "audit": [
+        "审计", "AI调用", "token", "调用记录",
+        "AI配置", "模型配置", "多维表格配置", "定时任务", "调度", "后台任务",
+    ],
     "daily_report": ["日报", "报表", "特殊作业", "次日预警", "计划外", "17点", "17点日报"],
     "fire_alarm": ["消防报警", "消防", "火警", "报警器"],
     "central_alarm": ["中控报警", "中控", "报警记录"],

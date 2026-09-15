@@ -423,6 +423,40 @@ class FireAlarmService:
             content=markdown, push=push, chat_id=chat_id,
         )
 
+        # 「安全速递」总卡：投递本报告格子（失败不影响消防日报本身）
+        if push and any(r.get("success") for r in push_results):
+            try:
+                from collections import Counter
+
+                from app.modules.safety.feishu.daily_digest import (
+                    DigestCell,
+                    upsert_daily_digest,
+                )
+
+                dim_top = sorted(
+                    agg.dimension_distribution.items(), key=lambda x: -x[1],
+                )[:3]
+                dept_top = Counter(
+                    r.department or "?" for r in agg.records
+                ).most_common(3)
+                await upsert_daily_digest(
+                    target_date,
+                    "fire_alarm",
+                    DigestCell(
+                        tag_color="red",
+                        tag_text="消防报警",
+                        title="消防报警日报",
+                        stats=f"今日报警 **{agg.total}** 起",
+                        zone=" ｜ ".join(
+                            [f"{k} {v}" for k, v in dim_top]
+                            + [f"{d} {n} 起" for d, n in dept_top]
+                        )[:100],
+                        detail=markdown,
+                    ),
+                )
+            except Exception:
+                logger.warning("安全速递总卡投递失败（消防报警）", exc_info=True)
+
         return FireAlarmReportResponse(
             report_kind="daily",
             target_date=target_date,

@@ -1457,12 +1457,19 @@ class KnowledgeService:
             return f"{prefix}-{today}-{seq:03d}"
 
         # ── 1. 拉取 Bitable 全部记录 ──
+        # app_token 从配置中心读（DB 活行 → registry 默认）：knowledge 域文档
+        # 为 wiki 挂载，配置存底层 Base token；Bitable 读写 API 两种 token 均可。
+        from app.modules.safety.bitable_config.store import resolve_connection
+
+        bitable_app_token, _ = resolve_connection("knowledge", "collection")
         bitable_records: list[dict[str, object]] = []
 
         for td in tables:
             table_id = str(td["table_id"])
             table_name = str(td["name"])
-            client = SafetyBitableClient(app_token="IkYTw6PJPiKZTCkfuNQc7IqEnzd", table_id=table_id)
+            client = SafetyBitableClient(
+                app_token=bitable_app_token, table_id=table_id
+            )
             records = await client.list_all_records()
             logger.info("Bitable [%s]: %d 条", table_name, len(records))
             for rec in records:

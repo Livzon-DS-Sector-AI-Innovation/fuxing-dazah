@@ -113,6 +113,12 @@ class SchedulerEngine:
 
         now = datetime.now(ZoneInfo(task.schedule.timezone))
         last = self._last_run.get(task.name)
+        if last is None:
+            # 首次见到该任务（进程启动后的第一个 tick）：只登记基准时间，
+            # 不执行。否则每次重启所有任务都会立即触发一轮——cron / 固定
+            # 时间任务会在一天内的任意时刻被补跑（重启即发定时任务）。
+            self._last_run[task.name] = now
+            return
         if not is_due(task.schedule, last, now):
             return
 
@@ -147,6 +153,10 @@ class SchedulerEngine:
 
         now = datetime.now(ZoneInfo(gen.schedule.timezone))
         last = self._last_run.get(gen.name)
+        if last is None:
+            # 与静态任务一致：启动后首次只登记基准时间，不扫描、不派发
+            self._last_run[gen.name] = now
+            return
         if not is_due(gen.schedule, last, now):
             return
 

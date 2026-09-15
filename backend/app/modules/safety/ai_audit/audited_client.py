@@ -93,6 +93,10 @@ class AuditedAIService(AIService):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # 平台层 AIService 不暴露 base_url（只存在其内部 httpx 客户端上），
+        # 但本类的 thinking_policy DeepSeek 判定与备份切换需要读取它，
+        # 因此从客户端反推补齐（含末尾斜杠，仅用于 in 判定与日志）。
+        self.base_url = str(self._client.base_url)
         self._backup: AuditedAIService | None = None
 
     def set_backup(self, *, api_key: str, base_url: str, model: str, timeout: int = 120) -> None:
@@ -420,6 +424,43 @@ class AuditedAIService(AIService):
                 text_prompt, image_urls, temperature=temperature, max_tokens=max_tokens,
             )
             return self._parse_json_response(raw, expected_keys)
+
+    @staticmethod
+    def _parse_json_response(raw: str, expected_keys: list[str]) -> dict:
+        """解析视觉调用返回的 JSON（与平台层 chat_vision_parsed 解析逻辑保持一致）。
+
+        同步义务：平台层若修改其解析逻辑（去代码围栏 / 布尔串转换 / 缺键校验），
+        本方法必须同步。
+        """
+        try:
+            # Strip markdown code fences if present
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                lines = cleaned.split("\n")
+                # Find first line that doesn't start with ```
+                for i, line in enumerate(lines):
+                    if not line.strip().startswith("```"):
+                        cleaned = "\n".join(lines[i:])
+                        break
+                # Remove trailing ```
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3].strip()
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise AIOutputError("Vision AI response is not valid JSON", raw) from e
+
+        if not isinstance(parsed, dict):
+            raise AIOutputError("Vision AI response is not a dict", raw)
+
+        # coerce boolean strings
+        for k, v in parsed.items():
+            if isinstance(v, str) and v.lower() in ("true", "false"):
+                parsed[k] = v.lower() == "true"
+
+        missing = [k for k in expected_keys if k not in parsed]
+        if missing:
+            raise AIOutputError(f"Vision AI response missing keys: {missing}", raw)
+        return parsed
 
     async def close(self) -> None:
         """关闭主客户端 + 备份客户端（风险 10：绑定/降级后备份连接泄漏）。

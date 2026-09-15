@@ -29,6 +29,14 @@ _DATE_EXTRACT_RE = _re.compile(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}[日]?")
 # 剥离标题开头的媒体来源前缀（如 "[中国政府网] 人体器官捐献和移植条例"）
 _BRACKET_PREFIX_RE = _re.compile(r"^\[[^\]]*\]\s*")
 
+# 法规关键词加权（列表页链接排序用：标题含以下词的优先）
+_REGULATION_KEYWORDS = [
+    "条例", "办法", "规定", "规程", "规范", "规则", "通知",
+    "公告", "意见", "标准", "安全", "管理", "生产", "应急",
+    "消防", "职业", "健康", "环保", "药品", "化学品", "设备",
+    "特种", "锅炉", "压力", "电气", "防爆", "作业", "事故",
+]
+
 
 def _extract_date_text(text: str) -> str:
     """从文本中提取首个日期并规范化为 YYYY-MM-DD；无匹配返回空串。
@@ -701,14 +709,6 @@ class PlaywrightCrawler(BaseCrawler):
         soup = BeautifulSoup(html, "lxml")
         all_links = soup.select("a[href]")
 
-        # ── 法规关键词加权（标题含以下词的优先）──
-        _REGULATION_KW = [
-            "条例", "办法", "规定", "规程", "规范", "规则", "通知",
-            "公告", "意见", "标准", "安全", "管理", "生产", "应急",
-            "消防", "职业", "健康", "环保", "药品", "化学品", "设备",
-            "特种", "锅炉", "压力", "电气", "防爆", "作业", "事故",
-        ]
-
         candidates: list[tuple[int, str, str]] = []  # (score, title, href)
 
         for a in all_links:
@@ -745,7 +745,7 @@ class PlaywrightCrawler(BaseCrawler):
 
             # ── 计算相关性评分 ──
             score = len(title)  # 基础分 = 标题长度
-            for kw in _REGULATION_KW:
+            for kw in _REGULATION_KEYWORDS:
                 if kw in title:
                     score += 20  # 命中法规关键词加权
 

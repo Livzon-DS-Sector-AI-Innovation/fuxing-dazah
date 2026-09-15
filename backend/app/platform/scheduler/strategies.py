@@ -23,7 +23,11 @@ def is_due(
 
     Args:
         schedule: Scheduling parameters.
-        last_run: The last time the task was attempted (or None for first run).
+        last_run: The last time the task was attempted.  ``None`` means
+            "no baseline yet" and is treated as due-now — the engine
+            seeds a baseline on first sight instead, so restarts never
+            fire tasks immediately (传 None 的语义是"立即到期"，仅供
+            直接调用本函数的测试/工具使用).
         now: Current time; defaults to ``datetime.now()`` in the local timezone.
     """
     if now is None:

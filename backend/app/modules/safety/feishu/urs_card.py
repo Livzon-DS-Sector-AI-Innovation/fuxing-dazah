@@ -1,16 +1,23 @@
-"""URS 智能审核 — 飞书卡片构建与回调处理。
+"""URS 智能审核 — 飞书卡片构建与回调处理（卡片 JSON 2.0）。
 
 通知对象仅申请人（D8）；卡片回调挂载在 business_agent_bot_handler.card.action.trigger，
 通过 payload["scope"] == "urs" 路由到 handle_urs_card_action。
+
+卡片更新约定（2026-09-14 仓库机器人点击实测，本模块同机制）：WS 回调响应里
+携带卡片更新不生效，统一改「纯 ACK + PATCH 原卡」（message_id 取回调事件
+context.open_message_id）；toast 仅作锦上添花（生效则展示，不生效无碍）。
 """
 
 import asyncio
-import json
 import logging
 import uuid
 from typing import Any
 
-from app.modules.safety.feishu.notification import send_user_card
+from app.modules.safety.feishu.notification import (
+    build_card_dict,
+    button_row,
+    send_user_card,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +31,38 @@ _APPLICABILITY_EMOJI = {"mandatory": "🔴", "recommended": "🟡", "not_applica
 
 
 def _btn(value: dict, text: str, btn_type: str = "default") -> dict:
-    """构建卡片按钮。value 需双重 JSON 编码（卡片 + 事件）。"""
+    """构建卡片按钮。value 与 behaviors[type=callback].value 双写同值
+    （2.0 字段表首选 behaviors，旧式 value 仍被事件回传——回调解析两侧兼容）。"""
     return {
         "tag": "button",
         "text": {"tag": "plain_text", "content": text},
         "type": btn_type,
-        "value": json.dumps(value, ensure_ascii=False),
+        "value": value,
+        "behaviors": [{"type": "callback", "value": value}],
     }
 
 
 def _action_row(*buttons: dict) -> dict:
-    return {"tag": "action", "actions": list(buttons)}
+    return button_row(*buttons)
+
+
+def _patch_message_id(event_data: dict) -> str:
+    """回调事件中的原卡 message_id（2.0 事件在 context）。"""
+    context = event_data.get("context") or {}
+    return str(context.get("open_message_id") or "")
+
+
+async def _patch_card(event_data: dict, card: dict) -> None:
+    """PATCH 替换回调来源卡片为 card（失败仅告警，不阻断回调）。"""
+    from app.modules.safety.feishu.notification import update_card
+
+    msg_id = _patch_message_id(event_data)
+    if not msg_id:
+        logger.warning("URS 卡片回调缺少 context.open_message_id，跳过卡片更新")
+        return
+    ok = await update_card(msg_id, card)
+    if not ok:
+        logger.warning("URS 卡片 PATCH 失败: message_id=%s", msg_id)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -72,11 +100,12 @@ def build_assessment_card(report: Any) -> dict:
             _btn({"scope": "urs", "action": "urs_confirm", "urs_id": str(report.id)}, "✅ 确认画像", "primary"),
             _btn({"scope": "urs", "action": "urs_appeal", "urs_id": str(report.id)}, "✏️ 修正画像"),
         ))
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": f"{emoji} URS 审核结果：{report.equipment_name}"}, "template": "blue"},
-        "elements": [{"tag": "markdown", "content": "\n".join(lines)}] + elements,
-    }
+    return build_card_dict(
+        f"{emoji} URS 审核结果：{report.equipment_name}",
+        "\n".join(lines),
+        header_template="blue",
+        elements=elements,
+    )
 
 
 def build_conclusion_card(report: Any) -> dict:
@@ -110,11 +139,12 @@ def build_conclusion_card(report: Any) -> dict:
         elements.append(_action_row(
             _btn({"scope": "urs", "action": "urs_appeal", "urs_id": str(report.id)}, "提交申诉"),
         ))
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": f"URS 审核结论：{report.equipment_name}"}, "template": "orange" if conclusion == "rejected" else "green"},
-        "elements": [{"tag": "markdown", "content": "\n".join(lines)}] + elements,
-    }
+    return build_card_dict(
+        f"URS 审核结论：{report.equipment_name}",
+        "\n".join(lines),
+        header_template="orange" if conclusion == "rejected" else "green",
+        elements=elements,
+    )
 
 
 def build_appeal_result_card(report: Any) -> dict:
@@ -131,14 +161,14 @@ def build_appeal_result_card(report: Any) -> dict:
         f"**调整依据**：{appeal.get('basis') or '重新评估完成'}",
         f"**当前状态**：{report.review_status}",
     ]
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": f"URS 申诉结果：{report.equipment_name}"}, "template": "purple"},
-        "elements": [
-            {"tag": "markdown", "content": "\n".join(lines)},
+    return build_card_dict(
+        f"URS 申诉结果：{report.equipment_name}",
+        "\n".join(lines),
+        header_template="purple",
+        elements=[
             _action_row(_btn({"scope": "urs", "action": "urs_view", "urs_id": str(report.id)}, "查看详情", "primary")),
         ],
-    }
+    )
 
 
 # ════════════════════════════════════════════════════════════════
@@ -150,11 +180,12 @@ async def notify_assessment_result(report: Any) -> bool:
     if not report.applicant_open_id:
         return False
     card = build_assessment_card(report)
+    body = card["body"]["elements"]
     return await send_user_card(
         open_id=report.applicant_open_id,
         title=card["header"]["title"]["content"],
-        content=card["elements"][0]["content"],
-        elements=card["elements"][1:],
+        content=str(body[0].get("content") or ""),
+        elements=body[1:],
     )
 
 
@@ -162,11 +193,12 @@ async def notify_conclusion(report: Any) -> bool:
     if not report.applicant_open_id:
         return False
     card = build_conclusion_card(report)
+    body = card["body"]["elements"]
     return await send_user_card(
         open_id=report.applicant_open_id,
         title=card["header"]["title"]["content"],
-        content=card["elements"][0]["content"],
-        elements=card["elements"][1:],
+        content=str(body[0].get("content") or ""),
+        elements=body[1:],
     )
 
 
@@ -174,11 +206,12 @@ async def notify_appeal_result(report: Any) -> bool:
     if not report.applicant_open_id:
         return False
     card = build_appeal_result_card(report)
+    body = card["body"]["elements"]
     return await send_user_card(
         open_id=report.applicant_open_id,
         title=card["header"]["title"]["content"],
-        content=card["elements"][0]["content"],
-        elements=card["elements"][1:],
+        content=str(body[0].get("content") or ""),
+        elements=body[1:],
     )
 
 
@@ -188,7 +221,7 @@ async def notify_appeal_result(report: Any) -> bool:
 
 
 async def handle_urs_card_action(payload: dict, event_data: dict) -> dict | None:
-    """处理 URS 卡片按钮回调。返回卡片更新 dict（event_client 自动 b64 编码）。"""
+    """处理 URS 卡片按钮回调：执行动作后 PATCH 原卡，返回纯 ACK（None）。"""
     action = payload.get("action")
     urs_id_raw = payload.get("urs_id")
     if not action or not urs_id_raw:
@@ -199,22 +232,23 @@ async def handle_urs_card_action(payload: dict, event_data: dict) -> dict | None
         return None
 
     if action == "urs_view":
-        return await _show_detail(report_id)
+        return await _show_detail(report_id, event_data)
     if action == "urs_confirm":
-        return await _confirm_assessment(report_id)
+        return await _confirm_assessment(report_id, event_data)
     if action == "urs_appeal":
-        return _show_appeal_input(report_id)
+        return _show_appeal_input(report_id, event_data)
     if action == "urs_appeal_confirm":
         reason = payload.get("reason") or ""
         asyncio.create_task(_run_appeal_background(report_id, reason))
-        return {
-            "toast": {"type": "success", "content": "申诉已受理，正在重新评估..."},
-            "card": {"type": "raw", "data": json.dumps({
-                "config": {"wide_screen_mode": True},
-                "header": {"title": {"tag": "plain_text", "content": "URS 申诉处理中"}, "template": "purple"},
-                "elements": [{"tag": "markdown", "content": "正在重新评估风险画像与标准适配，完成后将推送结果。"}],
-            }, ensure_ascii=False)},
-        }
+        await _patch_card(
+            event_data,
+            build_card_dict(
+                "URS 申诉处理中",
+                "正在重新评估风险画像与标准适配，完成后将推送结果。",
+                header_template="purple",
+            ),
+        )
+        return {"toast": {"type": "success", "content": "申诉已受理，正在重新评估..."}}
     return None
 
 
@@ -227,15 +261,16 @@ async def _fetch_report(report_id: uuid.UUID):
         return await URSService(db).get_report(report_id)
 
 
-async def _show_detail(report_id: uuid.UUID) -> dict:
+async def _show_detail(report_id: uuid.UUID, event_data: dict) -> dict | None:
     report = await _fetch_report(report_id)
     if report is None:
         return {"toast": {"type": "error", "content": "记录不存在"}}
     card = build_conclusion_card(report) if report.conclusion else build_assessment_card(report)
-    return {"toast": {"type": "success", "content": "已加载"}, "card": {"type": "raw", "data": json.dumps(card, ensure_ascii=False)}}
+    await _patch_card(event_data, card)
+    return None
 
 
-async def _confirm_assessment(report_id: uuid.UUID) -> dict:
+async def _confirm_assessment(report_id: uuid.UUID, event_data: dict) -> dict | None:
     from app.core.database import async_session_factory
 
     try:
@@ -246,22 +281,19 @@ async def _confirm_assessment(report_id: uuid.UUID) -> dict:
             await db.commit()
         if report is None:
             return {"toast": {"type": "error", "content": "记录不存在"}}
-        card = build_assessment_card(report)
-        return {
-            "toast": {"type": "success", "content": "画像已确认，正在适配"},
-            "card": {"type": "raw", "data": json.dumps(card, ensure_ascii=False)},
-        }
+        await _patch_card(event_data, build_assessment_card(report))
+        return None
     except ValueError as e:
         return {"toast": {"type": "error", "content": str(e)}}
 
 
-def _show_appeal_input(report_id: uuid.UUID) -> dict:
-    """展示带输入框的申诉卡（输入理由 → 确认申诉）。"""
-    card = {
-        "config": {"wide_screen_mode": True},
-        "header": {"title": {"tag": "plain_text", "content": "提交申诉"}, "template": "purple"},
-        "elements": [
-            {"tag": "markdown", "content": "请填写申诉理由（如设备实际不涉及某项风险）："},
+def _show_appeal_input(report_id: uuid.UUID, event_data: dict) -> dict | None:
+    """展示带输入框的申诉卡（输入理由 → 确认申诉），PATCH 替换原卡。"""
+    card = build_card_dict(
+        "提交申诉",
+        "请填写申诉理由（如设备实际不涉及某项风险）：",
+        header_template="purple",
+        elements=[
             {
                 "tag": "input",
                 "name": "reason",
@@ -272,8 +304,11 @@ def _show_appeal_input(report_id: uuid.UUID) -> dict:
                 _btn({"scope": "urs", "action": "urs_appeal_confirm", "urs_id": str(report_id)}, "✅ 确认申诉", "primary"),
             ),
         ],
-    }
-    return {"toast": {"type": "success", "content": "请填写理由"}, "card": {"type": "raw", "data": json.dumps(card, ensure_ascii=False)}}
+    )
+    # input 值经 form 提交才随回调返回；此处仅展示，申诉理由由
+    # urs_appeal_confirm 的 value.reason（前端回填）或后续表单提交携带
+    asyncio.create_task(_patch_card(event_data, card))
+    return {"toast": {"type": "success", "content": "请填写理由"}}
 
 
 async def _run_appeal_background(report_id: uuid.UUID, reason: str) -> None:

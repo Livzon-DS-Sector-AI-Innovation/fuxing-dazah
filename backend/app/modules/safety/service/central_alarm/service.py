@@ -437,6 +437,38 @@ class CentralAlarmService:
             content=markdown, push=push, chat_id=chat_id,
         )
 
+        # 「安全速递」总卡：投递本报告格子（失败不影响中控日报本身）
+        if push and any(r.get("success") for r in push_results):
+            try:
+                from app.modules.safety.feishu.daily_digest import (
+                    DigestCell,
+                    upsert_daily_digest,
+                )
+
+                type_top = sorted(
+                    agg.alarm_type_distribution.items(), key=lambda x: -x[1],
+                )[:3]
+                workshop_top = sorted(
+                    agg.workshop_distribution.items(), key=lambda x: -x[1],
+                )[:3]
+                await upsert_daily_digest(
+                    target_date,
+                    "central_alarm",
+                    DigestCell(
+                        tag_color="indigo",
+                        tag_text="中控报警",
+                        title="中控报警日报",
+                        stats=f"今日报警 **{agg.total}** 条",
+                        zone=" ｜ ".join(
+                            [f"{k} {v}" for k, v in type_top]
+                            + [f"{w} {n}" for w, n in workshop_top]
+                        )[:100],
+                        detail=markdown,
+                    ),
+                )
+            except Exception:
+                logger.warning("安全速递总卡投递失败（中控报警）", exc_info=True)
+
         return CentralAlarmReportResponse(
             report_kind="daily",
             target_date=target_date,

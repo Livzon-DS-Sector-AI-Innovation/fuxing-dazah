@@ -217,9 +217,42 @@ async def send_daily_summary(result: dict[str, Any], chat_id: str | None = None)
         header_template = "red" if analysis.over_limit_count else "orange"
     else:
         header_template = "green"
-    return await send_group_card(
+    msg_id = await send_group_card(
         chat_id=effective_chat_id,
         title="危化品库存每日分析日报",
         content=content,
         header_template=header_template,
     )
+
+    # 「安全速递」总卡：投递本报告格子（失败不影响危化品日报本身）
+    if msg_id and analysis is not None:
+        try:
+            from app.modules.safety.feishu.daily_digest import (
+                DigestCell,
+                upsert_daily_digest,
+            )
+
+            top_over = ""
+            if analysis.over_limit_items:
+                first = analysis.over_limit_items[0]
+                top_over = getattr(first, "material", "") and (
+                    f"{getattr(first, 'material', '')} 超量"
+                )
+            await upsert_daily_digest(
+                analysis.report_date,
+                "chemical_daily",
+                DigestCell(
+                    tag_color="orange" if analysis.over_limit_count else "green",
+                    tag_text="危化品库存",
+                    title="危化品库存日报",
+                    stats=(
+                        f"⚠️ 超量 **{analysis.over_limit_count}** · "
+                        f"急升 {analysis.surge_count} · 急降 {analysis.decline_count}"
+                    ),
+                    zone=top_over or ("库存平稳" if not analysis.has_risk() else ""),
+                    detail=content,
+                ),
+            )
+        except Exception:
+            logger.warning("安全速递总卡投递失败（危化品日报）", exc_info=True)
+    return msg_id

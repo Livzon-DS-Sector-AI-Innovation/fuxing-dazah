@@ -236,6 +236,33 @@ class WorkTicketReviewService:
                 {**stats, "pushed": True},
             )
             review.report_markdown = markdown
+
+            # 「安全速递」总卡：投递本报告格子（失败不影响审核日报本身）
+            try:
+                from app.modules.safety.feishu.daily_digest import (
+                    DigestCell,
+                    upsert_daily_digest,
+                )
+
+                await upsert_daily_digest(
+                    review_date,
+                    "workticket",
+                    DigestCell(
+                        tag_color="green",
+                        tag_text="作业票审核",
+                        title="作业票审核日报",
+                        stats=(
+                            f"今日审核 **{stats.get('total', 0)}** 票 ｜ "
+                            f"✅ 通过 {stats.get('compliant_count', 0)} · "
+                            f"❌ 驳回 {stats.get('violation_count', 0)} · "
+                            f"待补 {stats.get('data_insufficient', 0)}"
+                        ),
+                        zone="",
+                        detail=markdown,
+                    ),
+                )
+            except Exception:
+                logger.warning("安全速递总卡投递失败（作业票审核）", exc_info=True)
         else:
             review = self._make_review(
                 review_date,

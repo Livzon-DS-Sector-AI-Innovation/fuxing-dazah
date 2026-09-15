@@ -21,6 +21,22 @@ from app.platform.integrations.ai.client import AIService
 
 logger = logging.getLogger(__name__)
 
+# 作业类型/级别/状态 → 展示名映射（AI 判定上下文、自然语言解析、台账导出共用）
+OP_TYPE_EN2CN = {
+    "hot_work": "动火作业", "confined_space": "受限空间",
+    "height_work": "高处作业", "temporary_electricity": "临时用电",
+    "blind_plate": "盲板抽堵", "excavation": "动土作业",
+    "lifting": "起重吊装", "road_breaking": "断路作业",
+}
+OP_TYPE_CN2EN = {
+    "动火作业": "hot_work", "受限空间": "confined_space",
+    "高处作业": "height_work", "临时用电": "temporary_electricity",
+    "盲板抽堵": "blind_plate", "动土作业": "excavation",
+    "起重吊装": "lifting", "断路作业": "road_breaking",
+}
+OP_LEVEL_EN2CN = {"special": "特级", "grade1": "一级", "grade2": "二级", "not_applicable": "不涉及"}
+STATUS_EN2CN = {"draft": "草稿", "submitted": "审批中", "approved": "已审批", "rejected": "已驳回"}
+
 # ═══════════════════════════════════════════════════════════
 # AI 提示词模板（硬编码）
 # ═══════════════════════════════════════════════════════════
@@ -316,13 +332,7 @@ class SpecialOperationReportService:
         self, ai: "AIService", report: "SpecialOperationReport"
     ) -> tuple[bool, str | None]:
         """使用 AI 判定关键作业（提示词由工作流配置提供）"""
-        OP_TYPE_LABELS = {
-            "hot_work": "动火作业", "confined_space": "受限空间",
-            "height_work": "高处作业", "temporary_electricity": "临时用电",
-            "blind_plate": "盲板抽堵", "excavation": "动土作业",
-            "lifting": "起重吊装", "road_breaking": "断路作业",
-        }
-        op_label = OP_TYPE_LABELS.get(report.operation_type, report.operation_type)
+        op_label = OP_TYPE_EN2CN.get(report.operation_type, report.operation_type)
 
         context = (
             f"作业类型：{op_label}\n"
@@ -417,13 +427,6 @@ class SpecialOperationReportService:
         self, natural_query: str
     ) -> dict:
         """使用 AI 将自然语言筛选条件解析为结构化参数（提示词由工作流配置提供）"""
-        OP_TYPE_LABELS = {
-            "动火作业": "hot_work", "受限空间": "confined_space",
-            "高处作业": "height_work", "临时用电": "temporary_electricity",
-            "盲板抽堵": "blind_plate", "动土作业": "excavation",
-            "起重吊装": "lifting", "断路作业": "road_breaking",
-        }
-
         # 使用硬编码提示词构建 prompt
         prompt = NATURAL_QUERY_PARSE_PROMPT + "\n\n用户查询：" + natural_query
 
@@ -440,8 +443,8 @@ class SpecialOperationReportService:
             # 验证 operation_type 值
             if result.get("operation_type"):
                 op_type = result["operation_type"]
-                if op_type in OP_TYPE_LABELS:
-                    result["operation_type"] = OP_TYPE_LABELS[op_type]
+                if op_type in OP_TYPE_CN2EN:
+                    result["operation_type"] = OP_TYPE_CN2EN[op_type]
             # 清除 None 值
             return {k: v for k, v in result.items() if v is not None}
         except Exception as e:
@@ -475,15 +478,6 @@ class SpecialOperationReportService:
             date_from=date_from, date_to=date_to,
             keyword=keyword, is_critical=is_critical,
         )
-
-        OP_TYPE_LABELS = {
-            "hot_work": "动火作业", "confined_space": "受限空间",
-            "height_work": "高处作业", "temporary_electricity": "临时用电",
-            "blind_plate": "盲板抽堵", "excavation": "动土作业",
-            "lifting": "起重吊装", "road_breaking": "断路作业",
-        }
-        OP_LEVEL_LABELS = {"special": "特级", "grade1": "一级", "grade2": "二级", "not_applicable": "不涉及"}
-        STATUS_LABELS = {"draft": "草稿", "submitted": "审批中", "approved": "已审批", "rejected": "已驳回"}
 
         wb = openpyxl.Workbook()
         ws = wb.active
@@ -522,8 +516,8 @@ class SpecialOperationReportService:
             values = [
                 row_idx - 1,
                 item.report_no or "",
-                OP_TYPE_LABELS.get(item.operation_type, item.operation_type or ""),
-                OP_LEVEL_LABELS.get(item.operation_level, item.operation_level or ""),
+                OP_TYPE_EN2CN.get(item.operation_type, item.operation_type or ""),
+                OP_LEVEL_EN2CN.get(item.operation_level, item.operation_level or ""),
                 item.location or "",
                 item.work_description or "",
                 item.department or "",
@@ -532,7 +526,7 @@ class SpecialOperationReportService:
                 item.applicant_name or "",
                 item.approver_name or "",
                 item.approved_at.strftime("%Y-%m-%d %H:%M") if item.approved_at else "",
-                STATUS_LABELS.get(item.status, item.status or ""),
+                STATUS_EN2CN.get(item.status, item.status or ""),
                 "是" if item.is_critical else "否",
                 item.is_critical_reason or "",
                 item.notes or "",

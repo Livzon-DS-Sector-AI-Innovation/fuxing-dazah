@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.modules.safety.schemas.special_op_daily import (
     DailyReportResponse,
     RiskAssessmentResult,
 )
+from app.modules.safety.service.special_op_contract import SpecialOpRecord
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,20 @@ logger = logging.getLogger(__name__)
 
 # 日报推送目标 — 特殊作业自动分配群
 DAILY_REPORT_CHAT_ID = "oc_d102e1a11eaaa9a1de3b41859de9d0c1"
+
+# 中文 → 英文枚举映射（Bitable「作业类型/作业分级」选项 → 模型枚举值）
+OP_TYPE_CN2EN = {
+    "动火作业": "hot_work", "受限空间": "confined_space",
+    "高处作业": "height_work", "吊装作业": "lifting",
+    "临时用电": "temporary_electricity", "动土作业": "excavation",
+    "断路作业": "road_breaking", "盲板抽堵": "blind_plate",
+    "常规作业": "hot_work",
+}
+OP_LEVEL_CN2EN = {
+    "特级/Ⅳ级": "special", "一级（Ⅰ级）": "grade1",
+    "二级（Ⅱ级）": "grade2", "三级（Ⅲ级）": "grade2",
+    "不涉及": "not_applicable",
+}
 
 # ═══════════════════════════════════════════════════════════
 # 类型推断关键词库
@@ -97,7 +113,7 @@ class RiskAssessmentEngine:
         return cls._OP_TYPE_EN2CN.get(op_type, op_type)
 
     @classmethod
-    def _get_fire_risk(cls, report: SpecialOperationReport) -> str | None:
+    def _get_fire_risk(cls, report: SpecialOpRecord) -> str | None:
         """动火方式风险分级。返回 high/medium/low/None"""
         method = (report.fire_work_method or "").strip()
         if not method:
@@ -111,7 +127,7 @@ class RiskAssessmentEngine:
         return "medium"  # "其他" → 默认中风险
 
     @classmethod
-    def _get_height_risk(cls, report: SpecialOperationReport) -> str | None:
+    def _get_height_risk(cls, report: SpecialOpRecord) -> str | None:
         """登高方式 × 作业高度 联合判定。返回 high/medium/low/None"""
         method = (report.height_work_method or "").strip()
         height = report.work_height
@@ -131,7 +147,7 @@ class RiskAssessmentEngine:
         return matrix.get(">=15", "medium")
 
     @classmethod
-    def _get_lifting_risk(cls, report: SpecialOperationReport) -> str | None:
+    def _get_lifting_risk(cls, report: SpecialOpRecord) -> str | None:
         """吊装质量分级。≥40t高风险，<40t中风险"""
         w = report.lifting_weight
         if w is None:
@@ -139,7 +155,7 @@ class RiskAssessmentEngine:
         return "high" if w >= 40 else "medium"
 
     @classmethod
-    def _tank_grade(cls, report: SpecialOperationReport) -> str | None:
+    def _tank_grade(cls, report: SpecialOpRecord) -> str | None:
         """发酵工程部罐号分级。返回 high/medium/low/None（非发酵工程部或非受限空间）"""
         op_type = cls._cn_type(report.operation_type)
         dept = report.department or ""
@@ -163,7 +179,7 @@ class RiskAssessmentEngine:
     # ── 主判定入口 ──
 
     @classmethod
-    def assess(cls, report: SpecialOperationReport) -> RiskAssessmentResult:
+    def assess(cls, report: SpecialOpRecord) -> RiskAssessmentResult:
         """V3.5 风险判定。"""
         op_type_raw = cls._cn_type(report.operation_type)
         description = report.work_description or ""
@@ -218,7 +234,7 @@ class RiskAssessmentEngine:
         return inferred
 
     @classmethod
-    def _merge_types(cls, op_type_raw: str, inferred: list[str], report: SpecialOperationReport) -> set[str]:
+    def _merge_types(cls, op_type_raw: str, inferred: list[str], report: SpecialOpRecord) -> set[str]:
         all_types: set[str] = set()
         if op_type_raw and op_type_raw != "常规作业":
             all_types.add(op_type_raw)
@@ -233,7 +249,7 @@ class RiskAssessmentEngine:
         return all_types
 
     @classmethod
-    def _is_off_hours(cls, report: SpecialOperationReport) -> bool:
+    def _is_off_hours(cls, report: SpecialOpRecord) -> bool:
         if report.is_weekend_holiday == "是":
             return True
         if report.is_national_holiday == "是":
@@ -401,7 +417,7 @@ class RiskAssessmentEngine:
     # ════════════════ 兜底 ════════════════
 
     @classmethod
-    def _assess_fallback(cls, all_types: set[str], report: SpecialOperationReport) -> tuple[str, str]:
+    def _assess_fallback(cls, all_types: set[str], report: SpecialOpRecord) -> tuple[str, str]:
         personnel = report.personnel_type or ""
         dur = report.work_duration_hours
         location = report.location or ""
@@ -481,7 +497,7 @@ class AIAnalyst:
         self,
         report_date: date,
         mode: str,
-        reports: list[SpecialOperationReport],
+        reports: Sequence[SpecialOpRecord],
         stats: dict[str, int],
     ) -> AIDailyAnalysisResult | None:
         """执行 RAG 检索 + AI 分析。失败返回 None。"""
@@ -509,7 +525,7 @@ class AIAnalyst:
         # ── Phase 1: 每条高风险作业独立分析（并行）──
         from app.core.database import async_session_factory
 
-        async def analyze_one(idx: int, r: SpecialOperationReport) -> dict | None:
+        async def analyze_one(idx: int, r: SpecialOpRecord) -> dict | None:
             """分析单条高风险作业。失败返回 None。"""
             try:
                 # RAG 检索 — 使用独立 session 避免并发冲突
@@ -559,7 +575,7 @@ class AIAnalyst:
         # 限流并行 — 最多 3 条同时调用，避免 API 限流超时
         sem = asyncio.Semaphore(3)
 
-        async def analyze_with_limit(idx: int, r: SpecialOperationReport) -> dict | None:
+        async def analyze_with_limit(idx: int, r: SpecialOpRecord) -> dict | None:
             async with sem:
                 return await analyze_one(idx, r)
 
@@ -615,7 +631,7 @@ class AIAnalyst:
         )
 
     @classmethod
-    def _build_single_prompt(cls, r: SpecialOperationReport, rag_md: str) -> str:
+    def _build_single_prompt(cls, r: SpecialOpRecord, rag_md: str) -> str:
         """构建单条记录的分析 prompt。"""
         cn_type = ReportBuilder._cn_label(r.operation_type)
         lines = [
@@ -672,7 +688,7 @@ class AIAnalyst:
             d = r.department or "?"
             dept_groups.setdefault(d, []).append(r)
         dept_lines = []
-        for d, items in sorted(dept_groups.items(), key=lambda x: -len(x[1])):
+        for d, items in sorted(dept_groups.items(), key=lambda x: (-len(x[1]), x[0])):
             dept_lines.append(f"- {d}: {len(items)}项")
             for i, r in enumerate(items, 1):
                 cn = ReportBuilder._cn_label(r.operation_type)
@@ -751,7 +767,7 @@ class ReportBuilder:
         return bj.strftime('%m/%d %H:%M')
 
     @classmethod
-    def _sort_key(cls, r: SpecialOperationReport) -> tuple:
+    def _sort_key(cls, r: SpecialOpRecord) -> tuple:
         """高风险排序键：按 risk_reason 严重度 → 时长降序 → 部门 → 时间"""
         reason = r.daily_risk_reason or ""
         # "叠加" / "同时存在" 排最前
@@ -759,10 +775,14 @@ class ReportBuilder:
         # 外部承包商次之
         has_external = 0 if (r.personnel_type or "") == "非公司人员" else 1
         dur = -(r.work_duration_hours or 0)  # 时长降序
-        return (has_overlap, has_external, dur, r.department or "", r.planned_start_time or datetime.min)
+        # 末尾用 feishu_record_id 兜底，保证同一份数据的排序完全确定
+        return (
+            has_overlap, has_external, dur, r.department or "",
+            r.planned_start_time or datetime.min, r.feishu_record_id or "",
+        )
 
     @classmethod
-    def _new_ops_section(cls, report_date: date, reports: list, mode: str) -> list[str]:
+    def _new_ops_section(cls, report_date: date, reports: Sequence[SpecialOpRecord], mode: str) -> list[str]:
         """构建「今日新增计划外作业」段落。
 
         计划外 = 当天北京时间 08:00 之后新提交（发起）的特殊作业，
@@ -798,13 +818,14 @@ class ReportBuilder:
             type_counts[cn] = type_counts.get(cn, 0) + 1
             if r.department:
                 dept_set.add(r.department)
+        type_counts = dict(sorted(type_counts.items(), key=lambda x: (-x[1], x[0])))
         type_parts = [f"{t} {c}项" for t, c in type_counts.items()]
         if type_parts:
             lines.append(f"  {'  '.join(type_parts)}")
         if dept_set:
             lines.append(f"  涉及部门: {'、'.join(sorted(dept_set))}")
         # 逐条明细(按发起时间升序)
-        ordered = sorted(new, key=_new_ts)
+        ordered = sorted(new, key=lambda r: (_new_ts(r), r.feishu_record_id or ""))
         for i, r in enumerate(ordered, 1):
             cn = cls._cn_label(r.operation_type)
             lines.append(f"{i}. 【{cn}】{r.department or '?'}")
@@ -824,12 +845,12 @@ class ReportBuilder:
                     time_parts.append(f"⏱ 计划: {start}{dur}")
             if time_parts:
                 lines.append(f"   {''.join(time_parts)}")
-            level = {"high": "高", "medium": "中", "low": "低"}.get(r.daily_risk_level, "中")
+            level = {"high": "高", "medium": "中", "low": "低"}.get(r.daily_risk_level or '', "中")
             lines.append(f"   ⚠️ 风险: {level}")
         return lines
 
     @classmethod
-    def build(cls, report_date: date, mode: str, reports: list[SpecialOperationReport],
+    def build(cls, report_date: date, mode: str, reports: Sequence[SpecialOpRecord],
               stats: dict[str, int],
               ai_analysis: AIDailyAnalysisResult | None = None) -> str:
         is_today_mode = cls._is_today_family(mode)  # 17点日报沿用当日标题/标签
@@ -938,7 +959,7 @@ class ReportBuilder:
             for r in medium:
                 cn_label = cls._cn_label(r.operation_type)
                 by_type.setdefault(cn_label, []).append(r)
-            for t, items in by_type.items():
+            for t, items in sorted(by_type.items(), key=lambda x: (-len(x[1]), x[0])):
                 depts = sorted({r.department or "?" for r in items})
                 lines.append(f"• {t} ×{len(items)} （{'、'.join(depts[:5])}{'…' if len(depts) > 5 else ''}）")
 
@@ -950,7 +971,9 @@ class ReportBuilder:
             for r in low:
                 cn_label = cls._cn_label(r.operation_type)
                 by_type_low.setdefault(cn_label, []).append(r)
-            for t, items in by_type_low.items():
+            for t, items in sorted(
+                by_type_low.items(), key=lambda x: (-len(x[1]), x[0])
+            ):
                 depts = sorted({r.department or "?" for r in items})
                 lines.append(f"• {t} ×{len(items)} （{'、'.join(depts[:5])}{'…' if len(depts) > 5 else ''}）")
 
@@ -999,7 +1022,9 @@ class ReportBuilder:
             for r in items:
                 type_groups.setdefault(_cn(r), []).append((r.work_description or "").strip())
             dept_parts = []
-            for cn, contents in type_groups.items():
+            for cn, contents in sorted(
+                type_groups.items(), key=lambda x: (-len(x[1]), x[0])
+            ):
                 valid = [c[:25] for c in contents if c]
                 dept_parts.append(f"{cn}—{'、'.join(valid)}" if valid else cn)
             hi_parts.append(f"{d}{'、'.join(dept_parts)}")
@@ -1011,7 +1036,10 @@ class ReportBuilder:
             cn = _cn(r)
             dept_groups_m.setdefault(r.department or "?", {}).setdefault(cn, 0)
             dept_groups_m[r.department or "?"][cn] += 1
-        for d, type_counts in sorted(dept_groups_m.items(), key=lambda x: -sum(x[1].values())):
+        for d, type_counts in sorted(
+            dept_groups_m.items(), key=lambda x: (-sum(x[1].values()), x[0])
+        ):
+            type_counts = dict(sorted(type_counts.items(), key=lambda x: (-x[1], x[0])))
             med_parts.append(f"{d}{'、'.join(f'{t}×{c}项' for t, c in type_counts.items())}")
 
         segments = []
@@ -1042,7 +1070,7 @@ class ReportBuilder:
         return tips[:6]
 
     @classmethod
-    def _control_measure(cls, r: SpecialOperationReport) -> str | None:
+    def _control_measure(cls, r: SpecialOpRecord) -> str | None:
         """V3.5 根据风险判定生成管控措施建议。"""
         reason = r.daily_risk_reason or ""
         cn_type = cls._cn_label(r.operation_type)
@@ -1121,6 +1149,19 @@ class SpecialOperationDailyReportService:
                 if isinstance(first, dict):
                     return first.get("text", "")
                 return str(first)
+            if isinstance(v, dict):
+                # 两种读接口对同一文本字段返回的形态不同：
+                #   单条 GET /records/{id}      -> [{"text": "...", "type": "text"}]
+                #   批量 POST /records/search   -> {"type": 1, "value": [{"text": "..."}]}
+                # 直读（search）与事件镜像（GET）必须映出同一个值，否则「施工单位」
+                # （contractor_name）在两条路径上一条为 None、一条有值，日报会不一致。
+                value = v.get("value")
+                if isinstance(value, list) and value and isinstance(value[0], dict):
+                    return value[0].get("text", "")
+                text = v.get("text")
+                if isinstance(text, str):
+                    return text
+                return None
             return None
 
         def _url(v):
@@ -1146,6 +1187,20 @@ class SpecialOperationDailyReportService:
             except (TypeError, ValueError):
                 return None
 
+        def _multi(v: object) -> str:
+            """多选字段 -> "A、B"（保留全部选项，供关键词匹配）。"""
+            if isinstance(v, str):
+                return v
+            if isinstance(v, list):
+                parts: list[str] = []
+                for item in v:
+                    if isinstance(item, dict):
+                        parts.append(str(item.get("text") or item.get("name") or ""))
+                    else:
+                        parts.append(str(item))
+                return "、".join(part for part in parts if part)
+            return ""
+
         # 映射 Bitable 字段 → SpecialOperationReport
         op_type_raw = fields.get("作业类型", "")
         op_level_raw = fields.get("作业分级", "")
@@ -1155,21 +1210,9 @@ class SpecialOperationDailyReportService:
         start_ts = fields.get("作业时间_开始时间")
         end_ts = fields.get("作业时间_结束时间")
 
-        # 中文 → 英文枚举映射
-        _OP_TYPE_CN2EN = {
-            "动火作业": "hot_work", "受限空间": "confined_space",
-            "高处作业": "height_work", "吊装作业": "lifting",
-            "临时用电": "temporary_electricity", "动土作业": "excavation",
-            "断路作业": "road_breaking", "盲板抽堵": "blind_plate",
-            "常规作业": "hot_work",
-        }
-        _OP_LEVEL_CN2EN = {
-            "特级/Ⅳ级": "special", "一级（Ⅰ级）": "grade1",
-            "二级（Ⅱ级）": "grade2", "三级（Ⅲ级）": "grade2",
-            "不涉及": "not_applicable",
-        }
-        op_type = _OP_TYPE_CN2EN.get(op_type_raw, op_type_raw)
-        op_level = _OP_LEVEL_CN2EN.get(op_level_raw, op_level_raw or "grade2")
+        # 中文 → 英文枚举映射（OP_TYPE_CN2EN / OP_LEVEL_CN2EN，模块级常量）
+        op_type = OP_TYPE_CN2EN.get(op_type_raw, op_type_raw)
+        op_level = OP_LEVEL_CN2EN.get(op_level_raw, op_level_raw or "grade2")
 
         # 生成 report_no
         # report_no 在 sync 时由 feishu_record_id 覆写，此处仅占位
@@ -1189,7 +1232,12 @@ class SpecialOperationDailyReportService:
             "work_duration_hours": _float(fields.get("作业时间_时长")),
             "personnel_type": fields.get("作业人员类型"),
             # V3.5 新增字段（从其他数据源同步，API 暂不可读时取 None）
-            "fire_work_method": _text(fields.get("动火方式")),
+            # 生产表真实列名为「动火作业方式」（多选，选项形如
+            # 「电焊/气割（焊）/等离子切割机」），旧代码读的「动火方式」列不存在，
+            # 导致 fire_work_method 恒为 None、V3.5 动火方式分级规则从未生效。
+            "fire_work_method": _multi(fields.get("动火作业方式"))
+            or _multi(fields.get("动火方式"))
+            or None,  # 空值仍为 None（与旧行为一致，不把镜像列写成空串）
             "height_work_method": _text(fields.get("高处作业方式")),
             "work_height": _float(fields.get("作业高度(米)")),
             "lifting_weight": _float(fields.get("吊物质量(吨)")),

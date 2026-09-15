@@ -21,12 +21,18 @@ from app.modules.safety.chemical_inventory.snapshots import (
     take_snapshot,
 )
 from app.modules.safety.feishu.notification import send_group_card
+from app.modules.safety.schemas.chemical_inventory import CHEMICAL_DEPARTMENT_LABELS
 
 logger = logging.getLogger(__name__)
 
 
 def _key(r: Any) -> str:
     return f"{r.department}|{r.storage_location or ''}|{r.material_name}"
+
+
+def _dept_label(dept: str) -> str:
+    """部门枚举 → 中文名（未收录的原样显示）。"""
+    return CHEMICAL_DEPARTMENT_LABELS.get(dept, dept)
 
 
 async def build_weekly_report(db: AsyncSession, snapshot_date: date) -> dict[str, Any]:
@@ -74,6 +80,20 @@ async def build_weekly_report(db: AsyncSession, snapshot_date: date) -> dict[str
     }
 
 
+def _localize_report(report: dict[str, Any]) -> dict[str, Any]:
+    """部门枚举 → 中文名的展示副本（AI 小结上下文用，让小结输出权威部门中文名）。"""
+    out = dict(report)
+    out["dept_delta"] = {_dept_label(k): v for k, v in report.get("dept_delta", {}).items()}
+    out["top_increase"] = [
+        {**it, "department": _dept_label(it["department"])} for it in report.get("top_increase", [])
+    ]
+    out["top_decrease"] = [
+        {**it, "department": _dept_label(it["department"])} for it in report.get("top_decrease", [])
+    ]
+    out["new_materials"] = [[_dept_label(d), m] for d, m in report.get("new_materials", [])]
+    return out
+
+
 async def generate_ai_summary(report: dict[str, Any]) -> str:
     """AI 生成一段趋势小结文字。"""
     if not os.getenv("SAFETY_AI_TEXT_API_KEY"):
@@ -84,12 +104,12 @@ async def generate_ai_summary(report: dict[str, Any]) -> str:
         from app.modules.safety.service.config import create_ai_service
 
         ai = create_ai_service("text")
-        ctx = _json.dumps(report, ensure_ascii=False)
+        ctx = _json.dumps(_localize_report(report), ensure_ascii=False)
         try:
             with ai_audit_scope(scenario="chemical_inventory_weekly_report", channel="system"):
                 return cast(str, await ai.chat(
                     messages=[
-                        {"role": "system", "content": "你是危化品库存分析助手，根据周环比数据用简洁中文总结存量变化趋势与风险关注点。必须以部门名/物料名+数量给出至少 2 条具体变化（如'XX部门新增XX物料 N 吨'），150 字内，不输出空话。示例：'提取一部新增甲醇 5 吨，总库存上升至 12 吨；仓储二部乙腈减少 3 吨。'"},
+                        {"role": "system", "content": "你是危化品库存分析助手，根据周环比数据用简洁中文总结存量变化趋势与风险关注点。必须以部门名/物料名+数量给出至少 2 条具体变化（如'XX部门新增XX物料 N 吨'），部门名直接使用数据中给出的中文名，150 字内，不输出空话。示例：'提炼一部新增甲醇 5 吨，总库存上升至 12 吨；仓储部乙腈减少 3 吨。'"},
                         {"role": "user", "content": f"周环比数据：{ctx}"},
                     ],
                     response_format="",
@@ -113,24 +133,24 @@ def _format_report(report: dict[str, Any], ai_summary: str) -> str:
     lines.append("**部门总量变化（T）**")
     for dept, v in report.get("dept_delta", {}).items():
         sign = "+" if v >= 0 else ""
-        lines.append(f"· {dept}: {sign}{v}")
+        lines.append(f"· {_dept_label(dept)}: {sign}{v}")
     lines.append("")
     lines.append(f"**预警**：{report.get('warn_prev')} → {report.get('warn_now')}")
     if report.get("top_increase"):
         lines.append("")
         lines.append("**涨幅 Top**")
         for it in report["top_increase"]:
-            lines.append(f"· {it['material']}（{it['department']}）：+{it['delta']} T")
+            lines.append(f"· {it['material']}（{_dept_label(it['department'])}）：+{it['delta']} T")
     if report.get("top_decrease"):
         lines.append("")
         lines.append("**降幅 Top**")
         for it in report["top_decrease"]:
-            lines.append(f"· {it['material']}（{it['department']}）：{it['delta']} T")
+            lines.append(f"· {it['material']}（{_dept_label(it['department'])}）：{it['delta']} T")
     if report.get("new_materials"):
         lines.append("")
         lines.append("**新增物料**")
         for dept, mat in report["new_materials"]:
-            lines.append(f"· {mat}（{dept}）")
+            lines.append(f"· {mat}（{_dept_label(dept)}）")
     if ai_summary:
         lines.append("")
         lines.append(f"**趋势小结**：{ai_summary}")
@@ -156,6 +176,35 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
     effective_chat_id = chat_id
     if effective_chat_id:
         await send_group_card(chat_id=effective_chat_id, title="危化品库存周报", content=content, header_template="blue")
+
+        # 「安全速递」总卡：投递本报告格子（失败不影响周报本身）
+        try:
+            from app.modules.safety.feishu.daily_digest import (
+                DigestCell,
+                upsert_daily_digest,
+            )
+
+            top_up = ""
+            if report.get("top_increase"):
+                it = report["top_increase"][0]
+                top_up = f"{it['material']} +{it['delta']}T（{_dept_label(it['department'])}）"
+            await upsert_daily_digest(
+                today,
+                "chemical_weekly",
+                DigestCell(
+                    tag_color="green",
+                    tag_text="危化品周报",
+                    title="危化品库存周报",
+                    stats=(
+                        f"预警 {report.get('warn_prev', '-')} → "
+                        f"**{report.get('warn_now', '-')}**"
+                    ),
+                    zone=top_up[:100],
+                    detail=content,
+                ),
+            )
+        except Exception:
+            logger.warning("安全速递总卡投递失败（危化品周报）", exc_info=True)
     else:
         logger.info("周报未发送（未配置群聊）：%s", content)
     return report

@@ -258,6 +258,35 @@ async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
         stats["sent"] = bool(ok)
         if ok:
             logger.info("④ 督办通报已发送: %s", stats)
+
+            # 「安全速递」总卡：投递本报告格子（失败不影响督办通报本身）
+            try:
+                from datetime import UTC, datetime, timedelta
+
+                from app.modules.safety.feishu.daily_digest import (
+                    DigestCell,
+                    upsert_daily_digest,
+                )
+
+                bj_today = (datetime.now(UTC) + timedelta(hours=8)).date()
+                await upsert_daily_digest(
+                    bj_today,
+                    "hazard_bulletin",
+                    DigestCell(
+                        tag_color="yellow",
+                        tag_text="隐患督办",
+                        title="隐患督办通报",
+                        stats=(
+                            f"未关闭 **{stats.get('total', 0)}** 项 ｜ "
+                            f"🔴 红色预警 {stats.get('urgent', 0)} · "
+                            f"🟡 一般预警 {stats.get('warning', 0)}"
+                        ),
+                        zone="请各责任部门尽快反馈整改进展",
+                        detail=content,
+                    ),
+                )
+            except Exception:
+                logger.warning("安全速递总卡投递失败（隐患督办）", exc_info=True)
         else:
             logger.error("④ 督办通报发送失败: %s", stats)
     except Exception:

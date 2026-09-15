@@ -39,3 +39,7 @@ from app.modules.safety.service.special_operation_report import (
 )
 
 __all__ = ['SafetyService', 'HazardService', 'RegulationService', 'SopGeneratorService', 'create_ai_service', 'SpecialOperationService', 'KnowledgeService', 'SpecialOperationReportService', 'KeyRiskOperationReportService', 'RiskAssessmentEngine', 'ReportBuilder', 'SpecialOperationDailyReportService', 'EhsChangeService', 'URSService', 'EmergencyDrillService', 'OhHealthExamService', 'OhPersonService', 'OhPositionService', 'OhTransferService', 'OhHazardFactorService', 'OhFollowupService', 'MsdsService', 'OhArchiveService', 'ContractorAdmissionService', 'CertWarningService', 'CertWarningEngine', 'ChemicalInventoryService']
+from app.modules.safety.service.daily_risk_report import DailyRiskReportService
+from app.modules.safety.service.oh_hazard_monitor import OhHazardMonitorService
+
+__all__ += ['DailyRiskReportService', 'OhHazardMonitorService']

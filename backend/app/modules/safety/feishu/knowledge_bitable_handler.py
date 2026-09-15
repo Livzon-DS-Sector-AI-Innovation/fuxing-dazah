@@ -269,6 +269,10 @@ def _match_knowledge_target(file_token: str, table_id: str) -> bool:
     """检查事件是否属于知识库 Bitable 表格（安全或环保法规标准表）。
 
     同步读 store 缓存（R1：改表 ID → 新事件进新表，过滤立即用新值）。
+
+    table_id 是表级权威身份，命中即接受；file_token 仅在事件缺 table_id 时
+    兜底匹配——wiki 挂载文档的事件 file_token 可能是 wiki 节点 token 或底层
+    Base token（与配置存哪种形态无关），故不作否决项。
     """
     conns = _knowledge_conns()
     if not conns:
@@ -276,11 +280,11 @@ def _match_knowledge_target(file_token: str, table_id: str) -> bool:
     for conn in conns:
         if not conn.app_token or not conn.table_id:
             continue
-        if file_token and file_token != conn.app_token:
-            continue
-        if table_id and table_id != conn.table_id:
-            continue
-        return True
+        if table_id:
+            if table_id == conn.table_id:
+                return True
+        elif file_token and file_token == conn.app_token:
+            return True
     return False
 
 
@@ -877,6 +881,8 @@ async def ensure_knowledge_bitable_subscribed() -> bool:
 
     飞书要求：在接收 Bitable 事件之前，必须先调用此 API 订阅文档事件。
     函数体内部读 store（延迟读取，不缓存到模块级），改表后重订阅携带新值。
+    app_token 为 wiki 节点 token 时由 subscribe 辅助自动解析底层 Base token
+    （drive 订阅 API 不认 wiki token，见 feishu/subscribe.py 模块说明）。
     """
     file_token = _knowledge_app_token()
     if not file_token:
@@ -884,26 +890,15 @@ async def ensure_knowledge_bitable_subscribed() -> bool:
         return False
 
     try:
-        import httpx
-
         from app.modules.safety.feishu.client import get_safety_tenant_token
+        from app.modules.safety.feishu.subscribe import (
+            subscribe_bitable_document_events,
+        )
 
         token = await get_safety_tenant_token()
-        async with httpx.AsyncClient(timeout=15) as http:
-            resp = await http.post(
-                f"https://open.feishu.cn/open-apis/drive/v1/files/{file_token}/subscribe",
-                headers={"Authorization": f"Bearer {token}"},
-                params={"file_type": "bitable"},
-            )
-            data = resp.json()
-            if data.get("code") == 0:
-                logger.info("知识库 Bitable 文档事件订阅成功: file_token=%s", file_token)
-                return True
-            logger.error(
-                "知识库 Bitable 文档事件订阅失败: code=%s msg=%s",
-                data.get("code"), data.get("msg"),
-            )
-            return False
+        return await subscribe_bitable_document_events(
+            token, file_token, label="知识库 Bitable",
+        )
     except Exception:
         logger.exception("知识库 Bitable 文档事件订阅异常")
         return False

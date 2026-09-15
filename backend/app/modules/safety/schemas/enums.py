@@ -624,3 +624,109 @@ ABNORMALITY_STATUS_OPTIONS = [
 ]
 
 
+
+
+class AccidentType(StrEnum):
+    """事故类型枚举"""
+
+    INJURY = "injury"  # 工伤事故
+    FIRE = "fire"  # 火灾
+    EXPLOSION = "explosion"  # 爆炸
+    LEAKAGE = "leakage"  # 泄漏
+    EQUIPMENT = "equipment"  # 设备事故
+    NEAR_MISS = "near_miss"  # 未遂事件
+    ENVIRONMENTAL = "environmental"  # 环境事件
+    OCCUPATIONAL_DISEASE = "occupational_disease"  # 职业病
+    TRAFFIC = "traffic"  # 交通事故
+    OTHER = "other"  # 其他
+
+
+ACCIDENT_TYPE_OPTIONS = [
+    {"value": AccidentType.INJURY, "label": "工伤事故"},
+    {"value": AccidentType.FIRE, "label": "火灾"},
+    {"value": AccidentType.EXPLOSION, "label": "爆炸"},
+    {"value": AccidentType.LEAKAGE, "label": "泄漏"},
+    {"value": AccidentType.EQUIPMENT, "label": "设备事故"},
+    {"value": AccidentType.NEAR_MISS, "label": "未遂事件"},
+    {"value": AccidentType.ENVIRONMENTAL, "label": "环境事件"},
+    {"value": AccidentType.OCCUPATIONAL_DISEASE, "label": "职业病"},
+    {"value": AccidentType.TRAFFIC, "label": "交通事故"},
+    {"value": AccidentType.OTHER, "label": "其他"},
+]
+
+
+class AccidentLevel(StrEnum):
+    """事故等级枚举"""
+
+    GENERAL = "general"  # 一般事故
+    SERIOUS = "serious"  # 较大事故
+    MAJOR = "major"  # 重大事故
+    CATASTROPHIC = "catastrophic"  # 特别重大事故
+
+
+ACCIDENT_LEVEL_OPTIONS = [
+    {"value": AccidentLevel.GENERAL, "label": "一般事故", "color": "blue"},
+    {"value": AccidentLevel.SERIOUS, "label": "较大事故", "color": "orange"},
+    {"value": AccidentLevel.MAJOR, "label": "重大事故", "color": "red"},
+    {"value": AccidentLevel.CATASTROPHIC, "label": "特别重大事故", "color": "magenta"},
+]
+
+
+class AccidentStatus(StrEnum):
+    """事故处理状态枚举"""
+
+    REPORTED = "reported"  # 已报告
+    INVESTIGATING = "investigating"  # 调查中
+    INVESTIGATED = "investigated"  # 调查完成
+    CAPA_IN_PROGRESS = "capa_in_progress"  # CAPA进行中
+    CLOSED = "closed"  # 已关闭
+
+
+ACCIDENT_STATUS_OPTIONS = [
+    {"value": AccidentStatus.REPORTED, "label": "已报告", "color": "blue"},
+    {"value": AccidentStatus.INVESTIGATING, "label": "调查中", "color": "orange"},
+    {"value": AccidentStatus.INVESTIGATED, "label": "调查完成", "color": "cyan"},
+    {"value": AccidentStatus.CAPA_IN_PROGRESS, "label": "CAPA进行中", "color": "purple"},
+    {"value": AccidentStatus.CLOSED, "label": "已关闭", "color": "green"},
+]
+
+
+class CheckType(StrEnum):
+    """检查类型枚举（16种）"""
+
+    DAILY = "daily"  # 日常检查
+    SPECIAL = "special"  # 专项检查
+    COMPREHENSIVE = "comprehensive"  # 综合检查
+    HOLIDAY = "holiday"  # 节假日检查
+    MONTHLY = "monthly"  # 月度安全检查
+    SEASONAL = "seasonal"  # 季节性安全检查
+    PRE_HOLIDAY = "pre_holiday"  # 节前安全检查
+    LEADERSHIP_DUTY = "leadership_duty"  # 领导干部值班检查
+    DEPT_CROSS = "dept_cross"  # 部门互查
+    WEEKLY = "weekly"  # 周检
+    RESUMPTION = "resumption"  # 复工复产安全检查
+    CHANGE_ACCEPTANCE = "change_acceptance"  # 变更验收
+    LIGHTNING = "lightning"  # 防雷检查
+    SAFETY_VALVE = "safety_valve"  # 安全阀专项检查
+    POST_HOLIDAY = "post_holiday"  # 节后复工检查
+    HEATSTROKE_PREVENTION = "heatstroke_prevention"  # 防暑降温专项
+
+
+CHECK_TYPE_OPTIONS = [
+    {"value": CheckType.DAILY, "label": "日常检查", "color": "blue"},
+    {"value": CheckType.SPECIAL, "label": "专项检查", "color": "orange"},
+    {"value": CheckType.COMPREHENSIVE, "label": "综合检查", "color": "purple"},
+    {"value": CheckType.HOLIDAY, "label": "节假日检查", "color": "red"},
+    {"value": CheckType.MONTHLY, "label": "月度安全检查", "color": "blue"},
+    {"value": CheckType.SEASONAL, "label": "季节性安全检查", "color": "cyan"},
+    {"value": CheckType.PRE_HOLIDAY, "label": "节前安全检查", "color": "orange"},
+    {"value": CheckType.LEADERSHIP_DUTY, "label": "领导干部值班检查", "color": "gold"},
+    {"value": CheckType.DEPT_CROSS, "label": "部门互查", "color": "green"},
+    {"value": CheckType.WEEKLY, "label": "周检", "color": "blue"},
+    {"value": CheckType.RESUMPTION, "label": "复工复产安全检查", "color": "orange"},
+    {"value": CheckType.CHANGE_ACCEPTANCE, "label": "变更验收", "color": "purple"},
+    {"value": CheckType.LIGHTNING, "label": "防雷检查", "color": "yellow"},
+    {"value": CheckType.SAFETY_VALVE, "label": "安全阀专项检查", "color": "red"},
+    {"value": CheckType.POST_HOLIDAY, "label": "节后复工检查", "color": "orange"},
+    {"value": CheckType.HEATSTROKE_PREVENTION, "label": "防暑降温专项", "color": "volcano"},
+]

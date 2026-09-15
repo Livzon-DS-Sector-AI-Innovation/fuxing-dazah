@@ -161,11 +161,16 @@ async def ensure_cert_bitable_subscribed() -> bool:
     """订阅持证台账 2 个唯一 app_token 的文档事件。
 
     cert 域 3 张表共享 2 个文档：
-      - special_op 特种作业证：独立 wiki app_token（VyYmwLlZsi2sXDkkIa6cEISsnpg）
-      - guardian_a / guardian_b 监护人 A/B 证：共用 base app_token
+      - special_op 特种作业证：wiki 挂载文档（知识库 URL 中的节点 token 为
+        VyYmwLlZsi2sXDkkIa6cEISsnpg，底层 Base token 为 WFxObPFLFaD2zCsQlKpcatssnOg）
+      - guardian_a / guardian_b 监护人 A/B 证：共用普通 Base 文档
         （QNKibNfd2aIxSEsvWaJc13G6nCb），按 table_id 分表
     app_token 从配置中心 store 读取（``store.get_connection("cert", kind)``），
     启用且非空才订阅，去重后最多 2 次调用。全部成功返回 True。
+
+    注意：wiki 挂载文档的 drive 订阅必须用底层 Base token——订阅辅助
+    （feishu/subscribe.py）会经 bitable 元信息回显自动解析，配置存 wiki token
+    或 Base token 均可。
     """
     from app.modules.safety.bitable_config.store import store
 
@@ -182,30 +187,18 @@ async def ensure_cert_bitable_subscribed() -> bool:
         return False
 
     try:
-        import httpx
-
         from app.modules.safety.feishu.client import get_safety_tenant_token
+        from app.modules.safety.feishu.subscribe import (
+            subscribe_bitable_document_events,
+        )
 
         token = await get_safety_tenant_token()
         all_ok = True
-        async with httpx.AsyncClient(timeout=15) as http:
-            for app_token in app_tokens:
-                resp = await http.post(
-                    f"https://open.feishu.cn/open-apis/drive/v1/files/{app_token}/subscribe",
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"file_type": "bitable"},
-                )
-                data = resp.json()
-                if data.get("code") == 0:
-                    logger.info(
-                        "持证台账 Bitable 文档事件订阅成功: file_token=%s", app_token
-                    )
-                else:
-                    all_ok = False
-                    logger.error(
-                        "持证台账 Bitable 文档事件订阅失败: code=%s msg=%s file_token=%s",
-                        data.get("code"), data.get("msg"), app_token,
-                    )
+        for app_token in app_tokens:
+            ok = await subscribe_bitable_document_events(
+                token, app_token, label="持证台账 Bitable",
+            )
+            all_ok = all_ok and ok
         return all_ok
     except Exception:
         logger.exception("持证台账 Bitable 文档事件订阅异常")

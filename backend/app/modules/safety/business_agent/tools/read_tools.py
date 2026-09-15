@@ -1600,13 +1600,16 @@ async def query_special_op_records(
 ) -> dict[str, Any]:
     """查询全厂特殊作业判定明细（逐条，含每日风险判定结果）。
 
-    数据源为本地同步的「全厂特殊作业一览表」，每条含作业类型/分级、
-    部门、判定风险等级（daily_risk_level）与判定理由。可按部门、日期、
-    作业类型、作业分级、风险等级、计划内外筛选 —— 如"提炼工程五部的
-    作业判定记录"应使用本工具而非生成日报。
+    数据源为飞书「全厂特殊作业一览表」**直读**（多维度表格，每条含作业类型/分级、
+    部门、判定风险等级与理由）。可按部门、日期、作业类型、作业分级、风险等级、
+    计划内外筛选  如"提炼工程五部的作业判定记录"应使用本工具而非生成日报。
+
+    风险等级口径：飞书表「日报风险等级（AI）」列有值则读列（该列由日报任务每天
+    回写两次，最长可能陈旧约 9 小时）；列为空则查询时现场判定并展示，**不回写**。
+    判定为排除的作业仍会返回（items 带 is_excluded 与 exclusion_reason）。
 
     Args:
-        department: 部门名称，模糊匹配（如"提炼工程五部"、"五部"）
+        department: 部门名称（如"提炼工程五部"；子串匹配，如"五部"）
         date_from: 起始日期（ISO，如 "2026-08-31"，按作业计划开始时间，可选）
         date_to: 结束日期（ISO，可选）
         operation_type: 作业类型（动火作业/受限空间/高处作业/吊装作业/临时用电/
@@ -1626,69 +1629,27 @@ async def query_special_op_records(
 
     示例：提炼工程五部的作业判定记录；8月31日全厂高风险特殊作业；今天的计划外作业。
     """
-    from sqlalchemy import func, or_, select
+    from datetime import date as _date
 
-    from app.modules.safety.models import SpecialOperationReport
+    from app.modules.safety.service.special_op_direct import query as direct_query
 
     try:
-        risk = _norm_choice(daily_risk_level, _SPECIAL_OP_RISK_MAP)
-        conds = [SpecialOperationReport.is_deleted.is_(False)]
-        if department:
-            conds.append(SpecialOperationReport.department.ilike(f"%{department}%"))
-        start, end_exclusive = _date_bounds(date_from, date_to)
-        if start:
-            conds.append(SpecialOperationReport.planned_start_time >= start)
-        if end_exclusive:
-            conds.append(SpecialOperationReport.planned_start_time < end_exclusive)
-        if op_type := _norm_choice(operation_type, _SPECIAL_OP_TYPE_MAP):
-            conds.append(SpecialOperationReport.operation_type == op_type)
-        if op_level := _norm_choice(operation_level, _SPECIAL_OP_LEVEL_MAP):
-            conds.append(SpecialOperationReport.operation_level == op_level)
-        if risk:
-            conds.append(SpecialOperationReport.daily_risk_level == risk)
-        if rpt_type := _norm_choice(report_type, _SPECIAL_OP_REPORT_TYPE_MAP):
-            conds.append(SpecialOperationReport.report_type == rpt_type)
-        if keyword:
-            conds.append(or_(
-                SpecialOperationReport.work_description.ilike(f"%{keyword}%"),
-                SpecialOperationReport.location.ilike(f"%{keyword}%"),
-                SpecialOperationReport.approval_no.ilike(f"%{keyword}%"),
-            ))
-
-        db = ctx.deps.db
-        total = (await db.execute(
-            select(func.count()).select_from(SpecialOperationReport).where(*conds)
-        )).scalar() or 0
-        rows = (await db.execute(
-            select(SpecialOperationReport).where(*conds)
-            .order_by(SpecialOperationReport.planned_start_time.desc())
-            .offset((max(page, 1) - 1) * page_size).limit(min(page_size, 100))
-        )).scalars().all()
-        items = [{
-            "report_no": r.report_no,
-            "department": r.department,
-            "initiator_department": r.initiator_department,
-            "operation_type": r.operation_type,
-            "operation_level": r.operation_level,
-            "daily_risk_level": r.daily_risk_level,
-            "daily_risk_reason": r.daily_risk_reason,
-            "report_type": r.report_type,
-            "work_description": r.work_description,
-            "location": r.location,
-            "planned_start_time": r.planned_start_time.isoformat() if r.planned_start_time else None,
-            "planned_end_time": r.planned_end_time.isoformat() if r.planned_end_time else None,
-            "work_duration_hours": r.work_duration_hours,
-            "personnel_type": r.personnel_type,
-            "approval_no": r.approval_no,
-            "approver_name": r.approver_name,
-            "is_excluded": r.is_excluded,
-            "exclusion_reason": r.exclusion_reason,
-        } for r in rows]
-        return _detail_result(items, page, page_size, total)
+        result = await direct_query.query_records(
+            department=department,
+            date_from=_date.fromisoformat(date_from) if date_from else None,
+            date_to=_date.fromisoformat(date_to) if date_to else None,
+            operation_type=_norm_choice(operation_type, _SPECIAL_OP_TYPE_MAP),
+            operation_level=_norm_choice(operation_level, _SPECIAL_OP_LEVEL_MAP),
+            daily_risk_level=_norm_choice(daily_risk_level, _SPECIAL_OP_RISK_MAP),
+            report_type=_norm_choice(report_type, _SPECIAL_OP_REPORT_TYPE_MAP),
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
+        )
+        return _detail_result(result["items"], page, page_size, result["total"])
     except Exception as e:
         logger.exception("query_special_op_records failed")
         return {"success": False, "error": f"查询失败: {e}"}
-
 
 async def query_key_risk_ops(
     ctx: RunContext[SafetyDeps],

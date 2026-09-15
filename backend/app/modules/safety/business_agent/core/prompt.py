@@ -157,9 +157,17 @@ class MemoriesSection(PromptSection):
 
 @dataclass
 class ToolCatalogSection(PromptSection):
-    """工具目录节：当前角色可见工具名列表（来自 ``permissions.allowed_tools``）。
+    """工具目录节：本轮真正可用的工具名（角色允许 与 本轮实际挂载 的交集）。
 
-    role=None 返回空串（无工具可见，提示模型无法调用任何工具）。
+    数据源 ``context["tool_names"]`` 由 executor 透传，与真正建 Agent 用的
+    ``get_agent_for_tools(...)`` 是同一份名单。
+
+    历史缺陷（2026-09-11 线上）：旧实现直接渲染 ``allowed_tools(role)`` 角色目录，
+    而 Agent 实际只注册关键词子集，于是 prompt 会"画饼"：模型看到
+    「可用工具：」里有 generate_supervision_bulletin，工具表里却没有，
+    只能回「工具未挂载」。改为只渲染交集后，目录永远不会超出真实工具表。
+
+    role=None 返回空串（无角色即无工具可见）。
     """
 
     name: str = "tool_catalog"
@@ -168,12 +176,37 @@ class ToolCatalogSection(PromptSection):
     def render(self, deps: SafetyDeps, context: dict | None = None) -> str:
         if deps.role is None:
             return ""
-        tools = allowed_tools(deps.role)
-        if not tools:
+        allowed = allowed_tools(deps.role)
+        if not allowed:
             return ""
+
+        visible = sorted(allowed & _registered_tool_names(context))
+        if not visible:
+            # 角色有工具、但本轮一个都没挂载：显式说清楚，避免模型凭 agent.md
+            # 的说明凭空调用（这正是"工具未挂载"回复的来源）
+            return (
+                "可用工具：无（本轮未挂载任何工具，"
+                "请勿调用任何工具，直接向用户说明无法完成）"
+            )
         # 保持顺序稳定：排序输出，避免 set 迭代顺序不确定影响 assemble 稳定
-        names = ", ".join(sorted(tools))
-        return f"可用工具：{names}"
+        return f"可用工具：{', '.join(visible)}"
+
+
+def _registered_tool_names(context: dict | None) -> frozenset[str]:
+    """本轮 Agent 实际注册的工具名集合。
+
+    executor 通过 ``context["tool_names"]`` 传入；其它调用方（测试/预览）缺省时
+    回退到 registry 全量，保证渲染结果永远不超出真实工具表。
+    """
+    names = (context or {}).get("tool_names")
+    if names is not None:
+        return frozenset(names)
+    try:
+        from app.modules.safety.business_agent.tools.registry import TOOL_KIND
+
+        return frozenset(TOOL_KIND)
+    except Exception:  # noqa: BLE001 - 渲染失败不应阻塞对话
+        return frozenset()
 
 
 # ── 默认五节清单（顺序稳定；调用方可自定义节列表或以切片开关某节） ──

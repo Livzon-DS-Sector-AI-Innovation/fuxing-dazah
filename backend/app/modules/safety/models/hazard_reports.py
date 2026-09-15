@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     JSON,
@@ -16,11 +16,16 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # 枚举集中定义在 models/enums.py（保持单一定义点）
 from app.modules.safety.models.enums import *  # noqa: F401,F403
 from app.shared.base_model import BaseModel
+
+if TYPE_CHECKING:
+    # 关系目标模型经字符串注解/registry 解析（模型间互引，运行时不可显式导入）；
+    # 显式导入仅为类型检查可解析（消除 F405 星号导入歧义）
+    from app.modules.safety.models.safety_ops import SafetyCheck
 
 # 业务表均软删除（is_deleted），唯一编号约束使用部分唯一索引
 # (WHERE is_deleted = false)，避免「软删→重建同编号」触发约束冲突。
@@ -226,12 +231,13 @@ class HazardReport(BaseModel):
         String(16), nullable=True,
         comment="督办进展状态: 未更新进展 / NULL(正常)"
     )
+    check_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("safety.safety_checks.id"), nullable=True, comment="关联检查ID"
+    )
 
-
-
-# ==================== 安全检查 ====================
-
-
-# ==================== 事故管理 ====================
+    # 关系
+    safety_check: Mapped["SafetyCheck | None"] = relationship(
+        "SafetyCheck", back_populates="hazards"
+    )
 
 

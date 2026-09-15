@@ -488,3 +488,101 @@ export const TRAINING_STATUS_OPTIONS = [
   { value: 'completed', label: '已完成', color: 'success' },
   { value: 'archived', label: '已归档', color: 'default' },
 ]
+
+// ============ 安全检查类型（16种） ============
+
+export enum CheckType {
+  DAILY = 'daily',
+  SPECIAL = 'special',
+  COMPREHENSIVE = 'comprehensive',
+  HOLIDAY = 'holiday',
+  MONTHLY = 'monthly',
+  SEASONAL = 'seasonal',
+  PRE_HOLIDAY = 'pre_holiday',
+  LEADERSHIP_DUTY = 'leadership_duty',
+  DEPT_CROSS = 'dept_cross',
+  WEEKLY = 'weekly',
+  RESUMPTION = 'resumption',
+  CHANGE_ACCEPTANCE = 'change_acceptance',
+  LIGHTNING = 'lightning',
+  SAFETY_VALVE = 'safety_valve',
+  POST_HOLIDAY = 'post_holiday',
+  HEATSTROKE_PREVENTION = 'heatstroke_prevention',
+}
+
+export const CHECK_TYPE_OPTIONS = [
+  { value: CheckType.DAILY, label: '日常检查', color: 'blue' },
+  { value: CheckType.SPECIAL, label: '专项检查', color: 'orange' },
+  { value: CheckType.COMPREHENSIVE, label: '综合检查', color: 'purple' },
+  { value: CheckType.HOLIDAY, label: '节假日检查', color: 'red' },
+  { value: CheckType.MONTHLY, label: '月度安全检查', color: 'blue' },
+  { value: CheckType.SEASONAL, label: '季节性安全检查', color: 'cyan' },
+  { value: CheckType.PRE_HOLIDAY, label: '节前安全检查', color: 'orange' },
+  { value: CheckType.LEADERSHIP_DUTY, label: '领导干部值班检查', color: 'gold' },
+  { value: CheckType.DEPT_CROSS, label: '部门互查', color: 'green' },
+  { value: CheckType.WEEKLY, label: '周检', color: 'blue' },
+  { value: CheckType.RESUMPTION, label: '复工复产安全检查', color: 'orange' },
+  { value: CheckType.CHANGE_ACCEPTANCE, label: '变更验收', color: 'purple' },
+  { value: CheckType.LIGHTNING, label: '防雷检查', color: 'yellow' },
+  { value: CheckType.SAFETY_VALVE, label: '安全阀专项检查', color: 'red' },
+  { value: CheckType.POST_HOLIDAY, label: '节后复工检查', color: 'orange' },
+  { value: CheckType.HEATSTROKE_PREVENTION, label: '防暑降温专项', color: 'volcano' },
+]
+
+// ============ 事故管理 ============
+
+export enum AccidentType {
+  INJURY = 'injury',
+  FIRE = 'fire',
+  EXPLOSION = 'explosion',
+  LEAKAGE = 'leakage',
+  EQUIPMENT = 'equipment',
+  NEAR_MISS = 'near_miss',
+  ENVIRONMENTAL = 'environmental',
+  OCCUPATIONAL_DISEASE = 'occupational_disease',
+  TRAFFIC = 'traffic',
+  OTHER = 'other',
+}
+
+export const ACCIDENT_TYPE_OPTIONS = [
+  { value: AccidentType.INJURY, label: '工伤事故' },
+  { value: AccidentType.FIRE, label: '火灾' },
+  { value: AccidentType.EXPLOSION, label: '爆炸' },
+  { value: AccidentType.LEAKAGE, label: '泄漏' },
+  { value: AccidentType.EQUIPMENT, label: '设备事故' },
+  { value: AccidentType.NEAR_MISS, label: '未遂事件' },
+  { value: AccidentType.ENVIRONMENTAL, label: '环境事件' },
+  { value: AccidentType.OCCUPATIONAL_DISEASE, label: '职业病' },
+  { value: AccidentType.TRAFFIC, label: '交通事故' },
+  { value: AccidentType.OTHER, label: '其他' },
+]
+
+export enum AccidentLevel {
+  GENERAL = 'general',
+  SERIOUS = 'serious',
+  MAJOR = 'major',
+  CATASTROPHIC = 'catastrophic',
+}
+
+export const ACCIDENT_LEVEL_OPTIONS = [
+  { value: AccidentLevel.GENERAL, label: '一般事故', color: 'blue' },
+  { value: AccidentLevel.SERIOUS, label: '较大事故', color: 'orange' },
+  { value: AccidentLevel.MAJOR, label: '重大事故', color: 'red' },
+  { value: AccidentLevel.CATASTROPHIC, label: '特别重大事故', color: 'magenta' },
+]
+
+export enum AccidentStatus {
+  REPORTED = 'reported',
+  INVESTIGATING = 'investigating',
+  INVESTIGATED = 'investigated',
+  CAPA_IN_PROGRESS = 'capa_in_progress',
+  CLOSED = 'closed',
+}
+
+export const ACCIDENT_STATUS_OPTIONS = [
+  { value: AccidentStatus.REPORTED, label: '已报告', color: 'blue' },
+  { value: AccidentStatus.INVESTIGATING, label: '调查中', color: 'orange' },
+  { value: AccidentStatus.INVESTIGATED, label: '调查完成', color: 'cyan' },
+  { value: AccidentStatus.CAPA_IN_PROGRESS, label: 'CAPA进行中', color: 'purple' },
+  { value: AccidentStatus.CLOSED, label: '已关闭', color: 'green' },
+]

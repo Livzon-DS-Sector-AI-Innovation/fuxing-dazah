@@ -489,3 +489,70 @@ export interface OhOverrideConclusionRequest {
   override_conclusion: OhAiConclusion | string
   notes?: string
 }
+
+// ============ 职业危害因素监测（GBZ 159, GBZ 2.1/2.2） ============
+
+export interface DetectionResultItem {
+  factor_name: string
+  factor_category: string
+  detection_value: number
+  unit?: string
+  oel_limit?: number
+  compliance_status?: string
+  sampling_method?: string
+  standard_ref?: string
+}
+
+export interface AbnormalityRecord {
+  abnormality_desc: string
+  corrective_action?: string
+  responsible_person?: string
+  deadline?: string
+  status?: string
+  completed_at?: string
+  remarks?: string
+}
+
+export interface OhHazardMonitor {
+  id: string
+  monitor_no: string
+  workplace: string
+  location?: string
+  equipment_info?: string
+  detection_type: string
+  detection_date?: string
+  detection_agency?: string
+  status: string
+  inspector_name?: string
+  verifier_name?: string
+  detection_results?: DetectionResultItem[]
+  abnormality_records?: AbnormalityRecord[]
+  attachments?: { name: string; path: string }[]
+  notes?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface OhHazardMonitorFormData {
+  monitor_no: string
+  workplace: string
+  location?: string
+  equipment_info?: string
+  detection_type: string
+  detection_date?: string
+  detection_agency?: string
+  inspector_name?: string
+  detection_results?: DetectionResultItem[]
+  abnormality_records?: AbnormalityRecord[]
+  attachments?: { name: string; path: string }[]
+  notes?: string
+}
+
+export interface OhHazardMonitorQueryParams {
+  page?: number
+  page_size?: number
+  status?: string
+  detection_type?: string
+  workplace?: string
+  keyword?: string
+}

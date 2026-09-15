@@ -227,3 +227,91 @@ class HazardLedgerExportParsedFilters(BaseModel):
     explanation: str = Field("", description="AI 对筛选条件的解读说明")
 
 
+
+
+class HazardRiskOption(BaseModel):
+    """危险源风险选项 — 供常规作业报备选择关联危险源"""
+
+    id: uuid.UUID
+    hazard_id_no: str
+    department: str | None = None
+    position: str | None = None
+    production_step: str
+    specific_activity: str | None = None
+    inherent_risk_level: str | None = None
+    inherent_risk_label: str | None = None
+    hazard_type: str | None = None
+    possible_accident: str | None = None
+    existing_engineering_controls: str | None = None
+    existing_management_controls: str | None = None
+    existing_ppe: str | None = None
+    existing_emergency_measures: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class DailyRiskReportBase(BaseModel):
+    """每日风险作业报备基础模式"""
+
+    report_no: str = Field(..., max_length=64, description="报备编号")
+    report_date: datetime = Field(..., description="报备作业日期")
+    report_type: str = Field("regular", max_length=20, description="报备类型: regular(常规作业) / non_regular(非常规作业)")
+    department: str | None = Field(None, max_length=100, description="报备部门")
+    hazard_identification_id: uuid.UUID | None = Field(None, description="关联危险源辨识ID")
+    operation_description: str = Field(..., description="风险作业描述")
+    operation_steps: str | None = Field(None, description="作业步骤")
+    hazard_factors: str | None = Field(None, description="危险因素")
+    risk_level: str | None = Field(None, max_length=20, description="风险等级")
+    control_measures: str | None = Field(None, description="控制措施")
+    responsible_person: str | None = Field(None, max_length=100, description="作业负责人")
+    operator_count: int | None = Field(None, description="作业人数")
+    location: str | None = Field(None, max_length=255, description="作业地点")
+    planned_start_time: datetime | None = Field(None, description="计划开始时间")
+    planned_end_time: datetime | None = Field(None, description="计划结束时间")
+    applicant_name: str | None = Field(None, max_length=100, description="报备申请人姓名")
+    approver_name: str | None = Field(None, max_length=100, description="审批人姓名")
+    notes: str | None = Field(None, description="备注")
+
+
+class DailyRiskReportCreate(DailyRiskReportBase):
+    """创建每日风险作业报备"""
+    pass
+
+
+class DailyRiskReportUpdate(BaseModel):
+    """更新每日风险作业报备"""
+
+    report_no: str | None = Field(None, max_length=64, description="报备编号")
+    report_date: datetime | None = Field(None, description="报备作业日期")
+    report_type: str | None = Field(None, max_length=20, description="报备类型（创建后不可修改）")
+    department: str | None = Field(None, max_length=100, description="报备部门")
+    hazard_identification_id: uuid.UUID | None = Field(None, description="关联危险源辨识ID")
+    operation_description: str | None = Field(None, description="风险作业描述")
+    operation_steps: str | None = Field(None, description="作业步骤")
+    hazard_factors: str | None = Field(None, description="危险因素")
+    risk_level: str | None = Field(None, max_length=20, description="风险等级")
+    control_measures: str | None = Field(None, description="控制措施")
+    responsible_person: str | None = Field(None, max_length=100, description="作业负责人")
+    operator_count: int | None = Field(None, description="作业人数")
+    location: str | None = Field(None, max_length=255, description="作业地点")
+    planned_start_time: datetime | None = Field(None, description="计划开始时间")
+    planned_end_time: datetime | None = Field(None, description="计划结束时间")
+    applicant_name: str | None = Field(None, max_length=100, description="报备申请人姓名")
+    approver_name: str | None = Field(None, max_length=100, description="审批人姓名")
+    status: ReportStatus | None = Field(None, description="状态")
+    notes: str | None = Field(None, description="备注")
+
+
+class DailyRiskReportResponse(DailyRiskReportBase):
+    """每日风险作业报备响应"""
+
+    id: uuid.UUID
+    approved_at: datetime | None = None
+    rejection_reason: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

@@ -431,3 +431,58 @@ class AdmissionTrainingStatus(StrEnum):
     NOT_TRAINED = "未培训"
 
 
+
+
+class AccidentType(StrEnum):
+    """事故类型枚举"""
+
+    INJURY = "injury"  # 工伤事故
+    FIRE = "fire"  # 火灾
+    EXPLOSION = "explosion"  # 爆炸
+    LEAKAGE = "leakage"  # 泄漏
+    EQUIPMENT = "equipment"  # 设备事故
+    NEAR_MISS = "near_miss"  # 未遂事件
+    ENVIRONMENTAL = "environmental"  # 环境事件
+    OCCUPATIONAL_DISEASE = "occupational_disease"  # 职业病
+    TRAFFIC = "traffic"  # 交通事故
+    OTHER = "other"  # 其他
+
+
+class AccidentLevel(StrEnum):
+    """事故等级枚举"""
+
+    GENERAL = "general"  # 一般事故
+    SERIOUS = "serious"  # 较大事故
+    MAJOR = "major"  # 重大事故
+    CATASTROPHIC = "catastrophic"  # 特别重大事故
+
+
+class AccidentStatus(StrEnum):
+    """事故处理状态枚举"""
+
+    REPORTED = "reported"  # 已报告
+    INVESTIGATING = "investigating"  # 调查中
+    INVESTIGATED = "investigated"  # 调查完成
+    CAPA_IN_PROGRESS = "capa_in_progress"  # CAPA进行中
+    CLOSED = "closed"  # 已关闭
+
+
+class CheckType(StrEnum):
+    """检查类型枚举（16种）"""
+
+    DAILY = "daily"  # 日常检查
+    SPECIAL = "special"  # 专项检查
+    COMPREHENSIVE = "comprehensive"  # 综合检查
+    HOLIDAY = "holiday"  # 节假日检查
+    MONTHLY = "monthly"  # 月度安全检查
+    SEASONAL = "seasonal"  # 季节性安全检查
+    PRE_HOLIDAY = "pre_holiday"  # 节前安全检查
+    LEADERSHIP_DUTY = "leadership_duty"  # 领导干部值班检查
+    DEPT_CROSS = "dept_cross"  # 部门互查
+    WEEKLY = "weekly"  # 周检
+    RESUMPTION = "resumption"  # 复工复产安全检查
+    CHANGE_ACCEPTANCE = "change_acceptance"  # 变更验收
+    LIGHTNING = "lightning"  # 防雷检查
+    SAFETY_VALVE = "safety_valve"  # 安全阀专项检查
+    POST_HOLIDAY = "post_holiday"  # 节后复工检查
+    HEATSTROKE_PREVENTION = "heatstroke_prevention"  # 防暑降温专项

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.storage import delete_object
 from app.core.storage import is_enabled as minio_enabled
 from app.modules.safety.bitable_config.store import store
-from app.modules.safety.feishu.notification import send_user_card
+from app.modules.safety.feishu.notification import button_row, send_user_card
 from app.modules.safety.models import HazardReport
 from app.modules.safety.repository import SafetyRepository
 from app.modules.safety.schemas import HazardReportCreate, HazardReportUpdate
@@ -1160,68 +1160,62 @@ async def _build_verify_card_content(
                 hazard.hazard_no, len(defect_keys), len(rectification_keys),
             )
 
-    # ── 操作按钮 ──
+    # ── 操作按钮（2.0：column_set 按钮行，旧 action 容器已不支持）──
     if button_state is None:
         # 活跃状态：同意 + 驳回 + 查看表格
-        elements.append({
-            "tag": "action",
-            "actions": [
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "✅ 同意"},
-                    "type": "primary",
-                    "value": {
-                        "action": "approve_rectification",
-                        "record_id": hazard.feishu_record_id,
-                        "level": level,
-                    },
-                    "confirm": {
-                        "title": {"tag": "plain_text", "content": f"确认{level_text}审核通过"},
-                        "text": {"tag": "plain_text", "content": f"将在多维表格中将「{_bitable_field_for_level(level)}」设为「已同意」"},
-                    },
+        elements.append(button_row(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "✅ 同意"},
+                "type": "primary",
+                "value": {
+                    "action": "approve_rectification",
+                    "record_id": hazard.feishu_record_id,
+                    "level": level,
                 },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "❌ 驳回"},
-                    "type": "danger",
-                    "value": {
-                        "action": "reject_rectification",
-                        "record_id": hazard.feishu_record_id,
-                        "level": level,
-                    },
-                    "confirm": {
-                        "title": {"tag": "plain_text", "content": "确认驳回整改"},
-                        "text": {"tag": "plain_text", "content": f"将在多维表格中将「{_bitable_field_for_level(level)}」设为「未同意」，隐患退回整改阶段"},
-                    },
+                "confirm": {
+                    "title": {"tag": "plain_text", "content": f"确认{level_text}审核通过"},
+                    "text": {"tag": "plain_text", "content": f"将在多维表格中将「{_bitable_field_for_level(level)}」设为「已同意」"},
                 },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "📋 查看飞书表格记录"},
-                    "type": "default",
-                    "url": bitable_url,
+            },
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "❌ 驳回"},
+                "type": "danger",
+                "value": {
+                    "action": "reject_rectification",
+                    "record_id": hazard.feishu_record_id,
+                    "level": level,
                 },
-            ],
-        })
+                "confirm": {
+                    "title": {"tag": "plain_text", "content": "确认驳回整改"},
+                    "text": {"tag": "plain_text", "content": f"将在多维表格中将「{_bitable_field_for_level(level)}」设为「未同意」，隐患退回整改阶段"},
+                },
+            },
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "📋 查看飞书表格记录"},
+                "type": "default",
+                "url": bitable_url,
+            },
+        ))
     else:
         # 已处理状态：显示结果 + 查看表格
         result_text = "✅ 已同意" if button_state == "approved" else "❌ 已驳回"
-        elements.append({
-            "tag": "action",
-            "actions": [
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": result_text},
-                    "type": "default",
-                    "disabled": True,
-                },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "📋 查看飞书表格记录"},
-                    "type": "default",
-                    "url": bitable_url,
-                },
-            ],
-        })
+        elements.append(button_row(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": result_text},
+                "type": "default",
+                "disabled": True,
+            },
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "📋 查看飞书表格记录"},
+                "type": "default",
+                "url": bitable_url,
+            },
+        ))
 
     title = f"🔔 隐患复核通知{level_text}" if button_state is None else f"🔔 隐患复核通知{level_text} — 已处理"
     return title, content, elements
@@ -1549,10 +1543,8 @@ async def _send_rectification_notification(hazard: HazardReport) -> None:
                 "type": "primary",
                 "url": bitable_url,
             })
-        elements.append({
-            "tag": "action",
-            "actions": button_actions,
-        })
+        if button_actions:
+            elements.append(button_row(*button_actions))
 
         receive_id = person.user_id or person.open_id
         id_type = "user_id" if person.user_id else "open_id"

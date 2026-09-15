@@ -46,7 +46,13 @@ from app.modules.safety.feishu.client import (
 )
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.feishu.identity_resolver import IdentityResolver
-from app.modules.safety.feishu.notification import update_card as _update_feishu_card
+from app.modules.safety.feishu.notification import (
+    build_card_dict,
+    button_row,
+)
+from app.modules.safety.feishu.notification import (
+    update_card as _update_feishu_card,
+)
 from app.modules.safety.service.oh_archive import (
     OH_UPLOAD_MAX_SIZE,
     ZIP_MAX_TOTAL_SIZE,
@@ -224,55 +230,50 @@ async def _add_reaction(message_id: str, emoji_type: str) -> None:
         logger.debug("添加表情回应异常: message_id=%s", message_id, exc_info=True)
 
 
-def _build_confirm_card(action_id: str, summary: str) -> dict[str, Any]:
-    """构建「执行方案确认」卡片（带确认/取消按钮）。"""
+def _confirm_button(value: dict[str, Any], text: str, btn_type: str) -> dict[str, Any]:
+    """确认流按钮（value 携带 action/action_id 供回调路由）。
+
+    value 与 behaviors[type=callback].value 双写同值（2.0 字段表首选
+    behaviors，旧式 value 仍被事件回传——回调解析两侧兼容）。
+    """
     return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"{_CARD_TITLE} — 操作确认"},
-            "template": "blue",
-        },
-        "elements": [
-            {"tag": "markdown", "content": f"📋 **执行方案**\n\n{summary}"},
-            {"tag": "hr"},
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "✅ 确认执行"},
-                        "type": "primary",
-                        "value": json.dumps({"action": "confirm", "action_id": action_id}),
-                    },
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "❌ 取消"},
-                        "type": "danger",
-                        "value": json.dumps({"action": "cancel", "action_id": action_id}),
-                    },
-                ],
-            },
-        ],
+        "tag": "button",
+        "text": {"tag": "plain_text", "content": text},
+        "type": btn_type,
+        "value": value,
+        "behaviors": [{"type": "callback", "value": value}],
     }
+
+
+def _build_confirm_card(action_id: str, summary: str) -> dict[str, Any]:
+    """构建「执行方案确认」卡片（带确认/取消按钮，JSON 2.0）。"""
+    value_confirm = {"action": "confirm", "action_id": action_id}
+    value_cancel = {"action": "cancel", "action_id": action_id}
+    return build_card_dict(
+        f"{_CARD_TITLE} — 操作确认",
+        f"📋 **执行方案**\n\n{summary}",
+        header_template="blue",
+        elements=[
+            {"tag": "hr"},
+            button_row(
+                _confirm_button(value_confirm, "✅ 确认执行", "primary"),
+                _confirm_button(value_cancel, "❌ 取消", "danger"),
+            ),
+        ],
+    )
 
 
 def _build_executing_card(summary: str) -> dict[str, Any]:
     """构建「正在执行」卡片（无按钮，展示进度状态）。"""
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"{_CARD_TITLE} — 正在执行"},
-            "template": "blue",
-        },
-        "elements": [
-            {"tag": "markdown", "content": f"⏳ **正在执行，请稍候...**\n\n{summary}"},
+    return build_card_dict(
+        f"{_CARD_TITLE} — 正在执行",
+        f"⏳ **正在执行，请稍候...**\n\n{summary}",
+        header_template="blue",
+        elements=[
             {"tag": "hr"},
-            {
-                "tag": "note",
-                "elements": [{"tag": "plain_text", "content": "执行完成后将自动更新此卡片"}],
-            },
+            {"tag": "markdown", "content": "*执行完成后将自动更新此卡片*"},
         ],
-    }
+    )
 
 
 def _build_completed_card(summary: str, result_text: str) -> dict[str, Any]:
@@ -282,32 +283,24 @@ def _build_completed_card(summary: str, result_text: str) -> dict[str, Any]:
     if len(result_short) > 3000:
         result_short = result_short[:3000] + "\n\n…（内容过长已截断）"
 
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"{_CARD_TITLE} — 执行完成"},
-            "template": "green",
-        },
-        "elements": [
-            {"tag": "markdown", "content": f"✅ **执行完成**\n\n{summary}"},
+    return build_card_dict(
+        f"{_CARD_TITLE} — 执行完成",
+        f"✅ **执行完成**\n\n{summary}",
+        header_template="green",
+        elements=[
             {"tag": "hr"},
             {"tag": "markdown", "content": result_short},
         ],
-    }
+    )
 
 
 def _build_cancelled_card(summary: str) -> dict[str, Any]:
     """构建「已取消」卡片（无按钮，展示取消状态）。"""
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"{_CARD_TITLE} — 已取消"},
-            "template": "red",
-        },
-        "elements": [
-            {"tag": "markdown", "content": f"❌ **操作已取消**\n\n{summary}"},
-        ],
-    }
+    return build_card_dict(
+        f"{_CARD_TITLE} — 已取消",
+        f"❌ **操作已取消**\n\n{summary}",
+        header_template="red",
+    )
 
 
 def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -382,12 +375,13 @@ def _build_reply_card(answer: str, sources: list[dict[str, Any]] | None = None) 
         elements.append({"tag": "markdown", "content": "\n".join(ref_lines)})
 
     return {
-        "config": {"wide_screen_mode": True},
+        "schema": "2.0",
+        "config": {"update_multi": True, "width_mode": "fill"},
         "header": {
             "title": {"tag": "plain_text", "content": _CARD_TITLE},
             "template": "blue",
         },
-        "elements": elements,
+        "body": {"elements": elements},
     }
 
 
@@ -1247,11 +1241,13 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
     try:
         action_value = event_data.get("action", {}).get("value", "{}")
         try:
-            payload = json.loads(action_value)
-            # Feishu 对 value 字段做双重 JSON 编码（卡片 JSON 序列化 + 事件 JSON 序列化）
-            # 一次 json.loads 可能只解出内层字符串，需要再解一次才能得到 dict
+            # 按钮 value 兼容两种形态：2.0+behaviors 回传 dict；旧式 JSON 字符串
+            # （卡片+事件双重编码，需二次 decode）。str → dict 归一化。
+            payload = action_value
             if isinstance(payload, str):
                 payload = json.loads(payload)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
         except json.JSONDecodeError:
             return None
 
@@ -1317,7 +1313,8 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
             card_msg_id = pa.card_message_id  # 可能为 None（旧卡片）
 
             chat_id = (
-                event_data.get("open_chat_id", "")
+                event_data.get("context", {}).get("open_chat_id", "")
+                or event_data.get("open_chat_id", "")
                 or event_data.get("message", {}).get("chat_id", "")
             )
             operator_id = (
@@ -1337,17 +1334,18 @@ async def handle_card_action(event_data: dict[str, Any]) -> dict[str, Any] | Non
             )
         )
 
-        # ── ACK 立即返回卡片更新 ──
+        # ── ACK 纯确认，卡片状态推进走 PATCH（WS 回调响应更新实测不生效，
+        # 与仓库机器人 2026-09-14 点击实测一致；card_msg_id 缺失的旧卡除外）──
         if approved:
-            return {
-                "toast": {"type": "success", "content": "正在执行，请稍候..."},
-                "card": {"type": "raw", "data": _build_executing_card(summary)},
-            }
+            ack_card = _build_executing_card(summary)
+            ack_toast = "正在执行，请稍候..."
         else:
-            return {
-                "toast": {"type": "success", "content": "操作已取消"},
-                "card": {"type": "raw", "data": _build_cancelled_card(summary)},
-            }
+            ack_card = _build_cancelled_card(summary)
+            ack_toast = "操作已取消"
+        if card_msg_id:
+            asyncio.create_task(_update_feishu_card(card_msg_id, ack_card))
+            return None
+        return {"toast": {"type": "success", "content": ack_toast}}
 
     except Exception:
         logger.exception("业务 Agent 卡片回调处理异常")
@@ -1435,16 +1433,11 @@ def _build_office_link_card(link: dict[str, Any]) -> dict[str, Any]:
         f"✅ **{message}**\n\n"
         f"<a href='{url}'>打开飞书文档 / 文件</a>"
     )
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "title": {"tag": "plain_text", "content": f"{_CARD_TITLE} — 办公产物"},
-            "template": "green",
-        },
-        "elements": [
-            {"tag": "markdown", "content": content},
-        ],
-    }
+    return build_card_dict(
+        f"{_CARD_TITLE} — 办公产物",
+        content,
+        header_template="green",
+    )
 
 
 async def _send_office_link_card(chat_id: str, link: dict[str, Any]) -> bool:

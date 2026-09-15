@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.modules.safety.service.hazard_direct import config
 from app.modules.safety.service.hazard_direct.ai_analysis import run_ai_analysis_round
@@ -37,6 +38,26 @@ async def _stopped() -> bool:
     return stop_scheduled_task_flag.is_set()
 
 
+def _round_failure_detail(result: Any) -> str:
+    """把「N 条失败」细化为「N 条失败（record: reason；）」。
+
+    连续失败告警原先只写「2 条失败」，排障时必须翻日志才能知道原因
+    （2026-09-11 事故：原因其实是 AI 客户端缺 base_url 属性）。
+    这里把本轮前 3 条失败原因带进告警，便于一眼定位。
+    """
+    detail = f"{getattr(result, 'failed', 0)} 条失败"
+    failures = getattr(result, "failures", None) or []
+    parts = [
+        f"{f.get('record_id', '?')}: {f.get('reason', '')}"
+        for f in failures[:3]
+    ]
+    if parts:
+        detail += "（" + "；".join(parts) + "）"
+    if len(failures) > 3:
+        detail += f" 等 {len(failures)} 条"
+    return detail[:400]
+
+
 async def _ai_loop() -> None:
     """① 隐患AI分析轮询。"""
     interval = config.poll_interval_seconds()
@@ -48,7 +69,7 @@ async def _ai_loop() -> None:
             result = await run_ai_analysis_round()
             consecutive = 0 if result.failed == 0 else consecutive + 1
             if result.failed:
-                error = f"{result.failed} 条失败"
+                error = _round_failure_detail(result)
         except Exception as exc:
             consecutive += 1
             error = f"{type(exc).__name__}: {exc}"
@@ -78,7 +99,7 @@ async def _review_loop() -> None:
             result = await run_review_round()
             consecutive = 0 if result.failed == 0 else consecutive + 1
             if result.failed:
-                error = f"{result.failed} 条失败"
+                error = _round_failure_detail(result)
         except Exception as exc:
             consecutive += 1
             error = f"{type(exc).__name__}: {exc}"
@@ -112,7 +133,7 @@ async def _supervision_loop() -> None:
             result = await run_supervision_round()
             consecutive = 0 if result.failed == 0 else consecutive + 1
             if result.failed:
-                error = f"{result.failed} 条失败"
+                error = _round_failure_detail(result)
         except Exception as exc:
             consecutive += 1
             error = f"{type(exc).__name__}: {exc}"

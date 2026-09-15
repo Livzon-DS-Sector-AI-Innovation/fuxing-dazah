@@ -30,7 +30,10 @@ from pydantic_ai import (
 )
 from pydantic_ai.messages import ModelMessage
 
-from app.modules.safety.business_agent.agent import business_agent
+from app.modules.safety.business_agent.agent import (
+    business_agent,
+    get_agent_for_tools,
+)
 from app.modules.safety.business_agent.permissions import check as perm_check
 from app.modules.safety.business_agent.rules import check_output
 from app.modules.safety.business_agent.schemas import (
@@ -581,6 +584,18 @@ _SUMMARY_TRIGGER_LENGTH = 20     # 旧条数触发阈值（已弃，token 驱动
 _SUMMARY_KEEP_RECENT = 10        # 保留最近 10 条原文不参与摘要（core/compaction 沿用同名常量）
 
 
+def _registered_tool_names(tool_names: list[str] | None) -> list[str]:
+    """本轮 Agent 实际会注册的工具名（口径与 get_agent_for_tools 一致）。
+
+    None/空 = 全量回退（business_agent 含全部工具）；否则取子集，未知名字与
+    register_tools_subset 一样静默丢弃。tool_catalog 节必须用这份名单渲染，
+    否则模型会被提示去调用一个不在工具表里的工具（"工具未挂载"根因）。
+    """
+    if not tool_names:
+        return sorted(TOOL_KIND)
+    return sorted({name for name in tool_names if name in TOOL_KIND})
+
+
 async def _agent_run(
     user_message: str | None,
     deps: SafetyDeps,
@@ -612,8 +627,19 @@ async def _agent_run(
 
         message_history = await maybe_compact(message_history, deps)
 
-    # ── S4：system-prompt 分节组装（persona/runtime_date/user_context/memories/tool_catalog）
-    #    替代旧 MemoryInjector 的 build_user_context + inject_memory_context 前缀拼接。
+    # 按需选择工具子集（减少 tool definitions 开销 66%）
+    # 必须在 prompt 组装之前算出来：tool_catalog 节要按「本轮真正挂载的工具」
+    # 渲染，否则模型会被提示去调用一个不在工具表里的工具（"工具未挂载"根因）。
+    selected_tools: list[str] | None = None
+    if user_message and deferred_tool_results is None:
+        from app.modules.safety.business_agent.tool_selector import select_tool_names
+
+        # 用原始用户消息做意图词匹配（不用拼了 prompt_prefix 的 effective_message，
+        # 否则 agent.md/上下文里的"法规/隐患/制度"等词会污染意图判定，导致全量注册工具）
+        selected_tools = select_tool_names(user_message)
+
+    # S4：system-prompt 分节组装（persona/runtime_date/user_context/memories/tool_catalog）
+    # 替代旧 MemoryInjector 的 build_user_context + inject_memory_context 前缀拼接。
     effective_message = user_message or ""
     if effective_message and deps.person and deps.person.user_id:
         from app.modules.safety.business_agent.core.prompt import ALL_SECTIONS, assemble
@@ -626,22 +652,17 @@ async def _agent_run(
         prompt_prefix = assemble(
             ALL_SECTIONS,
             deps,
-            context={"memories": memories or [], "query": effective_message},
+            context={
+                "memories": memories or [],
+                "query": effective_message,
+                # 与下面 get_agent_for_tools 用同一份名单，tool_catalog 只说真话
+                "tool_names": _registered_tool_names(selected_tools),
+            },
         )
         if prompt_prefix:
             effective_message = f"{prompt_prefix}\n---\n{effective_message}"
 
-    # ── 按需选择工具子集（减少 tool definitions 开销 66%）─────────
-    agent = business_agent  # fallback: all tools
-    if effective_message and deferred_tool_results is None:
-        from app.modules.safety.business_agent.agent import get_agent_for_tools
-        from app.modules.safety.business_agent.tool_selector import select_tool_names
-
-        # 用原始用户消息做意图词匹配（不用拼了 prompt_prefix 的 effective_message，
-        # 否则 agent.md/上下文里的"法规/隐患/制度"等词会污染意图判定 → 全量注册工具）
-        tool_names = select_tool_names(user_message or "")
-        if tool_names:
-            agent = get_agent_for_tools(tool_names)
+    agent = get_agent_for_tools(selected_tools)
 
     return await agent.run(
         effective_message,
