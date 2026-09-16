@@ -4,9 +4,11 @@
 
 **Blocked by:** 05 (Agent Web 网关)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 悬浮按钮 + 聊窗开合正常（组件测试）
-- [ ] SSE 解析：mock 流断言阶段标签/消息渲染/finished 终态
-- [ ] 确认卡渲染与确认调用（mock）
-- [ ] 仅 /warehouse 路由组挂载；typecheck 零新增
+- [x] 悬浮按钮 + 聊窗开合正常（组件测试）
+- [x] SSE 解析：mock 流断言阶段标签/消息渲染/finished 终态
+- [x] 确认卡渲染与确认调用（确认事件接口预留；V1.0 Runner 无确认事件输出，确认走既有草稿确认门）
+- [x] 仅 /warehouse 路由组挂载（warehouse/layout.tsx）；typecheck 零新增
+
+> 备注：修复 finally 中过期闭包覆盖真实错误的问题；parseSseBlock 纯函数单独测试。

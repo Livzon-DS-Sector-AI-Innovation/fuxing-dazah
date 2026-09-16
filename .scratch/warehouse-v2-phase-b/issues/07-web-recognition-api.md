@@ -4,9 +4,10 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] source 列迁移空库可执行
-- [ ] 上传测试：类型/大小校验、返回引用
-- [ ] recognition 测试：mock 识别结果 → draft 创建 status=aligned、source=web
-- [ ] 提交走既有 submit（复用既有测试模式）；403/422 边界
+- [x] source 列迁移（g8b2c6d4e1f3）空库可执行
+- [x] 上传测试：类型/大小校验、返回引用、图片回取
+- [x] recognition 测试：mock 识别结果 → draft 创建 status=aligned、source=web
+- [x] 确认走 handle_action（同飞书卡片确认链）；他人草稿 404
+

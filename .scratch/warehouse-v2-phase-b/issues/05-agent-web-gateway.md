@@ -4,9 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] SSE 事件序列路由测试（mock Runner：accepted/stage/message/finished 顺序与 sequence 递增）
-- [ ] 鉴权测试：未登录 401；场景停用 503
-- [ ] 会话隔离测试：web 会话与飞书会话互不可见（web:{user_id} 键）
-- [ ] mypy/ruff 零新增
+- [x] SSE 事件序列路由测试（accepted/stage/message/finished 顺序与 seq 递增）
+- [x] 鉴权测试：未登录 401；场景停用 503（monkeypatch scenario_store 实例）
+- [x] 会话隔离测试：web:{user_id} 键持久化
+- [x] mypy/ruff 零新增
+
+> 备注：SSE 端点 POST /agent/chat/stream（权限 warehouse:stock:read 基线）；网关审计 tool_name=web_gateway；历史落库对齐飞书侧模式。

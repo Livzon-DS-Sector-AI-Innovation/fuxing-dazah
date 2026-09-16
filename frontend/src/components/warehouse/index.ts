@@ -1,6 +1,8 @@
 // warehouse module components
 export { WarehouseDashboard } from './WarehouseDashboard'
 export { TodayBoard } from './TodayBoard'
+export { QuickRegister } from './QuickRegister'
+export { IntelligenceCenter } from './intelligence/IntelligenceCenter'
 export { QueryFilter } from './QueryFilter'
 export { PageHeader } from './PageHeader'
 export { DataTable } from './DataTable'

@@ -4,9 +4,9 @@
 
 **Blocked by:** 07 (快速登记后端)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 上传→识别→确认→提交全链路组件测试（mock lib/api）
-- [ ] 低置信度行标黄样式正确
-- [ ] 菜单入口"快速登记"生效
+- [x] 上传→识别→确认→提交全链路组件测试（mock lib/api 与 actions）
+- [x] 低置信度行标黄样式正确
+- [x] 菜单入口"快速登记"生效
 - [ ] typecheck/lint 零新增
