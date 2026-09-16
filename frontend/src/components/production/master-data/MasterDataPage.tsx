@@ -42,6 +42,7 @@ import {
 } from '@/lib/api/production-client'
 import type { Product, IntermediateType, MixingContainer } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { PageHeading } from '@/components/shared/PageHeading'
 import { LinesTab } from './LinesTab'
 
@@ -726,7 +727,11 @@ function MasterDataContent() {
 
   return (
     <div>
-      <PageHeading title="主数据管理" subtitle="管理产品主数据与产出物（中间体）字典" />
+      <PageHeading
+        title="主数据管理"
+        subtitle="管理产品主数据与产出物（中间体）字典"
+        actions={<PageGuideButton />}
+      />
       <Tabs items={tabItems} />
       <ProductFormModal
         key={editProduct?.id ?? 'product-new'}

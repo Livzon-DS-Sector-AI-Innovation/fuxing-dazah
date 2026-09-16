@@ -29,6 +29,24 @@
   pointer-events: none;
 }
 
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* min-width:0 必需：否则长 subtitle 撑开 flex item，把右侧 actions 挤出容器外 */
+.text {
+  min-width: 0;
+}
+
+.actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+}
+
 .title {
   margin: 0;
   color: var(--color-ink);

@@ -31,6 +31,7 @@ import { MaintenancePlanTable } from './MaintenancePlanTable'
 import { MaintenancePlanDrawer } from './MaintenancePlanDrawer'
 import { InspectionCompleteDrawer } from './InspectionCompleteDrawer'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { usePermission } from '@/hooks/usePermission'
 
 interface MaintenancePageProps {
@@ -347,7 +348,11 @@ export function MaintenancePage({
   return (
     <ConfigProvider theme={antdTheme} locale={zhCN}>
       <App>
-        <PageHeading title="维护保养" subtitle="工单管理 · 故障代码 · 维护计划" />
+        <PageHeading
+          title="维护保养"
+          subtitle="工单管理 · 故障代码 · 维护计划"
+          actions={<PageGuideButton />}
+        />
         <div style={{ background: '#ffffff', padding: 20, borderRadius: 12, border: '1px solid #e5e3df' }}>
           <Tabs activeKey={maintenanceTab} onChange={setMaintenanceTab} items={tabItems} />
         </div>

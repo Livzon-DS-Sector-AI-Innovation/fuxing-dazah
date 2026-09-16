@@ -11,6 +11,7 @@ import { fetchRouteGraphClient, fetchRoutesClient } from '@/lib/api/production-c
 import type { Product } from '@/types/production'
 import { ProductionQueryProvider } from '../ProductionQueryProvider'
 import { ProductSidebar, CARD_STYLE } from '../shared/ProductSidebar'
+import { PageGuideButton } from '../shared/PageGuideButton'
 import { RouteVersionBar } from './RouteVersionBar'
 import { RouteFlowGraph } from './RouteFlowGraph'
 import { RouteGraphEditor } from './RouteGraphEditor'
@@ -52,7 +53,11 @@ function ProcessPageInner({ initialProducts }: { initialProducts: Product[] }) {
 
   return (
     <div>
-      <PageHeading title="工艺路径" subtitle="查看工艺路线与节点流程" />
+      <PageHeading
+        title="工艺路径"
+        subtitle="查看工艺路线与节点流程"
+        actions={<PageGuideButton />}
+      />
       <div style={{ display: 'flex', gap: 16, alignItems: 'stretch' }}>
         <ProductSidebar
           selectedId={selectedProductId}

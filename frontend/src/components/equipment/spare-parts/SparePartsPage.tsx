@@ -14,6 +14,7 @@ import { SparePartEquipmentDrawer } from './SparePartEquipmentDrawer'
 import { StockInboundDrawer } from './StockInboundDrawer'
 import { SparePartImportModal } from './SparePartImportModal'
 import { PageHeading } from '@/components/shared/PageHeading'
+import { PageGuideButton } from '../shared/PageGuideButton'
 
 const txColumns: ColumnsType<OutboundTransaction> = [
   { title: '备件编码', dataIndex: 'spare_part_code', key: 'spare_part_code', width: 110, render: (v: string | null) => v || '-' },
@@ -168,7 +169,11 @@ export function SparePartsPage({
     <ConfigProvider theme={antdTheme} locale={zhCN}>
       <App>
         {/* ── 页面标题 ── */}
-        <PageHeading title="备件管理" subtitle="备件主数据 · 设备关联 · 消耗追踪" />
+        <PageHeading
+          title="备件管理"
+          subtitle="备件主数据 · 设备关联 · 消耗追踪"
+          actions={<PageGuideButton />}
+        />
 
         <div style={{ background: '#ffffff', padding: 20, borderRadius: 12, border: '1px solid #e5e3df' }}>
           <Tabs activeKey={tab} onChange={handleTabChange} items={tabItems} />

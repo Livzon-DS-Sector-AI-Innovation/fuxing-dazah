@@ -4,6 +4,7 @@ export { CategoryTree } from './shared/CategoryTree'
 export { LocationDrawer } from './shared/LocationDrawer'
 export { LocationTree } from './shared/LocationTree'
 export { PersonnelSelect } from './shared/PersonnelSelect'
+export { PageGuideButton } from './shared/PageGuideButton'
 
 // ==================== assets（设备台账） ====================
 export { EquipmentPage } from './assets/EquipmentPage'
