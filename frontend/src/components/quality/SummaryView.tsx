@@ -142,8 +142,6 @@ export default function SummaryView() {
               batch: p.batch_number,
               value: p.value,
               pass: p.is_pass,
-              limit_max: trend.limit_max,
-              limit_min: trend.limit_min,
             }))}
             xField="batch"
             yField="value"
@@ -169,10 +167,10 @@ export default function SummaryView() {
             }}
             annotations={[
               ...(trend.limit_max != null
-                ? [{ type: 'lineY', yField: 'limit_max', style: { stroke: '#d03b3b', lineDash: [4, 4], lineWidth: 1 } }]
+                ? [{ type: 'lineY', y: trend.limit_max, style: { stroke: '#d03b3b', lineDash: [4, 4], lineWidth: 1 } }]
                 : []),
               ...(trend.limit_min != null
-                ? [{ type: 'lineY', yField: 'limit_min', style: { stroke: '#0ca30c', lineDash: [4, 4], lineWidth: 1 } }]
+                ? [{ type: 'lineY', y: trend.limit_min, style: { stroke: '#0ca30c', lineDash: [4, 4], lineWidth: 1 } }]
                 : []),
             ]}
             style={{ lineWidth: 2 }}
