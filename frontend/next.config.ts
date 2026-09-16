@@ -5,7 +5,10 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: __dirname,
   },
-  reactCompiler: true,
+  // React Compiler 在生产构建下会使作业看板"新建计划单"等条件渲染 Modal 的
+  // open 状态在数秒后自动回退（真机验收缺陷，2026-09-16；单元测试无编译器时复现不了），
+  // 修复前保持关闭
+  reactCompiler: false,
   allowedDevOrigins: ['*', '127.0.0.1'],
 
   // 内部部署阶段：默认启用 sourcemap 方便定位错误；用 ENABLE_SOURCEMAPS=false 可关闭以加速构建/减小镜像
