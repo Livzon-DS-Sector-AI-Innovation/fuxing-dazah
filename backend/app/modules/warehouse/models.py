@@ -594,6 +594,26 @@ class WarehouseReplenishmentSuggestion(BaseModel):
     handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WarehouseDailyBriefing(BaseModel):
+    """每日晨报：聚合异常/建议/昨日出入库（brief_date 唯一，重生成覆盖）。"""
+
+    __tablename__ = "daily_briefings"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_daily_briefings_date",
+            "brief_date",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    brief_date: Mapped[date] = mapped_column(Date, nullable=False, comment="晨报业务日")
+    content: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="晨报内容 JSON"
+    )
+
+
 # ==================== 系统配置中心（设计稿 warehouse-system-config-design.md） ====================
 # 与 safety 模块同名表结构对齐（schema=warehouse）；回退链：DB 活行 → env → registry 默认。
 

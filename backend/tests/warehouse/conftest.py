@@ -43,6 +43,7 @@ WAREHOUSE_PERMS = {
     "warehouse:intelligence:update",
     "warehouse:replenishment:read",
     "warehouse:replenishment:update",
+    "warehouse:reports:read",
 }
 
 

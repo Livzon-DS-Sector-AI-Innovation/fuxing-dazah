@@ -7,14 +7,16 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.warehouse import dashboard as dashboard_service
 from app.modules.warehouse import intelligence as intelligence_service
+from app.modules.warehouse import morning_report as morning_report_service
 from app.modules.warehouse import plans as plans_service
+from app.modules.warehouse import reports as reports_service
 from app.modules.warehouse import service
 from app.modules.warehouse.schemas import (
     AlertRecordResponse,
@@ -426,6 +428,174 @@ async def update_replenishment_status(
     )
     return success_response(
         ReplenishmentSuggestionResponse.model_validate(suggestion).model_dump(mode="json")
+    )
+
+
+# ── 报表中心（分期C） ──
+
+
+def _xlsx_response(filename: str, content: bytes) -> Response:
+    from urllib.parse import quote
+
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@router.get("/reports/monthly", summary="出入库月报")
+async def report_monthly(
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_monthly_report(db, year, month))
+
+
+@router.get("/reports/monthly/export", summary="出入库月报导出 Excel")
+async def report_monthly_export(
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    report = await reports_service.get_monthly_report(db, year, month)
+    return _xlsx_response(
+        f"出入库月报-{year}-{month:02d}.xlsx", reports_service.build_monthly_xlsx(report)
+    )
+
+
+@router.get("/reports/turnover", summary="库存周转率排行")
+async def report_turnover(
+    days: int = Query(default=30, ge=1, le=365),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_turnover_ranking(db, days, limit, order))
+
+
+@router.get("/reports/turnover/export", summary="库存周转率排行导出 Excel")
+async def report_turnover_export(
+    days: int = Query(default=30, ge=1, le=365),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    rows = await reports_service.get_turnover_ranking(db, days, limit, order)
+    content = reports_service.build_table_xlsx(
+        "周转率排行",
+        ["物料编码", "物料名称", "出库数量", "当前库存", "周转率"],
+        [[r["material_code"], r["material_name"], r["outbound_qty"],
+          r["current_stock"], r["turnover"] or ""] for r in rows],
+    )
+    return _xlsx_response(f"库存周转率排行-{days}天.xlsx", content)
+
+
+@router.get("/reports/consumption", summary="物料消耗排名")
+async def report_consumption(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_consumption_ranking(db, days, limit))
+
+
+@router.get("/reports/consumption/export", summary="物料消耗排名导出 Excel")
+async def report_consumption_export(
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    rows = await reports_service.get_consumption_ranking(db, days, limit)
+    content = reports_service.build_table_xlsx(
+        "消耗排名",
+        ["物料编码", "物料名称", "单位", "出库数量"],
+        [[r["material_code"], r["material_name"], r["unit"], r["outbound_qty"]] for r in rows],
+    )
+    return _xlsx_response(f"物料消耗排名-{days}天.xlsx", content)
+
+
+@router.get("/reports/stock", summary="当前库存报表")
+async def report_stock(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    items, total = await reports_service.get_stock_report(db, page=page, page_size=page_size)
+    data = [
+        {
+            "material_code": s.material_code,
+            "material_name": s.material_name,
+            "batch_no": s.batch_no,
+            "location_name": s.location_name,
+            "expiry_date": s.expiry_date.isoformat() if s.expiry_date else None,
+            "quantity": float(s.quantity),
+        }
+        for s in items
+    ]
+    return paginated_response(data, page, page_size, total)
+
+
+@router.get("/reports/stock/export", summary="当前库存报表导出 Excel")
+async def report_stock_export(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    items, _total = await reports_service.get_stock_report(db, page=1, page_size=5000)
+    content = reports_service.build_table_xlsx(
+        "当前库存",
+        ["物料编码", "物料名称", "批次号", "库位", "效期", "数量"],
+        [
+            [s.material_code, s.material_name, s.batch_no, s.location_name,
+             s.expiry_date.isoformat() if s.expiry_date else "", float(s.quantity)]
+            for s in items
+        ],
+    )
+    return _xlsx_response("当前库存报表.xlsx", content)
+
+
+@router.get("/reports/briefings", summary="晨报历史列表")
+async def list_morning_briefings(
+    limit: int = Query(default=30, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    items = await morning_report_service.list_briefings(db, limit)
+    return success_response(
+        [
+            {
+                "brief_date": b.brief_date.isoformat(),
+                "content": b.content,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+            }
+            for b in items
+        ]
+    )
+
+
+@router.get("/reports/briefings/{brief_date}", summary="晨报详情")
+async def get_morning_briefing(
+    brief_date: date,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    briefing = await morning_report_service.get_briefing(db, brief_date)
+    if briefing is None:
+        return JSONResponse(status_code=404, content={"code": 404, "message": "该日无晨报"})
+    return success_response(
+        {
+            "brief_date": briefing.brief_date.isoformat(),
+            "content": briefing.content,
+            "created_at": briefing.created_at.isoformat() if briefing.created_at else None,
+        }
     )
 
 

@@ -235,4 +235,13 @@ PERMISSIONS: list[PermissionDef] = [
         action="update",
         description="标记补货建议已处理/忽略",
     ),
+    # ── 报表中心（分期C） ──
+    PermissionDef(
+        code="warehouse:reports:read",
+        name="查看仓储报表",
+        module="warehouse",
+        resource="reports",
+        action="read",
+        description="查看出入库月报/周转率/消耗排名/库存报表并导出",
+    ),
 ]

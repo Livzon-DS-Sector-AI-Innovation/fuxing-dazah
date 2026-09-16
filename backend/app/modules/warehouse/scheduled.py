@@ -13,6 +13,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.core.database import async_session_factory
+from app.modules.warehouse.morning_report import (
+    generate_morning_report,
+    is_in_briefing_window,
+)
 from app.modules.warehouse.snapshot import (
     is_in_snapshot_window,
     run_stock_daily_snapshot,
@@ -72,5 +76,34 @@ INTELLIGENCE_SCAN_TASK = TaskDefinition(
     ),
     coro=_run_scheduled_alert_scan,
     timeout_seconds=1800,
+    module="warehouse",
+)
+
+
+async def _run_scheduled_morning_report() -> None:
+    now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+    if not is_in_briefing_window(now_cn):
+        logger.info(
+            "warehouse morning report skipped: outside 08:00-09:00 window (now=%s)",
+            now_cn.isoformat(timespec="minutes"),
+        )
+        return
+    async with async_session_factory() as session:
+        content = await generate_morning_report(
+            session, now_cn.date()
+        )
+        await session.commit()
+    logger.info("warehouse morning report generated: %s", content.get("brief_date"))
+
+
+MORNING_REPORT_TASK = TaskDefinition(
+    name="warehouse.morning_report",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.FIXED_TIME,
+        time_of_day="08:00",
+        timezone="Asia/Shanghai",
+    ),
+    coro=_run_scheduled_morning_report,
+    timeout_seconds=600,
     module="warehouse",
 )
