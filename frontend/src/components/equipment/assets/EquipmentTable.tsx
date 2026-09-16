@@ -90,6 +90,10 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
           return
         }
         message.success('删除设备成功')
+        // preserveSelectedRowKeys 会跨页保留勾选，删掉的设备必须同时从选择里剔除，
+        // 否则「批量引用授权」会把已删除的设备 id 发给后端。
+        setSelectedRowKeys(keys => keys.filter(key => key !== record.id))
+        setSelectedEquipments(items => items.filter(item => item.id !== record.id))
         onPageChange(page, pageSize)
       },
     })

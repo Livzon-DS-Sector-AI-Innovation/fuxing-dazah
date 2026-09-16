@@ -444,10 +444,8 @@ export function DeviceDrawer({ onRefresh }: DeviceDrawerProps) {
               <Select
                 mode="multiple"
                 placeholder="搜索并选择设备台账中的设备"
-                showSearch
+                showSearch={{ filterOption: false, onSearch: handleEquipmentSearch }}
                 allowClear
-                filterOption={false}
-                onSearch={handleEquipmentSearch}
                 onOpenChange={handleEquipmentDropdownOpen}
                 options={equipmentOptions}
                 loading={equipmentLoading}

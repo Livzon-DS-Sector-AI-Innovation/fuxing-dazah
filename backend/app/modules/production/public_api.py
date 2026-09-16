@@ -17,6 +17,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.production.models import IntermediateType, Product
+from app.shared.sql import escape_like
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,11 +190,11 @@ async def list_products(
     if not include_deleted:
         filters.append(Product.is_deleted == False)  # noqa: E712
     if value:
-        pattern = f"%{value}%"
+        pattern = f"%{escape_like(value)}%"
         filters.append(
             or_(
-                Product.product_code.ilike(pattern),
-                Product.product_name.ilike(pattern),
+                Product.product_code.ilike(pattern, escape="\\"),
+                Product.product_name.ilike(pattern, escape="\\"),
             )
         )
 
@@ -301,12 +302,12 @@ async def list_intermediate_types(
     if not include_deleted:
         filters.append(IntermediateType.is_deleted == False)  # noqa: E712
     if value:
-        pattern = f"%{value}%"
+        pattern = f"%{escape_like(value)}%"
         filters.append(
             or_(
-                IntermediateType.code.ilike(pattern),
-                IntermediateType.name.ilike(pattern),
-                IntermediateType.category.ilike(pattern),
+                IntermediateType.code.ilike(pattern, escape="\\"),
+                IntermediateType.name.ilike(pattern, escape="\\"),
+                IntermediateType.category.ilike(pattern, escape="\\"),
             )
         )
 

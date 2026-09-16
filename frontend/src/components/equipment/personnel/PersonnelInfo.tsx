@@ -136,7 +136,7 @@ export function PersonnelInfo({ personnel }: PersonnelInfoProps) {
       trigger="hover"
       placement="right"
       mouseEnterDelay={0.3}
-      overlayStyle={{ maxWidth: 320 }}
+      styles={{ root: { maxWidth: 320 } }}
     >
       <div style={{
         display: 'inline-flex', alignItems: 'center', gap: 10,

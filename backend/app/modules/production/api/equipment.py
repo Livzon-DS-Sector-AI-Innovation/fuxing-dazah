@@ -6,6 +6,8 @@ production 模块已共享设备的并集，全部经 equipment.public_api 解�
 """
 
 import uuid
+from collections.abc import Sequence
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
@@ -20,6 +22,21 @@ from app.platform.permission.deps import RequireUser
 router = APIRouter(tags=["生产-设备选项"])
 
 
+def _equipment_options(rows: Sequence[Any]) -> list[dict[str, Any]]:
+    """设备摘要走同一序列化，避免两个端点字段口径漂移。"""
+    return [
+        EquipmentOptionOut(
+            id=e.id,
+            equipment_no=e.equipment_no,
+            name=e.name,
+            status=getattr(e, "status", None),
+            is_active=getattr(e, "is_active", True),
+            source=getattr(e, "source", None),
+        ).model_dump(mode="json")
+        for e in rows
+    ]
+
+
 @router.get("/equipment-options", summary="当前用户可引用设备下拉选项")
 async def get_equipment_options(
     current_user: RequireUser,
@@ -29,38 +46,18 @@ async def get_equipment_options(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
 ) -> JSONResponse:
-    if status is None:
-        # 不传 status 保持旧测试适配器及调用方的关键字签名兼容。
-        equipments, total = await equipment_public_api.list_equipment_references(
-            db,
-            current_user,
-            "production",
-            keyword=keyword,
-            page=page,
-            page_size=page_size,
-        )
-    else:
-        equipments, total = await equipment_public_api.list_equipment_references(
-            db,
-            current_user,
-            "production",
-            keyword=keyword,
-            status=status,
-            page=page,
-            page_size=page_size,
-        )
+    # status=None 等价于不传（仓储只在有值时过滤），无需分支。
+    equipments, total = await equipment_public_api.list_equipment_references(
+        db,
+        current_user,
+        "production",
+        keyword=keyword,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
     return paginated_response(
-        [
-            EquipmentOptionOut(
-                id=e.id,
-                equipment_no=e.equipment_no,
-                name=e.name,
-                status=getattr(e, "status", None),
-                is_active=getattr(e, "is_active", True),
-                source=getattr(e, "source", None),
-            ).model_dump(mode="json")
-            for e in equipments
-        ],
+        _equipment_options(equipments),
         page,
         page_size,
         total,
@@ -78,16 +75,4 @@ async def get_equipment_briefs_by_ids(
     briefs = await equipment_public_api.get_equipment_references_by_ids(
         db, current_user, "production", ids,
     )
-    return success_response(
-        [
-            EquipmentOptionOut(
-                id=e.id,
-                equipment_no=e.equipment_no,
-                name=e.name,
-                status=getattr(e, "status", None),
-                is_active=getattr(e, "is_active", True),
-                source=getattr(e, "source", None),
-            ).model_dump(mode="json")
-            for e in briefs
-        ]
-    )
+    return success_response(_equipment_options(briefs))

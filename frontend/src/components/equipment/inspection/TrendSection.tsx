@@ -121,7 +121,7 @@ export function TrendSection() {
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <Select
           value={selectedEq} onChange={(v: string) => { setSelectedEq(v); setSelectedItems([]) }}
-          showSearch optionFilterProp="label" placeholder="选择设备"
+          showSearch={{ optionFilterProp: 'label' }} placeholder="选择设备"
           style={{ minWidth: 220 }}
           options={equipments.map(e => ({ label: `${e.equipment_name}（${e.equipment_no}）`, value: e.equipment_id }))}
         />

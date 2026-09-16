@@ -370,8 +370,9 @@ body {
 
 /* 产品列表项 hover */
 .product-sidebar-item:hover {
-  background: #f6f5f4 !important;
+  background: linear-gradient(145deg, #fbfaf9, #f3f2f6) !important;
   border-color: #e5e3df !important;
+  box-shadow: inset 0 1px 0 #fff, 0 2px 5px -4px rgba(40, 33, 91, 0.35);
 }
 
 /* 批次「生产中」状态 — 呼吸脉动，表现"开动中" */

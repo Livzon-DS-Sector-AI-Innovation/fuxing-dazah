@@ -228,10 +228,10 @@ export function WorkshopConfigDrawer({ onRefresh }: WorkshopConfigDrawerProps) {
                 value: w.workshop,
                 key: `${w.device_name}__${w.workshop}`,
               }))}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               style={{ width: '100%' }}
               size="large"
               notFoundContent={filterEnergyType ? '该能源类型下暂无已启用的设备配置' : '暂无已启用的设备配置'}
@@ -243,10 +243,10 @@ export function WorkshopConfigDrawer({ onRefresh }: WorkshopConfigDrawerProps) {
               mode="multiple"
               placeholder="选择预警负责人"
               options={personnelOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               style={{ width: '100%' }}
             />
           </Form.Item>

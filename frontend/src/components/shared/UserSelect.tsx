@@ -90,12 +90,12 @@ export function UserSelect({
       allowClear={allowClear}
       maxTagCount={maxTagCount}
       maxTagPlaceholder={maxTagPlaceholder}
-      showSearch
-      filterOption={(input, option) =>
-        String(option?.label ?? '')
-          .toLowerCase()
-          .includes(input.toLowerCase())
-      }
+      showSearch={{
+        filterOption: (input, option) =>
+          String(option?.label ?? '')
+            .toLowerCase()
+            .includes(input.toLowerCase()),
+      }}
       options={dropdownOptions}
       optionRender={({ data: opt }) => {
         const u = (opt as { user?: IdentityPersonnel }).user

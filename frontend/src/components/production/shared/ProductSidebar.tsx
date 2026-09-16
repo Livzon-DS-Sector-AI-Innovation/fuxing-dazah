@@ -16,10 +16,14 @@ import type { Product } from '@/types/production'
 
 const { Text } = Typography
 
+// 生产模块统一的立体面板：顶部 1px 高光 + 145deg 渐变底 + 紫调柔和投影。
+// CARD_STYLE 被批次管理/数据汇总/通知配置页共用，改动会一并生效。
 export const CARD_STYLE: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e3df',
-  borderRadius: 12,
+  background: 'linear-gradient(145deg, #ffffff 0%, #fbfaf9 74%, #f6f4fb 100%)',
+  border: '1px solid rgba(200, 196, 190, 0.72)',
+  borderRadius: 18,
+  boxShadow:
+    'inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 10px 25px -23px rgba(40, 33, 91, 0.48)',
 }
 
 interface Props {
@@ -103,11 +107,24 @@ export function ProductSidebar({ selectedId, onSelect, onCreate, onEdit, onDelet
           gap: 8,
         }}
       >
-        <Text strong style={{ fontSize: 14, flex: 1 }}>
+        <Text strong style={{ fontSize: 14, fontWeight: 650, flex: 1 }}>
           产品列表
         </Text>
         {products && products.length > 0 && (
-          <Text style={{ fontSize: 12, color: '#a4a097' }}>{products.length}</Text>
+          <span
+            style={{
+              padding: '1px 7px',
+              borderRadius: 999,
+              background: '#f6f5f4',
+              boxShadow: 'inset 0 1px 0 #fff, inset 0 -1px 0 rgba(55,53,47,.05)',
+              color: '#a4a097',
+              fontSize: 11,
+              fontVariantNumeric: 'tabular-nums',
+              lineHeight: '16px',
+            }}
+          >
+            {products.length}
+          </span>
         )}
         {onCreate && (
           <Tooltip title="新建产品">
@@ -170,11 +187,18 @@ export function ProductSidebar({ selectedId, onSelect, onCreate, onEdit, onDelet
                   gap: 8,
                   padding: '9px 10px',
                   marginBottom: 2,
-                  borderRadius: 8,
+                  borderRadius: 10,
                   cursor: 'pointer',
-                  background: isSelected ? 'rgba(86,69,212,0.05)' : 'transparent',
-                  border: isSelected ? '1px solid rgba(86,69,212,0.15)' : '1px solid transparent',
-                  transition: 'background 0.15s, border-color 0.15s',
+                  background: isSelected
+                    ? 'linear-gradient(145deg, #f4f1fd 0%, #eae5f9 100%)'
+                    : 'transparent',
+                  border: isSelected
+                    ? '1px solid rgba(86, 69, 212, 0.22)'
+                    : '1px solid transparent',
+                  boxShadow: isSelected
+                    ? 'inset 0 1px 0 rgba(255,255,255,.9), 0 3px 8px -6px rgba(40,33,91,.6)'
+                    : undefined,
+                  transition: 'background 0.15s, border-color 0.15s, box-shadow 0.15s',
                   position: 'relative',
                 }}
               >
@@ -184,11 +208,12 @@ export function ProductSidebar({ selectedId, onSelect, onCreate, onEdit, onDelet
                     style={{
                       position: 'absolute',
                       left: 0,
-                      top: 6,
-                      bottom: 6,
+                      top: 7,
+                      bottom: 7,
                       width: 3,
-                      borderRadius: '0 2px 2px 0',
-                      background: '#5645d4',
+                      borderRadius: '0 3px 3px 0',
+                      background: 'linear-gradient(180deg, #6b5ddb, #5645d4)',
+                      boxShadow: '0 0 6px rgba(86,69,212,.45)',
                     }}
                   />
                 )}
@@ -196,16 +221,21 @@ export function ProductSidebar({ selectedId, onSelect, onCreate, onEdit, onDelet
                   style={{
                     width: 36,
                     height: 36,
-                    borderRadius: 8,
-                    background: isSelected ? '#e6e0f5' : '#f6f5f4',
+                    borderRadius: 10,
+                    background: isSelected
+                      ? 'linear-gradient(145deg, #7b68e0, #5645d4)'
+                      : 'linear-gradient(145deg, #fbfaf9, #f1f0ee)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontSize: 14,
                     fontWeight: 600,
-                    color: isSelected ? '#5645d4' : '#787671',
+                    color: isSelected ? '#ffffff' : '#787671',
                     flexShrink: 0,
-                    transition: 'background 0.15s, color 0.15s',
+                    boxShadow: isSelected
+                      ? 'inset 0 1px 0 rgba(255,255,255,.34), 0 4px 8px -4px rgba(40,33,91,.7)'
+                      : 'inset 0 1px 0 #ffffff, inset 0 -1px 0 rgba(55,53,47,.05)',
+                    transition: 'background 0.15s, color 0.15s, box-shadow 0.15s',
                   }}
                 >
                   {p.product_name.charAt(0)}

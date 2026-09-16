@@ -234,10 +234,9 @@ export function BatchCreateModal({ open, source, onClose }: Props) {
         { title: '使用地点', width: 130, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.location ?? ''} onChange={e => updateRow(i, 'location', e.target.value || null)} /> },
         { title: '制造商', width: 120, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.manufacturer ?? ''} onChange={e => updateRow(i, 'manufacturer', e.target.value || null)} /> },
         { title: '状态', width: 80, render: (_: unknown, r: RowItem, i: number) => (
-          <Select size="small" style={{ width: 80 }} value={(r as BatchCreateItem).status || undefined} onChange={v => updateRow(i, 'status', v || null)} allowClear placeholder="-">
-            <Select.Option value="在用">在用</Select.Option>
-            <Select.Option value="停用">停用</Select.Option>
-          </Select>
+          <Select size="small" style={{ width: 80 }} value={(r as BatchCreateItem).status || undefined} onChange={v => updateRow(i, 'status', v || null)} allowClear placeholder="-"
+            options={[{ value: '在用', label: '在用' }, { value: '停用', label: '停用' }]}
+          />
         )},
         { title: '检定日期', width: 130, render: (_: unknown, r: RowItem, i: number) => <DatePicker size="small" style={{ width: '100%' }} value={r.calibration_date ? dayjs(r.calibration_date) : null} onChange={d => updateRow(i, 'calibration_date', d?.format('YYYY-MM-DD') ?? null)} /> },
         { title: '检定单位', width: 120, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.calibration_unit ?? ''} onChange={e => updateRow(i, 'calibration_unit', e.target.value || null)} /> },
@@ -254,10 +253,9 @@ export function BatchCreateModal({ open, source, onClose }: Props) {
       { title: '量程', width: 120, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.measurement_range ?? ''} onChange={e => updateRow(i, 'measurement_range', e.target.value || null)} /> },
       { title: '产品编号', width: 120, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.product_number ?? ''} onChange={e => updateRow(i, 'product_number', e.target.value || null)} /> },
       { title: '安装方式', width: 100, render: (_: unknown, r: RowItem, i: number) => (
-        <Select size="small" style={{ width: '100%' }} value={r.installation_type || undefined} onChange={v => updateRow(i, 'installation_type', v || null)} allowClear placeholder="-">
-          <Select.Option value="固定式">固定式</Select.Option>
-          <Select.Option value="便携式">便携式</Select.Option>
-        </Select>
+        <Select size="small" style={{ width: '100%' }} value={r.installation_type || undefined} onChange={v => updateRow(i, 'installation_type', v || null)} allowClear placeholder="-"
+          options={[{ value: '固定式', label: '固定式' }, { value: '便携式', label: '便携式' }]}
+        />
       )},
       { title: '安装位置', width: 150, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.installation_location ?? ''} onChange={e => updateRow(i, 'installation_location', e.target.value || null)} /> },
       { title: '使用介质', width: 120, render: (_: unknown, r: RowItem, i: number) => <Input size="small" value={r.medium ?? ''} onChange={e => updateRow(i, 'medium', e.target.value || null)} /> },
@@ -321,9 +319,11 @@ export function BatchCreateModal({ open, source, onClose }: Props) {
               onChange={handleTemplateSelect}
               disabled={!department}
               allowClear
-              showSearch
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
               options={templates.map(t => ({ label: templateLabel(t), value: t.id }))}
-              filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
             />
           </Space>
 

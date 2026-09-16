@@ -211,7 +211,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
       open={equipmentDrawerOpen}
       onClose={closeEquipmentDrawer}
       destroyOnHidden
-      maskClosable={false}
+      mask={{ closable: false }}
       styles={{
         header: { borderBottom: '1px solid #e5e3df', padding: '16px 24px' },
         body: { padding: '24px' },
@@ -254,8 +254,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           <Select
             mode="multiple"
             placeholder="请选择设备分类（支持多选）"
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={categoryOptions}
           />
         </Form.Item>
@@ -266,8 +265,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
         >
           <Select
             placeholder="请选择设备位置"
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={locationOptions}
           />
         </Form.Item>
@@ -275,8 +273,7 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           <Select
             placeholder="请选择归属部门"
             allowClear
-            showSearch
-            optionFilterProp="label"
+            showSearch={{ optionFilterProp: 'label' }}
             options={departments.map(d => ({ label: d.name, value: d.id }))}
             onChange={handleDepartmentChange}
           />
@@ -285,9 +282,10 @@ export function EquipmentDrawer({ onRefresh, defaultDepartmentId }: EquipmentDra
           <Select
             placeholder="选择部门后默认填入部门负责人，也可搜索修改"
             allowClear
-            showSearch
-            filterOption={false}
-            onSearch={handleStaffSearch}
+            showSearch={{
+              filterOption: false,
+              onSearch: handleStaffSearch,
+            }}
             loading={staffLoading}
             notFoundContent={staffLoading ? '搜索中...' : staffKeyword ? '无匹配人员' : '输入姓名搜索员工'}
             options={staffOptions}

@@ -148,7 +148,7 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
             </Form.Item>
             {planMode === 'equipment' ? (
               <Form.Item name="equipment_id" label="关联设备" rules={[{ required: true, message: '请选择设备' }]}>
-                <Select placeholder="选择设备" showSearch optionFilterProp="label"
+                <Select placeholder="选择设备" showSearch={{ optionFilterProp: 'label' }}
                   options={equipments.map((eq) => ({ label: `${eq.equipment_no} - ${eq.name}`, value: eq.id }))}
                 />
               </Form.Item>
@@ -157,8 +157,9 @@ export function MaintenancePlanDrawer({ equipments, onRefresh }: MaintenancePlan
                 <TreeSelect
                   placeholder="选择分类"
                   treeDefaultExpandAll
-                  showSearch
-                  filterTreeNode={(input, node) => String(node?.title ?? '').includes(input)}
+                  showSearch={{
+                    filterTreeNode: (input, node) => String(node?.title ?? '').includes(input),
+                  }}
                   treeData={toTreeData(categories)}
                 />
               </Form.Item>

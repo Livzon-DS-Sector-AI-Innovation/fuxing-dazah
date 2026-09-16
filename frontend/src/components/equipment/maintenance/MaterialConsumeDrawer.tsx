@@ -77,7 +77,7 @@ export function MaterialConsumeDrawer({ workOrderId, spareParts, onRefresh }: Ma
                       style={{ flex: 2, marginBottom: 0 }}
                     >
                       <Select
-                        placeholder="选择备件" showSearch optionFilterProp="label"
+                        placeholder="选择备件" showSearch={{ optionFilterProp: 'label' }}
                         options={spareParts.map((sp) => ({
                           label: `${sp.code} - ${sp.name} (库存: ${sp.current_qty}${sp.unit})`,
                           value: sp.id,

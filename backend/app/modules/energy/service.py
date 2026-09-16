@@ -146,7 +146,9 @@ async def update_device_config(
     # devices loses its energy grant.
     if "equipment_ids" in update_data:
         equipment_ids = _normalise_equipment_ids(update_data["equipment_ids"] or [])
-        if [str(eid) for eid in equipment_ids] == list(existing.equipment_ids or []):
+        # 用集合比较：多选里「删掉再加回」或历史顺序不同时集合没变，
+        # 不能因为顺序不同就重走引用校验（那会让只改备注的提交 403）。
+        if {str(eid) for eid in equipment_ids} == {str(eid) for eid in (existing.equipment_ids or [])}:
             # Unchanged: skip validation and keep the historical snapshot --
             # the client must not be able to overwrite server-side names.
             update_data.pop("equipment_ids", None)

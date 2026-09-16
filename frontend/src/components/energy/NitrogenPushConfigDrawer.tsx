@@ -191,10 +191,10 @@ export function NitrogenPushConfigDrawer({ onRefresh }: NitrogenPushConfigDrawer
             mode="multiple"
             placeholder="选择推送接收人"
             options={personnelOptions}
-            showSearch
-            filterOption={(input, option) =>
-              (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-            }
+            showSearch={{
+              filterOption: (input, option) =>
+                (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+            }}
             style={{ width: '100%' }}
           />
         </Form.Item>
@@ -220,10 +220,10 @@ export function NitrogenPushConfigDrawer({ onRefresh }: NitrogenPushConfigDrawer
               allowClear
               placeholder="选择氮气设备"
               options={deviceOptions}
-              showSearch
-              filterOption={(input, option) =>
-                (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-              }
+              showSearch={{
+                filterOption: (input, option) =>
+                  (option?.label as string)?.toLowerCase().includes(input.toLowerCase()),
+              }}
             />
           </Form.Item>
         </div>

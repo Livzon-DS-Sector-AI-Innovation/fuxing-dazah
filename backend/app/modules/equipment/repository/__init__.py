@@ -134,6 +134,7 @@ from app.modules.equipment.repository.reference import (
     list_reference_grants,
     revoke_reference_grants,
     upsert_reference_grant,
+    upsert_reference_grants,
 )
 from app.modules.equipment.repository.spare_part import (
     create_equipment_spare_part,
@@ -317,6 +318,7 @@ __all__ = [
     "list_reference_grants",
     "revoke_reference_grants",
     "upsert_reference_grant",
+    "upsert_reference_grants",
     # inspection
     "count_photos_by_task",
     "create_inspection_records",

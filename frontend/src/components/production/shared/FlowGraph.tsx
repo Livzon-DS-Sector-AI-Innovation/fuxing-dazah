@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import {
   Background,
+  BackgroundVariant,
   Controls,
   Handle,
   Position,
@@ -14,9 +15,12 @@ import {
 } from '@xyflow/react'
 import dagre from 'dagre'
 import '@xyflow/react/dist/style.css'
+import styles from './FlowGraph.module.css'
 
-const DEFAULT_W = 200
-const DEFAULT_H = 76
+// 工序节点尺寸的唯一来源：dagre 布局、fitView 尺寸提示、节点内联宽高都取自这里，
+// 不要在别处（含 CSS）另写一份，否则连线端点会与卡片错位
+export const PROCESS_NODE_W = 200
+export const PROCESS_NODE_H = 76
 
 // ── 物料节点常量与类型 ──
 export const MATERIAL_INPUT = 'materialInputNode' as const
@@ -26,6 +30,7 @@ const MATERIAL_GAP_X = 40
 const MATERIAL_TITLE_H = 28
 const MATERIAL_ROW_H = 20
 const MATERIAL_PAD_B = 8
+const MATERIAL_FRAME = 2 // 上下各 1px 边框
 
 const MATERIAL_COLORS = {
   input: {
@@ -59,31 +64,24 @@ export function MaterialNode({ data }: NodeProps) {
   const c = MATERIAL_COLORS[d.direction] ?? MATERIAL_COLORS.input
   return (
     <div
-      style={{
-        width: MATERIAL_NODE_W,
-        background: '#fff',
-        border: `1px solid ${c.border}`,
-        borderRadius: 8,
-        overflow: 'hidden',
-      }}
+      className={styles.materialNode}
+      // 宽度取自常量：layoutGraph 按 MATERIAL_NODE_W 算横向偏移，硬编码在 CSS 里会悄悄错位
+      style={
+        {
+          width: MATERIAL_NODE_W,
+          '--mat-accent': c.border,
+          '--mat-tint': c.bg,
+        } as React.CSSProperties
+      }
     >
-      <div
-        style={{
-          height: MATERIAL_TITLE_H,
-          background: c.bg,
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 8px',
-          fontSize: 12,
-          fontWeight: 500,
-          color: c.border,
-        }}
-      >
+      {/* 高度 = MATERIAL_TITLE_H，行高 = MATERIAL_ROW_H，均参与 layoutGraph 的偏移计算 */}
+      <div className={styles.materialHead} style={{ height: MATERIAL_TITLE_H }}>
+        <span className={styles.materialDot} />
         {c.label}
       </div>
-      <div style={{ padding: '4px 8px' }}>
+      <div className={styles.materialBody}>
         {d.materials.map((m, i) => (
-          <div key={i} style={{ fontSize: 12, color: '#37352f', lineHeight: '20px' }}>
+          <div key={i} className={styles.materialRow} style={{ lineHeight: `${MATERIAL_ROW_H}px` }}>
             {m.name}
           </div>
         ))}
@@ -92,7 +90,7 @@ export function MaterialNode({ data }: NodeProps) {
         type={c.handleType}
         position={c.handlePosition}
         id={c.handleId}
-        style={{ background: c.border, width: 6, height: 6 }}
+        style={{ background: c.border, width: 7, height: 7 }}
       />
     </div>
   )
@@ -102,8 +100,8 @@ export function MaterialNode({ data }: NodeProps) {
 export function layoutGraph(
   nodes: Node[],
   edges: Edge[],
-  nodeW = DEFAULT_W,
-  nodeH = DEFAULT_H,
+  nodeW = PROCESS_NODE_W,
+  nodeH = PROCESS_NODE_H,
 ): Node[] {
   const processNodes = nodes.filter(
     n => n.type !== MATERIAL_INPUT && n.type !== MATERIAL_OUTPUT,
@@ -129,6 +127,11 @@ export function layoutGraph(
     if (!pos) return n
     return {
       ...n,
+      // 测量前的尺寸提示：让首帧 fitView 一次算准边距，不必等 ResizeObserver。
+      // 用 initialWidth/initialHeight 而非 width/height —— 后者会写死节点尺寸，
+      // 而溯源图（TraceGraph）的节点高度是内容撑开的，写死会溢出。
+      initialWidth: nodeW,
+      initialHeight: nodeH,
       targetPosition: Position.Top,
       sourcePosition: Position.Bottom,
       position: { x: pos.x - nodeW / 2, y: pos.y - nodeH / 2 },
@@ -146,13 +149,14 @@ export function layoutGraph(
       console.warn(`物料节点 "${n.id}" 的父工序节点 "${parentId}" 未找到`)
       return n
     }
-    const estH = MATERIAL_TITLE_H + (materials?.length ?? 0) * MATERIAL_ROW_H + MATERIAL_PAD_B
+    const estH = MATERIAL_TITLE_H + (materials?.length ?? 0) * MATERIAL_ROW_H + MATERIAL_PAD_B + MATERIAL_FRAME
     const offsetY = (nodeH - estH) / 2
     const x =
       direction === 'input'
         ? parent.position.x - MATERIAL_NODE_W - MATERIAL_GAP_X
         : parent.position.x + nodeW + MATERIAL_GAP_X
-    return { ...n, position: { x, y: parent.position.y + offsetY } }
+    // initialWidth/Height 与 estH 同源，保证 fitView 的估算尺寸就是实际渲染尺寸
+    return { ...n, initialWidth: MATERIAL_NODE_W, initialHeight: estH, position: { x, y: parent.position.y + offsetY } }
   })
 
   return [...laidOut, ...positionedMaterials]
@@ -175,12 +179,16 @@ export function FlowGraph({
 }: FlowGraphProps) {
   const laidOut = useMemo(() => layoutGraph(nodes, edges), [nodes, edges])
   return (
-    <div style={{ height, width: '100%' }}>
+    <div className={styles.canvas} style={{ height, width: '100%' }}>
       <ReactFlow
         nodes={laidOut}
         edges={edges}
         nodeTypes={nodeTypes}
         fitView
+        fitViewOptions={{ padding: 0.12 }}
+        // 长路线（6 工序 + 物料节点）纵向可超 750px，默认 minZoom 0.5 会把 fitView
+        // 的缩放截断，导致首屏上下被裁；放宽下限让它完整可见，用户仍可自行放大
+        minZoom={0.25}
         nodesDraggable={false}
         nodesConnectable={false}
         deleteKeyCode={null}
@@ -192,7 +200,7 @@ export function FlowGraph({
           }
         }}
       >
-        <Background />
+        <Background variant={BackgroundVariant.Dots} color="rgba(120,118,113,0.32)" gap={22} size={1.4} />
         <Controls showInteractive={false} />
       </ReactFlow>
     </div>

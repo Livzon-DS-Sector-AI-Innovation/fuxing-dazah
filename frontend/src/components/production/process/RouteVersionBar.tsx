@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { App, Button, Checkbox, Input, Modal, Popconfirm, Space, Tag, Typography } from 'antd'
+import { App, Button, Checkbox, Input, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd'
+import type { SelectProps } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import {
   archiveRoute,
@@ -12,6 +13,7 @@ import {
   renameRoute,
 } from '@/actions/production'
 import type { ProcessRoute } from '@/types/production'
+import styles from './RouteVersionBar.module.css'
 
 const { Text } = Typography
 
@@ -20,6 +22,9 @@ export const STATUS_META: Record<string, { color: string; label: string }> = {
   published: { color: 'green', label: '已发布' },
   archived: { color: 'default', label: '已归档' },
 }
+
+// 下拉分组顺序：在用的在前，历史归档置底
+const STATUS_GROUP_ORDER = ['published', 'draft', 'archived'] as const
 
 interface Props {
   productId: string
@@ -58,6 +63,19 @@ export function RouteVersionBar({
 }: Props) {
   const { message } = App.useApp()
   const current = routes.find(r => r.id === currentRouteId) ?? null
+  const routeOptions: SelectProps['options'] = STATUS_GROUP_ORDER.map(status => ({
+    status,
+    list: routes.filter(r => r.status === status),
+  }))
+    .filter(g => g.list.length > 0)
+    .map(g => ({
+      label: STATUS_META[g.status]?.label,
+      title: STATUS_META[g.status]?.label,
+      options: g.list.map(r => ({
+        value: r.id,
+        label: r.route_name,
+      })),
+    }))
   const [nameModal, setNameModal] = useState<NameModalAction | null>(null)
   const [nameValue, setNameValue] = useState('')
   const [copyOptions, setCopyOptions] = useState<CopyOptions>(DEFAULT_COPY_OPTIONS)
@@ -103,32 +121,36 @@ export function RouteVersionBar({
         : '重命名路线'
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 8,
-      }}
-    >
-      <Space size={4} wrap>
-        {routes.map(r => (
-          <Tag.CheckableTag
-            key={r.id}
-            checked={r.id === currentRouteId}
-            onChange={() => onSelect(r.id)}
-          >
-            {r.route_name}
-            <Tag
-              color={STATUS_META[r.status]?.color}
-              style={{ marginLeft: 4, marginRight: 0 }}
-            >
-              {STATUS_META[r.status]?.label}
-            </Tag>
-          </Tag.CheckableTag>
-        ))}
-      </Space>
+    <div className={styles.bar}>
+      {routes.length > 0 && (
+        <Select
+          value={currentRouteId ?? undefined}
+          onChange={id => onSelect(id)}
+          style={{ width: 300, maxWidth: '100%' }}
+          showSearch={{
+            filterOption: (input, option) => {
+              const r = routes.find(x => x.id === option?.value)
+              return !!r && r.route_name.toLowerCase().includes(input.toLowerCase())
+            },
+          }}
+          popupMatchSelectWidth={false}
+          labelRender={({ value }) => {
+            const r = routes.find(x => x.id === value)
+            if (!r) return null
+            return (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.route_name}
+                </span>
+                <Tag color={STATUS_META[r.status]?.color} style={{ marginRight: 0 }}>
+                  {STATUS_META[r.status]?.label}
+                </Tag>
+              </span>
+            )
+          }}
+          options={routeOptions}
+        />
+      )}
       {canManage && (
         <Space size={8}>
           <Button size="small" icon={<PlusOutlined />} onClick={() => openNameModal('create')}>

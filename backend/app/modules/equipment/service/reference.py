@@ -253,19 +253,14 @@ async def grant_equipment_references(
     owned_ids = await repo.get_owned_equipment_ids(db, ctx, normalized_ids)
     if len(owned_ids) != len(normalized_ids):
         raise ForbiddenException("只能管理自己设备数据范围内的授权")
-    grants: list[EquipmentReferenceGrant] = []
-    for equipment_id in normalized_ids:
-        grants.append(
-            await repo.upsert_reference_grant(
-                db,
-                equipment_id,
-                target,
-                source="manual",
-                operator_id=ctx.user.id,
-                remark=remark,
-            )
-        )
-    return grants
+    return await repo.upsert_reference_grants(
+        db,
+        normalized_ids,
+        target,
+        source="manual",
+        operator_id=ctx.user.id,
+        remark=remark,
+    )
 
 
 async def revoke_equipment_references(

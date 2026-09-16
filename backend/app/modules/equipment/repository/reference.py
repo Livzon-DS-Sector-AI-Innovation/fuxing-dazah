@@ -297,6 +297,62 @@ async def upsert_reference_grant(
     return result.scalar_one()
 
 
+async def upsert_reference_grants(
+    db: AsyncSession,
+    equipment_ids: Sequence[uuid.UUID],
+    target_module: str,
+    *,
+    source: str = "manual",
+    operator_id: uuid.UUID | None = None,
+    remark: str | None = None,
+) -> list[EquipmentReferenceGrant]:
+    """批量版 upsert_reference_grant：一条语句覆盖整批设备，避免逐台往返。
+
+    同一批次里重复的设备要先去掉：INSERT ... ON CONFLICT DO UPDATE 不允许
+    一条语句里第二次命中同一行。
+    """
+    unique_ids = list(dict.fromkeys(equipment_ids))
+    if not unique_ids:
+        return []
+    now = datetime.now(UTC)
+    values: list[dict[str, Any]] = []
+    for equipment_id in unique_ids:
+        row: dict[str, Any] = {
+            "equipment_id": equipment_id,
+            "target_module": target_module,
+            "source": source,
+            "granted_by": operator_id,
+            "granted_at": now,
+        }
+        if remark is not None:
+            row["remark"] = remark
+        values.append(row)
+    update_set: dict[str, Any] = {
+        "is_deleted": False,
+        "source": source,
+        "granted_by": operator_id,
+        "granted_at": now,
+        # 显式重新授权要清掉此前的撤销状态
+        "revoked_by": None,
+        "revoked_at": None,
+    }
+    if remark is not None:
+        update_set["remark"] = remark
+    stmt = (
+        pg_insert(EquipmentReferenceGrant)
+        .values(values)
+        .on_conflict_do_update(
+            constraint="uq_equipment_reference_grants_equipment_module",
+            set_=update_set,
+        )
+        .returning(EquipmentReferenceGrant)
+        .execution_options(populate_existing=True)
+    )
+    result = await db.execute(stmt)
+    by_id = {row.equipment_id: row for row in result.scalars()}
+    return [by_id[equipment_id] for equipment_id in unique_ids]
+
+
 async def create_reference_grants_if_absent(
     db: AsyncSession,
     equipment_ids: Sequence[uuid.UUID],
