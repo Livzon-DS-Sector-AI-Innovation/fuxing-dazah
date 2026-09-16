@@ -1,18 +1,22 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Select, DatePicker, Space, Statistic, Row, Col, App, Typography } from 'antd'
-import { BarChartOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined } from '@ant-design/icons'
-import type { HistorySummary, ProductSummary } from '@/types/quality'
-import { fetchHistorySummary, fetchSummaryProducts } from '@/actions/quality'
+import { Card, Table, Select, DatePicker, Space, App, Tag, Typography } from 'antd'
+import type { SummaryMatrix, SummaryMatrixRow } from '@/types/quality'
+import { fetchSummaryMatrix, fetchSummaryProducts } from '@/actions/quality'
 
-const { Title } = Typography
+const { Text } = Typography
 const { RangePicker } = DatePicker
+
+const STATUS_LABEL: Record<string, { label: string; color: string }> = {
+  completed: { label: '已完成', color: 'success' },
+  pending_review: { label: '待复核', color: 'warning' },
+}
 
 export default function SummaryView() {
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
-  const [summary, setSummary] = useState<HistorySummary | null>(null)
+  const [matrix, setMatrix] = useState<SummaryMatrix | null>(null)
   const [products, setProducts] = useState<string[]>([])
   const [selectedProduct, setSelectedProduct] = useState<string | undefined>()
   const [dateRange, setDateRange] = useState<[string, string] | null>(null)
@@ -24,14 +28,14 @@ export default function SummaryView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await fetchHistorySummary(
+      const res = await fetchSummaryMatrix(
         selectedProduct,
         dateRange?.[0],
         dateRange?.[1],
       )
-      setSummary(data)
-    } catch {
-      message.error('加载汇总失败')
+      setMatrix(res.data)
+    } catch (err: any) {
+      message.error(err.message || '加载汇总失败')
     } finally {
       setLoading(false)
     }
@@ -39,30 +43,44 @@ export default function SummaryView() {
 
   useEffect(() => { load() }, [load])
 
-  const productColumns = [
-    { title: '产品名称', dataIndex: 'product_name', key: 'product_name' },
-    { title: '检验次数', dataIndex: 'total', key: 'total' },
-    { title: '在途批次', dataIndex: 'in_progress', key: 'in_progress' },
-    {
-      title: '合格率', key: 'pass_rate',
-      render: (_: any, r: ProductSummary) =>
-        `${r.total > 0 ? (r.pass_count / r.total * 100).toFixed(1) : 0}%`,
-    },
-    { title: '合格/不合格', key: 'pass_fail',
-      render: (_: any, r: ProductSummary) =>
-        `${r.pass_count} / ${r.fail_count}` },
+  // 矩阵列：批次信息 + 全部检验项目横向逐一列出
+  const columns = [
+    { title: '产品名称', dataIndex: 'product_name', key: 'product_name', width: 220, fixed: 'left' as const, ellipsis: true },
+    { title: '批号', dataIndex: 'batch_number', key: 'batch_number', width: 140, fixed: 'left' as const },
+    { title: '生产日期', dataIndex: 'production_date', key: 'production_date', width: 110, render: (v: string | null) => v || '-' },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 90,
+      render: (v: string) => {
+        const meta = STATUS_LABEL[v]
+        return meta ? <Tag color={meta.color}>{meta.label}</Tag> : v
+      } },
+    { title: '判定', dataIndex: 'all_pass', key: 'all_pass', width: 80,
+      render: (v: boolean) => <Tag color={v ? 'success' : 'error'}>{v ? '合格' : '不合格'}</Tag> },
+    ...(matrix?.columns || []).map((item) => ({
+      title: item,
+      key: item,
+      width: 130,
+      render: (_: unknown, r: SummaryMatrixRow) => {
+        const cell = r.cells[item]
+        if (!cell) return <Text type="secondary">-</Text>
+        return (
+          <Text style={{ color: cell.is_pass ? undefined : '#ff4d4f' }}>
+            {cell.value}{cell.unit}
+          </Text>
+        )
+      },
+    })),
   ]
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder="全部产品"
           allowClear
           value={selectedProduct}
           onChange={setSelectedProduct}
           options={products.map(p => ({ value: p, label: p }))}
-          style={{ width: 200 }}
+          style={{ width: 240 }}
         />
         <RangePicker
           onChange={(_, dateStrings) => {
@@ -71,47 +89,17 @@ export default function SummaryView() {
         />
       </Space>
 
-      {summary && (
-        <>
-          <Row gutter={16} style={{ marginBottom: 16 }}>
-            <Col xs={12} sm={12} md={6}>
-              <Card size="small">
-                <Statistic title="检验总次数" value={summary.total} prefix={<BarChartOutlined />} />
-              </Card>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <Card size="small">
-                <Statistic title="合格率" value={summary.pass_rate}
-                  suffix="%" styles={{ content: { color: summary.pass_rate >= 95 ? '#52c41a' : '#faad14' } }}
-                  prefix={<CheckCircleOutlined />} />
-              </Card>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <Card size="small">
-                <Statistic title="不合格" value={summary.fail_count}
-                  styles={{ content: { color: summary.fail_count > 0 ? '#ff4d4f' : '#52c41a' } }}
-                  prefix={<CloseCircleOutlined />} />
-              </Card>
-            </Col>
-            <Col xs={12} sm={12} md={6}>
-              <Card size="small">
-                <Statistic title="在途批次（填报中/待复核）" value={summary.in_progress}
-                  prefix={<WarningOutlined />} />
-              </Card>
-            </Col>
-          </Row>
-
-          <Card size="small" title="按产品分组统计">
-            <Table
-              columns={productColumns}
-              dataSource={summary.products.map((p, i) => ({ ...p, key: i }))}
-              loading={loading}
-              pagination={false}
-              size="small"
-            />
-          </Card>
-        </>
-      )}
+      <Card size="small" title={`QC 汇总表（${matrix?.rows.length ?? 0} 个批次，检验项目横向列出）`}>
+        <Table
+          rowKey="task_id"
+          columns={columns}
+          dataSource={matrix?.rows || []}
+          loading={loading}
+          size="small"
+          pagination={false}
+          scroll={{ x: 400 + (matrix?.columns.length || 0) * 130, y: 480 }}
+        />
+      </Card>
     </div>
   )
 }

@@ -144,6 +144,22 @@ export interface HistorySummary {
   products: ProductSummary[]
 }
 
+export interface SummaryMatrixRow {
+  task_id: string
+  product_name: string
+  batch_number: string
+  production_date: string | null
+  report_date: string | null
+  status: string
+  all_pass: boolean
+  cells: Record<string, { value: number | string; is_pass: boolean; unit: string }>
+}
+
+export interface SummaryMatrix {
+  columns: string[]
+  rows: SummaryMatrixRow[]
+}
+
 // ─── 检验任务填报 ───
 
 export type TestTaskStatus = 'in_progress' | 'pending_review' | 'completed' | 'void'

@@ -14,7 +14,7 @@ export default function SummaryPage() {
           <BarChartOutlined /> 汇总表
         </Title>
         <Paragraph type="secondary" style={{ marginBottom: 24 }}>
-          按产品和时间段统计检验数据；下方按 SOP 索引汇总各项目跨批次结果（一手数据）。
+          QC 汇总表：每行一个批次，全部检验项目横向逐一列出数值结果与判定；下方按 SOP 索引查看跨批次明细。
         </Paragraph>
       </div>
       <SummaryView />

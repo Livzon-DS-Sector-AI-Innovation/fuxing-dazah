@@ -16,6 +16,7 @@ import type {
   UnqualifiedEvent,
   TaskAttachment,
   TaskReviewRecord,
+  SummaryMatrix,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -676,5 +677,19 @@ export async function approveTaskReview(taskId: string, comment?: string): Promi
     const err = await res.json().catch(() => ({}))
     throw new Error((err as any).detail || '复核失败')
   }
+  return res.json()
+}
+
+export async function fetchSummaryMatrix(
+  product_name?: string, date_from?: string, date_to?: string,
+): Promise<{ data: SummaryMatrix }> {
+  const qs = new URLSearchParams()
+  if (product_name) qs.set('product_name', product_name)
+  if (date_from) qs.set('date_from', date_from)
+  if (date_to) qs.set('date_to', date_to)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/matrix?${qs.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取汇总矩阵失败')
   return res.json()
 }

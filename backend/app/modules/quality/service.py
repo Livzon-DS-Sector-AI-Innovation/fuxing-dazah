@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
@@ -1279,6 +1280,64 @@ class TestTaskService:
         return splits
 
     # ── 查询 ──
+
+    @staticmethod
+    async def build_summary_matrix(
+        db: AsyncSession,
+        product_name: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        """QC 汇总表矩阵：行=批次（已完成/待复核），列=全部检验项目横向列出。
+
+        单元格为数值结果（带单位与判定）；未判定/未覆盖项目为空。
+        """
+        from datetime import datetime as _dt
+
+        stmt = select(QualityTestTask).where(
+            QualityTestTask.is_deleted == False,  # noqa: E712
+            QualityTestTask.status.in_(["completed", "pending_review"]),
+        )
+        if product_name:
+            stmt = stmt.where(QualityTestTask.product_name == product_name)
+        if date_from:
+            stmt = stmt.where(QualityTestTask.created_at >= _dt.fromisoformat(date_from))
+        if date_to:
+            stmt = stmt.where(QualityTestTask.created_at <= _dt.fromisoformat(date_to))
+        stmt = stmt.order_by(QualityTestTask.production_date.asc().nulls_last(), QualityTestTask.batch_number)
+        tasks = list((await db.execute(stmt)).scalars())
+
+        columns: list[str] = []
+        seen_cols: set[str] = set()
+        rows: list[dict[str, Any]] = []
+        for t in tasks:
+            results = await list_test_results(db, t.id)
+            cells: dict[str, dict[str, Any]] = {}
+            all_pass = all(r.is_pass for r in results if r.is_pass is not None)
+            for r in results:
+                if r.is_pass is None:
+                    continue
+                key = r.item_name
+                if key not in seen_cols:
+                    seen_cols.add(key)
+                    columns.append(key)
+                value: Any = r.result_value if r.result_value is not None else (r.result_text or "")
+                cells[key] = {
+                    "value": value,
+                    "is_pass": r.is_pass,
+                    "unit": TestTaskService._unit_of(r.standard_text),
+                }
+            rows.append({
+                "task_id": str(t.id),
+                "product_name": t.product_name,
+                "batch_number": t.batch_number,
+                "production_date": t.production_date,
+                "report_date": t.report_date,
+                "status": t.status,
+                "all_pass": all_pass,
+                "cells": cells,
+            })
+        return {"columns": columns, "rows": rows}
 
     @staticmethod
     async def get_task_detail(db: AsyncSession, task_id: uuid.UUID) -> TestTaskDetail | None:

@@ -812,6 +812,19 @@ async def history_summary(
     return success_response(data=summary)
 
 
+@router.get("/summary/matrix", summary="QC 汇总表矩阵：行=批次，列=全部检验项目横向列出")
+async def summary_matrix(
+    product_name: str | None = Query(default=None, description="产品名称"),
+    date_from: str | None = Query(default=None, description="起始日期 YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    data = await test_task_service.build_summary_matrix(
+        db, product_name=product_name, date_from=date_from, date_to=date_to,
+    )
+    return success_response(data=data)
+
+
 @router.get("/summary/products", summary="已检验产品列表")
 async def list_summary_products(
     db: AsyncSession = Depends(get_db),
