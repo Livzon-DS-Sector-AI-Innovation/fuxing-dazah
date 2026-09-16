@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException
+from app.core.exceptions import AppException, DuplicateException, ForbiddenException
 from app.modules.qa import service
 from app.modules.qa.file_service import StoredFile
 from app.modules.qa.models import (
@@ -23,6 +23,7 @@ from app.modules.qa.models import (
     VersionStatus,
 )
 from app.modules.qa.schemas import MasterObjectCreate, RelationIn, SourceLinkIn
+from app.platform.identity.models import User
 
 
 class _Result:
@@ -154,6 +155,131 @@ async def test_create_master_rejects_duplicate_source_in_payload(
 
     with pytest.raises(DuplicateException):
         await service.create_master(cast(AsyncSession, db), payload)
+
+
+@pytest.mark.asyncio
+async def test_equipment_source_uses_qa_reference_validation_for_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QA 设备来源必须带用户上下文校验，并支持首次自有设备自动授权。"""
+    source_id = uuid.uuid4()
+    calls: list[tuple[Any, Any, Any, Any, Any]] = []
+    brief = SimpleNamespace(
+        id=source_id,
+        equipment_no="EQ-QA-01",
+        name="QA设备",
+        is_active=True,
+    )
+
+    async def _validate(db: Any, user: Any, module: str, ids: Any, *, auto_publish_owned: bool) -> list[Any]:
+        calls.append((db, user, module, ids, auto_publish_owned))
+        return [brief]
+
+    monkeypatch.setattr(
+        "app.modules.equipment.public_api.validate_equipment_references", _validate
+    )
+    db = _FakeDb()
+    user = cast(User, SimpleNamespace(id=uuid.uuid4()))
+    code, name = await service._get_external_source(
+        cast(AsyncSession, db),
+        "EQUIPMENT",
+        "equipment",
+        "equipment",
+        source_id,
+        user,
+    )
+
+    assert (code, name) == ("EQ-QA-01", "QA设备")
+    assert calls == [(db, user, "qa", [source_id], True)]
+
+
+@pytest.mark.asyncio
+async def test_equipment_source_internal_task_keeps_trusted_brief_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """可信内部任务没有用户上下文时仍可读取无授权摘要。"""
+    source_id = uuid.uuid4()
+    brief = SimpleNamespace(
+        id=source_id,
+        equipment_no="EQ-INTERNAL",
+        name="内部任务设备",
+        is_active=True,
+    )
+    called: list[uuid.UUID] = []
+
+    async def _brief(_db: Any, equipment_id: uuid.UUID) -> Any:
+        called.append(equipment_id)
+        return brief
+
+    monkeypatch.setattr("app.modules.equipment.public_api.get_equipment_brief", _brief)
+    code, name = await service._get_external_source(
+        cast(AsyncSession, _FakeDb()),
+        "EQUIPMENT",
+        "equipment",
+        "equipment",
+        source_id,
+        None,
+    )
+
+    assert (code, name) == ("EQ-INTERNAL", "内部任务设备")
+    assert called == [source_id]
+
+
+@pytest.mark.asyncio
+async def test_equipment_source_rejects_hidden_or_revoked_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """QA 新建/替换来源遇到隐藏或撤销设备时保留统一无权结果。"""
+    source_id = uuid.uuid4()
+
+    async def _reject(*args: Any, **kwargs: Any) -> list[Any]:
+        raise ForbiddenException("设备不可用或无权关联")
+
+    monkeypatch.setattr(
+        "app.modules.equipment.public_api.validate_equipment_references", _reject
+    )
+    with pytest.raises(ForbiddenException, match="无权关联"):
+        await service._get_external_source(
+            cast(AsyncSession, _FakeDb()),
+            "EQUIPMENT",
+            "equipment",
+            "equipment",
+            source_id,
+            cast(User, SimpleNamespace(id=uuid.uuid4())),
+        )
+
+
+@pytest.mark.asyncio
+async def test_qa_external_availability_does_not_reexpose_revoked_equipment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """撤销后的设备在来源可用性查询中只能得到不可用，不会重新暴露摘要。"""
+    source_id = uuid.uuid4()
+    source = MasterObjectSource(
+        master_object_id=uuid.uuid4(),
+        source_module="equipment",
+        source_entity="equipment",
+        source_id=source_id,
+        source_code_snapshot="EQ-REVOKED",
+        source_name_snapshot="已撤销设备",
+    )
+    source.id = uuid.uuid4()
+    user = cast(User, SimpleNamespace(id=uuid.uuid4()))
+    calls: list[tuple[Any, Any, Any, Any]] = []
+
+    async def _refs(db: Any, actor: Any, module: str, ids: Any) -> list[Any]:
+        calls.append((db, actor, module, ids))
+        return []
+
+    monkeypatch.setattr(
+        "app.modules.equipment.public_api.get_equipment_references_by_ids", _refs
+    )
+    result = await service._availability_map(
+        cast(AsyncSession, _FakeDb()), [source], user
+    )
+
+    assert result == {source.id: False}
+    assert calls and calls[0][1:] == (user, "qa", [source_id])
 
 
 @pytest.mark.asyncio

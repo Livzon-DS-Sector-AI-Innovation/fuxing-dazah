@@ -3,7 +3,7 @@
 /* 页面数据加载请求会在 effect 中更新本地状态。 */
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Alert,
@@ -95,6 +95,7 @@ import type {
   QaSourceReference,
 } from '@/types/qa'
 import { QA_MASTER_KIND_LABELS } from '@/types/qa'
+import styles from './QaWorkspace.module.css'
 
 const { Text } = Typography
 const { Dragger } = Upload
@@ -104,6 +105,8 @@ export type QaView = 'home' | 'master-data' | 'documents' | 'audit'
 const MASTER_KIND_ORDER: QaMasterKind[] = ['PRODUCT', 'MATERIAL', 'EQUIPMENT', 'SUPPLIER', 'REGION']
 
 const STATUS_LABEL: Record<string, string> = {
+  // 主数据用 active/inactive 两态；缺了 active 会回退成英文原值。
+  active: '启用',
   registered: '已登记',
   current: '当前版本',
   history: '历史版本',
@@ -157,20 +160,43 @@ function formatBytes(value?: number | null): string {
   return `${(value / 1024 / 1024).toFixed(1)} MB`
 }
 
+const pad2 = (value: number) => String(value).padStart(2, '0')
+
+/** 表格列用的日期：主数据扫读只需要到天。 */
+function formatDay(value?: string | null): string {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+/** 详情用的时间：到分钟，秒对登记类数据没有意义。 */
 function formatDate(value?: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+  if (Number.isNaN(date.getTime())) return value
+  return `${formatDay(value)} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
 }
 
 function statusTag(value: string | undefined | null, active = true) {
   if (!active || value === 'inactive') return <Tag color="default">已停用</Tag>
-  const color = value === 'current' || value === 'ready' ? 'green' : value === 'failed' ? 'red' : value === 'processing' ? 'blue' : 'gold'
+  const color = value === 'current' || value === 'ready' || value === 'active' ? 'green' : value === 'failed' ? 'red' : value === 'processing' ? 'blue' : 'gold'
   return <Tag color={color}>{STATUS_LABEL[value || ''] || value || '启用'}</Tag>
 }
 
 function actionError(result: { success: boolean; error?: string }): string {
   return result.success ? '' : result.error || '操作失败'
+}
+
+function qaSourceOptionLabel(source: QaSourceReference): string {
+  const baseLabel = `${source.code ? `${source.code} · ` : ''}${source.name}`
+  if (source.source_module !== 'equipment') return baseLabel
+  const sourceLabel = source.source === 'shared'
+    ? ' · 已共享'
+    : source.source === 'own_scope'
+      ? ' · 我的设备'
+      : ''
+  return `${baseLabel}${sourceLabel}`
 }
 
 function PageIntro({ view }: { view: QaView }) {
@@ -338,6 +364,7 @@ function QaMasterData() {
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<QaMasterObject[]>([])
   const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState<Partial<Record<QaMasterKind, number>>>({})
   const [departments, setDepartments] = useState<QaDepartmentReference[]>([])
   const [regionRows, setRegionRows] = useState<QaMasterObject[]>([])
   const [loading, setLoading] = useState(false)
@@ -383,8 +410,23 @@ function QaMasterData() {
     }
   }, [])
 
+  // 类型索引的计数：只取各类型的 total，每类拉一行就够。
+  // 它反映词表规模，不跟随关键词筛选——搜"淀粉"时看到各类型还剩多少条，
+  // 比看到"当前命中几条"更有用。
+  const loadCounts = useCallback(async () => {
+    try {
+      const pages = await Promise.all(
+        MASTER_KIND_ORDER.map((item) => fetchQaMasterObjects({ kind: item, include_inactive: includeInactive, page: 1, page_size: 1 })),
+      )
+      setCounts(Object.fromEntries(MASTER_KIND_ORDER.map((item, index) => [item, pages[index].total])))
+    } catch {
+      // 计数失败不影响列表本身，索引退化为不显示数字。
+    }
+  }, [includeInactive])
+
   useEffect(() => { void loadRows() }, [loadRows, refreshKey])
   useEffect(() => { void loadReferences() }, [loadReferences])
+  useEffect(() => { void loadCounts() }, [loadCounts, refreshKey])
 
   const openCreate = () => { setEditing(null); setModalOpen(true) }
   const openEdit = (record: QaMasterObject) => { setEditing(record); setModalOpen(true) }
@@ -397,25 +439,38 @@ function QaMasterData() {
     setRefreshKey((value) => value + 1)
   }
 
+  // 列宽合计必须 ≤ scroll.x，否则末尾列会被 fixed 的操作列盖住（更新时间曾被截断）。
+  const MASTER_TABLE_WIDTH = 1130
   const columns: ColumnsType<QaMasterObject> = [
-    { title: '业务编码', key: 'code', width: 160, render: (_, row) => <Text strong copyable={{ text: displayMasterCode(row) }}>{displayMasterCode(row)}</Text> },
+    { title: '业务编码', key: 'code', width: 150, render: (_, row) => <Text strong copyable={{ text: displayMasterCode(row) }}>{displayMasterCode(row)}</Text> },
     { title: '名称', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
-    { title: '别名', key: 'aliases', width: 220, render: (_, row) => row.aliases?.length ? row.aliases.map((alias) => alias.alias).join('、') : '—' },
+    // 别名可能很长，交给列 ellipsis 裁切并把全文放进 title。
+    { title: '别名', key: 'aliases', width: 170, ellipsis: true, render: (_, row) => row.aliases?.map((alias) => alias.alias).filter(Boolean).join('、') || '—' },
     {
-      title: '责任部门', key: 'department', width: 160,
+      title: '责任部门', key: 'department', width: 150, ellipsis: true,
       render: (_, row) => row.responsible_department_name || row.responsible_department_name_snapshot || row.department_name || '—',
     },
     {
-      title: '来源', key: 'sources', width: 130,
-      render: (_, row) => row.source_count ?? row.sources?.length ?? 0,
+      title: '来源', key: 'sources', width: 80, align: 'center',
+      render: (_, row) => {
+        const list = row.sources || []
+        const count = row.source_count ?? list.length
+        if (!count) return <span className={styles.muted}>—</span>
+        const names = list.map((source) => source.source_name || source.source_name_snapshot || source.name_snapshot || source.source_entity).filter(Boolean)
+        return (
+          <Tooltip title={names.length ? names.join('、') : `${count} 个外部来源`}>
+            <span className={styles.sourceCount}><LinkOutlined />{count}</span>
+          </Tooltip>
+        )
+      },
     },
     { title: '状态', key: 'status', width: 90, render: (_, row) => statusTag(row.status, isMasterActive(row)) },
     {
-      title: '更新时间', key: 'updated_at', width: 170,
-      render: (_, row) => formatDate(row.updated_at),
+      title: '更新时间', key: 'updated_at', width: 110,
+      render: (_, row) => formatDay(row.updated_at),
     },
     {
-      title: '操作', key: 'actions', fixed: 'right', width: 170,
+      title: '操作', key: 'actions', fixed: 'right', width: 160,
       render: (_, row) => (
         <Space size={4}>
           <Button type="link" size="small" onClick={() => setDetail(row)}>详情</Button>
@@ -427,15 +482,43 @@ function QaMasterData() {
   ]
 
   const departmentColumns: ColumnsType<QaDepartmentReference> = [
-    { title: '飞书部门 ID', key: 'id', width: 240, render: (_, row) => <Text copyable={{ text: displayDepartmentId(row) }}>{displayDepartmentId(row)}</Text> },
-    { title: '部门名称', dataIndex: 'name', key: 'name' },
-    { title: '组织路径', dataIndex: 'path', key: 'path', render: (value: string | null | undefined) => value || '—' },
-    { title: '上级部门', dataIndex: 'parent_feishu_department_id', key: 'parent', render: (value: string | null | undefined) => value || '—' },
+    // 飞书部门 ID 是 36 字符，240px 下会折成三行把行高从 56 拉到 82，必须裁切。
+    { title: '飞书部门 ID', key: 'id', width: 220, render: (_, row) => <Text copyable={{ text: displayDepartmentId(row) }} ellipsis={{ tooltip: displayDepartmentId(row) }} style={{ maxWidth: '100%' }}>{displayDepartmentId(row)}</Text> },
+    { title: '部门名称', dataIndex: 'name', key: 'name', width: 220, ellipsis: true },
+    {
+      title: '上级部门', dataIndex: 'parent_feishu_department_id', key: 'parent', width: 200, ellipsis: true,
+      // 同步下来的是父部门 UUID，直接显示对用户没有意义，换成本地已有的部门名。
+      render: (value: string | null | undefined) => {
+        if (!value) return '—'
+        return departments.find((item) => displayDepartmentId(item) === value)?.name || value
+      },
+    },
+    // 组织路径排最后：本地库这一列还是空的，但 identity.departments.path 是
+    // 真实字段（public_api 还用它做搜索），生产可能有值，不删；放末尾是为了
+    // 不让空列把 ID / 名称 / 上级部门这三个有用的列隔开。
+    { title: '组织路径', dataIndex: 'path', key: 'path', width: 260, ellipsis: true, render: (value: string | null | undefined) => value || '—' },
   ]
 
   const tabItems = [
-    ...MASTER_KIND_ORDER.map((item) => ({ key: item, label: QA_MASTER_KIND_LABELS[item] })),
-    { key: 'DEPARTMENTS', label: '飞书部门（只读）' },
+    ...MASTER_KIND_ORDER.map((item) => ({
+      key: item,
+      label: (
+        <span className={styles.tabLabel}>
+          {QA_MASTER_KIND_LABELS[item]}
+          {counts[item] !== undefined && <span className={styles.tabCount}>{counts[item]}</span>}
+        </span>
+      ),
+    })),
+    {
+      key: 'DEPARTMENTS',
+      label: (
+        <span className={styles.tabLabel}>
+          <span className={styles.tabSep} aria-hidden="true" />
+          飞书部门
+          <span className={styles.tabCount}>{departments.length || ''}</span>
+        </span>
+      ),
+    },
   ]
 
   return (
@@ -450,25 +533,57 @@ function QaMasterData() {
             setKind(key as QaMasterKind)
             setPage(1)
           }}
-          tabBarExtraContent={
-            activeTab !== 'DEPARTMENTS' ? (
-              <Space wrap>
-                <Input.Search value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={(value) => { setQueryKeyword(value); setPage(1) }} allowClear placeholder="搜索编码、名称或别名" style={{ width: 250 }} />
-                <Space size={6}><Switch size="small" checked={includeInactive} onChange={(value) => { setIncludeInactive(value); setPage(1) }} /> <span style={{ fontSize: 12 }}>包含停用</span></Space>
-                {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增{QA_MASTER_KIND_LABELS[kind]}</Button>}
-              </Space>
-            ) : null
-          }
         />
         {activeTab !== 'DEPARTMENTS' ? (
           <>
-            <Table<QaMasterObject> rowKey="id" loading={loading} columns={columns} dataSource={rows} scroll={{ x: 1180 }} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无主数据" /> }} />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-              <Pagination current={page} pageSize={20} total={total} showSizeChanger={false} onChange={(next) => setPage(next)} showTotal={(value) => `共 ${value} 条`} />
+            {/* 工具行独立于 Tabs：放进 tabBarExtraContent 会和 6 个标签抢同一行宽度，
+                1200px 下标签已被挤成 "..."。 */}
+            <div className={styles.toolbar}>
+              <Input.Search
+                className={styles.search}
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                onSearch={(value) => { setQueryKeyword(value); setPage(1) }}
+                allowClear
+                placeholder="搜索编码、名称或别名"
+              />
+              <label className={styles.inactiveToggle}>
+                <Switch size="small" checked={includeInactive} onChange={(value) => { setIncludeInactive(value); setPage(1) }} />
+                包含停用
+              </label>
+              {canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增{QA_MASTER_KIND_LABELS[kind]}</Button>}
             </div>
+            <Table<QaMasterObject>
+              rowKey="id"
+              loading={loading}
+              columns={columns}
+              dataSource={rows}
+              scroll={{ x: MASTER_TABLE_WIDTH }}
+              pagination={false}
+              locale={{
+                emptyText: (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description={queryKeyword ? `没有匹配「${queryKeyword}」的${QA_MASTER_KIND_LABELS[kind]}` : `还没有登记${QA_MASTER_KIND_LABELS[kind]}`}
+                  >
+                    {queryKeyword
+                      ? <Button onClick={() => { setKeyword(''); setQueryKeyword(''); setPage(1) }}>清除搜索</Button>
+                      : canCreate && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新增{QA_MASTER_KIND_LABELS[kind]}</Button>}
+                  </Empty>
+                ),
+              }}
+            />
+            {total > 20 && (
+              <div className={styles.pagination}>
+                <Pagination current={page} pageSize={20} total={total} showSizeChanger={false} onChange={(next) => setPage(next)} showTotal={(value) => `共 ${value} 条`} />
+              </div>
+            )}
           </>
         ) : (
-          <Table<QaDepartmentReference> rowKey="id" loading={departmentLoading} columns={departmentColumns} dataSource={departments} pagination={{ pageSize: 20, showSizeChanger: false }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无飞书部门" /> }} />
+          <>
+            <p className={styles.readonlyNote}>飞书部门来自通讯录同步，只读；登记主数据时的「责任部门」从这里选取。</p>
+            <Table<QaDepartmentReference> rowKey="id" loading={departmentLoading} columns={departmentColumns} dataSource={departments} pagination={{ pageSize: 20, showSizeChanger: false }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无飞书部门" /> }} />
+          </>
         )}
       </Card>
 
@@ -488,38 +603,74 @@ function QaMasterData() {
   )
 }
 
+/** 单条主数据的身份卡：先立编码/名称/状态，再列属性与外部来源。
+ *
+ * 空字段不逐行铺开成 "—"，只保留有值的；但「责任部门」缺失是 QA 需要看到的
+ * 管理信号（无人负责的受控身份），所以始终占位并标为未指定。
+ */
 function QaMasterDetail({ item }: { item: QaMasterObject }) {
   const aliases = item.aliases?.map((entry) => entry.alias).filter(Boolean) || []
   const sources = item.sources || []
+  const department = item.responsible_department_name || item.responsible_department_name_snapshot || item.department_name || ''
+
+  const fields: Array<{ label: string; value: React.ReactNode }> = [
+    { label: '责任部门', value: department || <span className={styles.fieldMissing}>未指定</span> },
+    ...(item.kind === 'REGION' ? [{ label: '父级区域', value: item.parent_id || item.region_parent_id || '' }] : []),
+    ...(item.kind === 'SUPPLIER' ? [
+      { label: '联系人', value: item.contact_name || '' },
+      { label: '电话', value: item.contact_phone || '' },
+      { label: '邮箱', value: item.contact_email || '' },
+    ] : []),
+    { label: '描述', value: item.description || item.remark || '' },
+    { label: '更新时间', value: formatDate(item.updated_at) },
+  ].filter((field) => field.value !== '' && field.value != null)
+
   return (
     <>
-      <Descriptions column={1} bordered size="small">
-        <Descriptions.Item label="类型">{qaMasterKindLabel(item.kind || item.object_type)}</Descriptions.Item>
-        <Descriptions.Item label="业务编码">{displayMasterCode(item)}</Descriptions.Item>
-        <Descriptions.Item label="名称">{item.name}</Descriptions.Item>
-        <Descriptions.Item label="状态">{statusTag(item.status, isMasterActive(item))}</Descriptions.Item>
-        <Descriptions.Item label="责任部门">{item.responsible_department_name || item.responsible_department_name_snapshot || item.department_name || '—'}</Descriptions.Item>
-        {item.kind === 'REGION' && <Descriptions.Item label="父级区域">{item.parent_id || item.region_parent_id || '—'}</Descriptions.Item>}
-        {item.kind === 'SUPPLIER' && <>
-          <Descriptions.Item label="联系人">{item.contact_name || '—'}</Descriptions.Item>
-          <Descriptions.Item label="电话">{item.contact_phone || '—'}</Descriptions.Item>
-          <Descriptions.Item label="邮箱">{item.contact_email || '—'}</Descriptions.Item>
-        </>}
-        <Descriptions.Item label="描述">{item.description || item.remark || '—'}</Descriptions.Item>
-        <Descriptions.Item label="更新时间">{formatDate(item.updated_at)}</Descriptions.Item>
-      </Descriptions>
-      <Divider plain>别名</Divider>
-      {aliases.length ? <Space wrap>{aliases.map((alias) => <Tag key={alias}>{alias}</Tag>)}</Space> : <Text type="secondary">暂无别名</Text>}
-      <Divider plain>外部来源快照</Divider>
-      {sources.length ? (
-        <Space orientation="vertical" style={{ width: '100%' }}>
-          {sources.map((source, index) => <Card size="small" key={source.id || `${source.source_module}-${source.source_id}-${index}`}>
-            <Text strong>{source.source_name || source.source_name_snapshot || source.name_snapshot || '未命名来源'}</Text>
-            <div style={{ fontSize: 12, color: '#787671', marginTop: 4 }}>{source.source_module} / {source.source_entity} · {source.source_id}</div>
-            <div style={{ marginTop: 5 }}>{source.source_available === false ? <Tag color="orange">来源当前不可用，保留历史快照</Tag> : <Tag color="green">来源可用</Tag>}</div>
-          </Card>)}
-        </Space>
-      ) : <Text type="secondary">暂无外部来源</Text>}
+      <div className={styles.identity}>
+        <Text className={styles.identityCode} copyable={{ text: displayMasterCode(item) }}>{displayMasterCode(item)}</Text>
+        <div className={styles.identityName}>{item.name}</div>
+        <div className={styles.identityMeta}>
+          {statusTag(item.status, isMasterActive(item))}
+          <span className={styles.identityKind}>{qaMasterKindLabel(item.kind || item.object_type)}</span>
+        </div>
+        {/* 别名是"同一实体在别的系统/车间里的叫法"，主数据存在的理由；没有就不占位。 */}
+        {aliases.length > 0 && (
+          <div className={styles.aliasRow}>
+            <span className={styles.aliasLabel}>又名</span>
+            <span className={styles.aliasValue}>{aliases.map((alias) => <Tag key={alias}>{alias}</Tag>)}</span>
+          </div>
+        )}
+      </div>
+
+      <dl className={styles.fields}>
+        {fields.map((field) => (
+          <Fragment key={field.label}>
+            <dt className={styles.fieldLabel}>{field.label}</dt>
+            <dd className={styles.fieldValue}>{field.value}</dd>
+          </Fragment>
+        ))}
+      </dl>
+
+      <div className={styles.sectionTitle}>外部来源</div>
+      {sources.length > 0 ? (
+        <ul className={styles.sourceList}>
+          {sources.map((source, index) => {
+            const available = source.source_available !== false
+            return (
+              <li className={styles.sourceRow} key={source.id || `${source.source_module}-${source.source_id}-${index}`}>
+                <div className={styles.sourceMain}>
+                  <span className={styles.sourceName}>{source.source_name || source.source_name_snapshot || source.name_snapshot || '未命名来源'}</span>
+                  <span className={styles.sourceMeta}>{source.source_module} / {source.source_entity} · {source.source_id}</span>
+                </div>
+                <span className={available ? styles.sourceOk : styles.sourceWarn}>{available ? '可用' : '已失效'}</span>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className={styles.fieldMissing}>未关联外部来源</p>
+      )}
     </>
   )
 }
@@ -623,7 +774,7 @@ function QaMasterObjectModal({
 
   const sourceSelectOptions = sourceOptions.map((source) => ({
     value: `${source.source_module}|${source.source_entity}|${source.source_id}`,
-    label: `${source.code ? `${source.code} · ` : ''}${source.name}`,
+    label: qaSourceOptionLabel(source),
   }))
 
   return (
@@ -635,15 +786,15 @@ function QaMasterObjectModal({
           <Col span={14}><Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}><Input maxLength={200} /></Form.Item></Col>
         </Row>
         <Form.Item name="aliases" label="别名" extra="多个别名用逗号或换行分隔，用于全局检索"><Input.TextArea rows={2} maxLength={1000} /></Form.Item>
-        <Form.Item name="department_id" label="责任部门"><Select allowClear showSearch optionFilterProp="label" options={departments.map((item) => ({ value: displayDepartmentId(item), label: `${item.name} (${displayDepartmentId(item)})` }))} placeholder="选择飞书组织部门" /></Form.Item>
-        {kind === 'REGION' && <Form.Item name="parent_id" label="父级区域"><Select allowClear showSearch optionFilterProp="label" options={regions.filter((item) => item.id !== record?.id).map((item) => ({ value: item.id, label: `${displayMasterCode(item)} · ${item.name}` }))} placeholder="可选，系统会校验不能形成循环" /></Form.Item>}
+        <Form.Item name="department_id" label="责任部门"><Select allowClear showSearch={{ optionFilterProp: 'label' }} options={departments.map((item) => ({ value: displayDepartmentId(item), label: `${item.name} (${displayDepartmentId(item)})` }))} placeholder="选择飞书组织部门" /></Form.Item>
+        {kind === 'REGION' && <Form.Item name="parent_id" label="父级区域"><Select allowClear showSearch={{ optionFilterProp: 'label' }} options={regions.filter((item) => item.id !== record?.id).map((item) => ({ value: item.id, label: `${displayMasterCode(item)} · ${item.name}` }))} placeholder="可选，系统会校验不能形成循环" /></Form.Item>}
         {kind === 'SUPPLIER' && <Row gutter={12}>
           <Col span={8}><Form.Item name="contact_name" label="联系人"><Input /></Form.Item></Col>
           <Col span={8}><Form.Item name="contact_phone" label="电话"><Input /></Form.Item></Col>
           <Col span={8}><Form.Item name="contact_email" label="邮箱"><Input /></Form.Item></Col>
         </Row>}
         {(kind === 'PRODUCT' || kind === 'MATERIAL' || kind === 'EQUIPMENT') && <Form.Item name="sources" label="关联外部来源" extra="来源仅保存引用与快照，QA 记录仍由本模块负责">
-          <Select mode="multiple" showSearch filterOption={false} onSearch={(value) => { void loadSources(value) }} onFocus={() => { void loadSources('') }} loading={sourceLoading} options={sourceSelectOptions} placeholder="搜索生产产品、产出物或设备台账" />
+          <Select mode="multiple" showSearch={{ filterOption: false, onSearch: (value) => { void loadSources(value) } }} onFocus={() => { void loadSources('') }} loading={sourceLoading} options={sourceSelectOptions} placeholder="搜索生产产品、产出物或设备台账" />
         </Form.Item>}
         <Form.Item name="description" label="描述"><Input.TextArea rows={3} /></Form.Item>
         <Form.Item name="remark" label="备注"><Input.TextArea rows={2} /></Form.Item>
@@ -827,8 +978,8 @@ function QaDocumentModal({
       <Form form={form} layout="vertical">
         <Form.Item name="document_no" label="文件编号" rules={[{ required: true, message: '请输入文件编号' }]}><Input disabled={!!record} maxLength={100} /></Form.Item>
         <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入文件标题' }]}><Input maxLength={300} /></Form.Item>
-        <Form.Item name="document_type_id" label="文件类型" rules={[{ required: true, message: '请选择文件类型' }]}><Select showSearch optionFilterProp="label" options={types.filter(isDocumentTypeActive).map((item) => ({ value: item.id, label: `${item.name} (${item.code})` }))} placeholder="选择文件类型" /></Form.Item>
-        <Form.Item name="department_id" label="责任部门"><Select allowClear showSearch optionFilterProp="label" options={departments.map((item) => ({ value: displayDepartmentId(item), label: item.name }))} placeholder="选择飞书组织部门" /></Form.Item>
+        <Form.Item name="document_type_id" label="文件类型" rules={[{ required: true, message: '请选择文件类型' }]}><Select showSearch={{ optionFilterProp: 'label' }} options={types.filter(isDocumentTypeActive).map((item) => ({ value: item.id, label: `${item.name} (${item.code})` }))} placeholder="选择文件类型" /></Form.Item>
+        <Form.Item name="department_id" label="责任部门"><Select allowClear showSearch={{ optionFilterProp: 'label' }} options={departments.map((item) => ({ value: displayDepartmentId(item), label: item.name }))} placeholder="选择飞书组织部门" /></Form.Item>
         {!record && <Alert type="info" showIcon title="先登记文件台账，再上传一个或多个不可覆盖的版本。" />}
       </Form>
     </Modal>
@@ -1317,7 +1468,7 @@ function QaRelationsModal({ open, version, onClose, onSaved }: { open: boolean; 
   return (
     <Modal title={`维护版本 ${version?.version_label || ''} 的适用/关联`} open={open} onCancel={onClose} onOk={() => { void submit() }} okText="保存关联" cancelText="取消" confirmLoading={submitting} destroyOnHidden>
       <Alert type="info" showIcon title="关联挂在版本层级" description="版本锁定后不能修改关系；如需调整，请上传新版本。" style={{ marginBottom: 14 }} />
-      <Select mode="multiple" value={selected} onChange={setSelected} loading={loading} showSearch filterOption={false} onSearch={(value) => { void loadOptions(value) }} onFocus={() => { if (!options.length) void loadOptions() }} optionFilterProp="label" style={{ width: '100%' }} placeholder="搜索并选择产品、物料、设备、供应商或区域" options={options.map((item) => ({ value: item.id, label: `${qaMasterKindLabel(item.kind)} · ${displayMasterCode(item)} · ${item.name}` }))} />
+      <Select mode="multiple" value={selected} onChange={setSelected} loading={loading} showSearch={{ filterOption: false, optionFilterProp: 'label', onSearch: (value) => { void loadOptions(value) } }} onFocus={() => { if (!options.length) void loadOptions() }} style={{ width: '100%' }} placeholder="搜索并选择产品、物料、设备、供应商或区域" options={options.map((item) => ({ value: item.id, label: `${qaMasterKindLabel(item.kind)} · ${displayMasterCode(item)} · ${item.name}` }))} />
     </Modal>
   )
 }

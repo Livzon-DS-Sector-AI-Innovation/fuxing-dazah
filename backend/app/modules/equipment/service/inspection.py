@@ -494,7 +494,8 @@ async def _create_anomaly_work_order(
     from app.modules.equipment.models.work_order import WorkOrder as WOModel
 
     # 获取设备信息
-    equipment = await repo.get_equipment_by_id(db, equipment_id)
+    # 无范围读取：巡检任务本身已通过归属校验，此处只是按其记录联动建单。
+    equipment = await repo.get_equipment_unscoped(db, equipment_id)
     if not equipment:
         return None
 
@@ -1181,9 +1182,9 @@ async def get_trend(
     ctx: EquipmentAccessContext,
 ) -> TrendResponse:
     """参数趋势分析"""
-    from app.modules.equipment.repository.equipment import get_equipment_by_id
+    from app.modules.equipment.repository.equipment import get_equipment_unscoped
 
-    eq = await get_equipment_by_id(db, equipment_id)
+    eq = await get_equipment_unscoped(db, equipment_id)
     # 单设备:按数据范围校验设备归属部门,越权直接 403(与列表过滤口径一致)
     if not ctx.is_unrestricted and (
         eq is None or eq.department_id not in ctx.visible_department_ids

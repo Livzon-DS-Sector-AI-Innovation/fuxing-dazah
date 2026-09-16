@@ -119,7 +119,7 @@ async def list_master_objects(
         page=page,
         page_size=page_size,
     )
-    result = await service.master_to_dict_batch(db, items)
+    result = await service.master_to_dict_batch(db, items, user=user)
     for item in result:
         # 前端兼容字段；规范字段仍保留。
         item["kind"] = item["object_type"]
@@ -134,7 +134,7 @@ async def create_master_object(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.create_master(db, payload, user)
-    return success_response(await service.master_to_dict(db, obj))
+    return success_response(await service.master_to_dict(db, obj, user=user))
 
 
 @router.get("/master-objects/{object_id}", summary="QA主数据详情")
@@ -146,7 +146,7 @@ async def get_master_object(
     obj = await get_master(db, object_id)
     if obj is None:
         raise NotFoundException("QA主数据", str(object_id))
-    data = await service.master_to_dict(db, obj)
+    data = await service.master_to_dict(db, obj, user=user)
     data["kind"] = data["object_type"]
     data["is_active"] = data["status"] == "active"
     return success_response(data)
@@ -160,7 +160,7 @@ async def update_master_object(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.update_master(db, object_id, payload, user)
-    return success_response(await service.master_to_dict(db, obj))
+    return success_response(await service.master_to_dict(db, obj, user=user))
 
 
 @router.post("/master-objects/{object_id}/status", summary="切换QA主数据状态")
@@ -171,7 +171,7 @@ async def change_master_status(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, payload.status, user)
-    return success_response(await service.master_to_dict(db, obj))
+    return success_response(await service.master_to_dict(db, obj, user=user))
 
 
 @router.post("/master-objects/{object_id}/activate", summary="启用QA主数据")
@@ -181,7 +181,7 @@ async def activate_master_object(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, "active", user)
-    return success_response(await service.master_to_dict(db, obj))
+    return success_response(await service.master_to_dict(db, obj, user=user))
 
 
 @router.post("/master-objects/{object_id}/deactivate", summary="停用QA主数据")
@@ -191,7 +191,7 @@ async def deactivate_master_object(
     db: AsyncSession = Depends(get_db),
 ) -> Any:
     obj = await service.set_master_status(db, object_id, "inactive", user)
-    return success_response(await service.master_to_dict(db, obj))
+    return success_response(await service.master_to_dict(db, obj, user=user))
 
 
 @router.put("/master-objects/{object_id}/aliases", summary="替换QA主数据别名")
@@ -298,12 +298,15 @@ async def reference_sources(
         rows, total = await list_intermediate_types(db, keyword, page, page_size)
         entity = "intermediate_type"
     elif value == "EQUIPMENT":
-        from app.modules.equipment.public_api import list_equipments_for_user
+        from app.modules.equipment.public_api import list_equipment_references
 
-        # 设备有部门数据范围，引用选择器必须按当前用户过滤，否则任何登录
-        # 用户都能通过 QA 主数据来源挑到全公司设备台账。
-        rows, total = await list_equipments_for_user(
-            db, user, keyword=keyword, page=page, page_size=page_size
+        rows, total = await list_equipment_references(
+            db,
+            user,
+            "qa",
+            keyword=keyword,
+            page=page,
+            page_size=page_size,
         )
         entity = "equipment"
     else:
@@ -334,6 +337,8 @@ async def reference_sources(
                 "source_id": source_id,
                 "is_active": active if active is not None else True,
                 "is_deleted": deleted if deleted is not None else False,
+                # 仅用于选择器分组，不暴露设备台账详情。
+                "source": brief_value(row, "source"),
                 "category": brief_value(row, "category"),
                 "is_product": brief_value(row, "is_product"),
             }

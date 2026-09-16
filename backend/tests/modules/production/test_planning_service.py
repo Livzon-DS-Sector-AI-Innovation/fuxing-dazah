@@ -19,7 +19,13 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
+from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch
 from app.modules.production.schemas import (
@@ -28,6 +34,7 @@ from app.modules.production.schemas import (
     DemandUpdate,
     PlanItemCreate,
     PlanItemScheduleIn,
+    PlanItemUpdate,
     PlanOrderCreate,
     PlanOrderUpdate,
     RouteCreate,
@@ -509,6 +516,147 @@ class TestPlanOrder:
 # ═══════════════════════════════════════════
 
 class TestPlanItem:
+    async def test_create_uuid_equipment_validates_and_snapshots_reference(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """创建计划项时设备 UUID 走 production 授权并保存服务端快照。"""
+        equipment_id = uuid.uuid4()
+        calls: list[tuple[Any, ...]] = []
+
+        async def validate(
+            db: AsyncSession,
+            user: User,
+            target_module: str,
+            ids: list[uuid.UUID],
+            *,
+            auto_publish_owned: bool,
+        ) -> list[EquipmentBrief]:
+            calls.append((user, target_module, ids, auto_publish_owned))
+            return [
+                EquipmentBrief(
+                    id=equipment_id,
+                    equipment_no="EQ-PLAN",
+                    name="计划共享设备",
+                    status="完好",
+                )
+            ]
+
+        from app.modules.equipment import public_api
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", validate)
+        order = await _make_order(db_session, published_route, test_user)
+        item = await planning_service.create_plan_item(
+            db_session,
+            order.id,
+            PlanItemCreate(
+                product_id=published_route["product"].id,
+                product_name="中间体A",
+                route_id=published_route["route"].id,
+                equipment_id=str(equipment_id),
+                batch_no=rand_code("ITM"),
+            ),
+            user=test_user,
+        )
+
+        assert calls == [(test_user, "production", [equipment_id], True)]
+        assert item.equipment_id == str(equipment_id)
+        assert item.equipment_no == "EQ-PLAN"
+        assert item.equipment_name == "计划共享设备"
+
+    async def test_update_uuid_equipment_rejects_revoked_reference(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """计划项换绑到已撤销设备时被拒绝。"""
+        from app.modules.equipment import public_api
+
+        async def reject(*args: Any, **kwargs: Any) -> list[EquipmentBrief]:
+            raise ForbiddenException("设备不可用或无权关联")
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", reject)
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        with pytest.raises(ForbiddenException, match="设备不可用"):
+            await planning_service.update_plan_item(
+                db_session,
+                item.id,
+                PlanItemUpdate(equipment_id=str(uuid.uuid4())),
+                test_user,
+            )
+
+    async def test_schedule_rejects_revoked_equipment_reference(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """排程换绑到已撤销设备时被拒绝，不能只靠前端选项限制。"""
+        from app.modules.equipment import public_api
+
+        async def reject(*args: Any, **kwargs: Any) -> list[EquipmentBrief]:
+            raise ForbiddenException("设备不可用或无权关联")
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", reject)
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        current = datetime.now(UTC)
+        with pytest.raises(ForbiddenException, match="设备不可用"):
+            await planning_service.schedule_plan_item(
+                db_session,
+                item.id,
+                PlanItemScheduleIn(
+                    planned_start=current,
+                    planned_end=current + timedelta(hours=1),
+                    equipment_id=str(uuid.uuid4()),
+                ),
+                test_user,
+            )
+
+    async def test_schedule_time_only_keeps_existing_revoked_reference(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """仅调整历史计划项时间不算换绑，撤销后仍可继续维护旧关联。"""
+        from app.modules.equipment import public_api
+
+        calls: list[tuple[Any, ...]] = []
+
+        async def reject(*args: Any, **kwargs: Any) -> list[EquipmentBrief]:
+            calls.append(args)
+            raise ForbiddenException("设备不可用或无权关联")
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", reject)
+        order = await _make_order(db_session, published_route, test_user)
+        item = await _make_item(db_session, order, published_route, test_user)
+        # 模拟授权撤销后的历史 UUID 关联；时间-only 排程不触发新引用校验。
+        item.equipment_id = str(uuid.uuid4())
+        await db_session.flush()
+        current = datetime.now(UTC)
+        scheduled, warnings = await planning_service.schedule_plan_item(
+            db_session,
+            item.id,
+            PlanItemScheduleIn(
+                planned_start=current,
+                planned_end=current + timedelta(hours=1),
+            ),
+            test_user,
+        )
+
+        assert scheduled.status == "scheduled"
+        assert warnings == []
+        assert calls == []
+
     async def test_create_inherits_order_defaults(
         self, db_session: AsyncSession, published_route: dict[str, Any],
         test_user: User,

@@ -167,8 +167,15 @@ async def _get_external_source(
     source_module: str,
     source_entity: str,
     source_id: uuid.UUID,
+    user: User | None = None,
 ) -> tuple[str, str]:
-    """校验来源并返回编码/名称快照。"""
+    """校验来源并返回编码/名称快照。
+
+    设备来源是一个带调用上下文的跨模块引用：HTTP/用户触发的写入必须
+    通过 ``validate_equipment_references``，这样既不会因猜 UUID 越权，
+    又能在首次关联用户自己数据范围内的设备时自动创建 QA 授权。只有
+    ``user=None`` 的可信内部任务才使用无上下文摘要接口。
+    """
     expected = _SOURCE_ENTITY_MAP.get(object_type)
     normalized_module = source_module.strip().lower()
     normalized_entity = source_entity.strip().lower()
@@ -191,9 +198,17 @@ async def _get_external_source(
 
         brief = await get_intermediate_type_brief(db, source_id)
     elif normalized_module == "equipment" and normalized_entity == "equipment":
-        from app.modules.equipment.public_api import get_equipment_brief
+        if user is not None:
+            from app.modules.equipment.public_api import validate_equipment_references
 
-        brief = await get_equipment_brief(db, source_id)
+            refs = await validate_equipment_references(
+                db, user, "qa", [source_id], auto_publish_owned=True
+            )
+            brief = refs[0] if refs else None
+        else:
+            from app.modules.equipment.public_api import get_equipment_brief
+
+            brief = await get_equipment_brief(db, source_id)
 
     if brief is None or not getattr(brief, "is_active", True):
         raise AppException(status_code=422, message="外部来源对象不存在或已停用")
@@ -320,9 +335,15 @@ async def create_master(
         if source_key in source_seen:
             raise DuplicateException("来源关联", str(source_in.source_id))
         source_seen.add(source_key)
-        source_code, source_name = await _get_external_source(
-            db, object_type, module, entity, source_in.source_id
-        )
+        if user is None:
+            # 保持可信内部任务及旧测试适配器的五参数调用兼容。
+            source_code, source_name = await _get_external_source(
+                db, object_type, module, entity, source_in.source_id
+            )
+        else:
+            source_code, source_name = await _get_external_source(
+                db, object_type, module, entity, source_in.source_id, user
+            )
         db.add(
             MasterObjectSource(
                 master_object_id=obj.id,
@@ -502,7 +523,14 @@ async def add_master_sources(
         module = source_in.source_module.strip().lower()
         entity = source_in.source_entity.strip().lower()
         module, entity = _SOURCE_ENTITY_ALIASES.get((module, entity), (module, entity))
-        code, name = await _get_external_source(db, obj.object_type, module, entity, source_in.source_id)
+        if user is None:
+            code, name = await _get_external_source(
+                db, obj.object_type, module, entity, source_in.source_id
+            )
+        else:
+            code, name = await _get_external_source(
+                db, obj.object_type, module, entity, source_in.source_id, user
+            )
         duplicate = await db.execute(
             select(MasterObjectSource).where(
                 MasterObjectSource.master_object_id == object_id,
@@ -1152,7 +1180,11 @@ async def retry_extraction(
 
 
 async def _external_briefs(
-    db: AsyncSession, module: str, entity: str, ids: Sequence[uuid.UUID]
+    db: AsyncSession,
+    module: str,
+    entity: str,
+    ids: Sequence[uuid.UUID],
+    user: User | None = None,
 ) -> list[Any] | None:
     """按来源类型批量取外部摘要；不支持的类型返回 None。"""
     if (module, entity) == ("production", "product"):
@@ -1164,6 +1196,10 @@ async def _external_briefs(
 
         return list(await get_intermediate_type_briefs(db, ids))
     if (module, entity) == ("equipment", "equipment"):
+        if user is not None:
+            from app.modules.equipment.public_api import get_equipment_references_by_ids
+
+            return list(await get_equipment_references_by_ids(db, user, "qa", ids))
         from app.modules.equipment.public_api import get_equipment_briefs
 
         return list(await get_equipment_briefs(db, ids))
@@ -1171,7 +1207,9 @@ async def _external_briefs(
 
 
 async def _availability_map(
-    db: AsyncSession, sources: Sequence[MasterObjectSource]
+    db: AsyncSession,
+    sources: Sequence[MasterObjectSource],
+    user: User | None = None,
 ) -> dict[uuid.UUID, bool]:
     """批量判断外部来源是否仍可用（对象存在且未停用）。
 
@@ -1188,7 +1226,7 @@ async def _availability_map(
     for (module, entity), rows in groups.items():
         try:
             briefs = await _external_briefs(
-                db, module, entity, [row.source_id for row in rows]
+                db, module, entity, [row.source_id for row in rows], user
             )
         except Exception:
             logger.debug("来源可用性批量查询失败", exc_info=True)
@@ -1203,12 +1241,16 @@ async def _availability_map(
     return available
 
 
-async def master_to_dict(db: AsyncSession, obj: MasterObject) -> dict[str, Any]:
-    return (await master_to_dict_batch(db, [obj]))[0]
+async def master_to_dict(
+    db: AsyncSession, obj: MasterObject, user: User | None = None
+) -> dict[str, Any]:
+    return (await master_to_dict_batch(db, [obj], user=user))[0]
 
 
 async def master_to_dict_batch(
-    db: AsyncSession, objects: Sequence[MasterObject]
+    db: AsyncSession,
+    objects: Sequence[MasterObject],
+    user: User | None = None,
 ) -> list[dict[str, Any]]:
     """组装主数据输出。
 
@@ -1219,7 +1261,9 @@ async def master_to_dict_batch(
     aliases_by_master = await get_aliases_for_masters(db, object_ids)
     sources_by_master = await get_sources_for_masters(db, object_ids)
     availability = await _availability_map(
-        db, [source for rows in sources_by_master.values() for source in rows]
+        db,
+        [source for rows in sources_by_master.values() for source in rows],
+        user,
     )
 
     result: list[dict[str, Any]] = []

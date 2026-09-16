@@ -12,7 +12,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, NotFoundException
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import (
     Equipment,
@@ -183,6 +183,31 @@ async def test_create_work_order_equipment_scrapped(
     data = WorkOrderCreate(equipment_id=sample_equipment.id)
     with pytest.raises(AppException):
         await create_work_order(db_session, data, make_access_ctx(sample_user))
+
+
+async def test_create_work_order_outside_data_scope_is_not_found(
+    db_session: AsyncSession,
+    sample_equipment: Equipment,
+    sample_user: User,
+    make_scoped_access_ctx: Callable[..., EquipmentAccessContext],
+) -> None:
+    """设备不在可见部门内（含归属部门为空）时报修按不存在处理，不得改其状态。"""
+    ctx = make_scoped_access_ctx(
+        sample_user, scope="department", departments=[uuid.uuid4()]
+    )
+    status_before = sample_equipment.status
+
+    data = WorkOrderCreate(
+        equipment_id=sample_equipment.id,
+        order_type="故障维修",
+        priority="高",
+        fault_description="设备发出异响",
+    )
+    with pytest.raises(NotFoundException):
+        await create_work_order(db_session, data, ctx)
+
+    await db_session.refresh(sample_equipment)
+    assert sample_equipment.status == status_before
 
 
 async def test_create_fault_sets_equipment_pending_check(

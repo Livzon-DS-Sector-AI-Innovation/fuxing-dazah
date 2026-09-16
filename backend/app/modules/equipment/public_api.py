@@ -15,6 +15,17 @@ from app.modules.equipment.deps import build_access_context
 from app.modules.equipment.models import Equipment
 from app.modules.equipment.repository import equipment as equipment_repo
 from app.modules.equipment.service.data_scope import apply_equipment_scope
+from app.modules.equipment.service.reference import (
+    EquipmentReference,
+    ensure_equipment_reference,
+    get_equipment_references_by_ids,
+    get_reference_grants,
+    grant_equipment_references,
+    list_equipment_references,
+    list_reference_target_modules,
+    revoke_equipment_references,
+    validate_equipment_references,
+)
 from app.platform.identity.models import Department, User
 
 # 设备状态里的终态；报废设备不应再被其他模块引用为可用来源。
@@ -167,12 +178,33 @@ async def list_equipments_for_user(
     status: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    target_module: str | None = None,
 ) -> tuple[list[EquipmentBrief], int]:
     """按调用用户的数据范围查询设备列表，返回 (设备摘要列表, 总数)。
 
     数据范围沿用设备台账（equipment:asset）的权限配置：
     超管看全部，其余按可见部门过滤，无权限用户仅返回空。
     """
+    if target_module is not None:
+        references, total = await list_equipment_references(
+            db,
+            user,
+            target_module,
+            keyword=keyword,
+            status=status,
+            page=page,
+            page_size=page_size,
+        )
+        return [
+            EquipmentBrief(
+                id=reference.id,
+                equipment_no=reference.equipment_no,
+                name=reference.name,
+                status=reference.status,
+            )
+            for reference in references
+        ], total
+
     ctx = await build_access_context(db, user, resource="asset")
     equipments, total = await equipment_repo.get_equipments(
         db, ctx, status=status, keyword=keyword, page=page, page_size=page_size,
@@ -224,12 +256,21 @@ async def list_all_equipment_dept(
 
 
 __all__ = [
+    "EquipmentReference",
     "EquipmentBrief",
     "EquipmentDeptBrief",
     "get_equipment_briefs",
     "get_equipment_brief",
     "get_equipment_by_ids",
     "get_equipment_briefs_for_user",
+    "get_equipment_references_by_ids",
+    "get_reference_grants",
+    "grant_equipment_references",
+    "ensure_equipment_reference",
+    "list_equipment_references",
+    "list_reference_target_modules",
     "list_equipments_for_user",
     "list_all_equipment_dept",
+    "revoke_equipment_references",
+    "validate_equipment_references",
 ]

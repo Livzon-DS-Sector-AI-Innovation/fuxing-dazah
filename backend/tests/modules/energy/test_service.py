@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 
-from app.core.exceptions import DuplicateException, NotFoundException
+from app.core.exceptions import (
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.energy import service
 from app.modules.energy.models import EnergyData, EnergyDeviceConfig
 from app.modules.energy.schemas import (
@@ -14,6 +20,7 @@ from app.modules.energy.schemas import (
     EnergyDeviceConfigCreate,
     EnergyDeviceConfigUpdate,
 )
+from app.platform.identity.models import User
 
 
 @pytest.mark.asyncio
@@ -30,6 +37,224 @@ async def test_create_duplicate_raises(db_session, sample_device_config_data, wa
 
     with pytest.raises(DuplicateException):
         await service.create_device_config(db_session, data)
+
+
+@pytest.mark.asyncio
+async def test_create_device_config_revalidates_equipment_and_rebuilds_names(
+    db_session,
+    sample_device_config_data,
+    water_energy_type_config,
+):
+    """客户端传入的 equipment_names 不能绕过设备引用授权。"""
+    equipment_id = uuid4()
+    sample_device_config_data = {
+        **sample_device_config_data,
+        "equipment_ids": [str(equipment_id), str(equipment_id)],
+        "equipment_names": ["伪造名称"],
+    }
+    user = User(name="能源测试用户", employee_no=f"ENERGY-{uuid4().hex[:8]}")
+    reference = SimpleNamespace(
+        id=equipment_id,
+        equipment_no="EQ-001",
+        name="真实设备名称",
+        status="在用",
+        is_active=True,
+    )
+    data = EnergyDeviceConfigCreate(**sample_device_config_data)
+
+    with patch(
+        "app.modules.equipment.public_api.validate_equipment_references",
+        new=AsyncMock(return_value=[reference]),
+    ) as validate:
+        obj = await service.create_device_config(db_session, data, user)
+
+    assert obj.equipment_ids == [str(equipment_id)]
+    assert obj.equipment_names == ["真实设备名称"]
+    validate.assert_awaited_once_with(
+        db_session,
+        user,
+        "energy",
+        [equipment_id],
+        auto_publish_owned=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_device_config_revalidates_equipment_and_rebuilds_names(
+    db_session,
+    sample_device_config_data,
+    water_energy_type_config,
+):
+    created = await service.create_device_config(
+        db_session,
+        EnergyDeviceConfigCreate(**sample_device_config_data),
+    )
+    equipment_id = uuid4()
+    reference = SimpleNamespace(
+        id=equipment_id,
+        equipment_no="EQ-002",
+        name="更新后的真实设备",
+        status="在用",
+        is_active=True,
+    )
+    user = User(name="能源测试用户", employee_no=f"ENERGY-{uuid4().hex[:8]}")
+
+    with patch(
+        "app.modules.equipment.public_api.validate_equipment_references",
+        new=AsyncMock(return_value=[reference]),
+    ) as validate:
+        updated = await service.update_device_config(
+            db_session,
+            created.id,
+            EnergyDeviceConfigUpdate(
+                equipment_ids=[str(equipment_id)],
+                equipment_names=["客户端伪造"],
+            ),
+            user,
+        )
+
+    assert updated.equipment_ids == [str(equipment_id)]
+    assert updated.equipment_names == ["更新后的真实设备"]
+    validate.assert_awaited_once_with(
+        db_session,
+        user,
+        "energy",
+        [equipment_id],
+        auto_publish_owned=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_device_config_ignores_names_only_input(
+    db_session,
+    sample_device_config_data,
+    water_energy_type_config,
+):
+    equipment_id = uuid4()
+    reference = SimpleNamespace(
+        id=equipment_id,
+        equipment_no="EQ-HISTORY",
+        name="历史名称",
+        status="在用",
+        is_active=True,
+    )
+    with patch(
+        "app.modules.equipment.public_api.validate_equipment_references",
+        new=AsyncMock(return_value=[reference]),
+    ):
+        created = await service.create_device_config(
+            db_session,
+            EnergyDeviceConfigCreate(
+                **{
+                    **sample_device_config_data,
+                    "equipment_ids": [str(equipment_id)],
+                    "equipment_names": ["客户端伪造"],
+                }
+            ),
+        )
+
+    updated = await service.update_device_config(
+        db_session,
+        created.id,
+        EnergyDeviceConfigUpdate(equipment_names=["客户端伪造"]),
+    )
+
+    assert updated.equipment_names == ["历史名称"]
+
+
+@pytest.mark.asyncio
+async def test_create_device_config_rejects_revoked_equipment(
+    db_session,
+    sample_device_config_data,
+    water_energy_type_config,
+):
+    equipment_id = uuid4()
+    data = EnergyDeviceConfigCreate(
+        **{
+            **sample_device_config_data,
+            "equipment_ids": [str(equipment_id)],
+            "equipment_names": ["已撤销设备"],
+        }
+    )
+    user = User(name="能源测试用户", employee_no=f"ENERGY-{uuid4().hex[:8]}")
+
+    with patch(
+        "app.modules.equipment.public_api.validate_equipment_references",
+        new=AsyncMock(side_effect=ForbiddenException("设备不可用或无权关联")),
+    ):
+        with pytest.raises(ForbiddenException, match="无权关联"):
+            await service.create_device_config(db_session, data, user)
+
+
+@pytest.mark.asyncio
+async def test_list_equipment_options_uses_energy_reference_scope(db_session):
+    user = User(name="能源测试用户", employee_no=f"ENERGY-{uuid4().hex[:8]}")
+    equipment_id = uuid4()
+    reference = SimpleNamespace(
+        id=equipment_id,
+        equipment_no="EQ-SHARED",
+        name="共享设备",
+        status="在用",
+        is_active=True,
+    )
+    with patch(
+        "app.modules.equipment.public_api.list_equipment_references",
+        new=AsyncMock(return_value=([reference], 1)),
+    ) as list_refs:
+        options = await service.list_equipment_options(
+            db_session,
+            user,
+            keyword="共享",
+            page_size=10,
+        )
+
+    assert options == [
+        {
+            "id": str(equipment_id),
+            "equipment_no": "EQ-SHARED",
+            "name": "共享设备",
+            "status": "在用",
+            "is_active": True,
+        }
+    ]
+    list_refs.assert_awaited_once_with(
+        db_session,
+        user,
+        "energy",
+        keyword="共享",
+        page=1,
+        page_size=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_equipment_options_by_ids_uses_reference_scope(db_session):
+    user = User(name="能源测试用户", employee_no=f"ENERGY-{uuid4().hex[:8]}")
+    equipment_id = uuid4()
+    reference = SimpleNamespace(
+        id=equipment_id,
+        equipment_no="EQ-RECALL",
+        name="回显设备",
+        status="在用",
+        is_active=True,
+    )
+    with patch(
+        "app.modules.equipment.public_api.get_equipment_references_by_ids",
+        new=AsyncMock(return_value=[reference]),
+    ) as get_refs:
+        options = await service.get_equipment_options_by_ids(
+            db_session,
+            user,
+            [equipment_id],
+        )
+
+    assert options[0]["name"] == "回显设备"
+    get_refs.assert_awaited_once_with(
+        db_session,
+        user,
+        "energy",
+        [equipment_id],
+    )
 
 
 @pytest.mark.asyncio

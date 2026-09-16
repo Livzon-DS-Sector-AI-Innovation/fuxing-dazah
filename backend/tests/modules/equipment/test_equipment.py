@@ -437,10 +437,12 @@ async def test_create_equipment_invalid_location(
         )
 
 
-async def test_get_equipment_by_id_not_found(db_session: AsyncSession) -> None:
+async def test_get_equipment_by_id_not_found(
+    db_session: AsyncSession, ctx: EquipmentAccessContext
+) -> None:
     """获取不存在设备抛 NotFoundException。"""
     with pytest.raises(NotFoundException):
-        await service.get_equipment_by_id(db_session, uuid.uuid4())
+        await service.get_equipment_by_id(db_session, uuid.uuid4(), ctx)
 
 
 async def test_update_equipment_status(
@@ -510,7 +512,7 @@ async def test_delete_equipment_soft(
     )
     assert await service.delete_equipment(db_session, equipment.id, ctx) is True
     with pytest.raises(NotFoundException):
-        await service.get_equipment_by_id(db_session, equipment.id)
+        await service.get_equipment_by_id(db_session, equipment.id, ctx)
 
 
 async def test_equipment_soft_delete_then_recreate_same_no(
@@ -697,6 +699,56 @@ async def test_api_get_nonexistent_equipment_returns_404(client: AsyncClient) ->
         f"/api/v1/equipment/equipments/{uuid.uuid4()}"
     )
     assert response.status_code == 404
+
+
+async def test_known_foreign_equipment_uuid_is_hidden_from_detail_and_status_logs(
+    db_session: AsyncSession,
+) -> None:
+    """知道其他部门 UUID 也不能绕过设备详情和状态日志的数据范围。"""
+    own_department = uuid.uuid4()
+    foreign_department = uuid.uuid4()
+    category = await _make_category(db_session, _dept_ctx(foreign_department))
+    location = await _make_location(db_session, _dept_ctx(foreign_department))
+    equipment = await _make_equipment(
+        db_session,
+        category_ids=[category.id],
+        location_id=location.id,
+        department_id=foreign_department,
+    )
+    restricted = _dept_ctx(own_department)
+
+    with pytest.raises(NotFoundException):
+        await service.get_equipment_by_id(db_session, equipment.id, restricted)
+
+    from app.modules.equipment.api.equipment import get_equipment_status_logs
+
+    with pytest.raises(NotFoundException):
+        await get_equipment_status_logs(equipment.id, db_session, restricted)
+
+
+async def test_unowned_equipment_is_not_writable_by_restricted_user(
+    db_session: AsyncSession,
+) -> None:
+    """归属部门为空的设备不属于任何人的数据范围：受限用户改/删一律 404。
+
+    department_id 为 NULL 时若按「无归属字段→放行」处理，等于把孤儿设备
+    开放给所有持权限的人，因此这里必须 fail-closed。
+    """
+    dept = uuid.uuid4()
+    category = await _make_category(db_session, _dept_ctx(dept))
+    location = await _make_location(db_session, _dept_ctx(dept))
+    equipment = await _make_equipment(
+        db_session, category_ids=[category.id], location_id=location.id
+    )
+    assert equipment.department_id is None
+
+    restricted = _dept_ctx(dept)
+    with pytest.raises(NotFoundException):
+        await service.update_equipment(
+            db_session, equipment.id, EquipmentUpdate(status="维修中"), restricted
+        )
+    with pytest.raises(NotFoundException):
+        await service.delete_equipment(db_session, equipment.id, restricted)
 
 
 async def test_api_create_duplicate_category_code_returns_409(

@@ -35,6 +35,7 @@ from app.modules.equipment.models.personnel import (
     EquipmentPersonnelRole,
     EquipmentRole,
 )
+from app.modules.equipment.models.reference import EquipmentReferenceGrant
 from app.modules.equipment.models.spare_part import (
     EquipmentSparePart,
     SparePart,
@@ -73,6 +74,7 @@ __all__ = [
     "SparePartStock",
     "SparePartTransaction",
     "EquipmentStatusLog",
+    "EquipmentReferenceGrant",
     "MaintenanceConfig",
     "WorkOrder",
     "WorkOrderImage",

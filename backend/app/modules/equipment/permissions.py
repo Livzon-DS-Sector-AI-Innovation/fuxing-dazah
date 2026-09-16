@@ -3,6 +3,14 @@
 from app.platform.permission.registry import PermissionDef
 
 PERMISSIONS: list[PermissionDef] = [
+    # ── 跨模块设备引用 ──
+    PermissionDef(
+        "equipment:reference:manage",
+        "管理设备跨模块引用授权",
+        "equipment",
+        "reference",
+        "manage",
+    ),
     # ── 设备台账 ──
     PermissionDef("equipment:asset:read", "查看设备台账", "equipment", "asset", "read"),
     PermissionDef(

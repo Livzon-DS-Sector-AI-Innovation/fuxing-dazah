@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, ForbiddenException, NotFoundException
 from app.core.time import now
-from app.modules.equipment.public_api import get_equipment_briefs
 from app.modules.production import repository as repo
 from app.modules.production.models import (
     Batch,
@@ -55,6 +54,34 @@ from app.platform.identity.models import User
 from app.platform.permission.deps import get_user_permissions
 
 logger = logging.getLogger(__name__)
+
+_EQUIPMENT_TARGET_MODULE = "production"
+
+
+async def _get_execution_equipment_references(
+    db: AsyncSession,
+    equipment_ids: list[uuid.UUID],
+    user: User | None,
+) -> list[Any]:
+    """按执行场景解析设备引用并执行服务端授权校验。
+
+    ``user=None`` 只用于受信任的内部任务（例如历史数据同步）；它仍通过
+    equipment.public_api 的统一校验契约执行，只是公共接口内部跳过用户范围和
+    grant 校验。普通用户同样不能退化到无上下文查询。
+    """
+    if not equipment_ids:
+        return []
+    # 延迟导入，允许旧部署在迁移期间加载 production 模块；公共契约缺失时
+    # 显式失败，不会退化到无上下文摘要查询。
+    from app.modules.equipment.public_api import validate_equipment_references
+
+    return await validate_equipment_references(
+        db,
+        user,
+        _EQUIPMENT_TARGET_MODULE,
+        equipment_ids,
+        auto_publish_owned=True,
+    )
 
 
 async def _require_operator_permission(
@@ -309,11 +336,22 @@ async def start_execution(
         )
 
     # 设备校验 + 快照
-    briefs = await get_equipment_briefs(db, payload.equipment_ids)
+    briefs = await _get_execution_equipment_references(
+        db, payload.equipment_ids, user,
+    )
+    inactive_ids = {
+        brief.id
+        for brief in briefs
+        if hasattr(brief, "is_active") and not bool(brief.is_active)
+    }
+    if inactive_ids:
+        raise AppException(status_code=403, message="设备不可用或无权关联")
     found_ids = {b.id for b in briefs}
     missing_eq = set(payload.equipment_ids) - found_ids
     if missing_eq:
-        raise NotFoundException("设备", ", ".join(str(i) for i in missing_eq))
+        # validate_equipment_references normally已对任一缺失/越权 ID 抛出统一
+        # Forbidden；保留此防御分支兼容内部适配器返回省略结果时的同一语义。
+        raise ForbiddenException("设备不可用或无权关联")
 
     seq = await repo.max_execution_seq(db, batch_id, payload.node_id) + 1
     execution = NodeExecution(

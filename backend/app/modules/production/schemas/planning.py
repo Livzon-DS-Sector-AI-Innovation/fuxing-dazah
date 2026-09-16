@@ -224,6 +224,8 @@ class PlanItemOut(BaseModel):
     product_name: str
     route_id: uuid.UUID | None
     equipment_id: str | None
+    equipment_no: str | None = None
+    equipment_name: str | None = None
     planned_quantity: float | None
     unit: str | None
     batch_no: str | None
@@ -294,6 +296,8 @@ class ScheduleViewItem(BaseModel):
     product_id: uuid.UUID
     product_name: str
     equipment_id: str | None
+    equipment_no: str | None = None
+    equipment_name: str | None = None
     planned_quantity: float | None
     unit: str | None
     batch_no: str | None

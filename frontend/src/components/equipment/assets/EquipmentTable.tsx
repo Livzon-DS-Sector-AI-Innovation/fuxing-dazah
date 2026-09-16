@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { App, Table, Space, Input, Select, Button } from 'antd'
-import { EditOutlined, DeleteOutlined, SearchOutlined, ToolOutlined, PlusOutlined, ImportOutlined, EyeOutlined } from '@ant-design/icons'
+import { EditOutlined, DeleteOutlined, SearchOutlined, PlusOutlined, ImportOutlined, EyeOutlined, ShareAltOutlined, ToolOutlined } from '@ant-design/icons'
 import { Equipment } from '@/types/equipment'
 import { useEquipmentStore } from '@/stores/equipment'
 import { deleteEquipment } from '@/actions/equipment'
 import { EQUIP_STATUS_PILL_COLORS, RUNNING_STATUS_PILL_COLORS, statusPill, linkDanger, linkPrimary, linkWarning, pillPurple, pillNeutral } from '@/components/equipment/shared/shared-styles'
 import { EquipmentDetailDrawer } from './EquipmentDetailDrawer'
 import { usePermission } from '@/hooks/usePermission'
+import { EquipmentReferenceModal } from './EquipmentReferenceModal'
 
 const statusPillMap: Record<string, React.CSSProperties> = Object.fromEntries(
   Object.entries(EQUIP_STATUS_PILL_COLORS).map(([k, v]) => [k, statusPill(v.color, v.bg)])
@@ -45,6 +46,17 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailEquipment, setDetailEquipment] = useState<Equipment | null>(null)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [selectedEquipments, setSelectedEquipments] = useState<Equipment[]>([])
+  const [referenceEquipments, setReferenceEquipments] = useState<Equipment[]>([])
+  const [referenceOpen, setReferenceOpen] = useState(false)
+
+  const canManageReferences = hasPermission('equipment:reference:manage')
+
+  const openReferenceModal = (items: Equipment[]) => {
+    setReferenceEquipments(items)
+    setReferenceOpen(true)
+  }
 
   // 动态计算 scroll.y，使表头和筛选栏固定，仅表格数据行滚动
   const rootRef = useRef<HTMLDivElement>(null)
@@ -101,7 +113,7 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
     { title: '型号', dataIndex: 'model', key: 'model', width: 140, ellipsis: true },
     { title: '供应商', dataIndex: 'supplier', key: 'supplier', width: 150, ellipsis: true },
     { title: '投用日期', dataIndex: 'commissioning_date', key: 'commissioning_date', width: 120 },
-    { title: '操作', key: 'action', width: 240, fixed: 'end' as const,
+    { title: '操作', key: 'action', width: 320, fixed: 'end' as const,
       render: (_: unknown, record: Equipment) => (
         <Space size={8}>
           <span role="button" onClick={() => { setDetailEquipment(record); setDetailOpen(true) }} style={linkPrimary}><EyeOutlined />详情</span>
@@ -110,6 +122,9 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
           )}
           {hasPermission('equipment:asset:update') && (
             <span role="button" onClick={() => openEquipmentDrawer(record)} style={linkPrimary}><EditOutlined />编辑</span>
+          )}
+          {canManageReferences && record.status !== '报废' && (
+            <span role="button" onClick={() => openReferenceModal([record])} style={linkPrimary}><ShareAltOutlined />引用授权</span>
           )}
           {hasPermission('equipment:asset:delete') && (
             <span role="button" onClick={() => handleDelete(record)} style={linkDanger}><DeleteOutlined />删除</span>
@@ -138,6 +153,15 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
         {hasPermission('equipment:asset:import') && (
           <Button icon={<ImportOutlined />} onClick={onImportClick}>导入</Button>
         )}
+        {canManageReferences && (
+          <Button
+            icon={<ShareAltOutlined />}
+            disabled={selectedEquipments.length === 0}
+            onClick={() => openReferenceModal(selectedEquipments)}
+          >
+            批量引用授权{selectedEquipments.length > 0 ? `（${selectedEquipments.length}）` : ''}
+          </Button>
+        )}
         {hasPermission('equipment:asset:create') && (
           <Button type="primary" icon={<PlusOutlined />} onClick={() => openEquipmentDrawer()}>新增设备</Button>
         )}
@@ -146,6 +170,17 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
         <Table
           columns={columns} dataSource={equipments} rowKey="id" size="small"
           loading={loading} scroll={{ x: 'max-content', y: scrollY || undefined }}
+          rowSelection={canManageReferences ? {
+            selectedRowKeys,
+            // 服务端分页：不保留跨页勾选的话，翻页时 antd 会按当前 dataSource
+            // 过滤掉已选 key，批量授权会静默漏掉前面几页的设备。
+            preserveSelectedRowKeys: true,
+            getCheckboxProps: record => ({ disabled: record.status === '报废' }),
+            onChange: (keys, rows) => {
+              setSelectedRowKeys(keys)
+              setSelectedEquipments(rows)
+            },
+          } : undefined}
           pagination={{
             current: page,
             pageSize: pageSize,
@@ -165,6 +200,16 @@ export function EquipmentTable({ loading = false, onPageChange, onImportClick }:
         locationName={detailEquipment?.location_name || ''}
         onClose={() => { setDetailOpen(false); setDetailEquipment(null) }}
       />
+      {referenceOpen && (
+        <EquipmentReferenceModal
+          open
+          equipments={referenceEquipments}
+          onClose={() => {
+            setReferenceOpen(false)
+            setReferenceEquipments([])
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,0 +1,225 @@
+/* QA 工作台版式。颜色/字阶取 DESIGN.md 在 globals.css 里注册的 token，
+   圆角沿用组件层的字面值（与 PageHeading / ToolRunner 一致）。 */
+
+/* ── 类型索引（Tabs 标签内的计数） ─────────────────────────────
+   计数只做字阶与色阶，不加胶囊底色：6 个标签各挂一个灰底药丸会盖过
+   标签本身，而 Notion 体系的表达是克制的字重差。 */
+.tabLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* 次要文字统一用 slate(#5d5b54, 对白底约 7:1) 或 steel(#787671, 约 4.7:1)：
+   stone/muted 只有 2.5:1 与 1.9:1，达不到 AA，不能承载正文。
+   层次靠字号与字重拉开，不靠把颜色调淡到读不清。 */
+.tabCount {
+  color: var(--color-slate);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 飞书部门与 5 类主数据不是同一种实体，用竖线在索引里断开。 */
+.tabSep {
+  align-self: center;
+  width: 1px;
+  height: 12px;
+  margin-right: 2px;
+  background: var(--color-hairline-strong);
+}
+
+/* ── 工具行（已从 tabBarExtraContent 移出，改为独立一行） ────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 8px;
+}
+
+/* 搜索是这个页面的主入口（与 QA 首页同一套语言），让它吃掉工具行的剩余宽度，
+   而不是留一段空白再把开关和主按钮甩到最右。 */
+.search {
+  flex: 1 1 320px;
+  max-width: 560px;
+}
+
+.inactiveToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  color: var(--color-slate);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* 只读类型占位说明：替换工具行，避免整行留白。 */
+.readonlyNote {
+  margin: 0 0 8px;
+  color: var(--color-steel);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.muted {
+  color: var(--color-muted);
+}
+
+.sourceCount {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 详情抽屉：先立身份，再列属性 ──────────────────────────── */
+.identity {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.identityCode {
+  color: var(--color-ink);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.identityName {
+  margin-top: 4px;
+  color: var(--color-charcoal);
+  font-size: 15px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.identityMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.identityKind {
+  color: var(--color-steel);
+  font-size: 13px;
+}
+
+.aliasRow {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.aliasLabel {
+  flex: none;
+  color: var(--color-steel);
+  font-size: 13px;
+  line-height: 24px;
+}
+
+.aliasValue {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sectionTitle {
+  margin: 24px 0 10px;
+  color: var(--color-steel);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px 12px;
+  margin: 18px 0 0;
+}
+
+.fieldLabel {
+  color: var(--color-steel);
+  font-size: 13px;
+}
+
+.fieldValue {
+  margin: 0;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.fieldMissing {
+  color: var(--color-slate);
+}
+
+/* ── 外部来源：卡片改紧凑行，UUID 降为次要行 ────────────────── */
+.sourceList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourceRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 8px;
+  background: var(--color-surface-soft);
+}
+
+.sourceMain {
+  min-width: 0;
+}
+
+.sourceName {
+  display: block;
+  color: var(--color-charcoal);
+  font-size: 13px;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.sourceMeta {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--color-steel);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceOk {
+  flex: none;
+  color: var(--color-success);
+  font-size: 12px;
+}
+
+.sourceWarn {
+  flex: none;
+  color: var(--color-warning);
+  font-size: 12px;
+}

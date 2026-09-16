@@ -133,11 +133,15 @@ async def list_equipment_options(
     """查询设备台账候选设备，供数据源「关联设备」下拉使用。
 
     传入 ids 时按 ID 批量回显；否则按 keyword 搜索。
-    数据范围沿用设备台账（equipment:asset）权限配置。
+    返回当前用户设备台账范围内的设备，以及已授权给 energy 模块的共享设备；
+    仅返回设备摘要，不会扩大设备详情权限。
     """
     if ids:
-        id_list = [UUID(i) for i in ids.split(",") if i.strip()]
-        options = await service.get_equipment_options_by_ids(db, id_list)
+        try:
+            id_list = [UUID(i.strip()) for i in ids.split(",") if i.strip()]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="设备ID格式无效") from exc
+        options = await service.get_equipment_options_by_ids(db, user, id_list)
     else:
         options = await service.list_equipment_options(db, user, keyword=keyword)
     return success_response(options)
@@ -152,7 +156,7 @@ async def create_device_config(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:device:create")),
 ) -> JSONResponse:
-    obj = await service.create_device_config(db, data)
+    obj = await service.create_device_config(db, data, user)
     return success_response(
         EnergyDeviceConfigResponse.model_validate(obj).model_dump()
     )
@@ -203,7 +207,7 @@ async def update_device_config(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("energy:device:update")),
 ) -> JSONResponse:
-    obj = await service.update_device_config(db, config_id, data)
+    obj = await service.update_device_config(db, config_id, data, user)
     return success_response(
         EnergyDeviceConfigResponse.model_validate(obj).model_dump()
     )

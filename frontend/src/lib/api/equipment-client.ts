@@ -11,15 +11,23 @@ import {
   InspectionTemplateFilters, InspectionTemplateListResponse, InspectionTemplate,
   MaterialRecord,
   ClaimTimeoutConfig, AdvanceDaysConfig, Maintainer, WorkOrderImage,
+  EquipmentReferenceGrant, EquipmentReferenceTargetModule,
 } from '@/types/equipment'
 import { apiGet, apiFetchPaginated } from '@/lib/http-client'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
-function qs(params: Record<string, string | number | undefined | null>): string {
+function qs(params: object): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') sp.append(k, String(v))
+    if (
+      v !== undefined
+      && v !== null
+      && v !== ''
+      && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+    ) {
+      sp.append(k, String(v))
+    }
   }
   return sp.toString()
 }
@@ -35,6 +43,24 @@ export async function fetchEquipmentsClient(params: Record<string, string | numb
 export async function fetchEquipmentStatisticsClient(): Promise<EquipmentStatistics> {
   return apiGet(`${API_BASE_URL}/api/v1/equipment/equipments/statistics`)
 }
+
+// ═══════════════════════════════════════════════════════════
+//  跨模块引用授权
+// ═══════════════════════════════════════════════════════════
+export async function fetchEquipmentReferenceTargetsClient(): Promise<EquipmentReferenceTargetModule[]> {
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/references/targets`)
+}
+
+export async function fetchEquipmentReferenceGrantsClient(
+  targetModule: string,
+  equipmentIds: string[],
+): Promise<EquipmentReferenceGrant[]> {
+  const params = new URLSearchParams({ target_module: targetModule })
+  equipmentIds.forEach(id => params.append('equipment_ids', id))
+  return apiGet(`${API_BASE_URL}/api/v1/equipment/references/grants?${params.toString()}`)
+}
+
+// 授权/撤销是写操作，已按 frontend/CLAUDE.md 迁到 actions/equipment。
 
 // ═══════════════════════════════════════════════════════════
 //  状态日志 / 时间开动率
@@ -70,7 +96,7 @@ export async function fetchFailureCodesClient(type: 'symptoms' | 'causes' | 'act
 //  维修工单
 // ═══════════════════════════════════════════════════════════
 export async function fetchWorkOrdersClient(params: WorkOrderFilters = {}): Promise<WorkOrderListResponse> {
-  const s = qs(params as any)
+  const s = qs(params)
   return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/maintenance/work-orders/${s ? `?${s}` : ''}`)
 }
 
@@ -87,7 +113,7 @@ export async function fetchWorkOrderByIdClient(id: string): Promise<WorkOrder> {
 //  备件
 // ═══════════════════════════════════════════════════════════
 export async function fetchSparePartsClient(params: SparePartFilters = {}): Promise<SparePartListResponse> {
-  const s = qs(params as any)
+  const s = qs(params)
   return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/spare-parts/${s ? `?${s}` : ''}`)
 }
 
@@ -129,7 +155,7 @@ export async function fetchEquipmentSparePartsClient(equipmentId: string): Promi
 //  维护计划
 // ═══════════════════════════════════════════════════════════
 export async function fetchMaintenancePlansClient(params: MaintenancePlanFilters = {}): Promise<MaintenancePlanListResponse> {
-  const s = qs(params as any)
+  const s = qs(params)
   return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/maintenance/plans/${s ? `?${s}` : ''}`)
 }
 
@@ -141,7 +167,7 @@ export async function fetchOverdueMaintenancePlansClient(days?: number): Promise
 //  巡检模板
 // ═══════════════════════════════════════════════════════════
 export async function fetchInspectionTemplatesClient(params: InspectionTemplateFilters = {}): Promise<InspectionTemplateListResponse> {
-  const s = qs(params as any)
+  const s = qs(params)
   return apiFetchPaginated(`${API_BASE_URL}/api/v1/equipment/maintenance/inspection-templates/${s ? `?${s}` : ''}`)
 }
 

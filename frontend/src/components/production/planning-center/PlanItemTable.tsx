@@ -463,11 +463,15 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
   const equipmentOptions = useMemo(() => {
     const list = (equipmentData?.items ?? []).map(e => ({
       value: e.id,
-      label: `${e.name}（${e.equipment_no}）`,
+      // 标记设备来源，减少跨模块引用时的“设备从哪来”困惑。
+      label: `${e.name}（${e.equipment_no}）${e.source === 'shared' ? ' · 已共享' : e.source === 'own_scope' ? ' · 我的设备' : ''}`,
     }))
     const brief = editEquipment?.[0]
     if (brief && !list.some(o => o.value === brief.id)) {
-      list.push({ value: brief.id, label: `${brief.name}（${brief.equipment_no}）` })
+      list.push({
+        value: brief.id,
+        label: `${brief.name}（${brief.equipment_no}）${brief.source === 'shared' ? ' · 已共享' : brief.source === 'own_scope' ? ' · 我的设备' : ''}`,
+      })
     }
     return list
   }, [equipmentData, editEquipment])

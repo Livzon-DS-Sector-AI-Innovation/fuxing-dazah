@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException, ForbiddenException
 from app.core.time import APP_TZ, now
+from app.modules.equipment.models import Equipment, Location
+from app.modules.equipment.public_api import EquipmentBrief
 from app.modules.production import repository as repo
 from app.modules.production.models import (
     Batch,
@@ -76,6 +78,79 @@ async def _complete_node_a(
 
 
 class TestStart:
+    async def test_user_equipment_reference_is_validated_with_production_scope(
+        self,
+        db_session: AsyncSession,
+        published_route: dict[str, Any],
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """普通用户开始执行时必须走 production 引用授权，而非无上下文摘要。"""
+        batch = await _make_batch(db_session, published_route)
+        equipment_id = uuid.uuid4()
+        calls: list[tuple[Any, ...]] = []
+
+        async def validate(
+            db: AsyncSession,
+            user: User,
+            target_module: str,
+            ids: list[uuid.UUID],
+            *,
+            auto_publish_owned: bool,
+        ) -> list[EquipmentBrief]:
+            calls.append((user, target_module, ids, auto_publish_owned))
+            return [
+                EquipmentBrief(
+                    id=equipment_id,
+                    equipment_no="EQ-REF",
+                    name="共享设备",
+                    status="完好",
+                )
+            ]
+
+        from app.modules.equipment import public_api
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", validate)
+
+        async def allow_operator(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(execution_service, "_require_operator_permission", allow_operator)
+        execution = await execution_service.start_execution(
+            db_session,
+            batch.id,
+            ExecutionStartIn(
+                node_id=published_route["node_a"].id,
+                equipment_ids=[equipment_id],
+            ),
+            user=test_user,
+        )
+
+        assert calls == [(test_user, "production", [equipment_id], True)]
+        snapshots = await repo.get_equipments_by_executions(db_session, [execution.id])
+        assert snapshots[0].equipment_no == "EQ-REF"
+        assert snapshots[0].equipment_name == "共享设备"
+
+    async def test_user_cannot_start_with_revoked_equipment_reference(
+        self,
+        db_session: AsyncSession,
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """设备负责人撤销共享后，普通用户不能通过执行入口继续关联。"""
+        from app.modules.equipment import public_api
+
+        async def reject(*args: Any, **kwargs: Any) -> list[EquipmentBrief]:
+            raise ForbiddenException("设备不可用或无权关联")
+
+        monkeypatch.setattr(public_api, "validate_equipment_references", reject)
+        with pytest.raises(ForbiddenException, match="设备不可用"):
+            await execution_service._get_execution_equipment_references(
+                db_session,
+                [uuid.uuid4()],
+                test_user,
+            )
+
     async def test_first_execution_must_be_start_node(
         self, db_session: AsyncSession, published_route: dict[str, Any],
     ) -> None:
@@ -259,18 +334,30 @@ class TestStart:
     ) -> None:
         """指定设备 ID 时开始执行会写入设备快照关联记录。"""
         batch = await _make_batch(db_session, published_route)
-        eq_id = uuid.uuid4()
+        location = Location(name="测试车间", code=rand_code("LOC"))
+        db_session.add(location)
+        await db_session.flush()
+        equipment = Equipment(
+            equipment_no=rand_code("EQ"),
+            name="测试设备",
+            location_id=location.id,
+        )
+        db_session.add(equipment)
+        await db_session.flush()
         ex = await execution_service.start_execution(
             db_session,
             batch.id,
             ExecutionStartIn(
-                node_id=published_route["node_a"].id, equipment_ids=[eq_id],
+                node_id=published_route["node_a"].id,
+                equipment_ids=[equipment.id],
             ),
             user=None,
         )
         snaps = await repo.get_equipments_by_executions(db_session, [ex.id])
         assert len(snaps) == 1
-        assert snaps[0].equipment_id == eq_id
+        assert snaps[0].equipment_id == equipment.id
+        assert snaps[0].equipment_no == equipment.equipment_no
+        assert snaps[0].equipment_name == equipment.name
 
     async def test_derived_batch_starts_at_entry_node(
         self, db_session: AsyncSession, published_route: dict[str, Any],

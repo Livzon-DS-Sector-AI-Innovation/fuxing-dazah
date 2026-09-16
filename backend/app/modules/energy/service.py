@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.energy import repository as repo
 from app.modules.energy.adapters import ADAPTERS
 from app.modules.energy.collect_settings import (
@@ -59,7 +65,9 @@ async def _get_unit_by_energy_type(db: AsyncSession, energy_type: str) -> str:
 
 
 async def create_device_config(
-    db: AsyncSession, data: EnergyDeviceConfigCreate
+    db: AsyncSession,
+    data: EnergyDeviceConfigCreate,
+    user: User | None = None,
 ) -> EnergyDeviceConfig:
     if await repo.exists_device_config(
         db, data.platform_code, data.platform_device_code
@@ -69,6 +77,19 @@ async def create_device_config(
             f"{data.platform_code}:{data.platform_device_code}",
         )
     create_data = data.model_dump()
+
+    # ``equipment_names`` is a display cache, not a trusted input.  Resolve
+    # the selected equipment through the equipment module's scoped public API
+    # so a caller cannot associate an out-of-scope or revoked device by
+    # tampering with the request body.  ``user=None`` is reserved for trusted
+    # internal calls and is intentionally supported for backwards compatibility
+    # with service callers that do not have an HTTP identity.
+    equipment_ids = _normalise_equipment_ids(create_data.get("equipment_ids", []))
+    equipment_refs = await _validate_equipment_references(
+        db, user, equipment_ids,
+    )
+    create_data["equipment_ids"] = [str(ref.id) for ref in equipment_refs]
+    create_data["equipment_names"] = [ref.name for ref in equipment_refs]
     # 部门级别时，区域字段置空
     if not create_data.get("is_region_level", False):
         create_data["production_line"] = None
@@ -107,13 +128,41 @@ async def list_device_configs(
 
 
 async def update_device_config(
-    db: AsyncSession, config_id: UUID, data: EnergyDeviceConfigUpdate
+    db: AsyncSession,
+    config_id: UUID,
+    data: EnergyDeviceConfigUpdate,
+    user: User | None = None,
 ) -> EnergyDeviceConfig:
     existing = await repo.get_device_config_by_id(db, config_id)
     if existing is None:
         raise NotFoundException("设备配置", str(config_id))
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # Re-validate and re-hydrate the equipment snapshot only when the
+    # association actually changes.  The config drawer always submits the full
+    # form, equipment_ids included, so keying off "field present in payload"
+    # would make a name-only edit fail with 403 as soon as one of the linked
+    # devices loses its energy grant.
+    if "equipment_ids" in update_data:
+        equipment_ids = _normalise_equipment_ids(update_data["equipment_ids"] or [])
+        if [str(eid) for eid in equipment_ids] == list(existing.equipment_ids or []):
+            # Unchanged: skip validation and keep the historical snapshot --
+            # the client must not be able to overwrite server-side names.
+            update_data.pop("equipment_ids", None)
+            update_data.pop("equipment_names", None)
+        else:
+            equipment_refs = await _validate_equipment_references(
+                db, user, equipment_ids,
+            )
+            update_data["equipment_ids"] = [str(ref.id) for ref in equipment_refs]
+            update_data["equipment_names"] = [ref.name for ref in equipment_refs]
+    else:
+        # A names-only update must never overwrite the historical snapshot
+        # with client-controlled text.  Keep the existing names/IDs intact;
+        # a caller that wants to change the association must submit IDs, which
+        # then go through the scoped validation above.
+        update_data.pop("equipment_names", None)
     if "platform_code" in update_data or "platform_device_code" in update_data:
         pc = update_data.get("platform_code", existing.platform_code)
         pdc = update_data.get(
@@ -198,35 +247,108 @@ async def list_equipment_options(
     *,
     keyword: str | None = None,
     page_size: int = 20,
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
     """查询设备台账候选列表，供数据源「关联设备」下拉搜索使用。
 
-    通过设备模块 public_api 按当前用户数据范围查询（超管看全部、普通用户按部门），
-    不跨模块直接查询设备表。
+    通过设备模块 public_api 查询“自有设备 + energy 模块已共享设备”，不跨模块
+    直接查询设备表。返回结果只包含设备摘要，不能借此读取台账详情。
     """
-    from app.modules.equipment.public_api import list_equipments_for_user
+    from app.modules.equipment.public_api import list_equipment_references
 
-    equipments, _ = await list_equipments_for_user(
-        db, user, keyword=keyword, page=1, page_size=page_size,
+    equipments, _ = await list_equipment_references(
+        db,
+        user,
+        "energy",
+        keyword=keyword,
+        page=1,
+        page_size=page_size,
     )
-    return [
-        {"id": str(e.id), "equipment_no": e.equipment_no, "name": e.name}
-        for e in equipments
-    ]
+    return [_equipment_reference_to_option(e) for e in equipments]
 
 
 async def get_equipment_options_by_ids(
     db: AsyncSession,
-    ids: list[UUID],
-) -> list[dict[str, str]]:
-    """按 ID 批量获取设备台账摘要，供编辑数据源时回显已关联设备。"""
-    from app.modules.equipment.public_api import get_equipment_briefs
+    user: User | None,
+    ids: Sequence[UUID],
+) -> list[dict[str, object]]:
+    """按 ID 批量获取当前用户可引用摘要，供编辑数据源时回显已关联设备。
 
-    briefs = await get_equipment_briefs(db, ids)
-    return [
-        {"id": str(b.id), "equipment_no": b.equipment_no, "name": b.name}
-        for b in briefs
-    ]
+    设备台账范围和 energy 模块共享授权均由 equipment.public_api 统一判断；
+    越权或已撤销设备不会从结果中返回。``user=None`` 仅供受信任的内部任务使用，
+    传入非 User 对象不会被静默降级为无范围读取（单一签名，误传即报错）。
+    """
+    from app.modules.equipment.public_api import get_equipment_references_by_ids
+
+    refs = await get_equipment_references_by_ids(db, user, "energy", list(ids))
+    return [_equipment_reference_to_option(ref) for ref in refs]
+
+
+def _normalise_equipment_ids(values: object) -> list[UUID]:
+    """Normalize request IDs and reject malformed values consistently.
+
+    The API schema intentionally keeps IDs as strings for compatibility with
+    existing clients.  Validation belongs here, immediately before the
+    equipment public API call, so both HTTP and direct service callers share
+    the same behavior.
+    """
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise AppException(message="设备ID列表格式无效")
+
+    normalized: list[UUID] = []
+    seen: set[UUID] = set()
+    for value in values:
+        try:
+            equipment_id = value if isinstance(value, UUID) else UUID(str(value))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise AppException(message=f"设备ID格式无效: {value}") from exc
+        if equipment_id in seen:
+            continue
+        seen.add(equipment_id)
+        normalized.append(equipment_id)
+    return normalized
+
+
+async def _validate_equipment_references(
+    db: AsyncSession,
+    user: User | None,
+    equipment_ids: list[UUID],
+) -> list[Any]:
+    """Validate energy equipment references through the equipment contract."""
+    if not equipment_ids:
+        return []
+    from app.modules.equipment.public_api import validate_equipment_references
+
+    references = await validate_equipment_references(
+        db,
+        user,
+        "energy",
+        equipment_ids,
+        auto_publish_owned=True,
+    )
+    # The public contract is all-or-nothing.  Keep this guard at the caller as
+    # a defense-in-depth measure in case an older adapter returns a partial
+    # result instead of raising for an unauthorized ID.
+    if len(references) != len(equipment_ids):
+        raise ForbiddenException("设备不可用或无权关联")
+    return references
+
+
+def _equipment_reference_to_option(reference: Any) -> dict[str, object]:
+    """Convert the equipment public contract into the stable energy option shape."""
+    option: dict[str, object] = {
+        "id": str(reference.id),
+        "equipment_no": reference.equipment_no,
+        "name": reference.name,
+        "status": getattr(reference, "status", None),
+        "is_active": getattr(reference, "is_active", True),
+    }
+    # 来源仅用于选择器分组（我的设备/已共享设备），不包含设备台账详情。
+    source = getattr(reference, "source", None)
+    if source is not None:
+        option["source"] = source
+    return option
 
 
 async def list_energy_data(
@@ -1752,5 +1874,3 @@ async def evaluate_nitrogen_push(db: AsyncSession) -> dict[str, Any]:
             )
 
     return {"checked": len(configs), "sent": sent}
-
-

@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.exceptions import AppException, NotFoundException
+from app.core.exceptions import AppException
 from app.core.response import paginated_response, success_response
 from app.modules.equipment import repository as repo
 from app.modules.equipment import service
@@ -35,6 +35,19 @@ from app.modules.equipment.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _ensure_equipment_visible(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
+) -> None:
+    """按设备台账数据范围校验设备可见性，范围外一律 404。
+
+    所有以设备为父资源的子接口（状态日志、备件关联、消耗历史）都必须先过这一关：
+    否则知道其他部门设备 UUID 的用户仍可绕过列表过滤直接读取其数据。
+    """
+    await service.get_equipment_by_id(db, equipment_id, ctx)
 
 
 async def _equipment_to_response(equipment, db=None) -> EquipmentResponse:
@@ -319,7 +332,7 @@ async def get_equipment(
     ),
 ) -> JSONResponse:
     """获取设备详情"""
-    equipment = await service.get_equipment_by_id(db, equipment_id)
+    equipment = await service.get_equipment_by_id(db, equipment_id, ctx)
     return success_response(data=await _equipment_to_response(equipment, db))
 
 
@@ -332,9 +345,10 @@ async def get_equipment_status_logs(
     ),
 ) -> JSONResponse:
     """获取设备的设备状态/运行状态变更时间线（倒序，含两类日志）"""
-    if not await repo.equipment_exists(db, equipment_id):
-        raise NotFoundException("设备", str(equipment_id))
-    logs = await service.get_status_logs(db, equipment_id)
+    # 先按设备台账数据范围读取设备；不能只用 equipment_exists，否则知道
+    # 其他部门 UUID 的用户仍可通过状态日志接口探测/读取其历史。
+    await _ensure_equipment_visible(db, equipment_id, ctx)
+    logs = await service.get_status_logs(db, equipment_id, ctx)
     return success_response(data=logs)
 
 
@@ -374,6 +388,7 @@ async def get_equipment_spare_parts(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
+    await _ensure_equipment_visible(db, equipment_id, ctx)
     links = await repo.get_equipment_spare_parts(db, equipment_id)
     results = []
     for link in links:
@@ -401,6 +416,7 @@ async def get_equipment_consumption_history(
         require_equipment_access("equipment:spare_part:read"),
     ),
 ) -> JSONResponse:
+    await _ensure_equipment_visible(db, equipment_id, ctx)
     rows, total = await repo.get_consumption_history_by_equipment(
         db, equipment_id, page=page, page_size=page_size,
     )
@@ -424,6 +440,7 @@ async def get_available_spare_parts(
     """获取该设备可用的备件：
     未关联设备的备件（全局可用）+ 关联了此设备的备件
     """
+    await _ensure_equipment_visible(db, equipment_id, ctx)
     spare_parts = await repo.get_available_spare_parts(db, equipment_id)
     return success_response(
         data=[SparePartResponse.model_validate(sp) for sp in spare_parts],

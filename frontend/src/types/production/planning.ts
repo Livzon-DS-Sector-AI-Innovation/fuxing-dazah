@@ -115,6 +115,9 @@ export interface PlanItem {
   product_name: string
   route_id: string | null
   equipment_id: string | null
+  /** 服务端在关联时保存的设备编号/名称快照；历史计划项可能为空。 */
+  equipment_no?: string | null
+  equipment_name?: string | null
   planned_quantity: number | null
   unit: string | null
   batch_no: string | null
@@ -206,6 +209,8 @@ export interface ScheduleViewItem {
   product_id: string
   product_name: string
   equipment_id: string | null
+  equipment_no?: string | null
+  equipment_name?: string | null
   planned_quantity: number | null
   unit: string | null
   batch_no: string | null

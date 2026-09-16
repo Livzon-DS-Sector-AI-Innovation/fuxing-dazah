@@ -39,6 +39,7 @@ export interface QaSourceReference {
   is_deleted?: boolean
   category?: string | null
   is_product?: boolean
+  source?: 'own_scope' | 'shared' | string | null
 }
 
 export interface QaMasterSource {

@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -377,22 +377,42 @@ async def equipment_exists(db: AsyncSession, equipment_id: uuid.UUID) -> bool:
     return bool(result.scalar())
 
 
-async def get_equipment_by_id(
-    db: AsyncSession,
-    equipment_id: uuid.UUID,
-) -> Equipment | None:
-    """根据ID获取设备"""
-    result = await db.execute(
+def _equipment_detail_query() -> Select[Any]:
+    """设备详情基础查询（预加载分类/位置，排除已删除）。"""
+    return (
         select(Equipment)
         .options(
             selectinload(Equipment.category_links).selectinload(EquipmentCategoryLink.category),
             selectinload(Equipment.location),
         )
-        .where(
-            Equipment.id == equipment_id,
-            Equipment.is_deleted == False,  # noqa: E712
-        )
+        .where(Equipment.is_deleted == False)  # noqa: E712
     )
+
+
+async def get_equipment_unscoped(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+) -> Equipment | None:
+    """按 ID 读取设备，**不做数据范围过滤**。
+
+    仅限已完成归属校验的内部路径或系统任务使用；任何来自用户请求的读取都必须走
+    get_equipment_by_id(db, equipment_id, ctx)，否则等于把设备台账摊给整个公司。
+    """
+    result = await db.execute(
+        _equipment_detail_query().where(Equipment.id == equipment_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_equipment_by_id(
+    db: AsyncSession,
+    equipment_id: uuid.UUID,
+    ctx: EquipmentAccessContext,
+) -> Equipment | None:
+    """根据 ID 获取设备，套用设备台账数据范围（范围外一律视为不存在）。"""
+    query = _equipment_detail_query().where(Equipment.id == equipment_id)
+    query = apply_equipment_scope(query, ctx, Equipment.department_id, "department_id")
+    result = await db.execute(query)
     return result.scalar_one_or_none()
 
 
@@ -480,8 +500,8 @@ async def update_equipment(
     data: dict[str, Any],
     category_ids: list[uuid.UUID] | None = None,
 ) -> Equipment | None:
-    """更新设备"""
-    equipment = await get_equipment_by_id(db, equipment_id)
+    """更新设备（归属校验由 service 层在调用前完成）"""
+    equipment = await get_equipment_unscoped(db, equipment_id)
     if not equipment:
         return None
 
@@ -534,8 +554,8 @@ async def delete_equipment(
     db: AsyncSession,
     equipment_id: uuid.UUID,
 ) -> bool:
-    """删除设备（软删除）"""
-    equipment = await get_equipment_by_id(db, equipment_id)
+    """删除设备（软删除；归属校验由 service 层在调用前完成）"""
+    equipment = await get_equipment_unscoped(db, equipment_id)
     if not equipment:
         return False
     equipment.is_deleted = True

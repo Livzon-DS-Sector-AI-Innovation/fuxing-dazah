@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import time as app_time
+from app.core.exceptions import NotFoundException
 from app.modules.equipment.deps import EquipmentAccessContext
 from app.modules.equipment.models import EquipmentStatusLog
 from app.modules.equipment.repository import status_log as repo
@@ -90,8 +91,18 @@ def compute_status_durations(
 async def get_status_logs(
     db: AsyncSession,
     equipment_id: uuid.UUID,
+    ctx: EquipmentAccessContext | None = None,
 ) -> list[EquipmentStatusLogItem]:
-    """获取单台设备的状态变更历史"""
+    """获取单台设备的状态变更历史。
+
+    用户触发的调用传入设备台账上下文，先验证设备本身处于可见范围，
+    再读取日志；否则仅知道 UUID 也不能探测其他部门的状态历史。
+    """
+    if ctx is not None:
+        from app.modules.equipment.repository.equipment import get_equipment_by_id
+
+        if await get_equipment_by_id(db, equipment_id, ctx) is None:
+            raise NotFoundException("设备", str(equipment_id))
     logs = await repo.get_status_logs_by_equipment(db, equipment_id)
     return [EquipmentStatusLogItem.model_validate(log) for log in logs]
 

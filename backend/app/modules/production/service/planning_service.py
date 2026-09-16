@@ -19,7 +19,12 @@ if TYPE_CHECKING:
         PlanOrderChangeRequest,
     )
 
-from app.core.exceptions import AppException, DuplicateException, NotFoundException
+from app.core.exceptions import (
+    AppException,
+    DuplicateException,
+    ForbiddenException,
+    NotFoundException,
+)
 from app.modules.production import repository as repo
 from app.modules.production.models import Batch
 from app.modules.production.models.planning import (
@@ -55,6 +60,59 @@ from app.modules.production.service.route_service import require_published_route
 from app.platform.identity.models import User
 
 logger = logging.getLogger(__name__)
+
+_EQUIPMENT_TARGET_MODULE = "production"
+
+
+async def _resolve_plan_equipment(
+    db: AsyncSession,
+    equipment_id: str | None,
+    user: User | None,
+) -> Any | None:
+    """解析计划项设备并校验 production 模块引用权限。
+
+    计划项历史上也允许保存产线字符串（如 ``EQ-1``），因此非 UUID 标识
+    继续按旧语义保留；来自设备选择器的 UUID 则必须经过 equipment 公共授权
+    契约。服务端只使用返回摘要生成快照，忽略客户端提供的名称/编号。
+    """
+    if not equipment_id:
+        return None
+    try:
+        equipment_uuid = uuid.UUID(str(equipment_id))
+    except (TypeError, ValueError, AttributeError):
+        # 兼容旧的产线/设备编码，真实设备 UUID 不会走此分支。
+        return None
+
+    rows: list[Any]
+    # user=None 只代表受信任内部任务；统一通过公共契约，由 equipment 模块
+    # 自己决定跳过用户数据范围但仍排除软删除/报废设备。
+    from app.modules.equipment.public_api import validate_equipment_references
+
+    rows = await validate_equipment_references(
+        db,
+        user,
+        _EQUIPMENT_TARGET_MODULE,
+        [equipment_uuid],
+        auto_publish_owned=True,
+    )
+    if not rows:
+        # 公共校验契约对缺失、越权、撤销和不可用设备统一返回无权结果；
+        # 不把“未返回摘要”降级成 404，避免通过响应差异探测设备存在性。
+        raise ForbiddenException("设备不可用或无权关联")
+    brief = rows[0]
+    if hasattr(brief, "is_active") and not bool(brief.is_active):
+        raise AppException(status_code=403, message="设备不可用或无权关联")
+    return brief
+
+
+def _equipment_snapshot(brief: Any | None) -> tuple[str | None, str | None]:
+    """从设备摘要提取编号/名称快照。"""
+    if brief is None:
+        return None, None
+    return (
+        str(getattr(brief, "equipment_no", "")) or None,
+        str(getattr(brief, "name", "")) or None,
+    )
 
 # ═══════════════════════════════════════════
 # 辅助
@@ -585,6 +643,18 @@ async def change_plan_order(
                 if ci.batch_no is not None and ci.batch_no != item.batch_no:
                     await _check_batch_no_unique(db, ci.batch_no, ci.id)
                 update_data = ci.model_dump(exclude_unset=True, exclude={"id"})
+                # 设备 UUID 变更必须通过 production 引用授权；快照始终由
+                # 服务端摘要覆盖，不能信任请求体中的名称/编号。
+                # 同样只在设备真正变化时校验（表单会原样回传 equipment_id）。
+                equipment_changed = (
+                    "equipment_id" in update_data
+                    and update_data["equipment_id"] != item.equipment_id
+                )
+                equipment_brief = None
+                if equipment_changed:
+                    equipment_brief = await _resolve_plan_equipment(
+                        db, update_data["equipment_id"], user,
+                    )
                 # 已生成批次的计划项禁止改路线：批次 route_id 创建时锁定，
                 # 只改计划项会造成"计划显示 B、执行仍在 A"的假象。
                 if (
@@ -609,6 +679,10 @@ async def change_plan_order(
                 qty_changed = "planned_quantity" in update_data
                 for field, value in update_data.items():
                     setattr(item, field, value)
+                if equipment_changed:
+                    item.equipment_no, item.equipment_name = _equipment_snapshot(
+                        equipment_brief,
+                    )
                 item.updated_by = user.id if user else None
                 if qty_changed:
                     batch = item_batch_map.get(ci.id)
@@ -638,6 +712,10 @@ async def change_plan_order(
                 item_no = max_no + 1
                 # 未显式配置工段时长时不快照计划单 stage_config，展示时继承（改配置自动生效）
                 stage_durations = _stage_config_to_dict(ci.stage_durations)
+                equipment_brief = await _resolve_plan_equipment(
+                    db, ci.equipment_id, user,
+                )
+                equipment_no, equipment_name = _equipment_snapshot(equipment_brief)
                 new_item = PlanItem(
                     plan_order_id=order_id,
                     item_no=item_no,
@@ -645,6 +723,8 @@ async def change_plan_order(
                     product_name=ci.product_name or "",
                     route_id=route_id,
                     equipment_id=ci.equipment_id,
+                    equipment_no=equipment_no,
+                    equipment_name=equipment_name,
                     planned_quantity=ci.planned_quantity,
                     unit=ci.unit,
                     batch_no=ci.batch_no,
@@ -851,6 +931,10 @@ async def create_plan_item(
         )
     # 未显式配置工段时长时不快照计划单 stage_config，展示时继承（改配置自动生效）
     stage_durations = _stage_config_to_dict(payload.stage_durations)
+    equipment_brief = await _resolve_plan_equipment(
+        db, payload.equipment_id, user,
+    )
+    equipment_no, equipment_name = _equipment_snapshot(equipment_brief)
     item = PlanItem(
         plan_order_id=order_id,
         item_no=item_no,
@@ -858,6 +942,8 @@ async def create_plan_item(
         product_name=payload.product_name,
         route_id=route_id,
         equipment_id=payload.equipment_id,
+        equipment_no=equipment_no,
+        equipment_name=equipment_name,
         planned_quantity=payload.planned_quantity,
         unit=payload.unit,
         batch_no=payload.batch_no,
@@ -882,6 +968,17 @@ async def update_plan_item(
     if payload.batch_no is not None:
         await _check_batch_no_unique(db, payload.batch_no, item.id)
     update_data = payload.model_dump(exclude_unset=True)
+    # 只有真正换绑设备才重新校验引用：编辑表单会把原 equipment_id 原样回传，
+    # 若对未变化的设备也走引用校验，授权被撤的历史计划项将永远存不了（403）。
+    equipment_changed = (
+        "equipment_id" in update_data
+        and update_data["equipment_id"] != item.equipment_id
+    )
+    equipment_brief = None
+    if equipment_changed:
+        equipment_brief = await _resolve_plan_equipment(
+            db, update_data["equipment_id"], user,
+        )
     # 计划只能绑定已发布路线（草稿未定稿、归档已退役）
     if "route_id" in update_data and update_data["route_id"] is not None:
         product_id = update_data.get("product_id", item.product_id)
@@ -890,6 +987,10 @@ async def update_plan_item(
         )
     for field, value in update_data.items():
         setattr(item, field, value)
+    if equipment_changed:
+        item.equipment_no, item.equipment_name = _equipment_snapshot(
+            equipment_brief,
+        )
     item.updated_by = user.id if user else None
     await db.flush()
     refreshed = await repo.get_plan_item(db, item_id)
@@ -988,12 +1089,30 @@ async def schedule_plan_item(
         raise NotFoundException("计划项", str(item_id))
     if item.status not in ("draft", "scheduled"):
         raise AppException(status_code=400, message="仅 draft/scheduled 状态的计划项可排程")
+    # 先校验设备，再修改时间/排序字段，避免校验失败时在同一 session
+    # 留下尚未 flush 的半更新状态。
+    # 排程表单会原样回传当前 equipment_id，因此只在设备真正变化时才校验：
+    # 撤销授权仅阻断换绑路径，历史计划项因此仍可继续排程展示（与下方同口径）。
+    equipment_changed = (
+        payload.equipment_id is not None
+        and payload.equipment_id != item.equipment_id
+    )
+    equipment_brief = None
+    if equipment_changed:
+        equipment_brief = await _resolve_plan_equipment(
+            db, payload.equipment_id, user,
+        )
+    # 只改时间/排序不属于新建或换绑，保留旧关联可操作；撤销授权仅阻断
+    # 显式传入设备 ID 的新建/换绑路径。历史计划项因此仍可继续排程展示。
     if payload.planned_start is not None:
         item.planned_start = payload.planned_start
     if payload.planned_end is not None:
         item.planned_end = payload.planned_end
-    if payload.equipment_id is not None:
+    if equipment_changed:
         item.equipment_id = payload.equipment_id
+        item.equipment_no, item.equipment_name = _equipment_snapshot(
+            equipment_brief,
+        )
     if payload.sort_order is not None:
         item.sort_order = payload.sort_order
     warnings: list[dict[str, object]] = []
@@ -1214,6 +1333,8 @@ async def get_schedule_view(
             product_id=item.product_id,
             product_name=item.product_name,
             equipment_id=item.equipment_id,
+            equipment_no=item.equipment_no,
+            equipment_name=item.equipment_name,
             planned_quantity=item.planned_quantity,
             unit=item.unit,
             batch_no=item.batch_no,

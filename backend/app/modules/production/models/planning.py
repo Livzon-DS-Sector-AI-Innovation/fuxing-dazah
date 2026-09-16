@@ -159,6 +159,12 @@ class PlanItem(BaseModel):
     equipment_id: Mapped[str | None] = mapped_column(
         String(100), nullable=True, comment="目标设备/产线"
     )
+    equipment_no: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, comment="目标设备编号快照"
+    )
+    equipment_name: Mapped[str | None] = mapped_column(
+        String(200), nullable=True, comment="目标设备名称快照"
+    )
     planned_quantity: Mapped[float | None] = mapped_column(Float, nullable=True, default=None, comment="计划产量")
     unit: Mapped[str | None] = mapped_column(String(20), nullable=True, default=None, comment="单位")
     planned_start: Mapped[datetime | None] = mapped_column(

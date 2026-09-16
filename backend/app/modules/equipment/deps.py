@@ -5,6 +5,7 @@
 """
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from fastapi import Depends
@@ -178,5 +179,27 @@ def require_equipment_access(*codes: str):
         db: AsyncSession = Depends(get_db),
     ) -> EquipmentAccessContext:
         return await build_access_context(db, user, resource=_resource)
+
+    return _dependency
+
+
+def require_equipment_reference_access() -> Callable[
+    ..., Awaitable[EquipmentAccessContext]
+]:
+    """要求设备引用管理权限，并按设备台账范围构建上下文。
+
+    ``require_equipment_access`` 默认使用权限码中的 resource 计算数据范围。
+    引用授权的资源是 ``reference``，但授权对象始终是设备台账中的设备；如果
+    直接复用默认依赖，某个仅配置了 reference 资源的角色可能意外获得与
+    ``equipment:asset`` 不一致的部门范围。因此这里先校验专用权限，再明确
+    使用 asset 范围，确保手工授权/撤销不能超出设备负责人可管理的设备。
+    """
+    perm_dep = require_permission("equipment:reference:manage")
+
+    async def _dependency(
+        user: User = Depends(perm_dep),
+        db: AsyncSession = Depends(get_db),
+    ) -> EquipmentAccessContext:
+        return await build_access_context(db, user, resource="asset")
 
     return _dependency
