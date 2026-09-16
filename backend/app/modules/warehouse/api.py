@@ -688,6 +688,28 @@ async def get_morning_briefing(
 
 # ── 库存 ──
 
+@router.get("/reports/batch-trace", summary="批次追溯报告")
+async def batch_trace(
+    material_code: str = Query(..., min_length=1),
+    batch_no: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),) -> JSONResponse:
+    return success_response(
+        await reports_service.get_batch_trace(db, material_code=material_code, batch_no=batch_no)
+    )
+
+
+@router.get("/reports/batch-trace/export", summary="批次追溯导出 Excel")
+async def batch_trace_export(
+    material_code: str = Query(..., min_length=1),
+    batch_no: str = Query(..., min_length=1),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),) -> Response:
+    trace = await reports_service.get_batch_trace(db, material_code=material_code, batch_no=batch_no)
+    content = reports_service.build_batch_trace_xlsx(trace)
+    return _xlsx_response(f"批次追溯-{material_code}-{batch_no}.xlsx", content)
+
+
 
 @router.get("/stocks", summary="现有库存分页列表")
 async def list_stocks(

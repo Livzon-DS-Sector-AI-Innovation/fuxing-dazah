@@ -182,3 +182,63 @@ async def get_stock_report(
     )
     items = list((await db.execute(stmt)).scalars().all())
     return items, int(total or 0)
+
+
+# ── 批次追溯（分期D Ticket 01） ──
+
+
+async def get_batch_trace(
+    db: AsyncSession, *, material_code: str, batch_no: str
+) -> dict[str, Any]:
+    """从批次出发的正查（出库去向）+ 反查（入库来源）完整流水。"""
+    stmt = (
+        select(WarehouseMovement)
+        .where(
+            WarehouseMovement.is_deleted == False,  # noqa: E712
+            WarehouseMovement.material_code == material_code,
+            WarehouseMovement.batch_no == batch_no,
+        )
+        .order_by(WarehouseMovement.occurred_at.desc())
+    )
+    movements = list((await db.execute(stmt)).scalars().all())
+    inbound_flows = []
+    outbound_flows = []
+    for mv in movements:
+        flow = {
+            "movement_no": mv.movement_no,
+            "direction": mv.direction,
+            "source_type": mv.source_type,
+            "quantity": float(mv.quantity),
+            "unit": mv.unit,
+            "location_name": mv.location_name,
+            "occurred_at": mv.occurred_at.isoformat() if mv.occurred_at else None,
+            "remark": mv.remark,
+        }
+        if mv.direction == "inbound":
+            inbound_flows.append(flow)
+        elif mv.direction == "outbound":
+            outbound_flows.append(flow)
+    return {
+        "material_code": material_code,
+        "batch_no": batch_no,
+        "inbound_flows": inbound_flows,
+        "outbound_flows": outbound_flows,
+    }
+
+
+def build_batch_trace_xlsx(trace: dict[str, Any]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "批次追溯"
+    ws.append(["方向", "单号", "发生时间", "数量", "单位", "库位", "来源/去向", "备注"])
+    for flow in trace["inbound_flows"] + trace["outbound_flows"]:
+        ws.append([
+            flow["direction"], flow["movement_no"],
+            flow["occurred_at"][:19] if flow["occurred_at"] else "",
+            flow["quantity"], flow["unit"], flow["location_name"],
+            flow["source_type"], flow["remark"] or "",
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -87,6 +87,10 @@ class WarehouseLocation(BaseModel):
 
     code: Mapped[str] = mapped_column(String(50), nullable=False, comment="库位编码")
     name: Mapped[str] = mapped_column(String(200), nullable=False, comment="库位名称")
+    zone: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="库区")
+    aisle: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="巷道/排")
+    shelf_row: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="货架行")
+    shelf_level: Mapped[str | None] = mapped_column(String(32), nullable=True, comment="货架层")
     location_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default="normal", server_default="normal",
         comment="类型: normal常温/cold冷藏/danger危险品",
