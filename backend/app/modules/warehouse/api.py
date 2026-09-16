@@ -18,6 +18,7 @@ from app.modules.warehouse import dashboard as dashboard_service
 from app.modules.warehouse import intelligence as intelligence_service
 from app.modules.warehouse import morning_report as morning_report_service
 from app.modules.warehouse import plans as plans_service
+from app.modules.warehouse import reconciliation as reconciliation_service
 from app.modules.warehouse import reports as reports_service
 from app.modules.warehouse import service
 from app.modules.warehouse.models import WarehouseMovement
@@ -47,6 +48,7 @@ from app.modules.warehouse.schemas import (
 from app.modules.warehouse.system_config_api import system_config_router
 from app.modules.warehouse.web_gateway import router as web_agent_router
 from app.modules.warehouse.web_quick_register import router as web_quick_register_router
+from app.modules.warehouse.web_reconciliation import router as web_reconciliation_router
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
@@ -56,6 +58,7 @@ router = create_module_router(MODULES_BY_CODE["warehouse"])
 router.include_router(system_config_router)
 router.include_router(web_agent_router)
 router.include_router(web_quick_register_router)
+router.include_router(web_reconciliation_router)
 
 
 def _clean(value: str | None) -> str | None:

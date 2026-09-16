@@ -12,6 +12,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -611,6 +612,76 @@ class WarehouseDailyBriefing(BaseModel):
     brief_date: Mapped[date] = mapped_column(Date, nullable=False, comment="晨报业务日")
     content: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}", comment="晨报内容 JSON"
+    )
+
+
+class WarehouseSyncCheckRun(BaseModel):
+    """对账运行：一次库存台账比对的批次记录。"""
+
+    __tablename__ = "sync_check_runs"
+    __table_args__ = (
+        Index("ix_warehouse_sync_check_runs_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="running", server_default="running",
+        comment="running/completed/failed",
+    )
+    total_local: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="本地总行数"
+    )
+    total_feishu: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="飞书总行数"
+    )
+    cnt_match: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="一致数"
+    )
+    cnt_missing_in_feishu: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="飞书缺失数"
+    )
+    cnt_mismatch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="数量不一致数"
+    )
+    cnt_missing_local: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="本地缺失数"
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, comment="失败原因")
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="耗时毫秒"
+    )
+
+
+class WarehouseSyncCheckResult(BaseModel):
+    """对账差异明细（仅落非 match 行）。"""
+
+    __tablename__ = "sync_check_results"
+    __table_args__ = (
+        Index("ix_warehouse_sync_check_results_run", "run_id"),
+        Index("ix_warehouse_sync_check_results_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.sync_check_runs.id"),
+        nullable=False,
+        comment="关联运行",
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False,
+        comment="missing_in_feishu/mismatch/missing_local",
+    )
+    material_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="物料编码")
+    material_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="物料名称")
+    batch_no: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default="", comment="批次号"
+    )
+    local_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True, comment="本地数量")
+    feishu_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True, comment="飞书数量")
+    feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="飞书记录 ID")
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="差异详情"
     )
 
 

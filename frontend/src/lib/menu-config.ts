@@ -352,6 +352,7 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "intelligence", label: "智能中心", path: "/warehouse/intelligence" },
       { key: "quick-register", label: "快速登记", path: "/warehouse/quick-register" },
       { key: "reports", label: "报表中心", path: "/warehouse/reports" },
+      { key: "reconciliation", label: "对账中心", path: "/warehouse/reconciliation" },
       { key: "inventory", label: "库存管理", path: "/warehouse/inventory" },
       { key: "inout", label: "出入库记录", path: "/warehouse/inout" },
       { key: "stocktake", label: "库存盘点", path: "/warehouse/stocktake" },
