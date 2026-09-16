@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -49,6 +49,7 @@ from app.modules.quality.repository import (
     get_task_attachment,
     get_test_task,
     get_test_task_by_batch,
+    get_test_task_by_batch_number,
     list_coa_bindings,
     list_inspection_records,
     list_report_records,
@@ -59,6 +60,7 @@ from app.modules.quality.repository import (
     list_unqualified_events,
     update_standard_document,
     update_standard_item,
+    update_test_task_report_date,
     update_unqualified_event_handled,
     upsert_coa_binding,
 )
@@ -80,7 +82,11 @@ from app.modules.quality.schemas import (
     TestTaskStatusUpdate,
     UploadLcResponse,
 )
-from app.modules.quality.service import lc_report_service, test_task_service
+from app.modules.quality.service import (
+    _norm_date_str,
+    lc_report_service,
+    test_task_service,
+)
 from app.modules.quality.standard_doc_parser import (
     extract_text_async,
     parse_standard_doc,
@@ -817,12 +823,55 @@ async def summary_matrix(
     product_name: str | None = Query(default=None, description="产品名称"),
     date_from: str | None = Query(default=None, description="起始日期 YYYY-MM-DD"),
     date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
+    include_in_progress: bool = Query(default=False, description="包含填报中的批次"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
     data = await test_task_service.build_summary_matrix(
         db, product_name=product_name, date_from=date_from, date_to=date_to,
+        include_in_progress=include_in_progress,
     )
     return success_response(data=data)
+
+
+@router.get("/summary/matrix/export", summary="导出 QC 汇总表 Excel")
+async def summary_matrix_export(
+    product_name: str | None = Query(default=None, description="产品名称"),
+    date_from: str | None = Query(default=None, description="起始日期 YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="结束日期 YYYY-MM-DD"),
+    include_in_progress: bool = Query(default=False, description="包含填报中的批次"),
+    db: AsyncSession = Depends(get_db),
+):
+    import io as _io
+
+    import openpyxl
+
+    data = await test_task_service.build_summary_matrix(
+        db, product_name=product_name, date_from=date_from, date_to=date_to,
+        include_in_progress=include_in_progress,
+    )
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "QC汇总表"
+    headers = ["产品名称", "批号", "生产日期", "状态", "判定"] + [c["name"] for c in data["columns"]]
+    ws.append(headers)
+    status_label = {"completed": "已完成", "pending_review": "待复核", "in_progress": "填报中"}
+    for r in data["rows"]:
+        row = [
+            r["product_name"], r["batch_number"], r["production_date"] or "",
+            status_label.get(r["status"], r["status"]), "合格" if r["all_pass"] else "不合格",
+        ]
+        for c in data["columns"]:
+            cell = r["cells"].get(c["name"])
+            row.append(f'{cell["value"]}{cell["unit"]}' if cell else "")
+        ws.append(row)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    encoded = quote("QC汇总表.xlsx")
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="matrix.xlsx"; filename*=UTF-8\'\'{encoded}'},
+    )
 
 
 @router.get("/summary/trend", summary="项目跨批次趋势（数值序列+限度参考）")
@@ -1519,6 +1568,51 @@ async def update_test_task_report_date_endpoint(
     return success_response(
         data=detail.model_dump(mode="json"),
         message="出报日期已更新" if payload.report_date else "出报日期已清空",
+    )
+
+
+@router.post("/tasks/report-date-batch", summary="批量补录出报日期（Excel：批号列+出报日期列）")
+async def batch_report_date_endpoint(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:task:fill")),
+) -> JSONResponse:
+    import io as _io
+
+    import openpyxl
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="文件为空")
+    try:
+        wb = openpyxl.load_workbook(_io.BytesIO(content))
+        ws = wb.active
+        raw_rows = list(ws.iter_rows(min_row=2, values_only=True))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Excel 解析失败") from None
+
+    updated = 0
+    skipped: list[str] = []
+    for row in raw_rows:
+        if not row or not row[0]:
+            continue
+        batch = str(row[0]).strip()
+        date_cell = row[1] if len(row) > 1 else None
+        if isinstance(date_cell, (datetime, date)):
+            report_date = date_cell.strftime("%Y-%m-%d")
+        elif date_cell:
+            report_date = _norm_date_str(str(date_cell).strip())
+        else:
+            report_date = None
+        task = await get_test_task_by_batch_number(db, batch)
+        if not task:
+            skipped.append(f"{batch}:未找到任务")
+            continue
+        await update_test_task_report_date(db, task.id, report_date)
+        updated += 1
+    return success_response(
+        data={"updated": updated, "skipped": skipped},
+        message=f"已更新 {updated} 个任务的出报日期" + (f"，跳过 {len(skipped)} 条" if skipped else ""),
     )
 
 

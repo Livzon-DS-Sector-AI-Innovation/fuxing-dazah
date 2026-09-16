@@ -682,16 +682,43 @@ export async function approveTaskReview(taskId: string, comment?: string): Promi
 }
 
 export async function fetchSummaryMatrix(
-  product_name?: string, date_from?: string, date_to?: string,
+  product_name?: string, date_from?: string, date_to?: string, include_in_progress?: boolean,
 ): Promise<{ data: SummaryMatrix }> {
   const qs = new URLSearchParams()
   if (product_name) qs.set('product_name', product_name)
   if (date_from) qs.set('date_from', date_from)
   if (date_to) qs.set('date_to', date_to)
+  if (include_in_progress) qs.set('include_in_progress', 'true')
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/matrix?${qs.toString()}`, {
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取汇总矩阵失败')
+  return res.json()
+}
+
+export async function exportSummaryMatrix(
+  product_name?: string, date_from?: string, date_to?: string, include_in_progress?: boolean,
+): Promise<Blob> {
+  const qs = new URLSearchParams()
+  if (product_name) qs.set('product_name', product_name)
+  if (date_from) qs.set('date_from', date_from)
+  if (date_to) qs.set('date_to', date_to)
+  if (include_in_progress) qs.set('include_in_progress', 'true')
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/matrix/export?${qs.toString()}`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('导出失败')
+  return res.blob()
+}
+
+export async function batchReportDates(formData: FormData): Promise<{ message: string; data: { updated: number; skipped: string[] } }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/report-date-batch`, {
+    method: 'POST', headers: await _authHeaders(), body: formData,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as any).detail || '批量补录失败')
+  }
   return res.json()
 }
 

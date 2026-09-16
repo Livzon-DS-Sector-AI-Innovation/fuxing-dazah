@@ -1,16 +1,24 @@
-"""出报日期当日机器人任务推送：每天定时把当天需出报的检验任务推送到配置的群。
+"""出报日期当日机器人任务推送：内容构建与发送（定时触发由 quality/scheduled.py 注册到平台统一调度引擎）。
 
-由 app/main.py 按 safety 调度先例最小挂载（模块级 loop + stop_flag）。
-- 08:05 早间推送：今日出报任务 + 待复核任务列表（填报中的任务另发填报卡片）
-- 15:00 午后催办：今日出报但尚未完成/复核的任务再提醒一次
+- 早报：今日出报任务 + 待复核任务列表（填报中的任务另发填报卡片）+ 标准文件到期提醒
+- 午后催办：今日出报但尚未完成/复核的任务再提醒一次
 """
 
-import asyncio
 import logging
-import os
-from datetime import datetime
+import re
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_effective_date(s: str | None) -> str | None:
+    """标准文档生效日期归一化：2026年03月05日 / 2026.03.05 → 2026-03-05。"""
+    if not s:
+        return None
+    m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", s)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return s.strip().replace(".", "-").replace("/", "-")
 
 
 def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
@@ -20,13 +28,6 @@ def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
         return int(h), int(m)
     except Exception:
         return default
-
-
-# 每天推送时间（服务器本地时区），环境变量可调
-_PUSH_HOUR, _PUSH_MINUTE = _parse_hhmm(os.getenv("QUALITY_PUSH_MORNING", ""), (8, 5))
-_REMIND_HOUR, _REMIND_MINUTE = _parse_hhmm(os.getenv("QUALITY_PUSH_REMIND", ""), (15, 0))
-
-stop_flag = asyncio.Event()
 
 
 async def _push_today_tasks() -> None:
@@ -84,13 +85,33 @@ async def _push_today_tasks() -> None:
             + f"\n  🔗 {_frontend_task_link(str(t.id))}"
             for t in review_items
         ]
-    if not lines and not review_lines:
+        # 标准文件到期提醒（30 天内）
+        from app.modules.quality.repository import list_standard_documents
+        from app.modules.quality.service import TestTaskService
+
+        expiring: list[str] = []
+        std_docs = await list_standard_documents(db)
+        for d in std_docs:
+            eff = _parse_effective_date(d.effective_date)
+            if not eff or not d.valid_years:
+                continue
+            expiry = TestTaskService._calc_expiry(eff, d.valid_years)
+            if not expiry:
+                continue
+            days_left = (date.fromisoformat(expiry) - date.today()).days
+            if 0 <= days_left <= 30:
+                expiring.append(
+                    f"- {d.file_no}（{d.product_name}）{expiry} 到期（剩 {days_left} 天）"
+                )
+    if not lines and not review_lines and not expiring:
         return
     blocks: list[str] = []
     if lines:
         blocks.append(f"📅 今日出报任务（{today}）：\n" + "\n".join(lines))
     if review_lines:
         blocks.append(f"🔍 待复核任务（{len(review_lines)} 项，请专员进系统审核）：\n" + "\n".join(review_lines))
+    if expiring:
+        blocks.append("⏳ 标准文件到期提醒：\n" + "\n".join(expiring))
     text = "\n\n".join(blocks)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
         await send_chat_text(chat_id, text)
@@ -144,29 +165,3 @@ async def _push_afternoon_reminder() -> None:
         await send_chat_text(chat_id, text)
 
 
-async def daily_report_push_loop() -> None:
-    """每日定时推送（08:05 早报 + 15:00 催办，各每天一次；停止由 stop_flag 控制）。"""
-    pushed_morning: set[str] = set()
-    pushed_afternoon: set[str] = set()
-    while not stop_flag.is_set():
-        try:
-            now = datetime.now()
-            today = now.strftime("%Y-%m-%d")
-            if (
-                now.hour == _PUSH_HOUR
-                and now.minute == _PUSH_MINUTE
-                and today not in pushed_morning
-            ):
-                pushed_morning.add(today)
-                await _push_today_tasks()
-            if (
-                now.hour == _REMIND_HOUR
-                and now.minute == _REMIND_MINUTE
-                and today not in pushed_afternoon
-            ):
-                pushed_afternoon.add(today)
-                await _push_afternoon_reminder()
-            await asyncio.sleep(20)
-        except Exception:
-            logger.exception("出报日期每日推送失败")
-            await asyncio.sleep(60)

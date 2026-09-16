@@ -156,7 +156,7 @@ export interface SummaryMatrixRow {
 }
 
 export interface SummaryMatrix {
-  columns: string[]
+  columns: { name: string; sop_no: string | null }[]
   rows: SummaryMatrixRow[]
 }
 

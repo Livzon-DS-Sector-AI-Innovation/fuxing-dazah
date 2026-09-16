@@ -1287,16 +1287,19 @@ class TestTaskService:
         product_name: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        include_in_progress: bool = False,
     ) -> dict[str, Any]:
-        """QC 汇总表矩阵：行=批次（已完成/待复核），列=全部检验项目横向列出。
+        """QC 汇总表矩阵：行=批次，列=全部检验项目横向列出（含 SOP 分组信息）。
 
         单元格为数值结果（带单位与判定）；未判定/未覆盖项目为空。
+        include_in_progress=True 时包含填报中的批次（已填显示、未填留空）。
         """
         from datetime import datetime as _dt
 
+        statuses = ["completed", "pending_review"] + (["in_progress"] if include_in_progress else [])
         stmt = select(QualityTestTask).where(
             QualityTestTask.is_deleted == False,  # noqa: E712
-            QualityTestTask.status.in_(["completed", "pending_review"]),
+            QualityTestTask.status.in_(statuses),
         )
         if product_name:
             stmt = stmt.where(QualityTestTask.product_name == product_name)
@@ -1307,7 +1310,7 @@ class TestTaskService:
         stmt = stmt.order_by(QualityTestTask.production_date.asc().nulls_last(), QualityTestTask.batch_number)
         tasks = list((await db.execute(stmt)).scalars())
 
-        columns: list[str] = []
+        columns: list[dict[str, str | None]] = []
         seen_cols: set[str] = set()
         rows: list[dict[str, Any]] = []
         for t in tasks:
@@ -1320,7 +1323,7 @@ class TestTaskService:
                 key = r.item_name
                 if key not in seen_cols:
                     seen_cols.add(key)
-                    columns.append(key)
+                    columns.append({"name": key, "sop_no": r.sop_no or None})
                 value: Any = r.result_value if r.result_value is not None else (r.result_text or "")
                 cells[key] = {
                     "value": value,

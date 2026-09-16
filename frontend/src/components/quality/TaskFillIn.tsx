@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Upload,
 } from 'antd'
 import {
-  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined,
+  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
@@ -13,7 +13,7 @@ import { usePermission } from '@/hooks/usePermission'
 import type { TestTaskListItem, TestTaskStatus } from '@/types/quality'
 import {
   fetchTestTasks, createTestTask, updateTestTaskStatus, deleteTestTask,
-  updateTestTaskReportDate,
+  updateTestTaskReportDate, batchReportDates,
   fetchStandardDocuments, fetchStandardItems,
   type StandardDocument,
 } from '@/actions/quality'
@@ -347,6 +347,29 @@ export default function TaskFillIn() {
         <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
+        )}
+        {canFill && (
+          <Upload
+            accept=".xlsx,.xls"
+            showUploadList={false}
+            beforeUpload={async (file) => {
+              const formData = new FormData()
+              formData.append('file', file)
+              try {
+                const res = await batchReportDates(formData)
+                message.success(res.message || '批量补录完成')
+                if (res.data?.skipped?.length) {
+                  message.warning(`跳过：${res.data.skipped.slice(0, 5).join('；')}`)
+                }
+                load(page)
+              } catch (err: any) {
+                message.error(err.message || '批量补录失败')
+              }
+              return false
+            }}
+          >
+            <Button icon={<UploadOutlined />}>批量补录出报日期</Button>
+          </Upload>
         )}
       </Space>
 

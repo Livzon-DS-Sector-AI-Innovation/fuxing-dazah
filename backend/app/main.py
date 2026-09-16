@@ -118,11 +118,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     quality_ws_task = asyncio.create_task(quality_feishu_ws.start_ws())
 
-    # ── 质量模块出报日期每日推送（当日需出报任务的群提醒）──
-    from app.modules.quality.feishu import daily_push as quality_daily_push
-
-    quality_daily_push_task = asyncio.create_task(quality_daily_push.daily_report_push_loop())
-
     # ── 安全模块启动时 Bitable 漏单恢复（后台执行，不阻塞启动）──
     from app.modules.safety.feishu.catch_up import recover_unprocessed_records
 
@@ -162,6 +157,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
 
+    from app.modules.quality.scheduled import (
+        AFTERNOON_REMIND_TASK,
+        MORNING_PUSH_TASK,
+    )
+    scheduler_registry.register_task(MORNING_PUSH_TASK)
+    scheduler_registry.register_task(AFTERNOON_REMIND_TASK)
+
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK
         scheduler_registry.register_task(TITLE_REVIEW_SYNC_TASK)
@@ -189,10 +191,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 停止质量模块 WebSocket
     await quality_feishu_ws.stop_ws()
     quality_ws_task.cancel()
-
-    # 停止质量模块出报日期每日推送
-    quality_daily_push.stop_flag.set()
-    quality_daily_push_task.cancel()
 
     # 停止定时任务调度引擎
     stop_scheduled_task_flag.set()
