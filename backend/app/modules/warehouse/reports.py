@@ -184,7 +184,47 @@ async def get_stock_report(
     return items, int(total or 0)
 
 
-# ── 批次追溯（分期D Ticket 01） ──
+# ── 库位地图（分期D Ticket 02） ──
+
+
+async def get_location_map(db: AsyncSession) -> list[dict[str, Any]]:
+    """按 zone→aisle 分组返回库位与占用信息（库位地图数据源）。"""
+    from app.modules.warehouse.models import WarehouseLocation
+
+    stmt = (
+        select(WarehouseLocation)
+        .where(WarehouseLocation.is_deleted == False)  # noqa: E712
+        .order_by(WarehouseLocation.zone, WarehouseLocation.aisle, WarehouseLocation.code)
+    )
+    locations = list((await db.execute(stmt)).scalars().all())
+
+    stock_stmt = (
+        select(
+            WarehouseStock.location_id,
+            func.count().label("rows"),
+            func.coalesce(func.sum(WarehouseStock.quantity), 0).label("qty"),
+        )
+        .where(WarehouseStock.is_deleted == False, WarehouseStock.quantity > 0)  # noqa: E712
+        .group_by(WarehouseStock.location_id)
+    )
+    occupancy = {
+        r[0]: {"rows": int(r[1]), "qty": float(r[2])}
+        for r in (await db.execute(stock_stmt)).all()
+    }
+
+    return [
+        {
+            "id": str(loc.id),
+            "code": loc.code,
+            "name": loc.name,
+            "zone": loc.zone or "未分区",
+            "aisle": loc.aisle or "-",
+            "location_type": loc.location_type,
+            "occupied_rows": occupancy.get(loc.id, {}).get("rows", 0),
+            "total_qty": occupancy.get(loc.id, {}).get("qty", 0.0),
+        }
+        for loc in locations
+    ]
 
 
 async def get_batch_trace(

@@ -59,12 +59,20 @@ class LocationCreate(BaseModel):
     code: str = Field(..., min_length=1, max_length=50, description="库位编码")
     name: str = Field(..., min_length=1, max_length=200, description="库位名称")
     location_type: LocationType = Field(default="normal", description="库位类型")
+    zone: str | None = Field(default=None, max_length=32, description="库区")
+    aisle: str | None = Field(default=None, max_length=32, description="巷道/排")
+    shelf_row: str | None = Field(default=None, max_length=32, description="货架行")
+    shelf_level: str | None = Field(default=None, max_length=32, description="货架层")
     remark: str | None = Field(default=None, description="备注")
 
 
 class LocationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     location_type: LocationType | None = None
+    zone: str | None = None
+    aisle: str | None = None
+    shelf_row: str | None = None
+    shelf_level: str | None = None
     remark: str | None = None
 
 
@@ -73,6 +81,10 @@ class LocationResponse(BaseModel):
     code: str
     name: str
     location_type: str
+    zone: str | None = None
+    aisle: str | None = None
+    shelf_row: str | None = None
+    shelf_level: str | None = None
     remark: str | None
     created_at: datetime
     updated_at: datetime

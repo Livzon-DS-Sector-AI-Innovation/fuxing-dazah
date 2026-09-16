@@ -649,6 +649,22 @@ async def nl_export(
     return resp
 
 
+@router.get("/locations/map", summary="库位地图数据（按 zone→aisle 分组）")
+async def location_map(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_location_map(db))
+
+
+@router.get("/locations/recommend", summary="入库推荐库位（占用率最低 Top 5）")
+async def recommend_locations(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:stock:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_location_map(db))
+
+
 @router.get("/reports/briefings", summary="晨报历史列表")
 async def list_morning_briefings(
     limit: int = Query(default=30, ge=1, le=90),

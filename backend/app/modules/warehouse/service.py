@@ -135,6 +135,10 @@ async def create_location(
         code=payload.code.strip(),
         name=payload.name.strip(),
         location_type=payload.location_type,
+        zone=payload.zone,
+        aisle=payload.aisle,
+        shelf_row=payload.shelf_row,
+        shelf_level=payload.shelf_level,
         remark=payload.remark,
         created_by=user.id if user else None,
     )
