@@ -202,4 +202,37 @@ PERMISSIONS: list[PermissionDef] = [
         action="cancel",
         description="取消未完成的出入库计划单（必填原因）",
     ),
+    # ── 智能中心（分期B） ──
+    PermissionDef(
+        code="warehouse:intelligence:read",
+        name="查看智能中心",
+        module="warehouse",
+        resource="intelligence",
+        action="read",
+        description="查看异常检测、预警规则与解读",
+    ),
+    PermissionDef(
+        code="warehouse:intelligence:update",
+        name="处理异常与调整预警",
+        module="warehouse",
+        resource="intelligence",
+        action="update",
+        description="标记异常已处理、手动扫描、调整预警阈值",
+    ),
+    PermissionDef(
+        code="warehouse:replenishment:read",
+        name="查看补货建议",
+        module="warehouse",
+        resource="replenishment",
+        action="read",
+        description="查看补货建议列表",
+    ),
+    PermissionDef(
+        code="warehouse:replenishment:update",
+        name="处理补货建议",
+        module="warehouse",
+        resource="replenishment",
+        action="update",
+        description="标记补货建议已处理/忽略",
+    ),
 ]

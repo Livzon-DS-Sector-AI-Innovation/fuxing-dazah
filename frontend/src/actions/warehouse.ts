@@ -45,6 +45,12 @@ import {
   generatePlanMovement as apiGeneratePlanMovement,
 } from '@/lib/api/warehouse'
 import {
+  updateIntelligenceRule as apiUpdateIntelligenceRule,
+  resolveAlertRecord as apiResolveAlertRecord,
+  runIntelligenceScan as apiRunIntelligenceScan,
+  setSuggestionStatus as apiSetSuggestionStatus,
+} from '@/lib/api/warehouse-intelligence'
+import {
   MaterialCreate,
   MaterialFilter,
   MaterialUpdate,
@@ -323,5 +329,40 @@ export async function generatePlanMovementAction(
   const result = await apiGeneratePlanMovement(planId, payload)
   revalidatePath('/warehouse/board')
   revalidatePath('/warehouse/inventory')
+  return result
+}
+
+
+// ═══════════════════════════════════════════
+// 智能中心（分期B）—— 写操作一律走 Server Actions
+// ═══════════════════════════════════════════
+
+export async function updateIntelligenceRuleAction(
+  ruleKey: string,
+  payload: { threshold?: Record<string, number>; enabled?: boolean },
+) {
+  const result = await apiUpdateIntelligenceRule(ruleKey, payload)
+  revalidatePath("/warehouse/intelligence")
+  return result
+}
+
+export async function resolveIntelligenceAlert(recordId: string) {
+  const result = await apiResolveAlertRecord(recordId)
+  revalidatePath("/warehouse/intelligence")
+  return result
+}
+
+export async function runIntelligenceScanAction() {
+  const result = await apiRunIntelligenceScan()
+  revalidatePath("/warehouse/intelligence")
+  return result
+}
+
+export async function setSuggestionStatusAction(
+  suggestionId: string,
+  status: "handled" | "ignored",
+) {
+  const result = await apiSetSuggestionStatus(suggestionId, status)
+  revalidatePath("/warehouse/intelligence")
   return result
 }

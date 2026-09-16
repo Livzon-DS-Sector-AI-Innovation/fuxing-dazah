@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import app
@@ -177,19 +177,70 @@ async def test_movement_trend_fills_missing_days(dashboard_client: AsyncClient) 
     assert trend[-1]["date"] == datetime.now(CN_TZ).strftime("%Y-%m-%d")
 
 
+async def _movement_baseline(db: AsyncSession, direction: str, days_ago: int) -> float:
+    """基线：指定方向、N 天前（北京时间业务日）的出库量合计。"""
+    from app.modules.warehouse.dashboard import CN_TZ
+
+    day = datetime.now(CN_TZ).date() - timedelta(days=days_ago)
+    start = datetime.combine(day, datetime.min.time(), tzinfo=CN_TZ)
+    end = start + timedelta(days=1)
+    total = await db.scalar(
+        select(func.coalesce(func.sum(WarehouseMovement.quantity), 0)).where(
+            WarehouseMovement.is_deleted == False,  # noqa: E712
+            WarehouseMovement.direction == direction,
+            WarehouseMovement.occurred_at >= start,
+            WarehouseMovement.occurred_at < end,
+        )
+    )
+    return float(total or 0)
+
+
+async def _stock_baseline(db: AsyncSession) -> tuple[Decimal, dict[str, Decimal]]:
+    """种子前基线：库存总量与按分类合计（对外部残留数据鲁棒的差值断言用）。"""
+    total = (
+        await db.scalar(
+            select(func.coalesce(func.sum(WarehouseStock.quantity), 0)).where(
+                WarehouseStock.is_deleted == False,  # noqa: E712
+            )
+        )
+    ) or Decimal("0")
+    rows = (
+        await db.execute(
+            select(
+                WarehouseMaterial.category,
+                func.coalesce(func.sum(WarehouseStock.quantity), 0),
+            )
+            .select_from(WarehouseStock)
+            .join(WarehouseMaterial, WarehouseMaterial.id == WarehouseStock.material_id)
+            .where(WarehouseStock.is_deleted == False, WarehouseMaterial.is_deleted == False)  # noqa: E712
+            .group_by(WarehouseMaterial.category)
+        )
+    ).all()
+    return Decimal(str(total)), {r[0]: Decimal(str(r[1])) for r in rows}
+
+
 async def test_dashboard_summary(
     dashboard_client: AsyncClient, db_session: AsyncSession
 ) -> None:
     try:
+        baseline, _ = await _stock_baseline(db_session)
+        # 出入库基线（今日/昨日，真机验收残留数据鲁棒）
+        base_today_in = await _movement_baseline(db_session, "inbound", 0)
+        base_today_out = await _movement_baseline(db_session, "outbound", 0)
+        base_yest_in = await _movement_baseline(db_session, "inbound", 1)
+
         await _seed(db_session)
         resp = await dashboard_client.get("/api/v1/warehouse/dashboard/summary")
         assert resp.status_code == 200
         data = resp.json()["data"]
 
-        assert Decimal(str(data["total_quantity"])) == Decimal("618")  # 30+500+88
-        assert data["today_inbound_quantity"] == 40.0
-        assert data["today_outbound_quantity"] == 5.0
-        assert data["yesterday_inbound_quantity"] == 20.0
+        # 差值断言：对库中已有数据（如真机验收残留）鲁棒
+        assert (
+            Decimal(str(data["total_quantity"])) - baseline == Decimal("618")
+        )  # 30+500+88
+        assert data["today_inbound_quantity"] == base_today_in + 40.0
+        assert data["today_outbound_quantity"] == base_today_out + 5.0
+        assert data["yesterday_inbound_quantity"] == base_yest_in + 20.0
         # 环比基于快照：今日快照 480 - 昨日快照 460 = +20
         assert data["total_quantity_change"] == pytest.approx(20.0)
         assert data["summary_text"]
@@ -202,16 +253,18 @@ async def test_stock_distribution(
     dashboard_client: AsyncClient, db_session: AsyncSession
 ) -> None:
     try:
+        baseline, base_by_category = await _stock_baseline(db_session)
         await _seed(db_session)
         resp = await dashboard_client.get("/api/v1/warehouse/dashboard/stock-distribution")
         assert resp.status_code == 200
         data = resp.json()["data"]
 
         by_category = {item["category"]: float(item["total_quantity"]) for item in data["by_category"]}
-        assert by_category["raw"] == pytest.approx(118.0)  # 30 + 88
-        assert by_category["packaging"] == pytest.approx(500.0)
+        # 差值断言：对库中已有数据鲁棒
+        assert by_category["raw"] == pytest.approx(float(base_by_category.get("raw", 0)) + 118.0)
+        assert by_category["packaging"] == pytest.approx(float(base_by_category.get("packaging", 0)) + 500.0)
         by_type = {item["location_type"]: float(item["total_quantity"]) for item in data["by_location_type"]}
-        assert by_type["normal"] == pytest.approx(618.0)
+        assert by_type["normal"] == pytest.approx(float(baseline) + 618.0)
     finally:
         await _cleanup(db_session)
 

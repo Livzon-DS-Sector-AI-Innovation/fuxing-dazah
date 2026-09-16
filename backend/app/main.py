@@ -180,8 +180,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.energy.scheduler import register_tasks as register_energy_tasks
     register_energy_tasks(scheduler_registry)
 
-    from app.modules.warehouse.scheduled import STOCK_DAILY_SNAPSHOT_TASK
+    from app.modules.warehouse.scheduled import (
+        INTELLIGENCE_SCAN_TASK,
+        STOCK_DAILY_SNAPSHOT_TASK,
+    )
     scheduler_registry.register_task(STOCK_DAILY_SNAPSHOT_TASK)
+    scheduler_registry.register_task(INTELLIGENCE_SCAN_TASK)
 
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK

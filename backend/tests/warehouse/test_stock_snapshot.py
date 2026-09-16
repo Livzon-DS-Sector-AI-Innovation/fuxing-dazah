@@ -76,16 +76,17 @@ async def test_snapshot_aggregates_only_live_stocks(db_session) -> None:
 
     rows = await snapshot_module.build_stock_snapshot_rows(db_session, date(2026, 9, 15))
 
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["material_id"] == material.id
+    # 库中可能有其他来源的物料（如真机验收数据），只断言本用例物料
+    own = [r for r in rows if r["material_id"] == material.id]
+    assert len(own) == 1
+    row = own[0]
     assert row["material_code"] == "M-SNAP-001"
     assert row["total_quantity"] == Decimal("123.5")
     assert row["stock_rows"] == 2
 
 
 async def test_snapshot_upsert_is_idempotent(db_session) -> None:
-    await _seed_material_with_stocks(db_session)
+    material = await _seed_material_with_stocks(db_session)
     snapshot_date = date(2026, 9, 15)
 
     rows = await snapshot_module.build_stock_snapshot_rows(db_session, snapshot_date)
@@ -94,7 +95,7 @@ async def test_snapshot_upsert_is_idempotent(db_session) -> None:
     # 库存变化后同日重跑：覆盖而非新增
     stocks = (await db_session.execute(select(WarehouseStock))).scalars().all()
     for stock in stocks:
-        if not stock.is_deleted:
+        if not stock.is_deleted and stock.material_id == material.id:
             stock.quantity = Decimal("50")
     await db_session.flush()
 
@@ -105,7 +106,8 @@ async def test_snapshot_upsert_is_idempotent(db_session) -> None:
         (
             await db_session.execute(
                 select(WarehouseStockDailySnapshot).where(
-                    WarehouseStockDailySnapshot.snapshot_date == snapshot_date
+                    WarehouseStockDailySnapshot.material_id == material.id,
+                    WarehouseStockDailySnapshot.snapshot_date == snapshot_date,
                 )
             )
         )

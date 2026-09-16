@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, Field, computed_field, model_validator
 
@@ -259,3 +259,62 @@ class PlanResponse(BaseModel):
     remark: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── 智能中心（分期B） ──
+
+
+class RuleUpdate(BaseModel):
+    threshold: dict[str, Any] | None = Field(default=None, description="阈值（按规则键约定字段）")
+    enabled: bool | None = Field(default=None, description="是否启用")
+
+    @model_validator(mode="after")
+    def _need_something(self) -> RuleUpdate:
+        if self.threshold is None and self.enabled is None:
+            raise ValueError("至少提供 threshold 或 enabled 之一")
+        return self
+
+
+class IntelligenceRuleResponse(BaseModel):
+    rule_key: str
+    name: str
+    threshold: dict[str, Any]
+    enabled: bool
+    note: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class AlertRecordResponse(BaseModel):
+    id: StrUUID
+    rule_key: str
+    level: str
+    status: str
+    material_id: StrUUID
+    material_code: str
+    material_name: str
+    batch_no: str
+    location_name: str | None = None
+    detail: dict[str, Any]
+    created_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ReplenishmentSuggestionResponse(BaseModel):
+    id: StrUUID
+    material_id: StrUUID
+    material_code: str
+    material_name: str
+    avg_daily_outbound: float
+    days_cover: float | None = None
+    suggested_qty: float
+    status: str
+    handled_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class SuggestionStatusUpdate(BaseModel):
+    status: Literal["handled", "ignored"]

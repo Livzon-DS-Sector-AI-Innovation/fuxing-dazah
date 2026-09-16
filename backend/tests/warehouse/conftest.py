@@ -39,6 +39,10 @@ WAREHOUSE_PERMS = {
     "warehouse:plans:create",
     "warehouse:plans:update",
     "warehouse:plans:cancel",
+    "warehouse:intelligence:read",
+    "warehouse:intelligence:update",
+    "warehouse:replenishment:read",
+    "warehouse:replenishment:update",
 }
 
 
@@ -72,7 +76,9 @@ async def auth_client(
     user_id = await _real_user_id()
 
     async def _fake_user() -> object:
-        return object.__new__(type("FakeUser", (), {"id": user_id}))
+        return object.__new__(
+            type("FakeUser", (), {"id": user_id, "name": "验收用户"}),
+        )
 
     async def _fake_perms(user_id_arg: str, db: AsyncSession) -> set[str]:
         return WAREHOUSE_PERMS

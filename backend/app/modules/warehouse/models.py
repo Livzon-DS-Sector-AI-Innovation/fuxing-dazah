@@ -467,6 +467,129 @@ class WarehouseMovementPlan(BaseModel):
     remark: Mapped[str | None] = mapped_column(Text, nullable=True, comment="备注")
 
 
+class WarehouseAlertRule(BaseModel):
+    """智能中心预警规则：阈值可调，扫描引擎读取。"""
+
+    __tablename__ = "alert_rules"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_alert_rules_key",
+            "rule_key",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        {"schema": "warehouse"},
+    )
+
+    rule_key: Mapped[str] = mapped_column(String(32), nullable=False, comment="规则键")
+    name: Mapped[str] = mapped_column(String(64), nullable=False, comment="规则名称")
+    threshold: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="阈值（按规则键约定字段）"
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", comment="是否启用"
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class WarehouseAlertRuleAudit(BaseModel):
+    """预警规则变更审计（append-only）。"""
+
+    __tablename__ = "alert_rule_audits"
+    __table_args__ = (
+        Index(
+            "ix_warehouse_alert_rule_audits_key_created",
+            "rule_key",
+            "created_at",
+        ),
+        {"schema": "warehouse"},
+    )
+
+    rule_key: Mapped[str] = mapped_column(String(32), nullable=False, comment="规则键")
+    action: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="动作: update/enable/disable"
+    )
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更前")
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更后")
+    operator_name: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="操作人")
+
+
+class WarehouseAlertRecord(BaseModel):
+    """异常记录：扫描引擎产出，open/resolved 状态管理。"""
+
+    __tablename__ = "alert_records"
+    __table_args__ = (
+        Index(
+            "ix_warehouse_alert_records_key_material",
+            "rule_key",
+            "material_id",
+        ),
+        Index("ix_warehouse_alert_records_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    rule_key: Mapped[str] = mapped_column(String(32), nullable=False, comment="规则键")
+    level: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="warning", server_default="warning",
+        comment="级别: warning/critical",
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open", server_default="open",
+        comment="状态: open/resolved",
+    )
+    material_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    material_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="物料编码（冗余）")
+    material_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="物料名称（冗余）")
+    batch_no: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="", server_default="", comment="批次号（临期类用）"
+    )
+    location_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    location_code: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="库位编码（冗余）")
+    location_name: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="库位名称（冗余）")
+    detail: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}", comment="异常详情（数量/天数等）"
+    )
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WarehouseReplenishmentSuggestion(BaseModel):
+    """补货建议：按物料唯一，随扫描刷新（handled/ignored 不覆盖）。"""
+
+    __tablename__ = "replenishment_suggestions"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_replenishment_suggestions_material",
+            "material_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_replenishment_suggestions_status", "status"),
+        {"schema": "warehouse"},
+    )
+
+    material_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    material_code: Mapped[str] = mapped_column(String(50), nullable=False, comment="物料编码（冗余）")
+    material_name: Mapped[str] = mapped_column(String(200), nullable=False, comment="物料名称（冗余）")
+    avg_daily_outbound: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0",
+        comment="日均出库消耗（近30天）",
+    )
+    days_cover: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 4), nullable=True, comment="可支撑天数（当前库存/日均），零消耗为空"
+    )
+    suggested_qty: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0",
+        comment="建议采购量",
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending",
+        comment="pending/handled/ignored",
+    )
+    handled_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 # ==================== 系统配置中心（设计稿 warehouse-system-config-design.md） ====================
 # 与 safety 模块同名表结构对齐（schema=warehouse）；回退链：DB 活行 → env → registry 默认。
 

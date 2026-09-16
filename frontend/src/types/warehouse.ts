@@ -624,3 +624,50 @@ export interface MovementPlanCreateInput {
   planned_date?: string | null
   remark?: string | null
 }
+
+
+// ==================== 智能中心（分期B） ====================
+
+export type AlertRuleKey = "low_stock" | "zero_stock" | "idle" | "expiry" | "cover_days"
+export type AlertLevel = "warning" | "critical"
+export type AlertStatus = "open" | "resolved"
+
+export interface IntelligenceRule {
+  rule_key: AlertRuleKey | string
+  name: string
+  threshold: Record<string, number>
+  enabled: boolean
+  note?: string | null
+}
+
+export interface AlertRecordItem {
+  id: string
+  rule_key: string
+  level: AlertLevel
+  status: AlertStatus
+  material_code: string
+  material_name: string
+  batch_no: string
+  location_name?: string | null
+  detail: Record<string, number | string>
+  created_at?: string | null
+  resolved_at?: string | null
+}
+
+export interface AlertSummary {
+  rule_key: string
+  text: string
+  source: "llm" | "fallback"
+  open_count: number
+}
+
+export interface ReplenishmentSuggestionItem {
+  id: string
+  material_code: string
+  material_name: string
+  avg_daily_outbound: number
+  days_cover?: number | null
+  suggested_qty: number
+  status: "pending" | "handled" | "ignored"
+  handled_at?: string | null
+}

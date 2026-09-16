@@ -13,9 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.modules.warehouse import dashboard as dashboard_service
+from app.modules.warehouse import intelligence as intelligence_service
 from app.modules.warehouse import plans as plans_service
 from app.modules.warehouse import service
 from app.modules.warehouse.schemas import (
+    AlertRecordResponse,
+    IntelligenceRuleResponse,
     LocationCreate,
     LocationResponse,
     LocationUpdate,
@@ -29,9 +32,12 @@ from app.modules.warehouse.schemas import (
     PlanCreate,
     PlanMovementCreate,
     PlanResponse,
+    ReplenishmentSuggestionResponse,
+    RuleUpdate,
     StockResponse,
     StocktakeCreate,
     StocktakeUpdate,
+    SuggestionStatusUpdate,
 )
 from app.modules.warehouse.system_config_api import system_config_router
 from app.platform.identity.models import User
@@ -291,6 +297,131 @@ async def create_plan_movement(
             "movement": MovementResponse.model_validate(movement).model_dump(mode="json"),
         },
         status_code=201,
+    )
+
+
+# ── 智能中心（分期B） ──
+
+
+@router.get("/intelligence/rules", summary="预警规则列表")
+async def list_intelligence_rules(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    rules = await intelligence_service.list_rules(db)
+    data = [IntelligenceRuleResponse.model_validate(r).model_dump(mode="json") for r in rules]
+    return success_response(data)
+
+
+@router.put("/intelligence/rules/{rule_key}", summary="修改预警规则（阈值/启停）")
+async def update_intelligence_rule(
+    rule_key: str,
+    payload: RuleUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:update")),
+) -> JSONResponse:
+    rule = await intelligence_service.update_rule(db, rule_key, payload, user)
+    return success_response(IntelligenceRuleResponse.model_validate(rule).model_dump(mode="json"))
+
+
+@router.get("/intelligence/rules/{rule_key}/audits", summary="预警规则变更审计")
+async def list_intelligence_rule_audits(
+    rule_key: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    audits = await intelligence_service.get_rule_audits(db, rule_key, limit)
+    data = [
+        {
+            "action": a.action,
+            "before_json": a.before_json,
+            "after_json": a.after_json,
+            "operator_name": a.operator_name,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in audits
+    ]
+    return success_response(data)
+
+
+@router.get("/intelligence/alerts", summary="异常记录分页列表")
+async def list_intelligence_alerts(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    rule_key: str | None = Query(default=None, description="规则键"),
+    status: str | None = Query(default=None, description="open/resolved"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    items, total = await intelligence_service.list_alert_records(
+        db, page=page, page_size=page_size, rule_key=_clean(rule_key), status=_clean(status)
+    )
+    data = [AlertRecordResponse.model_validate(a).model_dump(mode="json") for a in items]
+    return paginated_response(data, page, page_size, total)
+
+
+@router.get("/intelligence/alerts/summary", summary="异常分类 AI 解读（降级安全）")
+async def intelligence_alert_summary(
+    rule_key: str = Query(..., description="规则键"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:read")),
+) -> JSONResponse:
+    return success_response(await intelligence_service.get_alert_summary(db, rule_key))
+
+
+@router.post("/intelligence/alerts/{record_id}/resolve", summary="标记异常已处理")
+async def resolve_intelligence_alert(
+    record_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:update")),
+) -> JSONResponse:
+    record = await intelligence_service.resolve_alert_record(db, record_id, user)
+    return success_response(AlertRecordResponse.model_validate(record).model_dump(mode="json"))
+
+
+@router.post("/intelligence/scan", summary="手动触发异常扫描")
+async def run_intelligence_scan(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:update")),
+) -> JSONResponse:
+    counts = await intelligence_service.run_intelligence_scan(db)
+    return success_response({"counts": counts})
+
+
+@router.get("/replenishment/suggestions", summary="补货建议分页列表")
+async def list_replenishment_suggestions(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    status: str | None = Query(default=None, description="pending/handled/ignored"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:replenishment:read")),
+) -> JSONResponse:
+    items, total = await intelligence_service.list_replenishment_suggestions(
+        db, page=page, page_size=page_size, status=_clean(status)
+    )
+    data = [
+        ReplenishmentSuggestionResponse.model_validate(s).model_dump(mode="json")
+        for s in items
+    ]
+    return paginated_response(data, page, page_size, total)
+
+
+@router.post(
+    "/replenishment/suggestions/{suggestion_id}/status",
+    summary="处理补货建议（已处理/忽略）",
+)
+async def update_replenishment_status(
+    suggestion_id: UUID,
+    payload: SuggestionStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:replenishment:update")),
+) -> JSONResponse:
+    suggestion = await intelligence_service.set_suggestion_status(
+        db, suggestion_id, payload.status, user
+    )
+    return success_response(
+        ReplenishmentSuggestionResponse.model_validate(suggestion).model_dump(mode="json")
     )
 
 
