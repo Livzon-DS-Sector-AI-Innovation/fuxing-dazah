@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Select, DatePicker, Space, App, Tag, Typography } from 'antd'
+import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button } from 'antd'
 import { Line } from '@ant-design/charts'
 import type { SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
 import { fetchSummaryMatrix, fetchSummaryProducts, fetchItemTrend } from '@/actions/quality'
@@ -26,15 +26,18 @@ export default function SummaryView() {
   const [trendItem, setTrendItem] = useState<string | undefined>()
   const [trend, setTrend] = useState<SummaryTrend | null>(null)
   const [trendLoading, setTrendLoading] = useState(false)
+  const [trendError, setTrendError] = useState<string | null>(null)
+  const [trendReloadKey, setTrendReloadKey] = useState(0)
 
   useEffect(() => {
-    if (!trendItem) { setTrend(null); return }
+    if (!trendItem) { setTrend(null); setTrendError(null); return }
     setTrendLoading(true)
+    setTrendError(null)
     fetchItemTrend(trendItem, selectedProduct)
       .then((res) => setTrend(res.data))
-      .catch((err: any) => message.error(err.message || '获取趋势失败'))
+      .catch((err: any) => setTrendError(err.message || '获取趋势失败'))
       .finally(() => setTrendLoading(false))
-  }, [trendItem, selectedProduct, message])
+  }, [trendItem, selectedProduct, trendReloadKey])
 
   useEffect(() => {
     fetchSummaryProducts().then(setProducts).catch(() => {})
@@ -177,9 +180,18 @@ export default function SummaryView() {
             color="#6b6b6b"
           />
         ) : (
-          <Text type="secondary">
-            {trendItem ? '该项目数值批次不足 2 批，无法绘制趋势' : '请先选择检验项目'}
-          </Text>
+          <div>
+            {trendError ? (
+              <Space>
+                <Text type="danger">{trendError}</Text>
+                <Button size="small" onClick={() => setTrendReloadKey((k) => k + 1)}>重试</Button>
+              </Space>
+            ) : (
+              <Text type="secondary">
+                {trendItem ? '该项目数值批次不足 2 批，无法绘制趋势' : '请先选择检验项目'}
+              </Text>
+            )}
+          </div>
         )}
       </Card>
     </div>
