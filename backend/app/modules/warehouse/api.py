@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Query
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -18,6 +20,7 @@ from app.modules.warehouse import morning_report as morning_report_service
 from app.modules.warehouse import plans as plans_service
 from app.modules.warehouse import reports as reports_service
 from app.modules.warehouse import service
+from app.modules.warehouse.models import WarehouseMovement
 from app.modules.warehouse.schemas import (
     AlertRecordResponse,
     IntelligenceRuleResponse,
@@ -560,6 +563,88 @@ async def report_stock_export(
         ],
     )
     return _xlsx_response("当前库存报表.xlsx", content)
+
+
+@router.post("/reports/nl-export", summary="AI 自然语言导出")
+async def nl_export(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+
+    from app.modules.warehouse.agent.llm_client import get_llm_client
+
+    query = str(payload.get("query", "")).strip()
+    fallback = payload.get("fallback_filters") or {}
+    if not query:
+        return JSONResponse(status_code=422, content={"code": 422, "message": "请输入导出条件"})
+
+    # LLM 解析自然语言 → 筛选条件 JSON（白名单字段）
+    filters: dict[str, Any] = {}
+    try:
+        client = get_llm_client()
+        prompt = (
+            "将以下中文查询解析为 JSON 筛选条件。可用字段："
+            "direction(inbound/outbound), material_keyword(str), "
+            "days(int,最近N天), min_qty(number,最小数量)。"
+            f'只输出 JSON，不要其他内容。查询：{query}'
+        )
+        data = await client._post_chat(  # noqa: SLF001
+            {"model": client.model,
+             "messages": [{"role": "user", "content": prompt}],
+             "temperature": 0.1}
+        )
+        import json as json_mod
+        raw = data["choices"][0]["message"]["content"].strip()
+        # 去掉可能的 markdown 包裹
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw
+            raw = raw.rsplit("```", 1)[0]
+        parsed = json_mod.loads(raw)
+        for k in ("direction", "material_keyword", "days", "min_qty"):
+            if k in parsed:
+                filters[k] = parsed[k]
+    except Exception:  # noqa: BLE001 — LLM 失败降级
+        filters = {}
+
+    if not filters:
+        filters = fallback  # 降级到前端提供的筛选
+
+    # 按筛选条件查询 movements
+    cn_tz = ZoneInfo("Asia/Shanghai")
+    start = datetime.now(cn_tz) - timedelta(days=int(filters.get("days", 30)))
+    stmt = select(WarehouseMovement).where(
+        WarehouseMovement.is_deleted == False,  # noqa: E712
+        WarehouseMovement.occurred_at >= start,
+    )
+    if filters.get("direction") in ("inbound", "outbound"):
+        stmt = stmt.where(WarehouseMovement.direction == filters["direction"])
+    if filters.get("material_keyword"):
+        kw = f"%{filters['material_keyword']}%"
+        stmt = stmt.where(
+            (WarehouseMovement.material_code.ilike(kw))
+            | (WarehouseMovement.material_name.ilike(kw))
+        )
+    if filters.get("min_qty") is not None:
+        try:
+            stmt = stmt.where(WarehouseMovement.quantity >= float(filters["min_qty"]))
+        except (ValueError, TypeError):
+            pass
+
+    rows = list(await db.execute(stmt.order_by(WarehouseMovement.occurred_at.desc())).scalars().all())
+    content = reports_service.build_table_xlsx(
+        "导出结果",
+        ["单号", "方向", "物料编码", "物料名称", "数量", "单位", "库位", "发生时间"],
+        [
+            [m.movement_no, m.direction, m.material_code, m.material_name,
+             float(m.quantity), m.unit, m.location_name,
+             m.occurred_at.strftime("%Y-%m-%d %H:%M")]
+            for m in rows
+        ],
+    )
+    resp = _xlsx_response("导出数据.xlsx", content)
+    resp.headers["X-Export-Count"] = str(len(rows))
+    return resp
 
 
 @router.get("/reports/briefings", summary="晨报历史列表")
