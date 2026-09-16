@@ -17,6 +17,7 @@ import type {
   TaskAttachment,
   TaskReviewRecord,
   SummaryMatrix,
+  SummaryTrend,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -691,5 +692,17 @@ export async function fetchSummaryMatrix(
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取汇总矩阵失败')
+  return res.json()
+}
+
+export async function fetchItemTrend(
+  itemName: string, product_name?: string, limit = 50,
+): Promise<{ data: SummaryTrend }> {
+  const qs = new URLSearchParams({ item_name: itemName, limit: String(limit) })
+  if (product_name) qs.set('product_name', product_name)
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/trend?${qs.toString()}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取趋势数据失败')
   return res.json()
 }

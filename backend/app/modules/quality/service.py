@@ -1340,6 +1340,58 @@ class TestTaskService:
         return {"columns": columns, "rows": rows}
 
     @staticmethod
+    async def build_item_trend(
+        db: AsyncSession,
+        item_name: str,
+        product_name: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """项目跨批次趋势：该检验项目最近 N 批的数值序列（时间升序）。"""
+        stmt = (
+            select(QualityTestResult, QualityTestTask)
+            .join(QualityTestTask, QualityTestResult.task_id == QualityTestTask.id)
+            .where(
+                QualityTestResult.item_name == item_name,
+                QualityTestResult.is_pass.isnot(None),
+                QualityTestResult.is_deleted == False,  # noqa: E712
+                QualityTestTask.is_deleted == False,  # noqa: E712
+                QualityTestTask.status.in_(["completed", "pending_review"]),
+            )
+        )
+        if product_name:
+            stmt = stmt.where(QualityTestTask.product_name == product_name)
+        stmt = stmt.order_by(
+            QualityTestTask.production_date.desc().nulls_last(),
+            QualityTestTask.created_at.desc(),
+        ).limit(limit)
+        pairs = list((await db.execute(stmt)).all())
+        if not pairs:
+            return {"item_name": item_name, "unit": "", "points": []}
+        pairs.reverse()  # 时间升序展示
+
+        first = pairs[-1][0]  # 最近一条作为限度参考（各批限度快照一致）
+        return {
+            "item_name": item_name,
+            "unit": TestTaskService._unit_of(first.standard_text),
+            "standard_text": first.standard_text,
+            "operator": first.operator,
+            "limit_min": first.limit_min,
+            "limit_max": first.limit_max,
+            "points": [
+                {
+                    "batch_number": t.batch_number,
+                    "production_date": t.production_date,
+                    "value": r.result_value if r.result_value is not None else None,
+                    "text": r.result_text if r.result_value is None else None,
+                    "is_pass": r.is_pass,
+                    "status": t.status,
+                }
+                for r, t in pairs
+                if r.result_value is not None  # 数值型项目才能画趋势
+            ],
+        }
+
+    @staticmethod
     async def get_task_detail(db: AsyncSession, task_id: uuid.UUID) -> TestTaskDetail | None:
         task = await get_test_task(db, task_id)
         if not task:

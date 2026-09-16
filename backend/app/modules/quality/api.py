@@ -825,6 +825,19 @@ async def summary_matrix(
     return success_response(data=data)
 
 
+@router.get("/summary/trend", summary="项目跨批次趋势（数值序列+限度参考）")
+async def summary_trend(
+    item_name: str = Query(..., description="检验项目名称"),
+    product_name: str | None = Query(default=None, description="产品名称"),
+    limit: int = Query(default=50, ge=2, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    data = await test_task_service.build_item_trend(
+        db, item_name, product_name=product_name, limit=limit,
+    )
+    return success_response(data=data)
+
+
 @router.get("/summary/products", summary="已检验产品列表")
 async def list_summary_products(
     db: AsyncSession = Depends(get_db),

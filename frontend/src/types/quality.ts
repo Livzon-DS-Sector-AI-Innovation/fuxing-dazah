@@ -160,6 +160,25 @@ export interface SummaryMatrix {
   rows: SummaryMatrixRow[]
 }
 
+export interface SummaryTrendPoint {
+  batch_number: string
+  production_date: string | null
+  value: number | null
+  text: string | null
+  is_pass: boolean
+  status: string
+}
+
+export interface SummaryTrend {
+  item_name: string
+  unit: string
+  standard_text: string | null
+  operator: string | null
+  limit_min: number | null
+  limit_max: number | null
+  points: SummaryTrendPoint[]
+}
+
 // ─── 检验任务填报 ───
 
 export type TestTaskStatus = 'in_progress' | 'pending_review' | 'completed' | 'void'
