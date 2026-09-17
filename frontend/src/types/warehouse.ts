@@ -39,6 +39,23 @@ export const MOVEMENT_SOURCE_LABEL: Record<MovementSourceType, string> = {
   other: '其他',
 }
 
+// ── 库存状态机（分期D Ticket 03）──
+
+export type StockStatus = 'normal' | 'quarantine' | 'frozen'
+
+export const STOCK_STATUS_LABEL: Record<StockStatus, string> = {
+  normal: '正常',
+  quarantine: '待检',
+  frozen: '冻结',
+}
+
+/** 合法流转（与后端 web_stock_status._LEGAL_TRANSITIONS 一致） */
+export const STOCK_STATUS_TRANSITIONS: Record<StockStatus, StockStatus[]> = {
+  normal: ['quarantine'],
+  quarantine: ['normal', 'frozen'],
+  frozen: ['normal'],
+}
+
 // ── 物料主数据 ──
 
 export interface MaterialRecord {
@@ -121,6 +138,7 @@ export interface StockRecord {
   location_name: string
   expiry_date?: string | null
   quantity: number
+  status?: StockStatus
 }
 
 export interface StockFilter {
@@ -132,6 +150,7 @@ export interface StockFilter {
   batch_no?: string
   expiry_from?: string
   expiry_to?: string
+  status?: StockStatus
 }
 
 // ── 出入库 ──

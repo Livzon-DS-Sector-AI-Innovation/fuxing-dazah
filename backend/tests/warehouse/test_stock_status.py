@@ -102,3 +102,35 @@ async def test_status_log_written(
         assert logs[0].new_status == "quarantine"
     finally:
         await _cleanup(db_session)
+
+
+async def test_stock_list_status_filter(
+    auth_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """库存列表按状态筛选（分期D Ticket 03 前端筛选的后端支撑）。"""
+    try:
+        stock = await _seed_stock(db_session, uuid4().hex[:6])
+        await auth_client.post(
+            f"/api/v1/warehouse/stocks/{stock.id}/status",
+            json={"new_status": "quarantine", "reason": "质检待检"},
+        )
+        batch = stock.batch_no
+
+        listed = await auth_client.get(
+            "/api/v1/warehouse/stocks",
+            params={"batch_no": batch, "status": "quarantine"},
+        )
+        assert listed.status_code == 200, listed.text
+        items = listed.json()["data"]
+        assert len(items) == 1
+        assert items[0]["id"] == str(stock.id)
+        assert items[0]["status"] == "quarantine"
+
+        empty = await auth_client.get(
+            "/api/v1/warehouse/stocks",
+            params={"batch_no": batch, "status": "frozen"},
+        )
+        assert empty.status_code == 200
+        assert empty.json()["data"] == []
+    finally:
+        await _cleanup(db_session)

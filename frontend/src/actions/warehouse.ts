@@ -43,6 +43,7 @@ import {
   startPlan as apiStartPlan,
   cancelPlan as apiCancelPlan,
   generatePlanMovement as apiGeneratePlanMovement,
+  changeStockStatus as apiChangeStockStatus,
 } from '@/lib/api/warehouse'
 import {
   updateIntelligenceRule as apiUpdateIntelligenceRule,
@@ -60,6 +61,7 @@ import {
   MovementFilter,
   MovementPlanCreateInput,
   StockFilter,
+  StockStatus,
   StocktakeCreate,
   StocktakeUpdate,
   WarehouseAiAuditListParams,
@@ -135,6 +137,15 @@ export async function deleteLocation(id: string) {
 
 export async function getStocks(params: StockFilter = {}) {
   return fetchStocks(params)
+}
+
+export async function changeStockStatus(
+  stockId: string,
+  data: { new_status: StockStatus; reason?: string },
+) {
+  const result = await apiChangeStockStatus(stockId, data)
+  revalidatePath('/warehouse/inventory')
+  return result
 }
 
 // ═══════════════════════════════════════════

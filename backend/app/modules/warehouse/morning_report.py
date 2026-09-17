@@ -136,7 +136,6 @@ async def generate_morning_report(db: AsyncSession, brief_date: date) -> dict[st
         for mid in totals
     }
     expiry_days = int((await get_rule_threshold(db, "expiry", {"days": 30}))["days"])
-    expiry_deadline = today + timedelta(days=expiry_days)
     for mid, qty in totals.items():
         m = seen_materials.get(mid)
         if m is None or m.safety_stock is None or m.safety_stock <= 0:

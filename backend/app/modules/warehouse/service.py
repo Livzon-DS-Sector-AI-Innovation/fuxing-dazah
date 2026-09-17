@@ -530,6 +530,7 @@ async def list_stocks(
     batch_no: str | None = None,
     expiry_from: date | None = None,
     expiry_to: date | None = None,
+    status: str | None = None,
 ) -> tuple[list[WarehouseStock], int]:
     return await repository.list_stocks(
         db,
@@ -541,6 +542,7 @@ async def list_stocks(
         batch_no=batch_no,
         expiry_from=expiry_from,
         expiry_to=expiry_to,
+        status=status,
     )
 
 

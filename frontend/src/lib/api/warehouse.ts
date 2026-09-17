@@ -55,6 +55,7 @@ import {
   StockDistribution,
   LowStockTop,
   DashboardTodos,
+  StockStatus,
 } from '@/types/warehouse'
 import { apiDelete, apiGet, apiPost, apiPut, apiFetchPaginated } from '@/lib/http-client'
 
@@ -197,6 +198,7 @@ function setStockParams(sp: URLSearchParams, params: StockFilter) {
   if (params.category) sp.set('category', params.category)
   if (params.keyword) sp.set('keyword', params.keyword)
   if (params.location_id) sp.set('location_id', params.location_id)
+  if (params.status) sp.set('status', params.status)
   if (params.page) sp.set('page', String(params.page))
   if (params.page_size) sp.set('page_size', String(params.page_size))
 }
@@ -253,6 +255,23 @@ export async function createMovement(data: MovementCreate): Promise<MovementReco
 
 export async function deleteMovement(id: string): Promise<void> {
   return apiDelete<void>(`${SERVER_API}${BASE}/movements/${id}`)
+}
+
+// ── 库存状态机（分期D Ticket 03）──
+
+export interface StockStatusChange {
+  old_status: StockStatus
+  new_status: StockStatus
+}
+
+export async function changeStockStatus(
+  stockId: string,
+  data: { new_status: StockStatus; reason?: string },
+): Promise<StockStatusChange> {
+  return apiPost<StockStatusChange>(
+    `${SERVER_API}${BASE}/stocks/${encodeURIComponent(stockId)}/status`,
+    { reason: '', ...data },
+  )
 }
 
 // ── 盘点 ──

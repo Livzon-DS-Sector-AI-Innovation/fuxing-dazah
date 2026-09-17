@@ -48,7 +48,12 @@ from app.modules.warehouse.system_config_api import system_config_router
 from app.modules.warehouse.web_gateway import router as web_agent_router
 from app.modules.warehouse.web_quick_register import router as web_quick_register_router
 from app.modules.warehouse.web_reconciliation import router as web_reconciliation_router
-from app.modules.warehouse.web_stock_status import router as web_stock_status_router
+from app.modules.warehouse.web_stock_status import (
+    STOCK_STATUS_PATTERN,
+)
+from app.modules.warehouse.web_stock_status import (
+    router as web_stock_status_router,
+)
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
@@ -741,6 +746,11 @@ async def list_stocks(
     batch_no: str | None = Query(default=None, description="批次号（模糊）"),
     expiry_from: date | None = Query(default=None, description="效期起"),
     expiry_to: date | None = Query(default=None, description="效期止"),
+    status: str | None = Query(
+        default=None,
+        pattern=STOCK_STATUS_PATTERN,
+        description="库存状态：normal正常/quarantine待检/frozen冻结",
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
@@ -754,6 +764,7 @@ async def list_stocks(
         batch_no=_clean(batch_no),
         expiry_from=expiry_from,
         expiry_to=expiry_to,
+        status=status,
     )
     data = [StockResponse.model_validate(s).model_dump(mode="json") for s in items]
     return paginated_response(data, page, page_size, total)

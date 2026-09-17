@@ -16,6 +16,9 @@ from app.platform.permission.deps import require_permission
 
 router = APIRouter()
 
+# 库存状态取值（路由查询参数与请求体共用同一白名单）
+STOCK_STATUS_PATTERN = "^(normal|quarantine|frozen)$"
+
 # 合法状态流转：normal↔quarantine、quarantine→frozen、frozen→normal；
 # normal 与 frozen 之间禁止直接跳转。
 _LEGAL_TRANSITIONS = {
@@ -27,7 +30,7 @@ _LEGAL_TRANSITIONS = {
 
 
 class StockStatusRequest(BaseModel):
-    new_status: str = Field(..., pattern="^(normal|quarantine|frozen)$", description="目标状态")
+    new_status: str = Field(..., pattern=STOCK_STATUS_PATTERN, description="目标状态")
     reason: str = Field(default="", max_length=500, description="变更原因")
 
 

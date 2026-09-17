@@ -11,11 +11,17 @@ vi.mock('@/lib/api/warehouse', () => ({
   fetchMovementsClient: vi.fn(),
 }))
 
+vi.mock('@/actions/warehouse', () => ({
+  changeStockStatus: vi.fn(),
+}))
+
+import { changeStockStatus } from '@/actions/warehouse'
 import { fetchLocationsClient, fetchMovementsClient, fetchStocksClient } from '@/lib/api/warehouse'
 
 const mockedStocks = vi.mocked(fetchStocksClient)
 const mockedLocations = vi.mocked(fetchLocationsClient)
 const mockedMovements = vi.mocked(fetchMovementsClient)
+const mockedChangeStatus = vi.mocked(changeStockStatus)
 
 const stock: StockRecord = {
   id: 's1',
@@ -44,6 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockedStocks.mockResolvedValue({ items: [stock], total: 1, page: 1, page_size: 20 })
   mockedLocations.mockResolvedValue([location])
+  mockedChangeStatus.mockResolvedValue({ old_status: 'normal', new_status: 'quarantine' })
   mockedMovements.mockResolvedValue({
     items: [
       {
@@ -117,5 +124,32 @@ describe('StockTable', () => {
 
     expect(await screen.findByText(/物料流水：MAT-001 甲醇/)).toBeInTheDocument()
     expect(await screen.findByText(/MV-1/)).toBeInTheDocument()
+  })
+
+  it('状态列渲染默认正常标签', async () => {
+    renderWithQuery(<StockTable />)
+
+    expect(await screen.findByText('MAT-001')).toBeInTheDocument()
+    expect(screen.getByText('正常')).toBeInTheDocument()
+  })
+
+  it('状态流转弹窗提交调用接口并刷新列表', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<StockTable />)
+
+    await screen.findByText('MAT-001')
+    await user.click(screen.getByRole('button', { name: '状态流转' }))
+
+    // Modal 打开，normal 的合法流转目标默认选中 quarantine
+    expect(await screen.findByText(/状态流转：MAT-001 批次 B1/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认变更' }))
+
+    await waitFor(() => expect(mockedChangeStatus).toHaveBeenCalledTimes(1))
+    expect(mockedChangeStatus).toHaveBeenCalledWith('s1', {
+      new_status: 'quarantine',
+      reason: '',
+    })
+    // 成功后刷新库存列表
+    await waitFor(() => expect(mockedStocks).toHaveBeenCalledTimes(2))
   })
 })

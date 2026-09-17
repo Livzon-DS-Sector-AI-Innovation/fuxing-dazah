@@ -104,8 +104,11 @@ async def list_stocks(
     batch_no: str | None = None,
     expiry_from: date | None = None,
     expiry_to: date | None = None,
+    status: str | None = None,
 ) -> tuple[list[WarehouseStock], int]:
     stmt = select(WarehouseStock).where(WarehouseStock.is_deleted == False)  # noqa: E712
+    if status:
+        stmt = stmt.where(WarehouseStock.status == status)
     if category:
         stmt = stmt.join(
             WarehouseMaterial,

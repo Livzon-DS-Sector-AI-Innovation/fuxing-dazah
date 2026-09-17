@@ -1,6 +1,6 @@
 'use client'
 
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import {
   Alert,
@@ -9,6 +9,7 @@ import {
   DatePicker,
   Drawer,
   Input,
+  Modal,
   Select,
   Space,
   Spin,
@@ -23,13 +24,17 @@ import {
   MATERIAL_CATEGORY_LABEL,
   MaterialCategory,
   MOVEMENT_DIRECTION_LABEL,
+  STOCK_STATUS_LABEL,
+  STOCK_STATUS_TRANSITIONS,
   StockRecord,
+  StockStatus,
 } from '@/types/warehouse'
 import {
   fetchLocationsClient,
   fetchMovementsClient,
   fetchStocksClient,
 } from '@/lib/api/warehouse'
+import { changeStockStatus } from '@/actions/warehouse'
 import { EXPIRY_TONE_COLOR, expiryTone } from '@/lib/warehouse-expiry'
 import { QueryFilter } from './QueryFilter'
 
@@ -38,6 +43,15 @@ const DIRECTION_COLOR: Record<string, string> = {
   outbound: 'red',
   adjust: 'orange',
 }
+
+const STATUS_TAG_COLOR: Record<StockStatus, string> = {
+  normal: 'green',
+  quarantine: 'gold',
+  frozen: 'red',
+}
+
+/** 后端 StockResponse.status 恒有值；兼容缺省时按 normal 展示 */
+const statusOf = (value: StockStatus | undefined): StockStatus => value ?? 'normal'
 
 export function StockTable(props: {
   /** 驾驶舱下钻带入的初始筛选 */
@@ -54,11 +68,18 @@ export function StockTable(props: {
   const [locationId, setLocationId] = useState<string | undefined>(undefined)
   const [batchNo, setBatchNo] = useState('')
   const [expiryRange, setExpiryRange] = useState<[Dayjs | null, Dayjs | null] | null>(null)
+  const [statusFilter, setStatusFilter] = useState<StockStatus | undefined>(undefined)
   const [detail, setDetail] = useState<{ id: string; code: string; name: string } | null>(null)
+  const [statusTarget, setStatusTarget] = useState<{ record: StockRecord; next: StockStatus } | null>(
+    null,
+  )
+  const [reason, setReason] = useState('')
 
   const expiryFrom = expiryRange?.[0]?.format('YYYY-MM-DD') ?? undefined
   const expiryTo = expiryRange?.[1]?.format('YYYY-MM-DD') ?? undefined
-  const hasFilters = Boolean(keyword || category || locationId || batchNo || expiryFrom || expiryTo)
+  const hasFilters = Boolean(
+    keyword || category || locationId || batchNo || expiryFrom || expiryTo || statusFilter,
+  )
 
   const {
     data: res,
@@ -66,7 +87,7 @@ export function StockTable(props: {
     isError,
     refetch,
   } = useQuery({
-    queryKey: ['warehouse', 'stocks', { page, pageSize, keyword, category, locationId, batchNo, expiryFrom, expiryTo }],
+    queryKey: ['warehouse', 'stocks', { page, pageSize, keyword, category, locationId, batchNo, expiryFrom, expiryTo, statusFilter }],
     queryFn: () =>
       fetchStocksClient({
         page,
@@ -77,8 +98,25 @@ export function StockTable(props: {
         batch_no: batchNo || undefined,
         expiry_from: expiryFrom,
         expiry_to: expiryTo,
+        status: statusFilter,
       }),
     placeholderData: keepPreviousData,
+  })
+
+  const queryClient = useQueryClient()
+
+  const statusMutation = useMutation({
+    mutationFn: (vars: { stockId: string; next: StockStatus; reason: string }) =>
+      changeStockStatus(vars.stockId, { new_status: vars.next, reason: vars.reason }),
+    onSuccess: () => {
+      message.success('库存状态已变更')
+      setStatusTarget(null)
+      setReason('')
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'stocks'] })
+    },
+    onError: (e: unknown) => {
+      message.error(e instanceof Error ? e.message : '状态变更失败')
+    },
   })
 
   const { data: locations } = useQuery({
@@ -114,6 +152,15 @@ export function StockTable(props: {
     },
     { title: '批次号', dataIndex: 'batch_no', width: 140, render: v => v || '-' },
     {
+      title: '状态',
+      dataIndex: 'status',
+      width: 80,
+      render: (value: StockStatus | undefined) => {
+        const status = statusOf(value)
+        return <Tag color={STATUS_TAG_COLOR[status]}>{STOCK_STATUS_LABEL[status]}</Tag>
+      },
+    },
+    {
       title: '效期',
       dataIndex: 'expiry_date',
       width: 130,
@@ -129,6 +176,28 @@ export function StockTable(props: {
       },
     },
     { title: '库位', dataIndex: 'location_name', width: 140 },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 96,
+      render: (_, record) => {
+        const current = statusOf(record.status)
+        return (
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0 }}
+            onClick={e => {
+              e.stopPropagation()
+              setStatusTarget({ record, next: STOCK_STATUS_TRANSITIONS[current][0] })
+              setReason('')
+            }}
+          >
+            状态流转
+          </Button>
+        )
+      },
+    },
     {
       title: '库存数量',
       key: 'quantity',
@@ -188,6 +257,20 @@ export function StockTable(props: {
                 setPage(1)
               }}
               options={(locations ?? []).map(loc => ({ value: loc.id, label: `${loc.code} ${loc.name}` }))}
+            />
+            <Select
+              allowClear
+              placeholder="全部状态"
+              style={{ width: 120 }}
+              value={statusFilter}
+              onChange={value => {
+                setStatusFilter(value)
+                setPage(1)
+              }}
+              options={(Object.keys(STOCK_STATUS_LABEL) as StockStatus[]).map(value => ({
+                value,
+                label: STOCK_STATUS_LABEL[value],
+              }))}
             />
           </>
         }
@@ -253,7 +336,7 @@ export function StockTable(props: {
             setPageSize(ps)
           },
         }}
-        scroll={{ x: 950 }}
+        scroll={{ x: 1100 }}
       />
 
       <Drawer
@@ -282,6 +365,58 @@ export function StockTable(props: {
           <span style={{ color: 'var(--ant-color-text-secondary, #999)' }}>该物料暂无流水</span>
         )}
       </Drawer>
+
+      <Modal
+        title={
+          statusTarget
+            ? `状态流转：${statusTarget.record.material_code} 批次 ${statusTarget.record.batch_no || '-'}`
+            : '状态流转'
+        }
+        open={!!statusTarget}
+        onCancel={() => {
+          setStatusTarget(null)
+          setReason('')
+        }}
+        onOk={() => {
+          if (!statusTarget) return
+          statusMutation.mutate({
+            stockId: statusTarget.record.id,
+            next: statusTarget.next,
+            reason,
+          })
+        }}
+        okText="确认变更"
+        cancelText="取消"
+        okButtonProps={{ loading: statusMutation.isPending }}
+        destroyOnHidden
+      >
+        {statusTarget && (
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <span>
+              当前状态：
+              <Tag color={STATUS_TAG_COLOR[statusOf(statusTarget.record.status)]}>
+                {STOCK_STATUS_LABEL[statusOf(statusTarget.record.status)]}
+              </Tag>
+            </span>
+            <Select
+              style={{ width: '100%' }}
+              value={statusTarget.next}
+              onChange={value => setStatusTarget({ ...statusTarget, next: value })}
+              options={STOCK_STATUS_TRANSITIONS[statusOf(statusTarget.record.status)].map(
+                value => ({ value, label: STOCK_STATUS_LABEL[value] }),
+              )}
+            />
+            <Input.TextArea
+              rows={3}
+              maxLength={500}
+              showCount
+              value={reason}
+              onChange={e => setReason(e.target.value)}
+              placeholder="变更原因（可选）"
+            />
+          </Space>
+        )}
+      </Modal>
     </div>
   )
 }
