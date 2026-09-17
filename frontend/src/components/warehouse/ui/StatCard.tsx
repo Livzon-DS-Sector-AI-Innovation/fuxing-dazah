@@ -43,7 +43,7 @@ export function StatCard({
             }
           : undefined
       }
-      className="rounded-xl border border-[var(--color-hairline)] bg-white px-5 py-4 transition-shadow"
+      className="h-full rounded-xl border border-[var(--color-hairline)] bg-white px-5 py-4 transition-shadow"
       style={{
         boxShadow: '0 1px 2px rgba(16,24,40,0.04)',
         cursor: interactive ? 'pointer' : undefined,
@@ -60,7 +60,7 @@ export function StatCard({
       ) : (
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[13px] leading-5 text-[var(--color-steel)]">{label}</div>
+            <div className="whitespace-nowrap text-[13px] leading-5 text-[var(--color-steel)]">{label}</div>
             <div
               className={`mt-1 font-semibold tabular-nums leading-7 text-[var(--color-charcoal)] ${
                 emphasized ? 'text-[28px]' : 'text-[22px]'
