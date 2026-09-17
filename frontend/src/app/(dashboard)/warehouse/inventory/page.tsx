@@ -1,4 +1,4 @@
-import { InventoryPanels, WarehouseOverviewCards } from '@/components/warehouse'
+import { InventoryPanels, PageHeader, WarehouseOverviewCards } from '@/components/warehouse'
 
 export default async function WarehouseInventoryPage({
   searchParams,
@@ -11,10 +11,11 @@ export default async function WarehouseInventoryPage({
 
   return (
     <div>
-      <h1 className="text-[22px] font-semibold text-[var(--color-charcoal)] mb-2">库存管理</h1>
-      <p className="text-[14px] text-[var(--color-steel)] mb-4">
-        现有库存、物料主数据与库位管理
-      </p>
+      <PageHeader
+        breadcrumb={['仓储管理', '库存管理']}
+        title="库存管理"
+        description="现有库存、物料主数据与库位管理"
+      />
       <WarehouseOverviewCards />
       <InventoryPanels initialKeyword={keyword} initialCategory={category} />
     </div>

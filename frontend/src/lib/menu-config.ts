@@ -5,6 +5,7 @@ export interface SubMenuItem {
   children?: SubMenuItem[]   // 嵌套子菜单 → Ant Design SubMenu
   disabled?: boolean         // 灰显占位，功能未开发
   permissions?: string[]     // 权限码，用于前端菜单可见性控制
+  group?: string             // 侧边栏分组标题（相邻同名项归入同组，渲染为组头）
 }
 
 export interface ModuleMenu {
@@ -347,17 +348,17 @@ export const moduleMenus: ModuleMenu[] = [
     path: "/warehouse",
     permissions: ["warehouse:*:read"],
     children: [
-      { key: "dashboard", label: "驾驶舱", path: "/warehouse" },
-      { key: "board", label: "作业看板", path: "/warehouse/board" },
-      { key: "intelligence", label: "智能中心", path: "/warehouse/intelligence" },
-      { key: "quick-register", label: "快速登记", path: "/warehouse/quick-register" },
-      { key: "reports", label: "报表中心", path: "/warehouse/reports" },
-      { key: "reconciliation", label: "对账中心", path: "/warehouse/reconciliation" },
-      { key: "location-map", label: "库位地图", path: "/warehouse/location-map" },
-      { key: "inventory", label: "库存管理", path: "/warehouse/inventory" },
-      { key: "inout", label: "出入库记录", path: "/warehouse/inout" },
-      { key: "stocktake", label: "库存盘点", path: "/warehouse/stocktake" },
-      { key: "system", label: "系统配置", path: "/warehouse/system", permissions: ["warehouse:system-config:read"] },
+      { key: "dashboard", label: "驾驶舱", path: "/warehouse", group: "工作台" },
+      { key: "board", label: "作业看板", path: "/warehouse/board", group: "工作台" },
+      { key: "quick-register", label: "快速登记", path: "/warehouse/quick-register", group: "工作台" },
+      { key: "inventory", label: "库存管理", path: "/warehouse/inventory", group: "库存" },
+      { key: "location-map", label: "库位地图", path: "/warehouse/location-map", group: "库存" },
+      { key: "stocktake", label: "库存盘点", path: "/warehouse/stocktake", group: "库存" },
+      { key: "inout", label: "出入库记录", path: "/warehouse/inout", group: "流转" },
+      { key: "reconciliation", label: "对账中心", path: "/warehouse/reconciliation", group: "流转" },
+      { key: "intelligence", label: "智能中心", path: "/warehouse/intelligence", group: "分析" },
+      { key: "reports", label: "报表中心", path: "/warehouse/reports", group: "分析" },
+      { key: "system", label: "系统配置", path: "/warehouse/system", permissions: ["warehouse:system-config:read"], group: "系统" },
     ],
   },
   {

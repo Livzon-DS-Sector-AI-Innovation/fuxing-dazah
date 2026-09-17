@@ -81,16 +81,16 @@ describe('StockTable', () => {
   it('加载后渲染库存行并标注低于安全库存', async () => {
     renderWithQuery(<StockTable />)
 
-    expect(await screen.findByText('MAT-001')).toBeInTheDocument()
+    expect(await screen.findByText(/MAT-001/)).toBeInTheDocument()
     expect(screen.getByText('A 库位')).toBeInTheDocument()
     expect(await screen.findByText(/低于安全库存/)).toBeInTheDocument()
   })
 
-  it('临期效期以红色标注', async () => {
+  it('临期效期以剩余天数徽章标注', async () => {
     renderWithQuery(<StockTable />)
 
-    // expiry_date = 今天+5 天 → danger 档
-    expect(await screen.findByText(/（临期）/)).toBeInTheDocument()
+    // expiry_date = 今天+5 天 → danger 档 → "剩 5 天" 徽章
+    expect(await screen.findByText('剩 5 天')).toBeInTheDocument()
   })
 
   it('加载失败显示错误 Alert 且可重试', async () => {
@@ -104,14 +104,14 @@ describe('StockTable', () => {
     await user.click(screen.getByRole('button', { name: /重试/ }))
     await waitFor(() => expect(mockedStocks).toHaveBeenCalledTimes(2))
     // 重试成功后错误条消失
-    expect(await screen.findByText('MAT-001')).toBeInTheDocument()
+    expect(await screen.findByText(/MAT-001/)).toBeInTheDocument()
   })
 
   it('库位下拉数据已加载', async () => {
     renderWithQuery(<StockTable />)
 
     // Select 下拉选项仅在展开时渲染，这里断言库位查询已发出
-    await screen.findByText('MAT-001')
+    await screen.findByText(/MAT-001/)
     expect(mockedLocations).toHaveBeenCalled()
   })
 
@@ -119,7 +119,7 @@ describe('StockTable', () => {
     const user = userEvent.setup()
     renderWithQuery(<StockTable />)
 
-    const cells = await screen.findAllByText('MAT-001')
+    const cells = await screen.findAllByText(/MAT-001/)
     await user.click(cells[0])
 
     expect(await screen.findByText(/物料流水：MAT-001 甲醇/)).toBeInTheDocument()
@@ -129,15 +129,23 @@ describe('StockTable', () => {
   it('状态列渲染默认正常标签', async () => {
     renderWithQuery(<StockTable />)
 
-    expect(await screen.findByText('MAT-001')).toBeInTheDocument()
+    expect(await screen.findByText(/MAT-001/)).toBeInTheDocument()
     expect(screen.getByText('正常')).toBeInTheDocument()
+  })
+
+  it('操作列提供状态流转与流水入口，流水打开抽屉', async () => {
+    const user = userEvent.setup()
+    renderWithQuery(<StockTable />)
+
+    await user.click(await screen.findByText('流水'))
+    expect(await screen.findByText(/物料流水：MAT-001 甲醇/)).toBeInTheDocument()
   })
 
   it('状态流转弹窗提交调用接口并刷新列表', async () => {
     const user = userEvent.setup()
     renderWithQuery(<StockTable />)
 
-    await screen.findByText('MAT-001')
+    await screen.findByText(/MAT-001/)
     await user.click(screen.getByRole('button', { name: '状态流转' }))
 
     // Modal 打开，normal 的合法流转目标默认选中 quarantine

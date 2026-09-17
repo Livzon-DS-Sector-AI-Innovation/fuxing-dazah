@@ -13,3 +13,11 @@ export { LocationTable } from './LocationTable'
 export { InventoryPanels } from './InventoryPanels'
 export { MovementTable } from './MovementTable'
 export { StocktakeBoard } from './StocktakeBoard'
+
+// UI 底座（V2.0 改版）
+export { StatCard, StatDelta } from './ui/StatCard'
+export { EmptyGuide } from './ui/EmptyGuide'
+export { StatusTag } from './ui/StatusTag'
+export { SectionCard } from './ui/SectionCard'
+export { DonutChart, RankBarChart, TrendAreaChart } from './ui/charts'
+export { TONE_STYLE, TONE_TAG_COLOR, TONE_HEX, type Tone } from './ui/tokens'

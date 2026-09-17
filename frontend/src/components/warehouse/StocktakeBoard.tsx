@@ -11,12 +11,12 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Table,
-  Tag,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { ClipboardList, Plus } from 'lucide-react'
 import dayjs from 'dayjs'
 import type { TableColumnsType } from 'antd'
 import {
@@ -33,6 +33,9 @@ import {
   updateStocktake,
 } from '@/actions/warehouse'
 import type { LocationRecord } from '@/types/warehouse'
+import { PageHeader } from './PageHeader'
+import { EmptyGuide } from './ui/EmptyGuide'
+import { StatusTag } from './ui/StatusTag'
 
 export function StocktakeBoard() {
   const { message } = App.useApp()
@@ -73,9 +76,9 @@ export function StocktakeBoard() {
       width: 100,
       render: (value: StocktakeRecord['status']) =>
         value === 'confirmed' ? (
-          <Tag color="green">已确认</Tag>
+          <StatusTag tone="ok" label="已确认" />
         ) : (
-          <Tag color="gold">草稿</Tag>
+          <StatusTag tone="warn" label="草稿" />
         ),
     },
     {
@@ -135,25 +138,30 @@ export function StocktakeBoard() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }} wrap>
-        <Select
-          allowClear
-          placeholder="全部状态"
-          style={{ width: 140 }}
-          value={status}
-          onChange={value => {
-            setStatus(value)
-            setPage(1)
-          }}
-          options={[
-            { value: 'draft', label: '草稿' },
-            { value: 'confirmed', label: '已确认' },
-          ]}
-        />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
-          新建盘点
-        </Button>
-      </Space>
+      <PageHeader
+        breadcrumb={['仓储管理', '库存盘点']}
+        title="库存盘点"
+        description="按库存快照创建盘点单，确认后按实盘结果自动调整库存"
+        actions={
+          <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>
+            新建盘点
+          </Button>
+        }
+      />
+
+      <Segmented
+        className="mb-3"
+        value={status ?? 'all'}
+        onChange={value => {
+          setStatus(value === 'all' ? undefined : (value as string))
+          setPage(1)
+        }}
+        options={[
+          { value: 'all', label: '全部' },
+          { value: 'draft', label: '草稿' },
+          { value: 'confirmed', label: '已确认' },
+        ]}
+      />
 
       <Table<StocktakeRecord>
         rowKey="id"
@@ -161,6 +169,17 @@ export function StocktakeBoard() {
         columns={columns}
         dataSource={res?.items ?? []}
         loading={isLoading}
+        locale={{
+          emptyText: (
+            <EmptyGuide
+              icon={<ClipboardList />}
+              title="还没有盘点单"
+              description="创建第一张盘点单，系统会按当前库存快照生成明细，确认后按实盘自动调整库存"
+              actionText="新建盘点"
+              onAction={() => setCreateOpen(true)}
+            />
+          ),
+        }}
         pagination={{
           current: page,
           pageSize,
@@ -357,8 +376,8 @@ function StocktakeDetailDrawer(props: {
       render: (_, item) => {
         if (item.counted_quantity == null) return '-'
         const diff = item.counted_quantity - item.book_quantity
-        if (diff === 0) return <Tag>0</Tag>
-        return <Tag color={diff > 0 ? 'green' : 'red'}>{diff > 0 ? `+${diff}` : diff}</Tag>
+        if (diff === 0) return <StatusTag tone="ok" label="0" />
+        return <StatusTag tone={diff > 0 ? 'info' : 'danger'} label={diff > 0 ? `+${diff}` : String(diff)} />
       },
     },
   ]
@@ -388,7 +407,11 @@ function StocktakeDetailDrawer(props: {
       {record && (
         <div style={{ marginBottom: 12 }}>
           <Space wrap>
-            {record.status === 'confirmed' ? <Tag color="green">已确认</Tag> : <Tag color="gold">草稿</Tag>}
+            {record.status === 'confirmed' ? (
+              <StatusTag tone="ok" label="已确认" />
+            ) : (
+              <StatusTag tone="default" label="草稿" />
+            )}
             <span>
               范围：
               {record.scope_location_name

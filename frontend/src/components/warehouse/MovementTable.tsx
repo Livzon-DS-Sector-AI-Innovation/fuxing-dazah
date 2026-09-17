@@ -11,12 +11,12 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Table,
-  Tag,
 } from 'antd'
-import { PlusOutlined, SearchOutlined } from '@ant-design/icons'
+import { ArrowDownLeft, ArrowUpRight, Plus, RotateCw, Search } from 'lucide-react'
 import dayjs, { Dayjs } from 'dayjs'
 import type { TableColumnsType } from 'antd'
 import {
@@ -34,11 +34,33 @@ import {
   fetchMovementsClient,
 } from '@/lib/api/warehouse'
 import { createMovement, deleteMovement } from '@/actions/warehouse'
+import { PageHeader } from './PageHeader'
+import { StatusTag } from './ui/StatusTag'
+import type { Tone } from './ui/tokens'
 
-const DIRECTION_COLOR: Record<MovementDirection, string> = {
-  inbound: 'green',
-  outbound: 'red',
-  adjust: 'orange',
+const DIRECTION_TONE: Record<MovementDirection, Tone> = {
+  inbound: 'ok',
+  outbound: 'danger',
+  adjust: 'warn',
+}
+
+const DIRECTION_ICON: Record<MovementDirection, React.ReactNode> = {
+  inbound: <ArrowDownLeft size={12} />,
+  outbound: <ArrowUpRight size={12} />,
+  adjust: <RotateCw size={12} />,
+}
+
+/** 相对时间：刚刚/x 分钟前/x 小时前/N 天前，超出 7 天回落绝对日期 */
+function relativeTime(value: string): string {
+  const diffMs = Date.now() - dayjs(value).valueOf()
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.floor(hours / 24)
+  if (days <= 7) return `${days} 天前`
+  return dayjs(value).format('YYYY-MM-DD')
 }
 
 /** 入库/出库可选的业务来源（盘点调整只能由盘点单生成）。 */
@@ -172,36 +194,59 @@ export function MovementTable() {
   }
 
   const columns: TableColumnsType<MovementRecord> = [
-    { title: '单据编号', dataIndex: 'movement_no', width: 170 },
+    { title: '单据编号', dataIndex: 'movement_no', width: 160 },
     {
       title: '方向',
       dataIndex: 'direction',
-      width: 90,
+      width: 96,
       render: (value: MovementDirection) => (
-        <Tag color={DIRECTION_COLOR[value]}>{MOVEMENT_DIRECTION_LABEL[value] ?? value}</Tag>
+        <StatusTag tone={DIRECTION_TONE[value]} label={MOVEMENT_DIRECTION_LABEL[value] ?? value} icon={DIRECTION_ICON[value]} />
       ),
     },
     {
       title: '业务来源',
       dataIndex: 'source_type',
-      width: 120,
+      width: 110,
       render: (value: MovementSourceType) => MOVEMENT_SOURCE_LABEL[value] ?? value,
     },
-    { title: '物料编码', dataIndex: 'material_code', width: 130 },
-    { title: '物料名称', dataIndex: 'material_name', width: 160 },
-    { title: '批次号', dataIndex: 'batch_no', width: 120, render: v => v || '-' },
+    {
+      title: '物料 / 批次',
+      dataIndex: 'material_name',
+      width: 220,
+      render: (_, record) => (
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-medium text-[var(--color-charcoal)]">
+            {record.material_name}
+          </div>
+          <div className="truncate text-[12px] leading-4 text-[var(--color-steel)]">
+            {record.material_code}
+            {record.batch_no ? ` · ${record.batch_no}` : ''}
+          </div>
+        </div>
+      ),
+    },
     {
       title: '数量',
-      width: 110,
+      width: 100,
       align: 'right',
-      render: (_, record) => `${record.quantity} ${record.unit}`,
+      render: (_, record) => (
+        <span className="font-medium tabular-nums">
+          {record.direction === 'inbound' ? '+' : record.direction === 'outbound' ? '-' : ''}
+          {record.quantity} {record.unit}
+        </span>
+      ),
     },
-    { title: '库位', dataIndex: 'location_name', width: 130 },
+    { title: '库位', dataIndex: 'location_name', width: 120 },
     {
       title: '发生时间',
       dataIndex: 'occurred_at',
-      width: 150,
-      render: v => dayjs(v).format('YYYY-MM-DD HH:mm'),
+      width: 160,
+      render: (v: string) => (
+        <div>
+          <div className="text-[13px] text-[var(--color-charcoal)]">{relativeTime(v)}</div>
+          <div className="text-[12px] leading-4 text-[var(--color-steel)]">{dayjs(v).format('MM-DD HH:mm')}</div>
+        </div>
+      ),
     },
     { title: '备注', dataIndex: 'remark', ellipsis: true, render: v => v ?? '-' },
     {
@@ -210,7 +255,7 @@ export function MovementTable() {
       width: 90,
       render: (_, record) =>
         record.direction === 'adjust' ? (
-          <span style={{ color: 'var(--ant-color-text-tertiary, #999)' }}>盘点生成</span>
+          <span style={{ color: 'var(--color-stone)' }}>盘点生成</span>
         ) : (
           <Popconfirm
             title="撤销该记录会反向冲销库存，确定？"
@@ -228,10 +273,32 @@ export function MovementTable() {
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }} wrap>
+      <PageHeader
+        breadcrumb={['仓储管理', '出入库记录']}
+        title="出入库记录"
+        description="登记入库/出库，撤销记录自动冲销库存"
+        actions={
+          <Button type="primary" icon={<Plus size={14} />} onClick={openCreate}>
+            登记出入库
+          </Button>
+        }
+      />
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Segmented
+          value={direction ?? 'all'}
+          onChange={value => {
+            setDirection(value === 'all' ? undefined : (value as MovementDirection))
+            setPage(1)
+          }}
+          options={[
+            { value: 'all', label: '全部' },
+            ...Object.entries(MOVEMENT_DIRECTION_LABEL).map(([value, label]) => ({ value, label })),
+          ]}
+        />
         <Input
           allowClear
-          prefix={<SearchOutlined />}
+          prefix={<Search size={14} />}
           placeholder="搜索单号/物料/批次"
           style={{ width: 220 }}
           onChange={e => {
@@ -239,24 +306,7 @@ export function MovementTable() {
             setPage(1)
           }}
         />
-        <Select
-          allowClear
-          placeholder="全部方向"
-          style={{ width: 130 }}
-          value={direction}
-          onChange={value => {
-            setDirection(value)
-            setPage(1)
-          }}
-          options={Object.entries(MOVEMENT_DIRECTION_LABEL).map(([value, label]) => ({
-            value,
-            label,
-          }))}
-        />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          登记出入库
-        </Button>
-      </Space>
+      </div>
 
       <Table<MovementRecord>
         rowKey="id"

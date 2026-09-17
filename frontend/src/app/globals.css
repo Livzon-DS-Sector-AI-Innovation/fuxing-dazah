@@ -44,6 +44,19 @@
   --color-warning: #dd5b00;
   --color-error: #e03131;
 
+  /* Warehouse UI（仓储模块 V2.0 改版语义色，全模块唯一出处） */
+  --wh-ok: #1aae39;
+  --wh-ok-bg: #e8f6ea;
+  --wh-warn: #dd5b00;
+  --wh-warn-bg: #fff2e8;
+  --wh-danger: #e03131;
+  --wh-danger-bg: #fdecec;
+  --wh-expired: #a61e24;
+  --wh-expired-bg: #f9e3e4;
+  --wh-info: #2f6bd8;
+  --wh-info-bg: #e9f0fc;
+  --wh-primary-bg: #ede9f8;
+
   /* Border Radius */
   --rounded-xs: 4px;
   --rounded-sm: 6px;
@@ -113,6 +126,17 @@
   --color-success: var(--color-success);
   --color-warning: var(--color-warning);
   --color-error: var(--color-error);
+  --color-wh-ok: var(--wh-ok);
+  --color-wh-ok-bg: var(--wh-ok-bg);
+  --color-wh-warn: var(--wh-warn);
+  --color-wh-warn-bg: var(--wh-warn-bg);
+  --color-wh-danger: var(--wh-danger);
+  --color-wh-danger-bg: var(--wh-danger-bg);
+  --color-wh-expired: var(--wh-expired);
+  --color-wh-expired-bg: var(--wh-expired-bg);
+  --color-wh-info: var(--wh-info);
+  --color-wh-info-bg: var(--wh-info-bg);
+  --color-wh-primary-bg: var(--wh-primary-bg);
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);

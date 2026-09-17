@@ -48,21 +48,33 @@ function buildKeyPathMap(items: SubMenuItem[]): Map<string, string> {
 }
 
 // ── 递归构建 Ant Design 菜单项 ──
+// ── 递归构建 Ant Design 菜单项（相邻同名 group 生成组头）──
 function buildMenuItems(items: SubMenuItem[]): MenuItem[] {
-  return items.map((item) => {
+  const result: MenuItem[] = []
+  let lastGroup: string | undefined
+  items.forEach((item, index) => {
+    if (item.group && item.group !== lastGroup) {
+      // key 带序号：非相邻同名 group 也不会产生重复 key
+      result.push({ key: `group:${index}:${item.group}`, type: 'group', label: item.group })
+      lastGroup = item.group
+    } else if (!item.group) {
+      lastGroup = undefined
+    }
     if (item.children && item.children.length > 0) {
-      return {
+      result.push({
         key: item.key,
         label: item.label,
         children: buildMenuItems(item.children),
-      }
+      })
+      return
     }
     const leaf: MenuItem = { key: item.key, label: item.label }
     if (item.disabled) {
       leaf.disabled = true
     }
-    return leaf
+    result.push(leaf)
   })
+  return result
 }
 
 // ── 收集所有可用的叶子节点（跳过 disabled 和空 path）──

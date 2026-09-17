@@ -1,17 +1,18 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
-import { Alert, Card, Col, List, Row, Spin, Statistic, Tag, Typography } from 'antd'
+import { Col, Row, Spin } from 'antd'
 import {
-  ArrowDownOutlined,
-  ArrowUpOutlined,
-  DatabaseOutlined,
-  InboxOutlined,
-  MinusOutlined,
-  WarningOutlined,
-} from '@ant-design/icons'
-import ReactECharts from 'echarts-for-react'
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  ClipboardList,
+  Inbox,
+  Package,
+  RefreshCw,
+  Send,
+} from 'lucide-react'
 import {
   fetchDashboardSummaryClient,
   fetchDashboardTodosClient,
@@ -22,11 +23,18 @@ import {
 import {
   MATERIAL_CATEGORY_LABEL,
   type DashboardSummary,
+  type DashboardTodos,
   type LowStockTop,
   type MovementTrendPoint,
   type StockDistribution,
-  type DashboardTodos,
 } from '@/types/warehouse'
+import { PageHeader } from './PageHeader'
+import { SectionCard } from './ui/SectionCard'
+import { StatCard, StatDelta } from './ui/StatCard'
+import { StatusTag } from './ui/StatusTag'
+import { TONE_HEX, type Tone } from './ui/tokens'
+import { Button } from 'antd'
+import { DonutChart, RankBarChart, TrendAreaChart } from './ui/charts'
 
 const LOCATION_TYPE_LABEL: Record<string, string> = {
   normal: '常温',
@@ -34,267 +42,229 @@ const LOCATION_TYPE_LABEL: Record<string, string> = {
   danger: '危险品',
 }
 
-const CHART_HEIGHT = 240
-
 function categoryLabel(key: string): string {
   return MATERIAL_CATEGORY_LABEL[key as keyof typeof MATERIAL_CATEGORY_LABEL] ?? key
 }
 
-function TrendChart({ data }: { data: MovementTrendPoint[] | undefined }) {
-  if (!data) return <Spin />
-  const option = {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['入库', '出库'], bottom: 0 },
-    grid: { left: 48, right: 16, top: 24, bottom: 48 },
-    xAxis: { type: 'category', data: data.map(p => p.date.slice(5)) },
-    yAxis: { type: 'value' },
-    series: [
-      { name: '入库', type: 'line', smooth: true, data: data.map(p => p.inbound) },
-      { name: '出库', type: 'line', smooth: true, data: data.map(p => p.outbound) },
-    ],
-  }
-  return <ReactECharts option={option} style={{ height: CHART_HEIGHT }} notMerge />
-}
-
-function DistributionCharts({ data }: { data: StockDistribution | undefined }) {
-  if (!data) return <Spin />
-  const pieOption = {
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0 },
-    series: [
-      {
-        type: 'pie',
-        radius: ['38%', '66%'],
-        data: data.by_category.map(item => ({
-          name: categoryLabel(item.category),
-          value: item.total_quantity,
-        })),
-      },
-    ],
-  }
-  const barOption = {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 64, right: 24, top: 16, bottom: 32 },
-    xAxis: { type: 'value' },
-    yAxis: {
-      type: 'category',
-      data: data.by_location_type.map(item => LOCATION_TYPE_LABEL[item.location_type] ?? item.location_type),
-    },
-    series: [{ type: 'bar', barMaxWidth: 24, data: data.by_location_type.map(item => item.total_quantity) }],
-  }
-  return (
-    <Row gutter={12}>
-      <Col span={12}>
-        <Typography.Text type="secondary">按物料分类</Typography.Text>
-        <ReactECharts option={pieOption} style={{ height: CHART_HEIGHT }} notMerge />
-      </Col>
-      <Col span={12}>
-        <Typography.Text type="secondary">按库位类型</Typography.Text>
-        <ReactECharts option={barOption} style={{ height: CHART_HEIGHT }} notMerge />
-      </Col>
-    </Row>
-  )
-}
-
-function TopBars({
-  data,
-  onDrill,
-}: {
-  data: LowStockTop | undefined
-  onDrill: (keyword: string) => void
-}) {
-  if (!data) return <Spin />
-  const barOption = (title: string, names: string[], values: number[]) => ({
-    title: { text: title, left: 'center', textStyle: { fontSize: 13 } },
-    tooltip: { trigger: 'axis' },
-    grid: { left: 100, right: 32, top: 32, bottom: 24 },
-    xAxis: { type: 'value' },
-    yAxis: { type: 'category', data: names, axisLabel: { width: 88, overflow: 'truncate' } },
-    series: [{ type: 'bar', barMaxWidth: 18, data: values }],
-  })
-  return (
-    <Row gutter={12}>
-      <Col span={12}>
-        <ReactECharts
-          option={barOption(
-            '低库存（库存 < 安全库存）',
-            data.low_stock.map(i => i.material_name),
-            data.low_stock.map(i => i.total_quantity),
-          )}
-          style={{ height: CHART_HEIGHT }}
-          notMerge
-          onEvents={{
-            click: (params: { name: string }) => onDrill(params.name),
-          }}
-        />
-        {data.low_stock.length === 0 && (
-          <Typography.Text type="secondary">暂无低库存物料</Typography.Text>
-        )}
-      </Col>
-      <Col span={12}>
-        <ReactECharts
-          option={barOption(
-            `呆滞（${90} 天无入库）`,
-            data.idle.map(i => i.material_name),
-            data.idle.map(i => i.total_quantity),
-          )}
-          style={{ height: CHART_HEIGHT }}
-          notMerge
-          onEvents={{
-            click: (params: { name: string }) => onDrill(params.name),
-          }}
-        />
-        {data.idle.length === 0 && (
-          <Typography.Text type="secondary">暂无呆滞物料</Typography.Text>
-        )}
-      </Col>
-    </Row>
-  )
-}
-
-function TodosPanel({ data }: { data: DashboardTodos | undefined }) {
+/** 异常汇总条：有待处理事项时首屏置顶提示（异常先行原则） */
+function PendingBanner({ summary }: { summary: DashboardSummary | undefined }) {
   const router = useRouter()
-  if (!data) return <Spin />
+  if (!summary) return null
+  const items: { label: string; count: number; path: string; tone: 'danger' | 'warn' }[] = []
+  if (summary.low_stock_count > 0) {
+    items.push({ label: '低库存', count: summary.low_stock_count, path: '/warehouse/intelligence', tone: 'danger' })
+  }
+  if (summary.draft_stocktake_count > 0) {
+    items.push({ label: '进行中盘点', count: summary.draft_stocktake_count, path: '/warehouse/stocktake', tone: 'warn' })
+  }
+  if (items.length === 0) return null
+  const total = items.reduce((acc, it) => acc + it.count, 0)
   return (
-    <div>
-      <Typography.Text strong>低库存（前 5）</Typography.Text>
-      <List
-        size="small"
-        dataSource={data.low_stock_items}
-        locale={{ emptyText: '暂无低库存物料' }}
-        renderItem={item => (
-          <List.Item
-            style={{ cursor: 'pointer' }}
-            onClick={() => router.push(`/warehouse/inventory?keyword=${encodeURIComponent(item.material_code)}`)}
-          >
-            <Typography.Text>
-              <WarningOutlined style={{ color: '#dd5b00', marginRight: 6 }} />
-              {item.material_name}
-            </Typography.Text>
-            <Typography.Text type="secondary">
-              {item.total_quantity} / 安全 {item.safety_stock}
-            </Typography.Text>
-          </List.Item>
-        )}
-      />
-      <Typography.Text strong>进行中盘点</Typography.Text>
-      <List
-        size="small"
-        dataSource={data.draft_stocktakes}
-        locale={{ emptyText: '暂无草稿盘点单' }}
-        renderItem={item => (
-          <List.Item style={{ cursor: 'pointer' }} onClick={() => router.push('/warehouse/stocktake')}>
-            <Typography.Text>{item.stocktake_no}</Typography.Text>
-            <Typography.Text type="secondary">{item.remark ?? '-'}</Typography.Text>
-          </List.Item>
-        )}
-      />
-      <Typography.Text strong>最近出入库</Typography.Text>
-      <List
-        size="small"
-        dataSource={data.recent_movements}
-        locale={{ emptyText: '暂无出入库记录' }}
-        renderItem={item => (
-          <List.Item style={{ cursor: 'pointer' }} onClick={() => router.push('/warehouse/inout')}>
-            <Typography.Text>
-              {item.direction === 'inbound' ? (
-                <Tag color="green">入</Tag>
-              ) : item.direction === 'outbound' ? (
-                <Tag color="red">出</Tag>
-              ) : (
-                <Tag color="orange">调</Tag>
-              )}
-              {item.material_name} × {item.quantity}
-              {item.unit}
-            </Typography.Text>
-          </List.Item>
-        )}
-      />
+    <div
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-4 py-2.5 text-[13px]"
+      style={{ background: 'var(--wh-danger-bg)', color: 'var(--wh-expired)' }}
+    >
+      <span className="inline-flex items-center gap-1.5 font-medium">
+        <AlertTriangle size={15} />
+        {total} 项待处理：
+      </span>
+      {items.map(it => (
+        <button
+          key={it.label}
+          type="button"
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-white/70 px-2.5 py-0.5 hover:bg-white"
+          onClick={() => router.push(it.path)}
+        >
+          <StatusTag tone={it.tone} label={it.label} />
+          <b className="tabular-nums">{it.count}</b>
+        </button>
+      ))}
+      <button
+        type="button"
+        className="ml-auto inline-flex cursor-pointer items-center gap-0.5 border-0 bg-transparent p-0 hover:underline"
+        style={{ color: 'inherit' }}
+        onClick={() => router.push(items[0].path)}
+      >
+        去处理 <ArrowUpRight size={14} />
+      </button>
     </div>
   )
 }
 
-function KpiCards({ summary }: { summary: DashboardSummary | undefined }) {
+function KpiRow({ summary, loading }: { summary: DashboardSummary | undefined; loading: boolean }) {
   const router = useRouter()
   const change = summary?.total_quantity_change
   return (
     <Row gutter={[12, 12]}>
-      <Col xs={12} md={8} xl={5}>
-        <Card size="small">
-          <Statistic
-            title="库存总量"
-            value={summary?.total_quantity ?? 0}
-            precision={2}
-            prefix={<DatabaseOutlined />}
-            suffix={
-              change === null || change === undefined ? (
-                <Tag style={{ fontSize: 12 }}>快照积累中</Tag>
-              ) : change >= 0 ? (
-                <span style={{ fontSize: 13, color: '#3f8f5f' }}>
-                  <ArrowUpOutlined /> {change}
-                </span>
-              ) : (
-                <span style={{ fontSize: 13, color: '#cf4444' }}>
-                  <ArrowDownOutlined /> {Math.abs(change)}
-                </span>
-              )
-            }
-          />
-        </Card>
+      <Col xs={24} sm={12} xl={5}>
+        <StatCard
+          emphasized
+          label="库存总量"
+          tone="primary"
+          icon={<Package />}
+          loading={loading}
+          value={(summary?.total_quantity ?? 0).toFixed(2)}
+          sub={
+            change === null || change === undefined ? (
+              '快照积累中'
+            ) : (
+              <span>
+                较昨日 <StatDelta value={change} />
+              </span>
+            )
+          }
+        />
       </Col>
-      <Col xs={12} md={8} xl={5}>
-        <Card size="small">
-          <Statistic
-            title="今日入库"
-            value={summary?.today_inbound_quantity ?? 0}
-            precision={2}
-            prefix={<InboxOutlined />}
-            suffix={<span style={{ fontSize: 13 }}>{summary?.today_inbound_count ?? 0} 笔</span>}
-          />
-        </Card>
+      <Col xs={12} xl={4}>
+        <StatCard
+          label="今日入库"
+          tone="ok"
+          icon={<Inbox />}
+          loading={loading}
+          value={(summary?.today_inbound_quantity ?? 0).toFixed(2)}
+          sub={`${summary?.today_inbound_count ?? 0} 笔`}
+        />
       </Col>
-      <Col xs={12} md={8} xl={5}>
-        <Card size="small">
-          <Statistic
-            title="今日出库"
-            value={summary?.today_outbound_quantity ?? 0}
-            precision={2}
-            prefix={<MinusOutlined />}
-            suffix={<span style={{ fontSize: 13 }}>{summary?.today_outbound_count ?? 0} 笔</span>}
-          />
-        </Card>
+      <Col xs={12} xl={4}>
+        <StatCard
+          label="今日出库"
+          tone="danger"
+          icon={<Send />}
+          loading={loading}
+          value={(summary?.today_outbound_quantity ?? 0).toFixed(2)}
+          sub={`${summary?.today_outbound_count ?? 0} 笔`}
+        />
       </Col>
-      <Col xs={12} md={12} xl={4}>
-        <Card
-          size="small"
-          hoverable
-          onClick={() => router.push('/warehouse/inventory')}
-        >
-          <Statistic
-            title="低库存项"
-            value={summary?.low_stock_count ?? 0}
-            valueStyle={summary && summary.low_stock_count > 0 ? { color: '#cf4444' } : undefined}
-            prefix={<WarningOutlined />}
-          />
-        </Card>
+      <Col xs={12} xl={4}>
+        <StatCard
+          label="低库存项"
+          tone={summary && summary.low_stock_count > 0 ? 'danger' : 'default'}
+          icon={<AlertTriangle />}
+          loading={loading}
+          value={summary?.low_stock_count ?? 0}
+          onClick={() => router.push('/warehouse/intelligence')}
+        />
       </Col>
-      <Col xs={24} md={12} xl={5}>
-        <Card
-          size="small"
-          hoverable
+      <Col xs={12} xl={4}>
+        <StatCard
+          label="进行中盘点"
+          tone="info"
+          icon={<ClipboardList />}
+          loading={loading}
+          value={summary?.draft_stocktake_count ?? 0}
           onClick={() => router.push('/warehouse/stocktake')}
-        >
-          <Statistic title="进行中盘点" value={summary?.draft_stocktake_count ?? 0} />
-        </Card>
+        />
+      </Col>
+      <Col xs={12} xl={3}>
+        <StatCard
+          label="库存 SKU"
+          tone="default"
+          icon={<Package />}
+          loading={loading}
+          value={summary?.stock_sku_count ?? 0}
+          onClick={() => router.push('/warehouse/inventory')}
+        />
       </Col>
     </Row>
+  )
+}
+
+/** 右栏可点击行项（名称+右侧数据，hover 强调）；tagLabel 缺省时按 入/出/调 映射 */
+function FeedRow({
+  title,
+  right,
+  tag,
+  tagLabel,
+  onClick,
+}: {
+  title: string
+  right: string
+  tag?: Tone
+  tagLabel?: string
+  onClick?: () => void
+}) {
+  const label = tagLabel ?? (tag === 'ok' ? '入' : tag === 'danger' ? '出' : '调')
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full cursor-pointer items-center gap-2 rounded-lg border-0 bg-transparent px-2 py-2 text-left transition-colors hover:bg-[var(--color-surface)]"
+    >
+      {tag && <StatusTag tone={tag} label={label} />}
+      <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-charcoal)]">{title}</span>
+      <span className="shrink-0 text-[12px] tabular-nums text-[var(--color-steel)]">{right}</span>
+    </button>
+  )
+}
+
+function FeedGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 px-2 text-[12px] font-medium uppercase tracking-wide text-[var(--color-stone)]">
+        {title}
+      </div>
+      <div className="-mx-1 flex flex-col">{children}</div>
+    </div>
+  )
+}
+
+function TodosPanel({ data, loading }: { data: DashboardTodos | undefined; loading: boolean }) {
+  const router = useRouter()
+  if (loading) return <Spin className="block w-full text-center" />
+  if (!data) return null
+  return (
+    <div className="flex flex-col gap-4">
+      <FeedGroup title="低库存（前 5）">
+        {data.low_stock_items.length === 0 && (
+          <div className="px-2 py-1 text-[13px] text-[var(--color-stone)]">暂无低库存物料</div>
+        )}
+        {data.low_stock_items.map(item => (
+          <FeedRow
+            key={item.material_code}
+            title={item.material_name}
+            right={`${item.total_quantity} / 安全 ${item.safety_stock}`}
+            tag="warn"
+            tagLabel="低库存"
+            onClick={() => router.push(`/warehouse/inventory?keyword=${encodeURIComponent(item.material_code)}`)}
+          />
+        ))}
+      </FeedGroup>
+      <FeedGroup title="进行中盘点">
+        {data.draft_stocktakes.length === 0 && (
+          <div className="px-2 py-1 text-[13px] text-[var(--color-stone)]">暂无草稿盘点单</div>
+        )}
+        {data.draft_stocktakes.map(item => (
+          <FeedRow
+            key={item.stocktake_no}
+            title={item.stocktake_no}
+            right={item.remark ?? '-'}
+            onClick={() => router.push('/warehouse/stocktake')}
+          />
+        ))}
+      </FeedGroup>
+      <FeedGroup title="最近出入库">
+        {data.recent_movements.length === 0 && (
+          <div className="px-2 py-1 text-[13px] text-[var(--color-stone)]">暂无出入库记录</div>
+        )}
+        {data.recent_movements.map((item, i) => (
+          <FeedRow
+            key={`${item.movement_no}-${i}`}
+            title={`${item.material_name} × ${item.quantity}${item.unit}`}
+            right={new Date(item.occurred_at).toLocaleDateString('zh-CN')}
+            tag={item.direction === 'inbound' ? 'ok' : item.direction === 'outbound' ? 'danger' : 'warn'}
+            onClick={() => router.push('/warehouse/inout')}
+          />
+        ))}
+      </FeedGroup>
+    </div>
   )
 }
 
 export function WarehouseDashboard() {
   const router = useRouter()
+  const queryClient = useQueryClient()
 
-  const { data: summary } = useQuery({
+  const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ['warehouse', 'dashboard', 'summary'],
     queryFn: fetchDashboardSummaryClient,
   })
@@ -310,10 +280,12 @@ export function WarehouseDashboard() {
     queryKey: ['warehouse', 'dashboard', 'low-stock-top'],
     queryFn: () => fetchLowStockTopClient(10),
   })
-  const { data: todos } = useQuery({
+  const { data: todos, isLoading: todosLoading } = useQuery({
     queryKey: ['warehouse', 'dashboard', 'todos'],
     queryFn: fetchDashboardTodosClient,
   })
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['warehouse', 'dashboard'] })
 
   const drillToInventory = (keyword: string) => {
     if (keyword) router.push(`/warehouse/inventory?keyword=${encodeURIComponent(keyword)}`)
@@ -321,32 +293,104 @@ export function WarehouseDashboard() {
 
   return (
     <div>
-      <Alert type="info" showIcon message={summary?.summary_text ?? '正在加载驾驶舱摘要…'} style={{ marginBottom: 12 }} />
-      <KpiCards summary={summary} />
+      <PageHeader
+        breadcrumb={['仓储管理', '驾驶舱']}
+        title="仓储驾驶舱"
+        description="库存总览、出入库趋势、分布与待办"
+        actions={
+          <Button icon={<RefreshCw size={14} />} onClick={refresh}>
+            刷新
+          </Button>
+        }
+      />
+
+      <PendingBanner summary={summary} />
+      <KpiRow summary={summary} loading={summaryLoading} />
+
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} xl={16}>
-          <Card size="small" title="出入库趋势（近 30 天）">
-            <TrendChart data={trend} />
-          </Card>
+          <SectionCard title="出入库趋势" description="近 30 天入库 / 出库数量">
+            {trend ? (
+              <TrendAreaChart
+                dates={trend.map(p => p.date.slice(5))}
+                inbound={trend.map(p => p.inbound)}
+                outbound={trend.map(p => p.outbound)}
+              />
+            ) : (
+              <Spin className="block w-full text-center" />
+            )}
+          </SectionCard>
         </Col>
         <Col xs={24} xl={8}>
-          <Card size="small" title="待办与预警">
-            <TodosPanel data={todos} />
-          </Card>
+          <SectionCard title="待办与预警" description="点击条目可直接下钻" className="h-full">
+            <TodosPanel data={todos} loading={todosLoading} />
+          </SectionCard>
         </Col>
       </Row>
+
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-        <Col span={24}>
-          <Card size="small" title="库存分布">
-            <DistributionCharts data={distribution} />
-          </Card>
+        <Col xs={24} xl={12}>
+          <SectionCard title="库存分布" description="按物料分类">
+            {distribution ? (
+              <DonutChart
+                items={distribution.by_category.map(item => ({
+                  name: categoryLabel(item.category),
+                  value: item.total_quantity,
+                }))}
+                centerLabel="库存总量"
+              />
+            ) : (
+              <Spin className="block w-full text-center" />
+            )}
+          </SectionCard>
+        </Col>
+        <Col xs={24} xl={12}>
+          <SectionCard title="库位类型分布" description="各类型库位的库存量">
+            {distribution ? (
+              <RankBarChart
+                names={distribution.by_location_type.map(
+                  item => LOCATION_TYPE_LABEL[item.location_type] ?? item.location_type,
+                )}
+                values={distribution.by_location_type.map(item => item.total_quantity)}
+                emptyText="暂无库位库存"
+              />
+            ) : (
+              <Spin className="block w-full text-center" />
+            )}
+          </SectionCard>
         </Col>
       </Row>
+
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-        <Col span={24}>
-          <Card size="small" title="重点关注 Top10（点击图条目下钻）">
-            <TopBars data={lowStockTop} onDrill={drillToInventory} />
-          </Card>
+        <Col xs={24} xl={12}>
+          <SectionCard title="低库存 Top10" description="库存低于安全库存，点击下钻明细">
+            {lowStockTop ? (
+              <RankBarChart
+                names={lowStockTop.low_stock.map(i => i.material_name)}
+                values={lowStockTop.low_stock.map(i => i.total_quantity)}
+                color={TONE_HEX.danger}
+                onPick={drillToInventory}
+                emptyText="暂无低库存物料"
+              />
+            ) : (
+              <Spin className="block w-full text-center" />
+            )}
+          </SectionCard>
+        </Col>
+        <Col xs={24} xl={12}>
+          <SectionCard title="呆滞 Top10" description="90 天无入库，点击下钻明细">
+            {lowStockTop ? (
+              <RankBarChart
+                names={lowStockTop.idle.map(i => i.material_name)}
+                values={lowStockTop.idle.map(i => i.total_quantity)}
+                color={TONE_HEX.warn}
+                onPick={drillToInventory}
+                emptyText="暂无呆滞物料"
+              />
+            ) : (
+              <Spin className="block w-full text-center" />
+            )}
+          </SectionCard>
         </Col>
       </Row>
     </div>

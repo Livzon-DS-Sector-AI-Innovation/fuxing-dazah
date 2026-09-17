@@ -35,8 +35,9 @@ import {
   fetchStocksClient,
 } from '@/lib/api/warehouse'
 import { changeStockStatus } from '@/actions/warehouse'
-import { EXPIRY_TONE_COLOR, expiryTone } from '@/lib/warehouse-expiry'
+import { expiryTone } from '@/lib/warehouse-expiry'
 import { QueryFilter } from './QueryFilter'
+import { StatusTag } from './ui/StatusTag'
 
 const DIRECTION_COLOR: Record<string, string> = {
   inbound: 'green',
@@ -44,11 +45,11 @@ const DIRECTION_COLOR: Record<string, string> = {
   adjust: 'orange',
 }
 
-const STATUS_TAG_COLOR: Record<StockStatus, string> = {
-  normal: 'green',
-  quarantine: 'gold',
-  frozen: 'red',
-}
+const STOCK_STATUS_TONE = {
+  normal: 'ok',
+  quarantine: 'warn',
+  frozen: 'danger',
+} as const
 
 /** 后端 StockResponse.status 恒有值；兼容缺省时按 normal 展示 */
 const statusOf = (value: StockStatus | undefined): StockStatus => value ?? 'normal'
@@ -141,67 +142,62 @@ export function StockTable(props: {
   })
 
   const columns: TableColumnsType<StockRecord> = [
-    { title: '物料编码', dataIndex: 'material_code', width: 140 },
-    { title: '物料名称', dataIndex: 'material_name', width: 180 },
+    {
+      title: '物料 / 批次',
+      dataIndex: 'material_name',
+      width: 250,
+      render: (_, record) => (
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-medium text-[var(--color-charcoal)]">
+            {record.material_name}
+          </div>
+          <div className="truncate text-[12px] leading-4 text-[var(--color-steel)]">
+            {record.material_code} · {record.batch_no || '无批次'}
+          </div>
+        </div>
+      ),
+    },
     {
       title: '分类',
       dataIndex: 'category',
-      width: 90,
+      width: 80,
       render: (value: MaterialCategory | null) =>
         value ? <Tag color="blue">{MATERIAL_CATEGORY_LABEL[value] ?? value}</Tag> : '-',
     },
-    { title: '批次号', dataIndex: 'batch_no', width: 140, render: v => v || '-' },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 80,
+      width: 84,
       render: (value: StockStatus | undefined) => {
         const status = statusOf(value)
-        return <Tag color={STATUS_TAG_COLOR[status]}>{STOCK_STATUS_LABEL[status]}</Tag>
+        return <StatusTag tone={STOCK_STATUS_TONE[status]} label={STOCK_STATUS_LABEL[status]} />
       },
     },
     {
       title: '效期',
       dataIndex: 'expiry_date',
-      width: 130,
+      width: 150,
       render: (value: string | null) => {
-        if (!value) return '-'
+        if (!value) return <span className="text-[var(--color-stone)]">未录入</span>
         const tone = expiryTone(value)
+        const days = dayjs(value).startOf('day').diff(dayjs().startOf('day'), 'day')
+        const chipTone = days < 0 ? 'expired' : tone === 'danger' ? 'danger' : tone === 'warning' ? 'warn' : 'ok'
+        const label = days < 0 ? `已过期 ${Math.abs(days)} 天` : days < 30 ? `剩 ${days} 天` : dayjs(value).format('YYYY-MM-DD')
         return (
-          <span style={{ color: EXPIRY_TONE_COLOR[tone], fontWeight: tone === 'danger' ? 600 : 500 }}>
-            {dayjs(value).format('YYYY-MM-DD')}
-            {tone === 'danger' ? ' （临期）' : ''}
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-[13px] tabular-nums text-[var(--color-charcoal)]">
+              {dayjs(value).format('YYYY-MM-DD')}
+            </span>
+            <StatusTag tone={chipTone} label={label} />
           </span>
         )
       },
     },
-    { title: '库位', dataIndex: 'location_name', width: 140 },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 96,
-      render: (_, record) => {
-        const current = statusOf(record.status)
-        return (
-          <Button
-            type="link"
-            size="small"
-            style={{ padding: 0 }}
-            onClick={e => {
-              e.stopPropagation()
-              setStatusTarget({ record, next: STOCK_STATUS_TRANSITIONS[current][0] })
-              setReason('')
-            }}
-          >
-            状态流转
-          </Button>
-        )
-      },
-    },
+    { title: '库位', dataIndex: 'location_name', width: 130 },
     {
       title: '库存数量',
       key: 'quantity',
-      width: 140,
+      width: 150,
       align: 'right',
       render: (_, record) => {
         const low =
@@ -209,9 +205,44 @@ export function StockTable(props: {
           record.safety_stock > 0 &&
           record.quantity < record.safety_stock
         return (
-          <span style={{ color: low ? 'var(--ant-color-warning, #dd5b00)' : undefined, fontWeight: 500 }}>
+          <span className="tabular-nums" style={{ color: low ? 'var(--wh-danger)' : undefined, fontWeight: low ? 600 : 500 }}>
             {record.quantity} {record.unit ?? ''}
-            {low ? ' （低于安全库存）' : ''}
+            {low && (
+              <StatusTag tone="danger" label="低于安全库存" bordered />
+            )}
+          </span>
+        )
+      },
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 130,
+      render: (_, record) => {
+        const current = statusOf(record.status)
+        return (
+          <span onClick={e => e.stopPropagation()}>
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: 0 }}
+              onClick={() => {
+                setStatusTarget({ record, next: STOCK_STATUS_TRANSITIONS[current][0] })
+                setReason('')
+              }}
+            >
+              状态流转
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: '0 0 0 8px' }}
+              onClick={() =>
+                setDetail({ id: record.material_id, code: record.material_code, name: record.material_name })
+              }
+            >
+              流水
+            </Button>
           </span>
         )
       },
@@ -394,9 +425,10 @@ export function StockTable(props: {
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
             <span>
               当前状态：
-              <Tag color={STATUS_TAG_COLOR[statusOf(statusTarget.record.status)]}>
-                {STOCK_STATUS_LABEL[statusOf(statusTarget.record.status)]}
-              </Tag>
+              <StatusTag
+                tone={STOCK_STATUS_TONE[statusOf(statusTarget.record.status)]}
+                label={STOCK_STATUS_LABEL[statusOf(statusTarget.record.status)]}
+              />
             </span>
             <Select
               style={{ width: '100%' }}

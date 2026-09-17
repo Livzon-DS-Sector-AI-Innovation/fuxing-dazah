@@ -88,9 +88,9 @@ describe('TodayBoard', () => {
   it('三列看板按状态与方向正确分组', async () => {
     renderWithQuery(<TodayBoard />)
 
-    expect(await screen.findByText('今日待收（1）')).toBeInTheDocument()
-    expect(await screen.findByText('今日待发（1）')).toBeInTheDocument()
-    // plan_no 与来源拼接在同一文本节点，用包含匹配
+    // 泳道头：名称与计数徽标分属两个元素，按文本节点匹配
+    expect(await screen.findByText('今日待收')).toBeInTheDocument()
+    expect(await screen.findByText('今日待发')).toBeInTheDocument()
     expect((await screen.findAllByText(/IP-001/)).length).toBeGreaterThan(0)
     expect(screen.getByText(/OP-001/)).toBeInTheDocument()
     expect(screen.getByText(/IP-000/)).toBeInTheDocument()

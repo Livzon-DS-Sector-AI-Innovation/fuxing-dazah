@@ -5,20 +5,17 @@ import { useState } from 'react'
 import {
   App,
   Button,
-  Card,
   Col,
   DatePicker,
   Form,
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Row,
   Select,
   Space,
-  Tag,
 } from 'antd'
-import { PlusOutlined } from '@ant-design/icons'
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, Plus } from 'lucide-react'
 import dayjs, { type Dayjs } from 'dayjs'
 import {
   MOVEMENT_DIRECTION_LABEL,
@@ -38,15 +35,19 @@ import {
   generatePlanMovementAction,
   startMovementPlan,
 } from '@/actions/warehouse'
-import { DataTable } from './DataTable'
+import { PageHeader } from './PageHeader'
+import { EmptyGuide } from './ui/EmptyGuide'
+import { StatusTag } from './ui/StatusTag'
+import type { Tone } from './ui/tokens'
 
-const STATUS_META: Record<PlanStatus, { label: string; color: string }> = {
-  planned: { label: '待执行', color: 'gold' },
-  in_progress: { label: '执行中', color: 'processing' },
-  completed: { label: '已完成', color: 'green' },
-  cancelled: { label: '已取消', color: 'default' },
+const STATUS_META: Record<PlanStatus, { label: string; tone: Tone }> = {
+  planned: { label: '待执行', tone: 'warn' },
+  in_progress: { label: '执行中', tone: 'info' },
+  completed: { label: '已完成', tone: 'ok' },
+  cancelled: { label: '已取消', tone: 'default' },
 }
 
+/** 泳道计划卡：方向色条 + 单号 + 物料数量主行 + 底部操作 */
 function PlanCard({
   plan,
   onStart,
@@ -59,43 +60,110 @@ function PlanCard({
   onCancel: (plan: MovementPlanRecord) => void
 }) {
   const meta = STATUS_META[plan.status]
+  const inbound = plan.direction === 'inbound'
   return (
-    <Card size="small" style={{ marginBottom: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-        <div>
-          <div style={{ fontWeight: 600 }}>
-            {plan.material_name} × {plan.quantity} {plan.location_name}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--ant-color-text-secondary, #999)' }}>
-            {plan.plan_no} · {MOVEMENT_SOURCE_LABEL[plan.source_type as keyof typeof MOVEMENT_SOURCE_LABEL] ?? plan.source_type}
-            {plan.planned_date ? ` · 预计 ${dayjs(plan.planned_date).format('MM-DD')}` : ''}
-          </div>
-          {plan.status === 'cancelled' && plan.cancel_reason && (
-            <div style={{ fontSize: 12, color: '#cf4444' }}>原因：{plan.cancel_reason}</div>
-          )}
-        </div>
-        <Tag color={meta.color}>{meta.label}</Tag>
+    <div
+      className="rounded-lg border border-[var(--color-hairline)] bg-white p-3"
+      style={{
+        borderLeft: `3px solid ${inbound ? 'var(--wh-ok)' : 'var(--wh-danger)'}`,
+        boxShadow: '0 1px 2px rgba(16,24,40,0.04)',
+      }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[12px] text-[var(--color-steel)]">{plan.plan_no}</span>
+        <StatusTag tone={meta.tone} label={meta.label} />
       </div>
-      {(plan.status === 'planned' || plan.status === 'in_progress') && (
-        <div style={{ marginTop: 8, textAlign: 'right' }}>
-          <Space>
-            {plan.status === 'planned' && (
-              <Button size="small" type="primary" onClick={() => onStart(plan)}>
-                开始执行
-              </Button>
-            )}
-            {plan.status === 'in_progress' && (
-              <Button size="small" type="primary" onClick={() => onGenerate(plan)}>
-                生成登记
-              </Button>
-            )}
-            <Button size="small" danger onClick={() => onCancel(plan)}>
-              取消
-            </Button>
-          </Space>
+      <div className="mt-1.5 text-[14px] font-semibold text-[var(--color-charcoal)]">
+        {plan.material_name}
+        <span className="ml-2 font-normal tabular-nums text-[var(--color-slate)]">
+          × {plan.quantity}
+        </span>
+      </div>
+      <div className="mt-1 text-[12px] leading-5 text-[var(--color-steel)]">
+        {MOVEMENT_SOURCE_LABEL[plan.source_type as keyof typeof MOVEMENT_SOURCE_LABEL] ?? plan.source_type}
+        {plan.planned_date ? ` · 预计 ${dayjs(plan.planned_date).format('MM-DD')}` : ''}
+        {plan.location_name ? ` · ${plan.location_name}` : ''}
+      </div>
+      {plan.status === 'cancelled' && plan.cancel_reason && (
+        <div className="mt-1 text-[12px]" style={{ color: 'var(--wh-danger)' }}>
+          原因：{plan.cancel_reason}
         </div>
       )}
-    </Card>
+      {(plan.status === 'planned' || plan.status === 'in_progress') && (
+        <div className="mt-2.5 flex justify-end gap-2 border-t border-[var(--color-hairline-soft)] pt-2.5">
+          {plan.status === 'planned' && (
+            <Button size="small" type="primary" onClick={() => onStart(plan)}>
+              开始执行
+            </Button>
+          )}
+          {plan.status === 'in_progress' && (
+            <Button size="small" type="primary" onClick={() => onGenerate(plan)}>
+              生成登记
+            </Button>
+          )}
+          <Button size="small" onClick={() => onCancel(plan)}>
+            取消
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 泳道列：标题（图标+名称+计数徽标）+ 卡片流 + 空态引导 */
+function Swimlane({
+  icon,
+  title,
+  tone,
+  count,
+  loading,
+  emptyText,
+  children,
+}: {
+  icon: React.ReactNode
+  title: string
+  tone: Tone
+  count: number
+  loading: boolean
+  emptyText: string
+  children: React.ReactNode
+}) {
+  return (
+    <Col xs={24} md={8} className="flex">
+      <section
+        className="flex min-h-[320px] w-full flex-col rounded-xl border border-[var(--color-hairline)] bg-[var(--color-surface-soft)]"
+        style={{ boxShadow: '0 1px 2px rgba(16,24,40,0.04)' }}
+      >
+        <header className="flex items-center gap-2 border-b border-[var(--color-hairline-soft)] px-4 py-3">
+          <span
+            aria-hidden
+            className="flex h-6 w-6 items-center justify-center rounded-md [&_svg]:h-[14px] [&_svg]:w-[14px]"
+            style={{
+              background: tone === 'ok' ? 'var(--wh-ok-bg)' : tone === 'danger' ? 'var(--wh-danger-bg)' : 'var(--color-surface)',
+              color: tone === 'ok' ? 'var(--wh-ok)' : tone === 'danger' ? 'var(--wh-danger)' : 'var(--color-steel)',
+            }}
+          >
+            {icon}
+          </span>
+          <span className="text-[14px] font-semibold text-[var(--color-charcoal)]">{title}</span>
+          <span
+            className="ml-1 rounded-full px-2 py-0.5 text-[12px] font-medium tabular-nums"
+            style={{ background: 'var(--color-surface)', color: 'var(--color-slate)' }}
+          >
+            {count}
+          </span>
+        </header>
+        <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto p-3">
+          {loading ? (
+            <div className="py-8 text-center text-[13px] text-[var(--color-stone)]">加载中…</div>
+          ) : count === 0 ? (
+            <EmptyGuide compact title={emptyText} />
+          ) : (
+            children
+          )}
+        </div>
+      </section>
+    </Col>
   )
 }
 
@@ -176,90 +244,83 @@ export function TodayBoard() {
   const workingOut = (startedIn?.items ?? []).filter(p => p.direction === 'outbound')
   const doneRows = done?.items ?? []
 
-  const doneColumns = [
-    { title: '单号', dataIndex: 'plan_no', width: 160 },
-    {
-      title: '方向',
-      dataIndex: 'direction',
-      width: 70,
-      render: (v: PlanDirection) => (v === 'inbound' ? <Tag color="green">入</Tag> : <Tag color="red">出</Tag>),
-    },
-    { title: '物料', dataIndex: 'material_name', ellipsis: true },
-    { title: '数量', dataIndex: 'quantity', width: 80, align: 'right' as const },
-    { title: '库位', dataIndex: 'location_name', width: 110 },
-  ]
-
   return (
     <div>
-      <Row gutter={[12, 12]}>
-        <Col xs={24} md={8}>
-          <Card size="small" title={`今日待收（${waitingInbound.length + workingIn.length}）`} loading={loadingPlanned}>
-            {(waitingInbound.length + workingIn.length) === 0 && (
-              <div style={{ color: 'var(--ant-color-text-secondary, #999)' }}>暂无待收计划</div>
-            )}
-            {[...waitingInbound, ...workingIn].map(plan => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                onStart={p => startMutation.mutate(p)}
-                onGenerate={p => {
-                  setGenerating(p)
-                  setGenQuantity(p.quantity)
-                  setGenRemark(p.remark ?? null)
-                }}
-                onCancel={p => {
-                  setCancelling(p)
-                  setCancelReason('')
-                }}
-              />
-            ))}
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card size="small" title={`今日待发（${waitingOutbound.length + workingOut.length}）`} loading={loadingInProgress}>
-            {(waitingOutbound.length + workingOut.length) === 0 && (
-              <div style={{ color: 'var(--ant-color-text-secondary, #999)' }}>暂无待发计划</div>
-            )}
-            {[...waitingOutbound, ...workingOut].map(plan => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                onStart={p => startMutation.mutate(p)}
-                onGenerate={p => {
-                  setGenerating(p)
-                  setGenQuantity(p.quantity)
-                  setGenRemark(p.remark ?? null)
-                }}
-                onCancel={p => {
-                  setCancelling(p)
-                  setCancelReason('')
-                }}
-              />
-            ))}
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card size="small" title="已完成（最近）" loading={loadingDone}>
-            <DataTable
-              columns={doneColumns}
-              dataSource={doneRows}
-              pageSize={10}
-              page={1}
-              total={doneRows.length}
-              scrollX={520}
-            />
-          </Card>
-        </Col>
-      </Row>
+      <PageHeader
+        breadcrumb={['仓储管理', '作业看板']}
+        title="作业看板"
+        description="今日待收、待发与已完成的出入库计划"
+        actions={
+          <Button type="primary" icon={<Plus size={14} />} onClick={() => setCreateOpen(true)}>
+            新建计划单
+          </Button>
+        }
+      />
 
-      <Button
-        type="primary"
-        icon={<PlusOutlined />}
-        style={{ marginTop: 12 }}
-        onClick={() => setCreateOpen(true)}
-      >
-        新建计划单
-      </Button>
+      <Row gutter={[12, 12]}>
+        <Swimlane
+          icon={<ArrowDownLeft />}
+          title="今日待收"
+          tone="ok"
+          count={waitingInbound.length + workingIn.length}
+          loading={loadingPlanned || loadingInProgress}
+          emptyText="今日暂无待收计划"
+        >
+          {[...waitingInbound, ...workingIn].map(plan => (
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              onStart={p => startMutation.mutate(p)}
+              onGenerate={p => {
+                setGenerating(p)
+                setGenQuantity(p.quantity)
+                setGenRemark(p.remark ?? null)
+              }}
+              onCancel={p => {
+                setCancelling(p)
+                setCancelReason('')
+              }}
+            />
+          ))}
+        </Swimlane>
+        <Swimlane
+          icon={<ArrowUpRight />}
+          title="今日待发"
+          tone="danger"
+          count={waitingOutbound.length + workingOut.length}
+          loading={loadingPlanned || loadingInProgress}
+          emptyText="今日暂无待发计划"
+        >
+          {[...waitingOutbound, ...workingOut].map(plan => (
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              onStart={p => startMutation.mutate(p)}
+              onGenerate={p => {
+                setGenerating(p)
+                setGenQuantity(p.quantity)
+                setGenRemark(p.remark ?? null)
+              }}
+              onCancel={p => {
+                setCancelling(p)
+                setCancelReason('')
+              }}
+            />
+          ))}
+        </Swimlane>
+        <Swimlane
+          icon={<CheckCircle2 />}
+          title="已完成（最近）"
+          tone="default"
+          count={doneRows.length}
+          loading={loadingDone}
+          emptyText="暂无已完成计划"
+        >
+          {doneRows.map(plan => (
+            <PlanCard key={plan.id} plan={plan} onStart={() => {}} onGenerate={() => {}} onCancel={() => {}} />
+          ))}
+        </Swimlane>
+      </Row>
 
       {createOpen && (
         <PlanCreateModal
@@ -283,7 +344,7 @@ export function TodayBoard() {
         onCancel={() => setCancelling(null)}
         destroyOnHidden
       >
-        <div style={{ color: 'var(--ant-color-text-secondary, #666)', paddingTop: 8 }}>
+        <div style={{ color: 'var(--color-steel)', paddingTop: 8 }}>
           取消后计划单不可恢复，请填写取消原因（必填）。
         </div>
         <Input
@@ -311,7 +372,7 @@ export function TodayBoard() {
       >
         {generating && (
           <div style={{ paddingTop: 8 }}>
-            <div style={{ marginBottom: 8, color: 'var(--ant-color-text-secondary, #666)' }}>
+            <div style={{ marginBottom: 8, color: 'var(--color-steel)' }}>
               {generating.direction === 'inbound' ? '入库登记' : '出库登记'} ·{' '}
               {generating.material_name} · {generating.location_name}
             </div>

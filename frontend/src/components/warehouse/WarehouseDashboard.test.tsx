@@ -68,11 +68,12 @@ beforeEach(() => {
 })
 
 describe('WarehouseDashboard', () => {
-  it('渲染 KPI、摘要与快照积累提示', async () => {
+  it('渲染 KPI、异常汇总条与快照积累提示', async () => {
     renderWithQuery(<WarehouseDashboard />)
 
-    expect(await screen.findByText('618')).toBeInTheDocument()
-    expect(await screen.findByText(/今日入库 1 笔共 40/)).toBeInTheDocument()
+    expect(await screen.findByText('618.00')).toBeInTheDocument()
+    // 异常先行：低库存 1 + 盘点 1 → 汇总条置顶
+    expect(await screen.findByText(/2 项待处理/)).toBeInTheDocument()
     expect(screen.getByText('快照积累中')).toBeInTheDocument()
   })
 
@@ -81,13 +82,17 @@ describe('WarehouseDashboard', () => {
 
     expect(await screen.findByText('低库存物料')).toBeInTheDocument()
     expect(screen.getByText('ST-1')).toBeInTheDocument()
+    expect(screen.getByText(/甲醇 × 40kg/)).toBeInTheDocument()
   })
 
-  it('渲染全部图表区块', async () => {
+  it('有数据的图表区块渲染，空数据区块显示空态引导', async () => {
     renderWithQuery(<WarehouseDashboard />)
 
-    // 等查询完成后各图区块才渲染（数据未到时显示 Spin）
-    expect(await screen.findByText(/低库存物料/)).toBeInTheDocument()
-    expect(screen.getAllByTestId('echart')).toHaveLength(5)
+    await screen.findByText(/低库存物料/)
+    // 库存分布 donut + 库位类型 bar + 低库存 bar = 3 个 echart；
+    // 趋势（空数组）与呆滞（空数组）走空态引导
+    expect(screen.getAllByTestId('echart')).toHaveLength(3)
+    expect(screen.getByText('近期暂无出入库')).toBeInTheDocument()
+    expect(screen.getByText('暂无呆滞物料')).toBeInTheDocument()
   })
 })

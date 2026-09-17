@@ -38,7 +38,7 @@ describe('StocktakeBoard', () => {
     renderWithQuery(<StocktakeBoard />)
 
     expect(await screen.findByText('ST-20260915-001')).toBeInTheDocument()
-    expect(screen.getByText('草稿')).toBeInTheDocument()
+    expect(screen.getAllByText('草稿').length).toBeGreaterThan(0)
     expect(screen.getByText('月度盘点')).toBeInTheDocument()
   })
 })

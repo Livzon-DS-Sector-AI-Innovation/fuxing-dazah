@@ -2,10 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Alert, App, Button, Card, DatePicker, Input, Space, Table, Typography } from 'antd'
+import { App, Button, DatePicker, Input, Modal, Space, Table, Typography } from 'antd'
 import type { TableColumnsType } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
-import { ReloadOutlined } from '@ant-design/icons'
+import { Download, Sparkles } from 'lucide-react'
+import { PageHeader } from '../PageHeader'
+import { SectionCard } from '../ui/SectionCard'
+import { StatCard } from '../ui/StatCard'
+import { RankBarChart } from '../ui/charts'
+import { TONE_HEX } from '../ui/tokens'
 
 const BASE = '/api/v1/warehouse/reports'
 
@@ -28,26 +33,21 @@ function exportExcel(path: string, filename: string) {
   link.click()
 }
 
-export function ReportCenter() {
+function topItems(items: MonthlyData['items'], key: 'inbound_qty' | 'outbound_qty', n = 10) {
+  return [...items]
+    .filter(it => Number(it[key]) > 0)
+    .sort((a, b) => Number(b[key]) - Number(a[key]))
+    .slice(0, n)
+}
+
+function NlExportModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { message } = App.useApp()
-  const [month, setMonth] = useState<Dayjs>(dayjs())
   const [nlQuery, setNlQuery] = useState('')
-
-  const { data: monthly, isLoading: loadingMonthly } = useQuery({
-    queryKey: ['warehouse', 'reports', 'monthly', month.year(), month.month() + 1],
-    queryFn: () => fetchMonthly(month.year(), month.month() + 1),
-  })
-
-  const monthlyColumns: TableColumnsType<MonthlyData['items'][0]> = [
-    { title: '物料编码', dataIndex: 'material_code', width: 140 },
-    { title: '物料名称', dataIndex: 'material_name', width: 180 },
-    { title: '单位', dataIndex: 'unit', width: 70 },
-    { title: '入库数量', dataIndex: 'inbound_qty', width: 110, align: 'right' },
-    { title: '出库数量', dataIndex: 'outbound_qty', width: 110, align: 'right' },
-  ]
+  const [exporting, setExporting] = useState(false)
 
   const handleNlExport = async () => {
     if (!nlQuery.trim()) { message.warning('请输入导出条件'); return }
+    setExporting(true)
     try {
       const resp = await fetch(`${BASE}/nl-export`, {
         method: 'POST',
@@ -64,53 +64,154 @@ export function ReportCenter() {
       a.href = url; a.download = '导出数据.xlsx'; a.click()
       URL.revokeObjectURL(url)
       message.success('导出成功')
+      onClose()
     } catch (e) {
       message.error(e instanceof Error ? e.message : '导出失败')
+    } finally {
+      setExporting(false)
     }
   }
 
   return (
-    <div>
-      <Card size="small" title="AI 自然语言导出" style={{ marginBottom: 12 }}>
-        <Space.Compact style={{ width: '100%' }}>
-          <Input
-            placeholder="如：导出 9 月出库大于 100 的物料"
-            value={nlQuery}
-            onChange={e => setNlQuery(e.target.value)}
-            onPressEnter={handleNlExport}
-          />
-          <Button type="primary" onClick={handleNlExport}>导出</Button>
-        </Space.Compact>
-        <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 4, display: 'block' }}>
-          解析失败时自动降级为当前筛选条件导出
-        </Typography.Text>
-      </Card>
-
-      <Card size="small" title="出入库月报" extra={
-        <Space>
-          <DatePicker picker="month" value={month} onChange={v => v && setMonth(v)} />
-          <Button size="small" icon={<ReloadOutlined />} onClick={() => exportExcel(`monthly/export?year=${month.year()}&month=${month.month() + 1}`, `出入库月报-${month.format('YYYY-MM')}.xlsx`)}>
-            导出
-          </Button>
-        </Space>
-      }>
-        {monthly && (
-          <Space wrap style={{ marginBottom: 12 }}>
-            <Typography.Text>入库 {monthly.summary.inbound_count} 笔 / {monthly.summary.inbound_qty}</Typography.Text>
-            <Typography.Text>出库 {monthly.summary.outbound_count} 笔 / {monthly.summary.outbound_qty}</Typography.Text>
-          </Space>
-        )}
-        <Table
-          rowKey="material_code" size="small" columns={monthlyColumns}
-          dataSource={monthly?.items ?? []} loading={loadingMonthly} pagination={false}
+    <Modal
+      title={
+        <span className="inline-flex items-center gap-2">
+          <Sparkles size={16} style={{ color: 'var(--color-primary)' }} />
+          AI 自然语言导出
+        </span>
+      }
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      destroyOnHidden
+    >
+      <Space.Compact block className="mt-2">
+        <Input
+          autoFocus
+          placeholder="如：导出 9 月出库大于 100 的物料"
+          value={nlQuery}
+          onChange={e => setNlQuery(e.target.value)}
+          onPressEnter={handleNlExport}
         />
-      </Card>
+        <Button type="primary" loading={exporting} onClick={handleNlExport}>导出</Button>
+      </Space.Compact>
+      <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+        用一句中文描述要导出的数据；解析失败时自动降级为整表导出
+      </Typography.Text>
+    </Modal>
+  )
+}
 
-      <Card size="small" title="当前库存报表" style={{ marginTop: 12 }} extra={
-        <Button size="small" onClick={() => exportExcel('stock/export', '当前库存报表.xlsx')}>导出</Button>
-      }>
-        <Typography.Text type="secondary">在"库存管理"页查看明细，此处提供全量导出入口</Typography.Text>
-      </Card>
+export function ReportCenter() {
+  const [month, setMonth] = useState<Dayjs>(dayjs())
+  const [nlOpen, setNlOpen] = useState(false)
+
+  const { data: monthly, isLoading: loadingMonthly } = useQuery({
+    queryKey: ['warehouse', 'reports', 'monthly', month.year(), month.month() + 1],
+    queryFn: () => fetchMonthly(month.year(), month.month() + 1),
+  })
+
+  const monthlyColumns: TableColumnsType<MonthlyData['items'][0]> = [
+    {
+      title: '物料 / 单位',
+      dataIndex: 'material_name',
+      width: 260,
+      render: (_, record) => (
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-medium text-[var(--color-charcoal)]">
+            {record.material_name}
+          </div>
+          <div className="truncate text-[12px] leading-4 text-[var(--color-steel)]">
+            {record.material_code} · {record.unit}
+          </div>
+        </div>
+      ),
+    },
+    { title: '入库数量', dataIndex: 'inbound_qty', width: 120, align: 'right', render: v => <span className="tabular-nums">{v}</span> },
+    { title: '出库数量', dataIndex: 'outbound_qty', width: 120, align: 'right', render: v => <span className="tabular-nums">{v}</span> },
+  ]
+
+  const summary = monthly?.summary
+
+  return (
+    <div>
+      <PageHeader
+        breadcrumb={['仓储管理', '报表中心']}
+        title="报表中心"
+        description="出入库月报、库存快照与自然语言导出"
+        actions={
+          <>
+            <Button icon={<Download size={14} />} onClick={() => exportExcel('stock/export', '当前库存报表.xlsx')}>
+              库存快照
+            </Button>
+            <Button type="primary" icon={<Sparkles size={14} />} onClick={() => setNlOpen(true)}>
+              AI 导出
+            </Button>
+          </>
+        }
+      />
+
+      <SectionCard
+        title="出入库月报"
+        description="按月汇总物料出入库数量"
+        action={
+          <Space>
+            <DatePicker picker="month" value={month} onChange={v => v && setMonth(v)} allowClear={false} />
+            <Button
+              size="small"
+              icon={<Download size={13} />}
+              onClick={() => exportExcel(`monthly/export?year=${month.year()}&month=${month.month() + 1}`, `出入库月报-${month.format('YYYY-MM')}.xlsx`)}
+            >
+              导出 Excel
+            </Button>
+          </Space>
+        }
+      >
+        <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatCard label="入库笔数" tone="ok" value={summary?.inbound_count ?? 0} loading={!monthly} />
+          <StatCard label="入库数量" tone="ok" value={summary?.inbound_qty ?? 0} loading={!monthly} />
+          <StatCard label="出库笔数" tone="danger" value={summary?.outbound_count ?? 0} loading={!monthly} />
+          <StatCard label="出库数量" tone="danger" value={summary?.outbound_qty ?? 0} loading={!monthly} />
+        </div>
+
+        <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <div>
+            <div className="mb-1 text-[13px] font-medium text-[var(--color-charcoal)]">
+              入库 Top10 <span className="font-normal text-[var(--color-steel)]">（{month.format('YYYY-MM')}）</span>
+            </div>
+            <RankBarChart
+              names={topItems(monthly?.items ?? [], 'inbound_qty').map(it => it.material_name)}
+              values={topItems(monthly?.items ?? [], 'inbound_qty').map(it => Number(it.inbound_qty))}
+              color={TONE_HEX.ok}
+              height={260}
+              emptyText="本月暂无入库"
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-[13px] font-medium text-[var(--color-charcoal)]">
+              出库 Top10 <span className="font-normal text-[var(--color-steel)]">（{month.format('YYYY-MM')}）</span>
+            </div>
+            <RankBarChart
+              names={topItems(monthly?.items ?? [], 'outbound_qty').map(it => it.material_name)}
+              values={topItems(monthly?.items ?? [], 'outbound_qty').map(it => Number(it.outbound_qty))}
+              color={TONE_HEX.danger}
+              height={260}
+              emptyText="本月暂无出库"
+            />
+          </div>
+        </div>
+
+        <Table
+          rowKey="material_code"
+          size="small"
+          columns={monthlyColumns}
+          dataSource={monthly?.items ?? []}
+          loading={loadingMonthly}
+          pagination={((monthly?.items.length ?? 0) > 20 ? { pageSize: 20 } : false)}
+        />
+      </SectionCard>
+
+      <NlExportModal open={nlOpen} onClose={() => setNlOpen(false)} />
     </div>
   )
 }
