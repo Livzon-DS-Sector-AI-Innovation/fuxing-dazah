@@ -309,12 +309,18 @@ export function WarehouseDashboard() {
 
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} xl={16}>
-          <SectionCard title="出入库趋势" description="近 30 天入库 / 出库数量">
+          <SectionCard
+            title="出入库趋势"
+            description="近 30 天入库 / 出库数量"
+            className="flex h-full flex-col"
+            bodyClassName="flex-1 min-h-[260px]"
+          >
             {trend ? (
               <TrendAreaChart
                 dates={trend.map(p => p.date.slice(5))}
                 inbound={trend.map(p => p.inbound)}
                 outbound={trend.map(p => p.outbound)}
+                height="100%"
               />
             ) : (
               <Spin className="block w-full text-center" />
@@ -322,7 +328,12 @@ export function WarehouseDashboard() {
           </SectionCard>
         </Col>
         <Col xs={24} xl={8}>
-          <SectionCard title="待办与预警" description="点击条目可直接下钻" className="h-full">
+          <SectionCard
+            title="待办与预警"
+            description="点击条目可直接下钻"
+            className="flex h-full flex-col"
+            bodyClassName="flex-1"
+          >
             <TodosPanel data={todos} loading={todosLoading} />
           </SectionCard>
         </Col>
@@ -330,7 +341,11 @@ export function WarehouseDashboard() {
 
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24} xl={12}>
-          <SectionCard title="库存分布" description="按物料分类">
+          <SectionCard
+            title="库存分布"
+            description="按物料分类"
+            className="h-full"
+          >
             {distribution ? (
               <DonutChart
                 items={distribution.by_category.map(item => ({
@@ -345,7 +360,11 @@ export function WarehouseDashboard() {
           </SectionCard>
         </Col>
         <Col xs={24} xl={12}>
-          <SectionCard title="库位类型分布" description="各类型库位的库存量">
+          <SectionCard
+            title="库位类型分布"
+            description="各类型库位的库存量"
+            className="h-full"
+          >
             {distribution ? (
               <RankBarChart
                 names={distribution.by_location_type.map(

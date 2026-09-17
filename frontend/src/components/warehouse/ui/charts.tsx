@@ -69,7 +69,7 @@ function hasData(series: number[][]): boolean {
   return series.some(values => values.some(v => Number(v) > 0))
 }
 
-function ChartEmpty({ height, text }: { height: number; text: string }) {
+function ChartEmpty({ height, text }: { height: number | string; text: string }) {
   return (
     <div style={{ height }} className="flex items-center justify-center">
       <EmptyGuide compact title={text} />
@@ -88,7 +88,8 @@ export function TrendAreaChart({
   dates: string[]
   inbound: number[]
   outbound: number[]
-  height?: number
+  /** 像素高度，或 '100%' 让图表随容器（flex-1 卡片体）自适应 */
+  height?: number | string
   emptyText?: string
 }) {
   ensureWarehouseTheme()
