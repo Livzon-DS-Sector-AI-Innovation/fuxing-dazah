@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import ast
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -450,3 +451,144 @@ class TestClientFieldNamesPassthrough:
         await client.list_all_records(field_names=["报警时间"])
 
         assert captured["json"]["field_names"] == ["报警时间"]
+
+def _timed(record_id: str, moment: datetime | None) -> dict[str, Any]:
+    """带「报警时间」的记录；moment 为 None 表示时间字段缺失。"""
+    fields: dict[str, Any] = {}
+    if moment is not None:
+        fields["报警时间"] = int(moment.timestamp() * 1000)
+    return {"record_id": record_id, "fields": fields}
+
+
+class TestFetchWindowRecords:
+    """票据 09：按时间字段倒序分页 + 见到早于起点的记录即提前终止。"""
+
+    START = datetime(2026, 9, 15, 0, 0, tzinfo=UTC)
+    END = datetime(2026, 9, 17, 0, 0, tzinfo=UTC)
+    MID = datetime(2026, 9, 16, 12, 0, tzinfo=UTC)
+    OLD = datetime(2026, 9, 14, 0, 0, tzinfo=UTC)
+
+    async def test_single_page_stops_early(self) -> None:
+        client = FakePageClient([
+            _page(
+                [
+                    _timed("new", self.MID),
+                    _timed("edge_start", self.START),
+                    _timed("old", self.OLD),
+                ],
+                has_more=True,
+                page_token="t1",
+            )
+        ])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert [r["record_id"] for r in result] == ["new", "edge_start"]
+        assert len(client.calls) == 1
+        assert client.calls[0]["sort"] == [{"field_name": "报警时间", "desc": True}]
+        assert client.calls[0]["page_token"] is None
+
+    async def test_keeps_paging_until_older_than_start(self) -> None:
+        client = FakePageClient([
+            _page([_timed("a", self.MID)], has_more=True, page_token="t1"),
+            _page([_timed("old", self.OLD)], has_more=True, page_token="t2"),
+        ])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert [r["record_id"] for r in result] == ["a"]
+        assert len(client.calls) == 2
+        assert client.calls[1]["page_token"] == "t1"
+
+    async def test_end_is_exclusive(self) -> None:
+        client = FakePageClient([
+            _page([_timed("at_end", self.END), _timed("old", self.OLD)])
+        ])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert result == []
+
+    async def test_records_without_time_are_skipped(self) -> None:
+        client = FakePageClient([
+            _page([
+                _timed("no_time", None),
+                _timed("in_window", self.MID),
+                _timed("old", self.OLD),
+            ])
+        ])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert [r["record_id"] for r in result] == ["in_window"]
+
+    async def test_last_page_without_more_returns(self) -> None:
+        client = FakePageClient([_page([_timed("a", self.MID)])])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert [r["record_id"] for r in result] == ["a"]
+        assert len(client.calls) == 1
+
+    async def test_empty_result_when_no_records(self) -> None:
+        client = FakePageClient([_page([])])
+
+        result = await reader.fetch_window_records(
+            client, time_field="报警时间", start=self.START, end=self.END
+        )
+
+        assert result == []
+
+    async def test_page_limit_raises_instead_of_truncating(self) -> None:
+        pages = [
+            _page([_timed(f"r{i}", self.MID)], has_more=True, page_token=f"t{i}")
+            for i in range(4)
+        ]
+        client = FakePageClient(pages)
+
+        with pytest.raises(BitableQueryError):
+            await reader.fetch_window_records(
+                client,
+                time_field="报警时间",
+                start=self.START,
+                end=self.END,
+                max_pages=2,
+            )
+
+        assert len(client.calls) == 2
+
+    async def test_api_error_propagates(self) -> None:
+        client = FakePageClient(error=BitableQueryError("boom"))
+
+        with pytest.raises(BitableQueryError):
+            await reader.fetch_window_records(
+                client, time_field="报警时间", start=self.START, end=self.END
+            )
+
+    async def test_passes_through_table_and_fields(self) -> None:
+        client = FakePageClient([_page([_timed("a", self.MID)])])
+
+        await reader.fetch_window_records(
+            client,
+            time_field="报警时间",
+            start=self.START,
+            end=self.END,
+            table_id="tblX",
+            field_names=["报警时间", "报警类型"],
+            page_size=123,
+        )
+
+        call = client.calls[0]
+        assert call["table_id"] == "tblX"
+        assert call["field_names"] == ["报警时间", "报警类型"]
+        assert call["page_size"] == 123

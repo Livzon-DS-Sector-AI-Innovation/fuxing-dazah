@@ -110,7 +110,7 @@ async def query_fire_alarms_direct(
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
-    client: bd_reader.BitableRecordsReader | None = None,
+    client: bd_reader.BitablePageClient | None = None,
 ) -> dict[str, Any]:
     """直读消防 Bitable 并返回 Agent 工具结构。
 
@@ -146,22 +146,20 @@ async def query_fire_alarms_direct(
             bd_filters.condition(contract.AI_DIMENSION_FIELD, "is", [dimension_option])
         )
 
-    page_reader = client or bd_reader.open_reader("fire_alarm", "alarm")
-    fetched_groups: list[list[dict[str, Any]]] = []
-    for _day, day_filter in bd_filters.day_queries(
-        F_ALARM_TIME, start_dt, end_dt
-    ):
-        conditions = list(day_filter["conditions"]) + push_conditions
-        filter_info = bd_filters.flat_group(conditions)
-        fetched = await page_reader.list_all_records(
-            filter_info=filter_info,
-            field_names=list(reader.REQUEST_FIELD_NAMES),
-            page_size=FETCH_PAGE_SIZE,
-            strict=True,
-        )
-        fetched_groups.append(fetched)
-
-    records = bd_filters.union_by_record_id(fetched_groups)
+    page_client = client or bd_reader.resolve_client("fire_alarm", "alarm")
+    filter_info = (
+        bd_filters.flat_group(push_conditions) if push_conditions else None
+    )
+    # 倒序分页 + 提前终止：默认 30 天窗口从 30 次查询降到 1 至 2 次（票据 09）
+    records = await bd_reader.fetch_window_records(
+        page_client,
+        time_field=F_ALARM_TIME,
+        start=start_dt,
+        end=end_dt,
+        filter_info=filter_info,
+        field_names=list(reader.REQUEST_FIELD_NAMES),
+        page_size=FETCH_PAGE_SIZE,
+    )
     views = [reader.to_view(record) for record in records]
     views = bd_filters.trim_records(
         views,

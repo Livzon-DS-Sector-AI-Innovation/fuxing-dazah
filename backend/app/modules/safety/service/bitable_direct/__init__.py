@@ -48,7 +48,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ms_to_utc": ("fields", "ms_to_utc"),
     "to_utc": ("fields", "to_utc"),
     "utc_to_ms": ("fields", "utc_to_ms"),
+    "fetch_window_records": ("reader", "fetch_window_records"),
     "attachment_list": ("fields", "attachment_list"),
+    "to_millis": ("fields", "to_millis"),
     # fields（字段级取值，空值统一 None）
     "text": ("fields", "text"),
     "select": ("fields", "select"),

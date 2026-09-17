@@ -39,11 +39,19 @@ def _record(
 
 
 class FakeQueryReader:
-    def __init__(self, records: list[dict[str, Any]]) -> None:
+    """假 page 级 client：一次返回受控记录（调用方按倒序给），记录每次请求。"""
+
+    def __init__(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        next_page_token: str | None = None,
+    ) -> None:
         self.records = records
+        self.next_page_token = next_page_token
         self.calls: list[dict[str, Any]] = []
 
-    async def list_all_records(
+    async def search_records(
         self,
         table_id: str | None = None,
         *,
@@ -52,10 +60,26 @@ class FakeQueryReader:
         sort: list[dict[str, Any]] | None = None,
         automatic_fields: bool = False,
         page_size: int = 200,
-        strict: bool = False,
-    ) -> list[dict[str, Any]]:
-        self.calls.append({"filter_info": filter_info, "field_names": field_names})
-        return list(self.records)
+        page_token: str | None = None,
+        strict: bool = True,
+    ) -> dict[str, Any]:
+        self.calls.append({
+            "table_id": table_id,
+            "filter_info": filter_info,
+            "field_names": field_names,
+            "sort": sort,
+            "page_size": page_size,
+            "page_token": page_token,
+            "strict": strict,
+        })
+        if page_token is not None:
+            return {"items": [], "has_more": False, "page_token": None, "total": 0}
+        return {
+            "items": list(self.records),
+            "has_more": self.next_page_token is not None,
+            "page_token": self.next_page_token,
+            "total": len(self.records),
+        }
 
 
 def _conditions(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -94,7 +118,11 @@ async def test_query_pushes_filters_and_applies_keyword_pagination() -> None:
     assert len(reader.calls) == 1
     fields = {c["field_name"] for c in _conditions(reader.calls)}
     # 部门不下推（多选字段不支持 contains），因此条件里不含部门字段
-    assert fields == {"报警时间", "报警类型", "报警性质", "AI维度"}
+    # 票据 09：窗口不再用日期过滤表达，改由「倒序 + 提前终止 + 应用侧裁剪」保证
+    assert fields == {"报警类型", "报警性质", "AI维度"}
+    assert reader.calls[0]["sort"] == [
+        {"field_name": "报警时间", "desc": True}
+    ]
     assert "AI维度" in reader.calls[0]["field_names"]
 
 
@@ -107,7 +135,7 @@ async def test_query_default_window_is_recent_30_days() -> None:
         today - timedelta(days=query.DEFAULT_QUERY_DAYS - 1)
     ).isoformat()
     assert result["window"]["date_to"] == today.isoformat()
-    assert len(reader.calls) == query.DEFAULT_QUERY_DAYS
+    assert len(reader.calls) == 1  # 票据 09：默认 30 天窗口只需一页
 
 
 async def test_query_range_over_limit_returns_error() -> None:
@@ -144,7 +172,11 @@ async def test_department_is_not_pushed_down_and_matches_substring() -> None:
     assert result["items"][0]["id"] == "rec-a"
     pushed = {cond["field_name"] for cond in _conditions(reader.calls)}
     assert "报警部门负责人.部门" not in pushed
-    assert pushed == {"报警时间"}
+    # 票据 09：窗口靠倒序 + 提前终止表达，因此下推条件里没有日期字段
+    assert pushed == set()
+    assert reader.calls[0]["sort"] == [
+        {"field_name": "报警时间", "desc": True}
+    ]
 
 async def test_query_empty_window_returns_empty() -> None:
     result = await query.query_fire_alarms_direct(

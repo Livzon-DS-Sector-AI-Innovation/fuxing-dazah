@@ -151,6 +151,24 @@ def to_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
+def to_millis(value: Any) -> int | None:
+    """Bitable 日期字段原始值 -> 毫秒时间戳（无法解析返回 None）。
+
+    与 ``ms_to_utc`` 互为反向；这里不做「0 视为缺失」的判断，
+    仅做类型归一，缺失语义由调用方决定。
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def utc_to_ms(value: datetime) -> int:
     """datetime -> 毫秒时间戳（naive 值按进程本地时钟解释）。"""
     return int(value.timestamp() * 1000)

@@ -1,4 +1,9 @@
-"""Ticket 03：消防报警直读读取器窗口与裁剪单测。"""
+"""Ticket 03 / 09：消防报警直读读取器窗口与裁剪单测。
+
+票据 09 起取数方式改为「按报警时间倒序分页 + 见到早于窗口起点的记录即提前终止」，
+不再按北京时间自然日逐次查询；因此替身从 domain 级 list_all_records 下沉为
+page 级 search_records，窗口正确性由「倒序 + 应用侧裁剪」共同保证。
+"""
 
 from __future__ import annotations
 
@@ -7,9 +12,14 @@ from typing import Any
 
 import pytest
 
-from app.modules.safety.feishu.bitable_client import BitableQueryError
+from app.modules.safety.feishu.bitable_client import (
+    BitableQueryError as ClientQueryError,
+)
 from app.modules.safety.service.bitable_direct import reader as bd_reader
-from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+from app.modules.safety.service.bitable_direct.errors import (
+    BitableConfigError,
+    BitableQueryError,
+)
 from app.modules.safety.service.fire_alarm import reader
 
 BJT = timezone(timedelta(hours=8))
@@ -30,14 +40,16 @@ def _record(record_id: str, moment: datetime | None) -> dict[str, Any]:
 
 
 class FakePageReader:
-    """按天查询替身：记录每次请求，返回受控记录集合。"""
+    """假 page 级 client：一次性返回受控记录（必须按报警时间倒序，与真实 API 一致）。"""
 
-    def __init__(self, records: list[dict[str, Any]], error: Exception | None = None) -> None:
-        self.records = records
+    def __init__(
+        self, records: list[dict[str, Any]], error: Exception | None = None
+    ) -> None:
+        self.records = list(records)
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
-    async def list_all_records(
+    async def search_records(
         self,
         table_id: str | None = None,
         *,
@@ -46,8 +58,9 @@ class FakePageReader:
         sort: list[dict[str, Any]] | None = None,
         automatic_fields: bool = False,
         page_size: int = 200,
-        strict: bool = False,
-    ) -> list[dict[str, Any]]:
+        page_token: str | None = None,
+        strict: bool = True,
+    ) -> dict[str, Any]:
         self.calls.append({
             "table_id": table_id,
             "filter_info": filter_info,
@@ -55,29 +68,35 @@ class FakePageReader:
             "sort": sort,
             "automatic_fields": automatic_fields,
             "page_size": page_size,
+            "page_token": page_token,
             "strict": strict,
         })
         if self.error is not None:
             raise self.error
-        return list(self.records)
+        if page_token is not None:  # 第二页起为空，保证终止
+            return {"items": [], "has_more": False, "page_token": None, "total": 0}
+        return {
+            "items": list(self.records),
+            "has_more": False,
+            "page_token": None,
+            "total": len(self.records),
+        }
 
 
-def _assert_day_filter(call: dict[str, Any]) -> None:
-    filter_info = call["filter_info"]
-    assert filter_info["conjunction"] == "and"
-    conditions = filter_info["conditions"]
-    assert [c["field_name"] for c in conditions] == ["报警时间", "报警时间"]
-    assert [c["operator"] for c in conditions] == ["isGreater", "isLess"]
-    assert all(c["value"][0] == "ExactDate" for c in conditions)
+def _assert_window_query(call: dict[str, Any]) -> None:
+    """窗口查询判据：按报警时间倒序、不携带日期过滤条件（提前终止的前提）。"""
+    assert call["sort"] == [{"field_name": "报警时间", "desc": True}]
+    assert call["filter_info"] is None
+    assert call["strict"] is True
 
 
 async def test_day_window_keeps_only_records_inside_bjt_day() -> None:
     start = datetime(2026, 9, 11, 0, 0, tzinfo=BJT)
-    records = [
-        _record("rec-before", start - timedelta(seconds=1)),
-        _record("rec-start", start),
-        _record("rec-inside", start + timedelta(hours=12)),
+    records = [  # 倒序
         _record("rec-end", start + timedelta(days=1)),
+        _record("rec-inside", start + timedelta(hours=12)),
+        _record("rec-start", start),
+        _record("rec-before", start - timedelta(seconds=1)),
         _record("rec-none", None),
     ]
     fake = FakePageReader(records)
@@ -85,55 +104,52 @@ async def test_day_window_keeps_only_records_inside_bjt_day() -> None:
 
     views = await dr.get_records_by_date(TARGET_DATE)
 
-    assert [v.id for v in views] == ["rec-start", "rec-inside"]
+    assert [v.id for v in views] == ["rec-inside", "rec-start"]
     assert len(fake.calls) == 1
-    _assert_day_filter(fake.calls[0])
+    _assert_window_query(fake.calls[0])
     assert fake.calls[0]["field_names"] is not None
     assert "AI维度" in fake.calls[0]["field_names"]
-    assert fake.calls[0]["strict"] is True
 
 
-async def test_rolling_window_uses_two_days_and_trims_exact_boundaries() -> None:
+async def test_rolling_window_trims_exact_boundaries() -> None:
     start = datetime(2026, 9, 10, 17, 0, tzinfo=BJT)
     end = datetime(2026, 9, 11, 17, 0, tzinfo=BJT)
     records = [
-        _record("rec-before", start - timedelta(seconds=1)),
-        _record("rec-start", start),
-        _record("rec-inside", start + timedelta(hours=20)),
-        _record("rec-end", end),
         _record("rec-after", end + timedelta(seconds=1)),
+        _record("rec-end", end),
+        _record("rec-inside", start + timedelta(hours=20)),
+        _record("rec-start", start),
+        _record("rec-before", start - timedelta(seconds=1)),
     ]
     fake = FakePageReader(records)
     dr = reader.FireAlarmBitableReader(fake, page_size=500)
 
     views, utc_start, utc_end = await dr.get_records_by_rolling_window(TARGET_DATE)
 
-    assert [v.id for v in views] == ["rec-start", "rec-inside"]
+    assert [v.id for v in views] == ["rec-inside", "rec-start"]
     assert utc_start == start.astimezone(UTC)
     assert utc_end == end.astimezone(UTC)
-    assert len(fake.calls) == 2
-    for call in fake.calls:
-        _assert_day_filter(call)
+    assert len(fake.calls) == 1  # 票据 09：滚动窗口从 2 次按天查询降为 1 次
+    _assert_window_query(fake.calls[0])
 
 
-async def test_week_window_uses_seven_days_and_trims_exact_boundaries() -> None:
+async def test_week_window_trims_exact_boundaries() -> None:
     start = datetime(2026, 9, 7, 0, 0, tzinfo=BJT)
     end = datetime(2026, 9, 14, 0, 0, tzinfo=BJT)
     records = [
-        _record("rec-before", start - timedelta(seconds=1)),
-        _record("rec-start", start),
-        _record("rec-inside", start + timedelta(days=3)),
         _record("rec-end", end),
+        _record("rec-inside", start + timedelta(days=3)),
+        _record("rec-start", start),
+        _record("rec-before", start - timedelta(seconds=1)),
     ]
     fake = FakePageReader(records)
     dr = reader.FireAlarmBitableReader(fake, page_size=500)
 
     views = await dr.get_records_by_week(WEEK_START, WEEK_END)
 
-    assert [v.id for v in views] == ["rec-start", "rec-inside"]
-    assert len(fake.calls) == 7
-    for call in fake.calls:
-        _assert_day_filter(call)
+    assert [v.id for v in views] == ["rec-inside", "rec-start"]
+    assert len(fake.calls) == 1  # 票据 09：周窗口从 7 次按天查询降为 1 次
+    _assert_window_query(fake.calls[0])
 
 
 async def test_empty_window_returns_empty_without_error() -> None:
@@ -143,8 +159,18 @@ async def test_empty_window_returns_empty_without_error() -> None:
     assert await dr.get_records_by_date(TARGET_DATE) == []
 
 
-async def test_api_error_propagates() -> None:
-    fake = FakePageReader([], error=BitableQueryError(1254001, "table not found"))
+async def test_records_without_time_are_dropped() -> None:
+    fake = FakePageReader([_record("rec-none", None)])
+    dr = reader.FireAlarmBitableReader(fake)
+
+    assert await dr.get_records_by_date(TARGET_DATE) == []
+
+
+async def test_client_error_is_wrapped_into_base_error() -> None:
+    # 客户端异常（code+msg 两参数）由底座统一翻译成底座 BitableQueryError
+    fake = FakePageReader(
+        [], error=ClientQueryError(1254001, "table not found")
+    )
     dr = reader.FireAlarmBitableReader(fake)
 
     with pytest.raises(BitableQueryError):

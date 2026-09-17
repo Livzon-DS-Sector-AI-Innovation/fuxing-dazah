@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from app.modules.safety.bitable_config.store import store
@@ -34,6 +35,7 @@ from app.modules.safety.feishu.bitable_client import (
 from app.modules.safety.feishu.bitable_client import (
     SafetyBitableClient,
 )
+from app.modules.safety.service.bitable_direct import fields
 from app.modules.safety.service.bitable_direct.errors import (
     BitableConfigError,
     BitableQueryError,
@@ -189,6 +191,83 @@ async def fetch_all_records(
     raise BitableQueryError(
         f"Bitable 分页超过上限 max_pages={effective_max}"
         f"（已拉取 {len(records)} 条），疑似 page_token 未推进"
+    )
+
+
+async def fetch_window_records(
+    client: BitablePageClient,
+    *,
+    time_field: str,
+    start: datetime,
+    end: datetime,
+    table_id: str | None = None,
+    filter_info: dict[str, Any] | None = None,
+    field_names: Sequence[str] | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    automatic_fields: bool = False,
+) -> list[dict[str, Any]]:
+    """按时间字段倒序分页，取回落在 [start, end) 内的记录（见到更早的即停）。
+
+    为什么这样取：Bitable 的日期过滤只有 ExactDate（天粒度、没有区间算子），
+    逐天查询会让「默认 30 天」变成 30 次请求；按时间倒序 + 提前终止后，
+    单页 500 条通常就覆盖完一个月的窗口。
+
+    约定：
+    - time_field 必须是可排序的业务日期字段（系统字段不能排序）；
+    - filter_info 只能放与窗口正交的条件（放日期条件会让提前终止不成立）；
+    - 时间字段为空或无法解析的记录不参与窗口判定、也不会被返回
+      （与旧「按天过滤」行为一致：它们本来就进不了任何窗口）；
+    - 页数超过 max_pages 抛 BitableQueryError，绝不静默截断。
+    """
+    effective_size = max(1, min(int(page_size), MAX_PAGE_SIZE))
+    effective_max = max(1, int(max_pages))
+    names = list(field_names) if field_names is not None else None
+    sort = [{"field_name": time_field, "desc": True}]
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+
+    collected: list[dict[str, Any]] = []
+    page_token: str | None = None
+
+    for _page_no in range(1, effective_max + 1):
+        result = await _search_page(
+            client,
+            table_id=table_id,
+            filter_info=filter_info,
+            field_names=names,
+            sort=sort,
+            automatic_fields=automatic_fields,
+            page_size=effective_size,
+            page_token=page_token,
+        )
+        items = result.get("items") or []
+        oldest_ms: int | None = None
+        for item in items:
+            millis = fields.to_millis((item.get("fields") or {}).get(time_field))
+            if millis is None:
+                continue
+            if oldest_ms is None or millis < oldest_ms:
+                oldest_ms = millis
+            if start_ms <= millis < end_ms:
+                collected.append(item)
+
+        # 本页已出现早于窗口起点的记录 -> 后续页只会更早，可安全停止
+        if oldest_ms is not None and oldest_ms < start_ms:
+            return collected
+        if not result.get("has_more"):
+            return collected
+        next_token = result.get("page_token")
+        if not next_token:
+            raise BitableQueryError(
+                "Bitable 分页异常: has_more=True 但 page_token 为空"
+                f"（窗口拉取已收 {len(collected)} 条）"
+            )
+        page_token = str(next_token)
+
+    raise BitableQueryError(
+        f"Bitable 窗口分页超过上限 max_pages={effective_max}"
+        f"（已收 {len(collected)} 条），疑似排序未生效或 page_token 未推进"
     )
 
 

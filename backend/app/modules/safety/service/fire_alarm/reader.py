@@ -21,6 +21,8 @@ from app.modules.safety.service.bitable_direct import reader as bd_reader
 from app.modules.safety.service.fire_alarm import contract
 from app.modules.safety.service.fire_alarm.bitable_mapper import map_bitable_fields
 
+F_ALARM_TIME = "报警时间"
+
 
 @dataclass
 class FireAlarmView:
@@ -154,7 +156,7 @@ class FireAlarmBitableReader:
 
     def __init__(
         self,
-        client: bd_reader.BitableRecordsReader,
+        client: bd_reader.BitablePageClient,
         *,
         table_id: str | None = None,
         page_size: int = 500,
@@ -166,18 +168,17 @@ class FireAlarmBitableReader:
     async def _fetch_window(
         self, start: datetime, end: datetime
     ) -> list[FireAlarmView]:
-        record_groups: list[list[dict[str, Any]]] = []
-        for _day, filter_info in bd_filters.day_queries("报警时间", start, end):
-            records = await self._client.list_all_records(
-                table_id=self._table_id,
-                filter_info=filter_info,
-                field_names=list(_REQUEST_FIELD_NAMES),
-                page_size=self._page_size,
-                strict=True,
-            )
-            record_groups.append(records)
-        merged = bd_filters.union_by_record_id(record_groups)
-        views = [to_view(record) for record in merged]
+        # 倒序分页 + 提前终止：不再按天逐次查询（票据 09）
+        records = await bd_reader.fetch_window_records(
+            self._client,
+            time_field=F_ALARM_TIME,
+            start=start,
+            end=end,
+            table_id=self._table_id,
+            field_names=list(_REQUEST_FIELD_NAMES),
+            page_size=self._page_size,
+        )
+        views = [to_view(record) for record in records]
         return bd_filters.trim_records(
             views,
             lambda view: view.alarm_time,
@@ -212,7 +213,7 @@ def open_reader(
     page_size: int = 500,
 ) -> FireAlarmBitableReader:
     """默认真实实现：从配置中心解析 fire_alarm/alarm 连接。"""
-    client = bd_reader.open_reader("fire_alarm", "alarm", table_id=table_id)
+    client = bd_reader.resolve_client("fire_alarm", "alarm", table_id=table_id)
     return FireAlarmBitableReader(
         client, table_id=table_id, page_size=page_size
     )
