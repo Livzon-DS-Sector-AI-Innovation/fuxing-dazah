@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { Typography, Table, Tag, Input, Space, App, Button } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ReportRecord } from '@/types/quality'
@@ -11,6 +12,7 @@ const { Title, Paragraph } = Typography
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 export default function ReportPage() {
+  const router = useRouter()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReportRecord[]>([])
@@ -42,12 +44,20 @@ export default function ReportPage() {
       render: (v: number) => v ? `${(v / 1024).toFixed(1)} KB` : '-' },
     { title: '生成时间', dataIndex: 'created_at', key: 'created_at', width: 170,
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
-    { title: '操作', key: 'actions', width: 100,
+    { title: '操作', key: 'actions', width: 180,
       render: (_: any, r: ReportRecord) => (
-        <Button size="small" icon={<DownloadOutlined />}
-          onClick={() => handleDownload(r.id)} disabled={!r.file_path}>
-          下载
-        </Button>
+        <Space size={4}>
+          <Button size="small" icon={<DownloadOutlined />}
+            onClick={() => handleDownload(r.id)} disabled={!r.file_path}>
+            下载
+          </Button>
+          {r.test_task_id && (
+            <Button size="small" type="link"
+              onClick={() => router.push(`/quality/task/${r.test_task_id}`)}>
+              查看任务
+            </Button>
+          )}
+        </Space>
       ),
     },
   ]

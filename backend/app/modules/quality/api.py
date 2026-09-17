@@ -40,7 +40,6 @@ from app.modules.quality.repository import (
     delete_coa_binding,
     delete_inspection_record,
     delete_standard_document,
-    delete_standard_item,
     delete_task_attachment,
     get_product_names,
     get_report_record,
@@ -57,11 +56,9 @@ from app.modules.quality.repository import (
     list_standard_items,
     list_task_attachments,
     list_task_reviews,
-    list_unqualified_events,
     update_standard_document,
     update_standard_item,
     update_test_task_report_date,
-    update_unqualified_event_handled,
     upsert_coa_binding,
 )
 from app.modules.quality.schemas import (
@@ -724,7 +721,8 @@ async def list_reports(
         data=[
             {
                 "id": str(it.id),
-                "inspection_record_id": str(it.inspection_record_id),
+                "inspection_record_id": str(it.inspection_record_id) if it.inspection_record_id else None,
+                "test_task_id": str(it.test_task_id) if it.test_task_id else None,
                 "template_path": it.template_path,
                 "product_name": it.product_name,
                 "batch_number": it.batch_number,
@@ -1231,20 +1229,6 @@ async def update_standard_doc_item(
     return success_response(message="已更新")
 
 
-@router.delete("/standards/items/{item_id}", summary="删除标准项目行")
-async def delete_standard_doc_item(
-    item_id: uuid.UUID, db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:standard:manage")),
-) -> JSONResponse:
-    it = await delete_standard_item(db, item_id)
-    if not it:
-        raise HTTPException(status_code=404, detail="标准行不存在")
-    return success_response(message="已删除")
-
-
-# ─── 检验任务（检阅+填报）───
-
-
 @router.post("/tasks", summary="创建检验任务（从标准库快照项目行）")
 async def create_test_task_endpoint(
     payload: TestTaskCreate = Body(...),
@@ -1271,76 +1255,6 @@ async def list_test_task_endpoint(
         data=[it.model_dump(mode="json") for it in items],
         page=page, page_size=page_size, total=total,
     )
-
-
-@router.get("/unqualified-events/export", summary="导出不合格台账 CSV")
-async def export_unqualified_events_endpoint(
-    handled: bool | None = Query(default=None, description="按处理状态过滤"),
-    db: AsyncSession = Depends(get_db),
-):
-    import csv
-    import io as _io
-
-    items = await list_unqualified_events(db, handled=handled, limit=5000)
-    buf = _io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["时间", "产品", "批号", "SOP号", "项目", "实测值", "限度", "来源", "状态"])
-    for e in items:
-        writer.writerow([
-            e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
-            e.product_name,
-            e.batch_number,
-            e.sop_no or "",
-            e.item_name,
-            e.result_value if e.result_value is not None else "",
-            e.limit_text or "",
-            e.source,
-            "已处理" if e.handled else "待处理",
-        ])
-    data = "﻿" + buf.getvalue()  # BOM：Excel 正确识别 UTF-8 中文
-    return StreamingResponse(
-        BytesIO(data.encode("utf-8")),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="unqualified_events.csv"'},
-    )
-
-
-@router.put("/unqualified-events/{event_id}/handle", summary="标记/取消不合格事件处理状态")
-async def handle_unqualified_event_endpoint(
-    event_id: uuid.UUID,
-    handled: bool = Query(default=True, description="true 标记已处理 / false 取消"),
-    db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:review")),
-) -> JSONResponse:
-    event = await update_unqualified_event_handled(db, event_id, handled)
-    if not event:
-        raise HTTPException(status_code=404, detail="事件不存在")
-    return success_response(message="已标记处理" if handled else "已取消标记")
-
-
-@router.get("/unqualified-events", summary="不合格事件台账")
-async def list_unqualified_events_endpoint(
-    handled: bool | None = Query(default=None, description="按处理状态过滤"),
-    db: AsyncSession = Depends(get_db),
-) -> JSONResponse:
-    items = await list_unqualified_events(db, handled=handled)
-    return success_response(data=[
-        {
-            "id": str(e.id),
-            "task_id": str(e.task_id) if e.task_id else None,
-            "product_name": e.product_name,
-            "batch_number": e.batch_number,
-            "item_name": e.item_name,
-            "sop_no": e.sop_no,
-            "result_value": e.result_value,
-            "standard_text": e.standard_text,
-            "limit_text": e.limit_text,
-            "source": e.source,
-            "handled": e.handled,
-            "created_at": e.created_at.isoformat() if e.created_at else None,
-        }
-        for e in items
-    ])
 
 
 @router.get("/tasks/summary", summary="按 SOP 汇总各批次检验结果（以 SOP 为索引）")

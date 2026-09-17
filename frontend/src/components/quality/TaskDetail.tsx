@@ -8,6 +8,7 @@ import {
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
@@ -469,10 +470,16 @@ export default function TaskDetail({ id }: { id: string }) {
               <Button icon={<UploadOutlined />}>上传原始证据</Button>
             </Upload>
           )}
+          <Button size="small" icon={<HistoryOutlined />}
+            onClick={() => router.push(`/quality/history?batch_number=${encodeURIComponent(detail.batch_number)}`)}>
+            液相解析记录
+          </Button>
           {detail.status === 'pending_review' && (
             <Text type="warning">
               复核进度：{Math.min(reviews.length, 2)}/2 人已通过
-              {reviews.length > 0 && `（复核时间：${reviews.map(r => r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-').join('；')}）`}
+              {reviews.length > 0 && `（${reviews.map((r, i) =>
+                `${i + 1}号复核：${r.created_at ? new Date(r.created_at).toLocaleString('zh-CN') : '-'}${r.comment ? `，备注「${r.comment}」` : ''}`
+              ).join('；')}）`}
             </Text>
           )}
         </Space>

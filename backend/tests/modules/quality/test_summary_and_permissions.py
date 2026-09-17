@@ -61,8 +61,9 @@ async def test_task_create_requires_auth(client):
     assert res.status_code == 401
 
 
-async def test_unqualified_handle_requires_auth(client):
-    res = await client.put(
-        "/api/v1/quality/unqualified-events/00000000-0000-0000-0000-000000000000/handle?handled=true"
+async def test_attachment_delete_requires_auth(client):
+    res = await client.delete(
+        "/api/v1/quality/tasks/00000000-0000-0000-0000-000000000000/attachments/"
+        "00000000-0000-0000-0000-000000000000"
     )
     assert res.status_code == 401

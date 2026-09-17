@@ -258,7 +258,6 @@ export const moduleMenus: ModuleMenu[] = [
       { key: "quality-standards", label: "🎯 产品标准", path: "/quality/standards" },
       { key: "quality-templates", label: "📑 报告模板", path: "/quality/templates" },
       { key: "quality-report", label: "📄 报告单", path: "/quality/report" },
-      { key: "quality-unqualified", label: "🚨 不合格台账", path: "/quality/unqualified" },
     ],
   },
   {

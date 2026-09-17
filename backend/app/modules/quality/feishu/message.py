@@ -133,11 +133,13 @@ _LAST_FILL_CARD: dict[str, dict] = {}
 def build_fill_card(
     batch: str,
     groups: list[tuple[str, list[dict], bool, str | None]],
+    progress: str | None = None,
 ) -> dict:
     """构建分组填报表单卡片。
 
     groups: [(组名, [{label, map_value}], 是否已提交, 已提交摘要文本)]。
     label 含 SOP 号与限度；map_value 为结果行 ID 的 JSON 列表（相同 SOP 合并组）。
+    progress 为「已填 N/M」进度文案（卡片标题展示）。
     已提交的组用确认文本行替代表单区（提交后卡片原地更新，落库状态一眼可辨）。
     """
     body_elements: list[dict] = [
@@ -175,9 +177,10 @@ def build_fill_card(
                  "value": {"action": "fill_form", "batch": batch, "group": gi, "map": name_map}},
             ],
         })
+    title = f"检验填报 {batch}" + (f"（{progress}）" if progress else "")
     return {
         "schema": "2.0",
-        "header": {"title": {"tag": "plain_text", "content": f"检验填报 {batch}"}, "template": "blue"},
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": "blue"},
         "body": {"elements": body_elements},
     }
 
@@ -187,9 +190,11 @@ def get_last_fill_card(batch: str) -> dict | None:
     return _LAST_FILL_CARD.get(batch)
 
 
-async def send_fill_card(chat_id: str, batch: str, groups: list[tuple[str, list[dict]]]) -> None:
-    """发送填报表单卡片（每组一个 form 容器）。groups: [(组名, [{item_name, limit_text}])]。"""
-    built = build_fill_card(batch, [(t, r, False, None) for t, r in groups])
+async def send_fill_card(
+    chat_id: str, batch: str, groups: list[tuple[str, list[dict]]], progress: str | None = None,
+) -> None:
+    """发送填报表单卡片（每组一个 form 容器）。groups: [(组名, [{label, map_value}])]。"""
+    built = build_fill_card(batch, [(t, r, False, None) for t, r in groups], progress)
     if not any(g[1] for g in groups):
         await send_chat_text(chat_id, f"✅ 批号 {batch} 的数值型项目已全部填写，无待填项")
         return

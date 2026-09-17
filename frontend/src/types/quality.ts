@@ -116,7 +116,8 @@ export interface InspectionRecordDetail extends InspectionRecordListItem {
 
 export interface ReportRecord {
   id: string
-  inspection_record_id: string
+  inspection_record_id: string | null
+  test_task_id: string | null
   template_path: string
   product_name: string
   batch_number: string
@@ -161,6 +162,7 @@ export interface SummaryMatrix {
 }
 
 export interface SummaryTrendPoint {
+  task_id: string
   batch_number: string
   production_date: string | null
   value: number | null
@@ -247,21 +249,6 @@ export interface TaskAttachment {
 export interface TaskReviewRecord {
   reviewer_id: string
   comment: string | null
-  created_at: string | null
-}
-
-export interface UnqualifiedEvent {
-  id: string
-  task_id: string | null
-  product_name: string
-  batch_number: string
-  item_name: string
-  sop_no: string | null
-  result_value: number | null
-  standard_text: string | null
-  limit_text: string | null
-  source: string
-  handled: boolean
   created_at: string | null
 }
 

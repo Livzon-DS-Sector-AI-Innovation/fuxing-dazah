@@ -11,6 +11,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
+from app.modules.quality import storage as quality_storage
 from app.modules.quality.feishu import event_client
 from app.modules.quality.feishu.client import (
     QUALITY_FEISHU_CHAT_IDS,
@@ -113,6 +114,31 @@ async def _resolve_task_by_batch(db, batch: str) -> QualityTestTask | None:
 # 标准文件多选点选卡片的进行中勾选状态（按批号隔离，任务创建成功后清除）
 _PENDING_DOC_SELECT: dict[str, set[str]] = {}
 
+# 图片消息暂存（先发图 → 回复「附件 批号 X」两步归档原始证据）
+_LAST_IMAGE: dict[str, dict[str, str]] = {}
+
+
+async def _download_image(message_id: str, file_key: str) -> bytes | None:
+    """下载飞书图片消息原始文件；失败返回 None。"""
+    try:
+        from lark_oapi.api.im.v1 import MessageResourceGetRequest
+
+        from app.modules.quality.feishu.client import build_client
+
+        req = (
+            MessageResourceGetRequest.builder()
+            .message_id(message_id)
+            .file_key(file_key)
+            .type_("image")
+            .build()
+        )
+        resp = await build_client().im.v1.message_resource.get(req)
+        if resp.success() and resp.file:
+            return resp.file.read()
+    except Exception:
+        logger.exception("飞书图片下载失败")
+    return None
+
 
 async def _reply_existing_task(chat_id: str, batch: str, task: QualityTestTask) -> None:
     """批号已有任务时的回执：不允许重复创建，带状态进度；填报中的任务另发填报卡片。"""
@@ -134,7 +160,11 @@ async def _reply_existing_task(chat_id: str, batch: str, task: QualityTestTask) 
     )
     if task.status == "in_progress":
         bio_rows, chem_rows = _unfilled_groups(rows)
-        await send_fill_card(chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)])
+        filled = sum(1 for r in rows if r.is_pass is not None)
+        await send_fill_card(
+            chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)],
+            progress=f"已填 {filled}/{len(rows)}",
+        )
 
 
 async def _task_doc_file_nos(db, task: QualityTestTask) -> list[str]:
@@ -152,6 +182,15 @@ async def _task_doc_file_nos(db, task: QualityTestTask) -> list[str]:
             out.append(d.file_no)
     return out
 
+
+
+
+def _limit_text(row, unit: str) -> str:
+    """限度摘要（如 ≤ 3.0%）。"""
+    return (
+        f"{row.operator or ''} {row.limit_min if row.limit_min is not None else ''}"
+        f"{row.limit_max if row.limit_max is not None else ''}{unit}"
+    ).strip()
 
 async def _reply_today_report(chat_id: str) -> None:
     """一句话查询「今天出报」：今日出报任务清单 + 待复核数。"""
@@ -285,6 +324,21 @@ async def handle_fill_command(event: dict) -> None:
     """对话式填报入口。"""
     chat_id, sender, text, chat_type = _extract_command(event)
     logger.info("质量飞书消息: chat=%s chat_type=%s sender=%s text=%r", chat_id, chat_type, sender, text)
+
+    # 图片消息：暂存图片，提示回复「附件 批号 XXX」归档为原始证据
+    msg_raw = event.get("event", {}).get("message", {})
+    if msg_raw.get("message_type") == "image":
+        try:
+            image_key = json.loads(msg_raw.get("content", "{}")).get("image_key", "")
+        except Exception:
+            image_key = ""
+        if chat_id and image_key:
+            _LAST_IMAGE[chat_id] = {"message_id": msg_raw.get("message_id", ""), "file_key": image_key}
+            await send_chat_text(
+                chat_id,
+                "📷 已收到图片。请回复「附件 批号 XXX」将其归档为对应任务的原始证据附件",
+            )
+        return
     if not chat_id or not text:
         return
     if chat_type != "p2p" and not _allowed(chat_id, sender or ""):
@@ -340,6 +394,36 @@ async def handle_fill_command(event: dict) -> None:
     from app.core.database import async_session_factory
 
     async with async_session_factory() as db:
+        # 「附件 批号 XXX」：把最近一张图片归档为任务原始证据附件
+        if not pairs and "附件" in text:
+            info = _LAST_IMAGE.get(chat_id)
+            if not info:
+                await send_chat_text(chat_id, "⚠️ 尚未收到图片，请先发送图片，再回复「附件 批号 XXX」")
+                return
+            async with async_session_factory() as db:
+                task = await _resolve_task_by_batch(db, batch)
+                if not task:
+                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务，无法归档")
+                    return
+                image_data = await _download_image(info["message_id"], info["file_key"])
+                if image_data is None:
+                    await send_chat_text(chat_id, "⚠️ 图片下载失败，请重发图片")
+                    return
+                filename = f"机器人上传_{info['file_key'][:12]}.jpg"
+                object_key = f"{task.id}/{uuid.uuid4().hex[:12]}_{filename}"
+                quality_storage.upload_attachment(object_key, image_data, "image/jpeg")
+                from app.modules.quality.repository import create_task_attachment
+
+                await create_task_attachment(db, {
+                    "task_id": task.id, "filename": filename, "content_type": "image/jpeg",
+                    "object_key": object_key, "size": len(image_data),
+                    "source": "manual", "remark": "机器人图片消息自动归档",
+                })
+                await db.commit()
+            _LAST_IMAGE.pop(chat_id, None)
+            await send_chat_text(chat_id, f"✅ 图片已归档为批号 {batch} 的原始证据附件，可在任务详情中查看")
+            return
+
         # 「建任务 批号 XXX」：批号自动识别代号 → 标准文件（可多选）→ 建任务卡片
         if not pairs and "建任务" in text:
             from app.modules.quality.feishu.message import (
@@ -408,7 +492,11 @@ async def handle_fill_command(event: dict) -> None:
                     f"✅ 批号 {batch} 的数值型项目已全部填写，或剩余项目均由液相计算表解析覆盖（请上传计算表自动填入）",
                 )
                 return
-            await send_fill_card(chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)])
+            filled = sum(1 for r in rows if r.is_pass is not None)
+            await send_fill_card(
+                chat_id, batch, [("生物组", bio_rows), ("理化组", chem_rows)],
+                progress=f"已填 {filled}/{len(rows)}",
+            )
             return
 
         rows = await list_test_results(db, task.id)
@@ -441,15 +529,20 @@ async def handle_fill_command(event: dict) -> None:
                     continue
                 unit = TestTaskService._unit_of(target.standard_text)
                 if verdict is False:
-                    # 不合格不落库：记录台账并发提醒，由人工处理
-                    await TestTaskService.record_unqualified_event(
-                        db, task, target, value, "manual", notify=True, origin_chat_id=chat_id,
+                    # 不合格不落库：仅发提醒，由人工处理
+                    try:
+                        from app.modules.quality.feishu.fill_service import (
+                            notify_unqualified,
+                        )
+                        asyncio.create_task(notify_unqualified(
+                            task.product_name, task.batch_number, target.item_name,
+                            f"{value}{unit}", _limit_text(target, unit), origin_chat_id=chat_id,
+                        ))
+                    except Exception:
+                        logger.exception("不合格提醒推送失败")
+                    alerts.append(
+                        f"{target.item_name}={value}{unit}（限度 {_limit_text(target, unit)}）"
                     )
-                    limit_text = (
-                        f"{target.operator or ''} {target.limit_min if target.limit_min is not None else ''}"
-                        f"{target.limit_max if target.limit_max is not None else ''}{unit}"
-                    ).strip()
-                    alerts.append(f"{target.item_name}={value}{unit}（限度 {limit_text}）")
                     continue
                 updates.append({
                     "result_id": target.id,
@@ -477,7 +570,7 @@ async def handle_fill_command(event: dict) -> None:
     if problems:
         lines.append("⚠️ " + "；".join(problems))
     if alerts:
-        lines.append("🚨 不合格未落库（已记录台账）：")
+        lines.append("🚨 不合格未落库：")
         lines.extend(f"- {a}" for a in alerts)
         lines.append("请人工处理")
     await send_chat_text(chat_id, "\n".join(lines))
@@ -606,7 +699,11 @@ async def handle_card_action(event: dict) -> None:
             r2 = await list_test_results(db2, t2.id)
             bio2, chem2 = _unfilled_groups(r2)
             if chat_id:
-                await send_fill_card(chat_id, batch2, [("生物组", bio2), ("理化组", chem2)])
+                filled2 = sum(1 for r in r2 if r.is_pass is not None)
+                await send_fill_card(
+                    chat_id, batch2, [("生物组", bio2), ("理化组", chem2)],
+                    progress=f"已填 {filled2}/{len(r2)}",
+                )
         return None
 
     if action_value.get("action") == "doc_query_submit":
@@ -819,15 +916,20 @@ async def handle_card_action(event: dict) -> None:
                     continue
                 unit = TestTaskService._unit_of(row.standard_text)
                 if verdict is False:
-                    # 不合格不落库：记录台账并发提醒，由人工处理
-                    await TestTaskService.record_unqualified_event(
-                        db, task, row, value, "manual", notify=True, origin_chat_id=chat_id,
+                    # 不合格不落库：仅发提醒，由人工处理
+                    try:
+                        from app.modules.quality.feishu.fill_service import (
+                            notify_unqualified,
+                        )
+                        asyncio.create_task(notify_unqualified(
+                            task.product_name, task.batch_number, row.item_name,
+                            f"{value}{unit}", _limit_text(row, unit), origin_chat_id=chat_id,
+                        ))
+                    except Exception:
+                        logger.exception("不合格提醒推送失败")
+                    alerts.append(
+                        f"{row.item_name}={value}{unit}（限度 {_limit_text(row, unit)}）"
                     )
-                    limit_text = (
-                        f"{row.operator or ''} {row.limit_min if row.limit_min is not None else ''}"
-                        f"{row.limit_max if row.limit_max is not None else ''}{unit}"
-                    ).strip()
-                    alerts.append(f"{row.item_name}={value}{unit}（限度 {limit_text}）")
                     continue
                 updates.append({
                     "result_id": row.id,
@@ -970,7 +1072,11 @@ async def push_task_reminder(task: QualityTestTask, rows: list) -> None:
             f"📋 检验任务：{task.product_name} 批号 {task.batch_number}（{task.specification or '-'}）{report_note}\n请在下方卡片填报；液相类项目上传计算表自动填入。",
         )
         if bio_rows or chem_rows:
-            await send_fill_card(chat_id, task.batch_number, [("生物组", bio_rows), ("理化组", chem_rows)])
+            filled = sum(1 for r in rows if r.is_pass is not None)
+            await send_fill_card(
+                chat_id, task.batch_number, [("生物组", bio_rows), ("理化组", chem_rows)],
+                progress=f"已填 {filled}/{len(rows)}",
+            )
 
 
 async def notify_unqualified(

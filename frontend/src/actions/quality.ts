@@ -13,7 +13,6 @@ import type {
   TestTaskListItem,
   TestTaskStatus,
   SopSummaryItem,
-  UnqualifiedEvent,
   TaskAttachment,
   TaskReviewRecord,
   SummaryMatrix,
@@ -588,38 +587,11 @@ export async function deleteTestResult(taskId: string, resultId: string): Promis
 
 // ─── 不合格事件台账 ───
 
-export async function fetchUnqualifiedEvents(
-  handled?: boolean,
-): Promise<{ data: UnqualifiedEvent[] }> {
-  const params = new URLSearchParams()
-  if (handled !== undefined) params.set('handled', String(handled))
-  const res = await fetch(`${API_BASE_URL}/api/v1/quality/unqualified-events?${params.toString()}`, {
-    headers: await _authHeaders(), cache: 'no-store',
-  })
-  if (!res.ok) throw new Error('获取不合格台账失败')
-  return res.json()
-}
 
-export async function markUnqualifiedEventHandled(
-  eventId: string, handled: boolean,
-): Promise<{ message: string }> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/v1/quality/unqualified-events/${eventId}/handle?handled=${handled}`,
-    { method: 'PUT', headers: await _authHeaders() },
-  )
-  if (!res.ok) throw new Error('更新处理状态失败')
-  return res.json()
-}
 
-export async function exportUnqualifiedEvents(handled?: boolean): Promise<Blob> {
-  const params = new URLSearchParams()
-  if (handled !== undefined) params.set('handled', String(handled))
-  const res = await fetch(`${API_BASE_URL}/api/v1/quality/unqualified-events/export?${params.toString()}`, {
-    headers: await _authHeaders(),
-  })
-  if (!res.ok) throw new Error('导出失败')
-  return res.blob()
-}
+
+
+
 
 // ─── 任务原始证据附件 / 双人复核 ───
 
