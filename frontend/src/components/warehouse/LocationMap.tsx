@@ -2,9 +2,12 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { App, Button, Card, Col, Drawer, Row, Space, Spin, Table, Tag, Typography } from 'antd'
+import { Drawer, Segmented, Spin, Table } from 'antd'
 import type { TableColumnsType } from 'antd'
-import dayjs from 'dayjs'
+import { PageHeader } from './PageHeader'
+import { SectionCard } from './ui/SectionCard'
+import { StatusTag } from './ui/StatusTag'
+import type { Tone } from './ui/tokens'
 
 const BASE = '/api/v1/warehouse'
 
@@ -19,18 +22,43 @@ interface LocationMapItem {
   total_qty: number
 }
 
-function occupancyColor(occupied: number): string {
-  if (occupied === 0) return '#f5f5f5'
-  if (occupied <= 2) return '#d4edda'
-  if (occupied <= 5) return '#fff3cd'
-  return '#f8d7da'
+type OccupancyLevel = 'idle' | 'low' | 'mid' | 'high'
+
+function occupancyLevel(occupied: number): OccupancyLevel {
+  if (occupied === 0) return 'idle'
+  if (occupied <= 2) return 'low'
+  if (occupied <= 5) return 'mid'
+  return 'high'
 }
 
-function occupancyLabel(occupied: number): string {
-  if (occupied === 0) return '空闲'
-  if (occupied <= 2) return '低占用'
-  if (occupied <= 5) return '中占用'
-  return '高占用'
+const LEVEL_META: Record<OccupancyLevel, { label: string; tone: Tone }> = {
+  idle: { label: '空闲', tone: 'default' },
+  low: { label: '低占用', tone: 'ok' },
+  mid: { label: '中占用', tone: 'warn' },
+  high: { label: '高占用', tone: 'danger' },
+}
+
+/** 库位格子：占用语义底色 + 编码/数量，点击弹详情 */
+function LocationCell({ loc, onPick }: { loc: LocationMapItem; onPick: (loc: LocationMapItem) => void }) {
+  const level = occupancyLevel(loc.occupied_rows)
+  const toneBg: Record<OccupancyLevel, string> = {
+    idle: 'var(--color-surface)',
+    low: 'var(--wh-ok-bg)',
+    mid: 'var(--wh-warn-bg)',
+    high: 'var(--wh-danger-bg)',
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onPick(loc)}
+      className="cursor-pointer rounded-lg border border-[var(--color-hairline)] px-1.5 py-2 text-center transition-shadow hover:shadow-md"
+      style={{ background: toneBg[level] }}
+      title={`${loc.code} ${loc.name} · ${LEVEL_META[level].label}`}
+    >
+      <div className="truncate text-[12px] font-semibold text-[var(--color-charcoal)]">{loc.code}</div>
+      <div className="text-[11px] tabular-nums text-[var(--color-steel)]">{loc.total_qty}</div>
+    </button>
+  )
 }
 
 export function LocationMap() {
@@ -46,55 +74,83 @@ export function LocationMap() {
     },
   })
 
-  if (isLoading || !map) return <Spin />
+  if (isLoading || !map) return <Spin className="block w-full text-center" />
 
+  const zoneLabel = (z: string) => (z && z !== '-' ? z : '未分区')
   const zones = [...new Set(map.map(l => l.zone))].sort()
   const activeZone = selectedZone ?? zones[0] ?? ''
   const zoneItems = map.filter(l => l.zone === activeZone)
   const aisles = [...new Set(zoneItems.map(l => l.aisle))].sort()
+  const occupiedCount = zoneItems.filter(l => l.occupied_rows > 0).length
+  const occupancyRate = zoneItems.length > 0 ? Math.round((occupiedCount / zoneItems.length) * 100) : 0
 
   return (
     <div>
-      <Space wrap style={{ marginBottom: 12 }}>
-        {zones.map(z => (
-          <Button
-            key={z}
-            type={z === activeZone ? 'primary' : 'default'}
-            size="small"
-            onClick={() => setSelectedZone(z)}
-          >
-            {z}
-          </Button>
-        ))}
-      </Space>
-      <Row gutter={[8, 8]}>
-        {aisles.map(aisle => (
-          <Col key={aisle} xs={12} md={8} xl={6}>
-            <Card size="small" title={aisle}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(64px, 1fr))', gap: 4 }}>
-                {zoneItems.filter(l => l.aisle === aisle).map(loc => (
-                  <div
-                    key={loc.id}
-                    onClick={() => setSelectedLoc(loc)}
-                    style={{
-                      background: occupancyColor(loc.occupied_rows),
-                      borderRadius: 4,
-                      padding: '4px 2px',
-                      textAlign: 'center',
-                      cursor: 'pointer',
-                      fontSize: 11,
-                      border: '1px solid #e5e3de',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600 }}>{loc.code}</div>
-                    <div>{loc.total_qty}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </Col>
-        ))}
-      </Row>
+      <PageHeader
+        breadcrumb={['仓储管理', '库位地图']}
+        title="库位地图"
+        description="按库区/巷道可视化查看占用情况"
+        actions={
+          <Segmented
+            value={activeZone}
+            onChange={value => setSelectedZone(value as string)}
+            options={zones.map(z => ({ value: z, label: zoneLabel(z) }))}
+          />
+        }
+      />
+
+      <SectionCard
+        title={`库区：${zoneLabel(activeZone)}`}
+        description={`${zoneItems.length} 个库位 · ${occupiedCount} 个有货 · 占用率 ${occupancyRate}%`}
+        action={
+          <div className="flex items-center gap-3">
+            {(Object.keys(LEVEL_META) as OccupancyLevel[]).map(level => (
+              <span key={level} className="inline-flex items-center gap-1.5 text-[12px] text-[var(--color-steel)]">
+                <span
+                  aria-hidden
+                  className="h-2.5 w-2.5 rounded-full border border-[var(--color-hairline)]"
+                  style={{
+                    background:
+                      level === 'idle'
+                        ? 'var(--color-surface)'
+                        : level === 'low'
+                          ? 'var(--wh-ok-bg)'
+                          : level === 'mid'
+                            ? 'var(--wh-warn-bg)'
+                            : 'var(--wh-danger-bg)',
+                  }}
+                />
+                {LEVEL_META[level].label}
+              </span>
+            ))}
+          </div>
+        }
+      >
+        {zoneItems.length === 0 ? (
+          <div className="py-10 text-center text-[13px] text-[var(--color-stone)]">该库区暂无库位</div>
+        ) : (
+          <div className="flex flex-col gap-6">
+            {aisles.map(aisle => (
+              <section key={aisle}>
+                <div className="mb-2 text-[13px] font-medium text-[var(--color-slate)]">
+                  巷道 {aisle && aisle !== '-' ? aisle : '未分配'}
+                  <span className="ml-2 text-[12px] font-normal text-[var(--color-stone)]">
+                    {zoneItems.filter(l => l.aisle === aisle).length} 位
+                  </span>
+                </div>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2">
+                  {zoneItems
+                    .filter(l => l.aisle === aisle)
+                    .map(loc => (
+                      <LocationCell key={loc.id} loc={loc} onPick={setSelectedLoc} />
+                    ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+
       {selectedLoc && (
         <Drawer
           title={`库位 ${selectedLoc.code} ${selectedLoc.name}`}
@@ -103,11 +159,15 @@ export function LocationMap() {
           onClose={() => setSelectedLoc(null)}
           destroyOnHidden
         >
-          <Tag color="blue">{selectedLoc.location_type}</Tag>
-          <Tag>{occupancyLabel(selectedLoc.occupied_rows)}</Tag>
-          <Typography.Paragraph style={{ marginTop: 8 }}>
-            占用行数: {selectedLoc.occupied_rows}，库存数量: {selectedLoc.total_qty}
-          </Typography.Paragraph>
+          <div className="mb-3 flex items-center gap-2">
+            <StatusTag
+              tone={LEVEL_META[occupancyLevel(selectedLoc.occupied_rows)].tone}
+              label={LEVEL_META[occupancyLevel(selectedLoc.occupied_rows)].label}
+            />
+            <span className="text-[13px] text-[var(--color-steel)]">
+              占用 {selectedLoc.occupied_rows} 行 · 库存 {selectedLoc.total_qty}
+            </span>
+          </div>
           <LocationDetailTable locationId={selectedLoc.id} />
         </Drawer>
       )}
