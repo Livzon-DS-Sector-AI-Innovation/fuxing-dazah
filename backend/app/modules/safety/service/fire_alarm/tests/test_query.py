@@ -93,13 +93,8 @@ async def test_query_pushes_filters_and_applies_keyword_pagination() -> None:
     assert result["window"] == {"date_from": "2026-09-17", "date_to": "2026-09-17"}
     assert len(reader.calls) == 1
     fields = {c["field_name"] for c in _conditions(reader.calls)}
-    assert fields == {
-        "报警时间",
-        "报警部门负责人.部门",
-        "报警类型",
-        "报警性质",
-        "AI维度",
-    }
+    # 部门不下推（多选字段不支持 contains），因此条件里不含部门字段
+    assert fields == {"报警时间", "报警类型", "报警性质", "AI维度"}
     assert "AI维度" in reader.calls[0]["field_names"]
 
 
@@ -127,6 +122,29 @@ async def test_query_range_over_limit_returns_error() -> None:
     assert "超过上限" in result["error"]
     assert reader.calls == []
 
+
+async def test_department_is_not_pushed_down_and_matches_substring() -> None:
+    """回归（票据 08 真机实测）：部门是多选字段，不支持 contains 下推。
+
+    下推会得到 code=1254018 InvalidFilter；改用 is 精确匹配又会漏掉「五部」
+    这类部分部门名。因此部门只在应用侧做子串匹配。
+    """
+    start = datetime(2026, 9, 17, 0, 0, tzinfo=UTC)
+    reader = FakeQueryReader([
+        _record("rec-a", moment=start + timedelta(hours=2), department="提炼工程五部"),
+        _record("rec-b", moment=start + timedelta(hours=3), department="动力车间"),
+    ])
+
+    result = await query.query_fire_alarms_direct(
+        date_from=DAY, date_to=DAY, department="五部", client=reader,
+    )
+
+    assert result["success"] is True
+    assert result["total"] == 1
+    assert result["items"][0]["id"] == "rec-a"
+    pushed = {cond["field_name"] for cond in _conditions(reader.calls)}
+    assert "报警部门负责人.部门" not in pushed
+    assert pushed == {"报警时间"}
 
 async def test_query_empty_window_returns_empty() -> None:
     result = await query.query_fire_alarms_direct(

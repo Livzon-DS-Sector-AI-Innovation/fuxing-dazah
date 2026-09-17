@@ -10,9 +10,16 @@ from app.modules.safety.service.bitable_direct import reader as bd_reader
 from app.modules.safety.service.fire_alarm import contract, reader
 
 F_ALARM_TIME = "报警时间"
-F_DEPARTMENT = "报警部门负责人.部门"
 F_ALARM_TYPE = "报警类型"
 F_ALARM_NATURE = "报警性质"
+
+# 部门字段说明（2026-09-17 票据 08 实测）：
+# 1. 该表没有「报警部门」独立列（bitable_config registry 里的映射已过时）；
+# 2. 部门实际来自「报警部门负责人.部门」，它是多选(type=4)，Bitable 的多选
+#    不支持 contains 过滤（实测 code=1254018 InvalidFilter）；
+# 3. 用 is 精确匹配会漏掉「五部」这类部分部门名。
+# 因此部门不下推服务端，统一在应用侧做子串匹配：窗口内记录量级为数百条，
+# 全量拉回再过滤的成本可忽略，且语义与镜像链路的模糊匹配一致。
 
 MAX_QUERY_DAYS = 31
 DEFAULT_QUERY_DAYS = 30
@@ -107,7 +114,7 @@ async def query_fire_alarms_direct(
 ) -> dict[str, Any]:
     """直读消防 Bitable 并返回 Agent 工具结构。
 
-    - 日期范围、部门、类型、性质、AI 维度尽量下推服务端；
+    - 日期范围、类型、性质、AI 维度下推服务端；部门在应用侧做子串匹配；
     - 关键词在应用侧匹配报警部位 / 具体报警原因；
     - 分页在应用侧完成；
     - 未给日期范围时默认最近 30 天；范围超过 31 天返回明确错误。
@@ -126,10 +133,7 @@ async def query_fire_alarms_direct(
     end_dt = bd_filters.bjt_day_start(end_date) + timedelta(days=1)
 
     push_conditions: list[dict[str, Any]] = []
-    if department:
-        push_conditions.append(
-            bd_filters.condition(F_DEPARTMENT, "contains", [department])
-        )
+    # 部门不下推（原因见模块头部说明），统一在应用侧做子串匹配。
     if alarm_type:
         push_conditions.append(bd_filters.condition(F_ALARM_TYPE, "is", [alarm_type]))
     if alarm_nature:
