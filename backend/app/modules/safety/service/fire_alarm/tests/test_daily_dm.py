@@ -16,6 +16,7 @@ from app.modules.safety.service.fire_alarm.daily_dm import (
     build_alarm_card,
     collect_recipient_plans,
     dept_recipients,
+    extra_mentions_for_depts,
     send_daily_alarm_dms,
 )
 from app.modules.safety.service.fire_alarm.service import (
@@ -141,6 +142,18 @@ class TestDeptRecipients:
         assert len(plans) == 2
         record, roles = plans[0]
         assert "分管安全员" in roles
+
+
+class TestExtraMentionsForDepts:
+    def test_hit_configured_dept(self) -> None:
+        assert extra_mentions_for_depts({"提炼工程一部"}) == {"提炼工程一部": ["吴志华"]}
+
+    def test_normalize_before_match(self) -> None:
+        # 「提炼六部」→ DEPT_NORMALIZE →「提炼工程六部」（未配置额外名单）→ 不命中
+        assert extra_mentions_for_depts({"提炼六部"}) == {}
+
+    def test_unconfigured_dept_ignored(self) -> None:
+        assert extra_mentions_for_depts({"提炼工程二部", "提炼工程三部", ""}) == {}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

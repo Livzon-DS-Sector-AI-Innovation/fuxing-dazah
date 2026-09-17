@@ -23,7 +23,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from app.core.redis import redis_client
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
@@ -31,12 +31,11 @@ from app.modules.safety.feishu.bitable_handler import (
     HAZARD_CATEGORY_REVERSE,
     HAZARD_LEVEL_REVERSE,
     HAZARD_TYPE_REVERSE,
-    _extract_person_info,
-    _extract_rich_text,
-    _extract_select_values,
     _format_bitable_select_value,
-    _ms_to_datetime,
 )
+from app.modules.safety.service.bitable_direct import fields as bd_fields
+from app.modules.safety.service.bitable_direct import filters as bd_filters
+from app.modules.safety.service.bitable_direct import locks as bd_locks
 from app.modules.safety.service.hazard_direct import config
 
 logger = logging.getLogger(__name__)
@@ -102,11 +101,15 @@ _ERROR_PREFIX = "ERROR:"
 
 
 def _and(conditions: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"conjunction": "and", "conditions": conditions}
+    if not conditions:
+        return {"conjunction": "and", "conditions": []}
+    return bd_filters.and_group(conditions)
 
 
 def _or(conditions: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"conjunction": "or", "conditions": conditions}
+    if not conditions:
+        return {"conjunction": "or", "conditions": []}
+    return bd_filters.or_group(conditions)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -116,31 +119,27 @@ def _or(conditions: list[dict[str, Any]]) -> dict[str, Any]:
 
 def f_text(fields: dict[str, Any], name: str) -> str:
     """文本字段 → 纯字符串（富文本数组自动拼接）。"""
-    return (_extract_rich_text(fields.get(name)) or "").strip()
+    return bd_fields.text(fields, name) or ""
 
 
 def f_select(fields: dict[str, Any], name: str) -> str:
     """单选/多选字段 → 逗号拼接字符串。"""
-    return (_extract_select_values(fields.get(name)) or "").strip()
+    return bd_fields.select(fields, name) or ""
 
 
 def f_person(fields: dict[str, Any], name: str) -> str:
     """人员字段 → 姓名（无姓名时回退 id）。"""
-    info = _extract_person_info(fields.get(name))
-    return (info.get("name") or info.get("id") or "").strip()
+    return bd_fields.person(fields, name) or ""
 
 
 def f_datetime(fields: dict[str, Any], name: str) -> datetime | None:
     """日期字段 → datetime（缺失返回 None）。"""
-    return _ms_to_datetime(fields.get(name))
+    return bd_fields.datetime_ms(fields, name)
 
 
 def f_attachments(fields: dict[str, Any], name: str) -> list[dict[str, Any]]:
     """附件字段 → 附件元数据列表。"""
-    raw = fields.get(name)
-    if not isinstance(raw, list):
-        return []
-    return [a for a in raw if isinstance(a, dict) and a.get("file_token")]
+    return bd_fields.attachments(fields, name)
 
 
 def is_placeholder_no(value: str) -> bool:
@@ -287,11 +286,9 @@ async def search_created_since(
 ) -> list[dict[str, Any]]:
     """③ 近 N 天新增（按业务字段「检查日期」过滤；系统字段不可过滤）。"""
     since = datetime.now(UTC) - timedelta(days=days)
-    ms = int(since.timestamp() * 1000)
+    cond = bd_filters.date_condition(F_DATE, since, lower=True)
     return await client.list_all_records(
-        filter_info=_and(
-            [{"field_name": F_DATE, "operator": "isGreater", "value": ["ExactDate", str(ms)]}]
-        ),
+        filter_info=_and([cond]) if cond else None,
         page_size=500,
         strict=True,
     )
@@ -302,18 +299,12 @@ async def search_closed_since(
 ) -> list[dict[str, Any]]:
     """③ 近 N 天关闭（按「整改完成时间」过滤）。"""
     since = datetime.now(UTC) - timedelta(days=days)
-    ms = int(since.timestamp() * 1000)
+    conds = [bd_filters.condition(F_RECTIFY_STATUS, "is", ["已关闭"])]
+    date_cond = bd_filters.date_condition(F_RECTIFY_DONE_AT, since, lower=True)
+    if date_cond:
+        conds.append(date_cond)
     return await client.list_all_records(
-        filter_info=_and(
-            [
-                {"field_name": F_RECTIFY_STATUS, "operator": "is", "value": ["已关闭"]},
-                {
-                    "field_name": F_RECTIFY_DONE_AT,
-                    "operator": "isGreater",
-                    "value": ["ExactDate", str(ms)],
-                },
-            ]
-        ),
+        filter_info=_and(conds),
         page_size=500,
         strict=True,
     )
@@ -333,17 +324,7 @@ def _date_cond(field: str, value: str, *, lower: bool) -> dict[str, Any] | None:
     Bitable 日期字段不支持 isGreaterEqual/isLessEqual，故下界用 isGreater、
     上界用 isLess（调用方负责把上界设为「次日 00:00」）。
     """
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return {
-        "field_name": field,
-        "operator": "isGreater" if lower else "isLess",
-        "value": ["ExactDate", str(int(dt.timestamp() * 1000))],
-    }
+    return bd_filters.date_condition(field, value, lower=lower)
 
 
 def _base_conditions(
@@ -383,7 +364,7 @@ def _flat(conds: list[dict[str, Any]], conjunction: str = "and") -> dict[str, An
     注意：实测该 records/search 接口**不支持嵌套 children/conditions**
     （传嵌套结构返回 99992402 field validation failed），故所有条件必须扁平。
     """
-    return {"conjunction": conjunction, "conditions": conds} if conds else None
+    return bd_filters.flat_group(conds, conjunction)
 
 
 async def query_hazards(
@@ -551,7 +532,7 @@ class HazardNoAllocator:
 
 
 def _lock_key(record_id: str) -> str:
-    return f"safety:hazard:direct:lock:{record_id}"
+    return bd_locks.record_lock_key("hazard", record_id)
 
 
 @asynccontextmanager
@@ -561,22 +542,13 @@ async def record_lock(record_id: str) -> AsyncIterator[bool]:
     yield True = 抢到锁；False = 已被其他轮次/实例处理，调用方应跳过。
     正常结束后释放，失败记录下一轮可重试。
     """
-    key = _lock_key(record_id)
-    try:
-        acquired = bool(
-            await redis_client.set(key, "1", ex=config.record_lock_ttl(), nx=True)
-        )
-    except Exception:
-        logger.warning("Redis 不可用，跳过记录锁: record_id=%s", record_id, exc_info=True)
-        acquired = True
-    try:
+    async with bd_locks.record_lock(
+        record_id,
+        domain="hazard",
+        ttl_seconds=config.record_lock_ttl(),
+        redis=cast(bd_locks.RedisLike, redis_client),
+    ) as acquired:
         yield acquired
-    finally:
-        if acquired:
-            try:
-                await redis_client.delete(key)
-            except Exception:
-                logger.debug("释放记录锁失败: record_id=%s", record_id, exc_info=True)
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -132,6 +132,60 @@ class TestRenderDailyReport:
         md = render_daily_report(agg, {}, ai_summary=None)
         assert "（无部门负责人信息，请各责任部门自行跟进）" in md
 
+    def test_dm_recipients_block_rendered(self) -> None:
+        dm = {
+            "动力车间": {"部门负责人": "张三", "分管安全员": "李四", "分管领导": "王五"},
+            "仓储部": {},
+        }
+        md = render_daily_report(
+            make_agg([make_record()]), {}, ai_summary=None, dm_recipients=dm,
+        )
+        assert "**📨 每日私发推送**" in md
+        assert "· 动力车间：张三（负责人）、李四（分管安全员）、王五（分管领导）" in md
+        assert "· 仓储部：（未配置收件人，跳过私发）" in md
+        assert "· 每条报警一卡一条私发至上述人员（负责人 + 分管安全员）" in md
+        # 板块位于部门明细之后、文末整改提醒之前
+        assert md.index("**📨 每日私发推送**") > md.index("**动力车间**")
+        assert md.index("**📨 每日私发推送**") < md.index("各部门负责人请核实")
+
+    def test_dm_recipients_none_or_empty_omits_block(self) -> None:
+        md = render_daily_report(
+            make_agg([make_record()]), {}, ai_summary=None, dm_recipients=None,
+        )
+        assert "📨" not in md
+        md_empty = render_daily_report(
+            make_agg([make_record()]), {}, ai_summary=None, dm_recipients={},
+        )
+        assert "📨" not in md_empty
+
+    def test_extra_mentions_at_leader_side(self) -> None:
+        """EXTRA_DM_RECIPIENTS 命中部门：部门块在 @负责人之外追加 @（如 @分管领导）。"""
+        md = render_daily_report(
+            make_agg([make_record()]),
+            {"张三": "ou_zhangsan", "王五": "ou_wangwu"},
+            ai_summary=None,
+            extra_mentions={"动力车间": ["王五"]},
+        )
+        dept_head = next(
+            line for line in md.splitlines() if line.startswith("**动力车间**")
+        )
+        assert dept_head.index('<at id=ou_zhangsan></at>') < dept_head.index(
+            '<at id=ou_wangwu></at>'
+        )
+
+    def test_extra_mentions_dedupe_leader(self) -> None:
+        """额外名单与负责人同名时只 @ 一次。"""
+        md = render_daily_report(
+            make_agg([make_record()]),
+            {"张三": "ou_zhangsan"},
+            ai_summary=None,
+            extra_mentions={"动力车间": ["张三"]},
+        )
+        dept_head = next(
+            line for line in md.splitlines() if line.startswith("**动力车间**")
+        )
+        assert dept_head.count('<at id=ou_zhangsan></at>') == 1
+
 
 def make_weekly_agg(records, **kw) -> FireAlarmWeeklyAgg:
     return FireAlarmWeeklyAgg(

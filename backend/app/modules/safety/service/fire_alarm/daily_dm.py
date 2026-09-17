@@ -42,6 +42,8 @@ HEADER_TEMPLATE = "red"
 # 私发追加收件人规则：部门（DEPT_NORMALIZE 归一化后）→ {role: name}。
 # 用户确认（2026-08-31）：提炼工程一部除现有推送人员外，同步推送给分管领导吴志华；
 # 卡片不区分收件人角色，推送内容与现有收件人完全一致。
+# 2026-09-15：本名单同时驱动群日报部门块的额外 @（extra_mentions_for_depts，
+# 提炼工程一部明细块在 @负责人之外再 @ 分管领导）。
 EXTRA_DM_RECIPIENTS: dict[str, dict[str, str]] = {
     "提炼工程一部": {"分管领导": "吴志华"},
 }
@@ -154,6 +156,25 @@ def collect_recipient_plans(
 ) -> list[tuple[Any, dict[str, str]]]:
     """每条报警 → 收件人计划（record, {role: name}）。"""
     return [(r, dept_recipients(r)) for r in records]
+
+
+def extra_mentions_for_depts(depts: Any) -> dict[str, list[str]]:
+    """部门集合 → 额外 @ 名单（EXTRA_DM_RECIPIENTS 命中的部门，键用原始部门名）。
+
+    群日报部门块与私发共用 EXTRA_DM_RECIPIENTS 单一来源：额外私发对象在
+    群卡明细块同样被 @（部门名先 DEPT_NORMALIZE 归一化再匹配配置键）。
+    """
+    out: dict[str, list[str]] = {}
+    for dept in depts:
+        if not dept:
+            continue
+        normalized = DEPT_NORMALIZE.get(dept, dept)
+        roles = EXTRA_DM_RECIPIENTS.get(normalized)
+        if roles:
+            names = [n for n in roles.values() if n]
+            if names:
+                out[dept] = names
+    return out
 
 
 async def load_identity_emails(session: AsyncSession, names: set[str]) -> dict[str, str]:

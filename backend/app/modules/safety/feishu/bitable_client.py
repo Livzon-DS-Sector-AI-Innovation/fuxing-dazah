@@ -640,6 +640,7 @@ class SafetyBitableClient:
         table_id: str | None = None,
         *,
         filter_str: str | None = None,
+        field_names: list[str] | None = None,
         page_size: int = 100,
         page_token: str | None = None,
         automatic_fields: bool = False,
@@ -652,6 +653,7 @@ class SafetyBitableClient:
         返回 {"items": [...], "has_more": bool, "page_token": str|None, "total": int|None}.
 
         filter_str: 字符串公式过滤（如 'CurrentValue.[状态]="待整改"'）
+        field_names: 只返回这些字段（字段名或字段 ID），减小返回体积；None = 全部字段
         filter_info: 结构化过滤（与 filter_str 互斥，优先使用 filter_info）
             格式: {"conjunction": "and",
                    "conditions": [{"field_name": "...", "operator": "...", "value": [...]}]}
@@ -672,6 +674,8 @@ class SafetyBitableClient:
             payload["filter"] = filter_str
         if automatic_fields:
             payload["automatic_fields"] = True
+        if field_names:
+            payload["field_names"] = list(field_names)
         if sort:
             payload["sort"] = sort
 
@@ -714,6 +718,7 @@ class SafetyBitableClient:
         *,
         filter_str: str | None = None,
         filter_info: dict[str, Any] | None = None,
+        field_names: list[str] | None = None,
         sort: list[dict[str, Any]] | None = None,
         automatic_fields: bool = False,
         page_size: int = 200,
@@ -723,6 +728,8 @@ class SafetyBitableClient:
 
         返回 [{"record_id": "...", "fields": {...}}, ...]。
         自动处理分页，直至 has_more=false 或 page_token 为空。
+
+        field_names / sort / automatic_fields: 透传给 ``search_records``。
 
         strict: 透传给 ``search_records``；True 时查询失败抛 ``BitableQueryError``，
         避免把「接口失败」误当成「没有记录」（定时任务静默漏发卡）。
@@ -737,6 +744,7 @@ class SafetyBitableClient:
                 table_id=table_id,
                 filter_str=filter_str,
                 filter_info=filter_info,
+                field_names=field_names,
                 sort=sort,
                 automatic_fields=automatic_fields,
                 page_size=page_size,

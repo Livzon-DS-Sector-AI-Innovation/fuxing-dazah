@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
@@ -22,6 +23,9 @@ from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import FireAlarmRecord
 from app.modules.safety.schemas.fire_alarm import FireAlarmReportResponse
+from app.modules.safety.service.fire_alarm import config as fire_config
+from app.modules.safety.service.fire_alarm import reader as fire_reader
+from app.modules.safety.service.fire_alarm import writeback as fire_writeback
 from app.modules.safety.service.fire_alarm.aggregator import (
     aggregate_daily,
     aggregate_weekly,
@@ -82,12 +86,24 @@ _BITABLE_RECORDS_URL = (
 class FireAlarmService:
     """消防报警分析业务服务（同步 + 查询/统计 + 日报/周报生成与推送编排）。"""
 
-    def __init__(self, session: AsyncSession, ai_service: Any = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        ai_service: Any = None,
+        reader: fire_reader.FireAlarmRecordsReader | None = None,
+    ) -> None:
         self.session = session
         self.analyst = FireAlarmAnalyst(session, ai_service=ai_service)
+        self._reader = reader
+
+    def _direct_reader(self) -> fire_reader.FireAlarmRecordsReader:
+        """返回注入的读取器替身；未注入时创建默认真实实现。"""
+        return self._reader or fire_reader.open_reader()
 
     async def sync_from_bitable(self) -> tuple[int, int]:
         """从飞书 Bitable 全量同步到 FireAlarmRecord。
+
+        直读模式下全量同步兜底由闸门关闭：返回 (0, 0)，不写平台库。
 
         Returns:
             (synced_count, soft_deleted_count)
@@ -99,6 +115,10 @@ class FireAlarmService:
           3. 软删对齐：本地有但远端无的 bitable 来源活行
              → is_deleted=true + feishu_record_id=NULL（软删除铁律）
         """
+        if not fire_config.legacy_sync_job_active():
+            logger.info("消防直读模式：跳过全量同步兜底")
+            return 0, 0
+
         import httpx
 
         from app.modules.safety.feishu.client import get_safety_tenant_token
@@ -275,8 +295,10 @@ class FireAlarmService:
             "department_distribution": _count_by(week_records, "department"),
         }
 
-    async def _get_records_by_date(self, target_date: date) -> list[FireAlarmRecord]:
+    async def _get_records_by_date(self, target_date: date) -> list[Any]:
         """按北京时间自然日窗口查询当日报警记录（非软删）。"""
+        if fire_config.direct_enabled():
+            return await self._direct_reader().get_records_by_date(target_date)
         utc_start = (
             datetime.combine(target_date, time.min, tzinfo=UTC)
             - timedelta(hours=8)  # 北京时间 00:00 = UTC 前一日 16:00
@@ -295,7 +317,7 @@ class FireAlarmService:
 
     async def _get_records_by_rolling_window(
         self, target_date: date,
-    ) -> tuple[list[FireAlarmRecord], datetime, datetime]:
+    ) -> tuple[list[Any], datetime, datetime]:
         """按滚动 24h 窗口查询报警记录：前日 17:00 ~ 当日 17:00（北京时间）。
 
         17:00 日报反映的是「上个日报周期（昨日17点至今日17点）」内发生的报警，
@@ -305,6 +327,10 @@ class FireAlarmService:
         Returns:
             (records, utc_start, utc_end)：utc_start/end 供 renderer 显示区间。
         """
+        if fire_config.direct_enabled():
+            return await self._direct_reader().get_records_by_rolling_window(
+                target_date
+            )
         # 北京时间 target_date 17:00 = UTC target_date 09:00
         utc_end = datetime.combine(target_date, time(9, 0), tzinfo=UTC)
         utc_start = utc_end - timedelta(days=1)  # 前日北京17:00
@@ -322,8 +348,12 @@ class FireAlarmService:
 
     async def _get_records_by_week(
         self, week_start: date, week_end: date,
-    ) -> list[FireAlarmRecord]:
+    ) -> list[Any]:
         """按北京时间自然周窗口查询周报警记录（周一 00:00 ~ 周日 24:00 北京时间）。"""
+        if fire_config.direct_enabled():
+            return await self._direct_reader().get_records_by_week(
+                week_start, week_end
+            )
         utc_start = (
             datetime.combine(week_start, time.min, tzinfo=UTC)
             - timedelta(hours=8)  # 北京时间周一 00:00 = UTC 周日 16:00
@@ -386,18 +416,37 @@ class FireAlarmService:
             except Exception:
                 logger.warning("逐条 AI 分析失败，跳过")
 
-            # UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
-            await self.session.flush()
-            record_ids = [r.id for r in records]
-            re_fetched = (
-                await self.session.scalars(
-                    select(FireAlarmRecord).where(FireAlarmRecord.id.in_(record_ids))
-                )
-            ).all()
-            agg.records = list(re_fetched)
-            # 逐条 AI 回写后重算维度分布（聚合发生在回写前，统计需用最新值）
-            agg.dimension_distribution = _count_by(re_fetched, "ai_dimension")
-            await self.session.commit()
+            if fire_config.direct_enabled():
+                # 直读路径：AI 结果落在视图对象上，不写平台库、不 re-fetch。
+                agg.records = list(records)
+                agg.dimension_distribution = _count_by(records, "ai_dimension")
+                if fire_config.writeback_ai_enabled():
+                    try:
+                        wb = await fire_writeback.writeback_ai_results(records)
+                        if wb.failed:
+                            logger.warning(
+                                "消防 AI 回写存在失败: attempted=%d written=%d failed=%d",
+                                wb.attempted,
+                                wb.written,
+                                len(wb.failed),
+                            )
+                    except Exception:
+                        logger.warning("消防 AI 回写失败（不阻塞日报）", exc_info=True)
+            else:
+                # 旧镜像路径：UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
+                await self.session.flush()
+                record_ids = [r.id for r in records]
+                re_fetched = (
+                    await self.session.scalars(
+                        select(FireAlarmRecord).where(
+                            FireAlarmRecord.id.in_(record_ids)
+                        )
+                    )
+                ).all()
+                agg.records = list(re_fetched)
+                # 逐条 AI 回写后重算维度分布（聚合发生在回写前，统计需用最新值）
+                agg.dimension_distribution = _count_by(re_fetched, "ai_dimension")
+                await self.session.commit()
 
         # 汇总 AI（失败返回 None，renderer 省略 AI 块）
         per_summaries = [
@@ -408,54 +457,59 @@ class FireAlarmService:
             agg, per_summaries, channel=channel,
         )
 
-        # @提及解析（报警部门负责人 → open_id；解析失败退化为纯文本）
-        person_open_id = await self._resolve_dept_leader_open_ids(agg.dept_leader_names)
+        # @提及解析（报警部门负责人 → open_id；解析失败退化为纯文本）。
+        # 额外 @ 名单与私发 EXTRA_DM_RECIPIENTS 同源（如提炼工程一部加 @分管领导），
+        # 姓名一并解析 open_id，未解析到的退化为纯文本。
+        from app.modules.safety.service.fire_alarm.daily_dm import (
+            extra_mentions_for_depts,
+        )
+
+        extra_mentions = extra_mentions_for_depts(
+            {r.department for r in agg.records},
+        )
+        extra_names = [n for names in extra_mentions.values() for n in names]
+        person_open_id = await self._resolve_dept_leader_open_ids(
+            agg.dept_leader_names, extra_names=extra_names,
+        )
+
+        # 私发收件人计划（与私发任务 daily_dm.dept_recipients 同源同规则，
+        # 按部门去重取首条记录解析）；开关关闭/无报警时为 None → 渲染省略板块
+        dm_recipients: dict[str, dict[str, str]] | None = None
+        try:
+            from app.modules.safety.service.fire_alarm.daily_dm import (
+                DM_ENABLED,
+                dept_recipients,
+            )
+
+            if DM_ENABLED and agg.records:
+                dm_recipients = {}
+                for r in agg.records:
+                    dept = r.department or "部门待确认"
+                    if dept not in dm_recipients:
+                        dm_recipients[dept] = dept_recipients(r)
+        except Exception:
+            logger.warning("私发收件人计划构建失败（日报省略私发板块）", exc_info=True)
+            dm_recipients = None
 
         markdown = render_daily_report(
             agg, person_open_id, ai_summary,
             window_start_utc=window_start_utc,
             window_end_utc=window_end_utc,
+            dm_recipients=dm_recipients,
+            extra_mentions=extra_mentions,
         )
 
-        # 推送（push=False / 无生效 chat_id → skipped；chat_id 为空时回退 env）
-        push_results = await self._maybe_push(
-            title=f"消防报警日报 - {target_date.strftime('%Y-%m-%d')}",
-            content=markdown, push=push, chat_id=chat_id,
-        )
+        # 推送：总卡开启 → 只投「安全速递」格子（安全AI创新交流群不再单独发日报卡）；
+        # 关闭 → 保持旧行为发独立群卡
+        from app.modules.safety.feishu.daily_digest import digest_enabled
 
-        # 「安全速递」总卡：投递本报告格子（失败不影响消防日报本身）
-        if push and any(r.get("success") for r in push_results):
-            try:
-                from collections import Counter
-
-                from app.modules.safety.feishu.daily_digest import (
-                    DigestCell,
-                    upsert_daily_digest,
-                )
-
-                dim_top = sorted(
-                    agg.dimension_distribution.items(), key=lambda x: -x[1],
-                )[:3]
-                dept_top = Counter(
-                    r.department or "?" for r in agg.records
-                ).most_common(3)
-                await upsert_daily_digest(
-                    target_date,
-                    "fire_alarm",
-                    DigestCell(
-                        tag_color="red",
-                        tag_text="消防报警",
-                        title="消防报警日报",
-                        stats=f"今日报警 **{agg.total}** 起",
-                        zone=" ｜ ".join(
-                            [f"{k} {v}" for k, v in dim_top]
-                            + [f"{d} {n} 起" for d, n in dept_top]
-                        )[:100],
-                        detail=markdown,
-                    ),
-                )
-            except Exception:
-                logger.warning("安全速递总卡投递失败（消防报警）", exc_info=True)
+        if push and digest_enabled():
+            push_results = await self._upsert_digest_cell(target_date, markdown, agg)
+        else:
+            push_results = await self._maybe_push(
+                title=f"消防报警日报 - {target_date.strftime('%Y-%m-%d')}",
+                content=markdown, push=push, chat_id=chat_id,
+            )
 
         return FireAlarmReportResponse(
             report_kind="daily",
@@ -464,7 +518,7 @@ class FireAlarmService:
             analyzed=len(per_results),
             markdown_report=markdown,
             push_results=push_results,
-            records_analyzed=[r.id for r in agg.records if r.ai_analyzed_at],
+            records_analyzed=_records_analyzed_ids(list(agg.records)),
         )
 
     # ── 周报生成与推送 ──
@@ -523,6 +577,39 @@ class FireAlarmService:
 
     # ── 推送辅助 ──
 
+    async def _upsert_digest_cell(
+        self, target_date: date, markdown: str, agg: Any,
+    ) -> list[dict[str, Any]]:
+        """把日报概览+明细投递为「安全速递」总卡格子（总卡模式下替代独立群卡）。"""
+        from collections import Counter
+
+        from app.modules.safety.feishu.daily_digest import (
+            DIGEST_CHAT_ID,
+            DigestCell,
+            upsert_daily_digest,
+        )
+
+        dim_top = sorted(agg.dimension_distribution.items(), key=lambda x: -x[1])[:3]
+        dept_top = Counter(r.department or "?" for r in agg.records).most_common(3)
+        ok = await upsert_daily_digest(
+            target_date,
+            "fire_alarm",
+            DigestCell(
+                tag_color="red",
+                tag_text="消防报警",
+                title="消防报警日报",
+                stats=f"今日报警 **{agg.total}** 起",
+                zone=" ｜ ".join(
+                    [f"{k} {v}" for k, v in dim_top]
+                    + [f"{d} {n} 起" for d, n in dept_top]
+                )[:100],
+                detail=markdown,
+            ),
+        )
+        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+            [] if ok else [{"error": "安全速递总卡投递失败"}]
+        )
+
     async def _maybe_push(
         self, *, title: str, content: str, push: bool,
         chat_id: str | None = None,
@@ -561,18 +648,20 @@ class FireAlarmService:
 
     async def _resolve_dept_leader_open_ids(
         self, dept_leader_names: dict[str, str],
+        extra_names: list[str] | None = None,
     ) -> dict[str, str]:
-        """批量解析报警部门负责人 → @ 提及用 open_id。
+        """批量解析报警部门负责人（+额外 @ 名单）→ @ 提及用 open_id。
 
         ⚠️ 必须用「安全应用作用域」的 open_id：平台同步的
         ``identity.users.feishu_open_id`` 跨应用无效（99992361 open_id cross app），
         因此统一走 ``feishu.mention``（邮箱 batch_get_id / user_id 反查）。
         解析失败返回空 dict，renderer 的 _at 退化为纯文本。
         """
-        if not dept_leader_names:
+        names = list(dept_leader_names.values()) + list(extra_names or [])
+        if not names:
             return {}
         try:
-            return await _resolve_mention_ids(dept_leader_names.values())
+            return await _resolve_mention_ids(names)
         except Exception:
             logger.warning("部门负责人 open_id 解析失败（@ 退化为纯文本）", exc_info=True)
             return {}
@@ -590,7 +679,25 @@ def _bj(dt: datetime | None) -> str:
     return (dt + timedelta(hours=8)).strftime("%m/%d %H:%M")
 
 
-def _count_by(records: list[FireAlarmRecord], attr: str) -> dict[str, int]:
+def _records_analyzed_ids(records: list[Any]) -> list[uuid.UUID]:
+    """把已分析记录 id 归一为 UUID 列表（直读视图用 feishu_record_id 生成稳定 UUID）。"""
+    out: list[uuid.UUID] = []
+    for record in records:
+        if not getattr(record, "ai_analyzed_at", None):
+            continue
+        feishu_id = getattr(record, "feishu_record_id", None)
+        if feishu_id:
+            out.append(uuid.uuid5(uuid.NAMESPACE_URL, f"fire_alarm:{feishu_id}"))
+            continue
+        raw_id = getattr(record, "id", None)
+        if isinstance(raw_id, uuid.UUID):
+            out.append(raw_id)
+        elif raw_id:
+            out.append(uuid.uuid5(uuid.NAMESPACE_URL, f"fire_alarm:{raw_id}"))
+    return out
+
+
+def _count_by(records: list[Any], attr: str) -> dict[str, int]:
     """按记录字段统计分布（值为 None 的字段不计入）。"""
     out: dict[str, int] = {}
     for r in records:

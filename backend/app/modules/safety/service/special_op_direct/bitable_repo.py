@@ -13,6 +13,10 @@
 - 一律走批量 search 接口（``list_all_records``），不逐条调用单记录读接口
 - ``strict=True``：查询失败向上抛 ``BitableQueryError``，绝不返回空列表伪装
   「当天无作业」
+
+Ticket 06 收敛：字段取值 / 时间换算 / 日期窗口 / 过滤构造 / 连接解析 / 回写串行
+全部转发公共底座 ``bitable_direct``；本模块只保留特殊作业的字段映射、视图对象、
+风险判定入口与列契约，不重复实现通用能力。
 """
 
 from __future__ import annotations
@@ -22,11 +26,32 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta, timezone
-from typing import Any, Protocol
+from datetime import UTC, date, datetime
+from typing import Any
 
-from app.modules.safety.bitable_config.store import store
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
+from app.modules.safety.service.bitable_direct import fields as bd_fields
+from app.modules.safety.service.bitable_direct import filters as bd_filters
+from app.modules.safety.service.bitable_direct.errors import BitableConfigError
+from app.modules.safety.service.bitable_direct.reader import (
+    BitableRecordsReader as BitableRecordsReader,
+)
+from app.modules.safety.service.bitable_direct.reader import (
+    resolve_client as _resolve_client,
+)
+from app.modules.safety.service.bitable_direct.writer import (
+    WRITEBACK_INTERVAL_SECONDS as WRITEBACK_INTERVAL_SECONDS,
+)
+from app.modules.safety.service.bitable_direct.writer import (
+    BitableRecordWriter as BitableRecordWriter,
+)
+from app.modules.safety.service.bitable_direct.writer import (
+    RecordUpdate,
+    write_serial,
+)
+from app.modules.safety.service.bitable_direct.writer import (
+    WritebackResult as WritebackResult,
+)
 from app.modules.safety.service.special_op_direct import contract
 from app.modules.safety.service.special_operation_daily_report import (
     RiskAssessmentEngine,
@@ -35,6 +60,8 @@ from app.modules.safety.service.special_operation_daily_report import (
 
 logger = logging.getLogger(__name__)
 
+RecordWriter = BitableRecordWriter
+
 # 多维表格列名（与生产表实际列名一致）
 F_START_TIME = "作业时间_开始时间"
 
@@ -42,7 +69,7 @@ F_START_TIME = "作业时间_开始时间"
 SYSTEM_FIELD_CREATED_TIME = "created_time"
 
 # 北京时间固定偏移（中国大陆无夏令时；表格时区实测为北京时间）
-BJT = timezone(timedelta(hours=8))
+BJT = bd_filters.BJT
 
 # 发起时间与系统「创建时间」都取不到时的哨兵：必然落在「今日新增」窗口之外
 UNKNOWN_CREATED_AT = datetime.min.replace(tzinfo=UTC)
@@ -56,22 +83,8 @@ _DATETIME_FIELDS: tuple[str, ...] = (
 )
 
 
-class SpecialOpDirectError(RuntimeError):
+class SpecialOpDirectError(BitableConfigError):
     """直读路径的前置条件不满足（连接未配置/停用等），调用方不得当作「无数据」。"""
-
-
-class BitableRecordsReader(Protocol):
-    """批量只读拉取接缝：真实实现为 ``SafetyBitableClient``，单测注入替身。"""
-
-    async def list_all_records(
-        self,
-        table_id: str | None = None,
-        *,
-        filter_info: dict[str, Any] | None = None,
-        automatic_fields: bool = False,
-        page_size: int = 200,
-        strict: bool = False,
-    ) -> list[dict[str, Any]]: ...
 
 
 @dataclass
@@ -139,28 +152,11 @@ class SpecialOpView:
     # 原始记录（排障用）
     raw: dict[str, Any] = field(default_factory=dict)
 
-def to_utc(value: datetime | None) -> datetime | None:
-    """把映射产出的 datetime 统一归一为 UTC aware（None 原样返回）。
 
-    ``map_bitable_fields`` 用 ``datetime.fromtimestamp(ms / 1000)`` 生成**进程本地
-    时钟**的 naive datetime：生产容器 TZ=UTC 时它本就是 UTC（与镜像行读回值一致），
-    而本机（TZ=Asia/Shanghai）会整体平移 8 小时。这里按「naive = 本地时钟，取同一
-    瞬时」归一，两种环境结果一致；同时保证下游 ``ReportBuilder._new_ops_section``
-    的 aware 窗口比较不会因 naive/aware 混用而抛 TypeError。
-    """
-    if value is None:
-        return None
-    return value.astimezone(UTC)
-
-
-def _ms_to_utc(value: Any) -> datetime | None:
-    """Bitable 毫秒时间戳 -> UTC aware datetime（无法解析返回 None）。"""
-    if value is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(value) / 1000.0, tz=UTC)
-    except (TypeError, ValueError, OSError):
-        return None
+# 通用字段取值 / 时间换算转发底座，保留原模块内名称与调用签名。
+to_utc = bd_fields.to_utc
+_ms_to_utc = bd_fields.ms_to_utc
+_to_ms = bd_fields.utc_to_ms
 
 
 def to_view(record: dict[str, Any]) -> SpecialOpView:
@@ -212,8 +208,7 @@ def assess_view(view: SpecialOpView) -> SpecialOpView:
 
 def day_window(target_date: date) -> tuple[datetime, datetime]:
     """目标日期的 [下界, 上界) 瞬时区间（北京时间日界，左闭右开）。"""
-    start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=BJT)
-    return start, start + timedelta(days=1)
+    return bd_filters.day_window(target_date)
 
 
 def day_filter(target_date: date) -> dict[str, Any]:
@@ -223,36 +218,21 @@ def day_filter(target_date: date) -> dict[str, Any]:
     因此下界取当日 00:00、上界取次日 00:00，语义等同「日期属于该天」；
     与旧镜像 ``get_reports_by_date`` 的窗口逐条一致。
     """
-    start, end = day_window(target_date)
-    return {
-        "conjunction": "and",
-        "conditions": [
-            {
-                "field_name": F_START_TIME,
-                "operator": "isGreater",
-                "value": ["ExactDate", str(_to_ms(start))],
-            },
-            {
-                "field_name": F_START_TIME,
-                "operator": "isLess",
-                "value": ["ExactDate", str(_to_ms(end))],
-            },
-        ],
-    }
-
-
-def _to_ms(value: datetime) -> int:
-    return int(value.timestamp() * 1000)
+    return bd_filters.day_filter(F_START_TIME, target_date)
 
 
 def resolve_client() -> SafetyBitableClient:
-    """按配置中心连接创建 Bitable 客户端；连接缺失/停用时抛错（不静默降级）。"""
-    conn = store.get_connection("special_op", "daily")
-    if conn is None or not conn.enabled:
+    """按配置中心连接创建 Bitable 客户端；连接缺失/停用时抛错（不静默降级）。
+
+    连接解析转发 ``bitable_direct.reader.resolve_client``；异常仍保留原域异常
+    类型 ``SpecialOpDirectError``，保证既有 ``except`` 语义不变。
+    """
+    try:
+        return _resolve_client("special_op", "daily")
+    except BitableConfigError as exc:
         raise SpecialOpDirectError(
             "特殊作业 Bitable 连接未配置或已停用（special_op/daily）"
-        )
-    return SafetyBitableClient(app_token=conn.app_token, table_id=conn.table_id)
+        ) from exc
 
 
 async def fetch_day_views(
@@ -283,34 +263,6 @@ async def fetch_day_views(
 # 风险等级回写（Ticket 05）：只写「日报风险等级（AI）」一列
 #
 
-# Bitable 同一张表不支持并发写，条目之间留间隔（spec「回写」）
-WRITEBACK_INTERVAL_SECONDS = 0.5
-
-
-class RecordWriter(Protocol):
-    """单条记录回写接缝（真实实现为 ``SafetyBitableClient.update_record``）。"""
-
-    async def update_record(
-        self,
-        record_id: str,
-        fields: dict[str, Any],
-        table_id: str | None = None,
-    ) -> bool: ...
-
-
-@dataclass
-class WritebackResult:
-    """回写结果（供编排入口 log warning / 计入告警）。"""
-
-    attempted: int = 0
-    written: int = 0
-    skipped: int = 0
-    failed: list[str] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return not self.failed
-
 
 async def writeback_risk_levels(
     views: Sequence[SpecialOpView],
@@ -324,47 +276,42 @@ async def writeback_risk_levels(
     - **只回写这一列**：请求体恒为 ``{日报风险等级（AI）: 高风险|中风险|低风险}``，
       绝不触碰人工填写列与公式列
     - 等级为空/未知，或缺少 record_id -> 跳过（不回写、不报错）
-    - 串行执行，条目之间间隔 ``interval_seconds``（默认 0.5 秒）
+    - 串行执行，条目之间间隔 ``interval_seconds``（默认 0.5 秒），由底座
+      ``bitable_direct.writer.write_serial`` 保证
     - 单条失败只记 warning 并计入 ``failed``，**不抛异常**：回写不阻塞日报推送，
       下一轮日报自然补写（spec「回写失败」决策）
     """
     target = writer or resolve_client()
-    result = WritebackResult()
     pending = [
         view
         for view in views
         if view.feishu_record_id
         and contract.option_for_risk_level(view.daily_risk_level) is not None
     ]
+    updates = [
+        RecordUpdate(
+            record_id=view.feishu_record_id or "",
+            fields={
+                contract.RISK_FIELD_NAME: contract.option_for_risk_level(
+                    view.daily_risk_level
+                )
+            },
+        )
+        for view in pending
+    ]
+    result = await write_serial(
+        target,
+        updates,
+        interval_seconds=interval_seconds,
+        sleep=sleep,
+    )
     result.skipped = len(views) - len(pending)
-
-    for index, view in enumerate(pending):
-        if index:
-            await sleep(interval_seconds)
-        option = contract.option_for_risk_level(view.daily_risk_level)
-        record_id = view.feishu_record_id or ""
-        result.attempted += 1
-        try:
-            written = await target.update_record(
-                record_id, {contract.RISK_FIELD_NAME: option}
-            )
-        except Exception:
-            logger.warning(
-                "风险等级回写异常: record_id=%s level=%s",
-                record_id, view.daily_risk_level, exc_info=True,
-            )
-            written = False
-        if written:
-            result.written += 1
-        else:
-            result.failed.append(record_id)
-            logger.warning(
-                "风险等级回写失败: record_id=%s level=%s（不阻塞日报推送，下一轮补写）",
-                record_id, view.daily_risk_level,
-            )
 
     logger.info(
         "风险等级回写完成: attempted=%d written=%d skipped=%d failed=%d",
-        result.attempted, result.written, result.skipped, len(result.failed),
+        result.attempted,
+        result.written,
+        result.skipped,
+        len(result.failed),
     )
     return result

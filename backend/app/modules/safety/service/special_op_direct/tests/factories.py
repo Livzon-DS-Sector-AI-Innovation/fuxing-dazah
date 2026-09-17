@@ -106,6 +106,8 @@ class FakeReader:
         table_id: str | None = None,
         *,
         filter_info: dict[str, Any] | None = None,
+        field_names: list[str] | None = None,
+        sort: list[dict[str, Any]] | None = None,
         automatic_fields: bool = False,
         page_size: int = 200,
         strict: bool = False,
@@ -113,6 +115,8 @@ class FakeReader:
         self.calls.append({
             "table_id": table_id,
             "filter_info": filter_info,
+            "field_names": field_names,
+            "sort": sort,
             "automatic_fields": automatic_fields,
             "page_size": page_size,
             "strict": strict,
@@ -129,8 +133,26 @@ class FakePusher:
         self.message_id = message_id
         self.calls: list[dict[str, Any]] = []
 
-    async def send(self, *, chat_id: str, title: str, content: str) -> str | None:
-        self.calls.append({"chat_id": chat_id, "title": title, "content": content})
+    async def send(
+        self,
+        *,
+        chat_id: str,
+        title: str,
+        content: str,
+        elements: list[dict[str, Any]] | None = None,
+        header_template: str = "orange",
+        subtitle: str | None = None,
+        header_tags: list[dict[str, Any]] | None = None,
+    ) -> str | None:
+        self.calls.append({
+            "chat_id": chat_id,
+            "title": title,
+            "content": content,
+            "elements": elements,
+            "header_template": header_template,
+            "subtitle": subtitle,
+            "header_tags": header_tags,
+        })
         return self.message_id
 
 

@@ -24,6 +24,7 @@ from app.modules.safety.feishu import bitable_handler as bh
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.models import FireAlarmRecord
+from app.modules.safety.service.fire_alarm import config as fire_config
 from app.modules.safety.service.fire_alarm.bitable_mapper import map_bitable_fields
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,10 @@ async def handle_fire_alarm_record_changed(event: dict) -> None:
     （file_token/table_id 在顶层，action_list 项含 record_id + action），
     不要再包一层 event.get("event")。仅处理消防报警表，其他表事件直接忽略。
     """
+    if not fire_config.legacy_event_sync_active():
+        logger.info("消防直读模式：事件镜像已关闭，忽略事件")
+        return
+
     file_token = event.get("file_token", "")
     table_id = event.get("table_id", "")
     if file_token != _fire_alarm_app_token() or table_id != _fire_alarm_table_id():

@@ -1023,8 +1023,12 @@ async def query_fire_alarms(
 ) -> dict[str, Any]:
     """查询消防报警记录（含 AI 分析结果）。
 
+    数据源：**直读飞书消防「火灾报警信息」表**。
+
     可按日期范围、部门、报警类型、报警性质、AI 维度、关键词筛选。
-    返回记录列表与分页统计。
+    未提供日期范围时默认最近 30 天；范围超过 31 天会返回明确提示。
+    返回记录列表与分页统计；items 中 id 为飞书记录 ID，并保留
+    feishu_record_id 字段。
 
     Args:
         date_from: 起始日期（ISO，如 "2026-08-18"，可选）
@@ -1047,11 +1051,10 @@ async def query_fire_alarms(
     """
     from datetime import date as _date
 
-    from app.modules.safety.service.fire_alarm.service import FireAlarmService
+    from app.modules.safety.service.fire_alarm.query import query_fire_alarms_direct
 
     try:
-        service = FireAlarmService(ctx.deps.db)
-        items, total = await service.get_records(
+        return await query_fire_alarms_direct(
             date_from=_date.fromisoformat(date_from) if date_from else None,
             date_to=_date.fromisoformat(date_to) if date_to else None,
             department=department,
@@ -1062,13 +1065,6 @@ async def query_fire_alarms(
             page=page,
             page_size=page_size,
         )
-        return {
-            "success": True,
-            "items": [_to_dict(r) for r in items],
-            "page": page,
-            "page_size": page_size,
-            "total": total,
-        }
     except Exception as e:
         logger.exception("query_fire_alarms failed")
         return {"success": False, "error": f"查询失败: {e}"}

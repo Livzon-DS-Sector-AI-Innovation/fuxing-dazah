@@ -16,20 +16,22 @@ Bitable 过滤能力（2026-09-14 连生产表实测）：
 - 单选字段只支持 ``is`` / ``isNot`` / ``isEmpty`` / ``isNotEmpty``
   （``contains`` 返回 ``InvalidFilter``）；文本字段（发起人部门）支持 ``contains``
 - 无日期窗口时不做分支下推（避免整表被扫多次），退化为单查询 + 应用侧过滤
+
+Ticket 06 收敛：日期窗口、过滤构造与分支并集全部转发公共底座
+``bitable_direct.filters``；本模块只保留特殊作业的枚举映射、应用侧复核与返回形状。
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
+from app.modules.safety.service.bitable_direct import fields as bd_fields
+from app.modules.safety.service.bitable_direct import filters as bd_filters
+from app.modules.safety.service.bitable_direct.reader import BitableRecordsReader
 from app.modules.safety.service.special_op_direct import bitable_repo, contract
-from app.modules.safety.service.special_op_direct.bitable_repo import (
-    BJT,
-    BitableRecordsReader,
-    SpecialOpView,
-)
+from app.modules.safety.service.special_op_direct.bitable_repo import SpecialOpView
 
 logger = logging.getLogger(__name__)
 
@@ -68,58 +70,20 @@ REPORT_TYPE_EN2CN: dict[str, str] = {
 }
 
 
-def _cond(field: str, operator: str, value: list[Any] | None = None) -> dict[str, Any]:
-    return {
-        "field_name": field,
-        "operator": operator,
-        "value": value if value is not None else [],
-    }
-
-
-def _flat(conditions: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"conjunction": "and", "conditions": conditions}
-
-
-def _ms(value: datetime) -> int:
-    return int(value.timestamp() * 1000)
-
-
-def _select_text(value: Any) -> str:
-    """单选/文本字段取值归一为字符串（兼容 str / list[dict] / dict）。"""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, list) and value:
-        first = value[0]
-        if isinstance(first, dict):
-            return str(first.get("name") or first.get("text") or "").strip()
-        return str(first).strip()
-    if isinstance(value, dict):
-        return str(value.get("name") or value.get("text") or "").strip()
-    return ""
-
-
 def date_window(
     date_from: date | None, date_to: date | None,
 ) -> tuple[datetime | None, datetime | None]:
-    """ISO 日期 -> [起始, 结束次日) 的北京时间半开区间（与旧工具口径一致）。"""
-    start = (
-        datetime(date_from.year, date_from.month, date_from.day, tzinfo=BJT)
-        if date_from
-        else None
-    )
-    end_exclusive = (
-        datetime(date_to.year, date_to.month, date_to.day, tzinfo=BJT)
-        + timedelta(days=1)
-        if date_to
-        else None
-    )
-    return start, end_exclusive
+    """ISO 日期 -> [起始, 结束次日) 的北京时间半开区间（与旧工具口径一致）。
+
+    转发公共底座的 ``date_range_window``，保留原函数名与签名。
+    """
+    return bd_filters.date_range_window(date_from, date_to)
 
 
 def _stored_risk_level(record: dict[str, Any]) -> str | None:
     """读取「日报风险等级（AI）」列值 -> 平台 code（空/未知返回 None）。"""
     fields = record.get("fields") or {}
-    text = _select_text(fields.get(contract.RISK_FIELD_NAME))
+    text = bd_fields.select(fields, contract.RISK_FIELD_NAME)
     if not text:
         return None
     return contract.OPTION_TO_RISK_LEVEL.get(text)
@@ -242,19 +206,35 @@ async def query_records(
     #  下推条件：扁平 AND（单选项枚举 + 日期窗口）
     base: list[dict[str, Any]] = []
     if start:
-        base.append(_cond(bitable_repo.F_START_TIME, "isGreater", ["ExactDate", str(_ms(start))]))
+        base.append(
+            bd_filters.condition(
+                bitable_repo.F_START_TIME,
+                "isGreater",
+                bd_filters.exact_date_value(start),
+            )
+        )
     if end_exclusive:
-        base.append(_cond(bitable_repo.F_START_TIME, "isLess", ["ExactDate", str(_ms(end_exclusive))]))
+        base.append(
+            bd_filters.condition(
+                bitable_repo.F_START_TIME,
+                "isLess",
+                bd_filters.exact_date_value(end_exclusive),
+            )
+        )
     if operation_type:
         options = OP_TYPE_EN2CN_OPTIONS.get(operation_type, ())
         if len(options) == 1:  # 多选项（hot_work）不下推，改应用侧
-            base.append(_cond(F_TYPE, "is", [options[0]]))
+            base.append(bd_filters.condition(F_TYPE, "is", [options[0]]))
     if operation_level:
         options = OP_LEVEL_EN2CN_OPTIONS.get(operation_level, ())
         if len(options) == 1:  # grade2 对应两个选项，不下推
-            base.append(_cond(F_LEVEL, "is", [options[0]]))
+            base.append(bd_filters.condition(F_LEVEL, "is", [options[0]]))
     if report_type and report_type in REPORT_TYPE_EN2CN:
-        base.append(_cond(F_REPORT_TYPE, "is", [REPORT_TYPE_EN2CN[report_type]]))
+        base.append(
+            bd_filters.condition(
+                F_REPORT_TYPE, "is", [REPORT_TYPE_EN2CN[report_type]]
+            )
+        )
 
     #  下推条件：需要 OR 的条件拆成多条 flat-AND 查询取并集
     # 仅在有日期窗口时下推（否则整表会被扫多次，不如单查询 + 应用侧过滤）
@@ -265,8 +245,8 @@ async def query_records(
                 leaf + branch
                 for leaf in branches
                 for branch in (
-                    [_cond(F_INITIATOR_DEPT, "contains", [department])],
-                    [_cond(F_DEPT, "is", [department])],
+                    [bd_filters.condition(F_INITIATOR_DEPT, "contains", [department])],
+                    [bd_filters.condition(F_DEPT, "is", [department])],
                 )
             ]
         risk_option = contract.option_for_risk_level(daily_risk_level)
@@ -275,29 +255,31 @@ async def query_records(
                 leaf + branch
                 for leaf in branches
                 for branch in (
-                    [_cond(contract.RISK_FIELD_NAME, "is", [risk_option])],
-                    [_cond(contract.RISK_FIELD_NAME, "isEmpty")],
+                    [bd_filters.condition(contract.RISK_FIELD_NAME, "is", [risk_option])],
+                    [bd_filters.condition(contract.RISK_FIELD_NAME, "isEmpty")],
                 )
             ]
 
-    records: dict[str, dict[str, Any]] = {}
+    fetched_groups: list[list[dict[str, Any]]] = []
     for branch in branches:
         conditions = base + branch
         fetched = await reader.list_all_records(
             # 无条件时传 None（空 conditions 会被 Bitable 判为非法过滤）
-            filter_info=_flat(conditions) if conditions else None,
+            filter_info=bd_filters.flat_group(conditions),
             page_size=_FETCH_PAGE_SIZE,
             strict=True,
         )
-        for record in fetched:
-            record_id = str(record.get("record_id") or "")
-            if record_id:
-                records[record_id] = record
+        fetched_groups.append([
+            record
+            for record in fetched
+            if str(record.get("record_id") or "")
+        ])
+    records = bd_filters.union_by_record_id(fetched_groups)
     logger.info(
         "特殊作业明细直读: 查询分支=%d 拉取记录=%d", len(branches), len(records)
     )
 
-    views = [to_query_view(record) for record in records.values()]
+    views = [to_query_view(record) for record in records]
     matched = [
         view
         for view in views

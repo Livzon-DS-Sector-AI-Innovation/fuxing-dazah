@@ -9,7 +9,8 @@
 
 结构（对接督办通报 hazard_supervision.build_bulletin_content 的分组风格）：
 - 日报：标题 → 生成时间 → 📊 当日报警统计（报警类型/性质合并为「报警类型」、
-  涉及部门）→ 部门分组报警明细（每部门分隔线 + @负责人）
+  涉及部门）→ 部门分组报警明细（每部门分隔线 + @负责人）→ 📨 每日私发推送
+  （部门 → 收件人名单，与私发任务同源；开关关闭/无收件人时整块省略）
 - 周报：标题 → 周起止 → 📊 本周报警统计 → 部门分组明细（含重复报警提示/
   @负责人跟进）
 
@@ -164,11 +165,14 @@ def _render_dept_blocks(
     grouped: list[tuple[str, list]],
     person_open_id: dict[str, str],
     dept_leader_names: dict[str, str] | None = None,
+    extra_mentions: dict[str, list[str]] | None = None,
 ) -> list[str]:
     """按部门渲染（部门标题 @负责人一次，条目内不重复）；部门之间用分隔线分开。
 
     负责人解析优先聚合映射 ``dept_leader_names``（department → leader_name）；
     映射缺失时回退记录自带的 ``department_leader_name``。
+    ``extra_mentions``（department → 附加姓名）命中的部门在 @负责人之外追加
+    @（与私发 EXTRA_DM_RECIPIENTS 同源，如提炼工程一部加 @分管领导）。
     负责人 presence：有 open_id 显示 @提及，无 open_id 显示纯文本姓名（_at 兜底）；
     完全无负责人信息时组头追加占位提示。
     """
@@ -187,6 +191,9 @@ def _render_dept_blocks(
                 None,
             )
         leaders = [leader_name] if isinstance(leader_name, str) and leader_name else []
+        for extra in (extra_mentions or {}).get(dept, []):
+            if extra and extra not in leaders:
+                leaders.append(extra)
         head: str = f"**{dept}{count_str}**"
         if leaders:
             mentions = "　".join(_at(name, person_open_id) for name in leaders)
@@ -200,6 +207,29 @@ def _render_dept_blocks(
     return parts
 
 
+def _render_dm_block(dm_recipients: dict[str, dict[str, str]] | None) -> list[str]:
+    """「📨 每日私发推送」板块：部门 → 收件人（role → 姓名）。
+
+    dm_recipients 由调用方用与私发任务（daily_dm.dept_recipients）同源的规则
+    算好传入，renderer 保持纯函数；None/空 dict 时整块省略（开关关闭/窗口无报警）。
+    收件人未配置的部门显示占位提示，暴露 DEPARTMENT_CONFIG 缺口。
+    """
+    if not dm_recipients:
+        return []
+    lines = [DIVIDER, "**📨 每日私发推送**", DIVIDER]
+    for dept, roles in dm_recipients.items():
+        if not roles:
+            lines.append(f"· {dept}：（未配置收件人，跳过私发）")
+            continue
+        pairs = "、".join(
+            f"{name}（{role.replace('部门', '')}）" for role, name in roles.items()
+        )
+        lines.append(f"· {dept}：{pairs}")
+    lines.append("· 每条报警一卡一条私发至上述人员（负责人 + 分管安全员）")
+    lines.append("")
+    return lines
+
+
 def render_daily_report(
     agg: FireAlarmDailyAgg,
     person_open_id: dict[str, str],
@@ -207,11 +237,14 @@ def render_daily_report(
     *,
     window_start_utc: datetime | None = None,
     window_end_utc: datetime | None = None,
+    dm_recipients: dict[str, dict[str, str]] | None = None,
+    extra_mentions: dict[str, list[str]] | None = None,
 ) -> str:
     """渲染日报 Markdown。
 
     结构: 标题 → 生成时间 → 📊 当日报警统计（报警类型合并、涉及部门）
-    → 部门分组报警明细（参照督办通报：部门标题 @负责人，条目内含原因/分析/建议/链接）。
+    → 部门分组报警明细（参照督办通报：部门标题 @负责人，条目内含原因/分析/建议/链接）
+    → 📨 每日私发推送（dm_recipients 非空时）。
 
     Args:
         agg: 日报聚合结果
@@ -219,6 +252,9 @@ def render_daily_report(
         ai_summary: 保留以兼容调用方签名；按需求不再渲染（AI 汇总分析已删除）
         window_start_utc: 滚动窗口起始 UTC（前日17:00~当日17:00）；None=自然日
         window_end_utc: 滚动窗口结束 UTC
+        dm_recipients: 部门 → {role: 姓名} 私发收件人计划；None/空省略该板块
+        extra_mentions: 部门 → 附加 @ 姓名（EXTRA_DM_RECIPIENTS 命中的部门，
+            在 @负责人之外追加 @分管领导）
     """
     if window_start_utc is not None and window_end_utc is not None:
         period = (
@@ -240,7 +276,10 @@ def render_daily_report(
     ]))
 
     grouped = _group_records_by_dept(agg.records)
-    parts.extend(_render_dept_blocks(grouped, person_open_id, agg.dept_leader_names))
+    parts.extend(_render_dept_blocks(
+        grouped, person_open_id, agg.dept_leader_names, extra_mentions,
+    ))
+    parts.extend(_render_dm_block(dm_recipients))
     parts.append("")
     parts.append(DIVIDER)
     parts.append("**各部门负责人请核实报警原因并落实整改措施。**")

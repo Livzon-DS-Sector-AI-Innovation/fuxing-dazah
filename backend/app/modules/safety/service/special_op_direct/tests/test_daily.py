@@ -54,7 +54,12 @@ def _mirror_objects(
 # 主路径
 
 
-async def test_run_renders_pushes_and_returns_stats() -> None:
+async def test_run_renders_pushes_and_returns_stats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 本测试验证旧长卡路径的标题与正文；速递卡路径另有构建器单测覆盖。
+    monkeypatch.setenv("SAFETY_SPECIAL_OP_DIGEST_CARD_ENABLED", "false")
+    monkeypatch.setenv("SAFETY_DAILY_DIGEST_ENABLED", "false")
     reader = FakeReader(records=ITEMS)
     pusher = FakePusher()
 

@@ -21,6 +21,7 @@ from app.modules.safety.schemas.fire_alarm import (
     FireAlarmWeeklyReportRequest,
 )
 from app.modules.safety.service.fire_alarm import FireAlarmService
+from app.modules.safety.service.fire_alarm import config as direct_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,14 @@ async def sync_from_bitable(db: AsyncSession = Depends(get_db)):
 
     Bitable/网络异常降级：返回 HTTP 200 + body code=500 + 错误 message，不抛 500。
     """
+    if not direct_config.legacy_sync_job_active():
+        return ApiResponse(
+            data=FireAlarmSyncResponse(
+                synced_count=0, soft_deleted_count=0,
+            ).model_dump(),
+            message="直读模式已关闭全量同步（SAFETY_FIRE_ALARM_SYNC_JOB_ENABLED=false）",
+        )
+
     service = FireAlarmService(db)
     try:
         synced, soft_deleted = await service.sync_from_bitable()

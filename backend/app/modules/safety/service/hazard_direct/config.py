@@ -10,25 +10,13 @@
 
 from __future__ import annotations
 
-import os
+from app.modules.safety.service.bitable_direct import gates
 
-_TRUE = {"1", "true", "yes", "on"}
+_DOMAIN = gates.DOMAIN_HAZARD
 
-
-def _flag(name: str, default: bool) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in _TRUE
-
-
-def _int(name: str, default: int, *, minimum: int = 1) -> int:
-    raw = (os.getenv(name) or "").strip()
-    try:
-        value = int(raw) if raw else default
-    except ValueError:
-        value = default
-    return max(minimum, value)
+# 兼容私有调用：转发底座实现，不保留第二份布尔/整数解析逻辑。
+_flag = gates.flag
+_int = gates.int_env
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -38,22 +26,28 @@ def _int(name: str, default: int, *, minimum: int = 1) -> int:
 
 def direct_poll_enabled() -> bool:
     """新路径总开关（关闭时 ① ② 轮询循环不启动）。"""
-    return _flag("SAFETY_HAZARD_DIRECT_POLL_ENABLED", False)
+    return _flag(gates.domain_env(_DOMAIN, "DIRECT_POLL_ENABLED"), False)
 
 
 def ai_poll_enabled() -> bool:
     """① 隐患AI分析轮询。"""
-    return direct_poll_enabled() and _flag("SAFETY_HAZARD_AI_POLL_ENABLED", False)
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "AI_POLL_ENABLED"), False
+    )
 
 
 def review_poll_enabled() -> bool:
     """② AI整改审核轮询。"""
-    return direct_poll_enabled() and _flag("SAFETY_HAZARD_REVIEW_POLL_ENABLED", False)
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "REVIEW_POLL_ENABLED"), False
+    )
 
 
 def supervision_poll_enabled() -> bool:
     """③ 督办等级计算轮询（读多维表格 → 算 → 只回写多维表格）。"""
-    return direct_poll_enabled() and _flag("SAFETY_HAZARD_SUPERVISION_POLL_ENABLED", False)
+    return direct_poll_enabled() and _flag(
+        gates.domain_env(_DOMAIN, "SUPERVISION_POLL_ENABLED"), False
+    )
 
 
 def event_sync_enabled() -> bool:
@@ -64,12 +58,12 @@ def event_sync_enabled() -> bool:
 
     置为 true 可恢复旧行为（用于回滚或需要 DB 镜像的场景）。
     """
-    return _flag("SAFETY_HAZARD_EVENT_SYNC_ENABLED", False)
+    return gates.event_sync_enabled(_DOMAIN)
 
 
 def catch_up_enabled() -> bool:
     """旧路径：启动时 Bitable 漏单恢复（写平台库）。默认关闭。"""
-    return _flag("SAFETY_HAZARD_CATCHUP_ENABLED", False)
+    return _flag(gates.domain_env(_DOMAIN, "CATCHUP_ENABLED"), False)
 
 
 # ⑤ 催办发送对象：**始终动态**（每条隐患的责任人 + 该部门分管安全员），
