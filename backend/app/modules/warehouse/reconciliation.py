@@ -1,14 +1,21 @@
-"""对账引擎（分期C 阶段二）：本地库存 ↔ 飞书 material_stock 台账逐条比对。
+"""对账引擎（分期C 阶段二 → V3.0 分期A Ticket 09 裁决反转）：本地库存 ↔ 飞书
+material_stock 台账逐条比对。
 
 四态分类：match / missing_in_feishu / mismatch / missing_local。
-仅展示不覆盖（用户决策）；仅手动触发。
-飞书拉取复用 WarehouseBitableAdapter.search_records_page（限流内建）+ 分页循环。
+**裁决方向（2B 定案）：差异默认 Base 胜出**——结果行带 verdict/suggested_action
+标注；「本地修复」为人工一键动作（apply_base_repair）：
+- mismatch → 本地聚合数量调整为 Base 值；
+- missing_local → 按 Base 记录补建本地库存行；
+- missing_in_feishu → 仅置「待人工处置」（本地多出，删除属红区，绝不自动删）。
+仅手动触发；飞书拉取复用 WarehouseBitableAdapter.search_records_page。
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +23,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.models import (
+    WarehouseLocation,
+    WarehouseMaterial,
     WarehouseStock,
     WarehouseSyncCheckResult,
     WarehouseSyncCheckRun,
@@ -23,10 +32,46 @@ from app.modules.warehouse.models import (
 
 logger = logging.getLogger(__name__)
 
-# 飞书 material_stock 表中用于匹配的字段名（bitable_schema material_stock 定义）
-_FEISHU_CODE_FIELD = "物料编码"
-_FEISHU_BATCH_FIELD = "批次"
-_FEISHU_QTY_FIELD = "可用库存"
+# 飞书 material_stock 匹配字段（bitable_schema 实测快照；Ticket 09 修正——
+# 原「物料编码/批次/可用库存」为错误键名，从未命中真实字段）
+_FEISHU_CODE_FIELD = "代码"
+_FEISHU_BATCH_FIELD = "物料批号"
+_FEISHU_QTY_FIELD = "剩余数量"
+
+# 修复状态（sync_check_results.repair_status）
+REPAIR_STATUS_REPAIRED = "repaired"
+REPAIR_STATUS_MANUAL = "manual"
+
+# missing_local 补录用的固定库位（按需自动创建）
+REPAIR_LOCATION_CODE = "RECON-IMPORT"
+REPAIR_LOCATION_NAME = "对账补录库位"
+
+
+class ReconciliationRepairError(Exception):
+    """修复动作不可执行（重复处理/前置缺失等，调用方转 4xx）。"""
+
+
+def _feishu_cell_text(value: Any) -> str:
+    """Base 单元格 → 匹配键文本（单选读取为数组，读写不对称）。"""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "、".join(str(v).strip() for v in value if str(v).strip())
+    return str(value).strip()
+
+
+def _feishu_cell_number(value: Any) -> float:
+    """Base 单元格 → 数值（formula 可能返回字符串数字）。"""
+    if value is None:
+        return 0.0
+    if isinstance(value, list):
+        value = value[0] if value else None
+        if value is None:
+            return 0.0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 async def _fetch_all_feishu_records(db: AsyncSession) -> list[dict[str, Any]]:
@@ -83,17 +128,13 @@ async def run_stock_reconciliation(
         feishu_map: dict[tuple[str, str], dict[str, Any]] = {}
         for row in feishu_raw:
             fields = row.get("fields") or {}
-            code = str(fields.get(_FEISHU_CODE_FIELD, "")).strip()
-            batch = str(fields.get(_FEISHU_BATCH_FIELD, "")).strip()
-            qty_raw = fields.get(_FEISHU_QTY_FIELD)
-            try:
-                qty = float(qty_raw) if qty_raw is not None else 0.0
-            except (ValueError, TypeError):
-                qty = 0.0
+            code = _feishu_cell_text(fields.get(_FEISHU_CODE_FIELD))
+            batch = _feishu_cell_text(fields.get(_FEISHU_BATCH_FIELD))
+            qty = _feishu_cell_number(fields.get(_FEISHU_QTY_FIELD))
             key = (code, batch)
             feishu_map[key] = {"qty": qty, "record_id": row.get("record_id", "")}
 
-        # 3. 四态分类
+        # 3. 四态分类（差异行默认标注「Base 胜出」裁决，Ticket 09）
         cnt_match = 0
         cnt_mif = 0
         cnt_mismatch = 0
@@ -109,7 +150,11 @@ async def run_stock_reconciliation(
                     run_id=run.id, status="missing_in_feishu",
                     material_code=code, material_name=local["material_name"],
                     batch_no=batch, local_qty=local["qty"], feishu_qty=None,
-                    detail={"reason": "飞书台账无此记录"},
+                    detail={
+                        "reason": "飞书台账无此记录",
+                        "verdict": "base_wins",
+                        "suggested_action": "manual_review",
+                    },
                 ))
             else:
                 lq = local["qty"]
@@ -121,7 +166,11 @@ async def run_stock_reconciliation(
                         material_code=code, material_name=local["material_name"],
                         batch_no=batch, local_qty=lq, feishu_qty=fq,
                         feishu_record_id=feishu.get("record_id"),
-                        detail={"reason": "数量不一致"},
+                        detail={
+                            "reason": "数量不一致",
+                            "verdict": "base_wins",
+                            "suggested_action": "repair_local",
+                        },
                     ))
                 else:
                     cnt_match += 1
@@ -134,7 +183,11 @@ async def run_stock_reconciliation(
                     material_code=key[0], material_name="", batch_no=key[1],
                     local_qty=None, feishu_qty=feishu["qty"],
                     feishu_record_id=feishu.get("record_id"),
-                    detail={"reason": "本地无此记录"},
+                    detail={
+                        "reason": "本地无此记录",
+                        "verdict": "base_wins",
+                        "suggested_action": "repair_local",
+                    },
                 ))
 
         for r in results:
@@ -183,3 +236,147 @@ async def list_results(
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     items = list((await db.execute(stmt)).scalars().all())
     return items, int(total or 0)
+
+
+async def _get_repair_location(db: AsyncSession) -> WarehouseLocation:
+    """missing_local 补录固定库位（不存在则创建）。"""
+    loc = (
+        await db.execute(
+            select(WarehouseLocation).where(
+                WarehouseLocation.code == REPAIR_LOCATION_CODE,
+                WarehouseLocation.is_deleted.is_(False),
+            )
+        )
+    ).scalars().first()
+    if loc is None:
+        loc = WarehouseLocation(code=REPAIR_LOCATION_CODE, name=REPAIR_LOCATION_NAME)
+        db.add(loc)
+        await db.flush()
+    return loc
+
+
+async def apply_base_repair(
+    db: AsyncSession, result_id: str | UUID, *, operator_id: str | None = None
+) -> WarehouseSyncCheckResult:
+    """按「Base 为准」人工一键修复本地（Ticket 09；不 commit，调用方负责）。
+
+    - mismatch：本地该 (编码, 批次) 聚合数量调整为 Base 值（差额落在数量
+      最大的行；调整后为负则拒绝）；
+    - missing_local：按 Base 记录补建本地库存行（物料主数据须已存在，
+      库位用「对账补录」）；
+    - missing_in_feishu：仅置「待人工处置」（本地多出，删除属红区）。
+    重复修复（repair_status 已终态）抛 ReconciliationRepairError。
+    """
+    from app.modules.warehouse.agent import repository as agent_repository
+
+    try:
+        rid = result_id if isinstance(result_id, UUID) else UUID(str(result_id))
+    except ValueError as exc:
+        raise ReconciliationRepairError("差异行 ID 无效") from exc
+
+    result = (
+        await db.execute(
+            select(WarehouseSyncCheckResult).where(
+                WarehouseSyncCheckResult.id == rid,
+                WarehouseSyncCheckResult.is_deleted.is_(False),
+            )
+        )
+    ).scalars().first()
+    if result is None:
+        raise ReconciliationRepairError("差异行不存在或已删除")
+
+    if result.repair_status in (REPAIR_STATUS_REPAIRED, REPAIR_STATUS_MANUAL):
+        raise ReconciliationRepairError(
+            f"该差异行已处理（{result.repair_status}），请重新对账后再操作"
+        )
+
+    if result.status == "mismatch":
+        await _repair_mismatch(db, result)
+        result.repair_status = REPAIR_STATUS_REPAIRED
+    elif result.status == "missing_local":
+        await _repair_missing_local(db, result)
+        result.repair_status = REPAIR_STATUS_REPAIRED
+    elif result.status == "missing_in_feishu":
+        # 本地多出：Base 胜出 = 本地行不应存在，但删除属红区 → 仅标记待人工处置
+        result.repair_status = REPAIR_STATUS_MANUAL
+    else:
+        raise ReconciliationRepairError(f"该差异行状态（{result.status}）无需修复")
+
+    result.repaired_at = datetime.now(UTC)
+    await agent_repository.insert_agent_audit(
+        db,
+        tool_name="reconciliation_repair",
+        args_summary={
+            "result_id": str(result.id),
+            "status": result.status,
+            "material_code": result.material_code,
+            "batch_no": result.batch_no,
+            "repair_status": result.repair_status,
+            "operator": (operator_id or "")[:30],
+        },
+        result_status="ok",
+    )
+    await db.flush()
+    return result
+
+
+async def _repair_mismatch(db: AsyncSession, result: WarehouseSyncCheckResult) -> None:
+    """本地聚合数量调整为 Base 值：差额落在数量最大的一行。"""
+    if result.feishu_qty is None:
+        raise ReconciliationRepairError("该行无飞书数量，无法按 Base 修复")
+    rows = list(
+        (
+            await db.execute(
+                select(WarehouseStock).where(
+                    WarehouseStock.material_code == result.material_code,
+                    WarehouseStock.batch_no == result.batch_no,
+                    WarehouseStock.is_deleted.is_(False),
+                )
+            )
+        ).scalars().all()
+    )
+    if not rows:
+        raise ReconciliationRepairError("本地对应库存行已不存在，请重新对账")
+
+    local_total = sum(float(r.quantity) for r in rows)
+    delta = float(result.feishu_qty) - local_total
+    if abs(delta) < 0.0001:
+        return  # 聚合已一致（可能已被单独调整过）
+    target = max(rows, key=lambda r: float(r.quantity))
+    new_qty = Decimal(str(round(float(target.quantity) + delta, 4)))
+    if new_qty < 0:
+        raise ReconciliationRepairError(
+            f"按 Base 调整后数量为负（{new_qty}），请人工核对后处理"
+        )
+    target.quantity = new_qty
+
+
+async def _repair_missing_local(db: AsyncSession, result: WarehouseSyncCheckResult) -> None:
+    """按 Base 记录补建本地库存行（物料主数据须已存在）。"""
+    if result.feishu_qty is None:
+        raise ReconciliationRepairError("该行无飞书数量，无法补建本地行")
+    material = (
+        await db.execute(
+            select(WarehouseMaterial).where(
+                WarehouseMaterial.code == result.material_code,
+                WarehouseMaterial.is_deleted.is_(False),
+            )
+        )
+    ).scalars().first()
+    if material is None:
+        raise ReconciliationRepairError(
+            f"本地无物料主数据 {result.material_code}，请先在物料管理录入再修复"
+        )
+    loc = await _get_repair_location(db)
+    db.add(
+        WarehouseStock(
+            material_id=material.id,
+            material_code=material.code,
+            material_name=result.material_name or material.name,
+            batch_no=result.batch_no or "",
+            location_id=loc.id,
+            location_code=loc.code,
+            location_name=loc.name,
+            quantity=Decimal(str(round(float(result.feishu_qty), 4))),
+        )
+    )

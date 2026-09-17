@@ -94,11 +94,12 @@ async def _run_scheduled_expiry_freeze() -> None:
         )
         return
     async with async_session_factory() as session:
-        changed = await freeze_expired_stocks(session)
+        result = await freeze_expired_stocks(session)
         await session.commit()
-    notified = await notify_expired_freeze(changed)
+    notified = await notify_expired_freeze(result["changed"])
     logger.info(
-        "warehouse expiry freeze completed: frozen=%d notified=%s", len(changed), notified
+        "warehouse expiry freeze completed: frozen=%d skipped=%d notified=%s",
+        len(result["changed"]), len(result["skipped"]), notified,
     )
 
 
@@ -140,5 +141,41 @@ MORNING_REPORT_TASK = TaskDefinition(
     ),
     coro=_run_scheduled_morning_report,
     timeout_seconds=600,
+    module="warehouse",
+)
+
+
+async def _run_push_center_tick() -> None:
+    """推送订阅中心单泵轮询（V3.0 分期A）：读 DB 任务配置执行到期推送。
+
+    到期判断/窗口守卫/互斥在引擎内实现（push_center.engine），
+    本包装只负责会话与提交；未到期任务静默跳过，tick 本身无窗口限制。
+    顺带做确认单过期清扫（确认门生命周期兜底，同泵复用）。
+    """
+    from app.modules.warehouse.confirm_request import expire_stale_requests
+    from app.modules.warehouse.push_center.engine import run_due_tasks
+
+    now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+    async with async_session_factory() as session:
+        results = await run_due_tasks(session, now_cn)
+        expired = await expire_stale_requests(session)
+        await session.commit()
+    if results:
+        logger.info(
+            "warehouse push tick: %s",
+            [(r.task_name, r.status) for r in results],
+        )
+    if expired:
+        logger.info("warehouse confirm requests expired: %d", expired)
+
+
+PUSH_CENTER_TICK_TASK = TaskDefinition(
+    name="warehouse.push_center_tick",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=60,
+    ),
+    coro=_run_push_center_tick,
+    timeout_seconds=300,
     module="warehouse",
 )

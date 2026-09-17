@@ -709,6 +709,13 @@ class WarehouseSyncCheckResult(BaseModel):
     local_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True, comment="本地数量")
     feishu_qty: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True, comment="飞书数量")
     feishu_record_id: Mapped[str | None] = mapped_column(String(64), nullable=True, comment="飞书记录 ID")
+    repair_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True,
+        comment="修复状态: repaired=已按Base修复 / manual=待人工处置（V3.0 分期A）",
+    )
+    repaired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="修复时间"
+    )
     detail: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}", comment="差异详情"
     )
@@ -980,4 +987,170 @@ class SchedulerConfigAudit(BaseModel):
     after_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更后")
     operator_name: Mapped[str | None] = mapped_column(
         String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class WarehousePushTask(BaseModel):
+    """推送任务配置（一行一任务；只能改值不能新增，push_center registry 注册）。"""
+
+    __tablename__ = "push_tasks"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_push_tasks_task",
+            "task_name",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_push_tasks_task", "task_name"),
+        {"schema": "warehouse"},
+    )
+
+    task_name: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="任务 key（push_center registry 注册，如 morning_report）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", comment="是否启用"
+    )
+    schedule: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="调度 daily/weekly/monthly/interval（引擎四态）；event 任务为 null；空值=回落 registry 默认",
+    )
+    targets: Mapped[str | None] = mapped_column(
+        String(512),
+        nullable=True,
+        comment="推送目标（逗号分隔群 chat_id/个人 open_id；空 = 回落 env 兜底）",
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
+
+
+class WarehousePushTaskAudit(BaseModel):
+    """推送任务配置变更审计（append-only）。"""
+
+    __tablename__ = "push_task_audits"
+    __table_args__ = (
+        Index("ix_warehouse_push_task_audits_task_created", "task_name", "created_at"),
+        Index("ix_warehouse_push_task_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    task_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="任务 key")
+    action: Mapped[str] = mapped_column(String(32), nullable=False, comment="动作: update/enable/disable")
+    before_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更前")
+    after_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, comment="变更后")
+    operator_name: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="操作人 name"
+    )
+
+
+class WarehousePushLog(BaseModel):
+    """推送日志（append-only；每次执行每目标一行，无目标跳过记一行）。"""
+
+    __tablename__ = "push_logs"
+    __table_args__ = (
+        Index("ix_warehouse_push_logs_task_slot", "task_name", "slot"),
+        Index("ix_warehouse_push_logs_task_created", "task_name", "created_at"),
+        Index("ix_warehouse_push_logs_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    task_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="任务 key")
+    scene: Mapped[str] = mapped_column(String(64), nullable=False, comment="内容场景（生成器注册 key）")
+    trigger: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="触发: scheduled/manual/event"
+    )
+    run_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="引擎执行时刻（interval 冷却判断基准）"
+    )
+    slot: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="计划槽位（日历型调度当日判重；interval/event 为空）"
+    )
+    target: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="目标 chat_id/open_id（无目标跳过行为空）"
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, comment="success/failed/skipped")
+    message_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="飞书 message_id（dry_run 为占位值）"
+    )
+    error: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="失败/跳过原因")
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="发送耗时毫秒")
+
+
+class WarehouseConfirmRequest(BaseModel):
+    """通用业务确认单（V3.0 分期A 确认门；1C 二值：确认/取消，无会签）。
+
+    确认动作 = 按映射回写 Base 字段（ref_table + ref_record_ids + writeback）；
+    取消动作 = 仅记审计不改数。状态机与草稿确认链（agent/confirm.py）同构
+    但独立成表——登记场景继续走 AgentDraft，业务确认走本表。
+    """
+
+    __tablename__ = "confirm_requests"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_confirm_requests_no",
+            "request_no",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_confirm_requests_business_status", "business_type", "status"),
+        Index("ix_warehouse_confirm_requests_status_created", "status", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    request_no: Mapped[str] = mapped_column(String(64), nullable=False, comment="确认单号 CR-yyyymmddHHMMSS-XXXXXX")
+    business_type: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="业务类型（如 unqualified_disposition）"
+    )
+    title: Mapped[str] = mapped_column(String(128), nullable=False, comment="卡片标题")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, comment="卡片正文（markdown，含清单摘要）")
+    ref_table: Mapped[str] = mapped_column(String(64), nullable=False, comment="回写目标 Base 表 key")
+    ref_record_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, nullable=False, default=list, comment="回写目标 record_id 列表"
+    )
+    payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="业务快照（审计/回执渲染用）"
+    )
+    target: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="确认卡投递目标（群 chat_id / 个人 open_id）"
+    )
+    writeback: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="回写字段映射 {Base字段名: 值}（确认后逐条写入 ref 记录）"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", comment="pending/confirmed/cancelled/expired/failed"
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="过期时间（默认 24h）")
+    confirmed_by: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="确认操作人 open_id（点击者；目标内任何人可确认）"
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="确认时间")
+    resend_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0", comment="重发次数"
+    )
+    card_message_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="确认卡 message_id（PATCH 原卡用；重发后为最新一张）"
+    )
+
+
+class WarehouseConfirmAudit(BaseModel):
+    """确认单生命周期审计（append-only：create/confirm/cancel/expire/resend/writeback）。"""
+
+    __tablename__ = "confirm_request_audits"
+    __table_args__ = (
+        Index("ix_warehouse_confirm_request_audits_no_created", "request_no", "created_at"),
+        Index("ix_warehouse_confirm_request_audits_created", "created_at"),
+        {"schema": "warehouse"},
+    )
+
+    request_no: Mapped[str] = mapped_column(String(64), nullable=False, comment="确认单号")
+    action: Mapped[str] = mapped_column(
+        String(32), nullable=False, comment="动作: create/confirm/cancel/expire/resend/writeback_ok/writeback_failed"
+    )
+    operator_open_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="操作人 open_id（系统动作为空）"
+    )
+    detail: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, comment="补充明细（回写条数/失败原因等）"
     )

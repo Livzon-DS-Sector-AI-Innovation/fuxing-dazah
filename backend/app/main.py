@@ -134,8 +134,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.modules.warehouse.ops_config.scheduler_store import (
         scheduler_store as wh_scheduler_store,
     )
+    from app.modules.warehouse.push_center.store import (
+        push_store as wh_push_store,
+    )
 
-    for _wh_store in (wh_ai_store, wh_scenario_store, wh_runtime_store, wh_bitable_store, wh_scheduler_store):
+    for _wh_store in (wh_ai_store, wh_scenario_store, wh_runtime_store, wh_bitable_store, wh_scheduler_store, wh_push_store):
         try:
             await _wh_store.warmup()
         except Exception:  # noqa: BLE001 — 预热失败不阻塞启动
@@ -184,12 +187,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         EXPIRY_FREEZE_TASK,
         INTELLIGENCE_SCAN_TASK,
         MORNING_REPORT_TASK,
+        PUSH_CENTER_TICK_TASK,
         STOCK_DAILY_SNAPSHOT_TASK,
     )
     scheduler_registry.register_task(STOCK_DAILY_SNAPSHOT_TASK)
     scheduler_registry.register_task(INTELLIGENCE_SCAN_TASK)
     scheduler_registry.register_task(EXPIRY_FREEZE_TASK)
     scheduler_registry.register_task(MORNING_REPORT_TASK)
+    scheduler_registry.register_task(PUSH_CENTER_TICK_TASK)
 
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK

@@ -437,6 +437,62 @@ export interface WarehouseSchedulerUpdateInput {
   note?: string | null
 }
 
+// ── 推送任务（V3.0 分期A 推送订阅中心）──
+
+/** push schedule 四态：daily / weekly（weekday 0=周一）/ monthly / interval；null（事件触发） */
+export type WarehousePushSchedule =
+  | { type: 'daily'; time: string; window_minutes?: number }
+  | { type: 'weekly'; weekday: number; time: string; window_minutes?: number }
+  | { type: 'monthly'; day: number; time: string; window_minutes?: number }
+  | { type: 'interval'; seconds: number }
+  | null
+
+export interface WarehousePushTaskView {
+  task_name: string
+  scene: string
+  label: string
+  description: string
+  trigger: 'scheduled' | 'event'
+  enabled: boolean
+  schedule: WarehousePushSchedule
+  targets: string[]
+  source: 'db' | 'default'
+}
+
+export interface WarehousePushTaskData {
+  tasks: WarehousePushTaskView[]
+}
+
+export interface WarehousePushTaskUpdateInput {
+  enabled?: boolean
+  schedule?: WarehousePushSchedule
+  targets?: string | null
+  note?: string | null
+}
+
+export interface WarehousePushTriggerResult {
+  task_name: string
+  scene: string
+  status: string
+  slot: string | null
+  log_count: number
+}
+
+export interface WarehousePushLogEntry {
+  id: string
+  created_at: string
+  task_name: string
+  scene: string
+  trigger: string
+  run_at: string
+  slot: string | null
+  target: string | null
+  status: string
+  message_id: string | null
+  error: string | null
+  duration_ms: number | null
+}
+
 // ── 配置变更审计（五类端点共用结构，主体键因端点而异）──
 
 export interface WarehouseConfigAuditBase {
@@ -463,14 +519,18 @@ export interface WarehouseBitableAuditItem extends WarehouseConfigAuditBase {
 export interface WarehouseSchedulerAuditItem extends WarehouseConfigAuditBase {
   job_name: string
 }
+export interface WarehousePushTaskAuditItem extends WarehouseConfigAuditBase {
+  task_name: string
+}
 
-/** ConfigAuditSection 的五类审计（决定取数 action 与「对象」列取值键） */
+/** ConfigAuditSection 的六类审计（决定取数 action 与「对象」列取值键） */
 export type WarehouseConfigAuditKind =
   | 'ai-model'
   | 'ai-scenario'
   | 'runtime'
   | 'bitable'
   | 'scheduler'
+  | 'push'
 
 // ── AI 调用审计（warehouse.ai_call_audits）──
 

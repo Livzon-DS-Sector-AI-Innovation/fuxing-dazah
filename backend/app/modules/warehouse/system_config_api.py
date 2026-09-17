@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,9 +32,14 @@ from app.modules.warehouse.models import (
     BitableConfigAudit,
     RuntimeConfigAudit,
     SchedulerConfigAudit,
+    WarehouseConfirmRequest,
+    WarehousePushLog,
+    WarehousePushTaskAudit,
 )
 from app.modules.warehouse.ops_config.runtime_store import runtime_store
 from app.modules.warehouse.ops_config.scheduler_store import scheduler_store
+from app.modules.warehouse.push_center import engine
+from app.modules.warehouse.push_center.store import push_store
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -434,6 +440,259 @@ async def list_scheduler_audits(
             for r in rows
         ]
     })
+
+
+# ── 推送任务（V3.0 分期A 推送订阅中心）──
+
+
+@system_config_router.get("/system-config/push-tasks", summary="推送任务总览")
+async def list_push_tasks(
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    views = [asdict(v) for v in push_store.iter_task_views()]
+    return success_response({"tasks": views})
+
+
+@system_config_router.put("/system-config/push-tasks/{task_name}", summary="更新推送任务")
+async def update_push_task(
+    task_name: str,
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:update")),
+) -> JSONResponse:
+    try:
+        view = await push_store.set_task(
+            db, task_name, payload, operator_name=user.name
+        )
+    except ValueError as exc:
+        raise _map_store_error(exc) from exc
+    return success_response(asdict(view), message="配置已保存，实时生效")
+
+
+@system_config_router.get("/system-config/push-tasks/audits", summary="推送任务配置变更审计")
+async def list_push_task_audits(
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    rows = (
+        await db.execute(
+            select(WarehousePushTaskAudit)
+            .order_by(WarehousePushTaskAudit.created_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+    return success_response({
+        "audits": [
+            {
+                "id": str(r.id),
+                "task_name": r.task_name,
+                "action": r.action,
+                "before_json": r.before_json,
+                "after_json": r.after_json,
+                "operator_name": r.operator_name,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows
+        ]
+    })
+
+
+@system_config_router.get("/system-config/push-logs", summary="推送日志分页查询")
+async def list_push_logs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    task_name: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    conditions: list[Any] = [WarehousePushLog.is_deleted.is_(False)]
+    if task_name:
+        conditions.append(WarehousePushLog.task_name == task_name)
+    if status:
+        conditions.append(WarehousePushLog.status == status)
+    where = conditions[0]
+    for cond in conditions[1:]:
+        where = where & cond
+    total = (
+        await db.execute(select(func.count()).select_from(WarehousePushLog).where(where))
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            select(WarehousePushLog)
+            .where(where)
+            .order_by(WarehousePushLog.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return success_response(
+        [
+            {
+                "id": str(r.id),
+                "created_at": r.created_at.isoformat(),
+                "task_name": r.task_name,
+                "scene": r.scene,
+                "trigger": r.trigger,
+                "run_at": r.run_at.isoformat(),
+                "slot": r.slot.isoformat() if r.slot else None,
+                "target": r.target,
+                "status": r.status,
+                "message_id": r.message_id,
+                "error": r.error,
+                "duration_ms": r.duration_ms,
+            }
+            for r in rows
+        ],
+        meta={"page": page, "page_size": page_size, "total": total},
+    )
+
+
+@system_config_router.post("/system-config/push-tasks/{task_name}/trigger", summary="手动触发一次推送")
+async def trigger_push_task(
+    task_name: str,
+    payload: dict[str, Any] | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:update")),
+) -> JSONResponse:
+    """立即执行一次该任务（绕过到期判断，仍走互斥/发送/日志全链路）。
+
+    body 可传 ``{"dry_run": true}`` 做发送演练（构建消息体但不真发），
+    用于上线前验证推送链路。
+    """
+    body = payload or {}
+    dry_run = bool(body.get("dry_run", False))
+    now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+    try:
+        result = await engine.run_task(db, task_name, now_cn, dry_run=dry_run)
+    except ValueError as exc:
+        raise _map_store_error(exc) from exc
+    return success_response(
+        {
+            "task_name": result.task_name,
+            "scene": result.scene,
+            "status": result.status,
+            "slot": result.slot.isoformat() if result.slot else None,
+            "log_count": result.log_count,
+        },
+        message="推送已触发" if result.status in ("executed", "failed") else "推送未执行",
+    )
+
+
+# ── 确认单（V3.0 分期A 通用确认门；API-only，无管理页）──
+
+
+def _serialize_confirm_request(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "created_at": row.created_at.isoformat(),
+        "request_no": row.request_no,
+        "business_type": row.business_type,
+        "title": row.title,
+        "summary": row.summary,
+        "ref_table": row.ref_table,
+        "ref_record_ids": row.ref_record_ids,
+        "payload": row.payload,
+        "target": row.target,
+        "writeback": row.writeback,
+        "status": row.status,
+        "expires_at": row.expires_at.isoformat(),
+        "confirmed_by": row.confirmed_by,
+        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "resend_count": row.resend_count,
+        "card_message_id": row.card_message_id,
+    }
+
+
+@system_config_router.get("/system-config/confirm-requests", summary="确认单分页查询")
+async def list_confirm_requests(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    business_type: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    conditions: list[Any] = [WarehouseConfirmRequest.is_deleted.is_(False)]
+    if status:
+        conditions.append(WarehouseConfirmRequest.status == status)
+    if business_type:
+        conditions.append(WarehouseConfirmRequest.business_type == business_type)
+    where = conditions[0]
+    for cond in conditions[1:]:
+        where = where & cond
+    total = (
+        await db.execute(
+            select(func.count()).select_from(WarehouseConfirmRequest).where(where)
+        )
+    ).scalar_one()
+    rows = (
+        await db.execute(
+            select(WarehouseConfirmRequest)
+            .where(where)
+            .order_by(WarehouseConfirmRequest.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+    return success_response(
+        [_serialize_confirm_request(r) for r in rows],
+        meta={"page": page, "page_size": page_size, "total": total},
+    )
+
+
+@system_config_router.get("/system-config/confirm-requests/stats", summary="确认单状态统计")
+async def confirm_request_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    rows = (
+        await db.execute(
+            select(
+                WarehouseConfirmRequest.status,
+                WarehouseConfirmRequest.business_type,
+                func.count(),
+            )
+            .where(WarehouseConfirmRequest.is_deleted.is_(False))
+            .group_by(WarehouseConfirmRequest.status, WarehouseConfirmRequest.business_type)
+        )
+    ).all()
+    return success_response({
+        "by_status_business": [
+            {"status": r[0], "business_type": r[1], "count": int(r[2])} for r in rows
+        ]
+    })
+
+
+@system_config_router.post(
+    "/system-config/confirm-requests/{request_id}/resend", summary="重发确认卡（仅待确认）"
+)
+async def resend_confirm_request(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:update")),
+) -> JSONResponse:
+    from app.modules.warehouse import confirm_request as confirm_request_service
+
+    row = (
+        await db.execute(
+            select(WarehouseConfirmRequest).where(
+                WarehouseConfirmRequest.id == request_id,
+                WarehouseConfirmRequest.is_deleted.is_(False),
+            )
+        )
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="确认单不存在")
+    try:
+        sent = await confirm_request_service.resend_request(db, row)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return success_response(
+        _serialize_confirm_request(row),
+        message="确认卡已重发" if sent else "重发失败（发送通道异常，请检查目标配置）",
+    )
 
 
 # ── AI 调用审计查询（设计稿 §8：与 warehouse_agent_audit 经 trace_id 串链）──

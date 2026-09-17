@@ -276,6 +276,28 @@ class WarehouseBitableAdapter:
             f"/tables/{self._table_id(table_key)}/records/{record_id}",
         )
 
+    async def update_record(
+        self, table_key: str, record_id: str, fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        """更新单条记录：先 ``validate_write_fields``（本地快速失败），再 PUT。
+
+        契约同 create_record（单选传纯字符串、字段键用字段名）；
+        返回 {"record_id": str, "fields": {回读字段: 值}}。
+        """
+        self._table(table_key)  # 未知表快速失败
+        validate_write_fields(table_key, fields)
+        data = await self._call(
+            "PUT",
+            f"{BITABLE_BASE}/apps/{self._base_token(table_key)}"
+            f"/tables/{self._table_id(table_key)}/records/{record_id}",
+            json_body={"fields": fields},
+        )
+        record = data.get("record") or {}
+        return {
+            "record_id": str(record.get("record_id", record_id)),
+            "fields": dict(record.get("fields") or {}),
+        }
+
     # ── 字段定义刷新（选项集缓存） ──
 
     async def refresh_table_fields(self, table_key: str) -> dict[str, Any]:

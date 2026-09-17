@@ -1,4 +1,9 @@
-"""库存状态变更路由（分期D Ticket 03）。"""
+"""库存状态变更路由（分期D Ticket 03 → V3.0 分期A Ticket 06 先 Base 后镜像）。
+
+合法流转校验保留；落库改走 base_mirror（先写 material_receipt.上一状态，
+成功后本地状态+日志；Base 失败整单失败、本地零变更，返回 502 明确报错）。
+本地库存状态机降级为「操作镜像+展示」（2B 定案）。
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import success_response
-from app.modules.warehouse.models import WarehouseStock, WarehouseStockStatusLog
+from app.modules.warehouse import base_mirror
+from app.modules.warehouse.models import WarehouseStock
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 
@@ -59,15 +65,16 @@ async def change_stock_status(
             content={"code": 400, "message": f"不允许从 {old} 变更为 {new}"},
         )
 
-    stock.status = new
-    db.add(
-        WarehouseStockStatusLog(
-            stock_id=stock.id,
-            old_status=old,
-            new_status=new,
-            reason=payload.reason,
-            operator_id=user.id if user else None,
+    try:
+        # 先写 Base（material_receipt.上一状态），成功后 helper 内落本地状态+日志
+        await base_mirror.apply_stock_status_base_first(
+            db, stock, new, reason=payload.reason, operator_id=user.id if user else None
         )
-    )
+    except base_mirror.BaseMirrorError as exc:
+        await db.rollback()
+        return JSONResponse(
+            status_code=502,
+            content={"code": 502, "message": f"Base 台账写入失败，本地未变更：{exc}"},
+        )
     await db.commit()
     return success_response({"id": str(stock.id), "old_status": old, "new_status": new})

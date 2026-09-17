@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -83,15 +83,55 @@ async def list_reconciliation_results(
     return paginated_response(
         [
             {
+                "id": str(r.id),
                 "status": r.status,
                 "material_code": r.material_code,
                 "material_name": r.material_name,
                 "batch_no": r.batch_no,
                 "local_qty": float(r.local_qty) if r.local_qty is not None else None,
                 "feishu_qty": float(r.feishu_qty) if r.feishu_qty is not None else None,
+                "repair_status": r.repair_status,
+                "repaired_at": r.repaired_at.isoformat() if r.repaired_at else None,
                 "detail": r.detail,
             }
             for r in items
         ],
         page, page_size, total,
+    )
+
+
+@router.post("/reconciliation/results/{result_id}/repair", summary="按 Base 修复本地（人工一键）")
+async def repair_reconciliation_result(
+    result_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:intelligence:update")),
+) -> JSONResponse:
+    """裁决反转（2B：Base 胜出）的人工一键修复：
+
+    - mismatch → 本地聚合数量调整为 Base 值；
+    - missing_local → 按 Base 记录补建本地库存行；
+    - missing_in_feishu → 仅置「待人工处置」（不删数据，删除属红区）。
+    """
+    try:
+        result = await reconciliation_service.apply_base_repair(
+            db, result_id, operator_id=str(user.id) if user else None
+        )
+    except reconciliation_service.ReconciliationRepairError as exc:
+        message = str(exc)
+        # 仅「行不存在/ID 无效」为 404；其余（已处理/前置缺失/负数调整）为 409
+        status_code = 404 if message.startswith(("差异行不存在", "差异行 ID 无效")) else 409
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    await db.commit()
+    return success_response(
+        {
+            "id": str(result.id),
+            "status": result.status,
+            "material_code": result.material_code,
+            "batch_no": result.batch_no,
+            "repair_status": result.repair_status,
+            "repaired_at": result.repaired_at.isoformat() if result.repaired_at else None,
+        },
+        message="已按 Base 修复本地"
+        if result.repair_status == reconciliation_service.REPAIR_STATUS_REPAIRED
+        else "已标记待人工处置",
     )

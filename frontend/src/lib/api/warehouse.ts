@@ -49,6 +49,12 @@ import {
   WarehouseSchedulerData,
   WarehouseSchedulerTaskView,
   WarehouseSchedulerUpdateInput,
+  WarehousePushTaskAuditItem,
+  WarehousePushTaskData,
+  WarehousePushTaskUpdateInput,
+  WarehousePushTaskView,
+  WarehousePushTriggerResult,
+  WarehousePushLogEntry,
   WarehouseOverview,
   DashboardSummary,
   MovementTrendPoint,
@@ -471,6 +477,55 @@ export async function putWarehouseSchedulerTask(
   )
 }
 
+// ── 推送任务（V3.0 分期A 推送订阅中心）──
+
+export async function fetchWarehousePushTasks(): Promise<WarehousePushTaskData> {
+  return apiGet<WarehousePushTaskData>(`${SERVER_API}${SC_BASE}/push-tasks`)
+}
+
+export async function fetchWarehousePushTaskAudits(
+  limit = 50,
+): Promise<WarehousePushTaskAuditItem[]> {
+  const data = await apiGet<{ audits: WarehousePushTaskAuditItem[] }>(
+    `${SERVER_API}${SC_BASE}/push-tasks/audits?limit=${limit}`,
+  )
+  return data?.audits ?? []
+}
+
+export async function putWarehousePushTask(
+  taskName: string,
+  input: WarehousePushTaskUpdateInput,
+): Promise<WarehousePushTaskView> {
+  return apiPut<WarehousePushTaskView>(
+    `${SERVER_API}${SC_BASE}/push-tasks/${encode(taskName)}`,
+    input,
+  )
+}
+
+export async function triggerWarehousePushTask(
+  taskName: string,
+  dryRun = false,
+): Promise<WarehousePushTriggerResult> {
+  return apiPost<WarehousePushTriggerResult>(
+    `${SERVER_API}${SC_BASE}/push-tasks/${encode(taskName)}/trigger`,
+    { dry_run: dryRun },
+  )
+}
+
+export async function fetchWarehousePushLogs(
+  params: { task_name?: string; status?: string; page?: number; page_size?: number } = {},
+): Promise<Paginated<WarehousePushLogEntry>> {
+  const sp = new URLSearchParams()
+  if (params.task_name) sp.set('task_name', params.task_name)
+  if (params.status) sp.set('status', params.status)
+  if (params.page) sp.set('page', String(params.page))
+  if (params.page_size) sp.set('page_size', String(params.page_size))
+  const qs = sp.toString()
+  return apiFetchPaginated<WarehousePushLogEntry>(
+    `${SERVER_API}${SC_BASE}/push-logs${qs ? `?${qs}` : ''}`,
+  )
+}
+
 // ── AI 调用审计（/warehouse/ai-audits）──
 
 function setAiAuditParams(sp: URLSearchParams, params: WarehouseAiAuditListParams) {
@@ -501,7 +556,7 @@ export async function fetchWarehouseAiAuditDetail(id: string): Promise<Warehouse
   return apiGet<WarehouseAiAuditDetail>(`${SERVER_API}${BASE}/ai-audits/${encode(id)}`)
 }
 
-/** 五类配置变更审计取数分发（ConfigAuditSection 用；行为对应端点的 audits[]） */
+/** 六类配置变更审计取数分发（ConfigAuditSection 用；行为对应端点的 audits[]） */
 export async function fetchWarehouseConfigAudits(
   kind: WarehouseConfigAuditKind,
   limit = 50,
@@ -517,5 +572,7 @@ export async function fetchWarehouseConfigAudits(
       return fetchWarehouseBitableAudits(limit)
     case 'scheduler':
       return fetchWarehouseSchedulerAudits(limit)
+    case 'push':
+      return fetchWarehousePushTaskAudits(limit)
   }
 }

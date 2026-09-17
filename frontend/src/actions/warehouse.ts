@@ -19,11 +19,15 @@ import {
   fetchWarehouseConfigAudits,
   fetchWarehouseRuntimeConfigs,
   fetchWarehouseSchedulerTasks,
+  fetchWarehousePushTasks,
+  fetchWarehousePushLogs,
   putWarehouseAiModel as apiPutWarehouseAiModel,
   putWarehouseAiScenario as apiPutWarehouseAiScenario,
   putWarehouseBitableConnection as apiPutWarehouseBitableConnection,
   putWarehouseRuntimeConfig as apiPutWarehouseRuntimeConfig,
   putWarehouseSchedulerTask as apiPutWarehouseSchedulerTask,
+  putWarehousePushTask as apiPutWarehousePushTask,
+  triggerWarehousePushTask as apiTriggerWarehousePushTask,
   refreshWarehouseBitableFields as apiRefreshWarehouseBitableFields,
   testWarehouseAiModel as apiTestWarehouseAiModel,
   testWarehouseBitableConnection as apiTestWarehouseBitableConnection,
@@ -71,6 +75,7 @@ import {
   WarehouseConfigAuditKind,
   WarehouseRuntimeValue,
   WarehouseSchedulerUpdateInput,
+  WarehousePushTaskUpdateInput,
 } from '@/types/warehouse'
 
 // ═══════════════════════════════════════════
@@ -290,6 +295,31 @@ export async function updateWarehouseSchedulerTask(
   const result = await apiPutWarehouseSchedulerTask(jobName, input)
   revalidatePath('/warehouse/system')
   return result
+}
+
+// ── 推送任务（V3.0 分期A 推送订阅中心）──
+
+export async function getWarehousePushTasks() {
+  return fetchWarehousePushTasks()
+}
+
+export async function updateWarehousePushTask(
+  taskName: string,
+  input: WarehousePushTaskUpdateInput,
+) {
+  const result = await apiPutWarehousePushTask(taskName, input)
+  revalidatePath('/warehouse/system')
+  return result
+}
+
+export async function triggerWarehousePushTask(taskName: string, dryRun = false) {
+  return apiTriggerWarehousePushTask(taskName, dryRun)
+}
+
+export async function getWarehousePushLogs(
+  params: { task_name?: string; status?: string; page?: number; page_size?: number } = {},
+) {
+  return fetchWarehousePushLogs(params)
 }
 
 // ── AI 调用审计 ──

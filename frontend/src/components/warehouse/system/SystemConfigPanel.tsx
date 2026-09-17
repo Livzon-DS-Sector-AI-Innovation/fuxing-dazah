@@ -1,7 +1,7 @@
 'use client'
 
 // 仓库系统配置中心主面板（对齐 safety/system 布局；design §10）
-// 六 Tab：AI 模型 / AI 场景 / 运行参数 / 多维表格 / 定时任务 / AI 调用审计。
+// 七 Tab：AI 模型 / AI 场景 / 运行参数 / 多维表格 / 定时任务 / 推送任务 / AI 调用审计。
 // 权限显隐（usePermission，对齐 safety 范式）：
 //   warehouse:system-config:read  → 页面可见（无权限整页 403 Alert，fail-closed）
 //   warehouse:system-config:update → 编辑态（开关/保存/测试按钮可用）
@@ -14,6 +14,7 @@ import AiScenariosTab from './AiScenariosTab'
 import RuntimeParamsTab from './RuntimeParamsTab'
 import BitableTab from './BitableTab'
 import SchedulerTasksTab from './SchedulerTasksTab'
+import PushTasksTab from './PushTasksTab'
 import AiCallAuditTab from './AiCallAuditTab'
 import { UI } from './systemConfigConstants'
 
@@ -90,6 +91,11 @@ export default function SystemConfigPanel() {
             key: 'scheduler',
             label: '定时任务',
             children: <SchedulerTasksTab canUpdate={canUpdate} />,
+          },
+          {
+            key: 'push',
+            label: '推送任务',
+            children: <PushTasksTab canUpdate={canUpdate} />,
           },
           {
             key: 'ai-audits',

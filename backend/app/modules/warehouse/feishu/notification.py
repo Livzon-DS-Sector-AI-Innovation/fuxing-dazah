@@ -158,7 +158,7 @@ async def send_card_to_user(
 
     Args:
         open_id: 飞书用户 open_id（如 "ou_xxx"）
-        card: 完整的飞书卡片 JSON dict
+        card: 完整的飞书卡片 dict
         dry_run: None=跟随模块级开关；True=只构建消息体并记录日志；False=真发送
 
     Returns:
@@ -174,6 +174,18 @@ async def send_card_to_user(
         )
         return DRY_RUN_MESSAGE_ID
     return await _send_create(payload)
+
+
+async def send_card_to_target(
+    target: str, card: dict[str, Any], dry_run: bool | None = None
+) -> str | None:
+    """按目标类型分发卡片：``ou_`` 前缀私聊（open_id），否则群聊（chat_id）。
+
+    推送引擎/确认门/回执等所有「目标可为群或人」的发送方统一走本入口。
+    """
+    if target.startswith("ou_"):
+        return await send_card_to_user(target, card, dry_run=dry_run)
+    return await send_card(target, card, dry_run=dry_run)
 
 
 async def add_reaction(

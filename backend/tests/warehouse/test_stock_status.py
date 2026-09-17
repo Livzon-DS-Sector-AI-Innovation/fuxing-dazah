@@ -1,12 +1,20 @@
-"""库存状态机测试（分期D Ticket 03）：状态流转校验与流转日志。"""
+"""库存状态机测试（分期D Ticket 03 → V3.0 分期A Ticket 06 先 Base 后镜像）。
+
+改造后语义：Web 状态变更先写 Base（material_receipt.上一状态，三态映射
+合格/待检/不合格）再落本地；Base 失败 502 且本地零变更；非法流转仍 400。
+Base 交互经 monkeypatch base_mirror.WarehouseBitableAdapter 为零网络假件。
+"""
 
 from decimal import Decimal
+from typing import Any
 from uuid import uuid4
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.warehouse import base_mirror
 from app.modules.warehouse.models import (
     WarehouseLocation,
     WarehouseMaterial,
@@ -14,6 +22,38 @@ from app.modules.warehouse.models import (
     WarehouseStock,
     WarehouseStockStatusLog,
 )
+
+
+class FakeBaseAdapter:
+    """零网络假适配器：按物料批号返回 record_id；fail_update 注入失败。"""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def search_records_page(
+        self, table_key: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        value = (kwargs.get("filter_json") or {}).get("conditions", [{}])[0].get("value", [""])[0]
+        return {
+            "records": [{"record_id": f"rec_{value}", "fields": {}}],
+            "total": 1,
+            "page_token": None,
+        }
+
+    async def update_record(
+        self, table_key: str, record_id: str, fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.update_calls.append((table_key, record_id, dict(fields)))
+        if self.fail:
+            raise RuntimeError("Base 写入被拒")
+        return {"record_id": record_id, "fields": {}}
+
+
+def _patch_base(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> FakeBaseAdapter:
+    adapter = FakeBaseAdapter(**kwargs)
+    monkeypatch.setattr(base_mirror, "WarehouseBitableAdapter", lambda: adapter)
+    return adapter
 
 
 async def _seed_stock(db: AsyncSession, suffix: str) -> WarehouseStock:
@@ -51,9 +91,10 @@ async def _cleanup(db: AsyncSession) -> None:
     await db.commit()
 
 
-async def test_normal_to_quarantine(
-    auth_client: AsyncClient, db_session: AsyncSession
+async def test_normal_to_quarantine_base_first(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    adapter = _patch_base(monkeypatch)
     try:
         stock = await _seed_stock(db_session, uuid4().hex[:6])
         resp = await auth_client.post(
@@ -62,28 +103,65 @@ async def test_normal_to_quarantine(
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["new_status"] == "quarantine"
+        # 先 Base 后本地：上一状态=待检（quarantine 映射）
+        assert adapter.update_calls[0][2] == {"上一状态": "待检"}
+    finally:
+        await _cleanup(db_session)
+
+
+async def test_base_failure_returns_502_local_unchanged(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_base(monkeypatch, fail=True)
+    try:
+        stock = await _seed_stock(db_session, uuid4().hex[:6])
+        resp = await auth_client.post(
+            f"/api/v1/warehouse/stocks/{stock.id}/status",
+            json={"new_status": "quarantine", "reason": "质检待检"},
+        )
+        assert resp.status_code == 502
+        assert "Base 台账写入失败" in resp.json()["message"]
+        # 本地零变更
+        await db_session.rollback()
+        fresh = (
+            await db_session.execute(
+                select(WarehouseStock).where(WarehouseStock.id == stock.id)
+            )
+        ).scalar_one()
+        assert fresh.status == "normal"
+        logs = (
+            await db_session.execute(
+                select(WarehouseStockStatusLog).where(
+                    WarehouseStockStatusLog.stock_id == stock.id
+                )
+            )
+        ).scalars().all()
+        assert logs == []
     finally:
         await _cleanup(db_session)
 
 
 async def test_invalid_transition_rejected(
-    auth_client: AsyncClient, db_session: AsyncSession
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    adapter = _patch_base(monkeypatch)
     try:
         stock = await _seed_stock(db_session, uuid4().hex[:6])
-        # normal → frozen 直接跳转不允许
+        # normal → frozen 直接跳转不允许（不触达 Base）
         resp = await auth_client.post(
             f"/api/v1/warehouse/stocks/{stock.id}/status",
             json={"new_status": "frozen", "reason": "跳过待检"},
         )
         assert resp.status_code == 400
+        assert adapter.update_calls == []
     finally:
         await _cleanup(db_session)
 
 
 async def test_status_log_written(
-    auth_client: AsyncClient, db_session: AsyncSession
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    _patch_base(monkeypatch)
     try:
         stock = await _seed_stock(db_session, uuid4().hex[:6])
         await auth_client.post(
@@ -105,9 +183,10 @@ async def test_status_log_written(
 
 
 async def test_stock_list_status_filter(
-    auth_client: AsyncClient, db_session: AsyncSession
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """库存列表按状态筛选（分期D Ticket 03 前端筛选的后端支撑）。"""
+    _patch_base(monkeypatch)
     try:
         stock = await _seed_stock(db_session, uuid4().hex[:6])
         await auth_client.post(

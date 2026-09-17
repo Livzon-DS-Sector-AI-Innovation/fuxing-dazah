@@ -29,12 +29,15 @@ interface ReconciliationRun {
 }
 
 interface ReconciliationResult {
+  id: string
   status: string
   material_code: string
   material_name: string
   batch_no: string
   local_qty: number | null
   feishu_qty: number | null
+  repair_status?: string | null
+  repaired_at?: string | null
   detail: Record<string, string>
 }
 
@@ -148,7 +151,7 @@ export function ReconciliationCenter() {
       <PageHeader
         breadcrumb={['仓储管理', '对账中心']}
         title="对账中心"
-        description="本地库存与飞书台账一致性核对；仅展示差异，不做覆盖操作"
+        description="本地库存与飞书台账一致性核对；差异默认以飞书台账为准，本地修复为人工一键操作（本地多出仅标记待处置，不自动删除）"
         actions={
           <Button
             type="primary"
@@ -219,6 +222,8 @@ export function ReconciliationCenter() {
 }
 
 function ResultDetail({ runId }: { runId: string }) {
+  const queryClient = useQueryClient()
+  const { message } = AntdApp.useApp()
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [keyword, setKeyword] = useState('')
   const { data: res, isLoading } = useQuery({
@@ -228,6 +233,26 @@ function ResultDetail({ runId }: { runId: string }) {
       if (status) params.set('status', status)
       const resp = await fetch(`${BASE}/runs/${runId}/results?${params}`)
       return (await resp.json()).data as ReconciliationResult[]
+    },
+  })
+
+  // 按 Base 修复本地（V3.0 分期A 裁决反转）：mismatch 调数 / missing_local 补行 /
+  // missing_in_feishu 仅标记待人工处置（删除属红区，绝不自动删）
+  const repairMutation = useMutation({
+    mutationFn: async (resultId: string) => {
+      const resp = await fetch(`${BASE}/results/${resultId}/repair`, { method: 'POST' })
+      const body = await resp.json()
+      if (!resp.ok) throw new Error(body?.detail ?? body?.message ?? '修复失败')
+      return body.data as { repair_status: string | null }
+    },
+    onSuccess: data => {
+      message.success(
+        data.repair_status === 'manual' ? '已标记待人工处置' : '已按 Base 修复本地',
+      )
+      queryClient.invalidateQueries({ queryKey: ['warehouse', 'reconciliation'] })
+    },
+    onError: (e: unknown) => {
+      if (e instanceof Error) message.error(e.message)
     },
   })
 
@@ -252,6 +277,31 @@ function ResultDetail({ runId }: { runId: string }) {
     { title: '批次', dataIndex: 'batch_no', width: 90, render: v => v || '-' },
     { title: '本地', dataIndex: 'local_qty', width: 80, align: 'right', render: v => v ?? '-' },
     { title: '飞书', dataIndex: 'feishu_qty', width: 80, align: 'right', render: v => v ?? '-' },
+    {
+      title: '修复（以 Base 为准）',
+      key: 'repair',
+      width: 150,
+      render: (_, record) => {
+        if (record.repair_status === 'repaired') {
+          return <StatusTag tone="ok" label="已按 Base 修复" />
+        }
+        if (record.repair_status === 'manual') {
+          return <StatusTag tone="warn" label="待人工处置" />
+        }
+        const isMissingInFeishu = record.status === 'missing_in_feishu'
+        return (
+          <Button
+            size="small"
+            danger={isMissingInFeishu}
+            type="link"
+            loading={repairMutation.isPending && repairMutation.variables === record.id}
+            onClick={() => repairMutation.mutate(record.id)}
+          >
+            {isMissingInFeishu ? '标记人工处置' : '按 Base 修复'}
+          </Button>
+        )
+      },
+    },
   ]
 
   if (isLoading) return <Typography.Text>加载中…</Typography.Text>
@@ -266,7 +316,7 @@ function ResultDetail({ runId }: { runId: string }) {
         />
       </Space.Compact>
       <Table
-        rowKey={r => `${r.material_code}-${r.batch_no}`}
+        rowKey={r => r.id}
         size="small"
         columns={columns}
         dataSource={filtered}

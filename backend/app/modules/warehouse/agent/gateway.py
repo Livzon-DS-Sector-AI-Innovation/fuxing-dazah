@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.warehouse import confirm_request
 from app.modules.warehouse.agent import (  # noqa: F401 — pipeline 导入即注册 scene=receipt 确认回调（票03 桩，票04 换 submit_receipt）；卡片回调路由依赖此注册
     confirm,
     pipeline,
@@ -839,6 +840,119 @@ def _callback_update(ok: bool, message: str) -> dict[str, Any]:
     return {"card": {"type": "raw", "data": card}}
 
 
+# ── 业务确认门（V3.0 分期A）：scene=biz_confirm ──
+
+
+async def _patch_confirm_request_card(
+    request: Any, state: str
+) -> None:
+    """PATCH 原确认卡状态（回写中/已确认/失败）；失败不阻断主流程。"""
+    from app.modules.warehouse import confirm_request
+
+    try:
+        await confirm_request.patch_request_card(request, state=state)
+    except Exception:  # noqa: BLE001
+        logger.warning("业务确认卡状态更新失败: state=%s", state)
+
+
+async def _send_biz_confirm_receipt(request: Any, result: dict[str, Any]) -> None:
+    """回写结果回执卡（成功/失败）→ 确认卡目标。"""
+    ok = not result.get("failed")
+    lines = [
+        f"**确认单**：{request.request_no}",
+        f"**回写**：成功 {result.get('ok', 0)} 条"
+        + (f" / 失败 {len(result.get('failed') or [])} 条" if not ok else ""),
+    ]
+    failed = result.get("failed") or []
+    if failed:
+        lines.append("**失败明细**：" + "；".join(
+            f"{f.get('record_id', '?')[:12]}… {f.get('error', '')[:60]}" for f in failed[:3]
+        ))
+    card = build_card(
+        title="✅ 确认回执" if ok else "⚠️ 确认回写失败",
+        template="green" if ok else "red",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+    try:
+        await notification.send_card_to_target(request.target, card)
+    except Exception:  # noqa: BLE001 — 回执失败不阻断状态机
+        logger.exception("业务确认回执发送异常: request_no=%s", request.request_no)
+
+
+async def _run_biz_confirm_writeback(request_id: uuid.UUID) -> None:
+    """后台执行业务确认回写（独立会话；幂等校验 confirmed，模式同 submit）。"""
+    from app.modules.warehouse import confirm_request
+
+    try:
+        async with _db_session() as db:
+            request = await confirm_request.get_request(db, request_id)
+            if request is None or request.status != "confirmed":
+                return  # 幂等：已被处理/作废
+            result = await confirm_request.execute_writeback(db, request)
+        await _patch_confirm_request_card(request, "done" if not result["failed"] else "failed")
+        await _send_biz_confirm_receipt(request, result)
+    except Exception:  # noqa: BLE001 — 后台任务顶层兜底
+        logger.exception("业务确认回写后台任务异常: request_id=%s", request_id)
+        try:
+            async with _db_session() as db:
+                request = await confirm_request.get_request(db, request_id)
+                if request is not None and request.status == "confirmed":
+                    request.status = "failed"
+                    await db.flush()
+            if request is not None:
+                await _send_biz_confirm_receipt(
+                    request, {"ok": 0, "failed": [{"record_id": "-", "error": "后台任务异常"}]}
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception("业务确认失败回执发送异常: request_id=%s", request_id)
+
+
+async def _handle_biz_confirm_action(
+    event: dict[str, Any], value: dict[str, Any]
+) -> dict[str, Any] | None:
+    """业务确认门卡片回调：confirm 后台回写（Base 写入可能超 ACK 窗口），cancel 同步。"""
+    from app.modules.warehouse import confirm_request
+
+    operator = event.get("operator") or {}
+    operator_open_id = str(operator.get("open_id") or "")
+    message_id = _message_id_of(event)
+    action = str(value.get("action") or "")
+
+    if action == "confirm":
+        try:
+            async with _db_session() as db:
+                outcome = await asyncio.shield(
+                    confirm_request.handle_action(
+                        db, value=value, operator_open_id=operator_open_id, execute=False
+                    )
+                )
+                request = outcome.request
+        except Exception:  # noqa: BLE001
+            logger.exception("业务确认门处理异常")
+            return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
+        if outcome.ok and request is not None:
+            asyncio.create_task(_patch_confirm_request_card(request, "processing"))
+            _spawn_receipt_task(_run_biz_confirm_writeback(request.id))
+            return {"code": 200}  # 纯 ACK；卡片更新走 PATCH（模式同 submit 场景）
+        return await _ack_with_patch(message_id, False, f"⚠️ {outcome.message}")
+
+    # cancel / 未知动作：同步路径（无 Base 写入）
+    try:
+        async with _db_session() as db:
+            outcome = await asyncio.shield(
+                confirm_request.handle_action(
+                    db, value=value, operator_open_id=operator_open_id
+                )
+            )
+            request = outcome.request
+    except Exception:  # noqa: BLE001
+        logger.exception("业务确认门取消处理异常")
+        return await _ack_with_patch(message_id, False, "⚠️ 处理失败，请稍后重试")
+    if outcome.ok and outcome.status == "cancelled" and request is not None:
+        asyncio.create_task(_patch_confirm_request_card(request, "cancelled"))
+    return await _ack_with_patch(message_id, outcome.ok, outcome.message)
+
+
 @on_event("card.action.trigger")
 async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | None:
     """卡片按钮回调入口：解析 value 按 scene 分发。
@@ -859,6 +973,12 @@ async def handle_card_action_trigger(event: dict[str, Any]) -> dict[str, Any] | 
         value = {}
 
     scene = str(value.get("scene") or "")
+
+    # 业务确认门（V3.0 分期A）：确认 → 置 confirmed + PATCH 回写中 + 后台回写；
+    # 取消 → 同步置 cancelled。确认人 = 卡片目标范围内任何人（1C 加速器定位）。
+    if scene == confirm_request.CONFIRM_GATE_SCENE:
+        return await _handle_biz_confirm_action(event, value)
+
     # 票07：除通用确认场景外，已注册执行回调的场景（如 office 的 send_card）
     # 也进入确认门处理；未注册场景返回 None（ACK 通用信封，S2 识别确认等扩展位）
     if scene != confirm.CONFIRM_SCENE and not confirm.is_registered_scene(scene):

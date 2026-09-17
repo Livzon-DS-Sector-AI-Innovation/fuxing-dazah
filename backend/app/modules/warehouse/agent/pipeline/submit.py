@@ -845,12 +845,49 @@ async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str |
             f"⚠ 成品出库已登记：{draft.draft_no}（Base 记录 {record_id}），"
             f"{count} 个字段读回不一致，请到 Base 核对"
         )
-    # 快递推送引导（spec 决策 3）：登记了快递号 → 回执附「要推送给谁？」
+    # 快递推送（V3.0 分期A Ticket 08）：登记了快递号 → 自动推发货通知到
+    # 事件型推送任务（express_notify）目标；任务停用/目标未配置时回落
+    # 既有 group:/user: 交互指令（保留兼容）。
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     express_no = str(aligned.get("express_no") or "").strip()
     if express_no:
-        note += (
-            f"\n📦 已登记快递号 {express_no}，要推送给谁？"
-            "回复 group:群ID 或 user:open_id 可发送发货通知"
-        )
+        pushed = await _fire_express_notify(db, aligned, express_no)
+        if pushed:
+            note += f"\n📦 发货通知已自动推送给配置目标（快递号 {express_no}）"
+        else:
+            note += (
+                f"\n📦 已登记快递号 {express_no}，要推送给谁？"
+                "回复 group:群ID 或 user:open_id 可发送发货通知"
+            )
     return note
+
+
+def _express_payload(aligned: dict[str, Any], express_no: str) -> dict[str, Any]:
+    """快递通知 payload（canonical 键对齐 FINISHED_FIELD_LABELS）。"""
+    payload = {
+        "product_name": aligned.get("product_name"),
+        "product_batch_no": aligned.get("product_batch_no"),
+        "quantity": aligned.get("quantity"),
+        "unit": aligned.get("unit"),
+        "customer": aligned.get("customer"),
+        "express_no": express_no,
+        "remark": aligned.get("remark"),
+        "outbound_date": date.today().isoformat(),
+    }
+    return {k: v for k, v in payload.items() if v not in (None, "")}
+
+
+async def _fire_express_notify(
+    db: AsyncSession, aligned: dict[str, Any], express_no: str
+) -> bool:
+    """自动推送发货通知；返回是否送达（至少一个目标执行成功）。"""
+    from app.modules.warehouse.push_center.events import fire_push_event
+
+    try:
+        results = await fire_push_event(
+            db, "express_notify", _express_payload(aligned, express_no)
+        )
+    except Exception:  # noqa: BLE001 — 通知失败不影响出库登记结果
+        logger.exception("快递发货通知自动推送异常（express_no=%s）", express_no)
+        return False
+    return any(r.status == "executed" for r in results)

@@ -1,6 +1,6 @@
 'use client'
 
-// 五类配置变更审计共享组件（模型/场景/运行参数/多维表格/定时任务）
+// 六类配置变更审计共享组件（模型/场景/运行参数/多维表格/定时任务/推送任务）
 // 对齐 safety/AiConfigAuditTable 范式：时间/操作人/动作/对象/变更摘要 + 展开 before/after。
 // 懒加载：Collapse 首次展开才取数（fetchWarehouseConfigAudits 按 kind 分发）；
 // 暴露 refresh()（ConfigAuditHandle）供保存成功后顶刷。
@@ -30,6 +30,7 @@ const KIND_META: Record<WarehouseConfigAuditKind, { entityKey: string; label: st
   runtime: { entityKey: 'key', label: '运行参数审计' },
   bitable: { entityKey: 'table_key', label: '多维表格连接审计' },
   scheduler: { entityKey: 'job_name', label: '定时任务审计' },
+  push: { entityKey: 'task_name', label: '推送任务审计' },
 }
 
 type AuditRow = WarehouseConfigAuditBase & Record<string, unknown>
