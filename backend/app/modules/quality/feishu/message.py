@@ -319,6 +319,20 @@ async def send_pick_doc_card(
     await send_interactive_card(chat_id, build_pick_doc_card(batch, docs, selected_ids, notice))
 
 
+async def send_help_card(chat_id: str) -> None:
+    """指令帮助卡片（全部机器人指令速查）。"""
+    card = {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": "质量机器人指令帮助"}, "template": "blue"},
+        "body": {
+            "elements": [
+                {"tag": "markdown", "content": "**建任务**\n建任务 批号 X\n\n**填报**\n批号 X 项目 数值 …（可省略批号沿用上次）\n填报 批号 X（表单卡片）\n修正 批号 X 项目 数值（改错覆盖）\n\n**查询**\n进度 批号 X ｜ 批号 X 还差什么\n今天出报 ｜ 待复核 ｜ X.XX 已出报任务\n进度 片段（批号模糊）\n\n**原始证据**\n发图片 → 附件 批号 X\n归档模式 批号 X（连拍多张）→ 结束\n\n**其他**\n菜单 ｜ 帮助"},
+            ]
+        },
+    }
+    await send_interactive_card(chat_id, card)
+
+
 async def send_menu_card(chat_id: str) -> None:
     """机器人单聊导航菜单卡片。"""
     card = {

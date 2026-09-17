@@ -117,6 +117,12 @@ _PENDING_DOC_SELECT: dict[str, set[str]] = {}
 # 图片消息暂存（先发图 → 回复「附件 批号 X」两步归档原始证据）
 _LAST_IMAGE: dict[str, dict[str, str]] = {}
 
+# 归档模式：chat_id → task_id（连拍多张自动归档，发「结束」退出）
+_ARCHIVE_MODE: dict[str, str] = {}
+
+# 当前批号上下文：chat_id → batch（省略批号的指令沿用）
+_LAST_BATCH: dict[str, str] = {}
+
 
 async def _download_image(message_id: str, file_key: str) -> bytes | None:
     """下载飞书图片消息原始文件；失败返回 None。"""
@@ -325,18 +331,40 @@ async def handle_fill_command(event: dict) -> None:
     chat_id, sender, text, chat_type = _extract_command(event)
     logger.info("质量飞书消息: chat=%s chat_type=%s sender=%s text=%r", chat_id, chat_type, sender, text)
 
-    # 图片消息：暂存图片，提示回复「附件 批号 XXX」归档为原始证据
+    # 图片消息：归档模式连拍自动归档；否则暂存并提示「附件 批号 XXX」
     msg_raw = event.get("event", {}).get("message", {})
     if msg_raw.get("message_type") == "image":
         try:
             image_key = json.loads(msg_raw.get("content", "{}")).get("image_key", "")
         except Exception:
             image_key = ""
-        if chat_id and image_key:
+        if not chat_id or not image_key:
+            return
+        task_id = _ARCHIVE_MODE.get(chat_id)
+        if task_id:
+            image_data = await _download_image(msg_raw.get("message_id", ""), image_key)
+            if image_data is None:
+                await send_chat_text(chat_id, "⚠️ 图片下载失败，请重发")
+                return
+            from app.core.database import async_session_factory
+            from app.modules.quality.repository import create_task_attachment
+
+            async with async_session_factory() as db:
+                filename = f"机器人上传_{image_key[:12]}.jpg"
+                object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{filename}"
+                quality_storage.upload_attachment(object_key, image_data, "image/jpeg")
+                await create_task_attachment(db, {
+                    "task_id": uuid.UUID(task_id), "filename": filename, "content_type": "image/jpeg",
+                    "object_key": object_key, "size": len(image_data),
+                    "source": "manual", "remark": "归档模式连拍自动归档",
+                })
+                await db.commit()
+            await send_chat_text(chat_id, "📷 已归档（归档模式中，继续发图；发「结束」退出）")
+        else:
             _LAST_IMAGE[chat_id] = {"message_id": msg_raw.get("message_id", ""), "file_key": image_key}
             await send_chat_text(
                 chat_id,
-                "📷 已收到图片。请回复「附件 批号 XXX」将其归档为对应任务的原始证据附件",
+                "📷 已收到图片。请回复「附件 批号 XXX」归档；连拍多张可先发「归档模式 批号 XXX」",
             )
         return
     if not chat_id or not text:
@@ -348,6 +376,7 @@ async def handle_fill_command(event: dict) -> None:
         kw = text.strip()
         from app.modules.quality.feishu.message import (
             send_batch_form_card,
+            send_help_card,
             send_menu_card,
         )
 
@@ -380,7 +409,38 @@ async def handle_fill_command(event: dict) -> None:
         if "进度" in kw:
             await send_batch_form_card(chat_id, "progress")
             return
-        if "菜单" in kw or "帮助" in kw or "开始" in kw or kw.lower() in ("hi", "hello", "你好"):
+        if kw in ("结束", "结束归档"):
+            _ARCHIVE_MODE.pop(chat_id, None)
+            await send_chat_text(chat_id, "✅ 归档模式已退出")
+            return
+
+        # 批号片段模糊查询：报候选批号
+        if ("进度" in kw or "填报" in kw or "建任务" in kw):
+            frag = re.search(r"([A-Za-z0-9-]{3,})", kw)
+            if frag:
+                from app.core.database import async_session_factory
+                from app.modules.quality.repository import (
+                    list_test_tasks_by_batch_fuzzy,
+                )
+
+                async with async_session_factory() as fdb:
+                    hits = await list_test_tasks_by_batch_fuzzy(fdb, frag.group(1))
+                if hits:
+                    lines = "\n".join(
+                        f"- {t.product_name} 批号 {t.batch_number}（{t.status}）" for t in hits
+                    )
+                    await send_chat_text(
+                        chat_id,
+                        f"🔎 批号「{frag.group(1)}」匹配：\n{lines}\n请用完整批号继续",
+                    )
+                else:
+                    await send_chat_text(chat_id, f"🔎 未找到包含「{frag.group(1)}」的批号")
+                return
+
+        if "帮助" in kw or kw in ("指令", "命令"):
+            await send_help_card(chat_id)
+            return
+        if "菜单" in kw or "开始" in kw or kw.lower() in ("hi", "hello", "你好"):
             await send_menu_card(chat_id)
             return
         if chat_type == "p2p":
@@ -394,6 +454,21 @@ async def handle_fill_command(event: dict) -> None:
     from app.core.database import async_session_factory
 
     async with async_session_factory() as db:
+        # 「归档模式 批号 XXX」：连拍多张自动归档
+        if not pairs and "归档模式" in text:
+            async with async_session_factory() as db:
+                task = await _resolve_task_by_batch(db, batch)
+                if not task:
+                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务")
+                    return
+                _ARCHIVE_MODE[chat_id] = str(task.id)
+            _LAST_BATCH[chat_id] = batch
+            await send_chat_text(
+                chat_id,
+                f"📸 归档模式已开启（批号 {batch}）。连发图片将自动归档为原始证据，发「结束」退出",
+            )
+            return
+
         # 「附件 批号 XXX」：把最近一张图片归档为任务原始证据附件
         if not pairs and "附件" in text:
             info = _LAST_IMAGE.get(chat_id)
@@ -455,6 +530,55 @@ async def handle_fill_command(event: dict) -> None:
                 await send_pick_doc_card(chat_id, batch, doc_dicts, set())
             return
 
+        # 「修正 批号 X 项目 值」：覆盖已填结果重新判定（复核人/检验员改错）
+        if pairs and "修正" in text:
+            async with async_session_factory() as db:
+                task = await _resolve_task_by_batch(db, batch)
+                if not task:
+                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务")
+                    return
+                if task.status not in ("in_progress", "pending_review"):
+                    await send_chat_text(chat_id, f"⚠️ 批号 {batch} 状态为 {task.status}，不可修正")
+                    return
+                rows = await list_test_results(db, task.id)
+                norm_rows = {TestTaskService._norm_name(r.item_name): r for r in rows}
+                updates = []
+                done: list[str] = []
+                for name, value_str in pairs:
+                    value = float(value_str)
+                    row = norm_rows.get(TestTaskService._norm_name(name))
+                    if row is None or row.judge_mode != "auto":
+                        continue
+                    verdict = TestTaskService._judge_value(
+                        row.operator, row.limit_min, row.limit_max, value
+                    )
+                    if verdict is None:
+                        continue
+                    unit = TestTaskService._unit_of(row.standard_text)
+                    if verdict is False:
+                        # 不合格不落库：仅发提醒
+                        from app.modules.quality.feishu.fill_service import (
+                            notify_unqualified,
+                        )
+                        asyncio.create_task(notify_unqualified(
+                            task.product_name, task.batch_number, row.item_name,
+                            f"{value}{unit}", _limit_text(row, unit), origin_chat_id=chat_id,
+                        ))
+                        done.append(f"{row.item_name}={value}{unit}（🚨不合格，未落库）")
+                        continue
+                    updates.append({
+                        "result_id": row.id, "result_text": str(value), "result_value": value,
+                        "is_pass": True, "source": "manual", "inspection_record_id": None,
+                        "filled_by": None, "filled_at": datetime.now(UTC),
+                    })
+                    done.append(f"{row.item_name}={value}{unit}（合格，已修正）")
+                if updates:
+                    await update_test_results_fill(db, updates)
+                await db.commit()
+            _LAST_BATCH[chat_id] = batch
+            await send_chat_text(chat_id, f"✅ 批号 {batch} 修正：\n" + "\n".join(done) if done else "未识别到可修正的项目")
+            return
+
         # 「进度 批号 XXX」/「批号 X 还差什么」：进度查询（五态：未创建/待分配/填报中/待复核/已出报）
         if not pairs and ("进度" in text or "还差" in text or "待填" in text or "差什么" in text):
             t = await _resolve_task_by_batch(db, batch)
@@ -464,6 +588,7 @@ async def handle_fill_command(event: dict) -> None:
                     f"⚠️ 批号 {batch} 未创建任务（可发送「建任务 批号 {batch}」创建）",
                 )
                 return
+            _LAST_BATCH[chat_id] = batch
             await send_chat_text(chat_id, await _build_progress_text(db, batch, t))
             return
 
@@ -1124,7 +1249,6 @@ async def notify_pending_review(task_id: str) -> None:
         QUALITY_FEISHU_CHAT_IDS,
         feishu_configured,
     )
-    from app.modules.quality.feishu.message import send_chat_text
     from app.modules.quality.repository import get_test_task
 
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
@@ -1138,11 +1262,19 @@ async def notify_pending_review(task_id: str) -> None:
         await asyncio.sleep(0.5)
     if not task or task.status != "pending_review":
         return
+    from app.modules.quality.feishu.message import send_interactive_card
+
+    card = {
+        "schema": "2.0",
+        "header": {"title": {"tag": "plain_text", "content": f"🔍 待复核 {task.batch_number}"}, "template": "orange"},
+        "body": {"elements": [
+            {"tag": "markdown", "content": f"**{task.product_name}** 批号 **{task.batch_number}** 已全部填报完成，待复核（需两名不同复核人通过）。\n进入任务详情：对照原始证据核对结果、必要时修改，点「复核通过」。"},
+            {"tag": "button", "text": {"tag": "plain_text", "content": "打开任务复核"},
+             "type": "primary", "url": _frontend_task_link(task_id)},
+        ]},
+    }
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
-        await send_chat_text(
-            chat_id,
-            f"🔍 批号 {task.batch_number}（{task.product_name}）已全部填报完成，待复核，请专员进入系统审核",
-        )
+        await send_interactive_card(chat_id, card)
 
 
 async def notify_task_created(task_id: str) -> None:

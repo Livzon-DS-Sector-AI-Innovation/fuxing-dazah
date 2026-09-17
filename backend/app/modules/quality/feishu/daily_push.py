@@ -6,7 +6,7 @@
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,15 @@ async def _push_today_tasks() -> None:
             + f"\n  🔗 {_frontend_task_link(str(t.id))}"
             for t in review_items
         ]
+        # 明日出报预告
+        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_items = await list_test_tasks_by_report_date(db, tomorrow)
+        tomorrow_lines = [
+            f"- {t.product_name} 批号 {t.batch_number}｜"
+            f"{'填报中' if t.status == 'in_progress' else {'pending_review': '待复核', 'completed': '已完成'}.get(t.status, t.status)}"
+            for t in tomorrow_items
+            if t.status != "void"
+        ]
         # 标准文件到期提醒（30 天内）
         from app.modules.quality.repository import list_standard_documents
         from app.modules.quality.service import TestTaskService
@@ -103,13 +112,15 @@ async def _push_today_tasks() -> None:
                 expiring.append(
                     f"- {d.file_no}（{d.product_name}）{expiry} 到期（剩 {days_left} 天）"
                 )
-    if not lines and not review_lines and not expiring:
+    if not lines and not review_lines and not expiring and not tomorrow_lines:
         return
     blocks: list[str] = []
     if lines:
         blocks.append(f"📅 今日出报任务（{today}）：\n" + "\n".join(lines))
     if review_lines:
         blocks.append(f"🔍 待复核任务（{len(review_lines)} 项，请专员进系统审核）：\n" + "\n".join(review_lines))
+    if tomorrow_lines:
+        blocks.append(f"⏰ 明日出报预告（{tomorrow}）：\n" + "\n".join(tomorrow_lines))
     if expiring:
         blocks.append("⏳ 标准文件到期提醒：\n" + "\n".join(expiring))
     text = "\n\n".join(blocks)

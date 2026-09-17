@@ -685,6 +685,17 @@ async def get_test_task_by_batch_number(
     return (await db.execute(stmt)).scalars().first()
 
 
+async def list_test_tasks_by_batch_fuzzy(
+    db: AsyncSession, fragment: str, limit: int = 10
+) -> list[QualityTestTask]:
+    """批号片段模糊查询（机器人候选批号提示）。"""
+    stmt = select(QualityTestTask).where(
+        QualityTestTask.batch_number.ilike(f"%{fragment}%"),
+        QualityTestTask.is_deleted == False,  # noqa: E712
+    ).order_by(QualityTestTask.created_at.desc()).limit(limit)
+    return list((await db.execute(stmt)).scalars())
+
+
 async def list_test_tasks_by_report_date(
     db: AsyncSession, report_date: str
 ) -> list[QualityTestTask]:
