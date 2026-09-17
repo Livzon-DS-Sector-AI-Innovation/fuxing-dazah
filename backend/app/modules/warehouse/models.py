@@ -128,9 +128,34 @@ class WarehouseStock(BaseModel):
     expiry_date: Mapped[date | None] = mapped_column(
         Date, nullable=True, comment="批次效期（入库登记时录入，随入库更新）"
     )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="normal", server_default="normal",
+        comment="状态: normal/quarantine/frozen",
+    )
     quantity: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0", comment="库存数量"
     )
+
+
+class WarehouseStockStatusLog(BaseModel):
+    """库存状态流转日志：每次变更写入，append-only。"""
+
+    __tablename__ = "stock_status_logs"
+    __table_args__ = (
+        Index("ix_warehouse_stock_status_logs_stock", "stock_id"),
+        {"schema": "warehouse"},
+    )
+
+    stock_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("warehouse.warehouse_stocks.id"),
+        nullable=False,
+        comment="关联库存行",
+    )
+    old_status: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="变更前状态")
+    new_status: Mapped[str] = mapped_column(String(16), nullable=False, comment="变更后状态")
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True, comment="变更原因")
+    operator_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True, comment="操作人")
 
 
 class WarehouseMovement(BaseModel):

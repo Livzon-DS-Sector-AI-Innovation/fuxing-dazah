@@ -48,6 +48,7 @@ from app.modules.warehouse.system_config_api import system_config_router
 from app.modules.warehouse.web_gateway import router as web_agent_router
 from app.modules.warehouse.web_quick_register import router as web_quick_register_router
 from app.modules.warehouse.web_reconciliation import router as web_reconciliation_router
+from app.modules.warehouse.web_stock_status import router as web_stock_status_router
 from app.platform.identity.models import User
 from app.platform.permission.deps import require_permission
 from app.shared.module_api import create_module_router
@@ -58,6 +59,7 @@ router.include_router(system_config_router)
 router.include_router(web_agent_router)
 router.include_router(web_quick_register_router)
 router.include_router(web_reconciliation_router)
+router.include_router(web_stock_status_router)
 
 
 def _clean(value: str | None) -> str | None:
@@ -569,7 +571,7 @@ async def report_stock_export(
 
 @router.post("/reports/nl-export", summary="AI 自然语言导出")
 async def nl_export(
-    payload: dict,
+    payload: dict[str, Any],
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:reports:read")),
 ) -> Response:
@@ -633,7 +635,9 @@ async def nl_export(
         except (ValueError, TypeError):
             pass
 
-    rows = list(await db.execute(stmt.order_by(WarehouseMovement.occurred_at.desc())).scalars().all())
+    rows = list(
+        (await db.execute(stmt.order_by(WarehouseMovement.occurred_at.desc()))).scalars().all()
+    )
     content = reports_service.build_table_xlsx(
         "导出结果",
         ["单号", "方向", "物料编码", "物料名称", "数量", "单位", "库位", "发生时间"],

@@ -109,6 +109,7 @@ class StockResponse(BaseModel):
     location_name: str
     expiry_date: date | None = None
     quantity: float
+    status: str = "normal"
 
     model_config = {"from_attributes": True}
 

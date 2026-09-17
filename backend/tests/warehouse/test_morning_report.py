@@ -70,17 +70,23 @@ async def test_generate_morning_report_content(
     auth_client: AsyncClient, db_session: AsyncSession
 ) -> None:
     try:
+        today = datetime.now(CN_TZ).date()
+        # 共享开发库可能存在真机验收残留的昨日流水（如 EXP-T-M1），
+        # 全库聚合断言不能写死精确值：先取基线，种子后断言增量。
+        baseline = await morning_report.generate_morning_report(db_session, today)
+        base_in_qty = baseline["yesterday"]["inbound_qty"]
+        base_in_cnt = baseline["yesterday"]["inbound_count"]
+
         await _seed(db_session)
         # 直接在 db_session 上扫描（同会话可见，无需跨会话提交）
         from app.modules.warehouse.intelligence import run_alert_scan
 
         await run_alert_scan(db_session)
 
-        today = datetime.now(CN_TZ).date()
         content = await morning_report.generate_morning_report(db_session, today)
 
-        assert content["yesterday"]["inbound_qty"] == 20.0  # 种子昨日入库 20
-        assert content["yesterday"]["inbound_count"] == 1
+        assert content["yesterday"]["inbound_qty"] == base_in_qty + 20.0  # 种子昨日入库 20
+        assert content["yesterday"]["inbound_count"] == base_in_cnt + 1
         assert content["alerts"]["open_total"] >= 1
         assert any(i["material_name"] == "晨报物料" for i in content["low_stock_top5"])
     finally:
