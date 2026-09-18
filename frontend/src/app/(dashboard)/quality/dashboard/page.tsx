@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Typography, Card, Row, Col, Statistic, List, Tag, Button, App, Space } from 'antd'
 import {
-  CalendarOutlined, SearchOutlined, LoadingOutlined, CheckCircleOutlined, ClockCircleOutlined,
+  CalendarOutlined, SearchOutlined, LoadingOutlined, CheckCircleOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import type { QualityDashboard } from '@/types/quality'
@@ -44,7 +44,7 @@ export default function QualityDashboardPage() {
       <div>
         <Title level={3} style={{ marginBottom: 4 }}>📊 质量总览</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          今日出报、待复核、在途批次与标准文件到期提醒一屏总览；点卡片直达。
+          今日出报、待复核、在途批次一屏总览；点条目直达任务详情。
         </Paragraph>
       </div>
 
@@ -64,13 +64,6 @@ export default function QualityDashboardPage() {
         <Col xs={12} sm={8} md={6}>
           <Card size="small" loading={loading}>
             <Statistic title="在途（填报中）" value={data?.in_progress_count ?? 0} prefix={<LoadingOutlined />} />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} md={6}>
-          <Card size="small" loading={loading}>
-            <Statistic title="标准文件到期提醒" value={data?.expiring_docs.length ?? 0}
-              prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: (data?.expiring_docs.length ?? 0) > 0 ? '#ff4d4f' : undefined }} />
           </Card>
         </Col>
       </Row>
@@ -123,20 +116,6 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
       </Row>
-
-      {data && data.expiring_docs.length > 0 && (
-        <Card size="small" title="⏳ 标准文件到期提醒（30 天内）">
-          <List
-            size="small"
-            dataSource={data.expiring_docs}
-            renderItem={(item) => (
-              <List.Item>
-                <Text type="warning">{item}</Text>
-              </List.Item>
-            )}
-          />
-        </Card>
-      )}
 
       <Space wrap>
         <Button type="primary" onClick={() => router.push('/quality/task')}>📝 检验填报</Button>

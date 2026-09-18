@@ -299,5 +299,4 @@ export interface QualityDashboard {
     total: number
     report_date: string | null
   }[]
-  expiring_docs: string[]
 }

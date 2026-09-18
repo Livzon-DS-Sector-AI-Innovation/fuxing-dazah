@@ -38,7 +38,6 @@ from app.modules.quality.repository import (
     get_test_task,
     get_test_task_by_batch,
     list_coa_bindings_by_docs,
-    list_standard_documents,
     list_standard_documents_by_product,
     list_standard_items,
     list_task_reviews,
@@ -1263,26 +1262,11 @@ class TestTaskService:
                 "report_date": t.report_date,
             }
 
-        from app.modules.quality.feishu.daily_push import _parse_effective_date
-
-        expiring: list[str] = []
-        for d in await list_standard_documents(db):
-            eff = _parse_effective_date(d.effective_date)
-            if not eff or not d.valid_years:
-                continue
-            expiry = TestTaskService._calc_expiry(eff, d.valid_years)
-            if not expiry:
-                continue
-            days_left = (datetime.strptime(expiry, "%Y-%m-%d").date() - datetime.now().date()).days
-            if 0 <= days_left <= 30:
-                expiring.append(f"{d.file_no}（{d.product_name}）{expiry} 到期（剩 {days_left} 天）")
-
         return {
             "today": [await _row(t) for t in today_tasks],
             "pending_review_count": len(review_items),
             "in_progress_count": len(inprog_items),
             "recent_completed": [await _row(t) for t in completed_items],
-            "expiring_docs": expiring,
         }
 
     @staticmethod
