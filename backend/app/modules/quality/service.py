@@ -1262,10 +1262,15 @@ class TestTaskService:
                 "report_date": t.report_date,
             }
 
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_tasks = await list_test_tasks_by_report_date(db, tomorrow)
+
         return {
             "today": [await _row(t) for t in today_tasks],
+            "pending_review": [await _row(t) for t in review_items],
             "pending_review_count": len(review_items),
             "in_progress_count": len(inprog_items),
+            "tomorrow_count": len([t for t in tomorrow_tasks if t.status != "void"]),
             "recent_completed": [await _row(t) for t in completed_items],
         }
 

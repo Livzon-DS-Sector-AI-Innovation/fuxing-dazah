@@ -38,6 +38,12 @@ export default function TaskFillIn() {
   const [page, setPage] = useState(1)
   const [productSearch, setProductSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<TestTaskStatus | undefined>()
+
+  // 读取 URL ?status= 预置筛选（挂载后读取，避免 SSR 窗口问题）
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('status')
+    if (p) setStatusFilter(p as TestTaskStatus)
+  }, [])
   const [reportDateFilter, setReportDateFilter] = useState<string | undefined>()
 
   const [createOpen, setCreateOpen] = useState(false)

@@ -288,8 +288,18 @@ export interface QualityDashboard {
     total: number
     report_date: string | null
   }[]
+  pending_review: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
   pending_review_count: number
   in_progress_count: number
+  tomorrow_count: number
   recent_completed: {
     task_id: string
     product_name: string
