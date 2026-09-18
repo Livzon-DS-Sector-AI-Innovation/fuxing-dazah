@@ -132,6 +132,9 @@ class ReportRecord(BaseModel):
     )
     product_name: Mapped[str] = mapped_column(String(200), comment="产品名称")
     batch_number: Mapped[str] = mapped_column(String(100), comment="批号")
+    serial_no: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="流水号（年月日+当日序号，如 26091801）"
+    )
     file_path: Mapped[str | None] = mapped_column(
         String(500), nullable=True, comment="生成的 docx 文件存储路径（本地或 MinIO）"
     )

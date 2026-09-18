@@ -33,6 +33,7 @@ from app.modules.quality.report_generator import (
     resolve_placeholders,
 )
 from app.modules.quality.repository import (
+    count_report_records_since,
     create_report_record,
     create_standard_document,
     create_standard_item,
@@ -52,6 +53,7 @@ from app.modules.quality.repository import (
     list_coa_bindings,
     list_inspection_records,
     list_report_records,
+    list_report_records_by_date,
     list_standard_documents,
     list_standard_items,
     list_task_attachments,
@@ -643,6 +645,9 @@ async def generate_report(
     else:
         raise HTTPException(status_code=400, detail="请提供 inspection_record_id 或 data")
 
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    serial_no = f"{datetime.now():%y%m%d}{await count_report_records_since(db, today_start) + 1:02d}"
+    fill_data.setdefault("流水号", serial_no)
     output_path, output_filename, content = _render_cao_file(
         tp, fill_data, product_name, batch_number
     )
@@ -657,6 +662,7 @@ async def generate_report(
             batch_number=batch_number,
             file_path=str(output_path),
             file_size=output_path.stat().st_size,
+            serial_no=serial_no,
         )
 
     return _coa_response(output_filename, content)
@@ -689,6 +695,7 @@ async def generate_task_report(
             batch_number=split["batch_number"],
             file_path=str(output_path),
             file_size=output_path.stat().st_size,
+            serial_no=split["fill_data"].get("流水号", ""),
         )
         generated.append({
             "report_id": str(record.id),
@@ -814,6 +821,26 @@ async def history_summary(
         db, product_name=product_name, date_from=dt_from, date_to=dt_to
     )
     return success_response(data=summary)
+
+
+@router.get("/summary/daily-reports", summary="每日报告单汇总（流水号+产品+批号）")
+async def daily_reports(
+    date: str | None = Query(default=None, description="日期 YYYY-MM-DD，默认今天"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    day = date or datetime.now().strftime("%Y-%m-%d")
+    items = await list_report_records_by_date(db, day)
+    return success_response(data=[
+        {
+            "serial_no": it.serial_no or "-",
+            "product_name": it.product_name,
+            "batch_number": it.batch_number,
+            "template_path": it.template_path,
+            "report_id": str(it.id),
+            "created_at": it.created_at.strftime("%H:%M") if it.created_at else None,
+        }
+        for it in items
+    ])
 
 
 @router.get("/dashboard/summary", summary="质量总览看板数据")

@@ -380,6 +380,20 @@ async def handle_fill_command(event: dict) -> None:
             send_menu_card,
         )
 
+        # 一句话查询：今日出报单（流水号+产品+批号）
+        if "出报单" in kw or ("报告单" in kw and ("今天" in kw or "今日" in kw)):
+            from app.core.database import async_session_factory
+            from app.modules.quality.repository import list_report_records_by_date
+
+            async with async_session_factory() as rdb:
+                items = await list_report_records_by_date(rdb, datetime.now().strftime("%Y-%m-%d"))
+            lines = [f"- {it.serial_no or '-'}｜{it.product_name}｜批号 {it.batch_number}" for it in items]
+            await send_chat_text(
+                chat_id,
+                "📄 今日报告单（流水号｜产品｜批号）：" + ("\n" + "\n".join(lines) if lines else " 暂无"),
+            )
+            return
+
         # 一句话查询：X.XX 已出报任务 / 今天出报 / 待复核（无批号）
         _reported_m = re.search(r"(\d{4})[-.](\d{1,2})[-.](\d{1,2})", kw) or re.search(
             r"(?<!\d)(\d{1,2})\.(\d{1,2})(?!\d)", kw

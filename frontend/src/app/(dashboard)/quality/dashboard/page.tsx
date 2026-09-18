@@ -7,8 +7,8 @@ import {
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
-import type { QualityDashboard } from '@/types/quality'
-import { fetchQualityDashboard } from '@/actions/quality'
+import type { QualityDashboard, DailyReportItem } from '@/types/quality'
+import { fetchQualityDashboard, fetchDailyReports } from '@/actions/quality'
 
 const { Title, Paragraph, Text } = Typography
 
@@ -47,14 +47,19 @@ export default function QualityDashboardPage() {
   const { message } = App.useApp()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<QualityDashboard | null>(null)
+  const [dailyReports, setDailyReports] = useState<DailyReportItem[]>([])
 
   const today = dayjs().format('YYYY-MM-DD')
   const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD')
 
   const load = useCallback(async () => {
     try {
-      const res = await fetchQualityDashboard()
+      const [res, reports] = await Promise.all([
+        fetchQualityDashboard(),
+        fetchDailyReports(),
+      ])
       setData(res.data)
+      setDailyReports(reports.data || [])
     } catch (err: any) {
       message.error(err.message || '加载总览失败')
     } finally {
@@ -133,6 +138,25 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
       </Row>
+
+      <Card size="small" title="📄 今日报告单（流水号+产品+批号）"
+        extra={<Button size="small" type="link" onClick={() => router.push('/quality/report')}>报告单页</Button>}>
+        <List
+          size="small"
+          dataSource={dailyReports}
+          locale={{ emptyText: '今日暂无生成报告单' }}
+          renderItem={(r) => (
+            <List.Item>
+              <Space wrap size={8}>
+                <Text strong>{r.serial_no}</Text>
+                <Text>{r.product_name}</Text>
+                <Text type="secondary">批号 {r.batch_number}</Text>
+                <Text type="secondary">{r.created_at}</Text>
+              </Space>
+            </List.Item>
+          )}
+        />
+      </Card>
 
       <Space wrap>
         <Button type="primary" onClick={() => router.push('/quality/task')}>📝 检验填报</Button>

@@ -18,6 +18,7 @@ import type {
   SummaryMatrix,
   SummaryTrend,
   QualityDashboard,
+  DailyReportItem,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -721,4 +722,13 @@ export async function downloadReportDateTemplate(): Promise<Blob> {
   })
   if (!res.ok) throw new Error('下载模板失败')
   return res.blob()
+}
+
+export async function fetchDailyReports(date?: string): Promise<{ data: DailyReportItem[] }> {
+  const qs = date ? `?date=${date}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/daily-reports${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取报告单汇总失败')
+  return res.json()
 }

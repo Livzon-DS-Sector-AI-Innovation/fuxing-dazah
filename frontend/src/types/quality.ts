@@ -310,3 +310,12 @@ export interface QualityDashboard {
     report_date: string | null
   }[]
 }
+
+export interface DailyReportItem {
+  serial_no: string
+  product_name: string
+  batch_number: string
+  template_path: string
+  report_id: string
+  created_at: string | null
+}

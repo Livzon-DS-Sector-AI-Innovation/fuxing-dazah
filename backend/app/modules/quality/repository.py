@@ -189,6 +189,7 @@ async def create_report_record(
     test_task_id: uuid.UUID | None = None,
     file_path: str | None = None,
     file_size: int | None = None,
+    serial_no: str | None = None,
 ) -> ReportRecord:
     """创建报告单记录（inspection_record_id 与 test_task_id 二选一，P2 任务驱动 COA）。"""
     report = ReportRecord(
@@ -199,6 +200,7 @@ async def create_report_record(
         batch_number=batch_number,
         file_path=file_path,
         file_size=file_size,
+        serial_no=serial_no,
     )
     db.add(report)
     await db.flush()
@@ -214,6 +216,20 @@ async def count_report_records_since(
         ReportRecord.created_at >= since,
     )
     return int((await db.execute(stmt)).scalar_one())
+
+
+async def list_report_records_by_date(
+    db: AsyncSession, day: str
+) -> list[ReportRecord]:
+    """某日生成的报告单（流水号汇总：流水号+产品+批号）。"""
+    start = datetime.fromisoformat(day)
+    end = start + __import__("datetime").timedelta(days=1)
+    stmt = select(ReportRecord).where(
+        ReportRecord.created_at >= start,
+        ReportRecord.created_at < end,
+        ReportRecord.is_deleted == False,  # noqa: E712
+    ).order_by(ReportRecord.created_at)
+    return list((await db.execute(stmt)).scalars())
 
 
 async def get_latest_report_record_by_task(
