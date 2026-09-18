@@ -112,7 +112,9 @@ class FireAlarmAnalyst:
                 with ai_audit_scope(
                     scenario="fire_alarm_analysis",
                     resource_type="fire_alarm_record",
-                    resource_id=r.id,
+                    # resource_id 是 UUID 列；直读视图的 id 是飞书记录 ID（字符串），
+                    # 因此不传 resource_id，改把飞书 ID 放进 extra 保持可追溯（票据 10）。
+                    extra={"feishu_record_id": str(r.id)},
                     channel=channel,
                 ):
                     result = await ai.chat_parsed(
