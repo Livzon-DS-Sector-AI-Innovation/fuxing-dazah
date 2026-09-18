@@ -6,6 +6,7 @@ import {
   CalendarOutlined, SearchOutlined, LoadingOutlined, CheckCircleOutlined, SunOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
+import dayjs from 'dayjs'
 import type { QualityDashboard } from '@/types/quality'
 import { fetchQualityDashboard } from '@/actions/quality'
 
@@ -47,6 +48,9 @@ export default function QualityDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<QualityDashboard | null>(null)
 
+  const today = dayjs().format('YYYY-MM-DD')
+  const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD')
+
   const load = useCallback(async () => {
     try {
       const res = await fetchQualityDashboard()
@@ -79,7 +83,8 @@ export default function QualityDashboardPage() {
 
       <Row gutter={16}>
         <Col xs={12} sm={12} md={6}>
-          <Card size="small" hoverable loading={loading} onClick={() => router.push('/quality/task')}>
+          <Card size="small" hoverable loading={loading}
+            onClick={() => router.push(`/quality/task?report_date=${today}`)}>
             <Statistic title="今日出报" value={data?.today.length ?? 0} prefix={<CalendarOutlined />} />
           </Card>
         </Col>
@@ -98,7 +103,8 @@ export default function QualityDashboardPage() {
           </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
-          <Card size="small" hoverable loading={loading} onClick={() => router.push('/quality/task')}>
+          <Card size="small" hoverable loading={loading}
+            onClick={() => router.push(`/quality/task?report_date=${tomorrow}`)}>
             <Statistic title="明日出报" value={data?.tomorrow_count ?? 0} prefix={<SunOutlined />} />
           </Card>
         </Col>
