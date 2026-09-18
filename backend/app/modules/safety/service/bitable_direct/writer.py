@@ -150,6 +150,25 @@ async def write_serial(
 _DEFAULT_FIELD_ID_CACHE: dict[tuple[str, str], str] = {}
 
 
+# Bitable 字段类型（与域包 contract 里的列契约一致）
+FIELD_TYPE_TEXT = 1
+FIELD_TYPE_SINGLE_SELECT = 3
+FIELD_TYPE_MULTI_SELECT = 4
+
+
+def format_write_value(field_type: int, value: Any) -> Any:
+    """按 Bitable 字段类型整形写值。
+
+    - 多选（type=4）：必须传数组，字符串自动包成 [str]
+    - 其余类型（文本 / 单选 / 日期 / 人员等）：原样返回
+
+    迁移自 legacy bitable_handler._format_bitable_select_value 的语义（票据 08）。
+    """
+    if field_type == FIELD_TYPE_MULTI_SELECT and isinstance(value, str):
+        return [value]
+    return value
+
+
 async def resolve_field_id(
     client: BitableFieldAdmin,
     field_name: str,

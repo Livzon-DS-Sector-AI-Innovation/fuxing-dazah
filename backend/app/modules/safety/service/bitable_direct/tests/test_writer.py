@@ -423,3 +423,28 @@ class TestOpenWriter:
             "kind": "alarm",
             "table_id": "tblX",
         }
+
+
+class TestFormatWriteValue:
+    """票据 08：写回值整形从 legacy bitable_handler 迁到底座。"""
+
+    def test_multi_select_wraps_string_into_list(self) -> None:
+        assert writer.format_write_value(writer.FIELD_TYPE_MULTI_SELECT, "电焊") == ["电焊"]
+
+    def test_multi_select_keeps_existing_list(self) -> None:
+        assert writer.format_write_value(
+            writer.FIELD_TYPE_MULTI_SELECT, ["电焊", "氩弧焊"]
+        ) == ["电焊", "氩弧焊"]
+
+    def test_single_select_passes_through(self) -> None:
+        # 生产隐患表 4 个回写字段均为 type=3，因此整形为 no-op（本次切换行为等价的依据）
+        assert writer.format_write_value(
+            writer.FIELD_TYPE_SINGLE_SELECT, "高风险"
+        ) == "高风险"
+
+    def test_other_types_pass_through(self) -> None:
+        for ftype in (writer.FIELD_TYPE_TEXT, 5, 11, 17):
+            assert writer.format_write_value(ftype, "值") == "值"
+
+    def test_none_passes_through(self) -> None:
+        assert writer.format_write_value(writer.FIELD_TYPE_TEXT, None) is None

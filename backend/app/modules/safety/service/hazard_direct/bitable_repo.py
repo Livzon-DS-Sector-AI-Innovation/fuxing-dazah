@@ -31,14 +31,19 @@ from app.modules.safety.feishu.bitable_handler import (
     HAZARD_CATEGORY_REVERSE,
     HAZARD_LEVEL_REVERSE,
     HAZARD_TYPE_REVERSE,
-    _format_bitable_select_value,
 )
+from app.modules.safety.service.bitable_direct import attachments as bd_attachments
 from app.modules.safety.service.bitable_direct import fields as bd_fields
 from app.modules.safety.service.bitable_direct import filters as bd_filters
 from app.modules.safety.service.bitable_direct import locks as bd_locks
+from app.modules.safety.service.bitable_direct import writer as bd_writer
 from app.modules.safety.service.hazard_direct import config
 
 logger = logging.getLogger(__name__)
+
+# 回写字段的 Bitable 类型：2026-09-17 只读核对生产表，4 个字段（隐患分类/级别/类别（AI）、督办等级）
+# 均为单选 type=3，因此 format_write_value 对它们等于原样返回。
+_SELECT_FIELD_TYPE = 3
 
 # ═══════════════════════════════════════════════════════════════
 # 字段名常量（与多维表格实际列名一致）
@@ -572,17 +577,13 @@ async def write_ai_analysis(
     if hazard_no:
         writeback[F_NO] = hazard_no
     if output.get("hazard_type"):
-        writeback[F_TYPE_AI] = _format_bitable_select_value(
-            F_TYPE_AI, HAZARD_TYPE_REVERSE.get(output["hazard_type"], output["hazard_type"])
+        writeback[F_TYPE_AI] = bd_writer.format_write_value(_SELECT_FIELD_TYPE, HAZARD_TYPE_REVERSE.get(output["hazard_type"], output["hazard_type"])
         )
     if output.get("hazard_level"):
-        writeback[F_LEVEL_AI] = _format_bitable_select_value(
-            F_LEVEL_AI, HAZARD_LEVEL_REVERSE.get(output["hazard_level"], output["hazard_level"])
+        writeback[F_LEVEL_AI] = bd_writer.format_write_value(_SELECT_FIELD_TYPE, HAZARD_LEVEL_REVERSE.get(output["hazard_level"], output["hazard_level"])
         )
     if output.get("hazard_category"):
-        writeback[F_CATEGORY_AI] = _format_bitable_select_value(
-            F_CATEGORY_AI,
-            HAZARD_CATEGORY_REVERSE.get(output["hazard_category"], output["hazard_category"]),
+        writeback[F_CATEGORY_AI] = bd_writer.format_write_value(_SELECT_FIELD_TYPE, HAZARD_CATEGORY_REVERSE.get(output["hazard_category"], output["hazard_category"]),
         )
     if output.get("key_defect"):
         writeback[F_DESC_AI] = output["key_defect"]
@@ -591,13 +592,17 @@ async def write_ai_analysis(
     if output.get("advice_text"):
         writeback[F_ADVICE_AI] = output["advice_text"]
     if supervision_label:
-        writeback[F_SUPERVISION] = _format_bitable_select_value(
-            F_SUPERVISION, supervision_label
+        writeback[F_SUPERVISION] = bd_writer.format_write_value(_SELECT_FIELD_TYPE, supervision_label
         )
     if not writeback:
         logger.warning("① 无字段可写回，跳过: record_id=%s", record_id)
         return False
-    return await client.update_record(record_id, writeback)
+    result = await bd_writer.write_serial(
+        client,
+        [bd_writer.RecordUpdate(record_id=record_id, fields=writeback)],
+        interval_seconds=0.0,
+    )
+    return result.written > 0
 
 
 async def write_review(
@@ -611,9 +616,15 @@ async def write_review(
 
     conclusion 必须是「AI初审结果」字段的既有选项之一；未知结论由调用方拦截，不写。
     """
-    return await client.update_record(
-        record_id, {F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary}
+    result = await bd_writer.write_serial(
+        client,
+        [bd_writer.RecordUpdate(
+            record_id=record_id,
+            fields={F_REVIEW_RESULT: conclusion, F_REVIEW_NOTE: summary},
+        )],
+        interval_seconds=0.0,
     )
+    return result.written > 0
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -658,7 +669,6 @@ async def download_photos(
     三级回退：预签名 url → tmp_url → file_token + extra（Drive API）。
     """
     from app.modules.safety.attachment_store import store_bytes
-    from app.modules.safety.feishu.bitable_handler import _build_attachment_extra
 
     saved: dict[str, list[str]] = {"defect": [], "rectification": []}
 
@@ -686,7 +696,7 @@ async def download_photos(
                 extra: str | None = None
                 field_id = await _field_id_of(client, field_name)
                 if field_id:
-                    extra = _build_attachment_extra(
+                    extra = bd_attachments.build_attachment_extra(
                         client.table_id, record_id, field_id, file_token
                     )
                 async with _DOWNLOAD_SEM:

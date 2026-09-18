@@ -51,13 +51,15 @@ _LAZY: dict[str, tuple[str, str]] = {
     "fetch_window_records": ("reader", "fetch_window_records"),
     "attachment_list": ("fields", "attachment_list"),
     "to_millis": ("fields", "to_millis"),
+    "format_write_value": ("writer", "format_write_value"),
+    "build_attachment_extra": ("attachments", "build_attachment_extra"),
     # fields（字段级取值，空值统一 None）
     "text": ("fields", "text"),
     "select": ("fields", "select"),
     "multi": ("fields", "multi"),
     "person": ("fields", "person"),
     "datetime_ms": ("fields", "datetime_ms"),
-    "attachments": ("fields", "attachments"),
+    # 注意：字段级 attachments 不导出裸名（与子模块 attachments 同名，PEP 562 缓存会遮住子模块）；需要时用 fields.attachments。
     # filters（过滤条件构造与下推能力矩阵）
     "BJT": ("filters", "BJT"),
     "EXACT_DATE": ("filters", "EXACT_DATE"),
