@@ -17,6 +17,7 @@ import type {
   TaskReviewRecord,
   SummaryMatrix,
   SummaryTrend,
+  QualityDashboard,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -704,4 +705,20 @@ export async function fetchItemTrend(
   })
   if (!res.ok) throw new Error('获取趋势数据失败')
   return res.json()
+}
+
+export async function fetchQualityDashboard(): Promise<{ data: QualityDashboard }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/dashboard/summary`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取总览失败')
+  return res.json()
+}
+
+export async function downloadReportDateTemplate(): Promise<Blob> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/tasks/report-date-template`, {
+    headers: await _authHeaders(),
+  })
+  if (!res.ok) throw new Error('下载模板失败')
+  return res.blob()
 }

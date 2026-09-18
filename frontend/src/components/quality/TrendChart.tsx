@@ -1,5 +1,6 @@
 'use client'
 
+import { useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import type { SummaryTrend } from '@/types/quality'
 
@@ -11,8 +12,35 @@ const CRITICAL = '#d03b3b'
  *  数据点可点击跳转对应任务详情。 */
 export default function TrendChart({ trend }: { trend: SummaryTrend }) {
   const router = useRouter()
+  const svgRef = useRef<SVGSVGElement>(null)
   const pts = trend.points.filter((p) => p.value != null)
   if (pts.length < 2) return null
+
+  // 导出 PNG：SVG 序列化 → canvas 2x 渲染 → 下载
+  const handleExportPng = () => {
+    const svg = svgRef.current
+    if (!svg) return
+    const xml = new XMLSerializer().serializeToString(svg)
+    const img = new Image()
+    const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = 1600
+      canvas.height = 600
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      URL.revokeObjectURL(url)
+      const a = document.createElement('a')
+      a.href = canvas.toDataURL('image/png')
+      a.download = `趋势-${trend.item_name}.png`
+      a.click()
+    }
+    img.src = url
+  }
 
   const W = 800
   const H = 300
@@ -39,7 +67,18 @@ export default function TrendChart({ trend }: { trend: SummaryTrend }) {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', minHeight: 200 }}>
+      <div style={{ textAlign: 'right', marginBottom: 4 }}>
+        <button
+          onClick={handleExportPng}
+          style={{
+            border: '1px solid #d9d9d9', background: '#fff', borderRadius: 4,
+            padding: '2px 10px', fontSize: 12, cursor: 'pointer',
+          }}
+        >
+          导出图片
+        </button>
+      </div>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', minHeight: 200 }}>
         {[0.25, 0.5, 0.75].map((r) => (
           <line
             key={r}

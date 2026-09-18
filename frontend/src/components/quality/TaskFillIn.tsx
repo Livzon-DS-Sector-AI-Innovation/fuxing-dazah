@@ -5,7 +5,7 @@ import {
   Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Upload,
 } from 'antd'
 import {
-  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined,
+  SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import dayjs from 'dayjs'
@@ -13,7 +13,7 @@ import { usePermission } from '@/hooks/usePermission'
 import type { TestTaskListItem, TestTaskStatus } from '@/types/quality'
 import {
   fetchTestTasks, createTestTask, updateTestTaskStatus, deleteTestTask,
-  updateTestTaskReportDate, batchReportDates,
+  updateTestTaskReportDate, batchReportDates, downloadReportDateTemplate,
   fetchStandardDocuments, fetchStandardItems,
   type StandardDocument,
 } from '@/actions/quality'
@@ -347,6 +347,21 @@ export default function TaskFillIn() {
         <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
+        )}
+        {canFill && (
+          <Button size="small" type="link" icon={<DownloadOutlined />} onClick={async () => {
+            try {
+              const blob = await downloadReportDateTemplate()
+              const url = URL.createObjectURL(blob)
+              const a = document.createElement('a')
+              a.href = url
+              a.download = '出报日期补录模板.xlsx'
+              a.click()
+              URL.revokeObjectURL(url)
+            } catch (err: any) {
+              message.error(err.message || '下载模板失败')
+            }
+          }}>模板</Button>
         )}
         {canFill && (
           <Upload

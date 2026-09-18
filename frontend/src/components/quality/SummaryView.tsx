@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
@@ -29,6 +30,7 @@ function renderCell(item: string) {
 }
 
 export default function SummaryView() {
+  const router = useRouter()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [matrix, setMatrix] = useState<SummaryMatrix | null>(null)
@@ -164,6 +166,10 @@ export default function SummaryView() {
           size="small"
           pagination={false}
           scroll={{ x: 400 + (matrix?.columns.length || 0) * 130, y: 480 }}
+          onRow={(r: SummaryMatrixRow) => ({
+            style: { cursor: 'pointer' },
+            onClick: () => router.push(`/quality/task/${r.task_id}`),
+          })}
         />
       </Card>
 

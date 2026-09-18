@@ -277,3 +277,27 @@ export interface SopSummaryItem {
   method_source: string | null
   batches: SopSummaryBatch[]
 }
+
+export interface QualityDashboard {
+  today: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
+  pending_review_count: number
+  in_progress_count: number
+  recent_completed: {
+    task_id: string
+    product_name: string
+    batch_number: string
+    status: string
+    filled: number
+    total: number
+    report_date: string | null
+  }[]
+  expiring_docs: string[]
+}

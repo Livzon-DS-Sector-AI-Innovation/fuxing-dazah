@@ -248,9 +248,10 @@ export const moduleMenus: ModuleMenu[] = [
     key: "quality",
     label: "质量管理",
     icon: "check-circle",
-    path: "/quality",
+    path: "/quality/dashboard",
     permissions: ["quality:*:read"],
     children: [
+      { key: "quality-dashboard", label: "📊 质量总览", path: "/quality/dashboard" },
       { key: "lc-parser", label: "🧪 液相解析", path: "/quality" },
       { key: "quality-task", label: "📝 检验填报", path: "/quality/task" },
       { key: "lc-history", label: "📜 检验历史", path: "/quality/history" },

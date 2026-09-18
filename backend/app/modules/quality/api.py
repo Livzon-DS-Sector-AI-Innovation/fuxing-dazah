@@ -816,6 +816,34 @@ async def history_summary(
     return success_response(data=summary)
 
 
+@router.get("/dashboard/summary", summary="质量总览看板数据")
+async def quality_dashboard(
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    data = await test_task_service.build_dashboard(db)
+    return success_response(data=data)
+
+
+@router.get("/tasks/report-date-template", summary="下载出报日期批量补录 Excel 模板")
+async def report_date_template_endpoint():
+    import io as _io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "出报日期补录"
+    ws.append(["批号", "出报日期"])
+    ws.append(["HAF2608001B", "2026-09-18"])
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return StreamingResponse(
+        BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="出报日期补录模板.xlsx"'},
+    )
+
+
 @router.get("/summary/matrix", summary="QC 汇总表矩阵：行=批次，列=全部检验项目横向列出")
 async def summary_matrix(
     product_name: str | None = Query(default=None, description="产品名称"),
