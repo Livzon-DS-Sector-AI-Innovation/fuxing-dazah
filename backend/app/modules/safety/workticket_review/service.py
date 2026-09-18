@@ -161,11 +161,30 @@ class WorkTicketReviewService:
 
         if push:
             try:
-                msg_id = await send_group_card(
-                    chat_id=self.chat_id,
-                    title=f"作业票审核日报 - {review_date.isoformat()}",
-                    content=markdown,
+                # 速递卡优先（构建失败/超限回退旧长卡）
+                from app.modules.safety.feishu.workticket_digest import (
+                    build_workticket_digest,
                 )
+
+                digest_card = build_workticket_digest(
+                    review_date, tickets, violations_by_ticket, stats, markdown,
+                )
+                if digest_card is not None:
+                    msg_id = await send_group_card(
+                        chat_id=self.chat_id,
+                        title=digest_card.title,
+                        content=digest_card.content,
+                        elements=digest_card.elements,
+                        header_template=digest_card.header_template,
+                        subtitle=digest_card.subtitle,
+                        header_tags=digest_card.header_tags,
+                    )
+                else:
+                    msg_id = await send_group_card(
+                        chat_id=self.chat_id,
+                        title=f"作业票审核日报 - {review_date.isoformat()}",
+                        content=markdown,
+                    )
                 if msg_id:
                     push_result = {
                         "chat_id": self.chat_id,
