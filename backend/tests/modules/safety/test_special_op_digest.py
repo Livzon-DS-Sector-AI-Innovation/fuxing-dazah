@@ -1,7 +1,7 @@
 """特殊作业速递卡构建器测试（纯结构验证，不依赖 DB / 网络）。
 
 速递卡是日报推送的表现层改造：同一份 records/stats/ai_analysis 输入下，
-验证卡片 JSON 结构、图标降级、超限回退与开关语义。
+验证卡片 JSON 结构、无图纯文字、超限回退与开关语义。
 """
 
 from __future__ import annotations
@@ -101,14 +101,9 @@ def _sample_reports() -> list[_Rec]:
     ]
 
 
-async def _ok_uploader(op_type: str | None) -> str | None:
-    return "img_demo"
-
-
 async def test_build_digest_basic_structure() -> None:
     built = await build_special_op_digest(
         REPORT_DATE, "today", _sample_reports(), STATS, None, FULL_MARKDOWN,
-        icon_uploader=_ok_uploader,
     )
     assert built is not None
     title, greeting, elements = built.title, built.content, built.elements
@@ -124,24 +119,25 @@ async def test_build_digest_basic_structure() -> None:
     assert "高风险 **2** 项" in greeting
     assert "动火作业 1 · 受限空间 1 · 高处作业 1 · 临时用电 1" in greeting
 
-    # 高风险条目卡：2 张 column_set，左文右图（按 _sort_key 稳定排序）
+    # 高风险条目卡：2 张 column_set，纯文字单列（不带图片）
     column_sets = [e for e in elements if e["tag"] == "column_set"]
     assert len(column_sets) == 2
-    all_item_md = [c["elements"][0]["content"] for cs in column_sets for c in cs["columns"][:1]]
+    all_item_md = [
+        c["elements"][0]["content"] for cs in column_sets for c in cs["columns"]
+    ]
     assert any("<text_tag color='red'>高风险</text_tag>" in c for c in all_item_md)
     assert any("<text_tag color='orange'>动火作业</text_tag>" in c for c in all_item_md)
     assert any("<text_tag color='indigo'>受限空间</text_tag>" in c for c in all_item_md)
     assert any("**炼油一部｜常压装置区**" in c for c in all_item_md)
-    first = column_sets[0]
-    assert first["background_style"] == "grey"
-    img_col = first["columns"][1]
-    assert img_col["elements"][0]["img_key"] == "img_demo"
+    for cs in column_sets:
+        assert cs["background_style"] == "grey"
+        assert len(cs["columns"]) == 1  # 不带图片
+    import json
+
+    assert '"img"' not in json.dumps(elements, ensure_ascii=False)
 
     # 中/低风险聚合条目
-    contents = [
-        e["content"] for e in elements
-        if e["tag"] == "markdown"
-    ]
+    contents = [e["content"] for e in elements if e["tag"] == "markdown"]
     assert any("常规作业" in c and "**1 项**" in c for c in contents)
     assert any("低风险" in c and "**1 项**" in c for c in contents)
 
@@ -154,52 +150,9 @@ async def test_build_digest_basic_structure() -> None:
     assert not panel_md.startswith("📋")
 
 
-async def test_icon_failure_degrades_to_no_image() -> None:
-    async def _fail_uploader(op_type: str | None) -> str | None:
-        return None
-
-    built = await build_special_op_digest(
-        REPORT_DATE, "today", _sample_reports()[:2], STATS, None, FULL_MARKDOWN,
-        icon_uploader=_fail_uploader,
-    )
-    assert built is not None
-    elements = built.elements
-    column_sets = [e for e in elements if e["tag"] == "column_set"]
-    assert len(column_sets) == 2
-    for cs in column_sets:
-        assert len(cs["columns"]) == 1  # 只剩文字列
-        assert all(c["elements"][0]["tag"] == "markdown" for c in cs["columns"])
-
-
-async def test_unknown_type_uses_fallback_icon() -> None:
-    seen: list[str | None] = []
-
-    async def _spy_uploader(op_type: str | None) -> str | None:
-        seen.append(op_type)
-        return "img_fb"
-
-    rec = _Rec(operation_type="unknown_type", daily_risk_level="high")
-    built = await build_special_op_digest(
-        REPORT_DATE, "today", [rec], STATS, None, FULL_MARKDOWN,
-        icon_uploader=_spy_uploader,
-    )
-    assert built is not None
-    assert seen == ["unknown_type"]  # 未知类型原样传给图标层，由其回退 fallback 素材
-
-
-async def test_oversize_falls_back_to_none() -> None:
-    huge_markdown = FULL_MARKDOWN + "x" * 30_000
-    built = await build_special_op_digest(
-        REPORT_DATE, "today", _sample_reports(), STATS, None, huge_markdown,
-        icon_uploader=_ok_uploader,
-    )
-    assert built is None
-
-
 async def test_tomorrow_mode_not_supported() -> None:
     built = await build_special_op_digest(
         REPORT_DATE, "tomorrow", _sample_reports(), STATS, None, FULL_MARKDOWN,
-        icon_uploader=_ok_uploader,
     )
     assert built is None
 
@@ -209,17 +162,15 @@ async def test_afternoon_header_tag_and_new_ops() -> None:
     reports = [r for r in _sample_reports()[:2]] + [afternoon_rec]
     built = await build_special_op_digest(
         REPORT_DATE, "afternoon", reports, STATS, None, FULL_MARKDOWN,
-        icon_uploader=_ok_uploader,
     )
     assert built is not None
-    _, _, elements = built.title, built.content, built.elements
     # 午后推送带「午后更新」头部标签
     assert built.header_tags == [{
         "tag": "text_tag",
         "text": {"tag": "plain_text", "content": "午后更新"},
         "color": "orange",
     }]
-    contents = [e["content"] for e in elements if e["tag"] == "markdown"]
+    contents = [e["content"] for e in built.elements if e["tag"] == "markdown"]
     assert any("新增计划外" in c and "**1 项**" in c for c in contents)
 
 
@@ -229,7 +180,6 @@ async def test_ai_tips_preferred_over_rule_tips() -> None:
     )
     built = await build_special_op_digest(
         REPORT_DATE, "today", _sample_reports(), STATS, ai, FULL_MARKDOWN,
-        icon_uploader=_ok_uploader,
     )
     assert built is not None
     contents = [e["content"] for e in built.elements if e["tag"] == "markdown"]
@@ -246,13 +196,20 @@ async def test_more_than_max_high_items_truncated() -> None:
     stats = {**STATS, "high": 8}
     built = await build_special_op_digest(
         REPORT_DATE, "today", many, stats, None, FULL_MARKDOWN,
-        icon_uploader=_ok_uploader,
     )
     assert built is not None
     column_sets = [e for e in built.elements if e["tag"] == "column_set"]
     assert len(column_sets) == 6
     contents = [e["content"] for e in built.elements if e["tag"] == "markdown"]
     assert any("其余 2 项高风险" in c for c in contents)
+
+
+async def test_oversize_falls_back_to_none() -> None:
+    huge_markdown = FULL_MARKDOWN + "x" * 30_000
+    built = await build_special_op_digest(
+        REPORT_DATE, "today", _sample_reports(), STATS, None, huge_markdown,
+    )
+    assert built is None
 
 
 def test_digest_flag_default_on_and_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:

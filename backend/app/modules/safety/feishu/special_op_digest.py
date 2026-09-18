@@ -4,7 +4,7 @@
 
 - 蓝色横幅头部：标题 + 统计副标题（午后推送加「午后更新」标签）
 - 问候语 + 类型分布一行
-- 高风险逐条「标签 + 标题 + 时间地点 + 内容」条目卡（左文右图，灰底）
+- 高风险逐条「标签 + 标题 + 时间地点 + 内容」纯文字条目卡（灰底，不带图片）
 - 中/低风险聚合条目 + 新增计划外 + 安全提示
 - 完整长文收纳进底部折叠面板（默认收起，信息零丢失）
 
@@ -18,12 +18,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from app.modules.safety.feishu.digest_icons import get_type_icon_key
 from app.modules.safety.feishu.notification import build_card_dict
 from app.modules.safety.schemas.special_op_daily import AIDailyAnalysisResult
 from app.modules.safety.service.special_op_contract import SpecialOpRecord
@@ -37,7 +36,7 @@ _MAX_CARD_BYTES = 25_000
 # 高风险条目最多逐条展示数，超出部分指向折叠面板
 _MAX_HIGH_ITEMS = 6
 
-# 作业类型 → text_tag 颜色（与 digest_icons 素材一一对应）
+# 作业类型 → text_tag 颜色
 _TYPE_TAG_COLORS: dict[str, str] = {
     "动火作业": "orange",
     "受限空间": "indigo",
@@ -53,8 +52,6 @@ _TYPE_ORDER = [
     "动火作业", "受限空间", "高处作业", "吊装作业",
     "临时用电", "动土作业", "断路作业", "盲板抽堵",
 ]
-
-IconUploader = Callable[[str | None], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -76,8 +73,6 @@ async def build_special_op_digest(
     stats: dict[str, int],
     ai_analysis: AIDailyAnalysisResult | None,
     full_markdown: str,
-    *,
-    icon_uploader: IconUploader | None = None,
 ) -> DigestCard | None:
     """构建速递卡；仅 today / afternoon 模式生效。
 
@@ -89,7 +84,6 @@ async def build_special_op_digest(
     try:
         return await _build(
             report_date, mode, reports, stats, ai_analysis, full_markdown,
-            icon_uploader=icon_uploader or get_type_icon_key,
         )
     except Exception:
         logger.warning("速递卡构建失败，回退旧长卡", exc_info=True)
@@ -103,8 +97,6 @@ async def _build(
     stats: dict[str, int],
     ai_analysis: AIDailyAnalysisResult | None,
     full_markdown: str,
-    *,
-    icon_uploader: IconUploader,
 ) -> DigestCard | None:
     high = sorted(
         [r for r in reports if r.daily_risk_level == "high"],
@@ -128,10 +120,9 @@ async def _build(
 
     elements: list[dict[str, Any]] = []
 
-    # 高风险逐条条目卡（左文右图）
+    # 高风险逐条条目卡（纯文字）
     for r in high[:_MAX_HIGH_ITEMS]:
-        img_key = await icon_uploader(r.operation_type)
-        elements.append(_high_item_card(r, img_key))
+        elements.append(_high_item_card(r))
     if len(high) > _MAX_HIGH_ITEMS:
         elements.append({
             "tag": "markdown",
@@ -250,8 +241,8 @@ def _type_chips(reports: Sequence[SpecialOpRecord]) -> str:
     return " · ".join(parts)
 
 
-def _high_item_card(r: SpecialOpRecord, img_key: str | None) -> dict[str, Any]:
-    """单条高风险条目卡：column_set 左文右图、灰底。"""
+def _high_item_card(r: SpecialOpRecord) -> dict[str, Any]:
+    """单条高风险条目卡：column_set 纯文字、灰底。"""
     cn = ReportBuilder._cn_label(r.operation_type)
     tag_color = _TYPE_TAG_COLORS.get(cn, "grey")
     body_lines = [
@@ -275,32 +266,19 @@ def _high_item_card(r: SpecialOpRecord, img_key: str | None) -> dict[str, Any]:
             desc = desc[:42] + "…"
         body_lines.append(desc)
 
-    columns: list[dict[str, Any]] = [{
-        "tag": "column",
-        "width": "weighted",
-        "weight": 1,
-        "vertical_align": "center",
-        "padding": "8px 4px 8px 12px",
-        "elements": [{"tag": "markdown", "content": "\n".join(body_lines)}],
-    }]
-    if img_key:
-        columns.append({
-            "tag": "column",
-            "width": "auto",
-            "vertical_align": "center",
-            "padding": "8px 12px 8px 4px",
-            "elements": [{
-                "tag": "img",
-                "img_key": img_key,
-                "alt": {"tag": "plain_text", "content": f"{cn}图标"},
-            }],
-        })
     return {
         "tag": "column_set",
         "flex_mode": "none",
         "background_style": "grey",
         "margin": "0px 0px 6px 0px",
-        "columns": columns,
+        "columns": [{
+            "tag": "column",
+            "width": "weighted",
+            "weight": 1,
+            "vertical_align": "center",
+            "padding": "8px 12px",
+            "elements": [{"tag": "markdown", "content": "\n".join(body_lines)}],
+        }],
     }
 
 
