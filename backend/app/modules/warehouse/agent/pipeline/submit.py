@@ -440,6 +440,9 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
     # 到货请验（V3.0 分期B 链路1）：登记成功自动推 QC 群；失败不影响登记
     await _fire_arrival_inspection(db, fields, record_id, meta)
 
+    # 供应商不一致提醒（V3.0 分期C §4.3，AI 辅助核对口径）：失败不影响登记
+    await _fire_supplier_mismatch(db, draft, fields, record_id, meta)
+
     logger.info(
         "入库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
         draft.draft_no,
@@ -865,6 +868,230 @@ async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str |
     return note
 
 
+# ── 领料出库提交（V3.0 分期C Ticket 02，设计 §4.2）──
+# scene=picking_outbound 确认回调真身（draft_flow._picking_submit_callback
+# 薄包装）：aligned（含 FIFO picking_plan 快照，改批号后由工具侧重算）→
+# 组装 material_outbound 写入字段 → validate → create_record → 读回核对
+# （批号/数量/部门）→ submitted + 回执。领用日期=当天（毫秒时间戳）；
+# 领用类型缺省生产使用；物料名称/单位等为 lookup/公式拒写（不在映射表）。
+
+PICKING_OUTBOUND_TABLE = "material_outbound"
+
+# 读回核对关键字段（spec：批号/数量/部门）
+PICKING_CHECK_FIELDS: tuple[str, ...] = ("物料批号", "出库数量", "领用部门")
+
+# canonical 键 → (Base 字段名, 是否单选)；quantity 数字化单独分支，领用日期
+# 恒写当天单独处理；picking_plan（结构化建议快照）不进映射
+_PICKING_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
+    ("designated_batch", "物料批号", True),
+    ("use_type", "领用类型", True),
+    ("department", "领用部门", True),
+    ("remark", "备注", False),
+)
+
+
+async def _picking_table_fields() -> dict[str, FieldMeta]:
+    """material_outbound 字段元数据（运行时选项集优先，静态快照兜底）。
+
+    物料批号/领用类型/领用部门均为单选且 Base 侧持续追加选项——先
+    refresh_table_fields 拉最新选项集（bitable_schema TTL 缓存内直用），
+    刷新失败回落静态快照（登记主链路不因选项集刷新抖动中断）。
+    """
+    try:
+        await get_adapter().refresh_table_fields(PICKING_OUTBOUND_TABLE)
+    except Exception:  # noqa: BLE001 — 选项集刷新失败不阻断（回落静态快照）
+        logger.warning("material_outbound 选项集刷新失败，回落静态快照", exc_info=True)
+    return get_table_fields(PICKING_OUTBOUND_TABLE)
+
+
+def build_picking_fields(
+    draft: WarehouseAgentDraft,
+    *,
+    table_fields: dict[str, FieldMeta] | None = None,
+    today: date | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """draft.aligned（含 picking_plan）→ material_outbound 写入字段。
+
+    返回 (fields, degraded)：degraded 为未写入字段名（单选值不在选项集 /
+    数量非数字）。物料批号取用户指定批号或 FIFO 建议首批（跨批拆分的多批
+    无法一行写完——写首批并把完整建议放回执，多批余量人工在 Base 拆行；
+    2B 台账权威，本地不做拆行镜像）；领用日期恒写当天毫秒时间戳。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    fields: dict[str, Any] = {}
+    degraded: list[str] = []
+
+    # 领用类型默认生产使用（工具层为卡片展示同款默认；提交侧兜底，单一
+    # 常量源在 tools/picking）。只读兜底、不回写 aligned（草稿 JSONB 保持
+    # 工具/对话修改路径的唯一写入口）。
+    from app.modules.warehouse.agent.tools.picking import PICKING_DEFAULT_USE_TYPE
+
+    use_type = str(aligned.get("use_type") or "").strip() or PICKING_DEFAULT_USE_TYPE
+
+    # 领用数量（picking_plan 首批承担量优先，与写入批号行严格一致）
+    plan = aligned.get("picking_plan") if isinstance(aligned.get("picking_plan"), list) else []
+    if plan:
+        qty_value = plan[0].get("pick_qty")
+    else:
+        qty_value = aligned.get("quantity")
+    num = _to_number(qty_value)
+    if num is None:
+        degraded.append("出库数量")
+    else:
+        fields["出库数量"] = num
+
+    # 物料批号：用户指定批号 > FIFO 建议首批
+    batch = str(aligned.get("designated_batch") or "").strip()
+    if not batch and plan:
+        batch = str(plan[0].get("batch_no") or "").strip()
+    if batch:
+        adapted = _select_or_skip(
+            table_fields or get_table_fields(PICKING_OUTBOUND_TABLE),
+            "物料批号",
+            batch,
+            degraded,
+        )
+        if adapted:
+            fields["物料批号"] = adapted
+
+    for key, field_name, is_select in _PICKING_FIELD_MAP:
+        if key == "designated_batch":
+            continue  # 上面已按批号列单独处理
+        if key == "use_type":
+            value: Any = use_type  # 默认生产使用（局部兜底，不回写 aligned）
+        else:
+            value = aligned.get(key)
+        if value is None or not str(value).strip():
+            continue
+        text = str(value).strip()
+        if is_select:
+            adapted = _select_or_skip(
+                table_fields or get_table_fields(PICKING_OUTBOUND_TABLE),
+                field_name,
+                text,
+                degraded,
+            )
+            if not adapted:
+                continue
+            text = adapted
+        fields[field_name] = text
+
+    fields["领用日期"] = _today_ms(today)
+    return fields, degraded
+
+
+async def _build_and_validate_picking(
+    draft: WarehouseAgentDraft,
+) -> tuple[dict[str, Any], list[str]]:
+    """组装领料写入字段并跑写契约校验（刷新选项集后本地拦截）。
+
+    校验与组装用同一份运行时刷新后的字段元数据（静态快照批号选项仅
+    50 条而 Base 实测 1700+，直接按快照校验会误杀合法批号）。
+    """
+    table_fields = await _picking_table_fields()
+    fields, degraded = build_picking_fields(draft, table_fields=table_fields)
+    validate_write_fields(PICKING_OUTBOUND_TABLE, fields, table_fields=table_fields)
+    return fields, degraded
+
+
+async def submit_picking(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
+    """领料提交：写契约 → create_record → 读回核对 → submitted + 回执。
+
+    状态前置/异常语义与 submit_gmp 完全同款：非 confirmed 抛
+    :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
+    不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
+    跨批拆分建议在回执中提示人工拆行（首批自动写入，2B 台账权威）。
+    """
+    started = time.monotonic()
+    if draft.status != "confirmed":
+        raise DraftFlowError(
+            f"草稿 {draft.draft_no} 状态为 {draft.status}，仅 confirmed 可提交"
+        )
+
+    adapter = get_adapter()
+    fields, degraded = await _build_and_validate_picking(draft)
+
+    created = await adapter.create_record(PICKING_OUTBOUND_TABLE, fields)
+    record_id = str(created.get("record_id") or "")
+    if not record_id:
+        raise WarehouseBitableError(
+            "create_record 未返回 record_id", code="no_record_id"
+        )
+
+    check_result = await _verify_record(
+        adapter,
+        record_id,
+        fields,
+        table_key=PICKING_OUTBOUND_TABLE,
+        check_fields=PICKING_CHECK_FIELDS,
+    )
+    check_result["written"] = dict(fields)
+    check_result["record_id"] = record_id
+    check_result["degraded"] = degraded
+
+    # draft → submitted + target 回填（状态机迁移表已含 confirmed → submitted）
+    from_status = draft.status
+    draft.status = "submitted"
+    meta = get_table_meta(PICKING_OUTBOUND_TABLE)
+    draft.target_base = meta["base_token"]
+    draft.target_table = meta["table_id"]
+    draft.target_record_id = record_id
+    await db.flush()
+
+    await repository.insert_agent_audit(
+        db,
+        tool_name="submit_picking",
+        args_summary={
+            "draft_no": draft.draft_no,
+            "record_id": record_id,
+            "fields": sorted(fields.keys()),
+            "degraded": degraded,
+            "from": from_status,
+            "to": "submitted",
+        },
+        result_status="ok",
+        error_code=None if check_result["consistent"] else "mismatch",
+        duration_ms=_elapsed_ms(started),
+        draft_id=draft.id,
+    )
+
+    # 回执卡片（scene 分支渲染领料标题；cards 延迟 import 解模块环，同上）
+    from app.modules.warehouse.agent.cards import render_receipt_result_card
+
+    card = render_receipt_result_card(draft, check_result)
+    await _send_result_card(draft, card)
+
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    plan: list[Any] = (
+        list(aligned["picking_plan"])
+        if isinstance(aligned.get("picking_plan"), list)
+        else []
+    )
+    split_note = ""
+    if len(plan) > 1:
+        rest = "、".join(
+            f"{item.get('batch_no')} x{item.get('pick_qty')}" for item in plan[1:]
+        )
+        split_note = f"\n📦 跨批拆分：首批已写入，余量（{rest}）请在 Base 拆行登记"
+
+    logger.info(
+        "领料提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
+        draft.draft_no,
+        record_id,
+        check_result["consistent"],
+        degraded,
+    )
+    if check_result["consistent"]:
+        note = f"✅ 领料已登记：{draft.draft_no}（Base 记录 {record_id}）{split_note}"
+    else:
+        count = len(check_result["mismatches"])
+        note = (
+            f"⚠ 领料已登记：{draft.draft_no}（Base 记录 {record_id}），"
+            f"{count} 个字段读回不一致，请到 Base 核对{split_note}"
+        )
+    return note
+
+
 def _express_payload(aligned: dict[str, Any], express_no: str) -> dict[str, Any]:
     """快递通知 payload（canonical 键对齐 FINISHED_FIELD_LABELS）。"""
     payload = {
@@ -946,5 +1173,70 @@ async def _fire_arrival_inspection(
         )
     except Exception:  # noqa: BLE001 — 通知失败不影响入库登记结果
         logger.exception("到货请验通知自动推送异常（record_id=%s）", record_id)
+        return False
+    return any(r.status == "executed" for r in results)
+
+
+# ── 供应商不一致提醒（V3.0 分期C §4.3，AI 辅助核对口径）──
+
+
+def _mismatch_payload(
+    draft: WarehouseAgentDraft,
+    fields: dict[str, Any],
+    record_id: str,
+    meta: dict[str, str],
+) -> dict[str, Any] | None:
+    """不一致提醒 payload（识别/主数据供应商两方对照；空值剔除，无识别供应商返回 None）。
+
+    master_supplier 来自对齐 match_detail（mark_aligned 已并入 aligned）。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    supp = recognized.get("supplier")
+    supplier_text = (
+        str(supp.get("value") or "").strip() if isinstance(supp, dict) else ""
+    )
+    if not supplier_text:
+        return None
+    match_detail_raw = aligned.get("match_detail")
+    match_detail: dict[str, Any] = (
+        match_detail_raw if isinstance(match_detail_raw, dict) else {}
+    )
+    payload: dict[str, Any] = {
+        "supplier": supplier_text,
+        "master_supplier": str(match_detail.get("master_supplier") or "").strip(),
+        "material_name": str(
+            fields.get("物料名称(API)") or aligned.get("material_name") or ""
+        ).strip(),
+        "batch_no": str(fields.get("物料批号") or "").strip(),
+        "record_url": _receipt_record_url(meta, record_id),
+    }
+    return payload
+
+
+async def _fire_supplier_mismatch(
+    db: AsyncSession,
+    draft: WarehouseAgentDraft,
+    fields: dict[str, Any],
+    record_id: str,
+    meta: dict[str, str],
+) -> bool:
+    """识别供应商与主数据对齐不一致 → 推提醒卡；返回是否送达。
+
+    仅 supplier_matched 显式为 False（对齐器判定）且识别供应商非空时触发；
+    推送失败只记日志不影响登记（同到货请验钩子语义）。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    if aligned.get("supplier_matched") is not False:
+        return False
+    payload = _mismatch_payload(draft, fields, record_id, meta)
+    if payload is None:
+        return False
+    from app.modules.warehouse.push_center.events import fire_push_event
+
+    try:
+        results = await fire_push_event(db, "supplier_mismatch_alert", payload)
+    except Exception:  # noqa: BLE001 — 通知失败不影响入库登记结果
+        logger.exception("供应商不一致提醒推送异常（record_id=%s）", record_id)
         return False
     return any(r.status == "executed" for r in results)

@@ -35,6 +35,11 @@ CONFIRM_SCENE = "confirm_action"
 # 确认有效期（秒）：spec Implementation Decisions 6 — pending 状态 10 分钟 TTL
 DEFAULT_TTL_SECONDS = 600
 
+# 发起人校验豁免场景（V3.0 分期C 领料，质询定案）：领料卡发到发起会话，
+# 仓管员非发起人时也要能确认——能点卡者即可确认（1C 口径，审计照记
+# operator）；其余场景保持「仅发起人可操作」不变。
+OPEN_CONFIRM_SCENES: frozenset[str] = frozenset({"picking_outbound"})
+
 # 回调签名：在同一 db 事务内执行业务动作，返回用户可见提示（None 用默认文案）
 ConfirmCallback = Callable[[AsyncSession, WarehouseAgentDraft], Awaitable[str | None]]
 
@@ -195,7 +200,7 @@ async def handle_action(
         await _audit(draft_id, "denied", "not_pending")
         return ConfirmOutcome(ok=False, status="invalid", message="该确认不存在或已被处理")
 
-    if draft.created_by_open_id != operator_open_id:
+    if draft.scene not in OPEN_CONFIRM_SCENES and draft.created_by_open_id != operator_open_id:
         logger.warning(
             "仓库确认门非发起人点击: draft_no=%s operator=%s",
             draft.draft_no, operator_open_id[:20],

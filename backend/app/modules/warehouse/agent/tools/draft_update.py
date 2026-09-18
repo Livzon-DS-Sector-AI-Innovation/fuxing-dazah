@@ -112,15 +112,27 @@ FIELD_ALIASES: dict[str, str] = {
     "express_no": "express_no",
     "温度计": "thermometer",
     "thermometer": "thermometer",
+    # ── 领料登记（V3.0 分期C）；数量/单位/部门/备注与上面场景同义共用 ──
+    "物料": "material",
+    "material": "material",
+    "领用类型": "use_type",
+    "use_type": "use_type",
+    "指定批号": "designated_batch",
+    "指定批次": "designated_batch",
+    "designated_batch": "designated_batch",
+    "建议批号": "designated_batch",
+    # ── 供应商准入（V3.0 分期C）──
+    "供应商名称": "supplier_name",
+    "supplier_name": "supplier_name",
 }
 
 # 引导文案里的可改字段清单（业务名；receipt + gmp_outbound + finished_outbound
-# 三场景并集；「品名」在成品语境请用「产品名称」，见提示词）
+# + picking_outbound 四场景并集；「品名」在成品语境请用「产品名称」，见提示词）
 MODIFIABLE_FIELD_NAMES = (
     "物料名称、厂家批号、数量、单位、供应商、生产商、车牌、合同号、"
     "包装规格、生产日期、到货时间段、备注、联系人、物料批号、生产批号、"
     "单据类型、领用品种、领用部门、产品名称、产品批号、出库量、销售客户、"
-    "用途、快递号、温度计"
+    "用途、快递号、温度计、物料、领用类型、指定批号"
 )
 
 # 确认卡片动作文案（按 scene；重发卡片后的提醒话术）
@@ -128,6 +140,7 @@ _SCENE_CONFIRM_LABELS: dict[str, str] = {
     "receipt": "确认入库",
     "gmp_outbound": "确认登记",
     "finished_outbound": "确认登记",
+    "picking_outbound": "确认领料",
 }
 
 
@@ -174,6 +187,50 @@ def map_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
             continue
         mapped[key] = _coerce_value(key, value)
     return mapped, unknown
+
+
+# 领料场景重算触发键（改物料/数量/指定批号后 FIFO 建议必须重算，否则卡片
+# 展示与 submit 写入脱节；其余键（部门/备注等）不影响建议）
+_PICKING_REPLAN_KEYS: frozenset[str] = frozenset(
+    {"designated_batch", "material", "quantity"}
+)
+
+
+async def _repick_picking_plan(db: AsyncSession, draft: WarehouseAgentDraft) -> None:
+    """领料草稿字段变更后重算 FIFO 建议（原地更新 aligned.picking_plan）。
+
+    用户指定批号 → 单批校验（条件放行附 warning）；未指定 → 全量 FIFO。
+    匹配失败抛 :class:`PickingError`（update_draft 外层统一转 error，
+    草稿保持原状可重试）。lazy import 解 draft_update ↔ picking 模块环。
+    """
+    from app.modules.warehouse.agent.tools import picking as picking_module
+
+    aligned = dict(draft.aligned or {})
+    material = str(aligned.get("material") or "").strip()
+    try:
+        quantity = float(str(aligned.get("quantity")).strip().replace(",", ""))
+    except (TypeError, ValueError, AttributeError):
+        raise picking_module.PickingError(
+            "invalid_quantity", "领用数量无效，请先修改领用数量"
+        )
+    records = await picking_module.fetch_stock_for_picking(
+        picking_module.get_adapter(), material
+    )
+    designated = str(aligned.get("designated_batch") or "").strip()
+    if designated:
+        plan, warning = picking_module.plan_for_designated_batch(
+            records, designated, quantity=quantity
+        )
+    else:
+        plan = picking_module.fifo_plan(records, quantity=quantity)
+        warning = ""
+    aligned["picking_plan"] = plan
+    if warning:
+        aligned["picking_warning"] = warning
+    else:
+        aligned.pop("picking_warning", None)
+    draft.aligned = aligned  # JSONB 重新赋值才触发 UPDATE
+    await db.flush()
 
 
 # ── 草稿定位 ──
@@ -262,6 +319,12 @@ async def update_draft(
             aligned.update(mapped)
             draft.aligned = aligned  # JSONB 重新赋值才触发 UPDATE
             await db.flush()
+            # 领料场景：物料/数量/指定批号变化后重算 FIFO 建议（失败转 error，
+            # 草稿保持原字段，用户可修正后重试）
+            if draft.scene == draft_flow.PICKING_OUTBOUND_SCENE and (
+                set(mapped) & _PICKING_REPLAN_KEYS
+            ):
+                await _repick_picking_plan(db, draft)
             # 状态回 pending_confirm + 重发确认卡片
             # （aligned→pending_confirm 首发或 pending_confirm→pending_confirm 重发，
             #   迁移合法性由 draft_flow 状态机校验）

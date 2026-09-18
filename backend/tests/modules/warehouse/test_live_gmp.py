@@ -470,11 +470,17 @@ async def test_create_gmp_draft_success_with_card(
 
 
 def test_scene_config_structure_and_registration() -> None:
-    """SCENE_CONFIG 三场景；receipt/gmp_outbound/finished_outbound 均注册回调。"""
-    assert set(SCENE_CONFIG) == {"receipt", "gmp_outbound", "finished_outbound"}
+    """SCENE_CONFIG 四场景；receipt/gmp_outbound/finished_outbound/picking 均注册回调。"""
+    assert set(SCENE_CONFIG) == {
+        "receipt",
+        "gmp_outbound",
+        "finished_outbound",
+        "picking_outbound",  # V3.0 分期C
+    }
     assert confirm.is_registered_scene("receipt")
     assert confirm.is_registered_scene("gmp_outbound")
     assert confirm.is_registered_scene("finished_outbound")  # S3 ticket 02 落地
+    assert confirm.is_registered_scene("picking_outbound")  # V3.0 分期C
 
     gmp_config = SCENE_CONFIG["gmp_outbound"]
     assert gmp_config.required_fields == (
@@ -738,10 +744,16 @@ async def test_live_gmp_missing_field_asks(
     # 无 GMP 草稿落库（工具 incomplete 分支不建稿；LLM 不应硬写）
     assert await _gmp_drafts(agent_db, open_id) == []
 
-    # 回复含追问（问句或明确点名缺失字段）；无占位卡（OK 表情承担确认）
+    # 回复含追问（问句或明确点名缺失字段）；无占位卡（OK 表情承担确认）。
+    # 断言取卡片全部 markdown 元素（LLM 可能把字段名放表格/列表元素——
+    # 只取首元素会因输出格式变体误判，2026-09-18 领料场景上线后实测）。
     assert len(captured_sends) >= 1
     reply = _card_of(captured_sends[-1])
-    text = reply["body"]["elements"][0]["content"]
+    text = "\n".join(
+        element.get("content") or ""
+        for element in reply["body"]["elements"]
+        if isinstance(element, dict)
+    )
     assert "？" in text or "?" in text or "生产批号" in text, (
         f"应追问缺失的生产批号，实际回复: {text[:120]}"
     )

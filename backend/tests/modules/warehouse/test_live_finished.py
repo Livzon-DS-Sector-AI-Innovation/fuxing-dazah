@@ -576,7 +576,12 @@ async def test_create_finished_draft_success_with_card(
 
 def test_scene_config_finished_registration() -> None:
     """SCENE_CONFIG：finished_outbound 已注册确认回调（票02 落地）。"""
-    assert set(SCENE_CONFIG) == {"receipt", "gmp_outbound", "finished_outbound"}
+    assert set(SCENE_CONFIG) == {
+        "receipt",
+        "gmp_outbound",
+        "finished_outbound",
+        "picking_outbound",  # V3.0 分期C
+    }
     assert confirm.is_registered_scene("finished_outbound")
 
     config = SCENE_CONFIG["finished_outbound"]

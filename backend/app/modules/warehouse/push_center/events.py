@@ -164,6 +164,36 @@ def render_release_notify_card(payload: dict[str, Any]) -> dict[str, Any]:
 register_event_renderer("release_notify", render_release_notify_card)
 
 
+# ── V3.0 分期C：入库供应商不一致提醒（设计 §4.3，AI 辅助核对口径）──
+
+
+def render_supplier_mismatch_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """供应商不一致提醒卡：识别供应商与主数据两方对照，请人工核实。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    master = _payload_text(payload, "master_supplier")
+    lines = [
+        f"**物料** {_payload_text(payload, 'material_name') or '-'}"
+        f"　**批号** {_payload_text(payload, 'batch_no') or '-'}",
+        f"**识别供应商** {_payload_text(payload, 'supplier') or '-'}",
+    ]
+    if master:
+        lines.append(f"**主数据供应商** {master}")
+    lines.append("识别供应商与主数据记录不一致，请人工核实（AI 辅助核对，系统不做判定）。")
+    if _payload_text(payload, "record_url"):
+        lines.append(
+            f"[📋 打开台账记录]({_payload_text(payload, 'record_url')})"
+        )
+    return build_card(
+        title="⚠️ 供应商不一致",
+        template="yellow",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+
+
+register_event_renderer("supplier_mismatch_alert", render_supplier_mismatch_alert_card)
+
+
 async def fire_push_event(
     db: AsyncSession,
     scene: str,

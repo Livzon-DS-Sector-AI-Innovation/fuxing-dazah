@@ -723,6 +723,12 @@ FINISHED_CONFIRM_CARD_TITLE = "📦 成品出库登记"
 CONFIRM_FINISHED_BUTTON_LABEL = "✅ 确认登记"
 CANCEL_FINISHED_BUTTON_LABEL = "❌ 取消"
 
+# 领料登记确认卡片（V3.0 分期C：scene=picking_outbound 分支文案）
+PICKING_OUTBOUND_SCENE = "picking_outbound"
+PICKING_CONFIRM_CARD_TITLE = "🏭 领料登记"
+CONFIRM_PICKING_BUTTON_LABEL = "✅ 确认领料"
+CANCEL_PICKING_BUTTON_LABEL = "❌ 取消"
+
 # 识别置信度低于该阈值加 ⚠ 高亮（spec：低置信度字段提醒重点核对）
 RECEIPT_CONFIDENCE_WARN = 0.7
 
@@ -790,6 +796,25 @@ FINISHED_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
 
 FINISHED_MODIFY_HINT = (
     "💡 确认前请核对以上信息；要修改可直接回复消息（如「出库量改成 200」）。"
+)
+
+# 领料必收 4 字段（展示名, aligned 键；顺序即卡片展示顺序）
+PICKING_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("物料", "material"),
+    ("领用数量", "quantity"),
+    ("单位", "unit"),
+    ("领用部门", "department"),
+)
+
+# 领料选填/展示字段（指定批号有值=用户改过建议；无值=按 FIFO 建议）
+PICKING_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("领用类型", "use_type"),
+    ("指定批号", "designated_batch"),
+    ("备注", "remark"),
+)
+
+PICKING_MODIFY_HINT = (
+    "💡 确认前请核对批次与数量；要改批号可直接回复消息（如「改成 10407-251008」）。"
 )
 
 
@@ -933,6 +958,68 @@ def _render_finished_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
+def _render_picking_confirm_card(draft: Any) -> dict[str, Any]:
+    """领料登记确认卡片（scene=picking_outbound 分支，V3.0 分期C）。
+
+    与 GMP 确认卡片同构（对话收集字段、无识别置信度语义），额外渲染
+    FIFO 建议批次列表（跨批拆分逐行：批号 x 承担量 / 库存量 / 贮存位置）。
+    渲染防御同主入口：字段缺失降级，不抛错。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or PICKING_OUTBOUND_SCENE)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [f"**草稿**：{draft_no or '-'}", "", "**登记信息**"]
+    for index, (label, key) in enumerate(PICKING_REQUIRED_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
+        )
+    lines.extend(["", "**补充信息（选填）**"])
+    for index, (label, key) in enumerate(PICKING_OPTIONAL_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+        )
+
+    # FIFO 建议批次（picking_plan 结构化快照；用户改批号后由工具侧重算覆盖）
+    plan = aligned.get("picking_plan")
+    if isinstance(plan, list) and plan:
+        lines.extend(["", "**FIFO 批次建议**（最早放行批次优先）"])
+        for item in plan:
+            if not isinstance(item, dict):
+                continue
+            batch = _clean(item.get("batch_no"), 40)
+            pick = item.get("pick_qty")
+            pick_text = f"{pick:g}" if isinstance(pick, (int, float)) else "-"
+            stock = item.get("stock_qty")
+            stock_text = f"{stock:g}" if isinstance(stock, (int, float)) else "-"
+            location = _clean(item.get("location"), 30)
+            lines.append(
+                f"- {batch}：领 {pick_text}（库存 {stock_text} {item.get('unit') or ''}，{location}）"
+            )
+    warning = str(aligned.get("picking_warning") or "").strip()
+    if warning:
+        lines.extend(["", f"⚠ {warning}"])
+
+    lines.extend(["", PICKING_MODIFY_HINT])
+
+    value_base = {"scene": scene, "draft_id": draft_id}
+    return build_card(
+        title=PICKING_CONFIRM_CARD_TITLE,
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_PICKING_BUTTON_LABEL,
+                cancel_label=CANCEL_PICKING_BUTTON_LABEL,
+            ),
+        ],
+    )
+
+
 def render_confirm_status_card(
     draft: Any, *, state: str, title: str
 ) -> dict[str, Any]:
@@ -990,6 +1077,8 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         return _render_gmp_confirm_card(draft)
     if scene == FINISHED_OUTBOUND_SCENE:
         return _render_finished_confirm_card(draft)
+    if scene == PICKING_OUTBOUND_SCENE:
+        return _render_picking_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
@@ -1044,10 +1133,18 @@ GMP_RESULT_CARD_TITLE_MISMATCH = "⚠ GMP 出库已登记（读回不一致）"
 FINISHED_RESULT_CARD_TITLE_OK = "✅ 成品出库已登记"
 FINISHED_RESULT_CARD_TITLE_MISMATCH = "⚠ 成品出库已登记（读回不一致）"
 
+# 领料回执标题（scene=picking_outbound 分支，V3.0 分期C）
+PICKING_RESULT_CARD_TITLE_OK = "✅ 领料已登记"
+PICKING_RESULT_CARD_TITLE_MISMATCH = "⚠ 领料已登记（读回不一致）"
+
 # 读回核对一致提示行（按 scene 的核对字段口径）
 RECEIPT_CHECK_OK_LINE = "✅ 数量/批号/单位/供应商 与 Base 读回一致"
 GMP_CHECK_OK_LINE = "✅ 批号/数量/单位 与 Base 读回一致"
 FINISHED_CHECK_OK_LINE = "✅ 批号/出库量/单位/客户 与 Base 读回一致"
+PICKING_CHECK_OK_LINE = "✅ 批号/领用数量/领用部门 与 Base 读回一致"
+
+# 领料批号降级提示（选项集未命中需人工补填，同 GMP 口径）
+PICKING_DEGRADE_BATCH_HINT = "⚠ 物料批号需在 Base 人工补填（选项集未命中）"
 
 # GMP 物料批号写入 API 专用文本字段（2026-09-07 新建；原单选字段
 # 入——Base 侧字段编辑限制，放开后置 True 提示随之消失）
@@ -1133,6 +1230,11 @@ def render_receipt_result_card(
         title_mismatch = FINISHED_RESULT_CARD_TITLE_MISMATCH
         check_ok_line = FINISHED_CHECK_OK_LINE
         special_field, special_hint = "快递号", FINISHED_DEGRADE_EXPRESS_HINT
+    elif scene == PICKING_OUTBOUND_SCENE:
+        title_ok = PICKING_RESULT_CARD_TITLE_OK
+        title_mismatch = PICKING_RESULT_CARD_TITLE_MISMATCH
+        check_ok_line = PICKING_CHECK_OK_LINE
+        special_field, special_hint = "物料批号", PICKING_DEGRADE_BATCH_HINT
     else:
         title_ok = RECEIPT_RESULT_CARD_TITLE_OK
         title_mismatch = RECEIPT_RESULT_CARD_TITLE_MISMATCH

@@ -375,7 +375,7 @@ class TestBitableStore:
 
     def test_ten_connections_registered(self) -> None:
         store = BitableConfigStore(row_loader=lambda k: None)
-        assert len(store.iter_connection_views()) == 10
+        assert len(store.iter_connection_views()) == 11  # 10 核心表 + 分期C supplier_directory
 
     def test_view_masks_token(self) -> None:
         store = BitableConfigStore(

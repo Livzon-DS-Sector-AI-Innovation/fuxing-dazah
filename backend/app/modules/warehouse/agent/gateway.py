@@ -297,6 +297,16 @@ def _scene_hint(text: str) -> str | None:
             "【场景提示】本次任务为成品出库登记：必须调用 create_finished_outbound_draft "
             "收集字段，禁止调用其他登记工具。"
         )
+    if "领料" in t or "领用" in t:
+        return (
+            "【场景提示】本次任务为领料登记（先进先出批次匹配）：必须调用 "
+            "create_picking_draft 收集字段，禁止调用其他登记工具。"
+        )
+    if "准入" in t and "供应商" in t:
+        return (
+            "【场景提示】本次任务为供应商准入申请：必须调用 "
+            "create_supplier_admission 收集字段，禁止调用其他登记工具。"
+        )
     return None
 
 @on_event("im.message.receive_v1")

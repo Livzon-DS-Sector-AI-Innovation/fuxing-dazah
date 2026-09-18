@@ -167,6 +167,11 @@ class Runner:
                         f"- 有一张 GMP 出库登记单待确认（草稿 {d.draft_no}），"
                         "用户可能要修改字段或确认登记"
                     )
+                elif scene == "picking_outbound":
+                    lines.append(
+                        f"- 有一张领料登记单待确认（草稿 {d.draft_no}），"
+                        "用户可能要改批号/数量或确认领料"
+                    )
                 else:
                     lines.append(
                         f"- 有一个待你确认的{scene}事项（草稿 {d.draft_no}），尚未执行"

@@ -51,9 +51,17 @@ from app.modules.warehouse.agent.tools.office import (
     OFFICE_TOOL_FUNCS,
     OFFICE_TOOLS_SCHEMA,
 )
+from app.modules.warehouse.agent.tools.picking import (
+    PICKING_TOOL_FUNCS,
+    PICKING_TOOLS_SCHEMA,
+)
 from app.modules.warehouse.agent.tools.plan import (
     PLAN_TOOL_FUNCS,
     PLAN_TOOLS_SCHEMA,
+)
+from app.modules.warehouse.agent.tools.supplier import (
+    SUPPLIER_TOOL_FUNCS,
+    SUPPLIER_TOOLS_SCHEMA,
 )
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
 from app.modules.warehouse.bitable_cells import (
@@ -640,6 +648,8 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     **DRAFT_UPDATE_TOOL_FUNCS,
     **GMP_TOOL_FUNCS,
     **FINISHED_TOOL_FUNCS,
+    **PICKING_TOOL_FUNCS,
+    **SUPPLIER_TOOL_FUNCS,
     **SKILL_TOOL_FUNCS,
 }
 
@@ -757,6 +767,8 @@ TOOLS: list[dict[str, Any]] = [
     *DRAFT_UPDATE_TOOLS_SCHEMA,
     *GMP_TOOLS_SCHEMA,
     *FINISHED_TOOLS_SCHEMA,
+    *PICKING_TOOLS_SCHEMA,
+    *SUPPLIER_TOOLS_SCHEMA,
     *SKILL_TOOLS_SCHEMA,
 ]
 

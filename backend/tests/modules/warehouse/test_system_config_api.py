@@ -230,7 +230,7 @@ async def test_bitable_connections_list_and_update(
     resp = await client.get(BITABLE)
     assert resp.status_code == 200
     connections = resp.json()["data"]["connections"]
-    assert len(connections) == 10
+    assert len(connections) == 11  # 10 核心表 + 分期C supplier_directory
     assert all(c["base_token"] != "" for c in connections)  # 脱敏后非空（**** 或 未配置）
 
     resp = await client.put(

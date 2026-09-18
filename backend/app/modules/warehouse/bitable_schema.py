@@ -421,6 +421,20 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '内部批号': FieldMeta(type=1),
         '厂家批号': FieldMeta(type=1),
     },
+
+    # ── V3.0 分期C 供应商名录（设计 §4.3，唯一需要 Base 建表的票）──
+    # 用户按列规格在飞书 Base 人工建表后，经系统配置中心 Bitable 连接
+    # Tab 配置 table_id（DB 行覆盖空占位）；表未接入时 adapter 报错，
+    # 上层捕获转「功能未就绪」。选项集为列规格约定值（用户按规格建列）。
+    'supplier_directory': {  # 供应商名录表
+        '供应商名称': FieldMeta(type=1),
+        '审计状态': FieldMeta(
+            type=3, options=('待准入', '准入', '暂停', '淘汰')
+        ),
+        '准入日期': FieldMeta(type=5),
+        '申请日期': FieldMeta(type=5),
+        '备注': FieldMeta(type=1),
+    },
 }
 
 # ── 表坐标（10 张核心表，table_id 以测试版 Base 为准） ──
@@ -497,6 +511,15 @@ TABLES: dict[str, TableMeta] = {
         name_cn="不合格物料汇总",
         fields=_TABLE_FIELDS["unqualified_stock"],
     ),
+    # ── V3.0 分期C 供应商名录（§4.3）：table_id 空占位，Base 建表后经
+    # 配置中心 Bitable 连接 Tab 配置（DB 行覆盖），未配置时适配器报错 ──
+    "supplier_directory": TableMeta(
+        base_key="MATERIAL",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN",
+        table_id="",
+        name_cn="供应商名录表",
+        fields=_TABLE_FIELDS["supplier_directory"],
+    ),
 }
 
 # 运行时字段缓存：table_key -> (写入时间 monotonic, 字段元数据)
@@ -560,8 +583,17 @@ def apply_runtime_fields(
     return parsed
 
 
-def validate_write_fields(table_key: str, fields: dict[str, Any]) -> None:
+def validate_write_fields(
+    table_key: str,
+    fields: dict[str, Any],
+    *,
+    table_fields: dict[str, FieldMeta] | None = None,
+) -> None:
     """写前契约校验（纯本地快速失败，不发起 HTTP）。
+
+    ``table_fields`` 显式注入字段元数据（V3.0 分期C：调用方已运行时刷新
+    选项集时传入同一份，避免静态快照选项滞后误杀合法值；缺省回落
+    get_table_fields 的运行时缓存优先链）。
 
     - 字段名在常量表且为只读类型 → WarehouseBitableError(code="readonly_field")；
     - 单选字段值非纯字符串，或非空选项集时不在选项集内
@@ -569,7 +601,8 @@ def validate_write_fields(table_key: str, fields: dict[str, Any]) -> None:
     - 未收录字段名**放行**、空选项集的单选**放行**（交由 Base 侧校验，
       避免常量滞后误杀）；值为 None 视为清空，同样放行。
     """
-    table_fields = get_table_fields(table_key)  # 内含未知表检查
+    if table_fields is None:
+        table_fields = get_table_fields(table_key)  # 内含未知表检查
     for name, value in fields.items():
         meta = table_fields.get(name)
         if meta is None:

@@ -106,6 +106,16 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule=None,
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # ── V3.0 分期C（领料 FIFO 与供应商名录，设计 §4.2/§4.3）──
+    PushTaskInfo(
+        task_name="supplier_mismatch_alert",
+        scene="supplier_mismatch_alert",
+        label="供应商不一致提醒",
+        description="入库识别供应商与主数据不一致时推提醒卡（事件触发，AI 辅助核对口径）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

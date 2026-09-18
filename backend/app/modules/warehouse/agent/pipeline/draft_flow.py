@@ -59,6 +59,7 @@ logger = logging.getLogger(__name__)
 RECEIPT_SCENE = "receipt"
 GMP_OUTBOUND_SCENE = "gmp_outbound"
 FINISHED_OUTBOUND_SCENE = "finished_outbound"  # 票02：成品出库登记（预留）
+PICKING_OUTBOUND_SCENE = "picking_outbound"  # V3.0 分期C：领料 FIFO 登记
 
 # pending_confirm TTL（秒）：读运行参数配置（DB → env → 默认 600），改值即时生效
 def _draft_ttl_seconds() -> int:
@@ -519,6 +520,17 @@ async def _finished_submit_callback(
     return await submit_outbound(db, draft)
 
 
+async def _picking_submit_callback(
+    db: AsyncSession, draft: WarehouseAgentDraft
+) -> str | None:
+    """scene=picking_outbound 确认回调（V3.0 分期C Ticket 02）：薄包装延迟
+    import submit_picking（解环同上）；confirmed → 写物料出库台账（FIFO
+    建议批次）+ 读回核对 → submitted（详见 pipeline/submit.py）。"""
+    from app.modules.warehouse.agent.pipeline.submit import submit_picking
+
+    return await submit_picking(db, draft)
+
+
 # 场景配置表（spec Implementation Decisions 1/2/5/6）：scene → 配置。
 # receipt 沿用识别必提集合；gmp_outbound 对话必收四件套 + 可写八字段
 # （物料名称为 lookup 拒写，不在此列——仅确认卡片展示）；finished_outbound
@@ -587,6 +599,24 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "快递号(API)",
         ),
         submit=_finished_submit_callback,
+    ),
+    PICKING_OUTBOUND_SCENE: SceneConfig(
+        name_cn="领料登记",
+        required_fields=(
+            "material",
+            "quantity",
+            "unit",
+            "department",
+        ),
+        writable_fields=(
+            "物料批号",
+            "出库数量",
+            "领用日期",
+            "领用类型",
+            "领用部门",
+            "备注",
+        ),
+        submit=_picking_submit_callback,
     ),
 }
 

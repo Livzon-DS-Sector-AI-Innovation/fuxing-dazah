@@ -98,7 +98,10 @@ def qa_confirm_target() -> str:
 # QC 链路确认门业务类型（confirm_request 确认闸门按此挂钩独立开关）
 QA_RELEASE_BIZ = "qa_release"
 QC_REJECTED_BIZ = "qc_rejected_disposition"
-QC_GATE_BIZ_TYPES = (QA_RELEASE_BIZ, QC_REJECTED_BIZ)
+# 供应商准入门（V3.0 分期C §4.3）：把关人同为 QA，回写开关与 QC 链路共用
+# qc_writeback_enabled（质询 Round 2 定案，不另立参数）
+SUPPLIER_ADMIT_BIZ = "supplier_admission"
+QC_GATE_BIZ_TYPES = (QA_RELEASE_BIZ, QC_REJECTED_BIZ, SUPPLIER_ADMIT_BIZ)
 
 # 已放行态（链路3 上架通知覆盖；否决不通知）
 RELEASED_VALUES = ("放行", "条件放行")

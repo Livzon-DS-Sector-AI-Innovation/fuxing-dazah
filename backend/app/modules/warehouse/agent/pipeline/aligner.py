@@ -208,6 +208,9 @@ def match_material(
         if entry is not None:
             detail["candidate"] = entry.name
             detail["candidate_code"] = entry.code
+            # 主数据供应商原名（分期C 供应商不一致提醒卡展示用；V1.0 仅
+            # supplier_matched 布尔，提醒卡无两方对照，2026-09-18 补）
+            detail["master_supplier"] = entry.supplier
         detail["manufacturer_matched"] = bool(
             manu_norm and entry is not None and normalize_name(entry.manufacturer) == manu_norm
         )

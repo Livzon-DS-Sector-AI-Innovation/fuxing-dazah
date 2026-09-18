@@ -152,6 +152,8 @@ class TestPushRegistry:
             "arrival_inspection",
             "qc_progress_alert",
             "release_notify",
+            # V3.0 分期C（供应商不一致提醒，事件型）
+            "supplier_mismatch_alert",
         }
 
     def test_scheduled_vs_event(self) -> None:
