@@ -5,13 +5,16 @@
 卡片内「提交进展」仍直接回写多维表格（``progress_card.push_progress_note_to_bitable``）。
 
 发送对象分类型：``ou_``（个人）= 一卡一隐患 DM 私发；``oc_``（群聊）= 群卡片。
+
+私发完成后，向当日「安全速递」总卡投递一个 ``progress_dunning`` 格子
+（发到安全AI创新交流群），简报中注明已私发的对象与催办隐患明细。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.modules.safety.service.hazard_direct import (
@@ -187,6 +190,9 @@ async def send_progress_dunning_dynamic() -> dict[str, Any]:
 
     mention_ids = await mention.resolve_open_ids(p.name for _, _, p in plan)
 
+    sent_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []
+    failed_plan: list[tuple[bitable_repo.HazardView, str, Any]] = []
+
     for view, role, person in plan:
         # open_id 按应用隔离：平台同步的 open_id 对安全应用会报 99992361 cross app，
         # 统一用租户级 user_id（identity.users.feishu_user_id）发送。
@@ -206,18 +212,21 @@ async def send_progress_dunning_dynamic() -> dict[str, Any]:
             )
             if ok:
                 stats["sent"] += 1
+                sent_plan.append((view, role, person))
                 logger.info(
                     "⑤ 催办卡片已发送: record_id=%s → %s(%s) id_type=%s",
                     view.record_id, person.name, role, id_type,
                 )
             else:
                 stats["skipped"] += 1
+                failed_plan.append((view, role, person))
                 logger.warning(
                     "⑤ 催办卡片发送失败: record_id=%s → %s(%s)",
                     view.record_id, person.name, role,
                 )
         except Exception:
             stats["errors"] += 1
+            failed_plan.append((view, role, person))
             logger.exception(
                 "⑤ 催办卡片发送异常: record_id=%s → %s", view.record_id, person.name
             )
@@ -226,5 +235,120 @@ async def send_progress_dunning_dynamic() -> dict[str, Any]:
         "⑤ 催办完成(动态名单): sent=%d skipped=%d errors=%d 收件人=%d",
         stats["sent"], stats["skipped"], stats["errors"], stats["recipients"],
     )
+
+    # 私发完成后，催办简报（含已私发对象）投递「安全速递」总卡；
+    # 失败只告警，不影响私发结果与任务状态。
+    try:
+        stats["digest_upserted"] = await _upsert_dunning_digest(
+            views, plan, sent_plan, failed_plan, stats,
+        )
+    except Exception:
+        stats["digest_upserted"] = False
+        logger.exception("⑤ 催办简报投递安全速递异常（不影响私发结果）")
     return stats
+
+
+def _hazard_label(view: bitable_repo.HazardView) -> str:
+    return view.hazard_no or view.record_id
+
+
+def _short(text: str | None, limit: int = 40) -> str:
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit] + "…"
+
+
+def _build_dunning_cell(
+    views: list[bitable_repo.HazardView],
+    plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    sent_plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    failed_plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    stats: dict[str, Any],
+) -> Any:
+    """催办简报格子：概览统计 + 已私发对象分组 + 催办明细 + 未送达提示。"""
+    from app.modules.safety.feishu.daily_digest import DigestCell
+
+    # 已成功私发的人 → 角色去重、催办隐患编号列表（按发送顺序）
+    people: dict[str, dict[str, Any]] = {}
+    for view, role, person in sent_plan:
+        key = person.user_id or person.open_id or person.name
+        entry = people.setdefault(
+            key, {"name": person.name, "roles": [], "hazards": []},
+        )
+        if role not in entry["roles"]:
+            entry["roles"].append(role)
+        hazard = _hazard_label(view)
+        if hazard not in entry["hazards"]:
+            entry["hazards"].append(hazard)
+
+    # 每条隐患的应收件人（解析成功的完整名单，与送达状态分开呈现）
+    plan_by_view: dict[str, list[tuple[str, Any]]] = {}
+    for view, role, person in plan:
+        plan_by_view.setdefault(view.record_id, []).append((role, person))
+
+    detail: list[str] = [f"**已私发对象（{len(people)} 人）**"]
+    if people:
+        for entry in people.values():
+            detail.append(
+                f"- {entry['name']}（{'/'.join(entry['roles'])}）："
+                f"{'、'.join(entry['hazards'])}"
+            )
+    else:
+        detail.append("- 无（全部发送失败或收件人解析失败）")
+
+    detail.append("")
+    detail.append(f"**催办明细（{len(views)} 项）**")
+    for view in views:
+        targets = plan_by_view.get(view.record_id, [])
+        target_txt = " ｜ ".join(f"{role} {p.name}" for role, p in targets)
+        if not target_txt:
+            target_txt = "收件人解析失败"
+        dept = (view.department or "").strip() or "未填部门"
+        detail.append(
+            f"- **{_hazard_label(view)}**（{dept}）"
+            f"{_short(view.description)} → {target_txt}"
+        )
+
+    if failed_plan:
+        detail.append("")
+        detail.append(
+            f"⚠️ 未送达 {len(failed_plan)} 张："
+            + "、".join(
+                f"{_hazard_label(view)}（{role} {person.name}）"
+                for view, role, person in failed_plan
+            )
+        )
+
+    return DigestCell(
+        tag_color="orange",
+        tag_text="进展催办",
+        title="未更新进展催办",
+        stats=(
+            f"未更新进展 **{len(views)}** 项 ｜ "
+            f"已私发 **{len(people)}** 人（{stats.get('sent', 0)} 张卡送达）"
+        ),
+        zone="已私发各隐患责任人与分管安全员，收卡人可在卡片内直接提交进展",
+        detail="\n".join(detail),
+    )
+
+
+async def _upsert_dunning_digest(
+    views: list[bitable_repo.HazardView],
+    plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    sent_plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    failed_plan: list[tuple[bitable_repo.HazardView, str, Any]],
+    stats: dict[str, Any],
+) -> bool:
+    """把催办简报投进当日「安全速递」总卡（安全AI创新交流群）。"""
+    from app.modules.safety.feishu.daily_digest import upsert_daily_digest
+
+    bj_today = (datetime.now(UTC) + timedelta(hours=8)).date()
+    cell = _build_dunning_cell(views, plan, sent_plan, failed_plan, stats)
+    ok = await upsert_daily_digest(bj_today, "progress_dunning", cell)
+    if ok:
+        logger.info("⑤ 催办简报已投递安全速递总卡: date=%s", bj_today)
+    else:
+        logger.warning("⑤ 催办简报总卡投递失败: date=%s", bj_today)
+    return ok
 

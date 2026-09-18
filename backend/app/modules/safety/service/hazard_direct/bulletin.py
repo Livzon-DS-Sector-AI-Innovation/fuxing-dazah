@@ -1,4 +1,4 @@
-"""④ 隐患督办通报（周四 08:30）— 直读多维表格。
+"""④ 隐患督办通报（周四 14:00）— 直读多维表格。
 
 改造前：读 DB（``get_hazards_for_notification``）→ 渲染 → 推群。
 改造后：读 **多维表格**（``督办等级`` 为红色/一般预警、且未关闭非整改中）→ 渲染 → 推群。
@@ -243,7 +243,14 @@ async def build_bulletin() -> tuple[str, dict[str, Any]]:
 
 
 async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
-    """生成并推送督办通报到群聊。"""
+    """生成并推送督办通报到群聊（总卡开启时只投「安全速递」格子）。"""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.safety.feishu.daily_digest import (
+        DigestCell,
+        digest_enabled,
+        upsert_daily_digest,
+    )
     from app.modules.safety.feishu.notification import send_group_card
 
     content, stats = await build_bulletin()
@@ -252,41 +259,38 @@ async def send_bulletin(chat_id: str | None = None) -> dict[str, Any]:
         stats["sent"] = False
         return stats
     try:
+        if digest_enabled():
+            # 总卡开启：只投格子（安全AI创新交流群不再单独发督办通报卡）
+            bj_today = (datetime.now(UTC) + timedelta(hours=8)).date()
+            ok = await upsert_daily_digest(
+                bj_today,
+                "hazard_bulletin",
+                DigestCell(
+                    tag_color="yellow",
+                    tag_text="隐患督办",
+                    title="隐患督办通报",
+                    stats=(
+                        f"未关闭 **{stats.get('total', 0)}** 项 ｜ "
+                        f"🔴 红色预警 {stats.get('urgent', 0)} · "
+                        f"🟡 一般预警 {stats.get('warning', 0)}"
+                    ),
+                    zone="请各责任部门尽快反馈整改进展",
+                    detail=content,
+                ),
+            )
+            stats["sent"] = bool(ok)
+            if ok:
+                logger.info("④ 督办通报已投递安全速递总卡: %s", stats)
+            else:
+                logger.error("④ 督办通报总卡投递失败: %s", stats)
+            return stats
+
         ok = await send_group_card(
             chat_id=chat_id, title="隐患督办通报", content=content
         )
         stats["sent"] = bool(ok)
         if ok:
             logger.info("④ 督办通报已发送: %s", stats)
-
-            # 「安全速递」总卡：投递本报告格子（失败不影响督办通报本身）
-            try:
-                from datetime import UTC, datetime, timedelta
-
-                from app.modules.safety.feishu.daily_digest import (
-                    DigestCell,
-                    upsert_daily_digest,
-                )
-
-                bj_today = (datetime.now(UTC) + timedelta(hours=8)).date()
-                await upsert_daily_digest(
-                    bj_today,
-                    "hazard_bulletin",
-                    DigestCell(
-                        tag_color="yellow",
-                        tag_text="隐患督办",
-                        title="隐患督办通报",
-                        stats=(
-                            f"未关闭 **{stats.get('total', 0)}** 项 ｜ "
-                            f"🔴 红色预警 {stats.get('urgent', 0)} · "
-                            f"🟡 一般预警 {stats.get('warning', 0)}"
-                        ),
-                        zone="请各责任部门尽快反馈整改进展",
-                        detail=content,
-                    ),
-                )
-            except Exception:
-                logger.warning("安全速递总卡投递失败（隐患督办）", exc_info=True)
         else:
             logger.error("④ 督办通报发送失败: %s", stats)
     except Exception:

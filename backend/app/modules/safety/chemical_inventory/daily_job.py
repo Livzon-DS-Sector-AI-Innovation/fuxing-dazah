@@ -206,39 +206,31 @@ def build_daily_summary(result: dict[str, Any]) -> str:
 
 
 async def send_daily_summary(result: dict[str, Any], chat_id: str | None = None) -> str | None:
-    """把每日分析日报推送到配置群聊（发送目标唯一来源：调度器配置，不再回退 env）。"""
+    """把每日分析日报推送到配置群聊（发送目标唯一来源：调度器配置，不再回退 env）。
+
+    总卡开启时只投「安全速递」格子（安全AI创新交流群不再单独发日报卡）。
+    """
     effective_chat_id = chat_id
     if not effective_chat_id or effective_chat_id.startswith("#"):
         logger.info("安全AI创新交流群 chat_id 未配置，跳过日报推送")
         return None
     content = build_daily_summary(result)
     analysis = result.get("analysis")
-    if analysis is not None and analysis.has_risk():
-        header_template = "red" if analysis.over_limit_count else "orange"
-    else:
-        header_template = "green"
-    msg_id = await send_group_card(
-        chat_id=effective_chat_id,
-        title="危化品库存每日分析日报",
-        content=content,
-        header_template=header_template,
+
+    from app.modules.safety.feishu.daily_digest import (
+        DigestCell,
+        digest_enabled,
+        upsert_daily_digest,
     )
 
-    # 「安全速递」总卡：投递本报告格子（失败不影响危化品日报本身）
-    if msg_id and analysis is not None:
-        try:
-            from app.modules.safety.feishu.daily_digest import (
-                DigestCell,
-                upsert_daily_digest,
-            )
-
+    if digest_enabled():
+        if analysis is not None:
             top_over = ""
             if analysis.over_limit_items:
                 first = analysis.over_limit_items[0]
-                top_over = getattr(first, "material", "") and (
-                    f"{getattr(first, 'material', '')} 超量"
-                )
-            await upsert_daily_digest(
+                material = getattr(first, "material", "")
+                top_over = f"{material} 超量" if material else ""
+            ok = await upsert_daily_digest(
                 analysis.report_date,
                 "chemical_daily",
                 DigestCell(
@@ -253,6 +245,29 @@ async def send_daily_summary(result: dict[str, Any], chat_id: str | None = None)
                     detail=content,
                 ),
             )
-        except Exception:
-            logger.warning("安全速递总卡投递失败（危化品日报）", exc_info=True)
-    return msg_id
+            return "digest" if ok else None
+        # 今日无分析结果（未收到 Excel 等）：投一个缺席说明格，保留当日信息
+        ok = await upsert_daily_digest(
+            (datetime.now(UTC) + timedelta(hours=8)).date(),
+            "chemical_daily",
+            DigestCell(
+                tag_color="grey",
+                tag_text="危化品库存",
+                title="危化品库存日报",
+                stats="今日未收到日报 Excel，无库存分析",
+                zone=result.get("reason") or "",
+                detail=content,
+            ),
+        )
+        return "digest" if ok else None
+
+    if analysis is not None and analysis.has_risk():
+        header_template = "red" if analysis.over_limit_count else "orange"
+    else:
+        header_template = "green"
+    return await send_group_card(
+        chat_id=effective_chat_id,
+        title="危化品库存每日分析日报",
+        content=content,
+        header_template=header_template,
+    )

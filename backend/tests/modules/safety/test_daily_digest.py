@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from app.modules.safety.feishu import daily_digest
 from app.modules.safety.feishu.daily_digest import DigestCell, upsert_daily_digest
 from app.modules.safety.feishu.notification import build_card_dict
 
@@ -173,7 +174,8 @@ async def test_disabled_flag_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     assert store.hashes == {}
 
 
-async def test_detail_capped_on_store(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_full_detail_stored_and_rendered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """明细完整展示：不截断，存储与卡片均为全文。"""
     monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
     store = _FakeStore()
     captured: list[dict[str, Any]] = []
@@ -182,15 +184,48 @@ async def test_detail_capped_on_store(monkeypatch: pytest.MonkeyPatch) -> None:
         captured.append(kw)
         return "om_1"
 
+    long_detail = "洗罐排污期间甲烷逸散，被可燃气体探测器检出。" * 60  # ~2.5K 字
     await upsert_daily_digest(
-        D, "special_op", _cell(detail="x" * 5000), store=store, sender=sender,
+        D, "special_op", _cell(detail=long_detail), store=store, sender=sender,
         updater=_ok_updater,
     )
-    # 存储里的明细已截断到上限（1600 + 截断提示）
     raw = await store.hgetall("safety:daily_digest:2026-09-15")
     saved = json.loads(raw["special_op"])
-    assert len(saved["detail"]) <= 1700
-    assert saved["detail"].endswith("…（明细过长已截断）")
+    assert saved["detail"] == long_detail  # 存储不截断
+
+    card = build_card_dict(
+        captured[0]["title"], captured[0]["content"], "blue", captured[0]["elements"],
+    )
+    cell = _first_cell_dict(card)
+    panel_md = cell["columns"][0]["elements"][1]["elements"][0]["content"]
+    assert panel_md == long_detail  # 卡片完整展示
+    assert "已截断" not in panel_md
+
+
+async def test_emergency_shrink_only_when_extreme(monkeypatch: pytest.MonkeyPatch) -> None:
+    """仅当整卡超过 140KB 预算时才兜底减半明细（正常数据远达不到）。"""
+    monkeypatch.delenv("SAFETY_DAILY_DIGEST_ENABLED", raising=False)
+    store = _FakeStore()
+    captured: list[dict[str, Any]] = []
+
+    async def sender(**kw: Any) -> str | None:
+        captured.append(kw)
+        return "om_1"
+
+    huge = "x" * 200_000
+    ok = await upsert_daily_digest(
+        D, "special_op", _cell(detail=huge), store=store, sender=sender,
+        updater=_ok_updater,
+    )
+    assert ok is True
+    card = build_card_dict(
+        captured[0]["title"], captured[0]["content"], "blue", captured[0]["elements"],
+    )
+    size = len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
+    assert size <= daily_digest._MAX_CARD_BYTES
+    cell = _first_cell_dict(card)
+    panel_md = cell["columns"][0]["elements"][1]["elements"][0]["content"]
+    assert "…（明细过长已截断）" in panel_md  # 兜底收缩带标记
 
 
 async def test_sender_failure_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -4,7 +4,7 @@
 - ``run_ai_analysis_round``   ① 隐患AI分析轮询
 - ``run_review_round``        ② AI整改审核轮询
 - ``run_supervision_round``   ③ 督办等级计算（轮询）
-- ``send_bulletin``           ④ 隐患督办通报（周四 08:30）
+- ``send_bulletin``           ④ 隐患督办通报（周四 14:00）
 - ``send_progress_dunning_dynamic`` ⑤ 未更新进展催办（周三 10:00，动态名单）
 
 由 ``scheduler.scheduled_task_loop`` 启动 ``hazard_direct_loop``（①②③）；

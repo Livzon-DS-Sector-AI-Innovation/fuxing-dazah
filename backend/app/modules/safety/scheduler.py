@@ -5,8 +5,7 @@
 当前任务:
 - 督办等级计算 (每日 07:30, 已启用): 拉取督办等级未关闭记录 → 规则计算 → 更新回填
 - 持证到期预警 (每日 08:00, 已启用): 扫描 person_certificates → 推送本人/部门负责人/安管人员
-- 督办通报 (周四 08:30, 群聊卡片, 已启用)
-- 督办通知 (周四 08:30, 个人 DM, 已启用)
+- 督办通报 (周四 14:00, 安全速递总卡格子, 已启用)
 - 特殊作业日报 (每日 08:00, 已启用)
 - 特殊作业日报17点 (每日 17:00, 已启用)
 - Agent 手动触发: generate_supervision_bulletin 工具
@@ -133,10 +132,10 @@ async def _load_effective_jobs() -> list[dict[str, Any]]:
 # ── 调度任务配置 ──
 
 SCHEDULED_JOBS: list[dict[str, Any]] = [
-    # ── 隐患督办通报（每周四 08:30，直读多维表格）──
+    # ── 隐患督办通报（每周四 14:00，直读多维表格）──
     {
         "name": "隐患督办通报",
-        "hour": 8, "minute": 30, "dow": 3,  # 周四
+        "hour": 14, "minute": 0, "dow": 3,  # 周四
         "description": "直读多维表格的未关闭隐患，按部门分组推送督办通报到群聊",
     },
     # ── 未更新进展催办（每周三 10:00，直读多维表格 + Redis 跟踪进展变化）──
@@ -150,7 +149,9 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "target_chat_id": "ou_495039d6335d347b07ff92ad982b3b4e",
         "retry_until_hour": 18, "retry_until_minute": 0,
         "description": "未更新进展隐患催办卡片（每周三 10:00，直读多维表格，一卡一隐患，"
-                       "动态名单：责任人 + 分管安全员，卡片内可提交进展）",
+                       "动态名单：责任人 + 分管安全员，卡片内可提交进展）；"
+                       "私发完成后向安全AI创新交流群投递「安全速递」催办格子，"
+                       "注明已私发对象与催办明细",
     },
     # ── 已下线（2026-09-09 改造）──
     #   · 隐患差异同步：隐患记录以多维表格为唯一数据源，不再做 DB 差异对账
@@ -466,7 +467,7 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
 
 
 async def _run_supervision_bulletin(chat_id: str | None = None) -> None:
-    """周四 08:30 督办通报（群聊卡片，直读多维表格）。"""
+    """周四 14:00 督办通报（群聊推送，直读多维表格）。"""
     from app.modules.safety.service.hazard_direct.bulletin import send_bulletin
 
     stats = await send_bulletin(chat_id)

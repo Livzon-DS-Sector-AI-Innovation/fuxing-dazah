@@ -2,12 +2,14 @@
 
 设计（2026-09-15 与需求方确认）：
 - 一张总卡发到安全AI创新交流群，每个日报占一个「格子」：彩色标签 + 报告名 +
-  概览统计 + 右侧图标，格子内嵌默认收起的「查看详情」折叠面板（点击展开明细）
+  概览统计 + 一句话重点，格子内嵌默认收起的「查看详情」折叠面板（点击展开明细）
+- 总卡开启时，消防/中控/危化品日报周报/隐患督办等**不再单独发群卡**，
+  只往总卡投格子——该群每天只收到这一张卡
 - 存储：Redis hash ``safety:daily_digest:{date}``（field=报告 key，TTL 7 天），
   卡片 message_id 存 ``safety:daily_digest:card:{date}``
 - 滚动更新：首个报告创建卡片，后续报告把新格子加进同一张卡（PATCH 全量重建）
 - 顺序固定（CELL_ORDER），当天未产生的报告自动缺席
-- 任何异常只告警返回 False——总卡失败绝不影响报告自身的推送
+- 任何异常只告警返回 False——总卡失败绝不影响报告自身的生成与重试链路
 """
 
 from __future__ import annotations
@@ -46,13 +48,15 @@ DIGEST_CHAT_ID = os.getenv(
 _KEY = "safety:daily_digest:{date}"
 _MSG_KEY = "safety:daily_digest:card:{date}"
 _TTL_SECONDS = 7 * 86400
-# 单格明细字符上限：7 格 × 1.6K + 结构 ≈ 15KB，留足 30KB 消息上限余量
-_DETAIL_MAX_CHARS = 1600
+# 整卡大小预算（字节）。实测飞书 interactive 消息 content 上限约 150KB
+# （123KB 实测通过、154KB 报 230025），留 ~10KB 余量；正常日报总量远达不到，
+# 明细完整展示不截断，仅在极端超长时兜底逐格减半。
+_MAX_CARD_BYTES = 140_000
 
 # 格子固定展示顺序（当天缺席的报告跳过）
 CELL_ORDER: list[str] = [
     "special_op", "workticket", "fire_alarm", "central_alarm",
-    "chemical_daily", "chemical_weekly", "hazard_bulletin",
+    "chemical_daily", "chemical_weekly", "progress_dunning", "hazard_bulletin",
 ]
 
 
@@ -65,7 +69,7 @@ class DigestCell:
     title: str          # 报告名（如「消防报警日报」）
     stats: str          # 概览统计行（markdown，核心数字加粗）
     zone: str           # 一句话重点（灰字，可空）
-    detail: str         # 详情 markdown（超长自动截断）
+    detail: str         # 详情 markdown（完整展示，不截断）
 
 
 # 同日多报告并发推送时串行化「读格子 → 建卡 → PATCH」（单进程内足够）
@@ -79,12 +83,6 @@ def _bj_today() -> date:
 
 def _digest_key(d: date) -> str:
     return _KEY.format(date=d.isoformat())
-
-
-def _cap_detail(text: str, limit: int = _DETAIL_MAX_CHARS) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip() + "\n…（明细过长已截断）"
 
 
 async def upsert_daily_digest(
@@ -117,7 +115,6 @@ async def upsert_daily_digest(
     chat = chat_id or DIGEST_CHAT_ID
     try:
         payload = asdict(cell)
-        payload["detail"] = _cap_detail(payload["detail"])
         async with _lock:
             await store.hset(
                 _digest_key(report_date), key, json.dumps(payload, ensure_ascii=False),
@@ -169,39 +166,57 @@ async def _build_card(
     report_date: date,
     cells: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], str, str, str]:
-    """构建总卡；超 25KB 时逐级收缩明细再超限则只留概览。"""
+    """构建总卡：明细完整展示；仅当整卡超预算时兜底逐格减半（正常数据达不到）。"""
     title = f"📌 安全速递 | {report_date.isoformat()}"
     subtitle = f"今日已汇总 {len(cells)} 项安全动态"
     greeting = "Hi，今日安全动态汇总，点各条目的「查看详情」展开明细："
 
-    for detail_limit in (_DETAIL_MAX_CHARS, 400, 0):
-        elements = await _build_elements(cells, detail_limit)
+    # key → 明细字符上限；None 表示完整展示
+    limits: dict[str, int] = {}
+    while True:
+        elements = await _build_elements(cells, limits)
         card = build_card_dict(title, greeting, "blue", elements, subtitle=subtitle)
         size = len(json.dumps(card, ensure_ascii=False).encode("utf-8"))
-        if size <= 25_000:
+        if size <= _MAX_CARD_BYTES:
             return card, title, subtitle, greeting
-        logger.warning("安全速递总卡 %d 字节超限，明细收缩至 %d 字符重试", size, detail_limit)
-    return card, title, subtitle, greeting
+        largest = max(cells, key=lambda k: len(cells[k]["detail"]))
+        largest_len = len(cells[largest]["detail"])
+        if largest_len < 2000:
+            # 全部明细已很小仍超限（理论不可达），交由发送失败路径兜底
+            logger.error("安全速递总卡 %d 字节超限且明细已无法收缩", size)
+            return card, title, subtitle, greeting
+        limits[largest] = largest_len // 2
+        logger.warning(
+            "安全速递总卡 %d 字节超预算，格子 %s 明细减半至 %d 字符",
+            size, largest, limits[largest],
+        )
 
 
 async def _build_elements(
     cells: dict[str, dict[str, Any]],
-    detail_limit: int,
+    limits: dict[str, int],
 ) -> list[dict[str, Any]]:
     elements: list[dict[str, Any]] = []
     for key in CELL_ORDER:
         cell = cells.get(key)
         if not cell:
             continue
-        elements.append(await _cell_element(cell, detail_limit))
+        elements.append(await _cell_element(cell, limits.get(key)))
     if not elements:
         elements.append({"tag": "markdown", "content": "_今日暂无安全动态_"})
     return elements
 
 
+def _apply_limit(detail: str, limit: int | None) -> str:
+    """None = 完整展示；仅兜底收缩时才截断并标记。"""
+    if limit is None or len(detail) <= limit:
+        return detail
+    return detail[:limit].rstrip() + "\n…（明细过长已截断）"
+
+
 async def _cell_element(
     cell: dict[str, Any],
-    detail_limit: int,
+    detail_limit: int | None,
 ) -> dict[str, Any]:
     """一个日报格子：灰底概览卡 + 内嵌「查看详情」折叠面板（不带图片）。"""
     overview = [
@@ -212,9 +227,7 @@ async def _cell_element(
     if cell.get("zone"):
         overview.append(f"<font color='grey'>{cell['zone']}</font>")
 
-    detail = cell["detail"]
-    if detail_limit and len(detail) > detail_limit:
-        detail = detail[:detail_limit].rstrip() + "\n…（明细过长已截断）"
+    detail = _apply_limit(cell["detail"], detail_limit)
     panel: dict[str, Any] | None = None
     if detail:
         panel = {

@@ -431,43 +431,17 @@ class CentralAlarmService:
             window_end_utc=window_end_utc,
         )
 
-        # 推送（push=False 或 env 未配置 → skipped）
-        push_results = await self._maybe_push(
-            title=f"中控报警日报 - {target_date.strftime('%Y-%m-%d')}",
-            content=markdown, push=push, chat_id=chat_id,
-        )
+        # 推送：总卡开启 → 只投「安全速递」格子（安全AI创新交流群不再单独发日报卡）；
+        # 关闭 → 保持旧行为发独立群卡
+        from app.modules.safety.feishu.daily_digest import digest_enabled
 
-        # 「安全速递」总卡：投递本报告格子（失败不影响中控日报本身）
-        if push and any(r.get("success") for r in push_results):
-            try:
-                from app.modules.safety.feishu.daily_digest import (
-                    DigestCell,
-                    upsert_daily_digest,
-                )
-
-                type_top = sorted(
-                    agg.alarm_type_distribution.items(), key=lambda x: -x[1],
-                )[:3]
-                workshop_top = sorted(
-                    agg.workshop_distribution.items(), key=lambda x: -x[1],
-                )[:3]
-                await upsert_daily_digest(
-                    target_date,
-                    "central_alarm",
-                    DigestCell(
-                        tag_color="indigo",
-                        tag_text="中控报警",
-                        title="中控报警日报",
-                        stats=f"今日报警 **{agg.total}** 条",
-                        zone=" ｜ ".join(
-                            [f"{k} {v}" for k, v in type_top]
-                            + [f"{w} {n}" for w, n in workshop_top]
-                        )[:100],
-                        detail=markdown,
-                    ),
-                )
-            except Exception:
-                logger.warning("安全速递总卡投递失败（中控报警）", exc_info=True)
+        if push and digest_enabled():
+            push_results = await self._upsert_digest_cell(target_date, markdown, agg)
+        else:
+            push_results = await self._maybe_push(
+                title=f"中控报警日报 - {target_date.strftime('%Y-%m-%d')}",
+                content=markdown, push=push, chat_id=chat_id,
+            )
 
         return CentralAlarmReportResponse(
             report_kind="daily",
@@ -480,6 +454,39 @@ class CentralAlarmService:
         )
 
     # ── 推送辅助 ──
+
+    async def _upsert_digest_cell(
+        self, target_date: date, markdown: str, agg: Any,
+    ) -> list[dict[str, Any]]:
+        """把日报概览+明细投递为「安全速递」总卡格子（总卡模式下替代独立群卡）。"""
+        from app.modules.safety.feishu.daily_digest import (
+            DIGEST_CHAT_ID,
+            DigestCell,
+            upsert_daily_digest,
+        )
+
+        type_top = sorted(agg.alarm_type_distribution.items(), key=lambda x: -x[1])[:3]
+        workshop_top = sorted(
+            agg.workshop_distribution.items(), key=lambda x: -x[1],
+        )[:3]
+        ok = await upsert_daily_digest(
+            target_date,
+            "central_alarm",
+            DigestCell(
+                tag_color="indigo",
+                tag_text="中控报警",
+                title="中控报警日报",
+                stats=f"今日报警 **{agg.total}** 条",
+                zone=" ｜ ".join(
+                    [f"{k} {v}" for k, v in type_top]
+                    + [f"{w} {n}" for w, n in workshop_top]
+                )[:100],
+                detail=markdown,
+            ),
+        )
+        return [{"chat_id": DIGEST_CHAT_ID, "success": ok}] + (
+            [] if ok else [{"error": "安全速递总卡投递失败"}]
+        )
 
     async def _maybe_push(
         self, *, title: str, content: str, push: bool, chat_id: str | None = None,

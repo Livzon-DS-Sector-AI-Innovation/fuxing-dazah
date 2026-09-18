@@ -175,19 +175,21 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
     # 发送目标唯一来源：调度器配置（DB 播种/覆写），不再回退 env
     effective_chat_id = chat_id
     if effective_chat_id:
-        await send_group_card(chat_id=effective_chat_id, title="危化品库存周报", content=content, header_template="blue")
+        from app.modules.safety.feishu.daily_digest import (
+            DigestCell,
+            digest_enabled,
+            upsert_daily_digest,
+        )
 
-        # 「安全速递」总卡：投递本报告格子（失败不影响周报本身）
-        try:
-            from app.modules.safety.feishu.daily_digest import (
-                DigestCell,
-                upsert_daily_digest,
-            )
-
+        if digest_enabled():
+            # 总卡开启：只投「安全速递」格子（安全AI创新交流群不再单独发周报卡）
             top_up = ""
             if report.get("top_increase"):
                 it = report["top_increase"][0]
-                top_up = f"{it['material']} +{it['delta']}T（{_dept_label(it['department'])}）"
+                top_up = (
+                    f"{it['material']} +{it['delta']}T"
+                    f"（{_dept_label(it['department'])}）"
+                )
             await upsert_daily_digest(
                 today,
                 "chemical_weekly",
@@ -203,8 +205,8 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
                     detail=content,
                 ),
             )
-        except Exception:
-            logger.warning("安全速递总卡投递失败（危化品周报）", exc_info=True)
+        else:
+            await send_group_card(chat_id=effective_chat_id, title="危化品库存周报", content=content, header_template="blue")
     else:
         logger.info("周报未发送（未配置群聊）：%s", content)
     return report
