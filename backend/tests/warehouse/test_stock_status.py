@@ -50,9 +50,13 @@ class FakeBaseAdapter:
         return {"record_id": record_id, "fields": {}}
 
 
-def _patch_base(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> FakeBaseAdapter:
+def _patch_base(
+    monkeypatch: pytest.MonkeyPatch, *, writeback: bool = True, **kwargs: Any
+) -> FakeBaseAdapter:
+    """注入 Base 假件并设定回写开关（默认开，测先 Base 后镜像主路径）。"""
     adapter = FakeBaseAdapter(**kwargs)
     monkeypatch.setattr(base_mirror, "WarehouseBitableAdapter", lambda: adapter)
+    monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: writeback)
     return adapter
 
 
@@ -137,6 +141,41 @@ async def test_base_failure_returns_502_local_unchanged(
             )
         ).scalars().all()
         assert logs == []
+    finally:
+        await _cleanup(db_session)
+
+
+async def test_status_change_local_only_when_writeback_disabled(
+    auth_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回写开关关闭（生产默认）：状态变更本地直写，零 Base 调用。"""
+    adapter = _patch_base(monkeypatch, writeback=False)
+    try:
+        stock = await _seed_stock(db_session, uuid4().hex[:6])
+        resp = await auth_client.post(
+            f"/api/v1/warehouse/stocks/{stock.id}/status",
+            json={"new_status": "quarantine", "reason": "质检待检"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["new_status"] == "quarantine"
+        assert adapter.update_calls == []  # 零 Base 调用
+        # 本地状态 + 日志正常落（client 会话提交，refresh 绕过身份映射旧值）
+        await db_session.rollback()
+        fresh = (
+            await db_session.execute(
+                select(WarehouseStock).where(WarehouseStock.id == stock.id)
+            )
+        ).scalar_one()
+        await db_session.refresh(fresh)
+        assert fresh.status == "quarantine"
+        logs = (
+            await db_session.execute(
+                select(WarehouseStockStatusLog).where(
+                    WarehouseStockStatusLog.stock_id == stock.id
+                )
+            )
+        ).scalars().all()
+        assert len(logs) == 1
     finally:
         await _cleanup(db_session)
 

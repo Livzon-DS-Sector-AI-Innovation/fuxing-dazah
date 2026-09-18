@@ -173,8 +173,11 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 8
+    assert len(configs) == 9  # 8 个既有键 + bitable_writeback_enabled（V3.0 分期A）
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
+    # 回写总开关默认关闭（0）
+    writeback = [c for c in configs if c["key"] == "bitable_writeback_enabled"][0]
+    assert writeback["value"] == 0
 
     resp = await client.put(f"{RUNTIME}/max_turns", json={"value": 15})
     assert resp.status_code == 200

@@ -271,6 +271,17 @@ async def handle_action(
     if action != "confirm":
         return ConfirmGateOutcome(ok=False, status="invalid", message="未知操作")
 
+    # 回写总开关（默认关）：确认动作依赖 Base 回写，停用期间拒绝确认、保持 pending
+    from app.modules.warehouse.base_mirror import bitable_writeback_enabled
+
+    if not bitable_writeback_enabled():
+        logger.warning("确认被拒绝：多维表格回写开关关闭（request_no=%s）", request.request_no)
+        return ConfirmGateOutcome(
+            ok=False,
+            status="error",
+            message="台账回写功能已停用（运维开关关闭），暂时无法确认；如需开启请联系管理员",
+        )
+
     # 先置终态再执行回写：回写慢/被取消时重复点击会被 pending 校验拒绝（防重复回写）
     request.status = STATUS_CONFIRMED
     request.confirmed_by = operator_open_id or None

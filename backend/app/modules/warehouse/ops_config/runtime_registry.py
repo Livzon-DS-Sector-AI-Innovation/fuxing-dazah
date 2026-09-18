@@ -129,6 +129,23 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
         max_length=8000,
         description="非空时作为追加段注入系统提示词职责段之后（追加而非替换）；调优不发版",
     ),
+    RuntimeKeyInfo(
+        key="bitable_writeback_enabled",
+        label="多维表格回写开关（0/1）",
+        group="多维表格",
+        value_type="int",
+        default=0,
+        env_var="",
+        min_value=0,
+        max_value=1,
+        max_length=None,
+        description=(
+            "V3.0 分期A 回写总开关：1=库存状态变更/效期冻结先写 Base"
+            "（material_receipt.上一状态）、确认门确认后回写 Base；"
+            "0=（默认）本地直写、确认门停用建单与确认。"
+            "上线前置：与仓储部确认「上一状态」列无自动化占用后再置 1"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

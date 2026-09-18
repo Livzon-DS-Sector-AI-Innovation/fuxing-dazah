@@ -92,14 +92,17 @@ async def stale_env(
     """引擎环境：仅 stale_lists 启用（oc_test），清单聚合与 Base 全部假件化。"""
     from sqlalchemy import delete
 
-    # 封闭性：清该业务类型既有确认单（真机验证留有真实记录；事务内删除随回滚撤销）
+    from app.modules.warehouse import base_mirror
     from app.modules.warehouse.models import WarehouseConfirmRequest
 
+    # 封闭性：清该业务类型既有确认单（真机验证留有真实记录；事务内删除随回滚撤销）
     await db_session.execute(
         delete(WarehouseConfirmRequest).where(
             WarehouseConfirmRequest.business_type == UNQUALIFIED_DISPOSITION
         )
     )
+    # 回写开关默认开（生产默认关；建单路径依赖回写）
+    monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: True)
     rows = {
         "morning_report": StubPushRow(task_name="morning_report", enabled=False),
         "weekly_stock_report": StubPushRow(task_name="weekly_stock_report", enabled=False),
@@ -168,6 +171,17 @@ class TestStaleListsConfirmHook:
         stale_env.records = [stale_env.records[2]]  # 仅保留已处理条目
         results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
         assert [r.status for r in results] == ["executed"]
+        assert await _confirm_requests(db_session) == []
+
+    async def test_no_confirm_card_when_writeback_disabled(
+        self, db_session: AsyncSession, stale_env: FakeUnqualifiedAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """回写开关关闭（生产默认）：清单卡照发，但不建确认单。"""
+        from app.modules.warehouse import base_mirror
+
+        monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: False)
+        results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
+        assert [r.status for r in results] == ["executed"]  # 清单推送不受影响
         assert await _confirm_requests(db_session) == []
 
     async def test_hook_failure_does_not_fail_push(

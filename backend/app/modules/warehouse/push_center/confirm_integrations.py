@@ -81,8 +81,13 @@ async def stale_lists_confirm_hook(
     （未创建返回 None）。
     """
     from app.modules.warehouse import confirm_request as cr
+    from app.modules.warehouse.base_mirror import bitable_writeback_enabled
 
     if not view.targets:
+        return None
+    # 回写总开关（默认关）：确认门的存在意义是回写 Base，停用期间不建单
+    if not bitable_writeback_enabled():
+        logger.info("清单确认门跳过：多维表格回写开关关闭")
         return None
     records = await fetch_unqualified_records(WarehouseBitableAdapter())
     # 待跟进 = 处理日期为空（None/空串/空数组/空类型包装，规范解析后为空）

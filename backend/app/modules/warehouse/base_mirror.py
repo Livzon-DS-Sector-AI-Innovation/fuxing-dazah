@@ -12,6 +12,11 @@ lookup 不可写，见 bitable_schema 实测）。
 过滤）。定位不到 = 本地镜像行无 Base 源记录，按 2B 不允许本地单方面改，
 抛 BaseMirrorError（调用方决定逐条跳过或整单失败）。
 
+**回写总开关**（``bitable_writeback_enabled`` 运行参数，默认 0=关）：
+关闭时不触 Base——库存状态变更退化为本地直写（V3A 前行为）、确认门
+停用（不建单、确认点击拒绝）。上线前置：与仓储部确认「上一状态」列
+无自动化占用后在配置中心置 1。
+
 调用方语义：
 - expiry_freeze：逐条串行回写，失败条目跳过并记录，不回滚已成功条目；
 - web_stock_status：单行严格失败（HTTP 502 + 明确报错，本地零变更）。
@@ -36,6 +41,20 @@ STOCK_STATUS_TO_BASE: dict[str, str] = {
     "quarantine": "待检",
     "frozen": "不合格",
 }
+
+
+def bitable_writeback_enabled() -> bool:
+    """多维表格回写总开关（runtime 配置 bitable_writeback_enabled，0/1）。
+
+    读取异常一律按关闭处理（kill switch 语义：fail-safe off）。
+    """
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    try:
+        return int(runtime_store.get_value("bitable_writeback_enabled")) == 1
+    except Exception:  # noqa: BLE001 — 开关读不到 = 不写 Base
+        logger.warning("回写开关读取失败，按关闭处理", exc_info=True)
+        return False
 
 
 class BaseMirrorError(Exception):
@@ -95,15 +114,24 @@ async def apply_stock_status_base_first(
     reason: str = "",
     operator_id: Any = None,
     adapter: WarehouseBitableAdapter | None = None,
-) -> str:
+) -> str | None:
     """先写 Base 上一状态，成功后本地写状态 + 日志；失败抛 BaseMirrorError。
 
-    返回回写成功的 Base record_id。本函数不 commit（由调用方 session 上下文
-    统一提交/回滚）；但保证「Base 成功前本地零变更」。
+    返回回写成功的 Base record_id；**总开关关闭时退化为本地直写**
+    （不触 Base，返回 None）。本函数不 commit（由调用方 session 上下文
+    统一提交/回滚）；开关开启时保证「Base 成功前本地零变更」。
     """
     base_value = STOCK_STATUS_TO_BASE.get(new_status)
     if base_value is None:
         raise BaseMirrorError(f"未知的库存状态: {new_status!r}")
+
+    if not bitable_writeback_enabled():
+        logger.info(
+            "回写开关关闭，库存状态变更走本地直写: batch_no=%s -> %s",
+            stock.batch_no, new_status,
+        )
+        _write_local_status(db, stock, new_status, reason=reason, operator_id=operator_id)
+        return None
 
     adapter = adapter or WarehouseBitableAdapter()
     record_id = await resolve_receipt_record_id(
@@ -123,6 +151,19 @@ async def apply_stock_status_base_first(
         ) from exc
 
     # Base 成功 → 本地镜像写（状态 + 日志）
+    _write_local_status(db, stock, new_status, reason=reason, operator_id=operator_id)
+    return record_id
+
+
+def _write_local_status(
+    db: AsyncSession,
+    stock: WarehouseStock,
+    new_status: str,
+    *,
+    reason: str,
+    operator_id: Any,
+) -> None:
+    """本地状态 + 流转日志写（Base 成功后 / 开关关闭时的本地直写共用）。"""
     old_status = stock.status
     stock.status = new_status
     db.add(
@@ -134,4 +175,3 @@ async def apply_stock_status_base_first(
             operator_id=operator_id,
         )
     )
-    return record_id

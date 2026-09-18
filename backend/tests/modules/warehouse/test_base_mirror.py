@@ -82,6 +82,15 @@ async def _logs_of(db: AsyncSession, stock: WarehouseStock) -> list[WarehouseSto
     return list(rows)
 
 
+@pytest.fixture(autouse=True)
+def _writeback_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认开启回写（生产默认关；本文件测试先 Base 后镜像主路径）。
+
+    关闭路径由 test_disabled_switch_writes_local_only 显式覆盖。
+    """
+    monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: True)
+
+
 class TestBaseMirror:
     def test_status_mapping(self) -> None:
         assert base_mirror.STOCK_STATUS_TO_BASE == {
@@ -89,6 +98,21 @@ class TestBaseMirror:
             "quarantine": "待检",
             "frozen": "不合格",
         }
+
+    async def test_disabled_switch_writes_local_only(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """回写开关关闭（生产默认）：本地直写，不触 Base，返回 None。"""
+        monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: False)
+        adapter = FakeAdapter()
+        stock = await _seed_stock(db_session, uuid4().hex[:6])
+        record_id = await base_mirror.apply_stock_status_base_first(
+            db_session, stock, "frozen", adapter=adapter
+        )
+        assert record_id is None
+        assert adapter.update_calls == []  # 零 Base 调用
+        assert stock.status == "frozen"  # 本地直写生效
+        assert len(await _logs_of(db_session, stock)) == 1
 
     async def test_base_success_then_local_written(
         self, db_session: AsyncSession

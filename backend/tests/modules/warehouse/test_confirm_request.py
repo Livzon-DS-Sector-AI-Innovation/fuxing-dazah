@@ -64,6 +64,17 @@ def _value(request: WarehouseConfirmRequest, action: str) -> dict[str, Any]:
     return {"scene": cr.CONFIRM_GATE_SCENE, "request_id": str(request.id), "action": action}
 
 
+@pytest.fixture(autouse=True)
+def _writeback_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认开启回写（生产默认关；确认动作依赖回写）。
+
+    关闭路径由 test_confirm_rejected_when_writeback_disabled 显式覆盖。
+    """
+    from app.modules.warehouse import base_mirror
+
+    monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: True)
+
+
 async def _audits_of(db: AsyncSession, request_no: str) -> list[str]:
     rows = (
         await db.execute(
@@ -184,6 +195,29 @@ class TestStateMachine:
             db_session, value=_value(request, "hack"), operator_open_id="ou_op"
         )
         assert outcome.ok is False and outcome.status == "invalid"
+
+    async def test_confirm_rejected_when_writeback_disabled(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """回写开关关闭（生产默认）：确认拒绝、保持 pending；取消不受影响。"""
+        from app.modules.warehouse import base_mirror
+
+        monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: False)
+        request = await _make_request(db_session)
+
+        outcome = await cr.handle_action(
+            db_session, value=_value(request, "confirm"), operator_open_id="ou_op"
+        )
+        assert outcome.ok is False and outcome.status == "error"
+        assert "停用" in outcome.message
+        assert request.status == "pending"  # 未确认，可待开启后重试
+        assert request.confirmed_by is None
+
+        # 取消路径不受开关影响
+        outcome = await cr.handle_action(
+            db_session, value=_value(request, "cancel"), operator_open_id="ou_op"
+        )
+        assert outcome.ok is True and outcome.status == "cancelled"
 
 
 # ═══════════════════════════════════════════════════════════════

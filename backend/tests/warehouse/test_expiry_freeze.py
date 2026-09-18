@@ -54,9 +54,13 @@ class FakeBaseAdapter:
         return {"record_id": record_id, "fields": {}}
 
 
-def _patch_base(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> FakeBaseAdapter:
+def _patch_base(
+    monkeypatch: pytest.MonkeyPatch, *, writeback: bool = True, **kwargs: Any
+) -> FakeBaseAdapter:
+    """注入 Base 假件并设定回写开关（默认开，测先 Base 后本地主路径）。"""
     adapter = FakeBaseAdapter(**kwargs)
     monkeypatch.setattr(base_mirror, "WarehouseBitableAdapter", lambda: adapter)
+    monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: writeback)
     return adapter
 
 
@@ -165,6 +169,25 @@ async def test_freeze_skips_base_failure_rows(
         # 失败行本地保持 normal（下轮重试），成功行不回滚
         assert bad.status == "normal"
         assert good.status == "frozen"
+    finally:
+        await _cleanup(db_session)
+
+
+async def test_freeze_local_only_when_writeback_disabled(
+    auth_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回写开关关闭（生产默认）：冻结退化为本地直写，零 Base 调用。"""
+    adapter = _patch_base(monkeypatch, writeback=False)
+    try:
+        expired = await _seed_stock(db_session, suffix="off", expiry_offset_days=-3)
+        result = await expiry_freeze.freeze_expired_stocks(db_session)
+
+        assert [row["stock_id"] for row in result["changed"]] == [str(expired.id)]
+        assert result["skipped"] == []
+        assert adapter.update_calls == []  # 零 Base 调用
+        assert expired.status == "frozen"  # 本地直写生效
     finally:
         await _cleanup(db_session)
 
