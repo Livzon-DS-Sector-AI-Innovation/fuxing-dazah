@@ -80,7 +80,7 @@ module = "lark_oapi.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["mammoth", "weasyprint", "weasyprint.*"]
+module = ["mammoth", "weasyprint", "weasyprint.*", "reportlab", "reportlab.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

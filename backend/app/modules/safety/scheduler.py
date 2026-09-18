@@ -207,6 +207,13 @@ SCHEDULED_JOBS: list[dict[str, Any]] = [
         "retry_until_hour": 23, "retry_until_minute": 30,
         "description": "当日中控报警分析日报（车间/岗位/报警类型/异常模式统计 + AI 汇总分析），推送安全AI创新交流群",
     },
+    # ── 点检PDF归档（每日 17:00，开关默认关）──
+    {
+        "name": "点检PDF归档",
+        "hour": 17, "minute": 0,
+        "description": "扫描灭火器点检表缺档记录，自动生成标准归档 PDF 并回填巡检记录附件"
+                       "（仅缺失追加不覆盖；开关 SAFETY_FIRE_INSPECTION_PDF_ENABLED）",
+    },
     # ── 持证到期预警（每日 08:00，补发窗口 12:00）──
     {
         "name": "持证到期预警",
@@ -441,6 +448,8 @@ async def _run_scheduled_job(job: dict[str, Any]) -> None:
             await _run_fire_alarm_daily_dm()
         elif job_name == "中控报警日报":
             await _run_central_alarm_daily_report(chat_id=chat_id)
+        elif job_name == "点检PDF归档":
+            await _run_fire_inspection_pdf_backfill()
         elif job_name == "持证到期预警":
             await _run_cert_warning_notification()
         elif job_name == "危化品库存周报":
@@ -754,6 +763,32 @@ async def _run_cert_warning_notification() -> None:
             "持证预警推送完成: total=%d depts=%d",
             len(warnings), len(by_dept),
         )
+
+
+async def _run_fire_inspection_pdf_backfill() -> None:
+    """点检 PDF 归档定时任务（每日 17:00）：为缺档记录生成标准 PDF 并回填附件。
+
+    开关 SAFETY_FIRE_INSPECTION_PDF_ENABLED 关闭时入口直接跳过（默认关）；
+    仅缺失追加，已有附件零改动；部分记录失败时抛错交给调度器失败告警链路，
+    已回填的记录次日天然幂等跳过。
+    """
+    from app.modules.safety.fire_inspection.service import (
+        backfill_enabled,
+        generate_and_backfill,
+    )
+
+    if not backfill_enabled():
+        logger.info("点检PDF归档跳过（开关未启用）")
+        return
+
+    result = await generate_and_backfill()
+    logger.info(
+        "点检PDF归档完成: generated=%s skipped=%s failed=%s",
+        result.generated, result.skipped, result.failed,
+    )
+    if result.failed:
+        failed_desc = "; ".join(f"{rid}: {reason}" for rid, reason in result.failed)
+        raise RuntimeError(f"点检PDF归档存在失败记录: {failed_desc}")
 
 
 def _build_personal_card(r: Any, res: Any) -> str:
