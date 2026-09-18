@@ -405,10 +405,19 @@ class FireAlarmService:
         else:
             records = await self._get_records_by_date(target_date)
         agg = aggregate_daily(records, target_date)
+        direct_mode = fire_config.direct_enabled()
 
         # 逐条 AI 分析并回写（失败跳过，不阻塞汇总/渲染）
         per_results: dict[str, dict[str, str]] = {}
         if records:
+            # 分析前记录已分析集合，供回写时只挑本轮新分析的记录。
+            analyzed_before: set[str] = set()
+            if direct_mode:
+                analyzed_before = {
+                    str(r.id)
+                    for r in records
+                    if r.ai_analyzed_at is not None
+                }
             try:
                 per_results = await self.analyst.analyze_per_records(
                     records, channel=channel,
@@ -416,22 +425,29 @@ class FireAlarmService:
             except Exception:
                 logger.warning("逐条 AI 分析失败，跳过")
 
-            if fire_config.direct_enabled():
+            if direct_mode:
                 # 直读路径：AI 结果落在视图对象上，不写平台库、不 re-fetch。
                 agg.records = list(records)
                 agg.dimension_distribution = _count_by(records, "ai_dimension")
                 if fire_config.writeback_ai_enabled():
-                    try:
-                        wb = await fire_writeback.writeback_ai_results(records)
-                        if wb.failed:
-                            logger.warning(
-                                "消防 AI 回写存在失败: attempted=%d written=%d failed=%d",
-                                wb.attempted,
-                                wb.written,
-                                len(wb.failed),
+                    # 只回写本轮新分析成功的记录；已分析记录（第二任务已从 Bitable 读到值）跳过。
+                    newly_analyzed = [
+                        r for r in records if str(r.id) not in analyzed_before
+                    ]
+                    if newly_analyzed:
+                        try:
+                            wb = await fire_writeback.writeback_ai_results(
+                                newly_analyzed,
                             )
-                    except Exception:
-                        logger.warning("消防 AI 回写失败（不阻塞日报）", exc_info=True)
+                            if wb.failed:
+                                logger.warning(
+                                    "消防 AI 回写存在失败: attempted=%d written=%d failed=%d",
+                                    wb.attempted,
+                                    wb.written,
+                                    len(wb.failed),
+                                )
+                        except Exception:
+                            logger.warning("消防 AI 回写失败（不阻塞日报）", exc_info=True)
             else:
                 # 旧镜像路径：UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
                 await self.session.flush()

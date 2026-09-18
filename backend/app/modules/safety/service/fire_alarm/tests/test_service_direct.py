@@ -166,3 +166,61 @@ async def test_direct_generation_calls_writeback_when_enabled(
 
     assert len(captured) == 1
     assert [r.id for r in captured[0]] == ["rec001", "rec002"]
+
+
+class _IncrementalFakeAnalyst(FakeAnalyst):
+    """增量替身：只分析 ai_analyzed_at 为空的记录。"""
+
+    async def analyze_per_records(
+        self, records: list[Any], *, channel: str = "system",
+    ) -> dict[str, dict[str, str]]:
+        pending = [r for r in records if r.ai_analyzed_at is None]
+        return await super().analyze_per_records(pending, channel=channel)
+
+
+async def test_direct_writeback_only_newly_analyzed_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """群日报 + 私发任务先后跑：第二轮不把已分析记录再写一遍。"""
+    monkeypatch.setenv("SAFETY_FIRE_ALARM_DIRECT_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_FIRE_ALARM_WRITEBACK_AI_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_DAILY_DIGEST_ENABLED", "false")
+    monkeypatch.setattr(
+        service_module, "_resolve_mention_ids", lambda names: _no_mentions()
+    )
+
+    already = _view("rec001")
+    already.ai_dimension = "process"
+    already.ai_reason_analysis = "传感器老化"
+    already.ai_rectification_direction = "更换传感器"
+    already.ai_analyzed_at = datetime(2026, 9, 16, 3, 0, tzinfo=UTC)
+    fresh = _view("rec002")
+
+    reader = FakeReader()
+    reader.records = [already, fresh]
+
+    captured: list[list[Any]] = []
+
+    async def fake_writeback(records: list[Any], **kwargs: Any) -> Any:
+        captured.append(list(records))
+        return bd_writer.WritebackResult(written=len(records))
+
+    monkeypatch.setattr(fire_writeback, "writeback_ai_results", fake_writeback)
+
+    svc = service_module.FireAlarmService(
+        cast(AsyncSession, ExplodingSession()), reader=reader
+    )
+    svc.analyst = cast(Any, _IncrementalFakeAnalyst())
+
+    # 第一轮（群日报）：只回写本轮新分析的 rec002。
+    await svc.generate_daily_report(
+        target_date=TARGET_DATE, push=False, channel="web",
+    )
+    assert len(captured) == 1
+    assert [r.id for r in captured[0]] == ["rec002"]
+
+    # 第二轮（私发）：两条都已分析，不应再产生任何回写。
+    await svc.generate_daily_report(
+        target_date=TARGET_DATE, push=False, channel="web",
+    )
+    assert len(captured) == 1
