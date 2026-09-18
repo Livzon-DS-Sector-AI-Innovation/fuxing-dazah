@@ -72,14 +72,6 @@ export default function LcReportView({ report }: Props) {
       render: (v: boolean) =>
         v ? <Tag color="success">合格</Tag> : <Tag color="error">不合格</Tag>,
     },
-    {
-      title: 'OOT',
-      dataIndex: 'is_oot',
-      key: 'oot',
-      width: 60,
-      render: (v: boolean) =>
-        v ? <Tag color="warning">OOT</Tag> : null,
-    },
   ]
 
   // 质量标准表格
@@ -94,20 +86,6 @@ export default function LcReportView({ report }: Props) {
         const op = s.operator || '≤'
         return s.limit ? `${op} ${toPct(s.limit)}` : '-'
       },
-    },
-    {
-      title: 'OOT(HAF)',
-      dataIndex: 'oot_haf',
-      key: 'oot_haf',
-      width: 100,
-      render: (v: number | null) => (v ? toPct(v) : '-'),
-    },
-    {
-      title: 'OOT(HAA)',
-      dataIndex: 'oot_haa',
-      key: 'oot_haa',
-      width: 100,
-      render: (v: number | null) => (v ? toPct(v) : '-'),
     },
   ]
 
@@ -140,10 +118,8 @@ export default function LcReportView({ report }: Props) {
         <Col span={8}>
           <Card size="small">
             <Statistic
-              title="OOT 状态"
-              value={report.has_oot ? '存在超趋势' : '无超趋势'}
-              valueStyle={{ color: report.has_oot ? '#faad14' : '#52c41a' }}
-              prefix={report.has_oot ? <WarningOutlined /> : <CheckCircleOutlined />}
+              value={report.all_pass ? '合格' : '不合格'}
+              prefix={report.all_pass ? <CheckCircleOutlined /> : <WarningOutlined />}
             />
           </Card>
         </Col>

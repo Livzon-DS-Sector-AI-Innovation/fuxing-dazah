@@ -3,11 +3,12 @@
 读取 .docx 模板中的 {{占位符}}，根据数据源映射表填充值，
 生成最终检验报告单。
 
-格式说明（来自爬数软件模板约定）：
+格式说明（依据真实报告单 3205 模板校正）：
   {{字段名}}                        → 直接替换为文本
   {{字段名| dec(N)}}                → 保留 N 位小数
   {{字段名| dec(N, '单位')}}        → 小数 + 单位后缀
-  {{字段名| dec(N, '单位', 阈值)}}   → 小于阈值时显示"未检出"
+  {{字段名| dec(N, '单位', 阈值, N2)}} → 值小于阈值时用 N2 位小数，否则 N 位
+  注：值为百分数单位（0.63 即 0.63%），不再自动 ×100。
 """
 
 from __future__ import annotations
@@ -31,7 +32,9 @@ class PlaceholderSpec:
     name: str  # 字段名
     decimals: int = 2  # 小数位数
     suffix: str = ""  # 单位后缀
-    threshold: float | None = None  # 低于此值显示"未检出"
+    threshold: float | None = None  # 低于此值使用 second_decimals 位小数
+    second_decimals: int | None = None  # 低于阈值时的小数位数
+    has_format: bool = False  # 是否带格式声明（无格式时原样输出）
 
 
 def parse_placeholder(raw: str) -> PlaceholderSpec:
@@ -39,8 +42,8 @@ def parse_placeholder(raw: str) -> PlaceholderSpec:
 
     Examples:
         "水分 | dec(1, '%')" → decimals=1, suffix='%'
-        "杂质A| dec(2, '%',0.1)" → decimals=2, suffix='%', threshold=0.1
-        "批号" → decimals=0, suffix=''
+        "杂质A| dec(2, '%',0.1,3)" → decimals=2, suffix='%', threshold=0.1, second_decimals=3
+        "批号" → has_format=False（原样输出）
     """
     parts = [p.strip() for p in raw.split("|")]
     name = parts[0].strip()
@@ -50,9 +53,9 @@ def parse_placeholder(raw: str) -> PlaceholderSpec:
     if len(parts) < 2:
         return spec
 
+    spec.has_format = True
     fmt = parts[1]
-    # 解析 dec(N, 'unit', threshold)
-    # 匹配 dec(数字)
+    # 解析 dec(N, 'unit', threshold, N2)
     dec_match = re.search(r"dec\s*\(\s*(\d+)\s*", fmt)
     if dec_match:
         spec.decimals = int(dec_match.group(1))
@@ -62,43 +65,75 @@ def parse_placeholder(raw: str) -> PlaceholderSpec:
     if unit_match:
         spec.suffix = unit_match.group(1)
 
-    # 匹配阈值（最后一个数字参数）
-    nums = re.findall(r"(\d+\.?\d*)", fmt)
-    if len(nums) >= 2:
-        spec.threshold = float(nums[-1])
+    # dec 后的数字参数：N, 阈值, N2
+    nums = [n for n in re.findall(r"(\d+\.?\d*)", fmt)]
+    if len(nums) >= 3:
+        spec.threshold = float(nums[1])
+        spec.second_decimals = int(float(nums[2]))
+    elif len(nums) == 2:
+        spec.threshold = float(nums[1])
 
     return spec
 
 
 def format_value(value: Any, spec: PlaceholderSpec) -> str:
-    """根据规格格式化值。"""
+    """根据规格格式化值（值为百分数单位，如 0.63 即 0.63%）。"""
     if value is None or value == "":
         return ""
+    # 无格式声明的占位符（如 流水号/批号）原样输出
+    if not spec.has_format:
+        return str(value)
 
     try:
         num = float(value)
     except (ValueError, TypeError):
         return str(value)
 
-    # 百分比后缀处理：若值为小数形式（<1.0），自动转换为百分比显示
-    # 例如 0.956 → 95.6%，但 3.8（已是百分比）→ 3.8%
-    is_percent = spec.suffix in ("%", "％")
-    if is_percent and 0 < num < 1.0:
-        num = num * 100
-        if spec.threshold is not None:
-            spec.threshold = spec.threshold * 100
+    # 小数位数切换：低于阈值用 second_decimals，否则 decimals
+    decimals = spec.decimals
+    if spec.threshold is not None and spec.second_decimals is not None and num < spec.threshold:
+        decimals = spec.second_decimals
 
-    # 阈值检查：低于阈值显示"未检出"
-    if spec.threshold is not None and spec.threshold > 0 and num < spec.threshold:
-        return "未检出"
-
-    # 小数格式化
-    formatted = f"{num:.{spec.decimals}f}"
+    formatted = f"{num:.{decimals}f}"
 
     if spec.suffix:
         formatted += spec.suffix
 
     return formatted
+
+
+def resolve_placeholders(data: dict[str, Any], placeholder_names: list[str]) -> dict[str, Any]:
+    """占位符名 → 数据键的双向解析（填充前的兜底映射）。
+
+    数据键为项目名别名（原名/归一化/小写），模板占位符常为简写或带编号变体：
+    - 「ph」→「pH」（归一化小写相等）
+    - 「单去氯」→「单去氯万古霉素」（占位符是数据键前缀）
+    - 「吸光度370nm」→「吸光度」（数据键是占位符前缀）
+    取公共前缀最长者；存在精确命中时不动。
+    """
+
+    def norm(s: str) -> str:
+        return re.sub(r"[（()）\s.%％%]", "", s).lower()
+
+    resolved = dict(data)
+    data_keys = [k for k in data if not k.endswith("_判定")]
+    for name in placeholder_names:
+        if name in resolved:
+            continue
+        best_key, best_score = None, 0
+        nn = norm(name)
+        for k in data_keys:
+            nk = norm(k)
+            if nk == nn:
+                best_key, best_score = k, 1000
+                break
+            if nn.startswith(nk) or nk.startswith(nn):
+                score = min(len(nk), len(nn))
+                if score > best_score:
+                    best_key, best_score = k, score
+        if best_key and best_score >= 2:
+            resolved[name] = data[best_key]
+    return resolved
 
 
 # ─── 模板填充 ───

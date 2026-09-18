@@ -56,6 +56,37 @@ async def bootstrap_permissions(db: AsyncSession, settings: Settings) -> None:
                 "Admin employee_no=%s not found, skipping", emp_no,
             )
 
+    # ── 质量模块预置角色（权限码已配置，人员绑定由管理员在权限管理中完成）──
+    _quality_roles = [
+        (
+            "quality_inspector",
+            "质量检验员",
+            "填报检验结果与创建检验任务",
+            ["quality:task:read", "quality:task:create", "quality:task:fill"],
+        ),
+        (
+            "quality_reviewer",
+            "质量专员",
+            "复核检验任务、生成报告单、维护标准库与模板",
+            [
+                "quality:task:read", "quality:task:create", "quality:task:fill",
+                "quality:task:review", "quality:report:generate",
+                "quality:standard:manage", "quality:template:manage",
+                "quality:lc:read", "quality:report:read", "quality:inspection:read",
+            ],
+        ),
+    ]
+    for _code, _name, _desc, _perm_codes in _quality_roles:
+        role = await perm_repo.get_role_by_code(db, _code)
+        if not role:
+            role = Role(
+                code=_code, name=_name, description=_desc, data_scope="all", is_system=False,
+            )
+            role = await perm_repo.create_role(db, role)
+        await perm_repo.set_role_permissions(
+            db, role.id, [p.id for p in all_perms if p.code in _perm_codes],
+        )
+
     await db.commit()
     logger.info(
         "Permission bootstrap: synced %d permissions, admin role ready",

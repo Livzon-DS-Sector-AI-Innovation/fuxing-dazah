@@ -20,8 +20,6 @@ class QualityStandard:
 
     name: str  # 项目名称，如"万古霉素B"
     limit: float | None = None  # 合格限度值
-    oot_haf: float | None = None  # OOT 阈值（HAF 产品线）
-    oot_haa: float | None = None  # OOT 阈值（HAA 产品线）
     operator: str = "≤"  # 比较运算符：≤、≥、<、>
 
 
@@ -42,8 +40,6 @@ class ImpurityResult:
     first_percent: float  # 第一份%
     second_percent: float  # 第二份%
     limit: float | None = None  # 合格标准
-    oot_haf: float | None = None
-    oot_haa: float | None = None
 
 
 @dataclass
@@ -56,8 +52,6 @@ class CalculatedResult:
     rounded_first: float  # 四舍五入后的值（报告用）
     rounded_second: float
     limit: float | None = None
-    oot_haf: float | None = None
-    oot_haa: float | None = None
 
 
 @dataclass
@@ -211,7 +205,6 @@ class _UsrVancomycinParser:
 
     def _parse_standards(self, ws, data: LcReportData) -> None:
         """解析质量标准区域（O列及之后）。"""
-        # O列（col 15）开始是合格标准，Q列（col 17）是 OOT(HAF)，R列（col 18）是 OOT(HAA)
         standards_map: dict[str, QualityStandard] = {}
 
         for row_idx in range(2, ws.max_row + 1):
@@ -222,8 +215,6 @@ class _UsrVancomycinParser:
             std = QualityStandard(
                 name=name,
                 limit=self._safe_float(ws.cell(row_idx, 16).value),  # P列
-                oot_haf=self._safe_float(ws.cell(row_idx, 17).value),  # Q列
-                oot_haa=self._safe_float(ws.cell(row_idx, 18).value),  # R列
             )
             # 万古霉素B 是 ≥，其他都是 ≤
             if "万古霉素" in name or "Vancomycin" in name.lower():
@@ -298,8 +289,6 @@ class _UsrVancomycinParser:
             rounded_first=vb_first_rnd,
             rounded_second=vb_second_rnd,
             limit=vb_std.limit if vb_std else None,
-            oot_haf=vb_std.oot_haf if vb_std else None,
-            oot_haa=vb_std.oot_haa if vb_std else None,
         )
 
         # 总杂质（R77，K列=11 是 "＝"，L列=12 是值）
@@ -313,8 +302,6 @@ class _UsrVancomycinParser:
             rounded_first=total_first_raw,
             rounded_second=total_second,
             limit=ts.limit if ts else None,
-            oot_haf=ts.oot_haf if ts else None,
-            oot_haa=ts.oot_haa if ts else None,
         )
 
     def _parse_impurity_details(self, ws, data: LcReportData) -> None:
@@ -359,8 +346,6 @@ class _UsrVancomycinParser:
                     first_percent=first_pct,
                     second_percent=second_pct,
                     limit=std.limit if std else None,
-                    oot_haf=std.oot_haf if std else None,
-                    oot_haa=std.oot_haa if std else None,
                 )
             )
             row += 4  # 跳到下一个杂质组
