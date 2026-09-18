@@ -261,6 +261,86 @@ class TestWriteback:
         assert request.status == "failed"
         assert "writeback_failed" in await _audits_of(db_session, request.request_no)
 
+    async def test_confirmer_sentinel_resolves_operator(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """@confirmer 哨兵（V3.0 分期B）：确认执行时解析为 type 11 用户字段
+        写入格式 [{"id": 点击者 open_id}]，@today 同单共存。"""
+        update_mock = AsyncMock(return_value={"record_id": "r", "fields": {}})
+        monkeypatch.setattr(WarehouseBitableAdapter, "update_record", update_mock)
+        request = await _make_request(
+            db_session,
+            ref_record_ids=["recQ"],
+            writeback={
+                "QA放行": "放行",
+                "QA放行人": "@confirmer",
+                "放行提交时间": "@today",
+            },
+        )
+        outcome = await cr.handle_action(
+            db_session, value=_value(request, "confirm"), operator_open_id="ou_qa_1"
+        )
+        assert outcome.ok is True
+        fields = update_mock.await_args_list[0].args[2]
+        assert fields["QA放行"] == "放行"
+        assert fields["QA放行人"] == [{"id": "ou_qa_1"}]
+        assert isinstance(fields["放行提交时间"], int)  # @today → 毫秒时间戳
+
+    async def test_confirmer_without_operator_fails(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """@confirmer 但确认人为空（异常态）→ 单条失败置 failed，不改数。"""
+        update_mock = AsyncMock(return_value={"record_id": "r", "fields": {}})
+        monkeypatch.setattr(WarehouseBitableAdapter, "update_record", update_mock)
+        request = await _make_request(
+            db_session,
+            ref_record_ids=["recQ"],
+            writeback={"QA放行人": "@confirmer"},
+        )
+        request.confirmed_by = None  # 构造异常态（正常确认必有操作人）
+        await db_session.flush()
+        result = await cr.execute_writeback(db_session, request)
+        assert result["ok"] == 0
+        assert len(result["failed"]) == 1
+        assert update_mock.await_count == 0
+
+    async def test_qc_gate_confirm_rejected_when_qc_switch_off(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """QC 链路独立开关（V3.0 分期B）：关闭时 qa_release 门的确认点击被拒、
+        保持 pending（可秒停）；非 QC 业务类型不受该开关管辖。"""
+        from app.modules.warehouse import qc_flow
+
+        update_mock = AsyncMock(return_value={"record_id": "r", "fields": {}})
+        monkeypatch.setattr(WarehouseBitableAdapter, "update_record", update_mock)
+        monkeypatch.setattr(qc_flow, "qc_writeback_enabled", lambda: False)
+
+        qa_request = await cr.create_request(
+            db_session,
+            business_type="qa_release",
+            title="QA 放行确认",
+            summary="开关关闭时的遗留 pending 门",
+            ref_table="material_receipt",
+            ref_record_ids=["recQ"],
+            target="oc_qa",
+            writeback={"QA放行": "放行", "QA放行人": "@confirmer", "放行提交时间": "@today"},
+        )
+        outcome = await cr.handle_action(
+            db_session, value=_value(qa_request, "confirm"), operator_open_id="ou_qa"
+        )
+        assert outcome.ok is False
+        assert "已停用" in outcome.message
+        assert qa_request.status == "pending"  # 拒绝且保持 pending
+        assert update_mock.await_count == 0
+
+        # 非 QC 业务类型不受 qc 开关管辖（A 期总开关开着即可确认）
+        plain = await _make_request(db_session, ref_record_ids=["recN"])
+        outcome2 = await cr.handle_action(
+            db_session, value=_value(plain, "confirm"), operator_open_id="ou_op"
+        )
+        assert outcome2.ok is True
+        assert update_mock.await_count == 1
+
 
 # ═══════════════════════════════════════════════════════════════
 # 重发与过期清扫

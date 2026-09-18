@@ -39,7 +39,6 @@ from app.modules.warehouse.schemas import (
     PlanResponse,
     ReplenishmentSuggestionResponse,
     RuleUpdate,
-    StockResponse,
     StocktakeCreate,
     StocktakeUpdate,
     SuggestionStatusUpdate,
@@ -754,7 +753,8 @@ async def list_stocks(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_permission("warehouse:stock:read")),
 ) -> JSONResponse:
-    items, total = await service.list_stocks(
+    # QC 三列随行返回（V3.0 分期B 链路4：镜像按批号关联，service 层组装）
+    data, total = await service.list_stocks_with_qc(
         db,
         page=page,
         page_size=page_size,
@@ -766,7 +766,6 @@ async def list_stocks(
         expiry_to=expiry_to,
         status=status,
     )
-    data = [StockResponse.model_validate(s).model_dump(mode="json") for s in items]
     return paginated_response(data, page, page_size, total)
 
 

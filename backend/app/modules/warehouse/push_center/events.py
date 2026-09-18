@@ -83,6 +83,87 @@ def render_express_notify_card(payload: dict[str, Any]) -> dict[str, Any]:
 register_event_renderer("express_notify", render_express_notify_card)
 
 
+# ── V3.0 分期B：QC 请验放行闭环三个事件场景（设计 §4.1）──
+
+
+def _payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    return str(value).strip() if value is not None else ""
+
+
+def render_arrival_inspection_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """到货请验卡（链路1）：物料/批号/供应商/数量 + 台账记录链接，窄屏排版。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    def _t(key: str) -> str:
+        return _payload_text(payload, key) or "-"
+
+    lines = [
+        f"**物料** {_t('material_name')}　**批号** {_t('batch_no')}",
+        f"**供应商** {_t('supplier')}",
+        f"**数量** {_t('quantity')} {_t('unit')}",
+    ]
+    if _payload_text(payload, "record_url"):
+        lines.append(f"[📋 打开台账记录（填写取样/出报）]({_payload_text(payload, 'record_url')})")
+    return build_card(
+        title="📥 到货请验",
+        template="orange",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+
+
+register_event_renderer("arrival_inspection", render_arrival_inspection_card)
+
+
+def render_qc_progress_alert_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """QC 进度超期提醒卡（链路2）：未取样超期 / 未出报超期（加急）条目列表。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    kind_label = {"sample": "⏰ 未取样", "report": "🔥 未出报加急"}
+    lines = []
+    for item in payload.get("items") or []:
+        name = str(item.get("material_name") or "-")
+        batch = str(item.get("batch_no") or "-")
+        days = item.get("waited_days")
+        kind = kind_label.get(str(item.get("kind") or ""), "超期")
+        waited = f"{days} 天" if days is not None else "-"
+        lines.append(f"- {kind}：**{name}**（批号 {batch}，已等待 {waited}）")
+    if not lines:
+        lines.append("（本期无超期批号）")
+    return build_card(
+        title="⏰ QC 进度超期提醒",
+        template="red",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+
+
+register_event_renderer("qc_progress_alert", render_qc_progress_alert_card)
+
+
+def render_release_notify_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """放行上架通知卡（链路3）：批号已放行（含条件放行），可上架。"""
+    from app.modules.warehouse.agent.cards import build_card
+
+    def _t(key: str) -> str:
+        return _payload_text(payload, key) or "-"
+
+    release = _t("release_type")
+    extra = "（条件放行，请留意放行条件）" if release == "条件放行" else ""
+    lines = [
+        f"**物料** {_t('material_name')}　**批号** {_t('batch_no')}",
+        f"**QA 放行** {release}{extra}",
+        "该批号已放行，可以上架使用。",
+    ]
+    return build_card(
+        title="✅ 已放行可上架",
+        template="green",
+        elements=[{"tag": "markdown", "content": "\n".join(lines)}],
+    )
+
+
+register_event_renderer("release_notify", render_release_notify_card)
+
+
 async def fire_push_event(
     db: AsyncSession,
     scene: str,

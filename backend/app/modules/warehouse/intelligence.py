@@ -37,6 +37,10 @@ RULE_NAMES: dict[str, str] = {
     "idle": "呆滞预警",
     "expiry": "效期临期预警",
     "cover_days": "补货覆盖天数",
+    # V3.0 分期B：QC 超期规则（阈值全局默认，扫描/开单由 qc_flow 自管，
+    # 不接 run_intelligence_scan——仅注册名称供智能中心预警配置展示与改值）
+    "qc_sample_overdue": "QC未取样超期",
+    "qc_report_overdue": "QC未出报超期",
 }
 
 # ── 预警规则 ──

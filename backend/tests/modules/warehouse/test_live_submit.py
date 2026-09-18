@@ -432,11 +432,15 @@ async def test_submit_receipt_happy_path_with_degradation(
     assert "物料名称" not in audits[0].args_summary.get("degraded", [])  # 无降级
     assert "物料名称(API)" in audits[0].args_summary.get("fields", {})
 
-    # 回执卡片（dry-run 捕获，发发起人私聊）：✅ 标题 + 人工补选提示
+    # 回执卡片（dry-run 捕获，发发起人私聊）：✅ 标题 + 人工补选提示；
+    # 登记成功后自动追发「到货请验」卡（V3.0 分期B 链路1），回执卡按标题定位
     cards = _interactive_cards(captured_sends)
     assert cards, "回执卡片未被捕获"
-    assert cards[-1]["header"]["title"]["content"] == RECEIPT_RESULT_CARD_TITLE_OK
-    assert "人工补选" not in _card_content(cards[-1])  # 2026-09-09 起无降级
+    titles = [c["header"]["title"]["content"] for c in cards]
+    assert RECEIPT_RESULT_CARD_TITLE_OK in titles
+    result_card = cards[titles.index(RECEIPT_RESULT_CARD_TITLE_OK)]
+    assert "人工补选" not in _card_content(result_card)  # 2026-09-09 起无降级
+    assert "📥 到货请验" in titles  # 到货请验卡随登记自动送达
 
     # 终态幂等：submitted 后再次提交拒绝
     with pytest.raises(DraftFlowError):
@@ -464,8 +468,10 @@ async def test_submit_receipt_mismatch_injected(
     assert audits[0].result_status == "ok"
 
     cards = _interactive_cards(captured_sends)
-    assert cards[-1]["header"]["title"]["content"] == RECEIPT_RESULT_CARD_TITLE_MISMATCH
-    assert "⚠ 入库数量：写入 32000 ≠ 读回 200" in _card_content(cards[-1])
+    titles = [c["header"]["title"]["content"] for c in cards]
+    assert RECEIPT_RESULT_CARD_TITLE_MISMATCH in titles  # 请验卡追发，不再恒为末张
+    mismatch_card = cards[titles.index(RECEIPT_RESULT_CARD_TITLE_MISMATCH)]
+    assert "⚠ 入库数量：写入 32000 ≠ 读回 200" in _card_content(mismatch_card)
 
 
 async def test_submit_receipt_requires_confirmed(db_session: AsyncSession) -> None:

@@ -49,12 +49,13 @@ async def test_list_push_tasks(api_context: tuple[AsyncClient, AsyncSession]) ->
     resp = await client.get(PUSH_TASKS)
     assert resp.status_code == 200
     tasks = resp.json()["data"]["tasks"]
-    assert len(tasks) == 5
+    assert len(tasks) == 8  # A 期 5 个 + B 期 3 个事件型（到货请验/QC 提醒/放行通知）
     by_name = {t["task_name"]: t for t in tasks}
     assert by_name["morning_report"]["trigger"] == "scheduled"
     assert by_name["morning_report"]["schedule"] == {"type": "daily", "time": "08:00"}
     assert by_name["express_notify"]["trigger"] == "event"
     assert by_name["express_notify"]["schedule"] is None
+    assert by_name["arrival_inspection"]["trigger"] == "event"
 
 
 async def test_put_push_task_updates_and_audits(

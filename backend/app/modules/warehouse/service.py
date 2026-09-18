@@ -26,6 +26,7 @@ from app.modules.warehouse.schemas import (
     MaterialCreate,
     MaterialUpdate,
     MovementCreate,
+    StockResponse,
     StocktakeCreate,
     StocktakeUpdate,
 )
@@ -544,6 +545,52 @@ async def list_stocks(
         expiry_to=expiry_to,
         status=status,
     )
+
+
+async def list_stocks_with_qc(
+    db: AsyncSession,
+    *,
+    page: int,
+    page_size: int,
+    category: str | None = None,
+    keyword: str | None = None,
+    location_id: UUID | None = None,
+    batch_no: str | None = None,
+    expiry_from: date | None = None,
+    expiry_to: date | None = None,
+    status: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """库存分页列表 + QC 状态三列（V3.0 分期B 链路4，只读展示）。
+
+    warehouse.qc_status 镜像按批号关联（qc_flow.get_qc_status_by_batches，
+    同批号未放行优先）；无镜像批次三列为 None。
+    """
+    from app.modules.warehouse.qc_flow import get_qc_status_by_batches
+
+    items, total = await list_stocks(
+        db,
+        page=page,
+        page_size=page_size,
+        category=category,
+        keyword=keyword,
+        location_id=location_id,
+        batch_no=batch_no,
+        expiry_from=expiry_from,
+        expiry_to=expiry_to,
+        status=status,
+    )
+    qc_map = await get_qc_status_by_batches(
+        db, [s.batch_no or "" for s in items]
+    )
+    data: list[dict[str, Any]] = []
+    for s in items:
+        row = StockResponse.model_validate(s).model_dump(mode="json")
+        qc = qc_map.get(s.batch_no or "")
+        row["qc_sample_status"] = qc.sample_status if qc else None
+        row["qc_report_status"] = qc.report_status if qc else None
+        row["qc_release_status"] = qc.release_status if qc else None
+        data.append(row)
+    return data, total
 
 
 async def list_movements(

@@ -188,6 +188,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         INTELLIGENCE_SCAN_TASK,
         MORNING_REPORT_TASK,
         PUSH_CENTER_TICK_TASK,
+        QC_SCAN_TASK,
         STOCK_DAILY_SNAPSHOT_TASK,
     )
     scheduler_registry.register_task(STOCK_DAILY_SNAPSHOT_TASK)
@@ -195,6 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_registry.register_task(EXPIRY_FREEZE_TASK)
     scheduler_registry.register_task(MORNING_REPORT_TASK)
     scheduler_registry.register_task(PUSH_CENTER_TICK_TASK)
+    scheduler_registry.register_task(QC_SCAN_TASK)
 
     if settings.HR_TITLE_REVIEW_SYNC_ENABLED:
         from app.modules.hr.title_review.scheduled import TITLE_REVIEW_SYNC_TASK

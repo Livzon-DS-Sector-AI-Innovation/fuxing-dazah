@@ -437,6 +437,9 @@ async def submit_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | 
     card = render_receipt_result_card(draft, check_result)
     await _send_result_card(draft, card)
 
+    # 到货请验（V3.0 分期B 链路1）：登记成功自动推 QC 群；失败不影响登记
+    await _fire_arrival_inspection(db, fields, record_id, meta)
+
     logger.info(
         "入库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
         draft.draft_no,
@@ -889,5 +892,59 @@ async def _fire_express_notify(
         )
     except Exception:  # noqa: BLE001 — 通知失败不影响出库登记结果
         logger.exception("快递发货通知自动推送异常（express_no=%s）", express_no)
+        return False
+    return any(r.status == "executed" for r in results)
+
+
+# ── 到货请验（V3.0 分期B 链路1，设计 §4.1）：入库登记成功 → 自动推 QC 群 ──
+
+
+def _receipt_record_url(meta: dict[str, str], record_id: str) -> str:
+    """material_receipt 记录链接（手机一键打开台账行填取样/出报）。
+
+    域名与安全模块一致走 env FEISHU_BASE_URL（默认 livzon 租户域）。
+    """
+    import os
+
+    base_url = os.getenv("FEISHU_BASE_URL", "https://livzon.feishu.cn").rstrip("/")
+    app_token = meta.get("base_token") or ""
+    table_id = meta.get("table_id") or ""
+    return f"{base_url}/base/{app_token}?table={table_id}&record={record_id}"
+
+
+def _arrival_payload(
+    fields: dict[str, Any], record_id: str, meta: dict[str, str]
+) -> dict[str, Any]:
+    """到货请验事件 payload：登记写入字段取业务五项 + 记录链接（空值剔除）。"""
+    payload: dict[str, Any] = {}
+    for key, field_name in (
+        ("material_name", "物料名称(API)"),
+        ("batch_no", "物料批号"),
+        ("supplier", "供应商"),
+        ("quantity", "入库数量"),
+        ("unit", "单位"),
+    ):
+        value = fields.get(field_name)
+        if value is not None and str(value).strip():
+            payload[key] = value
+    payload["record_url"] = _receipt_record_url(meta, record_id)
+    return payload
+
+
+async def _fire_arrival_inspection(
+    db: AsyncSession,
+    fields: dict[str, Any],
+    record_id: str,
+    meta: dict[str, str],
+) -> bool:
+    """自动推到货请验卡；返回是否送达（至少一个目标执行成功）。"""
+    from app.modules.warehouse.push_center.events import fire_push_event
+
+    try:
+        results = await fire_push_event(
+            db, "arrival_inspection", _arrival_payload(fields, record_id, meta)
+        )
+    except Exception:  # noqa: BLE001 — 通知失败不影响入库登记结果
+        logger.exception("到货请验通知自动推送异常（record_id=%s）", record_id)
         return False
     return any(r.status == "executed" for r in results)

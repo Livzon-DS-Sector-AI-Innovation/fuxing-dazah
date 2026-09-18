@@ -208,12 +208,39 @@ function FeedGroup({ title, children }: { title: string; children: React.ReactNo
   )
 }
 
+/** QC 待办阶段 → FeedRow 标签色调（待取样/待出报最紧迫，待放行流程已推进） */
+const QC_STAGE_TONE: Record<string, Tone> = {
+  待取样: 'warn',
+  待出报: 'warn',
+  待放行: 'ok',
+}
+
 function TodosPanel({ data, loading }: { data: DashboardTodos | undefined; loading: boolean }) {
   const router = useRouter()
   if (loading) return <Spin className="block w-full text-center" />
   if (!data) return null
+  const qc = data.qc_pending
   return (
     <div className="flex flex-col gap-4">
+      {qc && (
+        <FeedGroup
+          title={`QC 闭环待检（待取样 ${qc.await_sample_count} · 待出报 ${qc.await_report_count} · 待放行 ${qc.await_release_count}）`}
+        >
+          {qc.items.length === 0 && (
+            <div className="px-2 py-1 text-[13px] text-[var(--color-stone)]">暂无待检/待放行批次</div>
+          )}
+          {qc.items.map(item => (
+            <FeedRow
+              key={`${item.batch_no}-${item.stage}`}
+              title={`${item.material_name}（${item.batch_no}）`}
+              right={item.receipt_date ?? '-'}
+              tag={QC_STAGE_TONE[item.stage] ?? 'warn'}
+              tagLabel={item.stage}
+              onClick={() => router.push(`/warehouse/inventory?keyword=${encodeURIComponent(item.batch_no)}`)}
+            />
+          ))}
+        </FeedGroup>
+      )}
       <FeedGroup title="低库存（前 5）">
         {data.low_stock_items.length === 0 && (
           <div className="px-2 py-1 text-[13px] text-[var(--color-stone)]">暂无低库存物料</div>

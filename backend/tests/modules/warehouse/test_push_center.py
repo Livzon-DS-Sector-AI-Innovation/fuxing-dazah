@@ -139,20 +139,26 @@ async def _hermetic_push_tables(db_session: AsyncSession) -> AsyncIterator[None]
 
 
 class TestPushRegistry:
-    def test_five_tasks_registered(self) -> None:
+    def test_all_tasks_registered(self) -> None:
         names = {info.task_name for info in iter_tasks()}
         assert names == {
+            # V3.0 分期A（5 个）
             "morning_report",
             "weekly_stock_report",
             "monthly_report_push",
             "stale_lists",
             "express_notify",
+            # V3.0 分期B（QC 请验放行，3 个事件型）
+            "arrival_inspection",
+            "qc_progress_alert",
+            "release_notify",
         }
 
     def test_scheduled_vs_event(self) -> None:
         by_name = {info.task_name: info for info in iter_tasks()}
-        assert by_name["express_notify"].trigger == "event"
-        assert by_name["express_notify"].default_schedule is None
+        for name in ("express_notify", "arrival_inspection", "qc_progress_alert", "release_notify"):
+            assert by_name[name].trigger == "event"
+            assert by_name[name].default_schedule is None
         for name in (
             "morning_report",
             "weekly_stock_report",

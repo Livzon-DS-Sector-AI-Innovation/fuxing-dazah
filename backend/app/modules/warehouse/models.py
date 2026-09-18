@@ -1154,3 +1154,45 @@ class WarehouseConfirmAudit(BaseModel):
     detail: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, comment="补充明细（回写条数/失败原因等）"
     )
+
+
+class WarehouseQcStatus(BaseModel):
+    """QC 状态镜像（V3.0 分期B 链路4）：material_receipt 单条记录的
+    QC 取样/出报/QA 放行状态快照，扫描任务 upsert（record_id 幂等）。
+
+    只读展示（库存列表 join / 驾驶舱待办）+ 变迁检测（新旧快照对比，
+    放行通知只推一次）；Base 为权威（2B），本表不承载任何写路径。
+    """
+
+    __tablename__ = "qc_status"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_qc_status_record",
+            "record_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_qc_status_batch", "batch_no"),
+        {"schema": "warehouse"},
+    )
+
+    record_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="material_receipt record_id（唯一，幂等键）"
+    )
+    batch_no: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="", comment="物料批号")
+    material_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default="", comment="物料名称"
+    )
+    receipt_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="入库日期（超期判断与展示）")
+    sample_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="QC取样情况: 已取样/未取样/无需取"
+    )
+    report_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="QC出报: 已出报（合格）/已出报（不合格）/未出报/免检物料"
+    )
+    release_status: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="QA放行: 放行/否决/条件放行"
+    )
+    scanned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="最近一次扫描时间"
+    )

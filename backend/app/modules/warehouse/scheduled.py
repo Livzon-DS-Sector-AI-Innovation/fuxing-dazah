@@ -179,3 +179,31 @@ PUSH_CENTER_TICK_TASK = TaskDefinition(
     timeout_seconds=300,
     module="warehouse",
 )
+
+
+async def _run_scheduled_qc_scan() -> None:
+    """QC 请验放行闭环扫描（V3.0 分期B，设计 §4.1）：每 60min 拉取
+    material_receipt 未闭环记录，镜像 QC 状态并驱动提醒/建门/生成。
+
+    拉取/幂等/去重在 qc_flow 内实现；本包装只负责会话与提交。
+    """
+    from app.modules.warehouse.qc_flow import run_qc_scan
+
+    now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+    async with async_session_factory() as session:
+        summary = await run_qc_scan(session, now_cn)
+        await session.commit()
+    if summary["pulled"]:
+        logger.info("warehouse qc scan: %s", summary)
+
+
+QC_SCAN_TASK = TaskDefinition(
+    name="warehouse.qc_scan",
+    schedule=ScheduleConfig(
+        strategy=ScheduleStrategy.INTERVAL,
+        interval_seconds=3600,
+    ),
+    coro=_run_scheduled_qc_scan,
+    timeout_seconds=600,
+    module="warehouse",
+)

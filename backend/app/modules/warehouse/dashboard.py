@@ -20,13 +20,52 @@ from app.modules.warehouse.models import (
     WarehouseLocation,
     WarehouseMaterial,
     WarehouseMovement,
+    WarehouseQcStatus,
     WarehouseStock,
     WarehouseStockDailySnapshot,
     WarehouseStocktake,
 )
+from app.modules.warehouse.qc_flow import qc_stage
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 IDLE_DAYS = 90
+
+
+async def _qc_pending(db: AsyncSession) -> dict[str, Any]:
+    """QC 待办：三计数 + top 条目（入库最早优先；日期缺失排最后）。"""
+    rows = (
+        await db.execute(
+            select(WarehouseQcStatus).where(WarehouseQcStatus.is_deleted.is_(False))
+        )
+    ).scalars().all()
+    staged = [
+        (row, stage)
+        for row in rows
+        if (stage := qc_stage(row.sample_status, row.report_status, row.release_status)) is not None
+    ]
+    counts = {
+        "await_sample_count": 0,
+        "await_report_count": 0,
+        "await_release_count": 0,
+    }
+    for _, stage in staged:
+        if stage == "待取样":
+            counts["await_sample_count"] += 1
+        elif stage == "待出报":
+            counts["await_report_count"] += 1
+        else:
+            counts["await_release_count"] += 1
+    staged.sort(key=lambda item: (item[0].receipt_date is None, item[0].receipt_date))
+    items = [
+        {
+            "batch_no": row.batch_no,
+            "material_name": row.material_name,
+            "stage": stage,
+            "receipt_date": row.receipt_date.isoformat() if row.receipt_date else None,
+        }
+        for row, stage in staged[:5]
+    ]
+    return {**counts, "items": items}
 
 
 def _cn_date_expr() -> Any:
@@ -356,4 +395,5 @@ async def get_todos(db: AsyncSession) -> dict[str, Any]:
         "low_stock_items": low_items[:5],
         "draft_stocktakes": draft_stocktakes,
         "recent_movements": recent_movements,
+        "qc_pending": await _qc_pending(db),
     }

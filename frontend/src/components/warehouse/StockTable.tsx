@@ -54,6 +54,11 @@ const STOCK_STATUS_TONE = {
 /** 后端 StockResponse.status 恒有值；兼容缺省时按 normal 展示 */
 const statusOf = (value: StockStatus | undefined): StockStatus => value ?? 'normal'
 
+/** QC 取样/出报列只读文本（空值占位 -） */
+const QcCell = (value: string | null | undefined) => (
+  <span className="text-[13px] text-[var(--color-charcoal)]">{value || '-'}</span>
+)
+
 export function StockTable(props: {
   /** 驾驶舱下钻带入的初始筛选 */
   initialKeyword?: string
@@ -171,6 +176,28 @@ export function StockTable(props: {
       render: (value: StockStatus | undefined) => {
         const status = statusOf(value)
         return <StatusTag tone={STOCK_STATUS_TONE[status]} label={STOCK_STATUS_LABEL[status]} />
+      },
+    },
+    {
+      title: 'QC 取样',
+      dataIndex: 'qc_sample_status',
+      width: 90,
+      render: QcCell,
+    },
+    {
+      title: 'QC 出报',
+      dataIndex: 'qc_report_status',
+      width: 118,
+      render: QcCell,
+    },
+    {
+      title: 'QA 放行',
+      dataIndex: 'qc_release_status',
+      width: 96,
+      render: (value: string | null | undefined) => {
+        if (!value) return <span className="text-[13px] text-[var(--color-stone)]">-</span>
+        const tone = value === '放行' ? 'ok' : value === '条件放行' ? 'warn' : 'danger'
+        return <StatusTag tone={tone} label={value} />
       },
     },
     {
@@ -367,7 +394,7 @@ export function StockTable(props: {
             setPageSize(ps)
           },
         }}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 1400 }}
       />
 
       <Drawer

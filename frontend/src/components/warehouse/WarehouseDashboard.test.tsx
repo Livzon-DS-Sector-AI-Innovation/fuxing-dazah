@@ -59,6 +59,15 @@ vi.mock('@/lib/api/warehouse', async importOriginal => {
           occurred_at: '2026-09-15T10:00:00+08:00',
         },
       ],
+      qc_pending: {
+        await_sample_count: 1,
+        await_report_count: 1,
+        await_release_count: 0,
+        items: [
+          { batch_no: 'B-QC1', material_name: '硫酸', stage: '待取样', receipt_date: '2026-09-12' },
+          { batch_no: 'B-QC2', material_name: '丙酮', stage: '待出报', receipt_date: '2026-09-14' },
+        ],
+      },
     }),
   }
 })
@@ -83,6 +92,16 @@ describe('WarehouseDashboard', () => {
     expect(await screen.findByText('低库存物料')).toBeInTheDocument()
     expect(screen.getByText('ST-1')).toBeInTheDocument()
     expect(screen.getByText(/甲醇 × 40kg/)).toBeInTheDocument()
+  })
+
+  it('渲染 QC 闭环待办块（计数与条目）', async () => {
+    renderWithQuery(<WarehouseDashboard />)
+
+    expect(await screen.findByText(/QC 闭环待检/)).toBeInTheDocument()
+    expect(screen.getByText(/硫酸（B-QC1）/)).toBeInTheDocument()
+    expect(screen.getByText('待取样')).toBeInTheDocument()
+    expect(screen.getByText(/丙酮（B-QC2）/)).toBeInTheDocument()
+    expect(screen.getByText('待出报')).toBeInTheDocument()
   })
 
   it('有数据的图表区块渲染，空数据区块显示空态引导', async () => {

@@ -271,11 +271,20 @@ async def handle_action(
     if action != "confirm":
         return ConfirmGateOutcome(ok=False, status="invalid", message="未知操作")
 
-    # 回写总开关（默认关）：确认动作依赖 Base 回写，停用期间拒绝确认、保持 pending
+    # 回写开关闸门（默认关）：确认动作依赖 Base 回写，停用期间拒绝确认、保持 pending。
+    # 分期B 起 QC 链路业务类型（qa_release/qc_rejected_disposition）另受
+    # qc_writeback_enabled 独立管辖——开关关闭时遗留 pending 的 QC 门同样拒绝
+    # （lazy import 解环：qc_flow 对本模块的引用同为 lazy）
     from app.modules.warehouse.base_mirror import bitable_writeback_enabled
+    from app.modules.warehouse.qc_flow import qc_writeback_allowed
 
-    if not bitable_writeback_enabled():
-        logger.warning("确认被拒绝：多维表格回写开关关闭（request_no=%s）", request.request_no)
+    if not bitable_writeback_enabled() or not qc_writeback_allowed(
+        request.business_type
+    ):
+        logger.warning(
+            "确认被拒绝：回写开关关闭（request_no=%s business_type=%s）",
+            request.request_no, request.business_type,
+        )
         return ConfirmGateOutcome(
             ok=False,
             status="error",
@@ -307,16 +316,31 @@ async def handle_action(
 # 回写字段值哨兵：创建时未知、确认执行时才解析（如处理日期=确认当天，
 # 而非推送当天——隔日确认的语义正确性）
 WRITEBACK_TODAY = "@today"
+# @confirmer（V3.0 分期B）：解析为确认操作人 open_id 的 type 11 用户字段
+# 写入格式 [{"id": ...}]——QA 放行回写 QA放行人 用（真机验证点：格式实测）
+WRITEBACK_CONFIRMER = "@confirmer"
 
 
-def _resolve_writeback_value(value: Any) -> Any:
-    """解析回写字段值：``@today`` → 确认执行当天的毫秒时间戳（Base date 字段
-    写入契约，对齐 submit._parse_date_ms）；其余原样。"""
+def _resolve_writeback_value(
+    value: Any, request: WarehouseConfirmRequest
+) -> Any:
+    """解析回写字段值哨兵（逐条记录解析，失败按单条失败处理）：
+
+    - ``@today`` → 确认执行当天的毫秒时间戳（Base date 字段写入契约，
+      对齐 submit._parse_date_ms）；
+    - ``@confirmer`` → ``[{"id": 确认人 open_id}]``（type 11 用户字段）；
+    - 其余原样。
+    """
     if value == WRITEBACK_TODAY:
         now = datetime.now(UTC)
         return int(
             datetime(now.year, now.month, now.day, tzinfo=UTC).timestamp() * 1000
         )
+    if value == WRITEBACK_CONFIRMER:
+        operator = (request.confirmed_by or "").strip()
+        if not operator:
+            raise ValueError("@confirmer 哨兵需要确认操作人（confirmed_by 为空）")
+        return [{"id": operator}]
     return value
 
 
@@ -325,24 +349,26 @@ async def execute_writeback(
 ) -> dict[str, Any]:
     """按映射逐条回写 Base（ref_table × ref_record_ids × writeback 字段）。
 
-    writeback 值支持 ``@today`` 哨兵（确认执行当天毫秒时间戳）。逐条独立
-    执行：失败条目记入 failed 列表并继续（不回滚已成功条目）；全部成功保持
-    confirmed、写 writeback_ok 审计；有失败置 failed + writeback_failed 审计
-    （含失败明细）。调用方负责 commit。
+    writeback 值支持 ``@today`` / ``@confirmer`` 哨兵（逐条记录解析，语义
+    见 :func:`_resolve_writeback_value`）。逐条独立执行：失败条目记入
+    failed 列表并继续（不回滚已成功条目）；全部成功保持 confirmed、写
+    writeback_ok 审计；有失败置 failed + writeback_failed 审计（含失败
+    明细）。调用方负责 commit。
     """
     from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
 
-    writeback = {
-        key: _resolve_writeback_value(value)
-        for key, value in (request.writeback or {}).items()
-    }
+    writeback = dict(request.writeback or {})
     record_ids = list(request.ref_record_ids or [])
     failed: list[dict[str, str]] = []
     ok_count = 0
     adapter = WarehouseBitableAdapter()
     for record_id in record_ids:
         try:
-            await adapter.update_record(request.ref_table, record_id, dict(writeback))
+            fields = {
+                key: _resolve_writeback_value(value, request)
+                for key, value in writeback.items()
+            }
+            await adapter.update_record(request.ref_table, record_id, fields)
             ok_count += 1
         except Exception as exc:  # noqa: BLE001 — 单条失败继续，明细入审计
             logger.exception(

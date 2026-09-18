@@ -173,11 +173,16 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 9  # 8 个既有键 + bitable_writeback_enabled（V3.0 分期A）
+    assert len(configs) == 11  # 8 个既有键 + bitable_writeback_enabled（V3A）+ qc_writeback_enabled/qa_confirm_target（V3B）
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
     # 回写总开关默认关闭（0）
     writeback = [c for c in configs if c["key"] == "bitable_writeback_enabled"][0]
     assert writeback["value"] == 0
+    # QC 链路开关默认关闭（0）；确认门目标 B 期迁移播种空串（运行时可改）
+    qc_writeback = [c for c in configs if c["key"] == "qc_writeback_enabled"][0]
+    assert qc_writeback["value"] == 0
+    qa_target = [c for c in configs if c["key"] == "qa_confirm_target"][0]
+    assert isinstance(qa_target["value"], str)
 
     resp = await client.put(f"{RUNTIME}/max_turns", json={"value": 15})
     assert resp.status_code == 200

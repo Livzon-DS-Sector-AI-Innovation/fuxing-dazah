@@ -146,6 +146,39 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "上线前置：与仓储部确认「上一状态」列无自动化占用后再置 1"
         ),
     ),
+    RuntimeKeyInfo(
+        key="qc_writeback_enabled",
+        label="QC 链路回写开关（0/1）",
+        group="多维表格",
+        value_type="int",
+        default=0,
+        env_var="",
+        min_value=0,
+        max_value=1,
+        max_length=None,
+        description=(
+            "V3.0 分期B QC 请验放行闭环开关：1=QA 放行确认门创建与确认回写"
+            "（material_receipt.QA放行/QA放行人/放行提交时间）、"
+            "出报不合格自动生成不合格记录；0=（默认）以上 Base 写入全部停用。"
+            "与分期A总开关解耦，可独立置 1"
+        ),
+    ),
+    RuntimeKeyInfo(
+        key="qa_confirm_target",
+        label="QA 放行确认门目标",
+        group="多维表格",
+        value_type="str",
+        default="",
+        env_var="WAREHOUSE_TEST_CHAT_ID",
+        min_value=None,
+        max_value=None,
+        max_length=64,
+        description=(
+            "QA 放行确认卡投递目标（群 chat_id 或 ou_ 开头个人 open_id）；"
+            "空=回落 env WAREHOUSE_TEST_CHAT_ID（测试群）。"
+            "生产环境改为真实 QA 群/人，即时生效"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

@@ -110,6 +110,10 @@ class StockResponse(BaseModel):
     expiry_date: date | None = None
     quantity: float
     status: str = "normal"
+    # QC 闭环状态（V3.0 分期B 链路4，warehouse.qc_status 镜像按批号关联，只读）
+    qc_sample_status: str | None = None
+    qc_report_status: str | None = None
+    qc_release_status: str | None = None
 
     model_config = {"from_attributes": True}
 

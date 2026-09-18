@@ -78,6 +78,34 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule=None,
         target_env_var="WAREHOUSE_ALERT_CHAT_ID",
     ),
+    # ── V3.0 分期B（QC 请验放行闭环，设计 §4.1）──
+    PushTaskInfo(
+        task_name="arrival_inspection",
+        scene="arrival_inspection",
+        label="到货请验通知",
+        description="原辅料入库登记确认后自动推 QC 群「到货请验」卡（事件触发，链路1）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="qc_progress_alert",
+        scene="qc_progress_alert",
+        label="QC 进度超期提醒",
+        description="QC 扫描发现未取样/未出报超期批号时推 QC 群提醒卡（事件触发，链路2）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="release_notify",
+        scene="release_notify",
+        label="放行上架通知",
+        description="QA 放行（含条件放行）后推仓库群「已放行可上架」卡（事件触发，链路3）",
+        trigger="event",
+        default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

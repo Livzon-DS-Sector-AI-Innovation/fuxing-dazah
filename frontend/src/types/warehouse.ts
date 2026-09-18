@@ -139,6 +139,10 @@ export interface StockRecord {
   expiry_date?: string | null
   quantity: number
   status?: StockStatus
+  /** QC 闭环状态（warehouse.qc_status 镜像按批号关联，只读；无镜像为 null） */
+  qc_sample_status?: string | null
+  qc_report_status?: string | null
+  qc_release_status?: string | null
 }
 
 export interface StockFilter {
@@ -645,6 +649,13 @@ export interface LowStockTop {
   idle: IdleStockItem[]
 }
 
+export interface QcPendingItem {
+  batch_no: string
+  material_name: string
+  stage: string
+  receipt_date: string | null
+}
+
 export interface DashboardTodos {
   low_stock_count: number
   low_stock_items: LowStockItem[]
@@ -657,6 +668,13 @@ export interface DashboardTodos {
     unit: string
     occurred_at: string
   }[]
+  /** QC 闭环待办（V3.0 分期B 链路4，warehouse.qc_status 镜像） */
+  qc_pending: {
+    await_sample_count: number
+    await_report_count: number
+    await_release_count: number
+    items: QcPendingItem[]
+  }
 }
 
 // ==================== 出入库计划单（V2.0 分期A） ====================

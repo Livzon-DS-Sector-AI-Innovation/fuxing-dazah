@@ -839,8 +839,11 @@ async def test_live_finished_dialog_submit_push_full_flow(
     )
     assert outcome.ok is True, f"submit 失败: {outcome.message}"
     assert "成品出库已登记" in outcome.message
-    # 回执含快递推送引导（票02 验收口径）
-    assert "要推送给谁？回复 group:群ID 或 user:open_id" in outcome.message
+    # 回执含快递推送结果：目标已配置（A 期验收把 express_notify 目标配到测试群）
+    # → 自动推送提示；目标未配置 → group:/user: 引导。两种口径都算过
+    pushed = "发货通知已自动推送给配置目标" in outcome.message
+    guided = "要推送给谁？回复 group:群ID 或 user:open_id" in outcome.message
+    assert pushed or guided, f"回执缺少快递推送结果/引导: {outcome.message}"
     assert "SF123456" in outcome.message
     assert draft.status == "submitted"
     record_id = draft.target_record_id

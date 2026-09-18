@@ -37,6 +37,9 @@ const stock: StockRecord = {
   location_name: 'A 库位',
   expiry_date: new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10),
   quantity: 30,
+  qc_sample_status: '已取样',
+  qc_report_status: '已出报（合格）',
+  qc_release_status: '放行',
 }
 
 const location: LocationRecord = {
@@ -131,6 +134,15 @@ describe('StockTable', () => {
 
     expect(await screen.findByText(/MAT-001/)).toBeInTheDocument()
     expect(screen.getByText('正常')).toBeInTheDocument()
+  })
+
+  it('渲染 QC 闭环三列（取样/出报/QA放行）', async () => {
+    renderWithQuery(<StockTable />)
+
+    expect(await screen.findByText(/MAT-001/)).toBeInTheDocument()
+    expect(screen.getByText('已取样')).toBeInTheDocument()
+    expect(screen.getByText('已出报（合格）')).toBeInTheDocument()
+    expect(screen.getByText('放行')).toBeInTheDocument()
   })
 
   it('操作列提供状态流转与流水入口，流水打开抽屉', async () => {
