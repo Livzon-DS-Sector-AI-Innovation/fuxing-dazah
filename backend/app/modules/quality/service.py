@@ -1247,9 +1247,9 @@ class TestTaskService:
         """质量总览看板：今日出报 / 待复核 / 在途 / 最近完成 / 标准文件到期提醒。"""
         today = datetime.now().strftime("%Y-%m-%d")
         today_tasks = await list_test_tasks_by_report_date(db, today)
-        review_items, _ = await list_test_tasks(db, None, "pending_review", 1, 200)
-        inprog_items, _ = await list_test_tasks(db, None, "in_progress", 1, 200)
-        completed_items, _ = await list_test_tasks(db, None, "completed", 1, 5)
+        review_items, _ = await list_test_tasks(db, status="pending_review", page=1, page_size=200)
+        inprog_items, _ = await list_test_tasks(db, status="in_progress", page=1, page_size=200)
+        completed_items, _ = await list_test_tasks(db, status="completed", page=1, page_size=5)
 
         async def _row(t) -> dict[str, Any]:
             rows = await list_test_results(db, t.id)
