@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -116,6 +117,20 @@ def _register_stubs(
     for scene in scenes:
         patched.setdefault(scene, _stub_generator(scene))
     monkeypatch.setattr(generators, "GENERATORS", patched)
+
+
+@pytest.fixture(autouse=True)
+async def _hermetic_push_tables(db_session: AsyncSession) -> AsyncIterator[None]:
+    """清空推送日志/审计表（事务内删除，随 teardown 回滚）。
+
+    共享开发库存在真实运行数据（真机验证/日常推送），精确计数断言
+    （len == 1 / .one()）必须只看到本用例写入的行。
+    """
+    from sqlalchemy import delete
+
+    await db_session.execute(delete(WarehousePushLog))
+    await db_session.execute(delete(WarehousePushTaskAudit))
+    yield
 
 
 # ═══════════════════════════════════════════════════════════════

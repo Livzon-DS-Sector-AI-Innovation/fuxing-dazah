@@ -22,6 +22,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.warehouse.bitable_cells import cell_number, cell_text
 from app.modules.warehouse.models import (
     WarehouseLocation,
     WarehouseMaterial,
@@ -52,26 +53,13 @@ class ReconciliationRepairError(Exception):
 
 
 def _feishu_cell_text(value: Any) -> str:
-    """Base 单元格 → 匹配键文本（单选读取为数组，读写不对称）。"""
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        return "、".join(str(v).strip() for v in value if str(v).strip())
-    return str(value).strip()
+    """匹配键文本（规范解析：富文本分段/类型包裹/单选数组全兼容）。"""
+    return cell_text(value)
 
 
 def _feishu_cell_number(value: Any) -> float:
-    """Base 单元格 → 数值（formula 可能返回字符串数字）。"""
-    if value is None:
-        return 0.0
-    if isinstance(value, list):
-        value = value[0] if value else None
-        if value is None:
-            return 0.0
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return 0.0
+    """数值（规范解析；无法解析按 0 计）。"""
+    return cell_number(value) or 0.0
 
 
 async def _fetch_all_feishu_records(db: AsyncSession) -> list[dict[str, Any]]:

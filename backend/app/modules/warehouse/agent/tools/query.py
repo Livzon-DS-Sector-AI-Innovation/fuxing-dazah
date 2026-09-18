@@ -56,6 +56,18 @@ from app.modules.warehouse.agent.tools.plan import (
     PLAN_TOOLS_SCHEMA,
 )
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+from app.modules.warehouse.bitable_cells import (
+    cell_list as _cell_list,
+)
+from app.modules.warehouse.bitable_cells import (
+    cell_number as _cell_number,
+)
+from app.modules.warehouse.bitable_cells import (
+    cell_text as _cell_text,
+)
+from app.modules.warehouse.bitable_cells import (
+    unwrap as _unwrap,
+)
 from app.modules.warehouse.bitable_schema import WarehouseBitableError
 
 logger = logging.getLogger(__name__)
@@ -81,61 +93,8 @@ def get_adapter() -> WarehouseBitableAdapter:
 
 
 # ── 单元格值规范化 ──
-# 实测形态（records/search，测试版 Base）：
-# - 直接标量：3700 / "是" / 1766937600000 / "硫酸"
-# - 单选/lookup 计算列包裹：{"type": 3, "value": ["放行"]}
-# - formula 包裹：{"type": 2, "value": [0]} / {"type": 5, "value": [ms]}
-# - 富文本分段：{"text": "...", "type": "text"} 或其数组
-# - user/人员：[{"id", "name", ...}]；关联：{"link_record_ids": ...}；附件：[{"name", ...}]
-
-
-def _cell_list(value: Any) -> list[str]:
-    """把单元格值数组化为文本列表（兼容以上全部形态）。"""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [part for item in value for part in _cell_list(item)]
-    if isinstance(value, dict):
-        if "text" in value:  # 富文本分段
-            return _cell_list(value.get("text"))
-        if "value" in value:  # 类型包裹（formula/lookup）
-            return _cell_list(value.get("value"))
-        name = value.get("name")  # user/附件
-        if name:
-            return [str(name)]
-        return []
-    if isinstance(value, bool):
-        return [str(value)]
-    return [str(value)]
-
-
-def _cell_text(value: Any) -> str:
-    return "、".join(_cell_list(value))
-
-
-def _unwrap(value: Any) -> Any:
-    """递归取第一个标量（分段/包裹/数组展开）。"""
-    if isinstance(value, list):
-        return _unwrap(value[0]) if value else None
-    if isinstance(value, dict):
-        for key in ("text", "value", "name"):
-            if key in value:
-                return _unwrap(value[key])
-        return None
-    return value
-
-
-def _cell_number(value: Any) -> float | None:
-    scalar = _unwrap(value)
-    if isinstance(scalar, bool) or scalar is None:
-        return None
-    if isinstance(scalar, (int, float)):
-        return float(scalar)
-    text = str(scalar).strip().replace(",", "")
-    try:
-        return float(text)
-    except ValueError:
-        return None
+# 规范实现已抽出为公开模块（V3.0 分期A，bitable_cells.py），此处保留私有
+# 别名供本模块既有引用；消费方请直接 import bitable_cells。
 
 
 def _cell_ms(value: Any) -> int | None:

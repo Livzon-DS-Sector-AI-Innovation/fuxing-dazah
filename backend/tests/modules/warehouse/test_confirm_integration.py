@@ -47,12 +47,15 @@ class StubPushRow:
 
 
 class FakeUnqualifiedAdapter:
-    """unqualified_stock 假件：2 条待跟进（处理日期空）+ 1 条已处理。"""
+    """unqualified_stock 假件：2 条待跟进（处理日期空）+ 1 条已处理。
+
+    物料名称用富文本分段形态（真机实测），回归验证卡片摘要不出现字典 repr。
+    """
 
     def __init__(self) -> None:
         self.records = [
-            {"record_id": "rec_u1", "fields": {"物料名称": "不合格物料A", "不合格项目": "含量不达标", "处理方式": None, "处理日期": None}},
-            {"record_id": "rec_u2", "fields": {"物料名称": "不合格物料B", "不合格项目": "包装破损", "处理方式": None, "处理日期": None}},
+            {"record_id": "rec_u1", "fields": {"物料名称": [{"text": "不合格物料A", "type": "text"}], "不合格项目": "含量不达标", "处理方式": None, "处理日期": None}},
+            {"record_id": "rec_u2", "fields": {"物料名称": [{"text": "不合格物料B", "type": "text"}], "不合格项目": "包装破损", "处理方式": None, "处理日期": None}},
             {"record_id": "rec_u3", "fields": {"物料名称": "不合格物料C", "不合格项目": "过期", "处理方式": "退货", "处理日期": 1760000000000}},
         ]
         self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
@@ -83,10 +86,20 @@ def _fake_list_report(unqualified_total: int = 3):
 
 
 @pytest.fixture
-def stale_env(
+async def stale_env(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> FakeUnqualifiedAdapter:
     """引擎环境：仅 stale_lists 启用（oc_test），清单聚合与 Base 全部假件化。"""
+    from sqlalchemy import delete
+
+    # 封闭性：清该业务类型既有确认单（真机验证留有真实记录；事务内删除随回滚撤销）
+    from app.modules.warehouse.models import WarehouseConfirmRequest
+
+    await db_session.execute(
+        delete(WarehouseConfirmRequest).where(
+            WarehouseConfirmRequest.business_type == UNQUALIFIED_DISPOSITION
+        )
+    )
     rows = {
         "morning_report": StubPushRow(task_name="morning_report", enabled=False),
         "weekly_stock_report": StubPushRow(task_name="weekly_stock_report", enabled=False),
@@ -134,6 +147,10 @@ class TestStaleListsConfirmHook:
         assert request.card_message_id == "dry_run"
         # 回写映射：处理日期=@today 哨兵（确认执行时解析为当天毫秒时间戳）
         assert request.writeback == {"处理日期": "@today"}
+        # 富文本分段规范解析：摘要显示纯文本名，不出现字典 repr
+        assert "不合格物料A" in request.summary
+        assert "不合格物料B" in request.summary
+        assert "{'text'" not in request.summary
         assert "**2** 条不合格物料待跟进" in request.summary
         # create 审计
         audits = (

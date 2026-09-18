@@ -61,6 +61,14 @@ async def test_put_push_task_updates_and_audits(
     api_context: tuple[AsyncClient, AsyncSession],
 ) -> None:
     client, db = api_context
+    # 封闭性：清该任务既有审计（共享库存在真机配置记录；事务内删除随回滚撤销）
+    from sqlalchemy import delete
+
+    await db.execute(
+        delete(WarehousePushTaskAudit).where(
+            WarehousePushTaskAudit.task_name == "morning_report"
+        )
+    )
     resp = await client.put(
         f"{PUSH_TASKS}/morning_report", json={"targets": "oc_x", "note": "验收配置"}
     )
@@ -107,6 +115,12 @@ async def test_trigger_push_task_executes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, db = api_context
+    # 封闭性：清该任务既有推送日志（真机验证留有真实记录；事务内删除随回滚撤销）
+    from sqlalchemy import delete
+
+    await db.execute(
+        delete(WarehousePushLog).where(WarehousePushLog.task_name == "morning_report")
+    )
     rows = {
         "morning_report": StubPushRow(task_name="morning_report", targets="oc_test"),
     }

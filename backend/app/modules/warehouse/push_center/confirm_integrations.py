@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+from app.modules.warehouse.bitable_cells import cell_text
 from app.modules.warehouse.models import WarehouseConfirmRequest
 from app.modules.warehouse.push_center.engine import (
     register_post_send_hook,
@@ -43,13 +44,9 @@ _UNQUALIFIED_FIELDS = ["物料名称", "不合格项目", "处理方式", "处�
 UNQUALIFIED_WRITEBACK = {"处理日期": "@today"}
 
 
-def _cell_text(value: Any) -> str:
-    """Base 单元格值 → 展示文本（数组取拼接，空值 -）。"""
-    if value is None:
-        return "-"
-    if isinstance(value, list):
-        return "、".join(str(v) for v in value) or "-"
-    return str(value)
+def _display(value: Any) -> str:
+    """单元格值 → 卡片展示文本（规范解析，空值显示 -）。"""
+    return cell_text(value) or "-"
 
 
 async def fetch_unqualified_records(adapter: Any) -> list[dict[str, Any]]:
@@ -88,10 +85,11 @@ async def stale_lists_confirm_hook(
     if not view.targets:
         return None
     records = await fetch_unqualified_records(WarehouseBitableAdapter())
+    # 待跟进 = 处理日期为空（None/空串/空数组/空类型包装，规范解析后为空）
     pending = [
         r
         for r in records
-        if not (r.get("fields") or {}).get("处理日期")
+        if not cell_text((r.get("fields") or {}).get("处理日期"))
     ]
     if not pending:
         logger.info("清单确认门跳过：无待跟进（处理日期为空）不合格物料")
@@ -99,8 +97,8 @@ async def stale_lists_confirm_hook(
 
     record_ids = [str(r["record_id"]) for r in pending]
     top_lines = "\n".join(
-        f"{i}. {_cell_text((r.get('fields') or {}).get('物料名称'))}"
-        f"（{_cell_text((r.get('fields') or {}).get('不合格项目'))}）"
+        f"{i}. {_display((r.get('fields') or {}).get('物料名称'))}"
+        f"（{_display((r.get('fields') or {}).get('不合格项目'))}）"
         for i, r in enumerate(pending[:5], start=1)
     )
     request = await cr.create_request(
@@ -120,7 +118,7 @@ async def stale_lists_confirm_hook(
             "task": view.task_name,
             "total": len(pending),
             "items": [
-                {"物料名称": _cell_text((r.get("fields") or {}).get("物料名称"))}
+                {"物料名称": _display((r.get("fields") or {}).get("物料名称"))}
                 for r in pending[:10]
             ],
         },

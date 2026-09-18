@@ -25,6 +25,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+from app.modules.warehouse.bitable_cells import cell_text
 from app.modules.warehouse.models import WarehouseStock, WarehouseStockStatusLog
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,9 @@ async def resolve_receipt_record_id(
         matched = None
         if material_name:
             for record in records:
-                value = (record.get("fields") or {}).get("物料名称")
-                text = "、".join(str(v) for v in value) if isinstance(value, list) else str(value or "")
-                if text.strip() == material_name.strip():
+                # 物料名称富文本分段/类型包裹由规范解析展开后精确比对
+                name_text = cell_text((record.get("fields") or {}).get("物料名称"))
+                if name_text.strip() == material_name.strip():
                     matched = record
                     break
         if matched is not None:

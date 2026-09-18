@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock
@@ -44,6 +45,17 @@ _EXPRESS_PAYLOAD = {
 
 def _make_store(rows: dict[str, StubPushRow | None]) -> PushConfigStore:
     return PushConfigStore(row_loader=lambda name: rows.get(name))
+
+
+@pytest.fixture(autouse=True)
+async def _hermetic_express_logs(db_session: AsyncSession) -> AsyncIterator[None]:
+    """封闭性：清 express_notify 既有推送日志（事务内删除随回滚撤销）。"""
+    from sqlalchemy import delete
+
+    await db_session.execute(
+        delete(WarehousePushLog).where(WarehousePushLog.task_name == "express_notify")
+    )
+    yield
 
 
 class TestExpressRenderer:
