@@ -837,10 +837,11 @@ async def report_date_template_endpoint():
     ws.append(["HAF2608001B", "2026-09-18"])
     buf = _io.BytesIO()
     wb.save(buf)
+    encoded = quote("出报日期补录模板.xlsx")
     return StreamingResponse(
         BytesIO(buf.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": 'attachment; filename="出报日期补录模板.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="template.xlsx"; filename*=UTF-8\'\'{encoded}'},
     )
 
 
