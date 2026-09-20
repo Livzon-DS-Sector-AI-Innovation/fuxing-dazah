@@ -5,13 +5,14 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppException
+from app.core.time import APP_TZ, today
 from app.modules.quality import lc_template_parser
 from app.modules.quality.excel_parser import LcReportData, parse_lc_excel
 from app.modules.quality.models import (
@@ -1213,7 +1214,8 @@ class TestTaskService:
 
         # 模板按标准文件解析：COA 绑定（该文档）→ 文档 template_path 兜底
         bindings = await list_coa_bindings_by_docs(db, list(docs.keys()))
-        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        # 流水号按北京时间计日：当天已生成的报告数作为序号起点
+        today_start = datetime.combine(today(), time.min, tzinfo=APP_TZ)
         base_seq = await count_report_records_since(db, today_start)
         splits: list[dict[str, Any]] = []
         ordered_docs = sorted(docs.values(), key=lambda d: d.file_no)
@@ -1226,7 +1228,7 @@ class TestTaskService:
                     status_code=400,
                     detail=f"标准文件 {d.file_no} 未绑定 COA 模板，无法逐份生成",
                 )
-            serial_no = f"{datetime.now(UTC):%y%m%d}{base_seq + i + 1:02d}"
+            serial_no = f"{today():%y%m%d}{base_seq + i + 1:02d}"
             splits.append({
                 "doc": d,
                 "template": template,
@@ -1244,8 +1246,8 @@ class TestTaskService:
     @staticmethod
     async def build_dashboard(db: AsyncSession) -> dict[str, Any]:
         """质量总览看板：今日出报 / 待复核 / 在途 / 最近完成 / 标准文件到期提醒。"""
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_tasks = await list_test_tasks_by_report_date(db, today)
+        today_str = today().isoformat()
+        today_tasks = await list_test_tasks_by_report_date(db, today_str)
         review_items, _ = await list_test_tasks(db, status="pending_review", page=1, page_size=200)
         inprog_items, _ = await list_test_tasks(db, status="in_progress", page=1, page_size=200)
         completed_items, _ = await list_test_tasks(db, status="completed", page=1, page_size=5)
@@ -1262,8 +1264,8 @@ class TestTaskService:
                 "report_date": t.report_date,
             }
 
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        tomorrow_tasks = await list_test_tasks_by_report_date(db, tomorrow)
+        tomorrow_str = (today() + timedelta(days=1)).isoformat()
+        tomorrow_tasks = await list_test_tasks_by_report_date(db, tomorrow_str)
 
         return {
             "today": [await _row(t) for t in today_tasks],

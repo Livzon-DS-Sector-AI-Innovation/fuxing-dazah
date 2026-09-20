@@ -37,6 +37,8 @@ export default function ReportPage() {
   }
 
   const columns = [
+    { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 110,
+      render: (v: string | null) => v || '-' },
     { title: '产品', dataIndex: 'product_name', key: 'product_name', width: 150 },
     { title: '批号', dataIndex: 'batch_number', key: 'batch_number', width: 120 },
     { title: '模板', dataIndex: 'template_path', key: 'template_path', ellipsis: true },

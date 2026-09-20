@@ -1,8 +1,9 @@
 """Quality 模块 API 路由。"""
 
+import asyncio
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -20,10 +21,12 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.response import paginated_response, success_response
+from app.core.time import APP_TZ, today
 from app.modules.quality import storage as quality_storage
 from app.modules.quality.models import QualityStandardDocument
 from app.modules.quality.report_generator import (
@@ -50,6 +53,7 @@ from app.modules.quality.repository import (
     get_test_task,
     get_test_task_by_batch,
     get_test_task_by_batch_number,
+    is_serial_unique_violation,
     list_coa_bindings,
     list_inspection_records,
     list_report_records,
@@ -645,25 +649,34 @@ async def generate_report(
     else:
         raise HTTPException(status_code=400, detail="请提供 inspection_record_id 或 data")
 
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    serial_no = f"{datetime.now():%y%m%d}{await count_report_records_since(db, today_start) + 1:02d}"
-    fill_data.setdefault("流水号", serial_no)
-    output_path, output_filename, content = _render_cao_file(
-        tp, fill_data, product_name, batch_number
-    )
-
-    # 保存报告单记录到数据库
-    if record_id:
-        await create_report_record(
-            db=db,
-            inspection_record_id=record_id,
-            template_path=payload.template,
-            product_name=product_name,
-            batch_number=batch_number,
-            file_path=str(output_path),
-            file_size=output_path.stat().st_size,
-            serial_no=serial_no,
+    # 流水号按北京时间计日：当天已生成的报告数作为序号起点。
+    # 并发撞号时（唯一索引冲突）重算流水号重试，最多 3 次。
+    for attempt in range(3):
+        today_start = datetime.combine(today(), time.min, tzinfo=APP_TZ)
+        serial_no = f"{today():%y%m%d}{await count_report_records_since(db, today_start) + 1:02d}"
+        # 直接覆盖：保证 docx 内流水号与入库流水号一致（重试时也能换新号）
+        fill_data["流水号"] = serial_no
+        output_path, output_filename, content = _render_cao_file(
+            tp, fill_data, product_name, batch_number
         )
+        try:
+            if record_id:
+                await create_report_record(
+                    db=db,
+                    inspection_record_id=record_id,
+                    template_path=payload.template,
+                    product_name=product_name,
+                    batch_number=batch_number,
+                    file_path=str(output_path),
+                    file_size=output_path.stat().st_size,
+                    serial_no=serial_no,
+                )
+            break
+        except IntegrityError as exc:
+            if not is_serial_unique_violation(exc) or attempt == 2:
+                raise
+            await db.rollback()  # flush 失败后 session 已不可用，回滚后才能重查计数
+            await asyncio.sleep(0.1 * (attempt + 1))  # 等并发对手提交后再重算
 
     return _coa_response(output_filename, content)
 
@@ -675,38 +688,47 @@ async def generate_task_report(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_permission("quality:report:generate")),
 ):
-    # 逐份生成：每个标准文件各出一份 COA（行归属其标准文件；模板按该文件 COA 绑定取）
-    splits = await test_task_service.build_task_report_splits(db, task_id)
-    generated = []
-    for split in splits:
-        template = split["template"]
-        tp = REPORT_TEMPLATE_DIR / template
-        if not quality_storage.ensure_template_local(template).is_file():
-            raise HTTPException(status_code=404, detail=f"模板不存在：{template}")
-        output_path, output_filename, _content = _render_cao_file(
-            tp, split["fill_data"], split["product_name"], split["batch_number"],
-            suffix=split["doc"].file_no,
-        )
-        record = await create_report_record(
-            db=db,
-            test_task_id=task_id,
-            template_path=template,
-            product_name=split["product_name"],
-            batch_number=split["batch_number"],
-            file_path=str(output_path),
-            file_size=output_path.stat().st_size,
-            serial_no=split["fill_data"].get("流水号", ""),
-        )
-        generated.append({
-            "report_id": str(record.id),
-            "filename": output_filename,
-            "file_no": split["doc"].file_no,
-            "template_path": template,
-        })
-    return success_response(
-        data=generated,
-        message=f"已按标准文件逐份生成 {len(generated)} 份 COA",
-    )
+    # 逐份生成：每个标准文件各出一份 COA（行归属其标准文件；模板按该文件 COA 绑定取）。
+    # 并发撞号时（唯一索引冲突）整体重算流水号重试，最多 3 次。
+    for attempt in range(3):
+        try:
+            splits = await test_task_service.build_task_report_splits(db, task_id)
+            generated = []
+            for split in splits:
+                template = split["template"]
+                tp = REPORT_TEMPLATE_DIR / template
+                if not quality_storage.ensure_template_local(template).is_file():
+                    raise HTTPException(status_code=404, detail=f"模板不存在：{template}")
+                output_path, output_filename, _content = _render_cao_file(
+                    tp, split["fill_data"], split["product_name"], split["batch_number"],
+                    suffix=split["doc"].file_no,
+                )
+                record = await create_report_record(
+                    db=db,
+                    test_task_id=task_id,
+                    template_path=template,
+                    product_name=split["product_name"],
+                    batch_number=split["batch_number"],
+                    file_path=str(output_path),
+                    file_size=output_path.stat().st_size,
+                    serial_no=split["fill_data"].get("流水号", ""),
+                )
+                generated.append({
+                    "report_id": str(record.id),
+                    "filename": output_filename,
+                    "file_no": split["doc"].file_no,
+                    "template_path": template,
+                })
+            return success_response(
+                data=generated,
+                message=f"已按标准文件逐份生成 {len(generated)} 份 COA",
+            )
+        except IntegrityError as exc:
+            if not is_serial_unique_violation(exc) or attempt == 2:
+                raise
+            await db.rollback()  # flush 失败后 session 已不可用，回滚后才能重查计数
+            await asyncio.sleep(0.1 * (attempt + 1))  # 等并发对手提交后再重算
+    raise HTTPException(status_code=500, detail="流水号重试次数用尽，请重新生成")
 
 
 # ─── 报告单记录 ───
@@ -733,6 +755,7 @@ async def list_reports(
                 "template_path": it.template_path,
                 "product_name": it.product_name,
                 "batch_number": it.batch_number,
+                "serial_no": it.serial_no,
                 "file_path": it.file_path,
                 "file_size": it.file_size,
                 "created_at": it.created_at.isoformat() if it.created_at else None,
@@ -828,7 +851,7 @@ async def daily_reports(
     date: str | None = Query(default=None, description="日期 YYYY-MM-DD，默认今天"),
     db: AsyncSession = Depends(get_db),
 ) -> JSONResponse:
-    day = date or datetime.now().strftime("%Y-%m-%d")
+    day = date or today().isoformat()
     items = await list_report_records_by_date(db, day)
     return success_response(data=[
         {
@@ -837,7 +860,7 @@ async def daily_reports(
             "batch_number": it.batch_number,
             "template_path": it.template_path,
             "report_id": str(it.id),
-            "created_at": it.created_at.strftime("%H:%M") if it.created_at else None,
+            "created_at": it.created_at.astimezone(APP_TZ).strftime("%H:%M") if it.created_at else None,
         }
         for it in items
     ])

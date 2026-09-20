@@ -2,12 +2,14 @@
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import APP_TZ
 from app.modules.quality.models import (
     CoaTemplateBinding,
     InspectionImpurity,
@@ -180,6 +182,11 @@ async def get_impurities_by_record(
 # ─── 报告单 ───
 
 
+def is_serial_unique_violation(exc: Exception) -> bool:
+    """判断是否为流水号唯一索引冲突（并发生成 COA 撞号，需要重算流水号重试）。"""
+    return isinstance(exc, IntegrityError) and "uq_quality_report_record_serial" in str(exc.orig)
+
+
 async def create_report_record(
     db: AsyncSession,
     template_path: str,
@@ -221,9 +228,9 @@ async def count_report_records_since(
 async def list_report_records_by_date(
     db: AsyncSession, day: str
 ) -> list[ReportRecord]:
-    """某日生成的报告单（流水号汇总：流水号+产品+批号）。"""
-    start = datetime.fromisoformat(day)
-    end = start + __import__("datetime").timedelta(days=1)
+    """某日生成的报告单（流水号汇总：流水号+产品+批号，按北京时间计日）。"""
+    start = datetime.fromisoformat(day).replace(tzinfo=APP_TZ)
+    end = start + timedelta(days=1)
     stmt = select(ReportRecord).where(
         ReportRecord.created_at >= start,
         ReportRecord.created_at < end,

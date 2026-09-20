@@ -5,7 +5,9 @@
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import timedelta
+
+from app.core.time import today as _app_today
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ async def _push_today_tasks() -> None:
 
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _app_today().isoformat()
     from app.modules.quality.feishu.fill_service import (
         _frontend_task_link,
         _task_doc_file_nos,
@@ -75,7 +77,7 @@ async def _push_today_tasks() -> None:
             for t in review_items
         ]
         # 明日出报预告
-        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (_app_today() + timedelta(days=1)).isoformat()
         tomorrow_items = await list_test_tasks_by_report_date(db, tomorrow)
         tomorrow_lines = [
             f"- {t.product_name} 批号 {t.batch_number}｜"
@@ -117,7 +119,7 @@ async def _push_afternoon_reminder() -> None:
 
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _app_today().isoformat()
     from app.modules.quality.feishu.fill_service import (
         _frontend_task_link,
         _task_doc_file_nos,

@@ -11,6 +11,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
+from app.core.time import today as _app_today
 from app.modules.quality import storage as quality_storage
 from app.modules.quality.feishu import event_client
 from app.modules.quality.feishu.client import (
@@ -207,7 +208,7 @@ async def _reply_today_report(chat_id: str) -> None:
         list_test_tasks_by_report_date,
     )
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _today_str()
     async with async_session_factory() as db:
         tasks = await list_test_tasks_by_report_date(db, today)
         review_items, _ = await list_test_tasks(
@@ -386,7 +387,7 @@ async def handle_fill_command(event: dict) -> None:
             from app.modules.quality.repository import list_report_records_by_date
 
             async with async_session_factory() as rdb:
-                items = await list_report_records_by_date(rdb, datetime.now().strftime("%Y-%m-%d"))
+                items = await list_report_records_by_date(rdb, _today_str())
             lines = [f"- {it.serial_no or '-'}｜{it.product_name}｜批号 {it.batch_number}" for it in items]
             await send_chat_text(
                 chat_id,
@@ -402,7 +403,7 @@ async def handle_fill_command(event: dict) -> None:
             if len(_reported_m.groups()) == 3:
                 _year, _mo, _day = (int(g) for g in _reported_m.groups())
             else:
-                _year = datetime.now().year
+                _year = _app_today().year
                 _mo, _day = int(_reported_m.group(1)), int(_reported_m.group(2))
             await _reply_reported_tasks(chat_id, f"{_year:04d}-{_mo:02d}-{_day:02d}")
             return
@@ -1138,8 +1139,8 @@ async def handle_card_action(event: dict) -> None:
 
 
 def _today_str() -> str:
-    """服务器本地日期 YYYY-MM-DD（与每日推送/出报日期口径一致）。"""
-    return datetime.now().strftime("%Y-%m-%d")
+    """北京日期 YYYY-MM-DD（与流水号/每日推送/出报日期口径一致）。"""
+    return _app_today().isoformat()
 
 
 def _norm_sop(s: str | None) -> str:

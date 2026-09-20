@@ -121,6 +121,7 @@ export interface ReportRecord {
   template_path: string
   product_name: string
   batch_number: string
+  serial_no: string | null
   file_path: string
   file_size: number | null
   created_at: string | null

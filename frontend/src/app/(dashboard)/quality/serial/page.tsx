@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Typography, Card, Table, DatePicker, Space, Button, App } from 'antd'
-import { PrinterOutlined, SearchOutlined, DownloadOutlined } from '@ant-design/icons'
+import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import * as XLSX from 'xlsx'
 import type { DailyReportItem } from '@/types/quality'
 import { fetchDailyReports, downloadReportFile } from '@/actions/quality'
 
@@ -45,6 +46,23 @@ export default function SerialRegistryPage() {
     }
   }
 
+  const handleExport = () => {
+    if (!data.length) {
+      message.warning('当日暂无流水记录可导出')
+      return
+    }
+    const wb = XLSX.utils.book_new()
+    const rows = data.map((r) => ({
+      '流水号': r.serial_no,
+      '产品名称': r.product_name,
+      '批号': r.batch_number,
+      '模板': r.template_path,
+      '时间': r.created_at,
+    }))
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '报告单流水')
+    XLSX.writeFile(wb, `报告单流水-${date.format('YYYYMMDD')}.xlsx`)
+  }
+
   const columns = [
     { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 120 },
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name', ellipsis: true },
@@ -81,6 +99,7 @@ export default function SerialRegistryPage() {
       <Space style={{ marginBottom: 16 }} wrap>
         <DatePicker value={date} onChange={(d) => d && setDate(d)} allowClear={false} />
         <Button type="primary" icon={<SearchOutlined />} onClick={load}>查询</Button>
+        <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出 Excel</Button>
         <Button icon={<PrinterOutlined />} onClick={() => window.print()}>打印</Button>
       </Space>
 

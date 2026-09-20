@@ -118,6 +118,13 @@ class ReportRecord(BaseModel):
     __tablename__ = "report_records"
     __table_args__ = (
         Index("ix_quality_report_record_inspection", "inspection_record_id"),
+        # 流水号唯一（并发生成 COA 时数据库兜底防重号；历史空号记录不受约束）
+        Index(
+            "uq_quality_report_record_serial",
+            "serial_no",
+            unique=True,
+            postgresql_where=text("serial_no IS NOT NULL"),
+        ),
         {"schema": "quality"},
     )
 
