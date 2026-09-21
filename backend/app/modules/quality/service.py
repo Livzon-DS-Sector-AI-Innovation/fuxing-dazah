@@ -905,6 +905,7 @@ class TestTaskService:
             existing.excel_filename = filename
             await db.flush()
             record_id = existing.id
+            rec = existing
         else:
             record = await create_inspection_record(
                 db=db,
@@ -927,6 +928,7 @@ class TestTaskService:
                 excel_filename=filename,
             )
             record_id = record.id
+            rec = record
         task_link = None
         task = await get_test_task_by_batch(db, parsed.product_name, parsed.batch_number)
         if task and task.status == "in_progress":
@@ -992,6 +994,23 @@ class TestTaskService:
                 "appended": appended,
                 "unmatched": remaining,
             }
+        # 判定结论回写 InspectionRecord.all_pass（此前恒 True，超限批次也被统计为合格）：
+        # 任务行判定结果 ∪ 组分自带限度判定；两者皆无判定时不改写（保留默认 True）
+        verdicts: list[bool] = []
+        if task:
+            for r in await list_test_results(db, task.id):
+                if r.is_pass is not None:
+                    verdicts.append(r.is_pass)
+        for c in parsed.components:
+            if c.report_value is not None and c.limit is not None:
+                op = "≥" if ("万古霉素" in c.name or "vancomycin" in c.name.lower()) else "≤"
+                verdicts.append(TestTaskService._judge_value(
+                    op, c.limit if op == "≥" else None,
+                    None if op == "≥" else c.limit, c.report_value,
+                ))
+        if verdicts:
+            rec.all_pass = all(verdicts)
+            await db.flush()
         return {"parse": parsed, "record_id": record_id, "task_link": task_link}
 
     # ── 追加行 ──

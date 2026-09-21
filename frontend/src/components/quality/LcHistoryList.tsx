@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Table, Tag, Input, Space, Button, App, Typography } from 'antd'
+import { Table, Tag, Input, Space, Button, App, Typography, Popconfirm } from 'antd'
 import { SearchOutlined, DeleteOutlined, EyeOutlined, ExperimentOutlined } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import type { InspectionRecordListItem } from '@/types/quality'
@@ -72,8 +72,16 @@ export default function LcHistoryList() {
             onClick={() => router.push(`/quality/history/${r.id}`)}>
             详情
           </Button>
-          <Button size="small" danger icon={<DeleteOutlined />}
-            onClick={() => handleDelete(r.id)} />
+          <Popconfirm
+            title={`确认删除检验记录 ${r.batch_number}？`}
+            description="删除后不可恢复"
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => handleDelete(r.id)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
         </Space>
       ),
     },

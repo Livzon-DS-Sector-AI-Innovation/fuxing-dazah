@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Upload,
+  Table, Tag, Input, Space, Button, App, Select, Modal, Form, DatePicker, Progress, Upload, Popconfirm,
 } from 'antd'
 import {
   SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined,
@@ -294,7 +294,10 @@ export default function TaskFillIn() {
     { title: 'COA表格编号', dataIndex: 'form_id', key: 'form_id', width: 150, render: (v: string | null) => v || '-' },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 90,
-      render: (v: TestTaskStatus) => <Tag color={STATUS_META[v].color}>{STATUS_META[v].label}</Tag>,
+      render: (v: TestTaskStatus) => {
+        const meta = STATUS_META[v] ?? { color: 'default', label: v }
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
     {
       title: '进度', key: 'progress', width: 150,
@@ -325,8 +328,16 @@ export default function TaskFillIn() {
             </Button>
           )}
           {canReview && (
-            <Button size="small" danger icon={<DeleteOutlined />}
-              onClick={() => handleDelete(r.id)} />
+            <Popconfirm
+              title={`确认删除任务 ${r.batch_number}？`}
+              description="删除后该任务的填报数据与进度不可恢复"
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleDelete(r.id)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
           )}
         </Space>
       ),

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Table, Tag, Input, Space, Button, App, Descriptions, Card, Modal, Form,
-  InputNumber, Select, Popconfirm, Typography, Upload,
+  InputNumber, Select, Popconfirm, Typography, Upload, Result, Skeleton,
 } from 'antd'
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
@@ -59,6 +59,7 @@ export default function TaskDetail({ id }: { id: string }) {
   const { message } = App.useApp()
   const [detail, setDetail] = useState<TestTaskDetail | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [edits, setEdits] = useState<Record<string, EditDraft>>({})
 
@@ -74,6 +75,7 @@ export default function TaskDetail({ id }: { id: string }) {
 
   const loadDetail = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const d = await fetchTestTaskDetail(id)
       setDetail(d)
@@ -84,7 +86,7 @@ export default function TaskDetail({ id }: { id: string }) {
       setAttachments(atts.data || [])
       setReviews(revs.data || [])
     } catch (err: any) {
-      message.error(err.message || '加载失败')
+      setLoadError(err.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -98,7 +100,17 @@ export default function TaskDetail({ id }: { id: string }) {
   const canReview = hasPermission('quality:task:review')
 
   if (!detail) {
-    return loading ? <Text type="secondary">加载中…</Text> : null
+    if (loadError) {
+      return (
+        <Result
+          status="error"
+          title="加载失败"
+          subTitle={loadError}
+          extra={<Button type="primary" onClick={loadDetail}>重试</Button>}
+        />
+      )
+    }
+    return <Skeleton active paragraph={{ rows: 6 }} />
   }
 
   const editable =
@@ -392,7 +404,15 @@ export default function TaskDetail({ id }: { id: string }) {
                 <Upload accept=".xlsx,.xls" showUploadList={false} beforeUpload={handleParseLc}>
                   <Button icon={<UploadOutlined />}>上传液相计算表填入</Button>
                 </Upload>
-                <Button icon={<CheckCircleOutlined />} loading={saving} onClick={handleFillManualPass}>文字项一键合格</Button>
+                <Popconfirm
+                  title="批量填入文字项"
+                  description={`将 ${detail.results.filter((r) => r.judge_mode === 'manual' && r.is_pass === null).length} 个未填写的文字型项目全部标为「符合规定/合格」，确认？`}
+                  okText="确认填入"
+                  cancelText="取消"
+                  onConfirm={handleFillManualPass}
+                >
+                  <Button icon={<CheckCircleOutlined />} loading={saving}>文字项一键合格</Button>
+                </Popconfirm>
                 <Button icon={<PlusOutlined />} onClick={() => { addForm.resetFields(); setAddOpen(true) }}>追加项目</Button>
               </>
             )}
@@ -443,7 +463,9 @@ export default function TaskDetail({ id }: { id: string }) {
           <Descriptions.Item label="效期">{detail.expiry_date || '-'}</Descriptions.Item>
           <Descriptions.Item label="COA表格编号">{detail.form_id || '-'}</Descriptions.Item>
           <Descriptions.Item label="状态">
-            <Tag color={STATUS_META[detail.status].color}>{STATUS_META[detail.status].label}</Tag>
+            <Tag color={(STATUS_META[detail.status] ?? { color: 'default', label: detail.status }).color}>
+              {(STATUS_META[detail.status] ?? { color: 'default', label: detail.status }).label}
+            </Tag>
           </Descriptions.Item>
           <Descriptions.Item label="进度">
             {detail.results.filter((r) => r.is_pass !== null).length}/{detail.results.length} 项已判定

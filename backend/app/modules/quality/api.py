@@ -116,6 +116,7 @@ async def read_module() -> dict[str, str]:
 async def upload_lc_excel(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:lc:upload")),
 ):
     filename = file.filename or "unknown.xlsx"
     if not filename.lower().endswith((".xlsx", ".xls")):
@@ -213,6 +214,7 @@ async def get_lc_record(
 async def delete_lc_record(
     record_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:lc:upload")),
 ) -> JSONResponse:
     result = await delete_inspection_record(db, record_id)
     if not result:
@@ -549,7 +551,10 @@ async def list_products():
 
 
 @router.post("/products", summary="保存产品代码映射")
-async def save_products(data: list[dict] = Body(...)):
+async def save_products(
+    data: list[dict] = Body(...),
+    _user: User = Depends(require_permission("quality:standard:manage")),
+):
     _save_products(data)
     return {"message": "已保存", "count": len(data)}
 
@@ -608,7 +613,14 @@ def _render_cao_file(
     output_dir.mkdir(parents=True, exist_ok=True)
     safe_batch = batch_number.replace("/", "_").replace("\\", "_")
     safe_suffix = suffix.replace("/", "_").replace("\\", "_")
-    output_filename = f"COA-{product_name}-{safe_batch}" + (f"-{safe_suffix}" if safe_suffix else "") + ".docx"
+    # 文件名含流水号：同批号重复出报不再同名覆盖（否则两条记录下载同一文件，静默错单）
+    safe_serial = str(fill_data.get("流水号") or "").replace("/", "_").replace("\\", "_")
+    output_filename = (
+        f"COA-{product_name}-{safe_batch}"
+        + (f"-{safe_serial}" if safe_serial else "")
+        + (f"-{safe_suffix}" if safe_suffix else "")
+        + ".docx"
+    )
     output_path = output_dir / output_filename
     doc.save(str(output_path))
     quality_storage.upload_report(output_path)
@@ -675,17 +687,18 @@ async def generate_report(
             tp, fill_data, product_name, batch_number
         )
         try:
-            if record_id:
-                await create_report_record(
-                    db=db,
-                    inspection_record_id=record_id,
-                    template_path=payload.template,
-                    product_name=product_name,
-                    batch_number=batch_number,
-                    file_path=str(output_path),
-                    file_size=output_path.stat().st_size,
-                    serial_no=serial_no,
-                )
+            # 两条路径（inspection_record_id / payload.data）都落库，
+            # 否则流水号不入库不计数，下一次出报拿到同一个号
+            await create_report_record(
+                db=db,
+                inspection_record_id=record_id,
+                template_path=payload.template,
+                product_name=product_name,
+                batch_number=batch_number,
+                file_path=str(output_path),
+                file_size=output_path.stat().st_size,
+                serial_no=serial_no,
+            )
             break
         except IntegrityError as exc:
             if not is_serial_unique_violation(exc) or attempt == 2:
