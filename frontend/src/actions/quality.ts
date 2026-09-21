@@ -544,6 +544,16 @@ export async function downloadReportFile(reportId: string): Promise<Blob> {
   return res.blob()
 }
 
+/** 下载 COA 模板文件（带鉴权；后端端点已加 require_permission）。 */
+export async function downloadTemplateFile(path: string): Promise<Blob> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/v1/quality/templates/${encodeURIComponent(path).replace(/%2F/g, '/')}/download`,
+    { headers: await _authHeaders() },
+  )
+  if (!res.ok) throw new Error('下载模板失败')
+  return res.blob()
+}
+
 export async function parseLcIntoTask(taskId: string, formData: FormData): Promise<{ message: string; data: TestTaskDetail }> {
   const headers = await _authHeaders()
   delete headers['Content-Type']

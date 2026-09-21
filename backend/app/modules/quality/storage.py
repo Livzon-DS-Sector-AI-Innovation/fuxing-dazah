@@ -79,12 +79,24 @@ def read_report_from_minio(filename: str) -> bytes | None:
     return result[0] if result else None
 
 
+def safe_join(base: Path, rel: str) -> Path | None:
+    """相对路径安全拼接：resolve 后必须仍位于 base 内，拦截 .. 穿越；非法返回 None。"""
+    base_r = base.resolve()
+    p = (base_r / rel).resolve()
+    if p == base_r or p.is_relative_to(base_r):
+        return p
+    return None
+
+
 def ensure_template_local(rel_path: str) -> Path:
     """确保模板本地可用：本地缺失且 MinIO 启用时从对象下载。
 
-    返回本地绝对路径（MinIO 也未存时返回不存在路径，由调用方报 404）。
+    返回本地绝对路径（路径非法或 MinIO 也未存时返回不存在路径，由调用方报 404）。
     """
-    local = REPORT_TEMPLATE_DIR / rel_path
+    local = safe_join(REPORT_TEMPLATE_DIR, rel_path)
+    if local is None:
+        # 非法路径（.. 穿越等）：返回目录内不存在的路径，调用方按 404 处理
+        return REPORT_TEMPLATE_DIR / "__invalid_path__"
     if local.is_file() or not s3.is_enabled():
         return local
     result = s3.get_object("quality", TEMPLATE_PREFIX + rel_path)

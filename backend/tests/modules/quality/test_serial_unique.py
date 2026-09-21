@@ -4,6 +4,8 @@
 识别冲突让上层重算重试。本测试验证：重复流水号被数据库拒绝，且冲突可被识别。
 """
 
+import uuid
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -13,13 +15,16 @@ from app.modules.quality.repository import (
     is_serial_unique_violation,
 )
 
+# 随机流水号，避免与开发库真实数据（按日期编号）撞唯一索引
+_SERIAL = f"test-{uuid.uuid4().hex[:12]}"
+
 
 def _insert_args(batch: str) -> dict:
     return {
         "template_path": "tpl.docx",
         "product_name": "测试产品",
         "batch_number": batch,
-        "serial_no": "26092001",
+        "serial_no": _SERIAL,
     }
 
 

@@ -31,5 +31,8 @@ async def test_day_boundary_is_beijing_time(db_session):
 
     day19 = await list_report_records_by_date(db_session, "2026-09-19")
     day20 = await list_report_records_by_date(db_session, "2026-09-20")
-    assert [r.batch_number for r in day19] == ["B-LATE"]
-    assert [r.batch_number for r in day20] == ["B-EARLY"]
+    # 只断言本测试插入的记录（开发库可能有同日的真实数据）
+    mine19 = [r.batch_number for r in day19 if r.batch_number in {"B-EARLY", "B-LATE"}]
+    mine20 = [r.batch_number for r in day20 if r.batch_number in {"B-EARLY", "B-LATE"}]
+    assert mine19 == ["B-LATE"]
+    assert mine20 == ["B-EARLY"]

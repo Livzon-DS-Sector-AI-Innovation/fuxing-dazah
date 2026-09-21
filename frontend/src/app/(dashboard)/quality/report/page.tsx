@@ -2,14 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { Typography, Table, Tag, Input, Space, App, Button } from 'antd'
+import { Typography, Table, Input, Space, App, Button } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ReportRecord } from '@/types/quality'
-import { fetchReportRecords } from '@/actions/quality'
+import { fetchReportRecords, downloadReportFile } from '@/actions/quality'
 
 const { Title, Paragraph } = Typography
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 export default function ReportPage() {
   const router = useRouter()
@@ -32,8 +30,18 @@ export default function ReportPage() {
 
   useEffect(() => { load(page) }, [page, load])
 
-  const handleDownload = (reportId: string) => {
-    window.open(`${API_BASE_URL}/api/v1/quality/report/records/${reportId}/download`, '_blank')
+  const handleDownload = async (r: ReportRecord) => {
+    try {
+      const blob = await downloadReportFile(r.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `COA-${r.batch_number}.docx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败')
+    }
   }
 
   const columns = [
@@ -50,7 +58,7 @@ export default function ReportPage() {
       render: (_: any, r: ReportRecord) => (
         <Space size={4}>
           <Button size="small" icon={<DownloadOutlined />}
-            onClick={() => handleDownload(r.id)} disabled={!r.file_path}>
+            onClick={() => handleDownload(r)} disabled={!r.file_path}>
             下载
           </Button>
           {r.test_task_id && (

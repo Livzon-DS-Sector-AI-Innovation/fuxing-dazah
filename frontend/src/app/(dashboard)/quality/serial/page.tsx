@@ -83,7 +83,7 @@ export default function SerialRegistryPage() {
         @media print {
           body * { visibility: hidden; }
           #serial-print-area, #serial-print-area * { visibility: visible; }
-          #serial-print-area { display: block; position: absolute; left: 0; top: 0; width: 100%; }
+          #serial-print-area { position: absolute; left: 0; top: 0; width: 100%; }
           #serial-print-area table { width: 100%; border-collapse: collapse; font-size: 13px; }
           #serial-print-area th, #serial-print-area td { border: 1px solid #333; padding: 6px 10px; text-align: left; }
         }
@@ -103,12 +103,14 @@ export default function SerialRegistryPage() {
         <Button icon={<PrinterOutlined />} onClick={() => window.print()}>打印</Button>
       </Space>
 
-      {/* 打印区：纯表格版式（打印模板接入后替换为模板样式） */}
-      <div id="serial-print-area" style={{ display: 'none' }}>
+      {/* 打印区：纯表格版式（打印模板接入后替换为模板样式）。
+          注意：不能再用 inline display:none（会压过 @media print 规则导致打印空白），
+          改为 Tailwind 的 hidden + print:block。 */}
+      <div id="serial-print-area" className="hidden print:block">
         <h2 style={{ textAlign: 'center' }}>{date.format('YYYY-MM-DD')} 报告单流水</h2>
         <table>
           <thead>
-            <tr><th>流水号</th><th>产品名称</th><th>批号</th><th>时间</th></tr>
+            <tr><th>流水号</th><th>产品名称</th><th>批号</th><th>模板</th><th>时间</th></tr>
           </thead>
           <tbody>
             {data.map((r) => (
@@ -116,6 +118,7 @@ export default function SerialRegistryPage() {
                 <td>{r.serial_no}</td>
                 <td>{r.product_name}</td>
                 <td>{r.batch_number}</td>
+                <td>{r.template_path}</td>
                 <td>{r.created_at}</td>
               </tr>
             ))}

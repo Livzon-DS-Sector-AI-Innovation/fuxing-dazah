@@ -369,7 +369,10 @@ async def create_folder(
     name: str = Body(..., embed=True),
     _user: User = Depends(require_permission("quality:template:manage")),
 ):
-    (REPORT_TEMPLATE_DIR / name).mkdir(parents=True, exist_ok=True)
+    p = quality_storage.safe_join(REPORT_TEMPLATE_DIR, name)
+    if p is None:
+        raise HTTPException(status_code=400, detail="非法文件夹名")
+    p.mkdir(parents=True, exist_ok=True)
     return {"name": name}
 
 
@@ -378,8 +381,8 @@ async def delete_folder(
     name: str = Body(..., embed=True),
     _user: User = Depends(require_permission("quality:template:manage")),
 ):
-    p = REPORT_TEMPLATE_DIR / name
-    if not p.exists():
+    p = quality_storage.safe_join(REPORT_TEMPLATE_DIR, name)
+    if p is None or not p.is_dir():
         raise HTTPException(status_code=404, detail="不存在")
     try:
         p.rmdir()
@@ -449,18 +452,22 @@ async def upload_template(
 ):
     if not file.filename or not file.filename.endswith(".docx"):
         raise HTTPException(status_code=400, detail="仅支持 .docx")
-    dest = REPORT_TEMPLATE_DIR / folder
+    # 文件名只取最后一段（去掉客户端路径成分，防 .. 穿越）
+    filename = Path(file.filename).name
+    dest = quality_storage.safe_join(REPORT_TEMPLATE_DIR, folder) if folder else REPORT_TEMPLATE_DIR
+    if dest is None or (dest / filename).resolve().is_relative_to(dest.resolve()) is False:
+        raise HTTPException(status_code=400, detail="非法路径")
     dest.mkdir(parents=True, exist_ok=True)
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="文件为空")
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="超过5MB")
-    saved = dest / file.filename
+    saved = dest / filename
     saved.write_bytes(content)
     quality_storage.upload_template(saved)
     # 自动匹配：模板 COA 号 ↔ 编号相同的标准文档（唯一命中才自动建立 COA 侧绑定）
-    rel_path = f"{folder}/{file.filename}" if folder else file.filename
+    rel_path = f"{folder}/{filename}" if folder else filename
     docs = await list_standard_documents(db)
     doc_tokens = {d.id: _extract_number_tokens(d.file_no or "", d.product_internal_code or "", d.product_code or "", d.version or "") for d in docs}
     matched = _match_template_to_doc(_template_number_tokens(saved), docs, doc_tokens)
@@ -472,7 +479,7 @@ async def upload_template(
         )
         bound = True
     return {
-        "filename": file.filename,
+        "filename": filename,
         "folder": folder,
         "path": rel_path,
         "matched": _doc_match_info(matched),
@@ -481,7 +488,10 @@ async def upload_template(
 
 
 @router.get("/templates/{path:path}/download", summary="下载模板")
-async def download_template(path: str):
+async def download_template(
+    path: str,
+    _user: User = Depends(require_permission("quality:report:read")),
+):
     full = quality_storage.ensure_template_local(path)
     if not full.is_file():
         raise HTTPException(status_code=404, detail="不存在")
@@ -497,8 +507,8 @@ async def delete_template(
     path: str,
     _user: User = Depends(require_permission("quality:template:manage")),
 ):
-    full = REPORT_TEMPLATE_DIR / path
-    if not full.exists():
+    full = quality_storage.safe_join(REPORT_TEMPLATE_DIR, path)
+    if full is None or not full.is_file():
         raise HTTPException(status_code=404, detail="不存在")
     full.unlink()
     quality_storage.delete_template_object(path)
@@ -603,6 +613,11 @@ def _render_cao_file(
     doc.save(str(output_path))
     quality_storage.upload_report(output_path)
     return output_path, output_filename, output_path.read_bytes()
+
+
+def _safe_filename(name: str) -> str:
+    """客户端文件名消毒：只取最后一段路径并过滤控制字符，防路径穿越（附件 key 用）。"""
+    return re.sub(r"[^\w.\-（）()\[\] ]", "_", Path(name).name) or "file"
 
 
 def _coa_response(output_filename: str, content: bytes) -> StreamingResponse:
@@ -769,7 +784,11 @@ async def list_reports(
 
 
 @router.get("/report/records/{report_id}/download", summary="下载已生成的报告单")
-async def download_report(report_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def download_report(
+    report_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_permission("quality:report:read")),
+):
     report = await get_report_record(db, report_id)
     if not report or not report.file_path:
         raise HTTPException(status_code=404, detail="报告文件不存在")
@@ -1397,7 +1416,7 @@ async def parse_lc_into_task_endpoint(
         db, task_id, content, filename
     )
     # 原始计算表自动归档为任务附件（电子审核原始证据）
-    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{filename}"
+    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{_safe_filename(filename)}"
     quality_storage.upload_attachment(
         object_key, content,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1437,7 +1456,7 @@ async def upload_task_attachment_endpoint(
         raise HTTPException(status_code=400, detail="文件为空")
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="超过20MB")
-    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{file.filename}"
+    object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{_safe_filename(file.filename)}"
     quality_storage.upload_attachment(object_key, content, file.content_type or "application/octet-stream")
     att = await create_task_attachment(db, {
         "task_id": task_id,

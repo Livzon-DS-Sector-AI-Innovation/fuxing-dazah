@@ -10,11 +10,10 @@ import {
 import { usePermission } from '@/hooks/usePermission'
 import {
   fetchTemplates, uploadTemplate, createTemplateFolder, deleteTemplateFolder, deleteTemplateFile,
-  bindTemplate, unbindTemplate, fetchStandardDocuments,
+  bindTemplate, unbindTemplate, fetchStandardDocuments, downloadTemplateFile,
 } from '@/actions/quality'
 
 const { Text } = Typography
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
 interface FlatTemplate {
   path: string
@@ -66,6 +65,20 @@ export default function TemplatesManager() {
   const [bindPath, setBindPath] = useState('')
   const [bindDocId, setBindDocId] = useState<string | undefined>()
   const [docOptions, setDocOptions] = useState<{ label: string; value: string }[]>([])
+
+  const handleDownload = async (path: string, filename: string) => {
+    try {
+      const blob = await downloadTemplateFile(path)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      message.error('下载失败')
+    }
+  }
 
   const openBindModal = async (path: string) => {
     setBindPath(path)
@@ -208,7 +221,7 @@ export default function TemplatesManager() {
             </Popconfirm>
           )}
           <Button size="small" icon={<DownloadOutlined />}
-            onClick={() => window.open(`${API_BASE_URL}/api/v1/quality/templates/${encodeURI(r.path)}/download`, '_blank')}>
+            onClick={() => handleDownload(r.path, r.filename)}>
             下载
           </Button>
           {canManage && (
