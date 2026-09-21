@@ -48,6 +48,7 @@ from app.modules.warehouse.agent import confirm, repository
 from app.modules.warehouse.agent.pipeline.aligner import AlignedReceipt
 from app.modules.warehouse.agent.pipeline.recognizer import (
     REQUIRED_FIELDS,
+    RecognizedFinishedReceipt,
     RecognizedReceipt,
 )
 from app.modules.warehouse.feishu import notification
@@ -60,6 +61,7 @@ RECEIPT_SCENE = "receipt"
 GMP_OUTBOUND_SCENE = "gmp_outbound"
 FINISHED_OUTBOUND_SCENE = "finished_outbound"  # 票02：成品出库登记（预留）
 PICKING_OUTBOUND_SCENE = "picking_outbound"  # V3.0 分期C：领料 FIFO 登记
+FINISHED_RECEIPT_SCENE = "finished_receipt"  # V3.0 §4.6：成品入库登记（识别+对话）
 
 # pending_confirm TTL（秒）：读运行参数配置（DB → env → 默认 600），改值即时生效
 def _draft_ttl_seconds() -> int:
@@ -178,17 +180,20 @@ async def _generate_draft_no(db: AsyncSession) -> str:
 async def create_receipt_draft(
     db: AsyncSession,
     *,
-    recognized: RecognizedReceipt,
+    recognized: RecognizedReceipt | RecognizedFinishedReceipt,
     image_file_token: str | None = None,
     open_id: str,
     chat_id: str | None = None,
+    scene: str = RECEIPT_SCENE,
 ) -> WarehouseAgentDraft:
-    """识别落库：新建 scene=receipt 草稿（status=created + TTL 10min）。
+    """识别落库：新建识别草稿（status=created + TTL 10min）。
 
-    recognized JSONB 存 ``RecognizedReceipt.model_dump()``（13 字段 value/
-    confidence + raw，票04/05 审计回溯用）；source_image 存原图 file token
-    （票04 submit 下载回字节传附件列）。chat_id 落库——确认后回执按原渠道
-    回复（群聊发起回群聊，私聊发起回私聊）。
+    scene 缺省 receipt（原辅料送货单）；V3.0 §4.6 成品入库识别传
+    FINISHED_RECEIPT_SCENE（recognized 为 RecognizedFinishedReceipt，两
+    模型同构 model_dump）。recognized JSONB 存 ``model_dump()``（字段
+    value/confidence + raw，票04/05 审计回溯用）；source_image 存原图
+    file token（票04 submit 下载回字节传附件列）。chat_id 落库——确认后
+    回执按原渠道回复（群聊发起回群聊，私聊发起回私聊）。
     """
     started = time.monotonic()
     recognized_json = recognized.model_dump(mode="json")
@@ -197,7 +202,7 @@ async def create_receipt_draft(
         draft_no = await _generate_draft_no(db)
         draft = WarehouseAgentDraft(
             draft_no=draft_no,
-            scene=RECEIPT_SCENE,
+            scene=scene,
             status="created",
             source_image=image_file_token or None,
             recognized=recognized_json,
@@ -329,6 +334,30 @@ async def mark_aligned(
         to_status="aligned",
         started=started,
         extra={"match": aligned.match_confidence},
+    )
+
+
+async def mark_direct_aligned(db: AsyncSession, draft: WarehouseAgentDraft) -> None:
+    """created → aligned（无对齐步骤，V3.0 §4.6 成品入库识别专用）。
+
+    成品入库识别不做物料主数据对齐（对齐器是原辅料 material_master 语义）：
+    aligned 保持空 dict——确认卡字段行展示 recognized 识别值（含置信度 ⚠），
+    对话修改后 aligned 覆盖（与 receipt 场景同一取值口径）。
+    """
+    _ensure_transition(draft, "aligned")
+    started = time.monotonic()
+    from_status = draft.status
+    draft.aligned = {}
+    draft.status = "aligned"
+    await db.flush()
+    await _audit_transition(
+        db,
+        draft,
+        action="mark_aligned",
+        from_status=from_status,
+        to_status="aligned",
+        started=started,
+        extra={"direct": True},
     )
 
 
@@ -531,6 +560,17 @@ async def _picking_submit_callback(
     return await submit_picking(db, draft)
 
 
+async def _finished_receipt_submit_callback(
+    db: AsyncSession, draft: WarehouseAgentDraft
+) -> str | None:
+    """scene=finished_receipt 确认回调（V3.0 §4.6）：薄包装延迟 import
+    submit_finished_receipt（解环同上）；confirmed → 写成品入库台账 +
+    读回核对 → submitted（详见 pipeline/submit.py）。"""
+    from app.modules.warehouse.agent.pipeline.submit import submit_finished_receipt
+
+    return await submit_finished_receipt(db, draft)
+
+
 # 场景配置表（spec Implementation Decisions 1/2/5/6）：scene → 配置。
 # receipt 沿用识别必提集合；gmp_outbound 对话必收四件套 + 可写八字段
 # （物料名称为 lookup 拒写，不在此列——仅确认卡片展示）；finished_outbound
@@ -618,6 +658,32 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "备注",
         ),
         submit=_picking_submit_callback,
+    ),
+    # V3.0 §4.6 成品入库（识别+对话双入口）：必收四件套；入库车间为 lookup
+    # 只读（车间收集后写备注前缀）、件数/库存数量公式列拒写、包装规格多选
+    # 无写入先例——均不在可写集；质量状态提交侧恒写「待检」（submit 组装）。
+    FINISHED_RECEIPT_SCENE: SceneConfig(
+        name_cn="成品入库登记",
+        required_fields=(
+            "product_name",
+            "product_batch_no",
+            "quantity",
+            "unit",
+        ),
+        writable_fields=(
+            "入库日期",
+            "产品名称",
+            "产品批号",
+            "品规",
+            "入库数量",
+            "单位",
+            "库区位置",
+            "质量状态",
+            "生产日期",
+            "有效期",
+            "备注",
+        ),
+        submit=_finished_receipt_submit_callback,
     ),
 }
 

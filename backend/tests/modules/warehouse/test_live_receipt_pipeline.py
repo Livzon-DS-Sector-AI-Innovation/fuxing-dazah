@@ -215,8 +215,12 @@ async def test_live_image_event_full_pipeline_to_submit(
     async def fake_download_im_image(message_id: str, file_key: str) -> bytes:
         return image_bytes
 
+    async def fake_classify(image_b64: str, content_type: str = "image/jpeg") -> str:
+        return "raw_material_delivery"  # 数据集为原辅料单：跳过分类真调用
+
     # im 下载 mock（卡片发送已捕获）；原图 upload/对齐/LLM/submit 均真调
     monkeypatch.setattr(media, "download_im_image", fake_download_im_image)
+    monkeypatch.setattr(gateway, "classify_document", fake_classify)
 
     chat_id = f"oc_p2p_{uuid.uuid4().hex[:10]}"
     open_id = f"ou_pipeline_{uuid.uuid4().hex[:8]}"
@@ -377,7 +381,11 @@ async def test_image_recognition_failure_degrades(
     async def boom(image_b64: str, content_type: str = "image/jpeg") -> None:
         raise RuntimeError("llm boom")
 
+    async def fake_classify(image_b64: str, content_type: str = "image/jpeg") -> str:
+        return "raw_material_delivery"  # 本用例只关注原辅料链路失败降级
+
     monkeypatch.setattr(media, "download_im_image", fake_download)
+    monkeypatch.setattr(gateway, "classify_document", fake_classify)
     monkeypatch.setattr(gateway, "recognize_receipt", boom)
     event = _im_image_event(chat_id="oc_p2p_fail", sender_open_id="ou_fail")
 

@@ -1235,3 +1235,222 @@ async def _fire_supplier_mismatch(
         logger.exception("供应商不一致提醒推送异常（record_id=%s）", record_id)
         return False
     return any(r.status == "executed" for r in results)
+
+
+# ── 成品入库提交（V3.0 §4.6：识别+对话双入口 → 写成品入库台账）──
+# scene=finished_receipt 确认回调真身（draft_flow._finished_receipt_submit_callback
+# 薄包装）：aligned（对话收集/修改，识别值经 value_of 回落 recognized）→ 组装
+# finished_receipt 写入字段 → validate（运行时选项集注入）→ create_record →
+# 读回核对（产品/批号/数量/单位）→ submitted + 回执。口径（grilling 拍板）：
+# 质量状态恒写「待检」；入库日期识别值缺失默认今天（毫秒时间戳）；生产日期/
+# 有效期为该表文本列（type 1）原样写；「入库车间」lookup 只读——车间写备注
+# 前缀「入库车间：X」；件数/库存数量/包装规格不写。
+
+FINISHED_RECEIPT_TABLE = "finished_receipt"
+
+# 读回核对关键字段（spec：产品/批号/数量/单位）
+FINISHED_RECEIPT_CHECK_FIELDS: tuple[str, ...] = ("产品名称", "产品批号", "入库数量", "单位")
+
+# 质量状态默认（成品入库必经 QC；须在选项集内——快照含 待检）
+FINISHED_RECEIPT_QUALITY_DEFAULT = "待检"
+
+# canonical 键 → (Base 字段名, 是否单选)；quantity 数字化与入库日期（毫秒
+# 时间戳、默认今天）单独分支；workshop 写备注前缀单独处理；生产日期/有效期
+# 该表为文本列（type 1）原样写（不复用原辅料毫秒时间戳转换）
+_FINISHED_RECEIPT_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
+    ("product_name", "产品名称", True),
+    ("product_batch_no", "产品批号", False),
+    ("quantity", "入库数量", False),
+    ("spec", "品规", True),
+    ("unit", "单位", True),
+    ("storage_location", "库区位置", False),
+    ("produced_at", "生产日期", False),
+    ("expiry", "有效期", False),
+)
+
+
+async def _finished_receipt_table_fields() -> dict[str, FieldMeta]:
+    """finished_receipt 字段元数据（运行时选项集优先，静态快照兜底）。
+
+    产品名称/品规/单位均为单选且 D 期快照未收录选项（options 为空）——
+    必须 refresh_table_fields 拉真实选项集，否则收集期空集放行的值要到
+    Base 侧 1254062 才暴露；刷新失败回落静态快照（登记主链路不中断）。
+    """
+    try:
+        await get_adapter().refresh_table_fields(FINISHED_RECEIPT_TABLE)
+    except Exception:  # noqa: BLE001 — 选项集刷新失败不阻断（回落静态快照）
+        logger.warning("finished_receipt 选项集刷新失败，回落静态快照", exc_info=True)
+    return get_table_fields(FINISHED_RECEIPT_TABLE)
+
+
+def build_finished_receipt_fields(
+    draft: WarehouseAgentDraft,
+    *,
+    table_fields: dict[str, FieldMeta] | None = None,
+    today: date | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """draft → finished_receipt 写入字段（aligned 优先，recognized 兜底）。
+
+    返回 (fields, degraded)：degraded 为未写入字段名（单选值不在选项集 /
+    数量非数字 / 入库日期不可解析）。识别路径 recognized 携带置信度、
+    对话路径 aligned 即收集值——取值口径与 build_receipt_fields 同款
+    （aligned 覆盖优先）。
+    """
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    table_fields_snapshot = table_fields or get_table_fields(FINISHED_RECEIPT_TABLE)
+    fields: dict[str, Any] = {}
+    degraded: list[str] = []
+
+    def value_of(key: str) -> Any:
+        if key in aligned:
+            v = aligned[key]
+            if v is not None and str(v).strip():
+                return v
+        item = recognized.get(key)
+        if isinstance(item, dict):
+            v = item.get("value")
+            if v is not None and str(v).strip():
+                return v
+        return None
+
+    for key, field_name, is_select in _FINISHED_RECEIPT_FIELD_MAP:
+        value = value_of(key)
+        if value is None:
+            continue
+        if key == "quantity":
+            num = _to_number(value)
+            if num is None:
+                degraded.append(field_name)
+                continue
+            fields[field_name] = num
+            continue
+        text = str(value).strip()
+        if is_select:
+            adapted = _select_or_skip(table_fields_snapshot, field_name, text, degraded)
+            if not adapted:
+                continue
+            text = adapted
+        fields[field_name] = text
+
+    # 入库日期：识别/对话值 → 毫秒时间戳；缺失默认今天；不可解析降级默认今天
+    receipt_date = value_of("receipt_date")
+    receipt_ms: int | None = None
+    if receipt_date is not None:
+        receipt_ms = _parse_date_ms(str(receipt_date))
+        if receipt_ms is None:
+            degraded.append("入库日期")
+    fields["入库日期"] = receipt_ms if receipt_ms is not None else _today_ms(today)
+
+    # 质量状态恒写「待检」（成品入库必经 QC；grilling 拍板 2）
+    fields["质量状态"] = FINISHED_RECEIPT_QUALITY_DEFAULT
+
+    # 备注 = 车间前缀 + remark 拼接（「入库车间」列 lookup 只读，grilling 拍板 1）
+    workshop = str(value_of("workshop") or "").strip()
+    remark = str(value_of("remark") or "").strip()
+    remark_parts = []
+    if workshop:
+        remark_parts.append(f"入库车间：{workshop}")
+    if remark:
+        remark_parts.append(remark)
+    if remark_parts:
+        fields["备注"] = "；".join(remark_parts)
+    return fields, degraded
+
+
+async def _build_and_validate_finished_receipt(
+    draft: WarehouseAgentDraft,
+) -> tuple[dict[str, Any], list[str]]:
+    """组装成品入库写入字段并跑写契约校验（运行时选项集注入，picking 先例）。
+
+    校验与组装用同一份刷新后字段元数据——D 期快照产品名称/品规/单位选项集
+    为空，直接按静态快照校验等于不校验，非法值会拖到 Base 侧 1254062。
+    """
+    table_fields = await _finished_receipt_table_fields()
+    fields, degraded = build_finished_receipt_fields(draft, table_fields=table_fields)
+    validate_write_fields(FINISHED_RECEIPT_TABLE, fields, table_fields=table_fields)
+    return fields, degraded
+
+
+async def submit_finished_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
+    """成品入库提交：写契约 → create_record → 读回核对 → submitted + 回执。
+
+    状态前置/异常语义与 submit_picking 完全同款：非 confirmed 抛
+    :class:`DraftFlowError`；写入异常向上抛（confirm 置 failed）；mismatch
+    不算失败——draft 仍 submitted + audit error_code="mismatch" + 回执 ⚠。
+    """
+    started = time.monotonic()
+    if draft.status != "confirmed":
+        raise DraftFlowError(
+            f"草稿 {draft.draft_no} 状态为 {draft.status}，仅 confirmed 可提交"
+        )
+
+    adapter = get_adapter()
+    fields, degraded = await _build_and_validate_finished_receipt(draft)
+
+    created = await adapter.create_record(FINISHED_RECEIPT_TABLE, fields)
+    record_id = str(created.get("record_id") or "")
+    if not record_id:
+        raise WarehouseBitableError(
+            "create_record 未返回 record_id", code="no_record_id"
+        )
+
+    check_result = await _verify_record(
+        adapter,
+        record_id,
+        fields,
+        table_key=FINISHED_RECEIPT_TABLE,
+        check_fields=FINISHED_RECEIPT_CHECK_FIELDS,
+    )
+    check_result["written"] = dict(fields)
+    check_result["record_id"] = record_id
+    check_result["degraded"] = degraded
+
+    # draft → submitted + target 回填（状态机迁移表已含 confirmed → submitted）
+    from_status = draft.status
+    draft.status = "submitted"
+    meta = get_table_meta(FINISHED_RECEIPT_TABLE)
+    draft.target_base = meta["base_token"]
+    draft.target_table = meta["table_id"]
+    draft.target_record_id = record_id
+    await db.flush()
+
+    await repository.insert_agent_audit(
+        db,
+        tool_name="submit_finished_receipt",
+        args_summary={
+            "draft_no": draft.draft_no,
+            "record_id": record_id,
+            "fields": sorted(fields.keys()),
+            "degraded": degraded,
+            "from": from_status,
+            "to": "submitted",
+        },
+        result_status="ok",
+        error_code=None if check_result["consistent"] else "mismatch",
+        duration_ms=_elapsed_ms(started),
+        draft_id=draft.id,
+    )
+
+    # 回执卡片（scene 分支渲染成品入库标题；cards 延迟 import 解模块环，同上）
+    from app.modules.warehouse.agent.cards import render_receipt_result_card
+
+    card = render_receipt_result_card(draft, check_result)
+    await _send_result_card(draft, card)
+
+    logger.info(
+        "成品入库提交完成: draft_no=%s record_id=%s consistent=%s degraded=%s",
+        draft.draft_no,
+        record_id,
+        check_result["consistent"],
+        degraded,
+    )
+    if check_result["consistent"]:
+        note = f"✅ 成品入库已登记：{draft.draft_no}（Base 记录 {record_id}）"
+    else:
+        count = len(check_result["mismatches"])
+        note = (
+            f"⚠ 成品入库已登记：{draft.draft_no}（Base 记录 {record_id}），"
+            f"{count} 个字段读回不一致，请到 Base 核对"
+        )
+    return note

@@ -723,6 +723,12 @@ FINISHED_CONFIRM_CARD_TITLE = "📦 成品出库登记"
 CONFIRM_FINISHED_BUTTON_LABEL = "✅ 确认登记"
 CANCEL_FINISHED_BUTTON_LABEL = "❌ 取消"
 
+# 成品入库（V3.0 §4.6：识别+对话双入口；质量状态恒写待检，卡片静态提示）
+FINISHED_RECEIPT_SCENE = "finished_receipt"
+FINISHED_RECEIPT_CONFIRM_CARD_TITLE = "🏭 成品入库登记"
+CONFIRM_FINISHED_RECEIPT_BUTTON_LABEL = "✅ 确认入库"
+CANCEL_FINISHED_RECEIPT_BUTTON_LABEL = "❌ 取消"
+
 # 领料登记确认卡片（V3.0 分期C：scene=picking_outbound 分支文案）
 PICKING_OUTBOUND_SCENE = "picking_outbound"
 PICKING_CONFIRM_CARD_TITLE = "🏭 领料登记"
@@ -796,6 +802,31 @@ FINISHED_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
 
 FINISHED_MODIFY_HINT = (
     "💡 确认前请核对以上信息；要修改可直接回复消息（如「出库量改成 200」）。"
+)
+
+# 成品入库必收 4 字段（展示名, 键；识别路径 recognized 带置信度、对话路径
+# aligned 即收集值——同一渲染函数两用）
+FINISHED_RECEIPT_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
+    ("产品名称", "product_name"),
+    ("产品批号", "product_batch_no"),
+    ("入库数量", "quantity"),
+    ("单位", "unit"),
+)
+
+# 成品入库选填字段（入库日期缺省提交日；车间写备注前缀——入库车间列只读）
+FINISHED_RECEIPT_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("入库日期", "receipt_date"),
+    ("品规", "spec"),
+    ("生产日期", "produced_at"),
+    ("有效期", "expiry"),
+    ("生产车间", "workshop"),
+    ("库区位置", "storage_location"),
+    ("备注", "remark"),
+)
+
+FINISHED_RECEIPT_MODIFY_HINT = (
+    "💡 确认前请核对以上信息；要修改可直接回复消息（如「数量改成 100」）。"
+    "入库质量状态默认「待检」，QC 判定后在台账改判。"
 )
 
 # 领料必收 4 字段（展示名, aligned 键；顺序即卡片展示顺序）
@@ -912,6 +943,49 @@ def _render_gmp_confirm_card(draft: Any) -> dict[str, Any]:
                 value_base,
                 confirm_label=CONFIRM_GMP_BUTTON_LABEL,
                 cancel_label=CANCEL_GMP_BUTTON_LABEL,
+            ),
+        ],
+    )
+
+
+def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
+    """成品入库登记确认卡片（scene=finished_receipt 分支，V3.0 §4.6）。
+
+    识别/对话双入口共用：识别路径 recognized 携带置信度（⚠ 规则生效）、
+    对话路径 aligned 即收集值（无置信度语义，⚠ 仅缺字段提醒）——_field_line
+    的 aligned 覆盖优先机制天然兼容两形态。质量状态恒写「待检」以静态行
+    提示（不占字段行）。渲染防御同主入口：字段缺失降级，不抛错。
+    """
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    draft_no = _clean(getattr(draft, "draft_no", ""), 30)
+    scene = str(getattr(draft, "scene", "") or FINISHED_RECEIPT_SCENE)
+    draft_id = str(getattr(draft, "id", ""))
+
+    lines = [f"**草稿**：{draft_no or '-'}", "", "**登记信息**"]
+    for index, (label, key) in enumerate(FINISHED_RECEIPT_REQUIRED_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=True)
+        )
+    lines.extend(["", "**补充信息（选填）**"])
+    for index, (label, key) in enumerate(FINISHED_RECEIPT_OPTIONAL_FIELDS, 1):
+        lines.append(
+            _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+        )
+    lines.extend(["", "**质量状态**：待检（入库默认，QC 判定后在台账改判）"])
+    lines.extend(["", FINISHED_RECEIPT_MODIFY_HINT])
+
+    value_base = {"scene": scene, "draft_id": draft_id}
+    return build_card(
+        title=FINISHED_RECEIPT_CONFIRM_CARD_TITLE,
+        template="orange",
+        elements=[
+            _md("\n".join(lines)),
+            {"tag": "hr"},
+            _confirm_cancel_buttons(
+                value_base,
+                confirm_label=CONFIRM_FINISHED_RECEIPT_BUTTON_LABEL,
+                cancel_label=CANCEL_FINISHED_RECEIPT_BUTTON_LABEL,
             ),
         ],
     )
@@ -1079,6 +1153,8 @@ def render_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         return _render_finished_confirm_card(draft)
     if scene == PICKING_OUTBOUND_SCENE:
         return _render_picking_confirm_card(draft)
+    if scene == FINISHED_RECEIPT_SCENE:
+        return _render_finished_receipt_confirm_card(draft)
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
@@ -1137,14 +1213,22 @@ FINISHED_RESULT_CARD_TITLE_MISMATCH = "⚠ 成品出库已登记（读回不一�
 PICKING_RESULT_CARD_TITLE_OK = "✅ 领料已登记"
 PICKING_RESULT_CARD_TITLE_MISMATCH = "⚠ 领料已登记（读回不一致）"
 
+# 成品入库回执标题（scene=finished_receipt 分支，V3.0 §4.6）
+FINISHED_RECEIPT_RESULT_CARD_TITLE_OK = "✅ 成品入库已登记"
+FINISHED_RECEIPT_RESULT_CARD_TITLE_MISMATCH = "⚠ 成品入库已登记（读回不一致）"
+
 # 读回核对一致提示行（按 scene 的核对字段口径）
 RECEIPT_CHECK_OK_LINE = "✅ 数量/批号/单位/供应商 与 Base 读回一致"
 GMP_CHECK_OK_LINE = "✅ 批号/数量/单位 与 Base 读回一致"
 FINISHED_CHECK_OK_LINE = "✅ 批号/出库量/单位/客户 与 Base 读回一致"
 PICKING_CHECK_OK_LINE = "✅ 批号/领用数量/领用部门 与 Base 读回一致"
+FINISHED_RECEIPT_CHECK_OK_LINE = "✅ 产品/批号/数量/单位 与 Base 读回一致"
 
 # 领料批号降级提示（选项集未命中需人工补填，同 GMP 口径）
 PICKING_DEGRADE_BATCH_HINT = "⚠ 物料批号需在 Base 人工补填（选项集未命中）"
+
+# 成品入库品规降级提示（品规单选选项集未命中需人工补填）
+FINISHED_RECEIPT_DEGRADE_SPEC_HINT = "⚠ 品规需在 Base 人工补填（选项集未命中）"
 
 # GMP 物料批号写入 API 专用文本字段（2026-09-07 新建；原单选字段
 # 入——Base 侧字段编辑限制，放开后置 True 提示随之消失）
@@ -1235,6 +1319,11 @@ def render_receipt_result_card(
         title_mismatch = PICKING_RESULT_CARD_TITLE_MISMATCH
         check_ok_line = PICKING_CHECK_OK_LINE
         special_field, special_hint = "物料批号", PICKING_DEGRADE_BATCH_HINT
+    elif scene == FINISHED_RECEIPT_SCENE:
+        title_ok = FINISHED_RECEIPT_RESULT_CARD_TITLE_OK
+        title_mismatch = FINISHED_RECEIPT_RESULT_CARD_TITLE_MISMATCH
+        check_ok_line = FINISHED_RECEIPT_CHECK_OK_LINE
+        special_field, special_hint = "品规", FINISHED_RECEIPT_DEGRADE_SPEC_HINT
     else:
         title_ok = RECEIPT_RESULT_CARD_TITLE_OK
         title_mismatch = RECEIPT_RESULT_CARD_TITLE_MISMATCH

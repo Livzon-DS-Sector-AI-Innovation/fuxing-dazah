@@ -124,15 +124,32 @@ FIELD_ALIASES: dict[str, str] = {
     # ── 供应商准入（V3.0 分期C）──
     "供应商名称": "supplier_name",
     "supplier_name": "supplier_name",
+    # ── 成品入库（V3.0 §4.6）；数量/单位/备注/生产日期与上面场景同义共用 ──
+    # 注意「批号」仍指原辅料厂家批号——产品批号请说「产品批号」（提示词约束，
+    # 沿 GMP「物料批号」先例）；「品名」指原辅料物料名称——成品请说「产品名称」
+    "品规": "spec",
+    "spec": "spec",
+    "有效期": "expiry",
+    "expiry": "expiry",
+    "生产车间": "workshop",
+    "车间": "workshop",
+    "workshop": "workshop",
+    "库区位置": "storage_location",
+    "货位": "storage_location",
+    "storage_location": "storage_location",
+    "入库日期": "receipt_date",
+    "receipt_date": "receipt_date",
 }
 
 # 引导文案里的可改字段清单（业务名；receipt + gmp_outbound + finished_outbound
-# + picking_outbound 四场景并集；「品名」在成品语境请用「产品名称」，见提示词）
+# + picking_outbound + finished_receipt 五场景并集；「品名」在成品语境请用
+# 「产品名称」，见提示词）
 MODIFIABLE_FIELD_NAMES = (
     "物料名称、厂家批号、数量、单位、供应商、生产商、车牌、合同号、"
     "包装规格、生产日期、到货时间段、备注、联系人、物料批号、生产批号、"
     "单据类型、领用品种、领用部门、产品名称、产品批号、出库量、销售客户、"
-    "用途、快递号、温度计、物料、领用类型、指定批号"
+    "用途、快递号、温度计、物料、领用类型、指定批号、品规、有效期、"
+    "生产车间、库区位置、入库日期"
 )
 
 # 确认卡片动作文案（按 scene；重发卡片后的提醒话术）
@@ -141,6 +158,7 @@ _SCENE_CONFIRM_LABELS: dict[str, str] = {
     "gmp_outbound": "确认登记",
     "finished_outbound": "确认登记",
     "picking_outbound": "确认领料",
+    "finished_receipt": "确认入库",
 }
 
 

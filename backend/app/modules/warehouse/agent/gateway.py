@@ -37,11 +37,19 @@ from app.modules.warehouse.agent import (  # noqa: F401 — pipeline 导入即�
 from app.modules.warehouse.agent import repository as agent_repository
 from app.modules.warehouse.agent.cards import build_card, render_reply_card
 from app.modules.warehouse.agent.pipeline import (
+    FINISHED_RECEIPT_SCENE,
     align_receipt,
     create_receipt_draft,
     mark_aligned,
+    mark_direct_aligned,
+    recognize_finished_receipt,
     recognize_receipt,
     send_confirm_card,
+)
+from app.modules.warehouse.agent.pipeline.recognizer import (
+    DOC_TYPE_FINISHED,
+    classify_document,
+    detect_rotation,
 )
 from app.modules.warehouse.agent.runner import get_runner
 from app.modules.warehouse.ai_audit.context import warehouse_audit_scope
@@ -295,6 +303,11 @@ def _scene_hint(text: str) -> str | None:
     if "登记" in t and "成品出库" in t:
         return (
             "【场景提示】本次任务为成品出库登记：必须调用 create_finished_outbound_draft "
+            "收集字段，禁止调用其他登记工具。"
+        )
+    if "成品入库" in t and "登记" in t:
+        return (
+            "【场景提示】本次任务为成品入库登记：必须调用 create_finished_receipt_draft "
             "收集字段，禁止调用其他登记工具。"
         )
     if "领料" in t or "领用" in t:
@@ -595,8 +608,6 @@ async def _process_receipt_image_inner(
         content_type = "image/png" if fmt == "png" else "image/jpeg"
         image_b64 = base64.b64encode(content).decode()
         # 方向预判+矫正（手机横拍无 EXIF 时像素本身旋转，模型识别大量幻觉）
-        from app.modules.warehouse.agent.pipeline.recognizer import detect_rotation
-
         rotation = await detect_rotation(image_b64, content_type)
         if rotation:
             from io import BytesIO
@@ -611,6 +622,83 @@ async def _process_receipt_image_inner(
             image_b64 = base64.b64encode(content).decode()
             content_type = "image/jpeg"
             logger.info("仓库网关图片方向矫正: rotation=%s", rotation)
+
+        # 单据分类预判（V3.0 §4.6）：成品入库单走成品识别分支（独立熔断+
+        # 审计作用域）；分类失败/原辅料单回落既有链路（零回归）。
+        # classify_document/DOC_TYPE_FINISHED 模块顶部导入（测试打桩点）
+        doc_type = await classify_document(image_b64, content_type)
+
+        if doc_type == DOC_TYPE_FINISHED:
+            from app.modules.warehouse.ai_audit.context import warehouse_audit_scope
+            from app.modules.warehouse.ai_config.scenario_store import scenario_store
+
+            if not scenario_store.is_enabled("finished_receipt_recognition"):
+                logger.warning("成品入库识别场景已熔断: chat_id=%s", chat_id)
+                try:
+                    await _send_card_to(
+                        chat_id=chat_id, chat_type=chat_type, open_id=open_id,
+                        card=_build_disabled_card("成品入库单识别"),
+                    )
+                except Exception:
+                    logger.exception("仓库网关熔断卡片发送失败")
+                await _record_gateway_audit(
+                    started=started,
+                    tool_name="gateway",
+                    args_summary={"chat_type": chat_type, "message_type": "image"},
+                    result_status="denied",
+                    error_code="finished_receipt_scenario_disabled",
+                )
+                return
+            # 独立审计作用域（嵌套安全：contextvars set/reset；成品分支的
+            # LLM 调用/失败归 finished_receipt_recognition 而非原辅料链路）
+            with warehouse_audit_scope(
+                "finished_receipt_recognition",
+                trace_id=str(uuid.uuid4()),
+                chat_id=chat_id,
+                user_open_id=open_id,
+                channel="feishu",
+            ):
+                recognized_finished = await recognize_finished_receipt(
+                    image_b64, content_type
+                )
+                stage = "对齐与草稿"
+                draft_no = ""
+                async with _db_session() as db:
+                    draft = await create_receipt_draft(
+                        db,
+                        recognized=recognized_finished,
+                        image_file_token=image_file_token,
+                        open_id=open_id,
+                        chat_id=chat_id,
+                        scene=FINISHED_RECEIPT_SCENE,
+                    )
+                    # 成品无物料主数据对齐（对齐器是原辅料语义）：直接
+                    # created → aligned（aligned 空，确认卡展示识别值+置信度）
+                    await mark_direct_aligned(db, draft)
+                    await send_confirm_card(
+                        db,
+                        draft,
+                        chat_id=chat_id,
+                        open_id=open_id if not chat_id else None,
+                    )
+                    draft_no = draft.draft_no
+            logger.info(
+                "仓库网关成品入库识别完成: message_id=%s draft_no=%s",
+                message_id, draft_no,
+            )
+            await _record_gateway_audit(
+                started=started,
+                tool_name="gateway",
+                args_summary={
+                    "chat_type": chat_type,
+                    "message_type": "image",
+                    "draft_no": draft_no,
+                    "doc_type": doc_type,
+                },
+                result_status="ok",
+            )
+            return
+
         recognized = await recognize_receipt(image_b64, content_type)
 
         stage = "对齐与草稿"

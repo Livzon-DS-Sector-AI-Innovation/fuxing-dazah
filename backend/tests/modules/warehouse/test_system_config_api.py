@@ -104,7 +104,12 @@ async def test_list_ai_scenarios(
     resp = await client.get(AI_SCENARIOS)
     assert resp.status_code == 200
     scenarios = resp.json()["data"]["scenarios"]
-    assert {s["scenario"] for s in scenarios} == {"agent_chat", "receipt_recognition"}
+    # V3.0 §4.6 新增成品入库识别熔断场景（registry 单一事实源）
+    assert {s["scenario"] for s in scenarios} == {
+        "agent_chat",
+        "receipt_recognition",
+        "finished_receipt_recognition",
+    }
     assert all(s["enabled"] is True for s in scenarios)
 
 

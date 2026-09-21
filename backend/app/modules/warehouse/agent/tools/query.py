@@ -39,6 +39,10 @@ from app.modules.warehouse.agent.tools.finished import (
     FINISHED_TOOL_FUNCS,
     FINISHED_TOOLS_SCHEMA,
 )
+from app.modules.warehouse.agent.tools.finished_receipt import (
+    FINISHED_RECEIPT_TOOL_FUNCS,
+    FINISHED_RECEIPT_TOOLS_SCHEMA,
+)
 from app.modules.warehouse.agent.tools.gmp import (
     GMP_TOOL_FUNCS,
     GMP_TOOLS_SCHEMA,
@@ -648,6 +652,7 @@ TOOL_FUNCS: dict[str, Callable[..., Awaitable[dict[str, Any]]]] = {
     **DRAFT_UPDATE_TOOL_FUNCS,
     **GMP_TOOL_FUNCS,
     **FINISHED_TOOL_FUNCS,
+    **FINISHED_RECEIPT_TOOL_FUNCS,
     **PICKING_TOOL_FUNCS,
     **SUPPLIER_TOOL_FUNCS,
     **SKILL_TOOL_FUNCS,
@@ -767,6 +772,7 @@ TOOLS: list[dict[str, Any]] = [
     *DRAFT_UPDATE_TOOLS_SCHEMA,
     *GMP_TOOLS_SCHEMA,
     *FINISHED_TOOLS_SCHEMA,
+    *FINISHED_RECEIPT_TOOLS_SCHEMA,
     *PICKING_TOOLS_SCHEMA,
     *SUPPLIER_TOOLS_SCHEMA,
     *SKILL_TOOLS_SCHEMA,

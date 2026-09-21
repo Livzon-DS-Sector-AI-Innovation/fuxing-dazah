@@ -470,17 +470,19 @@ async def test_create_gmp_draft_success_with_card(
 
 
 def test_scene_config_structure_and_registration() -> None:
-    """SCENE_CONFIG 四场景；receipt/gmp_outbound/finished_outbound/picking 均注册回调。"""
+    """SCENE_CONFIG 五场景；各登记场景均注册回调。"""
     assert set(SCENE_CONFIG) == {
         "receipt",
         "gmp_outbound",
         "finished_outbound",
         "picking_outbound",  # V3.0 分期C
+        "finished_receipt",  # V3.0 §4.6 成品入库
     }
     assert confirm.is_registered_scene("receipt")
     assert confirm.is_registered_scene("gmp_outbound")
     assert confirm.is_registered_scene("finished_outbound")  # S3 ticket 02 落地
     assert confirm.is_registered_scene("picking_outbound")  # V3.0 分期C
+    assert confirm.is_registered_scene("finished_receipt")  # V3.0 §4.6
 
     gmp_config = SCENE_CONFIG["gmp_outbound"]
     assert gmp_config.required_fields == (

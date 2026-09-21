@@ -68,12 +68,80 @@ RECOGNIZE_PROMPT = """你是制药厂仓库的送货单识别助手。请仔细�
 7. 图片可能是手写单据：逐字仔细辨认手写内容，书写潦草时结合上下文（物料代码/批号前缀与名称的对应关系）推断，但禁止把图中没有的信息编造为高置信度——辨认不清就给低 confidence。
 """
 
+# ── 成品入库单识别（V3.0 §4.6）：字段集不同，框架（解析/重试/降级）复用 ──
+
+FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手。请仔细识别图片中的成品入库单/入库台账信息，提取以下字段。
+
+## 必提字段（4 个，每个都必须出现在输出中）
+- product_name：产品名称（别名：品名、产品；如 达托霉素、硫酸黏菌素）
+- product_batch_no：产品批号（别名：批号、生产批号；逐字辨认）
+- quantity：入库数量（别名：数量、入库量；只给数字，不要带单位）
+- unit：单位（如 kg、十亿、g）
+
+## 选提字段（6 个，识别不到就填 null）
+- spec：品规（别名：规格、规格型号；如「DT高规二期（AB线）」）
+- produced_at：生产日期（文本原样，如 2026-09-01）
+- expiry：有效期/复验期（文本原样）
+- workshop：生产车间（别名：入库车间、车间；如 提炼工程一部）
+- storage_location：库区位置（别名：货位、库位）
+- receipt_date：入库日期（别名：日期；如 2026-09-21）
+
+## 输出要求（严格遵守）
+1. 只输出一个 JSON 对象，禁止输出任何解释文字或 markdown 代码块。
+2. JSON 结构（10 个字段全部出现，格式统一）：
+   {"product_name": {"value": "达托霉素", "confidence": 0.95}, "product_batch_no": {"value": "DA2609001", "confidence": 0.9}, ...}
+3. 每个字段的 confidence 是 0 到 1 的小数：清晰可辨 ≥0.8，模糊但可推断 0.4-0.8，猜测 <0.4。
+4. 无法辨认时 value 填 null 并给低 confidence，但必提字段必须基于图片给出最佳猜测，不要轻易填 null。
+5. quantity 的 value 必须是数字或数字字符串，不要带单位。
+6. 图片可能是手写单据：逐字仔细辨认，禁止把图中没有的信息编造为高置信度——辨认不清就给低 confidence。
+"""
+
+# 成品入库必提 4 / 选提 6 字段（RecognizedFinishedReceipt 契约）
+FINISHED_REQUIRED_FIELDS: tuple[str, ...] = (
+    "product_name",
+    "product_batch_no",
+    "quantity",
+    "unit",
+)
+FINISHED_OPTIONAL_FIELDS: tuple[str, ...] = (
+    "spec",
+    "produced_at",
+    "expiry",
+    "workshop",
+    "storage_location",
+    "receipt_date",
+)
+
+# 单据分类轻量预判（V3.0 §4.6 图片路由）：detect_rotation 同款缩略图轻量
+# 调用模式——现有网关一张图默认走原辅料识别，成品入库单需先分类再派发；
+# 失败/不确定一律回落原辅料（既有主链路零回归）。
+DOC_TYPE_RAW = "raw_material_delivery"
+DOC_TYPE_FINISHED = "finished_receipt"
+CLASSIFY_PROMPT = (
+    "这是一张制药厂仓库单据的照片。判断它属于哪一类：\n"
+    f"- {DOC_TYPE_RAW}：原辅料送货单/请验单/厂家报告单（常见字段：物料名称、"
+    "厂家批号、供应商、生产商、车牌、合同号）\n"
+    f"- {DOC_TYPE_FINISHED}：成品入库单（常见字段：产品名称、产品批号、品规、"
+    "生产车间、入库数量、有效期）\n"
+    "按单据标题与字段栏名判断。只输出一个 JSON："
+    '{"doc_type": "' + DOC_TYPE_RAW + '"} 或 {"doc_type": "' + DOC_TYPE_FINISHED + '"}；'
+    '无法判断时输出 {"doc_type": "unknown"}。'
+)
+
 # JSON 解析失败/必提全空的追加指令（强调只输出 JSON + 必提字段不可全空）
 _JSON_RETRY_PROMPT = (
     "你上一次的输出不合规：{reason}。请重新识别并只输出一个严格 JSON 对象："
     "不要 markdown 代码块、不要任何解释文字，直接以 {{ 开头、以 }} 结尾。"
     "必提 8 字段必须逐一看图给出最佳猜测（批号/品名/数量等常出现在报告单、"
     "外包装和标签上），不允许全部为 null。"
+)
+
+# 成品入库重试追加指令（必提 4 字段口径）
+_FINISHED_JSON_RETRY_PROMPT = (
+    "你上一次的输出不合规：{reason}。请重新识别并只输出一个严格 JSON 对象："
+    "不要 markdown 代码块、不要任何解释文字，直接以 {{ 开头、以 }} 结尾。"
+    "必提 4 字段（产品名称/产品批号/入库数量/单位）必须逐一看图给出最佳猜测，"
+    "不允许全部为 null。"
 )
 
 # 必提 8 字段（RecognizedReceipt 必填，解析缺省时 value=None/confidence=0）
@@ -133,12 +201,38 @@ class RecognizedReceipt(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
-def build_vision_message(image_b64: str, content_type: str = "image/jpeg") -> dict[str, Any]:
+class RecognizedFinishedReceipt(BaseModel):
+    """一张成品入库单的完整识别结果（V3.0 §4.6）。
+
+    必提 4 字段恒存在（无法辨认时 value=None、confidence=0）；选提 6 字段
+    识别不到时字段本身为 None；raw 保留 LLM 原始识别 JSON。
+    """
+
+    product_name: RecognizedField
+    product_batch_no: RecognizedField
+    quantity: RecognizedField
+    unit: RecognizedField
+
+    spec: RecognizedField | None = None
+    produced_at: RecognizedField | None = None
+    expiry: RecognizedField | None = None
+    workshop: RecognizedField | None = None
+    storage_location: RecognizedField | None = None
+    receipt_date: RecognizedField | None = None
+
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+def build_vision_message(
+    image_b64: str,
+    content_type: str = "image/jpeg",
+    prompt: str = RECOGNIZE_PROMPT,
+) -> dict[str, Any]:
     """构造 vision 识别消息（chat_with_tools 纯透传的 user content 数组）。"""
     return {
         "role": "user",
         "content": [
-            {"type": "text", "text": RECOGNIZE_PROMPT},
+            {"type": "text", "text": prompt},
             {
                 "type": "image_url",
                 "image_url": {"url": f"data:{content_type};base64,{image_b64}"},
@@ -213,13 +307,18 @@ def build_receipt(payload: dict[str, Any]) -> RecognizedReceipt:
 
 
 def required_all_missing(payload: dict[str, Any]) -> bool:
-    """必提 8 字段是否全部为空值。
+    """必提 8 字段是否全部为空值（原辅料口径；成品用 required_all_missing_for）。
 
     实测（2026-09-07）：模型偶发把"非送货单图片"误判为不可识别——
     必提字段全 null 而选提字段（包装规格/备注）有值。此形态对下游
     Pipeline 是废结果，由 recognize_receipt 据此触发一次重试。
     """
-    for name in REQUIRED_FIELDS:
+    return required_all_missing_for(payload, REQUIRED_FIELDS)
+
+
+def required_all_missing_for(payload: dict[str, Any], fields: tuple[str, ...]) -> bool:
+    """指定必提字段集是否全部为空值（原辅料/成品两识别场景共用）。"""
+    for name in fields:
         item = payload.get(name)
         if isinstance(item, dict):
             value = item.get("value")
@@ -257,17 +356,11 @@ ROTATION_PROMPT = (
 )
 
 
-async def detect_rotation(
-    image_b64: str, content_type: str = "image/jpeg"
-) -> int:
-    """识别前方向预判：返回需要顺时针旋转的角度（0/90/180/270）。
+def _make_thumbnail(image_b64: str, content_type: str) -> tuple[str, str]:
+    """原图 → 长边 768px JPEG 缩略图（轻量预判调用降成本共用）。
 
-    背景：手机横持拍照且无 EXIF 方向标记时，像素数据本身是旋转的——
-    视觉模型对旋转单据的识别会大量幻觉（2026-09-09 实测：同一张手写
-    请验单，0° 识别为「羟苯磺酸钙」，矫正 90° 后正确识别「纸箱(3#)」）。
-    轻量调用（缩略图 + 小 max_tokens），失败/超时默认 0（不旋转）。
+    解码/压缩失败回落原图（调用方语义：预判失败不阻断主链路）。
     """
-    # 缩略图降成本：方向判断不需要原始分辨率（长边压到 768px）
     try:
         from io import BytesIO
 
@@ -278,10 +371,22 @@ async def detect_rotation(
         img.thumbnail((768, 768))
         buf = BytesIO()
         img.save(buf, format="JPEG", quality=80)
-        thumb_b64 = base64.b64encode(buf.getvalue()).decode()
-        content_type = "image/jpeg"
+        return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
     except Exception:  # noqa: BLE001 — 缩略失败用原图
-        thumb_b64 = image_b64
+        return image_b64, content_type
+
+
+async def detect_rotation(
+    image_b64: str, content_type: str = "image/jpeg"
+) -> int:
+    """识别前方向预判：返回需要顺时针旋转的角度（0/90/180/270）。
+
+    背景：手机横持拍照且无 EXIF 方向标记时，像素数据本身是旋转的——
+    视觉模型对旋转单据的识别会大量幻觉（2026-09-09 实测：同一张手写
+    请验单，0° 识别为「羟苯磺酸钙」，矫正 90° 后正确识别「纸箱(3#)」）。
+    轻量调用（缩略图 + 小 max_tokens），失败/超时默认 0（不旋转）。
+    """
+    thumb_b64, thumb_type = _make_thumbnail(image_b64, content_type)
 
     messages = [
         {
@@ -290,7 +395,7 @@ async def detect_rotation(
                 {"type": "text", "text": ROTATION_PROMPT},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{content_type};base64,{thumb_b64}"},
+                    "image_url": {"url": f"data:{thumb_type};base64,{thumb_b64}"},
                 },
             ],
         }
@@ -322,8 +427,61 @@ async def recognize_receipt(
     语义处理。
     """
     set_audit_resource("receipt_parse")
+    payload = await _recognize_with_retry(
+        image_b64,
+        content_type,
+        prompt=RECOGNIZE_PROMPT,
+        required=REQUIRED_FIELDS,
+        retry_prompt=_JSON_RETRY_PROMPT,
+        missing_reason="必提 8 字段全部为空（图片无文字时才允许）",
+    )
+    return build_receipt(payload)
+
+
+def build_finished_receipt(payload: dict[str, Any]) -> RecognizedFinishedReceipt:
+    """把成品入库识别 JSON dict 构造为 RecognizedFinishedReceipt（缺省容错）。"""
+    kwargs: dict[str, Any] = {"raw": payload}
+    for name in FINISHED_REQUIRED_FIELDS:
+        kwargs[name] = _to_field(payload.get(name))
+    for name in FINISHED_OPTIONAL_FIELDS:
+        if payload.get(name) is not None:
+            kwargs[name] = _to_field(payload[name])
+    return RecognizedFinishedReceipt(**kwargs)
+
+
+async def recognize_finished_receipt(
+    image_b64: str, content_type: str = "image/jpeg"
+) -> RecognizedFinishedReceipt:
+    """识别一张成品入库单图片（V3.0 §4.6），返回结构化识别结果。
+
+    框架与 :func:`recognize_receipt` 同款（JSON 容错 → 必提全空/解析失败
+    重试 1 次 → 仍失败抛 WarehouseLLMError / 诚实返回空字段）。
+    """
+    set_audit_resource("finished_receipt_parse")
+    payload = await _recognize_with_retry(
+        image_b64,
+        content_type,
+        prompt=FINISHED_RECEIPT_PROMPT,
+        required=FINISHED_REQUIRED_FIELDS,
+        retry_prompt=_FINISHED_JSON_RETRY_PROMPT,
+        missing_reason="必提 4 字段全部为空（图片无文字时才允许）",
+    )
+    return build_finished_receipt(payload)
+
+
+async def _recognize_with_retry(
+    image_b64: str,
+    content_type: str,
+    *,
+    prompt: str,
+    required: tuple[str, ...],
+    retry_prompt: str,
+    missing_reason: str,
+) -> dict[str, Any]:
+    """识别重试框架（原辅料/成品两场景共用）：首调 → 解析失败或必提全空
+    → 附原输出重试 1 次 → JSON 仍失败抛 WarehouseLLMError。"""
     async with get_llm_client() as client:
-        messages = [build_vision_message(image_b64, content_type)]
+        messages = [build_vision_message(image_b64, content_type, prompt=prompt)]
         content = await _call_recognize(client, messages)
 
         try:
@@ -331,17 +489,13 @@ async def recognize_receipt(
         except ValueError:
             payload = None
 
-        if payload is None or required_all_missing(payload):
-            reason = (
-                "输出不是合法 JSON"
-                if payload is None
-                else "必提 8 字段全部为空（图片无文字时才允许）"
-            )
+        if payload is None or required_all_missing_for(payload, required):
+            reason = "输出不是合法 JSON" if payload is None else missing_reason
             logger.warning("识别输出不合规，重试 1 次: %s", reason)
             retry_messages = [
                 *messages,
                 {"role": "assistant", "content": content or "（空输出）"},
-                {"role": "user", "content": _JSON_RETRY_PROMPT.format(reason=reason)},
+                {"role": "user", "content": retry_prompt.format(reason=reason)},
             ]
             content = await _call_recognize(client, retry_messages)
             try:
@@ -350,4 +504,44 @@ async def recognize_receipt(
                 raise WarehouseLLMError(
                     f"识别结果 JSON 解析失败（重试后仍失败）: {retry_error}"
                 ) from retry_error
-        return build_receipt(payload)
+        return payload
+
+
+async def classify_document(
+    image_b64: str, content_type: str = "image/jpeg"
+) -> str:
+    """单据分类轻量预判（图片路由，V3.0 §4.6）：返回 DOC_TYPE_RAW /
+    DOC_TYPE_FINISHED。
+
+    detect_rotation 同款模式：缩略图 + 小 max_tokens 轻量调用；失败/超时/
+    未知类型一律回落 :data:`DOC_TYPE_RAW`（既有原辅料主链路零回归——
+    分类器只新增成品分派，不改变原路径的触发条件）。
+    """
+    thumb_b64, thumb_type = _make_thumbnail(image_b64, content_type)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": CLASSIFY_PROMPT},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{thumb_type};base64,{thumb_b64}"},
+                },
+            ],
+        }
+    ]
+    try:
+        set_audit_resource("doc_classify")
+        async with get_llm_client() as client:
+            msg = await client.chat_with_tools(
+                messages, tools=None, temperature=0.0, max_tokens=2000
+            )
+        data = parse_receipt_payload(msg.content or "")
+        doc_type = str(data.get("doc_type") or "").strip()
+        if doc_type in (DOC_TYPE_RAW, DOC_TYPE_FINISHED):
+            return doc_type
+        return DOC_TYPE_RAW
+    except Exception:  # noqa: BLE001 — 分类失败不阻断，回落原辅料
+        logger.warning("单据分类预判失败，按原辅料送货单处理", exc_info=True)
+        return DOC_TYPE_RAW

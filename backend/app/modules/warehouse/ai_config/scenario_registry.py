@@ -1,10 +1,13 @@
 """AI 场景注册表 — 仓库 Agent LLM 调用场景的代码唯一事实源。
 
-场景 = 业务功能级开关（不是每次调用一个场景）。仓库当前两条 LLM 业务链路：
+场景 = 业务功能级开关（不是每次调用一个场景）。仓库当前三条 LLM 业务链路：
 
 - ``agent_chat``：Runner tool-calling 主循环（查询/计划/记忆/草稿收集/办公工具）；
 - ``receipt_recognition``：送货单识别管线（方向预判 + 字段识别，审计以
-  resource 字段区分 rotate_detect / receipt_parse）。
+  resource 字段区分 rotate_detect / receipt_parse）；
+- ``finished_receipt_recognition``：成品入库单识别（§4.6 图片分类路由后的
+  成品分支——注意外层网关先查 receipt_recognition 闸门，停用原辅料识别
+  会连带停用成品识别；本场景开关只在单据被分类为成品入库单后生效）。
 
 单模型位设计：模型既跑文本又跑视觉，``allowed_profiles`` 恒为
 (agent, agent_backup)，``model_type`` 仅作信息性标注。
@@ -28,6 +31,14 @@ _SCENARIO_FUNCTIONS: dict[str, tuple[str, str, str, str]] = {
     "receipt_recognition": (
         "送货单识别入库",
         "图片方向预判 + 送货单字段识别（审计以 resource 区分两次调用）",
+        "vision",
+        "feishu",
+    ),
+    # V3.0 §4.6 成品入库识别（图片分类路由后的成品分支；外层 receipt
+    # 闸门先行，本开关在分类=成品入库单后生效——非完全独立）
+    "finished_receipt_recognition": (
+        "成品入库单识别",
+        "单据分类预判 + 成品入库单字段识别（分类失败回落原辅料链路）",
         "vision",
         "feishu",
     ),

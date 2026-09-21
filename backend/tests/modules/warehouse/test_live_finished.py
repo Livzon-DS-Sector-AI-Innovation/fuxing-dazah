@@ -581,6 +581,7 @@ def test_scene_config_finished_registration() -> None:
         "gmp_outbound",
         "finished_outbound",
         "picking_outbound",  # V3.0 分期C
+        "finished_receipt",  # V3.0 §4.6 成品入库
     }
     assert confirm.is_registered_scene("finished_outbound")
 
