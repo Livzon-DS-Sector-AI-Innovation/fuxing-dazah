@@ -115,8 +115,9 @@ export async function fetchReportRecords(
   return res.json()
 }
 
-/** 生成报告单（返回原始响应，调用方按 blob 下载） */
-export async function generateReport(recordId: string, template: string): Promise<Response> {
+/** 生成报告单（从检验记录）：返回 { filename, base64 } 供客户端下载。
+ *  注意：Server Action 返回值必须可序列化，不能直接返回 Response。 */
+export async function generateReport(recordId: string, template: string): Promise<{ filename: string; base64: string }> {
   const res = await fetch(`${API_BASE_URL}/api/v1/quality/report/generate`, {
     method: 'POST',
     headers: { ...(await _authHeaders()), 'Content-Type': 'application/json' },
@@ -126,7 +127,13 @@ export async function generateReport(recordId: string, template: string): Promis
     const err = await res.json().catch(() => ({}))
     throw new Error((err as any).detail || '生成报告单失败')
   }
-  return res
+  const buf = Buffer.from(await res.arrayBuffer())
+  const cd = res.headers.get('content-disposition') || ''
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/)
+  return {
+    filename: m ? decodeURIComponent(m[1]) : 'coa.docx',
+    base64: buf.toString('base64'),
+  }
 }
 
 /** 多批次历史汇总 */

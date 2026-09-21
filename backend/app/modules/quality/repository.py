@@ -207,7 +207,8 @@ async def create_report_record(
         batch_number=batch_number,
         file_path=file_path,
         file_size=file_size,
-        serial_no=serial_no,
+        # 空串归一为 None："" 会进入流水号唯一索引，多条空串记录会误撞号
+        serial_no=serial_no or None,
     )
     db.add(report)
     await db.flush()

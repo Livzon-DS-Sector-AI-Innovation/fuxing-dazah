@@ -128,7 +128,7 @@ async def upload_lc_excel(
         raise HTTPException(status_code=400, detail="文件超过 10MB")
     try:
         # 优先模板配置驱动的通用解析（表号识别）；无匹配配置回落到旧解析器
-        generic = await test_task_service.parse_lc_generic(db, file_bytes, filename)
+        generic = await test_task_service.parse_lc_generic(db, file_bytes, filename, filled_by=_user.id)
         if generic is not None:
             parsed = generic["parse"]
             result = UploadLcResponse(
@@ -154,7 +154,7 @@ async def upload_lc_excel(
         task = await get_test_task_by_batch(db, result.report.product_name, result.report.batch_number)
         if task and task.status == "in_progress":
             filled, unmatched = await test_task_service.fill_task_from_report(
-                db, task, result.report, result.record_id
+                db, task, result.report, result.record_id, filled_by=_user.id
             )
             result.task_link = {
                 "task_id": str(task.id),
@@ -747,10 +747,11 @@ async def generate_task_report(
                     "file_no": split["doc"].file_no,
                     "template_path": template,
                 })
-            return success_response(
-                data=generated,
-                message=f"已按标准文件逐份生成 {len(generated)} 份 COA",
-            )
+            msg = f"已按标准文件逐份生成 {len(generated)} 份 COA"
+            skipped = next((s["skipped_file_nos"] for s in splits if s.get("skipped_file_nos")), [])
+            if skipped:
+                msg += f"；跳过无结果行的标准文件：{'、'.join(skipped)}"
+            return success_response(data=generated, message=msg)
         except IntegrityError as exc:
             if not is_serial_unique_violation(exc) or attempt == 2:
                 raise
@@ -1384,9 +1385,9 @@ async def update_test_task_results_endpoint(
     task_id: uuid.UUID,
     payload: TestResultsUpdate = Body(...),
     db: AsyncSession = Depends(get_db),
-    _user: User = Depends(require_permission("quality:task:fill")),
+    user: User = Depends(require_permission("quality:task:fill")),
 ) -> JSONResponse:
-    detail = await test_task_service.update_results(db, task_id, payload)
+    detail = await test_task_service.update_results(db, task_id, payload, filled_by=user.id)
     return success_response(data=detail.model_dump(mode="json"), message="已保存")
 
 
@@ -1418,7 +1419,7 @@ async def parse_lc_into_task_endpoint(
     if len(content) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="文件超过 10MB")
     detail, filled, unmatched = await test_task_service.parse_lc_into_task(
-        db, task_id, content, filename
+        db, task_id, content, filename, filled_by=_user.id
     )
     # 原始计算表自动归档为任务附件（电子审核原始证据）
     object_key = f"{task_id}/{uuid.uuid4().hex[:12]}_{_safe_filename(filename)}"
@@ -1620,7 +1621,9 @@ async def batch_report_date_endpoint(
         elif date_cell:
             report_date = _norm_date_str(str(date_cell).strip())
         else:
-            report_date = None
+            # 空单元格跳过：此前 report_date=None 会静默清空已有出报日期
+            skipped.append(f"{batch}:日期为空，未修改")
+            continue
         task = await get_test_task_by_batch_number(db, batch)
         if not task:
             skipped.append(f"{batch}:未找到任务")

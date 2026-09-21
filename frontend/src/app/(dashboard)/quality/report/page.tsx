@@ -1,16 +1,27 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
-import { Typography, Table, Input, Space, App, Button } from 'antd'
+import { useEffect, useState, useCallback, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton } from 'antd'
 import { FileTextOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons'
 import type { ReportRecord } from '@/types/quality'
-import { fetchReportRecords, downloadReportFile } from '@/actions/quality'
+import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
 
 const { Title, Paragraph } = Typography
 
 export default function ReportPage() {
+  // useSearchParams 需 Suspense 边界，否则预渲染报错
+  return (
+    <Suspense fallback={<Skeleton active paragraph={{ rows: 6 }} />}>
+      <ReportPageInner />
+    </Suspense>
+  )
+}
+
+function ReportPageInner() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const recordId = searchParams.get('recordId')
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<ReportRecord[]>([])
@@ -19,6 +30,12 @@ export default function ReportPage() {
   // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
+
+  // 从检验历史详情跳转：?recordId= 打开生成报告单弹窗（此前为死链）
+  const [genOpen, setGenOpen] = useState(false)
+  const [genTemplates, setGenTemplates] = useState<{ label: string; value: string }[]>([])
+  const [genTemplate, setGenTemplate] = useState<string>()
+  const [generating, setGenerating] = useState(false)
 
   const load = useCallback(async (p: number) => {
     setLoading(true)
@@ -31,6 +48,58 @@ export default function ReportPage() {
   }, [search, message])
 
   useEffect(() => { load(page) }, [page, load])
+
+  const openGenModal = useCallback(async () => {
+    setGenOpen(true)
+    try {
+      const tpls = await fetchTemplates()
+      const files: { label: string; value: string }[] = []
+      const walk = (nodes: any[], prefix = '') => {
+        for (const n of nodes || []) {
+          if (n.children) walk(n.children, `${prefix}${n.name}/`)
+          else files.push({ label: `${prefix}${n.name}`, value: `${prefix}${n.name}` })
+        }
+      }
+      walk(tpls)
+      setGenTemplates(files)
+      setGenTemplate(files[0]?.value)
+    } catch {
+      message.error('模板列表加载失败')
+    }
+  }, [message])
+
+  useEffect(() => {
+    if (recordId) openGenModal()
+  }, [recordId, openGenModal])
+
+  const handleGenerate = async () => {
+    if (!recordId || !genTemplate) {
+      message.warning('请选择模板')
+      return
+    }
+    setGenerating(true)
+    try {
+      const { filename, base64 } = await generateReport(recordId, genTemplate)
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const blob = new Blob([bytes], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success('报告单已生成')
+      setGenOpen(false)
+      setPage(1)
+      load(1)
+    } catch (err: any) {
+      message.error(err.message || '生成报告单失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const handleDownload = async (r: ReportRecord) => {
     try {
@@ -94,6 +163,26 @@ export default function ReportPage() {
         loading={loading}
         pagination={{ current: page, pageSize: 20, total, onChange: (p) => setPage(p) }}
         size="small" />
+
+      <Modal
+        title="生成报告单"
+        open={genOpen}
+        onCancel={() => setGenOpen(false)}
+        onOk={handleGenerate}
+        confirmLoading={generating}
+        okText="生成并下载"
+        cancelText="取消"
+      >
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择 COA 模板"
+          value={genTemplate}
+          onChange={setGenTemplate}
+          options={genTemplates}
+          showSearch
+          optionFilterProp="label"
+        />
+      </Modal>
     </div>
   )
 }

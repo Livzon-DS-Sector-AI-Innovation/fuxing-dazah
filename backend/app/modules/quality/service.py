@@ -591,7 +591,10 @@ class TestTaskService:
 
     @staticmethod
     async def update_results(
-        db: AsyncSession, task_id: uuid.UUID, payload: TestResultsUpdate
+        db: AsyncSession,
+        task_id: uuid.UUID,
+        payload: TestResultsUpdate,
+        filled_by: uuid.UUID | None = None,
     ) -> TestTaskDetail:
         task = await get_test_task(db, task_id)
         if not task:
@@ -625,7 +628,7 @@ class TestTaskService:
                     "result_text": fill.result_text,
                     "result_value": fill.result_value,
                     "is_pass": verdict,
-                    "filled_by": None,
+                    "filled_by": filled_by,
                     "filled_at": now,
                 })
             else:  # manual：文字型人工判定
@@ -636,7 +639,7 @@ class TestTaskService:
                     "result_text": fill.result_text,
                     "result_value": fill.result_value,
                     "is_pass": fill.is_pass,
-                    "filled_by": None,
+                    "filled_by": filled_by,
                     "filled_at": now,
                 })
         await update_test_results_fill(db, updates)
@@ -782,6 +785,7 @@ class TestTaskService:
         task: QualityTestTask,
         report: LcReportOut,
         record_id: uuid.UUID,
+        filled_by: uuid.UUID | None = None,
     ) -> tuple[list[str], list[str]]:
         """把液相解析结果按项目名映射填入任务结果行（以 SOP 匹配键定位，判定按任务行标准快照）。
 
@@ -797,7 +801,7 @@ class TestTaskService:
             candidates.append(("总杂质", (t.rounded_first or t.first_percent) * 100))
         for imp in report.impurity_results:
             candidates.append((imp.name, (imp.second_percent or imp.first_percent) * 100))
-        return await TestTaskService._fill_candidates(db, task, candidates, record_id)
+        return await TestTaskService._fill_candidates(db, task, candidates, record_id, filled_by=filled_by)
 
     @staticmethod
     async def _fill_candidates(
@@ -807,6 +811,7 @@ class TestTaskService:
         record_id: uuid.UUID,
         sop_no: str | None = None,
         doc_item_ids: set[uuid.UUID] | None = None,
+        filled_by: uuid.UUID | None = None,
     ) -> tuple[list[str], list[str]]:
         """候选结果按项目名匹配填入任务行（SOP 匹配键；判定以任务行标准快照为准）。
 
@@ -835,7 +840,7 @@ class TestTaskService:
                 "is_pass": verdict,
                 "source": "parse",
                 "inspection_record_id": record_id,
-                "filled_by": None,
+                "filled_by": filled_by,
                 "filled_at": now,
             })
             filled_names.append(row.item_name)
@@ -847,7 +852,11 @@ class TestTaskService:
 
     @staticmethod
     async def parse_lc_into_task(
-        db: AsyncSession, task_id: uuid.UUID, file_bytes: bytes, filename: str
+        db: AsyncSession,
+        task_id: uuid.UUID,
+        file_bytes: bytes,
+        filename: str,
+        filled_by: uuid.UUID | None = None,
     ) -> tuple[TestTaskDetail, list[str], list[str]]:
         """上传液相计算表：解析并持久化检验记录，按项目名映射填入任务结果行。"""
         task = await get_test_task(db, task_id)
@@ -862,7 +871,7 @@ class TestTaskService:
         if not uploaded.record_id:
             raise AppException(status_code=500, detail="解析成功但检验记录未持久化")
         filled, unmatched = await TestTaskService.fill_task_from_report(
-            db, task, uploaded.report, uploaded.record_id
+            db, task, uploaded.report, uploaded.record_id, filled_by=filled_by
         )
         detail = TestTaskService._to_detail(task, await list_test_results(db, task_id))
         return detail, filled, unmatched
@@ -871,7 +880,10 @@ class TestTaskService:
 
     @staticmethod
     async def parse_lc_generic(
-        db: AsyncSession, file_bytes: bytes, filename: str
+        db: AsyncSession,
+        file_bytes: bytes,
+        filename: str,
+        filled_by: uuid.UUID | None = None,
     ) -> dict | None:
         """通用解析：表号识别 → 模板配置取值 → 持久化检验记录 → 自动关联任务。
 
@@ -945,7 +957,7 @@ class TestTaskService:
                 if mapped_doc:
                     doc_item_ids = {it.id for it in await list_standard_items(db, mapped_doc.id)}
             filled, unmatched = await TestTaskService._fill_candidates(
-                db, task, candidates, record_id, cfg.sop_no, doc_item_ids
+                db, task, candidates, record_id, cfg.sop_no, doc_item_ids, filled_by=filled_by
             )
             # 未匹配组分自动追加为任务行（限度取计算表自带限度列，如 RS1-7）
             appended: list[str] = []
@@ -1235,11 +1247,16 @@ class TestTaskService:
         # 模板按标准文件解析：COA 绑定（该文档）→ 文档 template_path 兜底
         bindings = await list_coa_bindings_by_docs(db, list(docs.keys()))
         # 流水号按北京时间计日：当天已生成的报告数作为序号起点
+        # 空行标准文件不生成 COA：此前空 rows 时 all([])==True 会产出「全合格」空报告单
+        docs_with_rows = [d for d in sorted(docs.values(), key=lambda d: d.file_no)
+                          if rows_by_doc.get(d.id)]
+        if not docs_with_rows:
+            raise AppException(status_code=400, detail="任务所有标准文件均无结果行，无法生成 COA")
+        skipped = [d.file_no for d in docs.values() if not rows_by_doc.get(d.id)]
         today_start = datetime.combine(today(), time.min, tzinfo=APP_TZ)
         base_seq = await count_report_records_since(db, today_start)
         splits: list[dict[str, Any]] = []
-        ordered_docs = sorted(docs.values(), key=lambda d: d.file_no)
-        for i, d in enumerate(ordered_docs):
+        for i, d in enumerate(docs_with_rows):
             template = next(
                 (b.template_path for b in bindings if b.standard_document_id == d.id), None
             ) or d.template_path or ""
@@ -1258,6 +1275,7 @@ class TestTaskService:
                 ),
                 "product_name": task.product_name,
                 "batch_number": task.batch_number,
+                "skipped_file_nos": skipped,
             })
         return splits
 
