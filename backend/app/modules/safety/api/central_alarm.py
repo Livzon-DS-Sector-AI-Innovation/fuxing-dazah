@@ -34,8 +34,19 @@ central_alarm_router = APIRouter()
 async def sync_from_bitable(db: AsyncSession = Depends(get_db)):
     """从飞书中控报警 Base 全量同步 15 张表（each 表 upsert + 软删对齐）。
 
+    直读模式（SAFETY_CENTRAL_ALARM_DIRECT_ENABLED）下短路：镜像不再维护，
+    返回提示不执行同步。
     Bitable/网络异常降级：返回 HTTP 200 + body code=500 + 错误 message，不抛 500。
     """
+    from app.modules.safety.service.central_alarm import config as ca_config
+
+    if ca_config.direct_enabled():
+        return ApiResponse(
+            data=CentralAlarmSyncResponse(
+                synced_count=0, soft_deleted_count=0,
+            ).model_dump(),
+            message="直读模式已开启，无需同步镜像",
+        )
     service = CentralAlarmService(db)
     try:
         synced, soft_deleted = await service.sync_from_bitable()
@@ -77,7 +88,27 @@ async def get_records(
     page_size: int = Query(20, ge=1, le=200, description="每页条数"),
     db: AsyncSession = Depends(get_db),
 ):
-    """分页查询中控报警记录（默认过滤软删；按报警日期倒序）。"""
+    """分页查询中控报警记录（默认过滤软删；按报警日期倒序）。
+
+    直读模式下：窗口默认近 7 天（date 参数可放宽）、ai_* 过滤参数静默忽略、
+    ai_* 字段恒 null（AI 不落盘）；meta.elapsed_ms 标注直读耗时。
+    """
+    from app.modules.safety.service.central_alarm import config as ca_config
+    from app.modules.safety.service.central_alarm import query as ca_query
+
+    if ca_config.direct_enabled():
+        result = await ca_query.query_central_alarms_direct(
+            date_from=date_from, date_to=date_to, workshop=workshop, line=line,
+            post=post, ai_alarm_type=ai_alarm_type, ai_dimension=ai_dimension,
+            ai_pattern=ai_pattern, keyword=keyword, page=page, page_size=page_size,
+        )
+        return ApiResponse(
+            data=[ca_query.serialize_view(v) for v in result.items],
+            meta={
+                "page": page, "page_size": page_size, "total": result.total,
+                "elapsed_ms": result.elapsed_ms, "mode": "direct",
+            },
+        )
     service = CentralAlarmService(db)
     items, total = await service.get_records(
         date_from=date_from, date_to=date_to, workshop=workshop, line=line,
@@ -102,7 +133,16 @@ async def get_stats(
     target_date: date | None = Query(None, description="目标日期，默认今天（北京时间）"),
     db: AsyncSession = Depends(get_db),
 ):
-    """KPI：今日/本周报警数 + 车间/岗位/报警类型/异常模式/维度分布（dict[str,int]）。"""
+    """KPI：今日/本周报警数 + 车间/岗位/报警类型/异常模式/维度分布（dict[str,int])。
+
+    直读模式下 total_count 走 search total 免翻页；week_ai_analyzed_count 恒 0。
+    """
+    from app.modules.safety.service.central_alarm import config as ca_config
+    from app.modules.safety.service.central_alarm import query as ca_query
+
+    if ca_config.direct_enabled():
+        stats = await ca_query.get_stats_direct(target_date)
+        return ApiResponse(data=CentralAlarmStatsOut(**stats).model_dump())
     service = CentralAlarmService(db)
     stats = await service.get_stats(target_date)
     return ApiResponse(data=CentralAlarmStatsOut(**stats).model_dump())

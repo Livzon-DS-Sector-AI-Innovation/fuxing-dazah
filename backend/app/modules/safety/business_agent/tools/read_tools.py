@@ -1112,9 +1112,33 @@ async def query_central_alarms(
     """
     from datetime import date as _date
 
+    from app.modules.safety.service.central_alarm import config as ca_config
+    from app.modules.safety.service.central_alarm import query as ca_query
     from app.modules.safety.service.central_alarm.service import CentralAlarmService
 
     try:
+        if ca_config.direct_enabled():
+            result = await ca_query.query_central_alarms_direct(
+                date_from=_date.fromisoformat(date_from) if date_from else None,
+                date_to=_date.fromisoformat(date_to) if date_to else None,
+                workshop=workshop,
+                line=line,
+                post=post,
+                ai_alarm_type=ai_alarm_type,
+                ai_dimension=ai_dimension,
+                ai_pattern=ai_pattern,
+                keyword=keyword,
+                page=page,
+                page_size=page_size,
+            )
+            return {
+                "success": True,
+                "items": [ca_query.serialize_view(v) for v in result.items],
+                "page": page,
+                "page_size": page_size,
+                "total": result.total,
+                "note": "直读模式：ai_* 字段不可用（AI 分析不落盘），窗口默认近 7 天",
+            }
         service = CentralAlarmService(ctx.deps.db)
         items, total = await service.get_records(
             date_from=_date.fromisoformat(date_from) if date_from else None,

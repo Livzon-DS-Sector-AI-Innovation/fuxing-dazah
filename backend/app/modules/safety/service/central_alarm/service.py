@@ -20,6 +20,7 @@ from app.modules.safety.bitable_config.store import ConnectionView, store
 from app.modules.safety.feishu.notification import send_group_card
 from app.modules.safety.models import CentralAlarmRecord
 from app.modules.safety.schemas.central_alarm import CentralAlarmReportResponse
+from app.modules.safety.service.central_alarm import config as ca_config
 from app.modules.safety.service.central_alarm.analyst import CentralAlarmAnalyst
 from app.modules.safety.service.central_alarm.bitable_mapper import (
     derive_workshop_line,
@@ -61,11 +62,44 @@ _NON_BITABLE_KEYS = ("feishu_record_id", "source")
 
 
 class CentralAlarmService:
-    """中控报警分析业务服务（同步 + 查询/统计 + 日报生成与推送编排）。"""
+    """中控报警分析业务服务（同步 + 查询/统计 + 日报生成与推送编排）。
 
-    def __init__(self, session: AsyncSession, ai_service: Any = None) -> None:
+    直读模式（SAFETY_CENTRAL_ALARM_DIRECT_ENABLED）：生成路径直接拉取 Bitable
+    （reader 注入可替身），不写平台库；关闭时走镜像 ORM 路径（现状）。
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        ai_service: Any = None,
+        *,
+        reader: Any | None = None,
+    ) -> None:
         self.session = session
         self.analyst = CentralAlarmAnalyst(session, ai_service=ai_service)
+        self._reader: Any = reader
+
+    def _direct_reader(self) -> Any:
+        """返回注入的读取器替身；未注入时创建默认真实实现。"""
+        if self._reader is not None:
+            return self._reader
+        from app.modules.safety.service.central_alarm import reader as ca_reader
+
+        return ca_reader.open_reader()
+
+    async def _direct_history_records(
+        self, reader: Any, target_date: date,
+    ) -> list[Any]:
+        """拉近 target_date 往前 21 天的历史窗口（AI 上下文内存索引用）。"""
+        from app.modules.safety.service.central_alarm import reader as ca_reader
+
+        _, hist_end = ca_reader.day_window(target_date)
+        hist_start = hist_end - timedelta(days=21)
+        return list(
+            await reader.fetch_window_records(
+                start_utc=hist_start, end_utc=hist_end,
+            )
+        )
 
     # ── 全量同步（循环 15 表）──
 
@@ -385,12 +419,35 @@ class CentralAlarmService:
         target_date = target_date or _bj_today()
         window_start_utc: datetime | None = None
         window_end_utc: datetime | None = None
-        if rolling:
-            records, window_start_utc, window_end_utc = (
-                await self._get_records_by_rolling_window(target_date)
+
+        direct = ca_config.direct_enabled()
+        if direct:
+            reader = self._direct_reader()
+            # 日报是「算完就发」的闭环：strict=True 让单表失败聚合上抛，
+            # 走调度器 failed → 补发窗口重试，绝不静默缺车间（审查 M3）
+            if rolling:
+                records, window_start_utc, window_end_utc = (
+                    await reader.get_records_by_rolling_window(
+                        target_date, strict=True,
+                    )
+                )
+            else:
+                records = await reader.get_records_by_date(target_date, strict=True)
+            # AI 历史上下文走内存索引（不查库、逐条零查询）
+            from app.modules.safety.service.central_alarm.analyst import HistoryIndex
+
+            self.analyst.history_index = HistoryIndex(
+                await self._direct_history_records(reader, target_date),
             )
         else:
-            records = await self._get_records_by_date(target_date)
+            # 镜像分支显式清空直读索引，防同实例先直读后镜像时残留索引接管（审查 s6）
+            self.analyst.history_index = None
+            if rolling:
+                records, window_start_utc, window_end_utc = (
+                    await self._get_records_by_rolling_window(target_date)
+                )
+            else:
+                records = await self._get_records_by_date(target_date)
         # 筛选规则：仅统计 高高压力 / 高高液位 / 回收车间高高温 三类，不做全量
         records = _filter_high_high_alarms(records)
         agg = aggregate_daily(records, target_date)
@@ -405,17 +462,21 @@ class CentralAlarmService:
             except Exception:
                 logger.warning("逐条 AI 分析失败，跳过")
 
-            # UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
-            await self.session.flush()
-            record_ids = [r.id for r in records]
-            re_fetched = (
-                await self.session.scalars(
-                    select(CentralAlarmRecord).where(CentralAlarmRecord.id.in_(record_ids))
-                )
-            ).all()
-            agg.records = list(re_fetched)
-            agg = _recompute_agg_distributions(agg)
-            await self.session.commit()
+            if direct:
+                # 直读：视图对象内存更新，无 DB；重算聚合分布即可
+                agg = _recompute_agg_distributions(agg)
+            else:
+                # UPDATE 后 re-fetch（CLAUDE.md SQLAlchemy async 铁律）
+                await self.session.flush()
+                record_ids = [r.id for r in records]
+                re_fetched = (
+                    await self.session.scalars(
+                        select(CentralAlarmRecord).where(CentralAlarmRecord.id.in_(record_ids))
+                    )
+                ).all()
+                agg.records = list(re_fetched)
+                agg = _recompute_agg_distributions(agg)
+                await self.session.commit()
 
         # 汇总 AI（失败返回 None，renderer 省略 AI 块）
         per_summaries = [
@@ -450,7 +511,7 @@ class CentralAlarmService:
             analyzed=len(per_results),
             markdown_report=markdown,
             push_results=push_results,
-            records_analyzed=[r.id for r in agg.records if r.ai_analyzed_at],
+            records_analyzed=[str(r.id) for r in agg.records if r.ai_analyzed_at],
         )
 
     # ── 推送辅助 ──
@@ -553,8 +614,15 @@ def _count_by(records: list[CentralAlarmRecord], attr: str) -> dict[str, int]:
 
 
 def _is_config_table(table_name: str) -> bool:
-    """是否为非业务的配置表（表名含「配置」，如「中控报警数据源配置」）。"""
-    return "配置" in (table_name or "")
+    """是否为非业务的配置表（表名含「配置」，如「中控报警数据源配置」）。
+
+    实现收口在 bitable_mapper（直读 reader 共用）；此处别名保持既有 import 面。
+    """
+    from app.modules.safety.service.central_alarm.bitable_mapper import (
+        _is_config_table as _impl,
+    )
+
+    return _impl(table_name)
 
 
 # ── 日报筛选规则（仅统计三类"高高"报警，不做全量；排除泡碱操作的高高液位）──
@@ -565,8 +633,11 @@ _RECYCLE_WORKSHOPS = ("酒精回收和旧罐区", "乙腈回收", "异丙醇回�
 _PAO_JIAN_KW = ("泡碱",)                    # 泡碱操作（其高高液位不统计）
 
 
-def _is_high_high_alarm(record: CentralAlarmRecord) -> bool:
-    """判断是否属于 高高压力 / 高高液位(除泡碱) / 回收车间高高温 三类。"""
+def _is_high_high_alarm(record: Any) -> bool:
+    """判断是否属于 高高压力 / 高高液位(除泡碱) / 回收车间高高温 三类。
+
+    接受 ORM 记录或直读视图对象（属性同名，central-alarm-direct 接缝）。
+    """
     desc = (record.alarm_description or "")
     # 1. 高高压力（含"高高压"文本标记）
     if any(k in desc for k in _HIGH_HIGH_PRESSURE_KW):
@@ -581,7 +652,7 @@ def _is_high_high_alarm(record: CentralAlarmRecord) -> bool:
     return False
 
 
-def _filter_high_high_alarms(records: list[CentralAlarmRecord]) -> list[CentralAlarmRecord]:
+def _filter_high_high_alarms(records: list[Any]) -> list[Any]:
     """仅保留 高高压力 / 高高液位(除泡碱) / 回收车间高高温 的高报警记录。"""
     return [r for r in records if _is_high_high_alarm(r)]
 
@@ -619,10 +690,11 @@ async def run_daily_central_alarm_analysis(
     target_date: date | None = None,
     chat_id: str | None = None,
 ) -> CentralAlarmReportResponse | None:
-    """定时任务入口：全量同步兜底 + 生成并推送日报到默认群聊。
+    """定时任务入口：生成并推送日报到默认群聊。
 
     - 独立 async_session_factory session，channel="system"，push=True
-    - 17:00 触发：先 sync_from_bitable（白天事件同步兜底）→ 再 generate_daily_report
+    - 17:00 触发：旧模式下先 sync_from_bitable（白天事件同步兜底）→ generate_daily_report；
+      直读模式下跳过镜像同步兜底（数据由直读编排拉取）
     - 异常向上抛（2026-09-02 改，与 fire_alarm 入口同）：调度器标 failed 后在
       补发窗口内自动重试；此前吞异常返回 None 会被误标 success。
     """
@@ -630,14 +702,20 @@ async def run_daily_central_alarm_analysis(
 
     async with async_session_factory() as session:
         service = CentralAlarmService(session)
-        synced, soft_deleted = await service.sync_from_bitable()
-        if synced or soft_deleted:
-            await session.commit()
-            logger.info("中控报警同步兜底: synced=%d soft_deleted=%d", synced, soft_deleted)
+        # 直读开启 = 日报数据由直读编排拉取，镜像同步兜底不再有任何意义；
+        # （legacy_sync_job_active 语义含「总开关未开」，direct 关时恒真）
+        if not ca_config.direct_enabled():
+            synced, soft_deleted = await service.sync_from_bitable()
+            if synced or soft_deleted:
+                await session.commit()
+                logger.info("中控报警同步兜底: synced=%d soft_deleted=%d", synced, soft_deleted)
+        else:
+            logger.info("中控报警直读模式：跳过镜像同步兜底")
         result = await service.generate_daily_report(
             target_date=target_date, push=True, channel="system", rolling=True, chat_id=chat_id,
         )
-        await session.commit()
+        if not ca_config.direct_enabled():
+            await session.commit()
         # 2026-09-02：请求了推送但发送失败 → 上抛标 failed 走补发重试
         # （与 fire_alarm 入口同；跳过推送〔无 chat 配置〕不算失败）。
         failed_pushes = [

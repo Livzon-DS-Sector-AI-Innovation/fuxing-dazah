@@ -1,14 +1,20 @@
 """中控报警数据聚合（ticket 03 统计复用 + ticket 05 日报聚合）。
 
 纯函数，无 DB 依赖；用于自然周计算、日报统计分布与车间分组。
+类型接缝（central-alarm-direct）：接受 ORM 记录或直读视图对象（字段同名）。
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import TYPE_CHECKING
 
-from app.modules.safety.models import CentralAlarmRecord
+if TYPE_CHECKING:
+    from app.modules.safety.service.central_alarm.reader import (
+        CentralAlarmRecordLike,
+    )
 
 
 @dataclass
@@ -16,7 +22,7 @@ class CentralAlarmDailyAgg:
     """日报聚合结果。"""
 
     target_date: date
-    records: list[CentralAlarmRecord] = field(default_factory=list)
+    records: list[CentralAlarmRecordLike] = field(default_factory=list)
     total: int = 0
     workshop_distribution: dict[str, int] = field(default_factory=dict)
     post_distribution: dict[str, int] = field(default_factory=dict)
@@ -24,7 +30,9 @@ class CentralAlarmDailyAgg:
     pattern_distribution: dict[str, int] = field(default_factory=dict)
     dimension_distribution: dict[str, int] = field(default_factory=dict)
     # 车间分组（报表按车间分节）
-    workshop_groups: dict[str, list[CentralAlarmRecord]] = field(default_factory=dict)
+    workshop_groups: dict[str, list[CentralAlarmRecordLike]] = field(
+        default_factory=dict
+    )
 
 
 def get_natural_week_range(ref_date: date) -> tuple[date, date]:
@@ -34,7 +42,9 @@ def get_natural_week_range(ref_date: date) -> tuple[date, date]:
     return monday, sunday
 
 
-def aggregate_daily(records: list[CentralAlarmRecord], target_date: date) -> CentralAlarmDailyAgg:
+def aggregate_daily(
+    records: Sequence[CentralAlarmRecordLike], target_date: date,
+) -> CentralAlarmDailyAgg:
     """聚合当日报警记录 → 统计分布 + 按车间分组。
 
     分布统计基于记录上已有的 AI 分析字段（ai_alarm_type/ai_pattern/ai_dimension）与
@@ -42,7 +52,7 @@ def aggregate_daily(records: list[CentralAlarmRecord], target_date: date) -> Cen
     """
     agg = CentralAlarmDailyAgg(target_date=target_date, records=list(records))
     agg.total = len(records)
-    workshop_groups: dict[str, list[CentralAlarmRecord]] = {}
+    workshop_groups: dict[str, list[CentralAlarmRecordLike]] = {}
     for r in records:
         if r.workshop:
             workshop_groups.setdefault(r.workshop, []).append(r)
@@ -59,7 +69,9 @@ def aggregate_daily(records: list[CentralAlarmRecord], target_date: date) -> Cen
     return agg
 
 
-def _count_by(records: list[CentralAlarmRecord], attr: str) -> dict[str, int]:
+def _count_by(
+    records: list[CentralAlarmRecordLike], attr: str,
+) -> dict[str, int]:
     out: dict[str, int] = {}
     for r in records:
         v = getattr(r, attr)

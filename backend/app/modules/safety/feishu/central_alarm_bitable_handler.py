@@ -42,7 +42,13 @@ async def handle_central_alarm_record_changed(event: dict) -> None:
 
     file_token/table_id 在顶层；action_list 项含 record_id + action。
     仅处理中控报警白名单表，其他表事件直接忽略。
+    直读闸门（central-alarm-direct）：总开关打开时事件镜像停用，直接短路。
     """
+    from app.modules.safety.service.central_alarm import config as ca_config
+
+    if not ca_config.legacy_event_sync_active():
+        logger.debug("中控报警事件镜像已关闭（直读模式），事件短路")
+        return
     file_token = event.get("file_token", "")
     table_id = event.get("table_id", "")
     if (

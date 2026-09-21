@@ -1,14 +1,18 @@
 """中控报警分析 — CentralAlarmAnalyst（AI + 历史上下文分析器）。
 
 流程:
-  1. 对每条报警（上限 MAX_RECORDS_TO_ANALYZE）→ 本地表查询历史趋势上下文
+  1. 对每条报警（上限 MAX_RECORDS_TO_ANALYZE）→ 历史趋势上下文
      → 独立 AI 调用 → {alarm_type, equipment, pattern, dimension,
      reason_analysis, rectification_direction} → 回写内存对象
   2. 汇总 AI 调用 → {summary, key_issues, rectification_suggestions}
   3. 任何环节失败返回 None/跳过该条，报告退化为纯数据汇总版本。
 
+历史上下文来源（central-alarm-direct 起二选一）：
+- history_index 注入（直读模式）：HistoryIndex 内存索引，不查库；
+- 未注入（镜像模式）：本地表 ORM 查询（旧行为，逐条 3 次 count/list）。
+
 区别（与 fire_alarm）：本功能「关联历史数据」= 历史趋势对比（同设备/同岗位上周同期、
-本周重复计数），而非知识库 RAG。历史上下文从本地表查询，失败降级为空。
+本周重复计数），而非知识库 RAG。
 """
 
 from __future__ import annotations
@@ -16,8 +20,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +39,11 @@ from app.modules.safety.service.central_alarm.prompts import (
 )
 from app.modules.safety.service.config import create_ai_service
 
+if TYPE_CHECKING:
+    from app.modules.safety.service.central_alarm.reader import (
+        CentralAlarmRecordLike,
+    )
+
 logger = logging.getLogger(__name__)
 
 # 逐条 AI 分析上限 + 并发限流（参照 fire_alarm / AIAnalyst）
@@ -40,12 +51,79 @@ MAX_RECORDS_TO_ANALYZE = 50
 MAX_CONCURRENCY = 3
 
 
+class HistoryIndex:
+    """直读模式的历史趋势内存索引（语义与旧 ORM 查询逐字一致）。
+
+    口径：同 workshop + 同 post（不含 line，保持旧查询条件）；
+    本周计数不含本条；上周同期 = 上一完整自然周；最近 5 条按 alarm_date 倒序。
+    """
+
+    def __init__(self, records: Sequence[CentralAlarmRecordLike]) -> None:
+        self._by_key: dict[tuple[str | None, str | None], list[Any]] = defaultdict(list)
+        for r in records:
+            self._by_key[(r.workshop, r.post)].append(r)
+        for rows in self._by_key.values():
+            rows.sort(key=lambda r: r.alarm_date or datetime.min.replace(tzinfo=UTC),
+                      reverse=True)
+
+    def context_for(self, record: CentralAlarmRecordLike) -> str:
+        try:
+            from app.modules.safety.service.central_alarm.aggregator import (
+                get_natural_week_range,
+            )
+
+            if not record.alarm_date:
+                return ""
+            ref = (record.alarm_date + timedelta(hours=8)).date()  # 北京时间日期
+            week_start, week_end = get_natural_week_range(ref)
+            week_start_utc = datetime.combine(week_start, time.min, tzinfo=UTC) - timedelta(hours=8)
+            week_end_utc = datetime.combine(week_end + timedelta(days=1), time.min, tzinfo=UTC) - timedelta(hours=8)
+            last_start_utc = week_start_utc - timedelta(days=7)
+            last_end_utc = week_start_utc
+
+            rows = self._by_key.get((record.workshop, record.post), [])
+            # 按 id 排除本条（直读编排里日报窗口与索引是两次拉取，同一 Bitable
+            # 记录会生成两个不同 View 对象，对象身份比较会漏排除）
+            week_count = sum(
+                1 for r in rows
+                if str(r.id) != str(record.id) and r.alarm_date is not None
+                and week_start_utc <= r.alarm_date < week_end_utc
+            )
+            last_count = sum(
+                1 for r in rows
+                if r.alarm_date is not None
+                and last_start_utc <= r.alarm_date < last_end_utc
+            )
+            recent_brief = [
+                f"{_bj(r.alarm_date)} {r.post or '?'}: {(r.alarm_description or '')[:60]}"
+                for r in rows[:5]
+            ]
+            payload = {
+                "workshop": record.workshop,
+                "post": record.post,
+                "本周同岗位报警数(不含本条)": week_count,
+                "上一完整自然周报警数": last_count,
+                "最近报警": recent_brief,
+            }
+            return json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            logger.warning("中控报警历史索引查询失败 record_id=%s", record.id)
+            return ""
+
+
 class CentralAlarmAnalyst:
     """AI + 历史上下文报警分析器（逐条 + 汇总两级调用）。"""
 
-    def __init__(self, session: AsyncSession, ai_service: Any = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession | None,
+        ai_service: Any = None,
+        *,
+        history_index: HistoryIndex | None = None,
+    ) -> None:
         self.session = session
         self._ai = ai_service
+        self.history_index = history_index
 
     async def _get_ai(self) -> Any:
         if self._ai is None:
@@ -53,14 +131,25 @@ class CentralAlarmAnalyst:
         return self._ai
 
     async def _load_history_context(self, record: CentralAlarmRecord) -> str:
-        """本地表查询同(workshop, line, post)上周同期 + 本周重复计数 → JSON 字符串。
+        """历史趋势上下文 JSON 字符串，失败返回 ""。
+
+        直读模式（注入 history_index）走内存索引；镜像模式走 ORM 查询（旧行为）。
+        """
+        if self.history_index is not None:
+            return self.history_index.context_for(record)
+        return await self._load_history_context_orm(record)
+
+    async def _load_history_context_orm(self, record: CentralAlarmRecord) -> str:
+        """本地表查询同(workshop, post)上周同期 + 本周重复计数 → JSON 字符串。
 
         - 本周窗口：报警日期所在自然周（周一~周日）
         - 上周同期：上周同一自然周
-        - 只统计非软删 + 同 workshop/line/post 的报警
+        - 只统计非软删 + 同 workshop/post 的报警
         返回紧凑 JSON（供 AI 判断 pattern），失败返回 ""。
         """
         try:
+            if not self.session:
+                return ""
             from .aggregator import get_natural_week_range
 
             if not record.alarm_date:
@@ -152,7 +241,10 @@ class CentralAlarmAnalyst:
                 with ai_audit_scope(
                     scenario="central_alarm_analysis",
                     resource_type="central_alarm_record",
-                    resource_id=r.id,
+                    # resource_id 是 UUID 列；直读视图的 id 是飞书记录 ID（字符串），
+                    # 因此不传 resource_id，改把记录 ID 放进 extra 保持可追溯
+                    #（与 fire_alarm 票据 10 同口径；镜像路径 ORM 的 UUID id 同样进 extra）。
+                    extra={"feishu_record_id": str(r.id)},
                     channel=channel,
                 ):
                     result = await ai.chat_parsed(

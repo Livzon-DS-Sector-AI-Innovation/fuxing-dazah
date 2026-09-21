@@ -68,4 +68,5 @@ class CentralAlarmReportResponse(BaseModel):
     analyzed: int = 0
     markdown_report: str
     push_results: list[dict] = Field(default_factory=list)
-    records_analyzed: list[uuid.UUID] = Field(default_factory=list)
+    # ORM 路径为 UUID 字符串、直读路径为飞书记录 ID，统一 str 承载
+    records_analyzed: list[str] = Field(default_factory=list)

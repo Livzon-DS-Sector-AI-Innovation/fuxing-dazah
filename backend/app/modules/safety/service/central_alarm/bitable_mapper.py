@@ -70,6 +70,15 @@ def derive_workshop_line(table_name: str) -> tuple[str, str | None]:
     return table_name.strip(), None
 
 
+def _is_config_table(table_name: str) -> bool:
+    """是否为非业务的配置表（表名含「配置」，如「中控报警数据源配置」）。
+
+    纯函数收口在 mapper（reader 与 service 共用，避免 import 环）；
+    service.py 保留同名别名引用。
+    """
+    return "配置" in (table_name or "")
+
+
 def _ts(value: Any) -> datetime | None:
     """Bitable 毫秒时间戳 → timezone-aware datetime（复用 bitable_handler._ms_to_datetime）。"""
     return bh._ms_to_datetime(value)

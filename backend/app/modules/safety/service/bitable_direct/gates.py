@@ -34,6 +34,7 @@ _TRUE = {"1", "true", "yes", "on"}
 DOMAIN_HAZARD = "HAZARD"
 DOMAIN_SPECIAL_OP = "SPECIAL_OP"
 DOMAIN_FIRE_ALARM = "FIRE_ALARM"
+DOMAIN_CENTRAL_ALARM = "CENTRAL_ALARM"
 
 
 def flag(name: str, default: bool = False) -> bool:

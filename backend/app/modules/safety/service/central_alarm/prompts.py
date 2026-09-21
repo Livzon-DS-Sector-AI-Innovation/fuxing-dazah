@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
-from app.modules.safety.models import CentralAlarmRecord
 from app.modules.safety.service.central_alarm.aggregator import CentralAlarmDailyAgg
+
+if TYPE_CHECKING:
+    from app.modules.safety.service.central_alarm.reader import (
+        CentralAlarmRecordLike,
+    )
 
 # ── chat_parsed 校验的顶层字段 ──
 EXPECTED_KEYS_PER_RECORD: list[str] = [
@@ -55,7 +60,7 @@ _DAILY_SUMMARY_SYSTEM_PROMPT = """你是一名化工企业中控报警分析专�
 
 
 def build_per_record_messages(
-    record: CentralAlarmRecord, history_context: str | None = None,
+    record: CentralAlarmRecordLike, history_context: str | None = None,
 ) -> list[dict[str, str]]:
     """构造单条记录分析的 messages（system 稳定 + user 动态 + 历史上下文在 user 末尾）。"""
     user_lines = [

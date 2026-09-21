@@ -2,6 +2,9 @@
 
 > 日期：2026-09-17
 > 状态：清单与分批计划（待用户拍板第 8 节决策点）
+> 进展（2026-09-21）：P0 公共底座与 P1-1 fire_alarm 已完成（44b7ba3 及后续票据 08/09/10），
+> 并对 knowledge/msds/ehs_change/hazard_id 四域做了分类修正。剩余 11 域的执行以
+> docs/DESIGN-多维表格镜像同步收尾-剩余域清单与实施计划.md 为准，本文作盘点依据保留。
 > 对标：docs/DESIGN-特殊作业系统直读多维表格改造-设计方案.md、.scratch/special-op-direct/HANDOFF.md（隐患域与特殊作业域均已实施）
 > 依据：backend/app/modules/safety/bitable_config/registry.py（14 域 24 张表注册表）+ 事件处理器 + 调度任务 + 镜像模型 + Agent 工具 + 前端页面
 > 代码基线：fuxing-dazah @ ead173a（feature/warehouse-module）
