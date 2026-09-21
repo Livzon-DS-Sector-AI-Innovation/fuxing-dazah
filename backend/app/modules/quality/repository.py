@@ -833,6 +833,22 @@ async def list_test_results(db: AsyncSession, task_id: uuid.UUID) -> list[Qualit
     return list((await db.execute(stmt)).scalars())
 
 
+async def list_test_results_for_tasks(
+    db: AsyncSession, task_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[QualityTestResult]]:
+    """批量取多个任务的结果行（一次查询，按 task_id 分组；看板等聚合场景避免 N+1）。"""
+    if not task_ids:
+        return {}
+    stmt = select(QualityTestResult).where(
+        QualityTestResult.task_id.in_(task_ids),
+        QualityTestResult.is_deleted == False,  # noqa: E712
+    ).order_by(QualityTestResult.seq, QualityTestResult.created_at)
+    grouped: dict[uuid.UUID, list[QualityTestResult]] = {}
+    for r in (await db.execute(stmt)).scalars():
+        grouped.setdefault(r.task_id, []).append(r)
+    return grouped
+
+
 async def list_task_standard_document_ids(
     db: AsyncSession, task_id: uuid.UUID
 ) -> list[uuid.UUID]:

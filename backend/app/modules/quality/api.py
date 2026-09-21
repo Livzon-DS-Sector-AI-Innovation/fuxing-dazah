@@ -1025,10 +1025,6 @@ async def preview_standard_doc(
         raise HTTPException(status_code=500, detail="文档文本提取失败")
     if not text.strip():
         raise HTTPException(status_code=400, detail="未能从文档中提取文本")
-    # 临时调试：保留提取文本用于解析器调优（修完解析器后移除）
-    debug_dump_dir = Path("/tmp/std_doc_debug")
-    debug_dump_dir.mkdir(parents=True, exist_ok=True)
-    (debug_dump_dir / f"{filename}.txt").write_text(text, encoding="utf-8")
 
     parsed = parse_standard_doc(text)
     if not parsed.product_name and not parsed.file_no:
@@ -1163,10 +1159,6 @@ async def import_standard_doc(
         raise HTTPException(status_code=500, detail="文档文本提取失败")
     if not text.strip():
         raise HTTPException(status_code=400, detail="未能从文档中提取文本")
-    # 临时调试：保留提取文本用于解析器调优（修完解析器后移除）
-    debug_dump_dir = Path("/tmp/std_doc_debug")
-    debug_dump_dir.mkdir(parents=True, exist_ok=True)
-    (debug_dump_dir / f"{filename}.txt").write_text(text, encoding="utf-8")
 
     parsed = parse_standard_doc(text)
     if not parsed.product_name and not parsed.file_no:

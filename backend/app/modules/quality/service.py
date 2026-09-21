@@ -44,6 +44,7 @@ from app.modules.quality.repository import (
     list_task_reviews,
     list_task_standard_document_ids,
     list_test_results,
+    list_test_results_for_tasks,
     list_test_tasks,
     list_test_tasks_by_report_date,
     soft_delete_task_reviews,
@@ -1271,8 +1272,12 @@ class TestTaskService:
         inprog_items, _ = await list_test_tasks(db, status="in_progress", page=1, page_size=200)
         completed_items, _ = await list_test_tasks(db, status="completed", page=1, page_size=5)
 
-        async def _row(t) -> dict[str, Any]:
-            rows = await list_test_results(db, t.id)
+        # 一次批量取全部结果行，按 task_id 分组（此前每任务一次查询，看板 400+ SQL）
+        all_tasks = today_tasks + review_items + completed_items
+        rows_by_task = await list_test_results_for_tasks(db, [t.id for t in all_tasks])
+
+        def _row(t) -> dict[str, Any]:
+            rows = rows_by_task.get(t.id, [])
             return {
                 "task_id": str(t.id),
                 "product_name": t.product_name,
@@ -1287,12 +1292,12 @@ class TestTaskService:
         tomorrow_tasks = await list_test_tasks_by_report_date(db, tomorrow_str)
 
         return {
-            "today": [await _row(t) for t in today_tasks],
-            "pending_review": [await _row(t) for t in review_items],
+            "today": [_row(t) for t in today_tasks],
+            "pending_review": [_row(t) for t in review_items],
             "pending_review_count": len(review_items),
             "in_progress_count": len(inprog_items),
             "tomorrow_count": len([t for t in tomorrow_tasks if t.status != "void"]),
-            "recent_completed": [await _row(t) for t in completed_items],
+            "recent_completed": [_row(t) for t in completed_items],
         }
 
     @staticmethod

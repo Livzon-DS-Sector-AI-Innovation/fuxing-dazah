@@ -118,6 +118,8 @@ class ReportRecord(BaseModel):
     __tablename__ = "report_records"
     __table_args__ = (
         Index("ix_quality_report_record_inspection", "inspection_record_id"),
+        Index("ix_quality_report_record_task", "test_task_id"),
+        Index("ix_quality_report_record_created", "created_at"),
         # 流水号唯一（并发生成 COA 时数据库兜底防重号；历史空号记录不受约束）
         Index(
             "uq_quality_report_record_serial",
@@ -198,6 +200,7 @@ class QualityStandardItem(BaseModel):
     __tablename__ = "quality_standard_items"
     __table_args__ = (
         Index("ix_quality_std_item_doc", "document_id"),
+        Index("ix_quality_std_item_sop", "sop_no"),
         Index(
             "uq_quality_std_item_sop",
             "document_id",
@@ -318,6 +321,7 @@ class QualityTestTask(BaseModel):
         ),
         Index("ix_quality_test_task_product", "product_name"),
         Index("ix_quality_test_task_status", "status"),
+        Index("ix_quality_test_task_report_date", "report_date"),
         {"schema": "quality"},
     )
 
@@ -408,6 +412,7 @@ class QualityTestResult(BaseModel):
     __table_args__ = (
         Index("ix_quality_test_result_task", "task_id"),
         Index("ix_quality_test_result_standard_item", "standard_item_id"),
+        Index("ix_quality_test_result_item_name", "item_name"),
         Index(
             "uq_quality_test_result_task_sop",
             "task_id",
