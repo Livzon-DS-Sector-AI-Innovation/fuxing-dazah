@@ -16,6 +16,9 @@ export default function LcHistoryList() {
   const [data, setData] = useState<InspectionRecordListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
+  const [productDraft, setProductDraft] = useState('')
+  const [batchDraft, setBatchDraft] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [batchSearch, setBatchSearch] = useState('')
 
@@ -90,15 +93,15 @@ export default function LcHistoryList() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
-        <Input placeholder="产品名称" allowClear value={productSearch}
-          onChange={e => setProductSearch(e.target.value)}
-          onPressEnter={() => { setPage(1); load(1) }}
+        <Input placeholder="产品名称" allowClear value={productDraft}
+          onChange={e => setProductDraft(e.target.value)}
+          onPressEnter={() => { setProductSearch(productDraft); setPage(1) }}
           style={{ width: 150 }} prefix={<SearchOutlined />} />
-        <Input placeholder="批号" allowClear value={batchSearch}
-          onChange={e => setBatchSearch(e.target.value)}
-          onPressEnter={() => { setPage(1); load(1) }}
+        <Input placeholder="批号" allowClear value={batchDraft}
+          onChange={e => setBatchDraft(e.target.value)}
+          onPressEnter={() => { setBatchSearch(batchDraft); setPage(1) }}
           style={{ width: 150 }} prefix={<ExperimentOutlined />} />
-        <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
+        <Button type="primary" onClick={() => { setProductSearch(productDraft); setBatchSearch(batchDraft); setPage(1) }}>搜索</Button>
       </Space>
 
       <Table

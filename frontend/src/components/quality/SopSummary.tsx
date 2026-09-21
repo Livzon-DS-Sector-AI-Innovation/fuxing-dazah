@@ -9,11 +9,15 @@ import { fetchTaskSopSummary } from '@/actions/quality'
 
 const { Text } = Typography
 
+const keyOf = (i: SopSummaryItem) => `${i.sop_no || '无SOP号'}__${i.item_name}`
+
 export default function SopSummary() {
   const router = useRouter()
   const { message } = App.useApp()
   const [items, setItems] = useState<SopSummaryItem[]>([])
   const [loading, setLoading] = useState(false)
+  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求
+  const [productDraft, setProductDraft] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [selected, setSelected] = useState<string | undefined>()
 
@@ -22,19 +26,22 @@ export default function SopSummary() {
     try {
       const data = await fetchTaskSopSummary(productSearch || undefined)
       setItems(data)
-      if (!selected || !data.some((i) => keyOf(i) === selected)) {
-        setSelected(data[0] ? keyOf(data[0]) : undefined)
-      }
+      // selected 用函数式更新 + 移出依赖：此前依赖自身写回导致每次请求后重跑
+      setSelected((prev) => {
+        if (!prev || !data.some((i) => keyOf(i) === prev)) {
+          return data[0] ? keyOf(data[0]) : undefined
+        }
+        return prev
+      })
     } catch (err: any) {
       message.error(err.message || '加载按 SOP 汇总失败')
     } finally {
       setLoading(false)
     }
-  }, [productSearch, message, selected])
+  }, [productSearch, message])
 
   useEffect(() => { load() }, [load])
 
-  const keyOf = (i: SopSummaryItem) => `${i.sop_no || '无SOP号'}__${i.item_name}`
   const current = items.find((i) => keyOf(i) === selected)
 
   const columns = [
@@ -67,9 +74,9 @@ export default function SopSummary() {
         <Input.Search
           placeholder="按产品名过滤"
           allowClear
-          value={productSearch}
-          onChange={(e) => setProductSearch(e.target.value)}
-          onSearch={() => load()}
+          value={productDraft}
+          onChange={(e) => setProductDraft(e.target.value)}
+          onSearch={() => setProductSearch(productDraft)}
           style={{ width: 220 }}
         />
         <Select

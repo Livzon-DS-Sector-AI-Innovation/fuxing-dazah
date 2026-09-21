@@ -52,7 +52,7 @@ export default function QualityDashboardPage() {
   const today = dayjs().format('YYYY-MM-DD')
   const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD')
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     try {
       const [res, reports] = await Promise.all([
         fetchQualityDashboard(),
@@ -61,7 +61,8 @@ export default function QualityDashboardPage() {
       setData(res.data)
       setDailyReports(reports.data || [])
     } catch (err: any) {
-      message.error(err.message || '加载总览失败')
+      // 自动刷新静默失败（此前后端异常时每 30 秒弹一条错误轰炸）
+      if (!silent) message.error(err.message || '加载总览失败')
     } finally {
       setLoading(false)
     }
@@ -69,10 +70,10 @@ export default function QualityDashboardPage() {
 
   useEffect(() => { load() }, [load])
 
-  // 30 秒自动刷新（页面可见时）
+  // 30 秒自动刷新（页面可见时，静默）
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!document.hidden) load()
+      if (!document.hidden) load(true)
     }, 30000)
     return () => clearInterval(timer)
   }, [load])
@@ -162,7 +163,7 @@ export default function QualityDashboardPage() {
         <Button type="primary" onClick={() => router.push('/quality/task')}>📝 检验填报</Button>
         <Button onClick={() => router.push('/quality/summary')}>📈 汇总统计</Button>
         <Button onClick={() => router.push('/quality/standards')}>🎯 产品标准</Button>
-        <Button icon={<CheckCircleOutlined />} onClick={load}>刷新</Button>
+        <Button icon={<CheckCircleOutlined />} onClick={() => load()}>刷新</Button>
       </Space>
     </div>
   )

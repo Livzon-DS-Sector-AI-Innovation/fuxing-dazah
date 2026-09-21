@@ -16,6 +16,8 @@ export default function ReportPage() {
   const [data, setData] = useState<ReportRecord[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
+  const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
 
   const load = useCallback(async (p: number) => {
@@ -80,11 +82,11 @@ export default function ReportPage() {
       </Paragraph>
 
       <Space style={{ marginBottom: 16 }}>
-        <Input placeholder="搜索产品名称" allowClear value={search}
-          onChange={e => setSearch(e.target.value)}
-          onPressEnter={() => { setPage(1); load(1) }}
+        <Input placeholder="搜索产品名称" allowClear value={searchDraft}
+          onChange={e => setSearchDraft(e.target.value)}
+          onPressEnter={() => { setSearch(searchDraft); setPage(1) }}
           style={{ width: 200 }} prefix={<SearchOutlined />} />
-        <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
+        <Button type="primary" onClick={() => { setSearch(searchDraft); setPage(1) }}>搜索</Button>
       </Space>
 
       <Table columns={columns}

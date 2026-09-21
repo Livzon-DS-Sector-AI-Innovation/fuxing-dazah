@@ -7,7 +7,7 @@ import {
 import {
   SearchOutlined, PlusOutlined, FormOutlined, StopOutlined, DeleteOutlined, UploadOutlined, DownloadOutlined,
 } from '@ant-design/icons'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import dayjs from 'dayjs'
 import { usePermission } from '@/hooks/usePermission'
 import type { TestTaskListItem, TestTaskStatus } from '@/types/quality'
@@ -36,18 +36,18 @@ export default function TaskFillIn() {
   const [data, setData] = useState<TestTaskListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  // 输入草稿与已提交查询分离：只有点「搜索」/回车才发请求（此前每敲一键发一次）
+  const [productDraft, setProductDraft] = useState('')
   const [productSearch, setProductSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<TestTaskStatus | undefined>()
-
-  // 读取 URL ?status= / ?report_date= 预置筛选（挂载后读取，避免 SSR 窗口问题）
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const p = params.get('status')
-    if (p) setStatusFilter(p as TestTaskStatus)
-    const rd = params.get('report_date')
-    if (rd) setReportDateFilter(rd)
-  }, [])
-  const [reportDateFilter, setReportDateFilter] = useState<string | undefined>()
+  // URL ?status= / ?report_date= 预置筛选：首帧即读入（组件挂在 Suspense 边界内，
+  // 无 SSR 水合问题，也不再需要 effect 触发第二次请求）
+  const searchParams = useSearchParams()
+  const [statusFilter, setStatusFilter] = useState<TestTaskStatus | undefined>(
+    () => (searchParams.get('status') as TestTaskStatus | null) || undefined
+  )
+  const [reportDateFilter, setReportDateFilter] = useState<string | undefined>(
+    () => searchParams.get('report_date') || undefined
+  )
 
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -56,14 +56,14 @@ export default function TaskFillIn() {
   const [sopOptions, setSopOptions] = useState<{ label: string; value: string }[]>([])
   const [createForm] = Form.useForm()
 
-  const load = useCallback(async (p: number) => {
+  const load = useCallback(async (p: number, silent = false) => {
     setLoading(true)
     try {
       const res = await fetchTestTasks(productSearch || undefined, statusFilter, p, reportDateFilter)
       setData(res.data)
       setTotal(res.meta.total)
     } catch (err: any) {
-      message.error(err.message || '加载失败')
+      if (!silent) message.error(err.message || '加载失败')
     } finally {
       setLoading(false)
     }
@@ -71,10 +71,10 @@ export default function TaskFillIn() {
 
   useEffect(() => { load(page) }, [page, load])
 
-  // 30 秒自动刷新：机器人侧填报后网页无需手动刷新（页面不可见时跳过）
+  // 30 秒自动刷新：机器人侧填报后网页无需手动刷新（页面不可见时跳过；静默失败不弹错误）
   useEffect(() => {
     const timer = setInterval(() => {
-      if (!document.hidden && !createOpen) load(page)
+      if (!document.hidden && !createOpen) load(page, true)
     }, 30000)
     return () => clearInterval(timer)
   }, [load, page, createOpen])
@@ -347,9 +347,9 @@ export default function TaskFillIn() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
-        <Input placeholder="产品名称" allowClear value={productSearch}
-          onChange={e => setProductSearch(e.target.value)}
-          onPressEnter={() => { setPage(1); load(1) }}
+        <Input placeholder="产品名称" allowClear value={productDraft}
+          onChange={e => setProductDraft(e.target.value)}
+          onPressEnter={() => { setProductSearch(productDraft); setPage(1) }}
           style={{ width: 180 }} prefix={<SearchOutlined />} />
         <Select
           placeholder="状态筛选" allowClear
@@ -364,7 +364,7 @@ export default function TaskFillIn() {
           value={reportDateFilter ? dayjs(reportDateFilter) : null}
           onChange={(d) => { setReportDateFilter(d ? d.format('YYYY-MM-DD') : undefined); setPage(1) }}
         />
-        <Button type="primary" onClick={() => { setPage(1); load(1) }}>搜索</Button>
+        <Button type="primary" onClick={() => { setProductSearch(productDraft); setPage(1) }}>搜索</Button>
         {canCreate && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>新建检验任务</Button>
         )}
