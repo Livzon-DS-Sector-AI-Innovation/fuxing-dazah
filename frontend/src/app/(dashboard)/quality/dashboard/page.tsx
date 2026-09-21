@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Typography, Card, Row, Col, Statistic, List, Tag, Button, App, Space, Progress } from 'antd'
+import { Typography, Card, Row, Col, Statistic, List, Tag, Button, App, Space, Progress, theme } from 'antd'
 import {
   CalendarOutlined, SearchOutlined, LoadingOutlined, CheckCircleOutlined, SunOutlined,
 } from '@ant-design/icons'
@@ -21,15 +21,16 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
 
 type DashRow = QualityDashboard['today'][number]
 
-function TaskItem({ t, color }: { t: DashRow; color?: string }) {
+function TaskItem({ t }: { t: DashRow }) {
   const router = useRouter()
+  const { token } = theme.useToken()
   const pct = t.total ? Math.round((t.filled / t.total) * 100) : 0
   return (
     <List.Item style={{ cursor: 'pointer', paddingBlock: 6 }}
       onClick={() => router.push(`/quality/task/${t.task_id}`)}>
       <div style={{ width: '100%' }}>
         <Space wrap size={6}>
-          {color && <CheckCircleOutlined style={{ color }} />}
+          {t.status === 'completed' && <CheckCircleOutlined style={{ color: token.colorSuccess }} />}
           <Text strong>{t.product_name}</Text>
           <Text type="secondary">批号 {t.batch_number}</Text>
           <Tag color={STATUS_LABEL[t.status]?.color}>{STATUS_LABEL[t.status]?.label ?? t.status}</Tag>
@@ -44,6 +45,7 @@ function TaskItem({ t, color }: { t: DashRow; color?: string }) {
 
 export default function QualityDashboardPage() {
   const router = useRouter()
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState<QualityDashboard | null>(null)
@@ -99,7 +101,7 @@ export default function QualityDashboardPage() {
             onClick={() => router.push('/quality/task?status=pending_review')}>
             <Statistic title="待复核" value={data?.pending_review_count ?? 0}
               prefix={<SearchOutlined />}
-              valueStyle={{ color: (data?.pending_review_count ?? 0) > 0 ? '#faad14' : undefined }} />
+              valueStyle={{ color: (data?.pending_review_count ?? 0) > 0 ? token.colorWarning : undefined }} />
           </Card>
         </Col>
         <Col xs={12} sm={12} md={6}>
@@ -135,7 +137,7 @@ export default function QualityDashboardPage() {
           <Card size="small" title="✅ 最近完成任务"
             extra={<Button size="small" type="link" onClick={() => router.push('/quality/task')}>全部</Button>}>
             <List size="small" dataSource={data?.recent_completed || []} locale={{ emptyText: '暂无完成任务' }}
-              renderItem={(t) => <TaskItem t={t} color="#0ca30c" />} />
+              renderItem={(t) => <TaskItem t={t} />} />
           </Card>
         </Col>
       </Row>

@@ -384,7 +384,7 @@ export default function StandardsPage() {
       </div>
 
       <Row gutter={12}>
-        <Col span={5}>
+        <Col xs={24} lg={5}>
           <Card size="small" title={`产品名称（${filteredProducts.length}）`}>
             <Input.Search
               placeholder="搜产品/代码/文件编号（回车直达）"
@@ -418,7 +418,7 @@ export default function StandardsPage() {
             )}
           </Card>
         </Col>
-        <Col span={5}>
+        <Col xs={24} lg={5}>
           <Card size="small" title={activeProductName ? `产品代码（${codes.length}）` : '产品代码'}>
             {!activeProductName ? (
               <Empty description="先在左侧选择产品名称" />
@@ -446,7 +446,7 @@ export default function StandardsPage() {
             )}
           </Card>
         </Col>
-        <Col span={14}>
+        <Col xs={24} lg={14}>
           <Card
             size="small"
             title="SOP 项目行"

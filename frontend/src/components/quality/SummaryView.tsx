@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch } from 'antd'
+import { Card, Table, Select, DatePicker, Space, App, Tag, Typography, Button, Switch, theme } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { SummaryMatrix, SummaryMatrixRow, SummaryTrend } from '@/types/quality'
 import { fetchSummaryMatrix, fetchSummaryProducts, fetchItemTrend, exportSummaryMatrix } from '@/actions/quality'
@@ -17,20 +17,10 @@ const STATUS_LABEL: Record<string, { label: string; color: string }> = {
   in_progress: { label: '填报中', color: 'processing' },
 }
 
-function renderCell(item: string) {
-  return (_: unknown, r: SummaryMatrixRow) => {
-    const cell = r.cells[item]
-    if (!cell) return <Text type="secondary">-</Text>
-    return (
-      <Text style={{ color: cell.is_pass ? undefined : '#ff4d4f' }}>
-        {cell.value}{cell.unit}
-      </Text>
-    )
-  }
-}
 
 export default function SummaryView() {
   const router = useRouter()
+  const { token } = theme.useToken()
   const { message } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [matrix, setMatrix] = useState<SummaryMatrix | null>(null)
@@ -112,6 +102,19 @@ export default function SummaryView() {
       { title: '判定', dataIndex: 'all_pass', key: 'all_pass', width: 80,
         render: (v: boolean) => <Tag color={v ? 'success' : 'error'}>{v ? '合格' : '不合格'}</Tag> },
     ]
+  // 单元格渲染（组件内定义：取主题 token 色值，不合格标红）
+  function renderCell(item: string) {
+    return (_: unknown, r: SummaryMatrixRow) => {
+      const cell = r.cells[item]
+      if (!cell) return <Text type="secondary">-</Text>
+      return (
+        <Text style={{ color: cell.is_pass ? undefined : token.colorError }}>
+          {cell.value}{cell.unit}
+        </Text>
+      )
+    }
+  }
+
     const cols = matrix?.columns || []
     const groups: any[] = []
     const bySop = new Map<string, any[]>()
@@ -152,7 +155,7 @@ export default function SummaryView() {
           checked={includeInProgress}
           onChange={setIncludeInProgress}
           checkedChildren="含填报中"
-          unCheckedChildren="含填报中"
+          unCheckedChildren="仅已完成"
         />
         <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 Excel</Button>
       </Space>

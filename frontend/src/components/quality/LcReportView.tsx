@@ -1,6 +1,6 @@
 'use client'
 
-import { Card, Descriptions, Table, Tag, Typography, Divider, Collapse, Statistic, Row, Col, Space } from 'antd'
+import { Card, Descriptions, Table, Tag, Typography, Divider, Collapse, Statistic, Row, Col, Space, theme } from 'antd'
 import {
   CheckCircleOutlined,
   WarningOutlined,
@@ -30,16 +30,17 @@ function reportVal(result: CalculatedResult): string {
   if (result.name === '总杂质') {
     return toPct(result.first_percent, 2)
   }
-  // 取第一份和第二份中较大的
-  const r1 = result.rounded_first || result.first_percent
-  const r2 = result.rounded_second || result.second_percent
-  if (r2 && r2 > 0) {
+  // 取第一份和第二份中较大的（0 是合法值，不能用 || 判缺失）
+  const r1 = result.rounded_first ?? result.first_percent
+  const r2 = result.rounded_second ?? result.second_percent
+  if (r2 != null) {
     return `${r1} / ${r2}`
   }
   return String(r1)
 }
 
 export default function LcReportView({ report }: Props) {
+  const { token } = theme.useToken()
   // 整理杂质表格数据
   const impurityColumns = [
     { title: '杂质名称', dataIndex: 'name', key: 'name', width: 130 },
@@ -110,20 +111,12 @@ export default function LcReportView({ report }: Props) {
             <Statistic
               title="整体判定"
               value={report.all_pass ? '全部合格' : '存在不合格'}
-              valueStyle={{ color: report.all_pass ? '#52c41a' : '#ff4d4f' }}
+              valueStyle={{ color: report.all_pass ? token.colorSuccess : token.colorError }}
               prefix={report.all_pass ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
             />
           </Card>
         </Col>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic
-              value={report.all_pass ? '合格' : '不合格'}
-              prefix={report.all_pass ? <CheckCircleOutlined /> : <WarningOutlined />}
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
+        <Col span={16}>
           <Card size="small">
             <Statistic
               title="杂质项目"
