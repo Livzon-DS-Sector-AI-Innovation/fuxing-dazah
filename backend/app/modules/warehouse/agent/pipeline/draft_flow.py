@@ -609,7 +609,8 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "department",
         ),
         writable_fields=(
-            "物料批号",
+            "物料批号(API)",
+            "物料名称(API)",
             "出库数量",
             "领用日期",
             "领用类型",

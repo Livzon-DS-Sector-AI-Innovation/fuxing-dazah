@@ -50,6 +50,12 @@ PICKING_STOCK_TABLE = "material_stock"
 # 无入库日期批次的排序哨兵（升序下排最后：缺日期不等于最早，FIFO 不抢先发）
 _SORT_SENTINEL_LAST = 2**62
 
+# 拆分口径（2026-09-21 真机验收定案）：剩余量 <1 的碎批不参与自动建议
+# （避免「首批 0.5」式不可操作拆分）；自动建议最多拆 3 批，凑不齐报
+# split_limit_exceeded 引导分次领用。常量先于运行参数，有需求再配置化。
+MIN_STOCK_QTY = 1.0
+MAX_SPLIT_BATCHES = 3
+
 # 领用类型默认值（质询 Round 2 定案：用户不说就默认生产使用；须在选项集内）
 PICKING_DEFAULT_USE_TYPE = "生产使用"
 
@@ -185,42 +191,49 @@ def fifo_plan(
 ) -> list[dict[str, Any]]:
     """库存记录 → FIFO 建议批次列表（入库日期升序、跨批拆分）。
 
-    仅 QA放行=放行 的批次参与；总量不足抛 :class:`PickingError`
-    （insufficient_stock，附可用总量）；无放行批次抛 no_released_batch。
+    仅 QA放行=放行 且剩余量 ≥1 的批次参与（碎批过滤，真机验收定案）；
+    升序累计扣减，最多拆 :data:`MAX_SPLIT_BATCHES` 批。总量不足抛
+    insufficient_stock（附可参与总量）；凑不齐且批次超上限抛
+    split_limit_exceeded（引导分次领用）；无放行批次抛 no_released_batch。
     record_id 由调用方从原始记录带入（纯函数只处理 fields 形态时置空）。
     """
-    released: list[tuple[dict[str, Any], str]] = []
+    pool: list[tuple[dict[str, Any], str, float]] = []
     for record in stock_records:
         fields = record.get("fields") or {}
         if not _is_released(fields):
             continue
-        released.append((fields, str(record.get("record_id") or "")))
-    if not released:
+        stock_qty = cell_number(fields.get("剩余数量"))
+        if stock_qty is None or stock_qty < MIN_STOCK_QTY:
+            continue
+        pool.append((fields, str(record.get("record_id") or ""), stock_qty))
+    if not pool:
         raise PickingError("no_released_batch", "该物料没有 QA 放行（放行状态）的批次")
-    released.sort(key=lambda pair: _parse_inbound_ms(pair[0]))
-    available = sum(
-        stock_qty
-        for fields, _ in released
-        if (stock_qty := cell_number(fields.get("剩余数量"))) is not None and stock_qty > 0
-    )
+    pool.sort(key=lambda triple: _parse_inbound_ms(triple[0]))
+    available = sum(stock_qty for _, _, stock_qty in pool)
 
     plan: list[dict[str, Any]] = []
     remaining = float(quantity)
-    for fields, record_id in released:
+    for fields, record_id, stock_qty in pool:
         if remaining <= 0:
             break
-        stock_qty = cell_number(fields.get("剩余数量"))
-        if stock_qty is None or stock_qty <= 0:
-            continue
+        if len(plan) >= MAX_SPLIT_BATCHES:
+            break
         pick = min(remaining, stock_qty)
         item = _batch_item(fields, pick)
         item["record_id"] = record_id
         plan.append(item)
         remaining -= pick
     if remaining > 1e-9:
+        if available < float(quantity) - 1e-9:
+            raise PickingError(
+                "insufficient_stock",
+                f"放行批次可用总量 {available:g}（单位见台账），不足以满足领用 {float(quantity):g}",
+            )
+        picked_total = float(quantity) - remaining
         raise PickingError(
-            "insufficient_stock",
-            f"放行批次可用总量 {available:g}（单位见台账），不足以满足领用 {float(quantity):g}",
+            "split_limit_exceeded",
+            f"放行批次零散：前 {MAX_SPLIT_BATCHES} 批仅能凑齐 {picked_total:g}"
+            f"（不足领用 {float(quantity):g}），请分次领用或先在台账合并零散批次",
         )
     return plan
 

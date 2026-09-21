@@ -145,6 +145,38 @@ class TestFifoPlan:
             picking.fifo_plan([], quantity=10)
         assert exc_info.value.code == "no_released_batch"
 
+    def test_dust_batches_below_one_excluded(self) -> None:
+        """剩余量 <1 的碎批不参与建议（真机验收定案：0.5 首批不可操作）。"""
+        records = [
+            _released_batch("D1", qty=0.5, inbound="2026-07-01"),
+            _released_batch("D2", qty=0.9, inbound="2026-07-02"),
+            _released_batch("B1", qty=140, inbound="2026-08-01"),
+        ]
+        plan = picking.fifo_plan(records, quantity=100)
+        assert [item["batch_no"] for item in plan] == ["B1"]
+        assert plan[0]["pick_qty"] == 100
+
+    def test_split_limit_three_batches(self) -> None:
+        """批次零散、前 3 批凑不齐 → split_limit_exceeded（引导分次领用）。"""
+        records = [
+            _released_batch(f"B{i}", qty=100, inbound=f"2026-08-0{i}")
+            for i in range(1, 6)
+        ]
+        with pytest.raises(picking.PickingError) as exc_info:
+            picking.fifo_plan(records, quantity=500)
+        assert exc_info.value.code == "split_limit_exceeded"
+        assert "300" in exc_info.value.message  # 前 3 批可凑量
+
+    def test_split_limit_exact_three_ok(self) -> None:
+        """恰好 3 批凑齐 → 正常建议。"""
+        records = [
+            _released_batch(f"B{i}", qty=200, inbound=f"2026-08-0{i}")
+            for i in range(1, 5)
+        ]
+        plan = picking.fifo_plan(records, quantity=600)
+        assert len(plan) == 3
+        assert plan[-1]["pick_qty"] == 200
+
 
 # ── Ticket 01：库存拉取（async）──
 
@@ -253,6 +285,8 @@ def _outbound_fields_for_test() -> dict[str, Any]:
         "物料批号": FieldMeta(
             type=FIELD_TYPE_SELECT, options=("B1", "B2", "10407-251008")
         ),
+        "物料批号(API)": FieldMeta(type=1),  # 2026-09-21 新建 API 专用文本字段
+        "物料名称(API)": FieldMeta(type=1),
         "领用类型": FieldMeta(
             type=FIELD_TYPE_SELECT,
             options=("生产使用", "研发使用", "部门领用", "采购退货"),
@@ -549,7 +583,8 @@ class TestBuildPickingFields:
             today=date(2026, 9, 18),
         )
         assert degraded == []
-        assert fields["物料批号"] == "10407-251008"
+        assert fields["物料批号(API)"] == "10407-251008"  # API 文本列直写
+        assert fields["物料名称(API)"] == "硫酸"
         assert fields["出库数量"] == 500
         assert fields["领用日期"] == _today_ms(date(2026, 9, 18))
         assert fields["领用类型"] == "生产使用"
@@ -573,7 +608,7 @@ class TestBuildPickingFields:
             draft, table_fields=_outbound_fields_for_test()
         )
         # 首批自动写入（跨批拆分余量人工在 Base 拆行，回执提示）
-        assert fields["物料批号"] == "B1"
+        assert fields["物料批号(API)"] == "B1"
         assert fields["出库数量"] == 300
         assert degraded == []
 
@@ -592,8 +627,10 @@ class TestBuildPickingFields:
         fields, degraded = build_picking_fields(
             draft, table_fields=_outbound_fields_for_test()
         )
-        assert "物料批号" in degraded and "物料批号" not in fields
+        # 批号走 API 文本列不再受选项集约束（选项集滞后误杀已治理）；仅
+        # 领用类型等软单选仍降级
         assert "领用类型" in degraded and "领用类型" not in fields
+        assert fields["物料批号(API)"] == "NOPE"
         assert fields["出库数量"] == 500
 
 
@@ -634,6 +671,7 @@ class TestSubmitPicking:
         draft = _picking_draft_row(
             {
                 "material": "硫酸",
+                "material_name": "硫酸",
                 "quantity": 500,
                 "unit": "Kg",
                 "department": "精制工程一部",
@@ -647,7 +685,8 @@ class TestSubmitPicking:
         assert len(adapter.created) == 1
         table_key, fields = adapter.created[0]
         assert table_key == "material_outbound"
-        assert fields["物料批号"] == "10407-251008"
+        assert fields["物料批号(API)"] == "10407-251008"
+        assert fields["物料名称(API)"] == "硫酸"
         assert fields["领用类型"] == "生产使用"
         assert note and "✅ 领料已登记" in note
         # 回执卡（领料分支标题）已捕获

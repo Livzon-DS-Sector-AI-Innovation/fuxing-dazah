@@ -877,13 +877,12 @@ async def submit_outbound(db: AsyncSession, draft: WarehouseAgentDraft) -> str |
 
 PICKING_OUTBOUND_TABLE = "material_outbound"
 
-# 读回核对关键字段（spec：批号/数量/部门）
-PICKING_CHECK_FIELDS: tuple[str, ...] = ("物料批号", "出库数量", "领用部门")
+# 读回核对关键字段（spec：批号/数量/部门；批号写 API 专用文本字段）
+PICKING_CHECK_FIELDS: tuple[str, ...] = ("物料批号(API)", "出库数量", "领用部门")
 
-# canonical 键 → (Base 字段名, 是否单选)；quantity 数字化单独分支，领用日期
-# 恒写当天单独处理；picking_plan（结构化建议快照）不进映射
+# canonical 键 → (Base 字段名, 是否单选)；quantity 数字化与批号/名称（API 文本
+# 列）单独分支，领用日期恒写当天单独处理；picking_plan（结构化建议快照）不进映射
 _PICKING_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
-    ("designated_batch", "物料批号", True),
     ("use_type", "领用类型", True),
     ("department", "领用部门", True),
     ("remark", "备注", False),
@@ -913,9 +912,11 @@ def build_picking_fields(
     """draft.aligned（含 picking_plan）→ material_outbound 写入字段。
 
     返回 (fields, degraded)：degraded 为未写入字段名（单选值不在选项集 /
-    数量非数字）。物料批号取用户指定批号或 FIFO 建议首批（跨批拆分的多批
-    无法一行写完——写首批并把完整建议放回执，多批余量人工在 Base 拆行；
-    2B 台账权威，本地不做拆行镜像）；领用日期恒写当天毫秒时间戳。
+    数量非数字）。物料批号/物料名称写 API 专用文本字段（2026-09-21 新建——
+    原单选列选项集不含新批次/部分物料，领料提交实测 degraded，GMP/入库
+    「(API)」同款先例）；批号取用户指定批号或 FIFO 建议首批（跨批拆分的
+    多批无法一行写完——写首批并把完整建议放回执，多批余量人工在 Base 拆
+    行；2B 台账权威，本地不做拆行镜像）；领用日期恒写当天毫秒时间戳。
     """
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     fields: dict[str, Any] = {}
@@ -940,23 +941,17 @@ def build_picking_fields(
     else:
         fields["出库数量"] = num
 
-    # 物料批号：用户指定批号 > FIFO 建议首批
+    # 物料批号/物料名称：API 专用文本字段（纯文本直写，无选项集约束）
     batch = str(aligned.get("designated_batch") or "").strip()
     if not batch and plan:
         batch = str(plan[0].get("batch_no") or "").strip()
     if batch:
-        adapted = _select_or_skip(
-            table_fields or get_table_fields(PICKING_OUTBOUND_TABLE),
-            "物料批号",
-            batch,
-            degraded,
-        )
-        if adapted:
-            fields["物料批号"] = adapted
+        fields["物料批号(API)"] = batch
+    material_name = str(aligned.get("material_name") or "").strip()
+    if material_name:
+        fields["物料名称(API)"] = material_name
 
     for key, field_name, is_select in _PICKING_FIELD_MAP:
-        if key == "designated_batch":
-            continue  # 上面已按批号列单独处理
         if key == "use_type":
             value: Any = use_type  # 默认生产使用（局部兜底，不回写 aligned）
         else:
