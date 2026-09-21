@@ -511,12 +511,12 @@ TABLES: dict[str, TableMeta] = {
         name_cn="不合格物料汇总",
         fields=_TABLE_FIELDS["unqualified_stock"],
     ),
-    # ── V3.0 分期C 供应商名录（§4.3）：table_id 空占位，Base 建表后经
-    # 配置中心 Bitable 连接 Tab 配置（DB 行覆盖），未配置时适配器报错 ──
+    # ── V3.0 分期C 供应商名录（§4.3）：测试版实测坐标（2026-09-21 API 建表
+    # 探针）；生产版切换时经配置中心 Bitable 连接 DB 行覆盖 ──
     "supplier_directory": TableMeta(
         base_key="MATERIAL",
         base_token_setting="WAREHOUSE_FEISHU_BITABLE_MATERIAL_APP_TOKEN",
-        table_id="",
+        table_id="tblHTyfj2syDObpD",
         name_cn="供应商名录表",
         fields=_TABLE_FIELDS["supplier_directory"],
     ),
