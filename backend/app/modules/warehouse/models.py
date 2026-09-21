@@ -882,10 +882,10 @@ class BitableConfigAudit(BaseModel):
 
     table_key: Mapped[str] = mapped_column(String(64), nullable=False, comment="表 key")
     action: Mapped[str] = mapped_column(
-        String(32), nullable=False, comment="动作: update/enable/disable"
+        String(32), nullable=False, comment="动作: update/update_env/env_mode"
     )
     before_json: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True, comment="变更前（compact，{base_token 脱敏, table_id, enabled, note}）"
+        JSONB, nullable=True, comment="变更前（compact，{base_token 脱敏, table_id, enabled, note, env}）"
     )
     after_json: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB, nullable=True, comment="变更后（compact）"
@@ -893,6 +893,49 @@ class BitableConfigAudit(BaseModel):
     operator_name: Mapped[str | None] = mapped_column(
         String(128), nullable=True, comment="操作人 name"
     )
+
+
+class BitableEnvConnection(BaseModel):
+    """Bitable 表级连接坐标（环境维度，V3.0 分期D §3.3 生产版切换准备）。
+
+    一行 = 某表在某环境（test/prod）的坐标覆盖。resolve 链：
+    环境行（当前 bitable_env_mode）→ 既有 bitable_connections 行 →
+    env/settings → 代码快照。test 模式且无环境行时行为与历史完全一致。
+    """
+
+    __tablename__ = "bitable_env_connections"
+    __table_args__ = (
+        Index(
+            "uq_warehouse_bitable_env_connections_key",
+            "table_key",
+            "env",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_warehouse_bitable_env_connections_table_key", "table_key"),
+        {"schema": "warehouse"},
+    )
+
+    table_key: Mapped[str] = mapped_column(
+        String(64), nullable=False,
+        comment="表 key（bitable_schema.TABLES 注册，如 material_receipt）",
+    )
+    env: Mapped[str] = mapped_column(
+        String(16), nullable=False, comment="环境: test 测试版 / prod 生产版",
+    )
+    base_token: Mapped[str | None] = mapped_column(
+        String(128), nullable=True,
+        comment="Base app_token 覆盖（空 = 回落既有连接行/env/快照）",
+    )
+    table_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True,
+        comment="表 table_id 覆盖（空 = 回落既有连接行/代码快照）",
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+        comment="是否启用（false = 该环境显式停用该表，不回退默认）",
+    )
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注")
 
 
 class RuntimeConfig(BaseModel):
@@ -1016,7 +1059,7 @@ class WarehousePushTask(BaseModel):
     schedule: Mapped[dict[str, Any] | None] = mapped_column(
         JSONB,
         nullable=True,
-        comment="调度 daily/weekly/monthly/interval（引擎四态）；event 任务为 null；空值=回落 registry 默认",
+        comment="调度 daily/weekly/monthly/yearly/interval（引擎五态）；event 任务为 null；空值=回落 registry 默认",
     )
     targets: Mapped[str | None] = mapped_column(
         String(512),

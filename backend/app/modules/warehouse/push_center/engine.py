@@ -165,7 +165,8 @@ def _calendar_slot(schedule: dict[str, Any], now: datetime) -> tuple[datetime, i
     """日历型调度 → (最近一个计划槽位, 窗口分钟数)。
 
     槽位取 now 所在周期或最近一个已过去的周期（weekly 取本周目标周几、
-    monthly 取本月或上月目标日），配合窗口判断「是否处于应执行窗口内」。
+    monthly 取本月或上月目标日、yearly 取本年或上年目标日），配合窗口
+    判断「是否处于应执行窗口内」。
     """
     window = int(schedule.get("window_minutes", DEFAULT_WINDOW_MINUTES))
     hh, mm = _parse_hhmm(schedule["time"])
@@ -186,6 +187,17 @@ def _calendar_slot(schedule: dict[str, Any], now: datetime) -> tuple[datetime, i
             prev_year, prev_month = (year, month - 1) if month > 1 else (year - 1, 12)
             base = date(
                 prev_year, prev_month, min(day, _calendar.monthrange(prev_year, prev_month)[1])
+            )
+    elif stype == "yearly":
+        month = int(schedule["month"])
+        day = int(schedule["day"])
+        clamped = min(day, _calendar.monthrange(now.year, month)[1])
+        if (now.month, now.day) >= (month, clamped):
+            base = date(now.year, month, clamped)
+        else:
+            prev_year = now.year - 1
+            base = date(
+                prev_year, month, min(day, _calendar.monthrange(prev_year, month)[1])
             )
     else:
         raise ValueError(f"非日历型调度: {stype}")

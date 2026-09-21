@@ -50,22 +50,14 @@ def _display(value: Any) -> str:
 
 
 async def fetch_unqualified_records(adapter: Any) -> list[dict[str, Any]]:
-    """分页拉取不合格物料清单（带 record_id；处理日期为空 = 待跟进）。"""
-    records: list[dict[str, Any]] = []
-    page_token: str | None = None
-    for _ in range(10):  # 分页上限防御（每页 500，>5000 条截断）
-        page = await adapter.search_records_page(
-            "unqualified_stock",
-            filter_json=None,
-            field_names=_UNQUALIFIED_FIELDS,
-            limit=500,
-            page_token=page_token,
-        )
-        records.extend(page.get("records") or [])
-        page_token = page.get("page_token")
-        if not page_token:
-            break
-    return records
+    """分页拉取不合格物料清单（带 record_id；处理日期为空 = 待跟进）。
+
+    分页/截断防御委托 finished_data.fetch_all_records（分期D 收敛，
+    原内联 500×10 循环与之逐字等价）。
+    """
+    from app.modules.warehouse.finished_data import fetch_all_records
+
+    return await fetch_all_records(adapter, "unqualified_stock", _UNQUALIFIED_FIELDS)
 
 
 async def stale_lists_confirm_hook(
@@ -145,8 +137,107 @@ async def stale_lists_confirm_hook(
 
 register_post_send_hook("stale_lists", stale_lists_confirm_hook)
 
+
+# ── V3.0 分期D：成品退货/不合格处理方案门（§4.8④）──
+
+# 确认单业务类型（非 QC 链路，仅受 A 期总开关 bitable_writeback_enabled 管辖）
+FINISHED_DISPOSITION_BIZ = "finished_disposition"
+
+# 回写映射：处理确认日期=确认执行当天（@today 哨兵）；处理进度为公式列
+# 只读，确认回写走 D 期 API 建列「处理确认日期」（退货/不合格两表各一列）
+FINISHED_DISPOSITION_WRITEBACK = {"处理确认日期": "@today"}
+
+
+async def finished_disposition_confirm_hook(
+    db: AsyncSession,
+    view: PushTaskView,
+    now: datetime,
+    *,
+    dry_run: bool | None = None,
+) -> list[WarehouseConfirmRequest]:
+    """成品待处理清单推送后置钩子：按表分单建处理方案确认卡。
+
+    退货汇总表/不合格产品汇总表各一张整单卡（ref_record_ids=各自待处理行，
+    处理确认日期为空）；入库台账待处理批次仅清单展示不入门。目标=推送任务
+    首个目标；无待处理或开关关闭不建单。
+    """
+    from app.modules.warehouse import base_mirror
+    from app.modules.warehouse import confirm_request as cr
+    from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+    from app.modules.warehouse.finished_data import (
+        SOURCE_RETURNS,
+        SOURCE_UNQUALIFIED,
+        fetch_pending_dispositions,
+    )
+
+    if not view.targets:
+        return []
+    if not base_mirror.bitable_writeback_enabled():
+        logger.info("成品处理方案门跳过：多维表格回写开关关闭")
+        return []
+    pending = await fetch_pending_dispositions(WarehouseBitableAdapter())
+    created: list[WarehouseConfirmRequest] = []
+    plans = (
+        (SOURCE_RETURNS, "finished_returns", "退货"),
+        (SOURCE_UNQUALIFIED, "finished_unqualified", "不合格"),
+    )
+    for source, table_key, label in plans:
+        rows = [r for r in pending if r.source == source]
+        if not rows:
+            continue
+        top_lines = "\n".join(
+            f"{i}. {r.product_name or '-'}（{r.spec or '-'}）批 {r.batch_no or '-'}｜"
+            f"{r.qty if r.qty is not None else '-'}{r.unit}"
+            for i, r in enumerate(rows[:5], start=1)
+        )
+        request = await cr.create_request(
+            db,
+            business_type=FINISHED_DISPOSITION_BIZ,
+            title=f"成品{label}处理方案确认",
+            summary=(
+                f"今日清单中有 **{len(rows)}** 条成品{label}待处理"
+                f"（处理确认日期为空）：\n{top_lines}"
+                f"\n\n点击「确认」表示以上条目处理方案已制定，将回写台账"
+                f"「处理确认日期=今天」；处理进度请在多维表格中人工跟进。"
+            ),
+            ref_table=table_key,
+            ref_record_ids=[r.record_id for r in rows],
+            target=view.targets[0],
+            payload={
+                "task": view.task_name,
+                "total": len(rows),
+                "items": [
+                    {"产品名称": r.product_name, "批号": r.batch_no} for r in rows[:10]
+                ],
+            },
+            writeback=dict(FINISHED_DISPOSITION_WRITEBACK),
+        )
+        sent = await cr.send_request_card(request, dry_run=dry_run)
+        if not sent:
+            logger.error(
+                "成品%s确认卡发送失败: request_no=%s target=%s",
+                label, request.request_no, request.target,
+            )
+        else:
+            logger.info(
+                "成品%s确认卡已送达: request_no=%s 待处理=%d 条",
+                label, request.request_no, len(rows),
+            )
+        created.append(request)
+    if not created:
+        logger.info("成品处理方案门跳过：无待处理（处理确认日期为空）行")
+    return created
+
+
+register_post_send_hook(
+    "finished_disposition_lists", finished_disposition_confirm_hook
+)
+
+
 __all__ = [
     "UNQUALIFIED_DISPOSITION",
+    "FINISHED_DISPOSITION_BIZ",
     "fetch_unqualified_records",
     "stale_lists_confirm_hook",
+    "finished_disposition_confirm_hook",
 ]

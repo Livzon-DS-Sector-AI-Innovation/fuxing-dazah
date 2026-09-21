@@ -5,7 +5,7 @@
   enabled/schedule = DB 活行 → registry 默认（schedule 空值 = 恢复默认）；
   缺行 = 按注册表默认（启用）。
 - **写（async，API 层传入 session）**：``set_task`` 校验（daily/weekly/monthly/
-  interval 四态 schedule）→ 软删行恢复 → before/after 审计 → flush → 失效。
+  yearly/interval 五态 schedule）→ 软删行恢复 → before/after 审计 → flush → 失效。
 - **测试接缝**：构造函数 ``row_loader`` 注入预设行；生产不传走同步会话工厂。
 """
 
@@ -155,8 +155,8 @@ class PushConfigStore:
         """更新任务行（事务 + 审计 + 失效）。
 
         - 未知任务抛 ValueError（404 语义）；
-        - enabled 必须 bool；schedule 须为 daily/weekly/monthly/interval 四态或
-          null（null = 恢复 registry 默认）；targets 逗号分隔，条目数与长度受限；
+        - enabled 必须 bool；schedule 须为 daily/weekly/monthly/yearly/interval
+          五态或 null（null = 恢复 registry 默认）；targets 逗号分隔，条目数与长度受限；
         - targets 空串/None = 清空覆盖（回落 env）。
         """
         info = registry.get_task(task_name)
@@ -355,7 +355,7 @@ def _validate_window(schedule: dict[str, Any]) -> None:
 
 
 def _validate_schedule(schedule: Any) -> dict[str, Any] | None:
-    """schedule 四态校验：daily / weekly / monthly / interval；null = 恢复默认。"""
+    """schedule 五态校验：daily / weekly / monthly / yearly / interval；null = 恢复默认。"""
     if schedule is None:
         return None
     if not isinstance(schedule, dict):
@@ -382,12 +382,26 @@ def _validate_schedule(schedule: Any) -> dict[str, Any] | None:
         _validate_window(schedule)
         out["window_minutes"] = schedule.get("window_minutes", 60)
         return out
+    if stype == "yearly":
+        month = schedule.get("month")
+        day = schedule.get("day")
+        if isinstance(month, bool) or not isinstance(month, int) or not 1 <= month <= 12:
+            raise ValueError("yearly schedule 的 month 必须为 1-12 整数")
+        if isinstance(day, bool) or not isinstance(day, int) or not 1 <= day <= 31:
+            raise ValueError("yearly schedule 的 day 必须为 1-31 整数")
+        out = {
+            "type": "yearly", "month": month, "day": day,
+            "time": _validate_hhmm(schedule.get("time")),
+        }
+        _validate_window(schedule)
+        out["window_minutes"] = schedule.get("window_minutes", 60)
+        return out
     if stype == "interval":
         seconds = schedule.get("seconds")
         if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < _INTERVAL_MIN_SECONDS:
             raise ValueError(f"interval schedule 的 seconds 必须为 >={_INTERVAL_MIN_SECONDS} 的整数")
         return {"type": "interval", "seconds": seconds}
-    raise ValueError("schedule.type 仅支持 daily/weekly/monthly/interval（null = 恢复默认）")
+    raise ValueError("schedule.type 仅支持 daily/weekly/monthly/yearly/interval（null = 恢复默认）")
 
 
 push_store = PushConfigStore()

@@ -16,6 +16,7 @@ import {
   updateWarehouseBitableConnection,
 } from '@/actions/warehouse'
 import type { WarehouseBitableView } from '@/types/warehouse'
+import BitableEnvBar from './BitableEnvBar'
 import ConfigAuditSection, { type ConfigAuditHandle } from './ConfigAuditSection'
 import {
   CARD_STYLE,
@@ -316,6 +317,13 @@ export default function BitableTab({ canUpdate }: { canUpdate: boolean }) {
 
   return (
     <div>
+      <BitableEnvBar
+        canUpdate={canUpdate}
+        onChanged={() => {
+          void load()
+          auditRef.current?.refresh()
+        }}
+      />
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         {/* ── 左：表列表 ── */}
         <div style={{ ...CARD_STYLE, padding: 12, width: 320, flexShrink: 0 }}>

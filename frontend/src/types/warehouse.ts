@@ -443,11 +443,12 @@ export interface WarehouseSchedulerUpdateInput {
 
 // ── 推送任务（V3.0 分期A 推送订阅中心）──
 
-/** push schedule 四态：daily / weekly（weekday 0=周一）/ monthly / interval；null（事件触发） */
+/** push schedule 五态：daily / weekly（weekday 0=周一）/ monthly / yearly / interval；null（事件触发） */
 export type WarehousePushSchedule =
   | { type: 'daily'; time: string; window_minutes?: number }
   | { type: 'weekly'; weekday: number; time: string; window_minutes?: number }
   | { type: 'monthly'; day: number; time: string; window_minutes?: number }
+  | { type: 'yearly'; month: number; day: number; time: string; window_minutes?: number }
   | { type: 'interval'; seconds: number }
   | null
 

@@ -16,6 +16,8 @@ import {
   fetchWarehouseAiModels,
   fetchWarehouseAiScenarios,
   fetchWarehouseBitableConnections,
+  fetchWarehouseBitableEnvConnections,
+  fetchWarehouseBitableEnvMode,
   fetchWarehouseConfigAudits,
   fetchWarehouseRuntimeConfigs,
   fetchWarehouseSchedulerTasks,
@@ -24,6 +26,8 @@ import {
   putWarehouseAiModel as apiPutWarehouseAiModel,
   putWarehouseAiScenario as apiPutWarehouseAiScenario,
   putWarehouseBitableConnection as apiPutWarehouseBitableConnection,
+  putWarehouseBitableEnvConnection as apiPutWarehouseBitableEnvConnection,
+  putWarehouseBitableEnvMode as apiPutWarehouseBitableEnvMode,
   putWarehouseRuntimeConfig as apiPutWarehouseRuntimeConfig,
   putWarehouseSchedulerTask as apiPutWarehouseSchedulerTask,
   putWarehousePushTask as apiPutWarehousePushTask,
@@ -270,6 +274,30 @@ export async function updateWarehouseBitableConnection(
   input: WarehouseBitableUpdateInput,
 ) {
   const result = await apiPutWarehouseBitableConnection(tableKey, input)
+  revalidatePath('/warehouse/system')
+  return result
+}
+
+export async function getWarehouseBitableEnvMode() {
+  return fetchWarehouseBitableEnvMode()
+}
+
+export async function setWarehouseBitableEnvMode(mode: string) {
+  const result = await apiPutWarehouseBitableEnvMode(mode)
+  revalidatePath('/warehouse/system')
+  return result
+}
+
+export async function getWarehouseBitableEnvConnections(env: string) {
+  return fetchWarehouseBitableEnvConnections(env)
+}
+
+export async function updateWarehouseBitableEnvConnection(
+  env: string,
+  tableKey: string,
+  input: WarehouseBitableUpdateInput,
+) {
+  const result = await apiPutWarehouseBitableEnvConnection(env, tableKey, input)
   revalidatePath('/warehouse/system')
   return result
 }

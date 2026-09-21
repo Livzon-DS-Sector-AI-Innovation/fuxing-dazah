@@ -55,6 +55,19 @@ class StubProfileRow:
     is_deleted: bool = False
 
 
+@dataclass
+class StubEnvRow:
+    """模拟 bitable_env_connections 活行（分期D 环境坐标）。"""
+
+    table_key: str
+    env: str = "test"
+    base_token: str | None = None
+    table_id: str | None = None
+    enabled: bool = True
+    note: str | None = None
+    is_deleted: bool = False
+
+
 def _patch_settings(monkeypatch: pytest.MonkeyPatch, **values: str) -> None:
     """把测试值打到缓存的 Settings 实例上（env 兜底层经 get_settings 读取）。
 
@@ -258,6 +271,24 @@ class TestRuntimeStore:
         assert store.get_value("max_turns") == 10
         assert store.get_view("max_turns").source == "default"
 
+    def test_fail_safe_switch_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """kill-switch 契约：回写双开关注册表默认 0（fail-safe off，不依赖 live 值）。
+
+        分期D 审查 B1：共享库 live 值随验收期翻转，默认值口径必须在
+        store/registry 级封闭断言（env 变量与 DB 行缺位时的实际生效值）。
+        """
+        _patch_settings(
+            monkeypatch,
+            **{info.env_var: "" for info in RUNTIME_REGISTRY.values() if info.env_var},
+        )
+        store = RuntimeConfigStore(row_loader=lambda k: None)
+        assert store.get_value("bitable_writeback_enabled") == 0
+        assert store.get_value("qc_writeback_enabled") == 0
+        assert store.get_value("bitable_env_mode") == "test"
+        assert RUNTIME_REGISTRY["bitable_writeback_enabled"].default == 0
+        assert RUNTIME_REGISTRY["qc_writeback_enabled"].default == 0
+        assert RUNTIME_REGISTRY["bitable_env_mode"].default == "test"
+
     def test_env_fallback_when_no_db(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_settings(monkeypatch, WAREHOUSE_AGENT_MAX_TURNS="18")
         store = RuntimeConfigStore(row_loader=lambda k: None)
@@ -362,11 +393,13 @@ class TestBitableStore:
         assert conn.table_id_source == "db"
 
     def test_disabled_row_is_explicit_off(self) -> None:
+        """显式停用不回退默认；空占位环境行（播种 test 行）不复活停用语义。"""
         store = BitableConfigStore(
-            row_loader=lambda k: StubConnectionRow(table_key=k, enabled=False)
+            row_loader=lambda k: StubConnectionRow(table_key=k, enabled=False),
+            env_row_loader=lambda k, env: StubEnvRow(table_key=k, env=env),
         )
         conn = store.resolve("material_receipt")
-        assert conn.enabled is False  # 显式停用不回退默认
+        assert conn.enabled is False  # 占位行（全空字段）透明，停用生效
 
     def test_unknown_table_raises(self) -> None:
         store = BitableConfigStore(row_loader=lambda k: None)
@@ -375,7 +408,10 @@ class TestBitableStore:
 
     def test_ten_connections_registered(self) -> None:
         store = BitableConfigStore(row_loader=lambda k: None)
-        assert len(store.iter_connection_views()) == 11  # 10 核心表 + 分期C supplier_directory
+        from app.modules.warehouse.bitable_config import registry
+
+        assert len(store.iter_connection_views()) == len(registry.iter_connections())
+        assert len(store.iter_connection_views()) == 15  # 11 既有 + 分期D 成品侧四表
 
     def test_view_masks_token(self) -> None:
         store = BitableConfigStore(

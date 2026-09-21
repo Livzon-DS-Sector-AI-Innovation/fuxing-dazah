@@ -452,6 +452,37 @@ export async function refreshWarehouseBitableFields(
   )
 }
 
+// ── 多维表格环境坐标组（V3.0 分期D §3.3 生产版切换准备）──
+
+export async function fetchWarehouseBitableEnvMode(): Promise<string> {
+  const data = await apiGet<{ mode: string }>(`${SERVER_API}${SC_BASE}/bitable/env-mode`)
+  return data?.mode ?? 'test'
+}
+
+export async function putWarehouseBitableEnvMode(mode: string): Promise<string> {
+  const data = await apiPut<{ mode: string }>(`${SERVER_API}${SC_BASE}/bitable/env-mode`, { mode })
+  return data?.mode ?? mode
+}
+
+export async function fetchWarehouseBitableEnvConnections(
+  env: string,
+): Promise<WarehouseBitableData> {
+  return apiGet<WarehouseBitableData>(
+    `${SERVER_API}${SC_BASE}/bitable/env-connections/${encode(env)}`,
+  )
+}
+
+export async function putWarehouseBitableEnvConnection(
+  env: string,
+  tableKey: string,
+  input: WarehouseBitableUpdateInput,
+): Promise<WarehouseBitableView> {
+  return apiPut<WarehouseBitableView>(
+    `${SERVER_API}${SC_BASE}/bitable/env-connections/${encode(env)}/${encode(tableKey)}`,
+    input,
+  )
+}
+
 // ── 定时任务 / 告警目标 ──
 
 export async function fetchWarehouseSchedulerTasks(): Promise<WarehouseSchedulerData> {

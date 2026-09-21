@@ -37,6 +37,8 @@ function formatPushSchedule(schedule: WarehousePushSchedule): string {
       return `每周${WEEKDAY_NAMES[schedule.weekday] ?? '?'} ${schedule.time}`
     case 'monthly':
       return `每月 ${schedule.day} 日 ${schedule.time}`
+    case 'yearly':
+      return `每年 ${schedule.month} 月 ${schedule.day} 日 ${schedule.time}`
     case 'interval':
       return `每 ${schedule.seconds} 秒`
   }

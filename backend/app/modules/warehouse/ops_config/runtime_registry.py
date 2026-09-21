@@ -179,6 +179,23 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "生产环境改为真实 QA 群/人，即时生效"
         ),
     ),
+    RuntimeKeyInfo(
+        key="bitable_env_mode",
+        label="Bitable 坐标环境模式（test/prod）",
+        group="多维表格",
+        value_type="str",
+        default="test",
+        env_var="",
+        min_value=None,
+        max_value=None,
+        max_length=8,
+        description=(
+            "V3.0 分期D 生产版切换开关（§3.3）：test=使用测试版坐标（默认）；"
+            "prod=表坐标解析优先取 bitable_env_connections 的 prod 行"
+            "（其次沿用既有连接行/env/快照）。非法值 fail-safe 回 test。"
+            "切 prod 前置：双跑比对零差异 + 零回写探针（.scratch 探针脚本）"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

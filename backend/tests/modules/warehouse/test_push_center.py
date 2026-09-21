@@ -84,20 +84,32 @@ async def _logs(db: AsyncSession, task_name: str) -> list[WarehousePushLog]:
 @pytest.fixture
 def engine_env(monkeypatch: pytest.MonkeyPatch) -> PushConfigStore:
     """引擎测试环境：晨报任务指向 oc_test，其余定时任务停用，失败告警静音。"""
-    rows = {
-        "morning_report": StubPushRow(task_name="morning_report", targets="oc_test"),
-        "weekly_stock_report": StubPushRow(task_name="weekly_stock_report", enabled=False),
-        "monthly_report_push": StubPushRow(task_name="monthly_report_push", enabled=False),
-        "stale_lists": StubPushRow(task_name="stale_lists", enabled=False),
-    }
+    rows = _with_disabled_defaults(
+        {
+            "morning_report": StubPushRow(task_name="morning_report", targets="oc_test"),
+        }
+    )
     test_store = _make_store(rows, monkeypatch)
     monkeypatch.setattr(engine, "push_store", test_store)
     monkeypatch.setattr(failure_notifier, "fire_notify_failure", MagicMock())
     return test_store
 
 
+def _with_disabled_defaults(
+    rows: dict[str, StubPushRow | None],
+) -> dict[str, StubPushRow | None]:
+    """未列出的定时任务补停用行（封闭性：新任务注册表默认启用，会污染到期断言）。"""
+    full: dict[str, StubPushRow | None] = {
+        info.task_name: StubPushRow(task_name=info.task_name, enabled=False)
+        for info in iter_tasks()
+        if info.trigger == "scheduled"
+    }
+    full.update(rows)
+    return full
+
+
 def _swap_rows(store: PushConfigStore, rows: dict[str, StubPushRow | None]) -> None:
-    store._row_loader = lambda name: rows.get(name)  # noqa: SLF001 — 测试注入口
+    store._row_loader = lambda name: _with_disabled_defaults(rows).get(name)  # noqa: SLF001 — 测试注入口
     store.invalidate()
 
 
@@ -154,6 +166,14 @@ class TestPushRegistry:
             "release_notify",
             # V3.0 分期C（供应商不一致提醒，事件型）
             "supplier_mismatch_alert",
+            # V3.0 分期D（分析补全，7 个定时型）
+            "finished_daily_summary",
+            "invoice_four_state",
+            "finished_disposition_lists",
+            "shipment_analysis",
+            "material_usage_compare",
+            "workshop_weekly_usage",
+            "annual_report",
         }
 
     def test_scheduled_vs_event(self) -> None:
@@ -166,9 +186,21 @@ class TestPushRegistry:
             "weekly_stock_report",
             "monthly_report_push",
             "stale_lists",
+            "finished_daily_summary",
+            "invoice_four_state",
+            "finished_disposition_lists",
+            "shipment_analysis",
+            "material_usage_compare",
+            "workshop_weekly_usage",
+            "annual_report",
         ):
             assert by_name[name].trigger == "scheduled"
             assert by_name[name].default_schedule is not None
+
+    def test_annual_report_yearly_schedule(self) -> None:
+        """年报推送为 yearly 调度（分期D 新增第五态）。"""
+        info = {t.task_name: t for t in iter_tasks()}["annual_report"]
+        assert info.default_schedule == {"type": "yearly", "month": 1, "day": 1, "time": "08:30"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -307,7 +339,10 @@ class TestRunDueTasks:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         _patch_settings(monkeypatch, WAREHOUSE_ALERT_CHAT_ID="")
-        _swap_rows(engine_env, {})
+        _swap_rows(
+            engine_env,
+            {"morning_report": StubPushRow(task_name="morning_report", targets="")},
+        )
         results = await engine.run_due_tasks(db_session, WED_0830, dry_run=True)
         assert [r.status for r in results] == ["skipped_no_target"]
         logs = await _logs(db_session, "morning_report")

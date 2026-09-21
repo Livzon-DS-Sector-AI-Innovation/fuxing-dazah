@@ -103,12 +103,16 @@ async def stale_env(
     )
     # 回写开关默认开（生产默认关；建单路径依赖回写）
     monkeypatch.setattr(base_mirror, "bitable_writeback_enabled", lambda: True)
+    # 封闭性：全部定时任务停用，仅 stale_lists 启用（分期D 新增任务
+    # 在 09:30 窗口内会到期，且其 Base 读取不在本文件假件覆盖范围）
+    from app.modules.warehouse.push_center.registry import iter_tasks
+
     rows = {
-        "morning_report": StubPushRow(task_name="morning_report", enabled=False),
-        "weekly_stock_report": StubPushRow(task_name="weekly_stock_report", enabled=False),
-        "monthly_report_push": StubPushRow(task_name="monthly_report_push", enabled=False),
-        "stale_lists": StubPushRow(task_name="stale_lists", targets="oc_test"),
+        info.task_name: StubPushRow(task_name=info.task_name, enabled=False)
+        for info in iter_tasks()
+        if info.trigger == "scheduled"
     }
+    rows["stale_lists"] = StubPushRow(task_name="stale_lists", targets="oc_test")
     test_store = PushConfigStore(row_loader=lambda name: rows.get(name))
     monkeypatch.setattr(engine, "push_store", test_store)
     monkeypatch.setattr(generators, "query_report", _fake_list_report())

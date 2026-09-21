@@ -478,6 +478,69 @@ async def report_monthly_export(
     )
 
 
+@router.get("/reports/annual", summary="出入库年报")
+async def report_annual(
+    year: int = Query(..., ge=2020, le=2100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_annual_report(db, year))
+
+
+@router.get("/reports/annual/export", summary="出入库年报导出 Excel")
+async def report_annual_export(
+    year: int = Query(..., ge=2020, le=2100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    report = await reports_service.get_annual_report(db, year)
+    return _xlsx_response(f"出入库年报-{year}.xlsx", reports_service.build_annual_xlsx(report))
+
+
+@router.get("/reports/hazardous", summary="危化品/易制毒/易制爆专项报表")
+async def report_hazardous(
+    days: int = Query(default=90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_hazardous_report(db, days=days))
+
+
+@router.get("/reports/hazardous/export", summary="危化品专项报表导出 Excel")
+async def report_hazardous_export(
+    days: int = Query(default=90, ge=1, le=365),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    report = await reports_service.get_hazardous_report(db, days=days)
+    return _xlsx_response(
+        f"危化品专项报表-{days}天.xlsx", reports_service.build_hazardous_xlsx(report)
+    )
+
+
+@router.get("/reports/usage-compare", summary="月度实际vs预期用量对比")
+async def report_usage_compare(
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> JSONResponse:
+    return success_response(await reports_service.get_usage_compare(db, year, month))
+
+
+@router.get("/reports/usage-compare/export", summary="月度用量对比导出 Excel")
+async def report_usage_compare_export(
+    year: int = Query(..., ge=2020, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:reports:read")),
+) -> Response:
+    report = await reports_service.get_usage_compare(db, year, month)
+    return _xlsx_response(
+        f"用量对比-{year}-{month:02d}.xlsx", reports_service.build_usage_compare_xlsx(report)
+    )
+
+
 @router.get("/reports/turnover", summary="库存周转率排行")
 async def report_turnover(
     days: int = Query(default=30, ge=1, le=365),

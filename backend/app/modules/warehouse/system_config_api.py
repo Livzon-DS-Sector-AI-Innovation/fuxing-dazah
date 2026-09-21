@@ -379,6 +379,78 @@ async def refresh_bitable_fields(
     return success_response({"ok": True, "field_count": fields.get("field_count")})
 
 
+# ── Bitable 环境坐标组（V3.0 分期D §3.3 生产版切换准备）──
+
+
+@system_config_router.get("/system-config/bitable/env-mode", summary="当前坐标环境模式")
+async def get_bitable_env_mode(
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    from app.modules.warehouse.bitable_config.store import current_env_mode
+
+    return success_response({"mode": current_env_mode()})
+
+
+@system_config_router.put("/system-config/bitable/env-mode", summary="切换坐标环境模式（test/prod）")
+async def set_bitable_env_mode(
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:update")),
+) -> JSONResponse:
+    from app.modules.warehouse.bitable_config.store import (
+        ENV_MODES,
+        bitable_store,
+    )
+
+    mode = str(payload.get("mode") or "").strip().lower()
+    if mode not in ENV_MODES:
+        raise HTTPException(status_code=422, detail="mode 仅支持 test/prod")
+    try:
+        applied = await bitable_store.set_env_mode(
+            db, mode, operator_name=user.name
+        )
+    except ValueError as exc:
+        raise _map_store_error(exc) from exc
+    return success_response({"mode": applied}, message=f"环境模式已切换为 {applied}，实时生效")
+
+
+@system_config_router.get("/system-config/bitable/env-connections/{env}", summary="某环境表级坐标总览")
+async def list_bitable_env_connections(
+    env: str,
+    user: User = Depends(require_permission("warehouse:system-config:read")),
+) -> JSONResponse:
+    from app.modules.warehouse.bitable_config.store import bitable_store
+
+    try:
+        views = [asdict(v) for v in bitable_store.iter_env_connection_views(env)]
+    except ValueError as exc:
+        raise _map_store_error(exc) from exc
+    return success_response({"env": env, "connections": views})
+
+
+@system_config_router.put(
+    "/system-config/bitable/env-connections/{env}/{table_key}",
+    summary="更新某环境表坐标",
+)
+async def update_bitable_env_connection(
+    env: str,
+    table_key: str,
+    payload: dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_permission("warehouse:system-config:update")),
+) -> JSONResponse:
+    from app.modules.warehouse.bitable_config.store import bitable_store
+
+    try:
+        view = await bitable_store.set_env_connection(
+            db, env, table_key, payload, operator_name=user.name
+        )
+    except ValueError as exc:
+        raise _map_store_error(exc) from exc
+    _trigger_field_refresh(table_key)
+    return success_response(asdict(view), message="环境坐标已保存，实时生效")
+
+
 def _trigger_field_refresh(table_key: str) -> None:
     """连接坐标变更后失效字段缓存（零网络；网络刷新走显式 refresh-fields 端点）。"""
     from app.modules.warehouse.bitable_schema import invalidate_field_cache

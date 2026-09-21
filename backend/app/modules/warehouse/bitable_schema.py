@@ -352,6 +352,9 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
     # ── S1 ticket 03 新增（查询工具需要；字段/类型来自 base_scan 快照，选项集快照为空） ──
 
     'material_master': {  # 25 fields 物料名称代码一览表
+        # 2026-09-21 D 期 API 建列（create_d_columns.py）：月度「实际vs预期」
+        # 对比报告的基准列（人工填写）
+        '月度预期用量': FieldMeta(type=2),
         '实际物料：请检后出报天数': FieldMeta(type=2),
         '代码': FieldMeta(type=3),
         '复验期': FieldMeta(type=2),
@@ -440,6 +443,88 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '申请日期': FieldMeta(type=5),
         '备注': FieldMeta(type=1),
     },
+
+    # ── V3.0 分期D 成品侧（§4.5/§4.8，只读聚合 + 处理确认回写；字段来自
+    # 2026-09-21 list_fields 探针，probe_d_bases.py；成品数据无本地镜像，
+    # 2B 口径全部 Base 直读）──
+    'daily_sales_summary': {  # 每日销售汇总（PROD，行级开票+发货明细）
+        '销售日期': FieldMeta(type=5),
+        '产品名称': FieldMeta(type=1),
+        '品规': FieldMeta(type=1),
+        '销售客户': FieldMeta(type=1),
+        '出库量': FieldMeta(type=20),  # 公式，返回「0.6kg」带单位文本
+        '开票数量': FieldMeta(type=2),
+        '单位': FieldMeta(type=19),
+        '开票时间': FieldMeta(type=5),
+        # 公式数值版出库量（开票工作流消费），优先取数源
+        '出库量-开票工作流使用': FieldMeta(type=20),
+        '订单判断': FieldMeta(type=20),
+    },
+    'finished_receipt': {  # 成品入库台账（PROD）
+        '入库日期': FieldMeta(type=5),
+        '登记人': FieldMeta(type=1003),
+        '产品名称': FieldMeta(type=3),
+        '产品批号': FieldMeta(type=1),
+        '品规': FieldMeta(type=3),
+        '入库数量': FieldMeta(type=2),
+        '单位': FieldMeta(type=3),
+        '件数': FieldMeta(type=20),
+        '包装规格': FieldMeta(type=4),
+        '入库车间': FieldMeta(type=19),
+        '各品种库存表': FieldMeta(type=19),
+        '库区位置': FieldMeta(type=1),
+        '质量状态': FieldMeta(type=3, options=('合格', '待检', '待处理', '退货')),
+        '备注': FieldMeta(type=1),
+        '库存数量': FieldMeta(type=20),
+        '退货原因': FieldMeta(type=1),
+        '退货客户': FieldMeta(type=1),
+        '首次出现判断': FieldMeta(type=20),
+        '取整（入库）': FieldMeta(type=20),
+        'kg/桶': FieldMeta(type=1),
+        '换算成公斤': FieldMeta(type=20),
+        '生产日期': FieldMeta(type=1),
+        '有效期': FieldMeta(type=1),
+        '样品来源': FieldMeta(type=1),
+        '父记录': FieldMeta(type=18),
+    },
+    'finished_returns': {  # 退货汇总表（PROD）
+        '退货日期': FieldMeta(type=5),
+        '产品名称': FieldMeta(type=1),
+        '品规': FieldMeta(type=1),
+        '产品批号': FieldMeta(type=1),
+        '退货客户': FieldMeta(type=1),
+        '退货原因': FieldMeta(type=1),
+        '包装规格': FieldMeta(type=1),
+        '退货量': FieldMeta(type=2),
+        '单位': FieldMeta(type=1),
+        '出库量': FieldMeta(type=20),
+        '剩余数量': FieldMeta(type=20),
+        '出库关联': FieldMeta(type=18),
+        '金额': FieldMeta(type=2),
+        '处理进度': FieldMeta(type=20),  # 公式只读，D 期确认回写走「处理确认日期」
+        '平均成本': FieldMeta(type=2),
+        '总成本': FieldMeta(type=20),
+        # 2026-09-21 D 期 API 建列（create_d_columns.py）：处理方案确认门回写
+        '处理确认日期': FieldMeta(type=5),
+    },
+    'finished_unqualified': {  # 不合格产品汇总表（PROD）
+        '登记日期': FieldMeta(type=5),
+        '产品名称': FieldMeta(type=1),
+        '品规': FieldMeta(type=1),
+        '产品批号': FieldMeta(type=1),
+        '包装规格': FieldMeta(type=1),
+        '产生数量': FieldMeta(type=2),
+        '出库量': FieldMeta(type=20),
+        '剩余数量': FieldMeta(type=20),
+        '单位': FieldMeta(type=1),
+        '产生原因': FieldMeta(type=1),
+        '出库关联': FieldMeta(type=18),
+        '处理进度': FieldMeta(type=20),  # 公式只读，D 期确认回写走「处理确认日期」
+        '金额': FieldMeta(type=2),
+        '报废流程': FieldMeta(type=17),
+        # 2026-09-21 D 期 API 建列（create_d_columns.py）：处理方案确认门回写
+        '处理确认日期': FieldMeta(type=5),
+    },
 }
 
 # ── 表坐标（10 张核心表，table_id 以测试版 Base 为准） ──
@@ -524,6 +609,37 @@ TABLES: dict[str, TableMeta] = {
         table_id="tblHTyfj2syDObpD",
         name_cn="供应商名录表",
         fields=_TABLE_FIELDS["supplier_directory"],
+    ),
+    # ── V3.0 分期D 成品侧四表（§4.5/§4.8）：测试版实测坐标（2026-09-21
+    # probe_d_bases.py 探针）；只读聚合为主，finished_returns/finished_unqualified
+    # 的「处理确认日期」为 D 期确认门回写列（API 建列） ──
+    "daily_sales_summary": TableMeta(
+        base_key="PROD",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_PROD_APP_TOKEN",
+        table_id="tbljxOCW2VtowuiG",
+        name_cn="每日销售汇总",
+        fields=_TABLE_FIELDS["daily_sales_summary"],
+    ),
+    "finished_receipt": TableMeta(
+        base_key="PROD",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_PROD_APP_TOKEN",
+        table_id="tblf2WmK787dA91b",
+        name_cn="成品入库台账",
+        fields=_TABLE_FIELDS["finished_receipt"],
+    ),
+    "finished_returns": TableMeta(
+        base_key="PROD",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_PROD_APP_TOKEN",
+        table_id="tblCffkhosqXBTiB",
+        name_cn="退货汇总表",
+        fields=_TABLE_FIELDS["finished_returns"],
+    ),
+    "finished_unqualified": TableMeta(
+        base_key="PROD",
+        base_token_setting="WAREHOUSE_FEISHU_BITABLE_PROD_APP_TOKEN",
+        table_id="tblyvMCh2DwRWqcP",
+        name_cn="不合格产品汇总表",
+        fields=_TABLE_FIELDS["finished_unqualified"],
     ),
 }
 

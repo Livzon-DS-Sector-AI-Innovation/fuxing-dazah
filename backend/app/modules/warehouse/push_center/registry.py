@@ -8,6 +8,7 @@ schedule 结构（引擎到期判断用，store 校验同构）：
 ``{"type": "daily", "time": "08:00"}`` /
 ``{"type": "weekly", "weekday": 0, "time": "08:30"}``（0=周一）/
 ``{"type": "monthly", "day": 1, "time": "08:30"}`` /
+``{"type": "yearly", "month": 1, "day": 1, "time": "08:30"}``（V3.0 分期D）/
 ``{"type": "interval", "seconds": 60}``；
 日历型可带 ``"window_minutes"``（默认 60，窗口守卫防重启误触发与重复执行）。
 本模块零副作用导入，migration 可直接引用。
@@ -114,6 +115,70 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         description="入库识别供应商与主数据不一致时推提醒卡（事件触发，AI 辅助核对口径）",
         trigger="event",
         default_schedule=None,
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    # ── V3.0 分期D（分析补全，设计 §4.4/§4.5/§4.8）──
+    PushTaskInfo(
+        task_name="finished_daily_summary",
+        scene="finished_daily_summary",
+        label="成品每日汇总",
+        description="每日 08:15 推送昨日成品出入库汇总与近 90 天质量状态分布（§4.5 成品③）",
+        trigger="scheduled",
+        default_schedule={"type": "daily", "time": "08:15"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="invoice_four_state",
+        scene="invoice_four_state",
+        label="开票四态推送",
+        description="每日 08:45 推送当月开票/发货四态合计与发货未开票明细（§4.8⑥）",
+        trigger="scheduled",
+        default_schedule={"type": "daily", "time": "08:45"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="finished_disposition_lists",
+        scene="finished_disposition_lists",
+        label="成品退货不合格清单",
+        description="每日 09:15 推送成品退货/不合格/待处理清单（推送后挂处理方案确认门，§4.8④）",
+        trigger="scheduled",
+        default_schedule={"type": "daily", "time": "09:15"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="shipment_analysis",
+        scene="shipment_analysis",
+        label="发货去向月度分析",
+        description="每月 1 日 09:00 推送上月销售发货客户排名/环比/品名分布分析（§4.8⑤）",
+        trigger="scheduled",
+        default_schedule={"type": "monthly", "day": 1, "time": "09:00"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="material_usage_compare",
+        scene="material_usage_compare",
+        label="物料用量对比报告",
+        description="每月 1 日 09:30 推送上月物料实际用量与预期基准对比及合理化建议（§4.4⑥）",
+        trigger="scheduled",
+        default_schedule={"type": "monthly", "day": 1, "time": "09:30"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="workshop_weekly_usage",
+        scene="workshop_weekly_usage",
+        label="车间周用量汇总",
+        description="每周一 09:00 按领用部门推送近 7 天领料用量汇总（§4.4⑤ 简化版）",
+        trigger="scheduled",
+        default_schedule={"type": "weekly", "weekday": 0, "time": "09:00"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
+    PushTaskInfo(
+        task_name="annual_report",
+        scene="annual_report",
+        label="年度报表推送",
+        description="每年 1 月 1 日 08:30 推送上年度年报（原辅料出入库聚合+成品年度开票/发货，§4.5）",
+        trigger="scheduled",
+        default_schedule={"type": "yearly", "month": 1, "day": 1, "time": "08:30"},
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
 )

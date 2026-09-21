@@ -173,16 +173,20 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 11  # 8 个既有键 + bitable_writeback_enabled（V3A）+ qc_writeback_enabled/qa_confirm_target（V3B）
+    assert len(configs) == 12  # 既有 11 键 + bitable_env_mode（V3D 环境模式）
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
-    # 回写总开关默认关闭（0）
+    # 回写开关/环境模式：共享库 live 值随验收期翻转（C 期交互式验收会把
+    # qc_writeback_enabled 临时置 1），API 测试只断言键存在且取值合法；
+    # **fail-safe 默认值（0/0/test）的封闭断言在 test_system_config_stores
+    # 的 test_fail_safe_switch_defaults**（不依赖 live 值）
     writeback = [c for c in configs if c["key"] == "bitable_writeback_enabled"][0]
-    assert writeback["value"] == 0
-    # QC 链路开关默认关闭（0）；确认门目标 B 期迁移播种空串（运行时可改）
+    assert writeback["value"] in (0, 1)
     qc_writeback = [c for c in configs if c["key"] == "qc_writeback_enabled"][0]
-    assert qc_writeback["value"] == 0
+    assert qc_writeback["value"] in (0, 1)
     qa_target = [c for c in configs if c["key"] == "qa_confirm_target"][0]
     assert isinstance(qa_target["value"], str)
+    env_mode = [c for c in configs if c["key"] == "bitable_env_mode"][0]
+    assert env_mode["value"] in ("test", "prod")
 
     resp = await client.put(f"{RUNTIME}/max_turns", json={"value": 15})
     assert resp.status_code == 200
@@ -230,7 +234,7 @@ async def test_bitable_connections_list_and_update(
     resp = await client.get(BITABLE)
     assert resp.status_code == 200
     connections = resp.json()["data"]["connections"]
-    assert len(connections) == 11  # 10 核心表 + 分期C supplier_directory
+    assert len(connections) == 15  # 11 既有 + 分期D 成品侧四表（daily_sales_summary 等）
     assert all(c["base_token"] != "" for c in connections)  # 脱敏后非空（**** 或 未配置）
 
     resp = await client.put(
