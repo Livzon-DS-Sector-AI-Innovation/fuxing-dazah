@@ -9,6 +9,7 @@ import type {
   QaDocumentType,
   QaDocumentVersion,
   QaMasterObject,
+  QaMasterObjectProposal,
 } from '@/types/qa'
 
 const BASE = `${API_BASE}/qa`
@@ -170,6 +171,48 @@ export async function setQaVersionActive(versionId: string, active: boolean): Pr
 export async function retryQaExtraction(fileId: string): Promise<ActionResult> {
   const result = await actionFetch(`${BASE}/document-files/${fileId}/retry`, { method: 'POST' })
   if (result.success) revalidatePath('/qa/documents')
+  return result
+}
+
+export async function triggerQaAiAnalysis(versionId: string, force = false): Promise<ActionResult<{ run_id: string; status: string }>> {
+  const result = await actionFetch<{ run_id: string; status: string }>(`${BASE}/document-versions/${versionId}/ai-analysis`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  })
+  if (result.success) revalidatePath('/qa/documents')
+  return result
+}
+
+export async function confirmQaAiRelations(runId: string, input: {
+  accepted_suggestion_ids: string[]
+  manual_master_object_ids: string[]
+  remove_master_object_ids: string[]
+}): Promise<ActionResult<QaDocumentMasterLink[]>> {
+  const result = await actionFetch<QaDocumentMasterLink[]>(`${BASE}/ai-analysis/${runId}/confirm-relations`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  if (result.success) {
+    revalidatePath('/qa/documents')
+    revalidatePath('/qa')
+  }
+  return result
+}
+
+export async function approveQaMasterObjectProposal(id: string, payload?: Record<string, unknown>): Promise<ActionResult<QaMasterObjectProposal>> {
+  const result = await actionFetch<QaMasterObjectProposal>(`${BASE}/master-object-proposals/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ payload: payload || null }),
+  })
+  if (result.success) revalidatePath('/qa/master-data')
+  return result
+}
+
+export async function rejectQaMasterObjectProposal(id: string): Promise<ActionResult<{ id: string; status: string }>> {
+  const result = await actionFetch<{ id: string; status: string }>(`${BASE}/master-object-proposals/${id}/reject`, {
+    method: 'POST',
+  })
+  if (result.success) revalidatePath('/qa/master-data')
   return result
 }
 

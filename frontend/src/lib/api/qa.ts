@@ -3,14 +3,19 @@
 import { apiFetchPaginated, apiGet } from '@/lib/http-client'
 import type {
   QaAuditLog,
+  QaAiAnalysisRun,
   QaDepartmentReference,
   QaDocument,
+  QaDocumentProcessingResult,
+  QaDocumentProcessingView,
+  QaDocumentSort,
   QaDocumentType,
   QaMasterKind,
   QaMasterObject,
   QaPage,
   QaSearchPage,
   QaSearchResult,
+  QaMasterObjectProposal,
   QaSourceReference,
 } from '@/types/qa'
 
@@ -126,6 +131,8 @@ export async function fetchQaDocuments(params: {
   include_history?: boolean
   /** 按“是否已设当前版本”过滤；配合 page_size=1 时 total 即该口径的文件数 */
   has_current_version?: boolean
+  /** 排序字段，后端白名单外的值回落到编号 */
+  sort_by?: QaDocumentSort
   page?: number
   page_size?: number
 } = {}): Promise<QaPage<QaDocument>> {
@@ -136,6 +143,7 @@ export async function fetchQaDocuments(params: {
     include_inactive: params.include_inactive,
     include_history: params.include_history,
     has_current_version: params.has_current_version,
+    sort_by: params.sort_by,
     page: params.page ?? 1,
     page_size: params.page_size ?? 20,
   })
@@ -145,6 +153,38 @@ export async function fetchQaDocuments(params: {
 
 export async function fetchQaDocument(id: string): Promise<QaDocument> {
   return apiGet<QaDocument>(`${QA_BASE}/documents/${id}`)
+}
+
+export async function fetchQaDocumentProcessingResults(
+  fileId: string,
+  params: {
+    view: QaDocumentProcessingView
+    page?: number
+    page_size?: number
+    content_limit?: number
+  },
+): Promise<QaDocumentProcessingResult> {
+  const query = qs({
+    view: params.view,
+    page: params.page ?? 1,
+    page_size: params.page_size ?? 20,
+    content_limit: params.content_limit ?? 800,
+  })
+  return apiGet<QaDocumentProcessingResult>(`${QA_BASE}/document-files/${fileId}/processing-results?${query}`)
+}
+
+export async function fetchQaAiAnalysis(versionId: string): Promise<QaAiAnalysisRun> {
+  return apiGet<QaAiAnalysisRun>(`${QA_BASE}/document-versions/${versionId}/ai-analysis/latest`)
+}
+
+export async function fetchQaAiAnalysisRun(runId: string): Promise<QaAiAnalysisRun> {
+  return apiGet<QaAiAnalysisRun>(`${QA_BASE}/ai-analysis/${runId}`)
+}
+
+export async function fetchQaMasterObjectProposals(params: { status?: string; page?: number; page_size?: number } = {}): Promise<QaPage<QaMasterObjectProposal>> {
+  const query = qs({ status: params.status, page: params.page ?? 1, page_size: params.page_size ?? 50 })
+  const result = await apiFetchPaginated<QaMasterObjectProposal>(`${QA_BASE}/master-object-proposals?${query}`)
+  return asPage(result)
 }
 
 export async function fetchQaSearch(params: {

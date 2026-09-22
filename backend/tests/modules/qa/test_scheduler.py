@@ -52,10 +52,10 @@ async def test_find_due_skips_unmigrated_qa_table_without_bubbling_error() -> No
 async def test_find_due_runs_timeout_recovery_and_returns_queued_files() -> None:
     """正常扫描时先回收超时任务，再返回排队和可重试文件。"""
     queued = object()
-    session = _Session(results=[_Result(), _Result([queued])])
+    session = _Session(results=[_Result(), _Result(), _Result([queued])])
 
     result = await QaTextExtractionGenerator().find_due(session)
 
     assert result == [queued]
-    assert session.execute_count == 2
+    assert session.execute_count == 3
     assert session.rollback_count == 0

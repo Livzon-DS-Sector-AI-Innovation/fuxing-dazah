@@ -14,11 +14,15 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 from zipfile import BadZipFile, ZipFile
 
 from app.core import storage as object_storage
 from app.core.config import get_settings
+
+if TYPE_CHECKING:
+    from app.modules.qa.document_processing import ExtractionDocument
 
 logger = logging.getLogger(__name__)
 
@@ -196,53 +200,72 @@ def extract_text(extension: str, data: bytes) -> tuple[str, list[TextSegment]]:
     扫描 PDF 返回 ``text_not_available`` 由 service 判断；旧 DOC 不解析。
     这里不做 OCR、不转换 Word。
     """
-    extension = extension.lower()
-    if not extension.startswith("."):
-        extension = f".{extension}"
-    if extension == ".doc":
-        return "unsupported", []
-    if extension == ".pdf":
-        import fitz  # PyMuPDF
+    from app.modules.qa.document_processing import parse_document
 
-        segments: list[TextSegment] = []
-        with fitz.open(stream=data, filetype="pdf") as pdf:
-            for page_index, page in enumerate(pdf.pages(), start=1):
-                text = page.get_text("text").strip()
-                if text:
-                    segments.append(TextSegment(text, f"第 {page_index} 页", page_number=page_index))
-        if not segments:
-            return "text_not_available", []
-        return "ready", segments
-    if extension == ".docx":
-        import io
+    extension = extension.lower().lstrip(".")
+    parsed = parse_document(extension, data)
+    if parsed.status != "ready":
+        return parsed.status, []
 
-        from docx import Document
+    # 这是旧 endpoint 的兼容视图：PDF 仍按页聚合，DOCX 表格仍按 cell
+    # 返回；新版 raw block/chunk API 则使用 extract_document 的完整结构。
+    if extension == "pdf":
+        grouped: dict[int, list[str]] = {}
+        for block in parsed.blocks:
+            if block.page_number is not None:
+                grouped.setdefault(block.page_number, []).append(block.content)
+        return "ready", [
+            TextSegment(
+                "\n".join(parts),
+                f"第 {page_number} 页",
+                page_number=page_number,
+            )
+            for page_number, parts in sorted(grouped.items())
+        ]
 
-        document = Document(io.BytesIO(data))
-        segments = []
-        for index, paragraph in enumerate(document.paragraphs, start=1):
-            text = paragraph.text.strip()
-            if text:
-                segments.append(TextSegment(text, f"段落 {index}", paragraph_index=index))
-        for table_index, table in enumerate(document.tables, start=1):
-            cell_index = 0
-            for row in table.rows:
-                for cell in row.cells:
-                    cell_index += 1
-                    text = cell.text.strip()
-                    if text:
-                        segments.append(
-                            TextSegment(
-                                text,
-                                f"表格 {table_index} / 单元格 {cell_index}",
-                                table_index=table_index,
-                                cell_index=cell_index,
-                            )
-                        )
-        if not segments:
-            return "text_not_available", []
-        return "ready", segments
-    return "unsupported", []
+    segments: list[TextSegment] = []
+    table_cell_counters: dict[int, int] = {}
+    for block in parsed.blocks:
+        if block.table_index is None:
+            segments.append(
+                TextSegment(
+                    block.content,
+                    f"段落 {block.paragraph_index}"
+                    if block.paragraph_index is not None
+                    else block.locator,
+                    paragraph_index=block.paragraph_index,
+                )
+            )
+            continue
+        cells = block.source_metadata.get("cells", [])
+        if not isinstance(cells, list) or not cells:
+            cells = [{"text": block.content}]
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            text = str(cell.get("text") or "").strip()
+            if not text:
+                continue
+            index = table_cell_counters.get(block.table_index, 0) + 1
+            table_cell_counters[block.table_index] = index
+            segments.append(
+                TextSegment(
+                    text,
+                    f"表格 {block.table_index} / 单元格 {index}",
+                    table_index=block.table_index,
+                    cell_index=index,
+                )
+            )
+    return "ready", segments
+
+
+def extract_document(
+    extension: str, data: bytes, *, mode: str = "native_text"
+) -> ExtractionDocument:
+    """返回包含 raw block/chunk 的新版解析结果。"""
+    from app.modules.qa.document_processing import parse_document
+
+    return parse_document(extension, data, mode=mode)
 
 
 def cleanup_stored_file(stored: StoredFile | str) -> None:

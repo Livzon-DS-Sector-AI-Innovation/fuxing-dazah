@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -148,8 +149,16 @@ async def test_create_master_rejects_duplicate_source_in_payload(
         code="EQ-02",
         name="设备",
         sources=[
-            SourceLinkIn(source_module="equipment", source_entity="equipment", source_id=source_id),
-            SourceLinkIn(source_module="equipment", source_entity="equipments", source_id=source_id),
+            SourceLinkIn(
+                source_module="equipment",
+                source_entity="equipment",
+                source_id=source_id,
+            ),
+            SourceLinkIn(
+                source_module="equipment",
+                source_entity="equipments",
+                source_id=source_id,
+            ),
         ],
     )
 
@@ -171,7 +180,9 @@ async def test_equipment_source_uses_qa_reference_validation_for_user(
         is_active=True,
     )
 
-    async def _validate(db: Any, user: Any, module: str, ids: Any, *, auto_publish_owned: bool) -> list[Any]:
+    async def _validate(
+        db: Any, user: Any, module: str, ids: Any, *, auto_publish_owned: bool
+    ) -> list[Any]:
         calls.append((db, user, module, ids, auto_publish_owned))
         return [brief]
 
@@ -283,11 +294,15 @@ async def test_qa_external_availability_does_not_reexpose_revoked_equipment(
 
 
 @pytest.mark.asyncio
-async def test_region_parent_rejects_self_and_cycles(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_region_parent_rejects_self_and_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """区域不能自引用，也不能通过父级链形成循环。"""
     object_id = uuid.uuid4()
     with pytest.raises(AppException) as self_error:
-        await service._validate_region_parent(cast(AsyncSession, _FakeDb()), object_id, object_id)
+        await service._validate_region_parent(
+            cast(AsyncSession, _FakeDb()), object_id, object_id
+        )
     assert self_error.value.status_code == 422
 
     parent = MasterObject(
@@ -302,7 +317,9 @@ async def test_region_parent_rejects_self_and_cycles(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(service, "get_master", _returning(parent))
 
     with pytest.raises(AppException) as cycle_error:
-        await service._validate_region_parent(cast(AsyncSession, _FakeDb()), object_id, parent.id)
+        await service._validate_region_parent(
+            cast(AsyncSession, _FakeDb()), object_id, parent.id
+        )
     assert cycle_error.value.status_code == 422
 
 
@@ -338,7 +355,9 @@ async def test_create_version_requires_external_approval_and_cleans_failed_stora
 
     cleanup: list[Any] = []
     db = _FakeDb([_Result(scalar=document), _Result()])
-    monkeypatch.setattr(service.file_service, "cleanup_stored_file", lambda value: cleanup.append(value))
+    monkeypatch.setattr(
+        service.file_service, "cleanup_stored_file", lambda value: cleanup.append(value)
+    )
     original_flush = db.flush
 
     async def fail_second_flush() -> None:
@@ -396,7 +415,9 @@ async def test_relations_reject_inactive_master_and_soft_delete_old_links(
     monkeypatch.setattr(service, "get_master", _returning(active))
     db = _FakeDb([_Result(rows=[old_link])])
 
-    rows = await service.set_relations(cast(AsyncSession, db), version.id, [RelationIn(master_object_id=active.id)])
+    rows = await service.set_relations(
+        cast(AsyncSession, db), version.id, [RelationIn(master_object_id=active.id)]
+    )
 
     assert old_link.is_deleted is True
     assert rows[0].code_snapshot == "EQ-NEW"
@@ -404,8 +425,121 @@ async def test_relations_reject_inactive_master_and_soft_delete_old_links(
 
     monkeypatch.setattr(service, "get_master", _returning(inactive))
     with pytest.raises(AppException) as error:
-        await service.set_relations(cast(AsyncSession, db), version.id, [RelationIn(master_object_id=inactive.id)])
+        await service.set_relations(
+            cast(AsyncSession, db),
+            version.id,
+            [RelationIn(master_object_id=inactive.id)],
+        )
     assert error.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_relations_allow_current_version_but_freeze_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """现行版本仍可维护关联；历史/停用版本作为过审快照冻结。"""
+    active = MasterObject(
+        object_type="EQUIPMENT",
+        code="EQ-CUR",
+        normalized_code="EQ-CUR",
+        name="现行关联设备",
+        status="active",
+    )
+    active.id = uuid.uuid4()
+    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(service, "get_master", _returning(active))
+
+    current = _version(status=VersionStatus.CURRENT.value)
+    current.locked_at = current.first_locked_at = datetime(2026, 1, 1, tzinfo=UTC)
+    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(current))
+    rows = await service.set_relations(
+        cast(AsyncSession, _FakeDb([_Result(rows=[])])),
+        current.id,
+        [RelationIn(master_object_id=active.id)],
+    )
+    assert [row.master_object_id for row in rows] == [active.id]
+
+    history = _version(status=VersionStatus.HISTORY.value)
+    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(history))
+    with pytest.raises(AppException) as error:
+        await service.set_relations(
+            cast(AsyncSession, _FakeDb()),
+            history.id,
+            [RelationIn(master_object_id=active.id)],
+        )
+    assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_relations_append_keeps_existing_links_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """追加语义默认不清理既有关系：提案审批的自动关联只传新增对象。"""
+    version = _version()
+    kept_link = DocumentMasterLink(
+        version_id=version.id,
+        master_object_id=uuid.uuid4(),
+        relation_type="APPLIES_TO",
+        code_snapshot="EQ-OLD",
+        name_snapshot="既有设备",
+    )
+    kept_link.id = uuid.uuid4()
+    approved = MasterObject(
+        object_type="EQUIPMENT",
+        code="EQ-AI",
+        normalized_code="EQ-AI",
+        name="提案新建设备",
+        status="active",
+    )
+    approved.id = uuid.uuid4()
+    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(version))
+    db = _FakeDb([_Result(rows=[kept_link]), _Result(rows=[approved])])
+
+    rows = await service.set_relations_append(
+        cast(AsyncSession, db), version.id, [approved.id]
+    )
+
+    assert not kept_link.is_deleted
+    assert {row.master_object_id for row in rows} == {
+        kept_link.master_object_id,
+        approved.id,
+    }
+    assert [row.code_snapshot for row in db.added] == ["EQ-AI"]
+
+
+@pytest.mark.asyncio
+async def test_relations_append_prunes_missing_only_when_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """显式 prune_missing 才软删除未出现在最终集合里的既有关系。"""
+    version = _version()
+    removed_link = DocumentMasterLink(
+        version_id=version.id,
+        master_object_id=uuid.uuid4(),
+        relation_type="APPLIES_TO",
+        code_snapshot="EQ-RM",
+        name_snapshot="被移除设备",
+    )
+    removed_link.id = uuid.uuid4()
+    kept = MasterObject(
+        object_type="EQUIPMENT",
+        code="EQ-KEEP",
+        normalized_code="EQ-KEEP",
+        name="保留设备",
+        status="active",
+    )
+    kept.id = uuid.uuid4()
+    monkeypatch.setattr(service, "_audit", _async_noop)
+    monkeypatch.setattr(service, "_get_version_with_document_lock", _returning(version))
+    db = _FakeDb([_Result(rows=[removed_link]), _Result(rows=[kept])])
+
+    rows = await service.set_relations_append(
+        cast(AsyncSession, db), version.id, [kept.id], prune_missing=True
+    )
+
+    assert removed_link.is_deleted is True
+    assert [row.master_object_id for row in rows] == [kept.id]
 
 
 @pytest.mark.asyncio
@@ -421,7 +555,9 @@ async def test_make_current_moves_previous_to_history_and_locks_versions(
     document.current_version_id = previous.id
     file_row = SimpleNamespace(sha256="abc123")
     # 第三次是 UPDATE 后的 re-fetch（回填 updated_at），返回被设为当前的 target
-    monkeypatch.setattr(service, "get_version", _returning_sequence([target, previous, target]))
+    monkeypatch.setattr(
+        service, "get_version", _returning_sequence([target, previous, target])
+    )
     monkeypatch.setattr(service, "get_file_for_version", _returning(file_row))
     monkeypatch.setattr(service, "_audit", _async_noop)
     db = _FakeDb([_Result(scalar=document)])
@@ -438,7 +574,9 @@ async def test_make_current_moves_previous_to_history_and_locks_versions(
 
 
 @pytest.mark.asyncio
-async def test_disable_current_version_is_forbidden(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_disable_current_version_is_forbidden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """当前版本不能直接停用，必须先切换当前指针。"""
     current = _version(status=VersionStatus.CURRENT.value)
     monkeypatch.setattr(service, "get_version", _returning(current))

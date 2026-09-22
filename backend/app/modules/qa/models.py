@@ -11,10 +11,14 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     Index,
     Integer,
     SmallInteger,
@@ -63,6 +67,50 @@ class ExtractionStatus(enum.StrEnum):
     TEXT_NOT_AVAILABLE = "text_not_available"
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
+
+
+class ExtractionRunStatus(enum.StrEnum):
+    """解析/分块运行状态。"""
+
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    READY = "ready"
+    TEXT_NOT_AVAILABLE = "text_not_available"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+    STALE = "stale"
+
+
+class AIAuthorityPolicy(enum.StrEnum):
+    """文件类型允许 AI 产生的事实范围。"""
+
+    AUTHORITATIVE = "authoritative"
+    REFERENCE = "reference"
+    DISABLED = "disabled"
+
+
+class AIAnalysisStatus(enum.StrEnum):
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    READY = "ready"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    STALE = "stale"
+
+
+class AIProposalStatus(enum.StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CONFLICT = "conflict"
+    STALE = "stale"
+
+
+class AISuggestionStatus(enum.StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    STALE = "stale"
 
 
 class RelationType(enum.StrEnum):
@@ -262,6 +310,10 @@ class DocumentType(BaseModel):
             "status IN ('active', 'inactive')",
             name="ck_qa_document_types_status",
         ),
+        CheckConstraint(
+            "ai_source_policy IN ('authoritative', 'reference', 'disabled')",
+            name="ck_qa_document_types_ai_source_policy",
+        ),
         # code 由 service 规范化；表达式索引再次保护大小写不敏感唯一性。
         Index(
             "uq_qa_document_types_code",
@@ -290,6 +342,13 @@ class DocumentType(BaseModel):
         default=RecordStatus.ACTIVE.value,
         server_default=RecordStatus.ACTIVE.value,
         comment="active/inactive",
+    )
+    ai_source_policy: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default=AIAuthorityPolicy.AUTHORITATIVE.value,
+        server_default=AIAuthorityPolicy.AUTHORITATIVE.value,
+        comment="AI 来源策略：authoritative/reference/disabled",
     )
 
 
@@ -508,6 +567,25 @@ class DocumentFile(BaseModel):
         server_default="0",
         comment="自动重试次数（最多三次）",
     )
+    parser_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="native_text", server_default="native_text",
+        comment="解析模式；本期 native_text，预留 ocr",
+    )
+    parser_version: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, comment="最近成功解析器版本；旧数据为空表示 legacy"
+    )
+    current_extraction_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="当前有效解析运行 ID（逻辑引用）"
+    )
+    current_chunk_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="当前有效分块运行 ID（逻辑引用）"
+    )
+    extraction_worker_token: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, comment="解析任务租约 token"
+    )
+    extraction_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, comment="解析任务租约到期时间"
+    )
 
 
 class DocumentTextSegment(BaseModel):
@@ -523,6 +601,7 @@ class DocumentTextSegment(BaseModel):
             postgresql_ops={"content": "gin_trgm_ops"},
         ),
         Index("ix_qa_document_text_segments_hash", "text_hash"),
+        Index("ix_qa_document_text_segments_run_order", "extraction_run_id", "source_order"),
         Index(
             "ix_qa_document_text_segments_pdf_position",
             "file_id",
@@ -550,10 +629,284 @@ class DocumentTextSegment(BaseModel):
     cell_index: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="DOCX 表格单元序号（从 0 开始）"
     )
+    extraction_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True, comment="解析运行 ID；为空表示 legacy 数据"
+    )
+    source_order: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="文件内全局 raw block 顺序"
+    )
+    block_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="paragraph", server_default="paragraph",
+        comment="paragraph/heading/list_item/table_header/table_row/pdf_block"
+    )
+    row_index: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="表格行序号")
+    column_index: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="表格列序号")
+    heading_path: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, comment="标题层级路径"
+    )
+    source_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True, comment="坐标、表格网格、样式等结构元数据"
+    )
     content: Mapped[str] = mapped_column(Text, nullable=False, comment="正文片段")
     text_hash: Mapped[str] = mapped_column(
         String(64), nullable=False, comment="正文片段 SHA-256"
     )
+
+
+class DocumentExtractionRun(BaseModel):
+    """一次可重建、可审计的 raw block 解析运行。"""
+
+    __tablename__ = "document_extraction_runs"
+    __table_args__ = (
+        Index("ix_qa_document_extraction_runs_file", "file_id", "created_at"),
+        Index("ix_qa_document_extraction_runs_queue", "status", "lease_until"),
+        Index("ix_qa_document_extraction_runs_input", "file_id", "input_hash"),
+        {"schema": "qa"},
+    )
+
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    parser_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="native_text")
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ExtractionRunStatus.QUEUED.value)
+    block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    statistics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+
+
+class DocumentChunkRun(BaseModel):
+    """raw block 的确定性分块运行。"""
+
+    __tablename__ = "document_chunk_runs"
+    __table_args__ = (
+        Index("ix_qa_document_chunk_runs_file", "file_id", "created_at"),
+        Index("ix_qa_document_chunk_runs_extraction", "extraction_run_id"),
+        Index("ix_qa_document_chunk_runs_queue", "status", "lease_until"),
+        {"schema": "qa"},
+    )
+
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    extraction_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=ExtractionRunStatus.QUEUED.value)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    statistics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DocumentTextChunk(BaseModel):
+    """供下游消费的派生上下文块。"""
+
+    __tablename__ = "document_text_chunks"
+    __table_args__ = (
+        Index("uq_qa_document_text_chunks_order", "chunk_run_id", "chunk_order", unique=True),
+        Index("ix_qa_document_text_chunks_file", "file_id", "chunk_order"),
+        Index("ix_qa_document_text_chunks_hash", "content_hash"),
+        Index("ix_qa_document_text_chunks_content_trgm", "content", postgresql_using="gin", postgresql_ops={"content": "gin_trgm_ops"}),
+        {"schema": "qa"},
+    )
+
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    heading_path: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSON, nullable=True
+    )
+
+
+class DocumentChunkBlock(BaseModel):
+    """chunk 与 raw block 的完整映射；不把证据折叠成不可追溯文本。"""
+
+    __tablename__ = "document_chunk_blocks"
+    __table_args__ = (
+        Index("uq_qa_document_chunk_blocks_identity", "chunk_id", "segment_id", unique=True),
+        Index("ix_qa_document_chunk_blocks_segment", "segment_id"),
+        {"schema": "qa"},
+    )
+
+    chunk_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    segment_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    block_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class DocumentAIAnalysisRun(BaseModel):
+    """一次文档 AI 分析请求的持久化状态。"""
+
+    __tablename__ = "document_ai_analysis_runs"
+    __table_args__ = (
+        Index("ix_qa_document_ai_analysis_runs_version", "version_id", "created_at"),
+        Index("ix_qa_document_ai_analysis_runs_queue", "status", "lease_until"),
+        Index("ix_qa_document_ai_analysis_runs_fingerprint", "version_id", "input_fingerprint"),
+        {"schema": "qa"},
+    )
+
+    version_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    extraction_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    chunk_run_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default=AIAnalysisStatus.QUEUED.value)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="openai-compatible")
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    catalog_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_policy: Mapped[str] = mapped_column(String(24), nullable=False)
+    requested_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    suggestion_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    proposal_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    processed_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_chunks: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    worker_token: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DocumentEntityObservation(BaseModel):
+    """模型/规则发现的实体事实；不是正式主数据。"""
+
+    __tablename__ = "document_entity_observations"
+    __table_args__ = (
+        Index("ix_qa_document_entity_observations_run", "analysis_run_id", "source_order"),
+        Index("ix_qa_document_entity_observations_normalized", "normalized_text"),
+        Index("ix_qa_document_entity_observations_evidence_hash", "evidence_hash"),
+        {"schema": "qa"},
+    )
+
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    raw_block_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    mention_text: Mapped[str] = mapped_column(String(500), nullable=False)
+    normalized_text: Mapped[str] = mapped_column(String(500), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="证据定位与片段内容的稳定哈希"
+    )
+    locator: Mapped[str] = mapped_column(String(255), nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    paragraph_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    table_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    row_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    column_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
+    extraction_method: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="deterministic", server_default="deterministic"
+    )
+    normalization_hint: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    observation_metadata: Mapped[dict[str, Any] | None] = mapped_column(
+        "metadata", JSON, nullable=True
+    )
+
+
+class DocumentRelationSuggestion(BaseModel):
+    """已有 QA 主数据的候选关联；确认前不写正式关系表。"""
+
+    __tablename__ = "document_relation_suggestions"
+    __table_args__ = (
+        Index(
+            "uq_qa_document_relation_suggestions_identity",
+            "analysis_run_id",
+            "observation_id",
+            "master_object_id",
+            unique=True,
+            postgresql_where=text("is_deleted = false"),
+        ),
+        Index("ix_qa_document_relation_suggestions_run", "analysis_run_id", "status", "rank"),
+        CheckConstraint(
+            "relation_type = 'APPLIES_TO'",
+            name="ck_qa_document_relation_suggestions_type",
+        ),
+        {"schema": "qa"},
+    )
+
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    observation_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    master_object_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    relation_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=RelationType.APPLIES_TO.value,
+        server_default=RelationType.APPLIES_TO.value,
+    )
+    match_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    rank: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    selected_by_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=AISuggestionStatus.PENDING.value,
+        server_default=AISuggestionStatus.PENDING.value,
+    )
+    rationale: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MasterObjectProposal(BaseModel):
+    """待人工审核的 QA 主数据新建/字段变更提案。"""
+
+    __tablename__ = "master_object_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "proposal_type IN ('create', 'update')",
+            name="ck_qa_master_object_proposals_type",
+        ),
+        Index("ix_qa_master_object_proposals_status", "status", "created_at"),
+        Index("ix_qa_master_object_proposals_run", "analysis_run_id"),
+        Index("ix_qa_master_object_proposals_target", "target_master_object_id"),
+        {"schema": "qa"},
+    )
+
+    analysis_run_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    observation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    proposal_type: Mapped[str] = mapped_column(String(24), nullable=False, comment="create/update")
+    target_master_object_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    object_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    proposed_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    field_diffs: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    conflicts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    base_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    base_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=AIProposalStatus.PENDING.value,
+        server_default=AIProposalStatus.PENDING.value,
+    )
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class DocumentMasterLink(BaseModel):
@@ -605,16 +958,29 @@ TextSegment = DocumentTextSegment
 
 
 __all__ = [
+    "AIAuthorityPolicy",
+    "AIAnalysisStatus",
+    "AIProposalStatus",
+    "AISuggestionStatus",
     "Document",
+    "DocumentAIAnalysisRun",
+    "DocumentChunkBlock",
+    "DocumentChunkRun",
+    "DocumentEntityObservation",
+    "DocumentExtractionRun",
     "DocumentFile",
     "DocumentMasterLink",
+    "DocumentRelationSuggestion",
     "DocumentTextSegment",
+    "DocumentTextChunk",
     "DocumentType",
     "DocumentVersion",
     "ExtractionStatus",
+    "ExtractionRunStatus",
     "MasterObject",
     "MasterObjectAlias",
     "MasterObjectSource",
+    "MasterObjectProposal",
     "MasterObjectType",
     "RecordStatus",
     "RelationType",

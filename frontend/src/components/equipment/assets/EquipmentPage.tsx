@@ -64,6 +64,7 @@ export function EquipmentPage({
     setLoading,
     setDepartments,
     setPage,
+    setPageSize,
   } = useEquipmentStore()
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -109,8 +110,12 @@ export function EquipmentPage({
     loadMissing()
   }, [])
 
-  // 获取列表数据
-  const fetchData = useCallback(async (p: number, ps: number) => {
+  // 获取列表数据。ps 省略表示沿用当前页大小（刷新场景）。
+  const fetchData = useCallback(async (p: number, ps?: number) => {
+    // EquipmentTable 的 pagination.pageSize 直接受控于 store，这里不落库的话
+    // 用户选了 100/页 也会被弹回 20，而表格已按 100 条渲染。
+    const size = ps ?? useEquipmentStore.getState().pageSize
+    setPageSize(size)
     setPage(p)
     setLoading(true)
     try {
@@ -121,7 +126,7 @@ export function EquipmentPage({
         status: statusFilter || undefined,
         keyword: keyword || undefined,
         page: p,
-        page_size: ps,
+        page_size: size,
       })
       setEquipments(equipmentsResponse.items)
       setTotal(equipmentsResponse.total)
@@ -130,7 +135,7 @@ export function EquipmentPage({
     } finally {
       setLoading(false)
     }
-  }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword, setEquipments, setTotal, setLoading, setPage])
+  }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword, setEquipments, setTotal, setLoading, setPage, setPageSize])
 
   // 刷新分类和位置树
   const refreshCategoriesAndLocations = useCallback(async () => {
@@ -145,7 +150,7 @@ export function EquipmentPage({
 
   // 筛选变化时重置到第一页（含首次加载）
   useEffect(() => {
-    fetchData(1, 20)
+    fetchData(1)
   }, [selectedCategory, selectedLocation, departmentFilter, statusFilter, keyword])
 
   const tabItems = [
@@ -243,11 +248,11 @@ export function EquipmentPage({
         </div>
 
         {/* 抽屉组件 */}
-        <EquipmentDrawer onRefresh={() => { fetchData(1, 20) }} defaultDepartmentId={initialUserDepartmentId} />
+        <EquipmentDrawer onRefresh={() => { fetchData(1) }} defaultDepartmentId={initialUserDepartmentId} />
         <EquipmentImportModal
           open={importModalOpen}
           onClose={() => setImportModalOpen(false)}
-          onImported={() => { fetchData(1, 20) }}
+          onImported={() => { fetchData(1) }}
         />
         <CategoryDrawer onRefresh={refreshCategoriesAndLocations} />
         <LocationDrawer onRefresh={refreshCategoriesAndLocations} />
@@ -256,7 +261,7 @@ export function EquipmentPage({
             id: e.id, equipment_no: e.equipment_no, name: e.name, importance: e.importance,
           }))}
           symptoms={failureCodes.symptoms}
-          onRefresh={() => fetchData(1, 20)}
+          onRefresh={() => fetchData(1)}
         />
       </App>
     </ConfigProvider>

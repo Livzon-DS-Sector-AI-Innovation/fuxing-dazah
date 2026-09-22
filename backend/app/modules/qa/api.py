@@ -15,31 +15,41 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.exceptions import AppException, NotFoundException
 from app.core.response import paginated_response, success_response
-from app.modules.qa import file_service, service
+from app.modules.qa import ai_analysis, file_service, service
 from app.modules.qa.repository import (
+    get_ai_run,
     get_document,
     get_file,
+    get_latest_ai_run,
     get_master,
     get_versions,
     list_document_types,
 )
 from app.modules.qa.schemas import (
+    AIAnalysisRunOut,
+    AIAnalysisTriggerRequest,
+    AIRelationConfirmationRequest,
     AliasIn,
     DocumentCreate,
+    DocumentProcessingResultOut,
     DocumentTypeCreate,
     DocumentTypeOut,
     DocumentTypeUpdate,
     DocumentUpdate,
     MasterObjectCreate,
+    MasterObjectProposalApproveRequest,
+    MasterObjectProposalOut,
     MasterObjectSourceOut,
     MasterObjectStatusIn,
     MasterObjectUpdate,
+    ProcessingResultView,
     RelationIn,
     SourceLinkIn,
 )
 from app.platform.identity.models import User
 from app.platform.permission.deps import RequireUser, require_permission
 from app.shared.module_registry import MODULES_BY_CODE
+from app.shared.schemas import ApiResponse
 
 router = APIRouter()
 _module = MODULES_BY_CODE["qa"]
@@ -56,6 +66,7 @@ _version_disable = require_permission("qa:version:disable")
 _relation_manage = require_permission("qa:relation:manage")
 _config_manage = require_permission("qa:config:manage")
 _audit_read = require_permission("qa:audit:read")
+_proposal_publish = require_permission("qa:master:create", "qa:master:update")
 
 
 class AliasUpdateRequest(BaseModel):
@@ -74,7 +85,7 @@ class SourceUpdateRequest(BaseModel):
 class RelationCompatRequest(BaseModel):
     """同时兼容规范的 relations 和前端早期的 master_object_ids。"""
 
-    relations: list[RelationIn] | None = None
+    relations: list[RelationIn] | None = Field(default=None, max_length=200)
     master_object_ids: list[uuid.UUID] | None = Field(default=None, max_length=200)
 
     def to_relations(self) -> list[RelationIn]:
@@ -410,6 +421,7 @@ async def get_documents(
     include_inactive: bool = False,
     include_history: bool = False,
     has_current_version: bool | None = None,
+    sort_by: str = Query("document_no", description="排序字段：document_no 编号 / title 标题"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ) -> Any:
@@ -420,6 +432,7 @@ async def get_documents(
         responsible_department_id=responsible_department_id,
         include_inactive=include_inactive,
         has_current_version=has_current_version,
+        sort_by=sort_by,
         page=page,
         page_size=page_size,
     )
@@ -542,6 +555,100 @@ async def put_version_relations(
     return success_response([await service._relation_dict(db, row) for row in rows])
 
 
+@router.post("/document-versions/{version_id}/ai-analysis", response_model=ApiResponse, summary="异步触发文档 AI 分析")
+async def post_ai_analysis(
+    version_id: uuid.UUID,
+    payload: AIAnalysisTriggerRequest | None = None,
+    user: User = Depends(_relation_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    run = await ai_analysis.create_analysis_run(
+        db, version_id, user, force=bool(payload and payload.force)
+    )
+    return success_response({"run_id": run.id, "status": run.status})
+
+
+@router.get("/document-versions/{version_id}/ai-analysis/latest", response_model=ApiResponse, summary="获取版本最近一次 AI 分析")
+async def get_latest_ai_analysis(
+    version_id: uuid.UUID,
+    user: User = Depends(_relation_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    run = await get_latest_ai_run(db, version_id)
+    if run is None:
+        raise NotFoundException("AI 分析运行", str(version_id))
+    data = await ai_analysis.analysis_to_dict(db, run, user=user)
+    return success_response(AIAnalysisRunOut.model_validate(data).model_dump(mode="json"))
+
+
+@router.get("/ai-analysis/{run_id}", response_model=ApiResponse, summary="获取指定 AI 分析运行及证据")
+async def get_ai_analysis(
+    run_id: uuid.UUID,
+    user: User = Depends(_relation_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    run = await get_ai_run(db, run_id)
+    if run is None:
+        raise NotFoundException("AI 分析运行", str(run_id))
+    data = await ai_analysis.analysis_to_dict(db, run, user=user)
+    return success_response(AIAnalysisRunOut.model_validate(data).model_dump(mode="json"))
+
+
+@router.post("/ai-analysis/{run_id}/confirm-relations", response_model=ApiResponse, summary="确认 AI 候选文件关联")
+async def post_confirm_ai_relations(
+    run_id: uuid.UUID,
+    payload: AIRelationConfirmationRequest,
+    user: User = Depends(_relation_manage),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    rows = await ai_analysis.confirm_relations(
+        db,
+        run_id,
+        accepted_suggestion_ids=payload.accepted_suggestion_ids,
+        manual_master_object_ids=payload.manual_master_object_ids,
+        remove_master_object_ids=payload.remove_master_object_ids,
+        user=user,
+    )
+    return success_response([await service._relation_dict(db, row) for row in rows])
+
+
+@router.get("/master-object-proposals", response_model=ApiResponse, summary="QA 主数据 AI 提案箱")
+async def get_master_object_proposals(
+    user: User = Depends(_proposal_publish),
+    db: AsyncSession = Depends(get_db),
+    status: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> Any:
+    items, total = await ai_analysis.list_proposal_page(db, status=status, page=page, page_size=page_size)
+    return paginated_response(items, page, page_size, total)
+
+
+@router.post("/master-object-proposals/{proposal_id}/approve", response_model=ApiResponse, summary="审批 QA 主数据 AI 提案")
+async def approve_master_object_proposal(
+    proposal_id: uuid.UUID,
+    payload: MasterObjectProposalApproveRequest | None = None,
+    user: User = Depends(_proposal_publish),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    row, auto_link_skipped = await ai_analysis.approve_proposal(db, proposal_id, payload.payload if payload else None, user)
+    body = MasterObjectProposalOut.model_validate(row).model_dump(mode="json")
+    body["auto_linked"] = auto_link_skipped is None
+    body["auto_link_skipped_reason"] = auto_link_skipped
+    return success_response(body)
+
+
+@router.post("/master-object-proposals/{proposal_id}/reject", response_model=ApiResponse, summary="拒绝 QA 主数据 AI 提案")
+async def reject_master_object_proposal(
+    proposal_id: uuid.UUID,
+    user: User = Depends(_proposal_publish),
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    # 拒绝即软删除，不回传提案内容：调用方只需知道已处理。
+    await ai_analysis.reject_proposal(db, proposal_id, user)
+    return success_response({"id": str(proposal_id), "status": "rejected"})
+
+
 @router.post("/documents/{document_id}/versions/{version_id}/copy-relations", summary="显式复制上一当前版本关联")
 async def post_copy_relations(
     document_id: uuid.UUID,
@@ -595,6 +702,50 @@ async def retry_file_extraction(
 ) -> Any:
     row = await service.retry_extraction(db, file_id, user)
     return success_response({"id": row.id, "extraction_status": row.extraction_status})
+
+
+@router.get(
+    "/document-files/{file_id}/processing-results",
+    response_model=ApiResponse,
+    summary="查看文件解析与分块结果",
+)
+async def get_file_processing_results(
+    file_id: uuid.UUID,
+    user: RequireUser,
+    db: AsyncSession = Depends(get_db),
+    view: ProcessingResultView = Query("raw_blocks"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=50),
+    content_limit: int = Query(
+        800,
+        ge=100,
+        le=2000,
+        description="每个正文预览最多返回的字符数；完整正文仍保留在受保护的内部存储中",
+    ),
+) -> Any:
+    data = await service.document_processing_results(
+        db,
+        file_id,
+        view=view,
+        page=page,
+        page_size=page_size,
+        content_limit=content_limit,
+    )
+    # 本端点能按页把整篇正文取走（content_limit 上限 2000），与 /content
+    # 预览/下载是同一份受保护内容；不写审计等于把下载审计整条绕过去。
+    from app.modules.qa.service import _audit
+
+    await _audit(
+        db,
+        action="view_processing_results",
+        user=user,
+        resource_type="document_file",
+        resource_id=file_id,
+        extra={"view": view, "page": page, "page_size": page_size},
+    )
+    return success_response(
+        DocumentProcessingResultOut.model_validate(data).model_dump(mode="json")
+    )
 
 
 @router.get("/document-files/{file_id}/content", summary="预览或下载质量文件")
