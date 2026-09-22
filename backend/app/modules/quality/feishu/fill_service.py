@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -28,7 +29,7 @@ from app.modules.quality.repository import (
     list_test_results,
     update_test_results_fill,
 )
-from app.modules.quality.service import TestTaskService
+from app.modules.quality.service import TestTaskService, spawn_background
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +116,24 @@ async def _resolve_task_by_batch(db, batch: str) -> QualityTestTask | None:
 # 标准文件多选点选卡片的进行中勾选状态（按批号隔离，任务创建成功后清除）
 _PENDING_DOC_SELECT: dict[str, set[str]] = {}
 
-# 图片消息暂存（先发图 → 回复「附件 批号 X」两步归档原始证据）
+# 图片消息暂存（先发图 → 回复「附件 批号 X」两步归档原始证据）；30 分钟过期自动清理
 _LAST_IMAGE: dict[str, dict[str, str]] = {}
+_LAST_IMAGE_TS: dict[str, float] = {}
 
-# 归档模式：chat_id → task_id（连拍多张自动归档，发「结束」退出）
+# 归档模式：chat_id → task_id（连拍多张自动归档，发「结束」退出）；30 分钟过期自动清理
 _ARCHIVE_MODE: dict[str, str] = {}
+_ARCHIVE_MODE_TS: dict[str, float] = {}
+
+_STATE_TTL = 30 * 60  # 临时状态过期时间（秒）
+
+
+def _prune_stale_state() -> None:
+    """机会式清理过期临时状态（多副本部署各自独立——短期状态可接受，防内存只增不减）。"""
+    now = time.monotonic()
+    for ts_map, state_map in ((_LAST_IMAGE_TS, _LAST_IMAGE), (_ARCHIVE_MODE_TS, _ARCHIVE_MODE)):
+        for key in [k for k, ts in ts_map.items() if now - ts > _STATE_TTL]:
+            state_map.pop(key, None)
+            ts_map.pop(key, None)
 
 # 当前批号上下文：chat_id → batch（省略批号的指令沿用）
 _LAST_BATCH: dict[str, str] = {}
@@ -341,6 +355,7 @@ async def handle_fill_command(event: dict) -> None:
             image_key = ""
         if not chat_id or not image_key:
             return
+        _prune_stale_state()
         task_id = _ARCHIVE_MODE.get(chat_id)
         if task_id:
             image_data = await _download_image(msg_raw.get("message_id", ""), image_key)
@@ -363,6 +378,7 @@ async def handle_fill_command(event: dict) -> None:
             await send_chat_text(chat_id, "📷 已归档（归档模式中，继续发图；发「结束」退出）")
         else:
             _LAST_IMAGE[chat_id] = {"message_id": msg_raw.get("message_id", ""), "file_key": image_key}
+            _LAST_IMAGE_TS[chat_id] = time.monotonic()
             await send_chat_text(
                 chat_id,
                 "📷 已收到图片。请回复「附件 批号 XXX」归档；连拍多张可先发「归档模式 批号 XXX」",
@@ -373,6 +389,12 @@ async def handle_fill_command(event: dict) -> None:
     if chat_type != "p2p" and not _allowed(chat_id, sender or ""):
         return
     batch_m = _BATCH_RE.search(text)
+    # 省略批号沿用上次（帮助文案宣传的能力）：填报/进度/附件类指令自动套用本会话最近批号
+    if not batch_m:
+        kw_first = text.strip()
+        last_batch = _LAST_BATCH.get(chat_id)
+        if last_batch and ("填报" in kw_first or "填写" in kw_first or "进度" in kw_first or "附件" in kw_first):
+            batch_m = _BATCH_RE.search(f"批号 {last_batch}")
     if not batch_m:
         kw = text.strip()
         from app.modules.quality.feishu.message import (
@@ -426,6 +448,7 @@ async def handle_fill_command(event: dict) -> None:
             return
         if kw in ("结束", "结束归档"):
             _ARCHIVE_MODE.pop(chat_id, None)
+            _ARCHIVE_MODE_TS.pop(chat_id, None)
             await send_chat_text(chat_id, "✅ 归档模式已退出")
             return
 
@@ -477,6 +500,7 @@ async def handle_fill_command(event: dict) -> None:
                     await send_chat_text(chat_id, f"⚠️ 批号 {batch} 未找到任务")
                     return
                 _ARCHIVE_MODE[chat_id] = str(task.id)
+                _ARCHIVE_MODE_TS[chat_id] = time.monotonic()
             _LAST_BATCH[chat_id] = batch
             await send_chat_text(
                 chat_id,
@@ -486,6 +510,7 @@ async def handle_fill_command(event: dict) -> None:
 
         # 「附件 批号 XXX」：把最近一张图片归档为任务原始证据附件
         if not pairs and "附件" in text:
+            _prune_stale_state()
             info = _LAST_IMAGE.get(chat_id)
             if not info:
                 await send_chat_text(chat_id, "⚠️ 尚未收到图片，请先发送图片，再回复「附件 批号 XXX」")
@@ -511,6 +536,7 @@ async def handle_fill_command(event: dict) -> None:
                 })
                 await db.commit()
             _LAST_IMAGE.pop(chat_id, None)
+            _LAST_IMAGE_TS.pop(chat_id, None)
             await send_chat_text(chat_id, f"✅ 图片已归档为批号 {batch} 的原始证据附件，可在任务详情中查看")
             return
 
@@ -575,7 +601,7 @@ async def handle_fill_command(event: dict) -> None:
                         from app.modules.quality.feishu.fill_service import (
                             notify_unqualified,
                         )
-                        asyncio.create_task(notify_unqualified(
+                        spawn_background(notify_unqualified(
                             task.product_name, task.batch_number, row.item_name,
                             f"{value}{unit}", _limit_text(row, unit), origin_chat_id=chat_id,
                         ))
@@ -674,7 +700,7 @@ async def handle_fill_command(event: dict) -> None:
                         from app.modules.quality.feishu.fill_service import (
                             notify_unqualified,
                         )
-                        asyncio.create_task(notify_unqualified(
+                        spawn_background(notify_unqualified(
                             task.product_name, task.batch_number, target.item_name,
                             f"{value}{unit}", _limit_text(target, unit), origin_chat_id=chat_id,
                         ))
@@ -1061,7 +1087,7 @@ async def handle_card_action(event: dict) -> None:
                         from app.modules.quality.feishu.fill_service import (
                             notify_unqualified,
                         )
-                        asyncio.create_task(notify_unqualified(
+                        spawn_background(notify_unqualified(
                             task.product_name, task.batch_number, row.item_name,
                             f"{value}{unit}", _limit_text(row, unit), origin_chat_id=chat_id,
                         ))
@@ -1097,7 +1123,7 @@ async def handle_card_action(event: dict) -> None:
         # 卡片原地更新：已提交组的表单区替换为确认文本
         from app.modules.quality.feishu import message as feishu_msg
 
-        card = feishu_msg.get_last_fill_card(batch)
+        card = feishu_msg.get_last_fill_card(chat_id, batch)
         if card:
             submitted_group = action_value.get("group")
 
@@ -1123,7 +1149,7 @@ async def handle_card_action(event: dict) -> None:
                 ("理化组", chem_left, submitted_group == 1, _group_text(1)),
             ]
             new_card = feishu_msg.build_fill_card(batch, groups)
-            feishu_msg._LAST_FILL_CARD[batch] = new_card
+            feishu_msg._LAST_FILL_CARD[(chat_id, batch)] = new_card
             return {
                 "type": "card_updated",
                 "card": {"type": "raw", "data": new_card},
@@ -1207,16 +1233,19 @@ async def push_task_reminder(task: QualityTestTask, rows: list) -> None:
     report_note = f"，出报日期 {task.report_date}" if task.report_date else ""
     bio_rows, chem_rows = _unfilled_groups(rows)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
-        await send_chat_text(
-            chat_id,
-            f"📋 检验任务：{task.product_name} 批号 {task.batch_number}（{task.specification or '-'}）{report_note}\n请在下方卡片填报；液相类项目上传计算表自动填入。",
-        )
-        if bio_rows or chem_rows:
-            filled = sum(1 for r in rows if r.is_pass is not None)
-            await send_fill_card(
-                chat_id, task.batch_number, [("生物组", bio_rows), ("理化组", chem_rows)],
-                progress=f"已填 {filled}/{len(rows)}",
+        try:
+            await send_chat_text(
+                chat_id,
+                f"📋 检验任务：{task.product_name} 批号 {task.batch_number}（{task.specification or '-'}）{report_note}\n请在下方卡片填报；液相类项目上传计算表自动填入。",
             )
+            if bio_rows or chem_rows:
+                filled = sum(1 for r in rows if r.is_pass is not None)
+                await send_fill_card(
+                    chat_id, task.batch_number, [("生物组", bio_rows), ("理化组", chem_rows)],
+                    progress=f"已填 {filled}/{len(rows)}",
+                )
+        except Exception:
+            logger.exception("飞书任务提醒推送失败: %s", chat_id)
 
 
 async def notify_unqualified(
@@ -1269,7 +1298,7 @@ async def notify_pending_review(task_id: str) -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     task = None
-    for _ in range(10):
+    for _ in range(20):
         async with async_session_factory() as db:
             task = await get_test_task(db, uuid.UUID(task_id))
         if task:
@@ -1289,7 +1318,10 @@ async def notify_pending_review(task_id: str) -> None:
         ]},
     }
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
-        await send_interactive_card(chat_id, card)
+        try:
+            await send_interactive_card(chat_id, card)
+        except Exception:
+            logger.exception("飞书待复核卡片发送失败: %s", chat_id)
 
 
 async def notify_task_created(task_id: str) -> None:
@@ -1303,7 +1335,7 @@ async def notify_task_created(task_id: str) -> None:
 
     # 重试等待：调用方事务可能尚未提交，稍等片刻再查任务
     task: QualityTestTask | None = None
-    for _ in range(10):
+    for _ in range(20):
         async with async_session_factory() as db:
             task = await get_test_task(db, uuid.UUID(task_id))
         if task:

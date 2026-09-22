@@ -73,6 +73,25 @@ from app.modules.quality.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# fire-and-forget 后台任务集合：持引用防 GC 回收（CPython 官方警告场景），
+# 完成后自动移除；异常只记日志不向调用方冒泡
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+def spawn_background(coro) -> None:
+    """以 fire-and-forget 方式调度后台任务（飞书推送等不阻塞主流程的场景）。"""
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _BG_TASKS.discard(t)
+        if not t.cancelled():
+            exc = t.exception()  # 必须取一次，避免「Task exception was never retrieved」告警
+            if exc:
+                logger.exception("后台任务异常: %s", exc)
+
+    task.add_done_callback(_done)
+
 
 def _norm_date_str(s: str | None) -> str | None:
     """日期字符串分隔符归一化：2026.01.01 / 2026/01/01 → 2026-01-01。"""
@@ -582,7 +601,7 @@ class TestTaskService:
         try:
             from app.modules.quality.feishu.fill_service import notify_task_created
 
-            asyncio.create_task(notify_task_created(str(task.id)))
+            spawn_background(notify_task_created(str(task.id)))
         except Exception:
             logger.exception("飞书任务推送失败")
         return TestTaskService._to_detail(task, rows)
@@ -679,7 +698,7 @@ class TestTaskService:
         try:
             from app.modules.quality.feishu.fill_service import notify_pending_review
 
-            asyncio.create_task(notify_pending_review(str(task_id)))
+            spawn_background(notify_pending_review(str(task_id)))
         except Exception:
             logger.exception("待复核提醒推送失败")
         return True
@@ -1121,7 +1140,7 @@ class TestTaskService:
             try:
                 from app.modules.quality.feishu.fill_service import notify_task_created
 
-                asyncio.create_task(notify_task_created(str(task_id)))
+                spawn_background(notify_task_created(str(task_id)))
             except Exception:
                 logger.exception("出报日期补录推送失败")
         return TestTaskService._to_detail(updated, await list_test_results(db, task_id))

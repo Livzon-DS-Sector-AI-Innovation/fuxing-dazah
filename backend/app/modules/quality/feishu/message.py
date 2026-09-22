@@ -1,15 +1,33 @@
 """质量模块飞书消息发送（发群文本/卡片，机器人身份）。"""
 
+import asyncio
 import json
 import logging
+import time
 
 from app.modules.quality.feishu.client import build_client
 
 logger = logging.getLogger(__name__)
 
+# 发送节流：飞书机器人消息接口 5 QPS，多群多任务批量推送时
+# 每条消息之间留 250ms 间隔，避免限流导致推送静默失败
+_MIN_SEND_INTERVAL = 0.25
+_last_send_ts = 0.0
+_throttle_lock = asyncio.Lock()
+
+
+async def _throttle() -> None:
+    global _last_send_ts
+    async with _throttle_lock:
+        elapsed = time.monotonic() - _last_send_ts
+        if elapsed < _MIN_SEND_INTERVAL:
+            await asyncio.sleep(_MIN_SEND_INTERVAL - elapsed)
+        _last_send_ts = time.monotonic()
+
 
 async def send_chat_text(chat_id: str, text: str) -> None:
     """向群发送纯文本消息（机器人身份）。"""
+    await _throttle()
     client = build_client()
     from lark_oapi.api.im.v1 import (
         CreateMessageRequest,
@@ -35,6 +53,7 @@ async def send_chat_text(chat_id: str, text: str) -> None:
 
 async def send_interactive_card(chat_id: str, card: dict) -> None:
     """向群发送交互式卡片（机器人身份）。card 为飞书卡片 JSON。"""
+    await _throttle()
     client = build_client()
     from lark_oapi.api.im.v1 import (
         CreateMessageRequest,
@@ -62,6 +81,7 @@ async def send_alert_post(
     chat_id: str, at_open_ids: list[str], title: str, lines: list[str]
 ) -> None:
     """发 post 消息提醒（可 @ 指定用户 open_id；列表为空则纯文本）。"""
+    await _throttle()
     client = build_client()
     from lark_oapi.api.im.v1 import (
         CreateMessageRequest,
@@ -92,6 +112,7 @@ async def send_alert_post(
 
 async def send_user_interactive_card(open_id: str, card: dict) -> None:
     """向指定用户单聊发送交互式卡片（机器人身份）。"""
+    await _throttle()
     client = build_client()
     from lark_oapi.api.im.v1 import (
         CreateMessageRequest,
@@ -127,7 +148,8 @@ async def get_chat_id_of_message(message_id: str) -> str | None:
     return None
 
 
-_LAST_FILL_CARD: dict[str, dict] = {}
+# 最近发送的填报卡片：按 (chat_id, batch) 索引——同批号发多个群时互不覆盖
+_LAST_FILL_CARD: dict[tuple[str, str], dict] = {}
 
 
 def build_fill_card(
@@ -185,9 +207,9 @@ def build_fill_card(
     }
 
 
-def get_last_fill_card(batch: str) -> dict | None:
-    """取最近一次发送的填报卡片（用于提交后原地更新）。"""
-    return _LAST_FILL_CARD.get(batch)
+def get_last_fill_card(chat_id: str, batch: str) -> dict | None:
+    """取最近一次发送的填报卡片（用于提交后原地更新；按群+批号隔离）。"""
+    return _LAST_FILL_CARD.get((chat_id, batch))
 
 
 async def send_fill_card(
@@ -198,7 +220,7 @@ async def send_fill_card(
     if not any(g[1] for g in groups):
         await send_chat_text(chat_id, f"✅ 批号 {batch} 的数值型项目已全部填写，无待填项")
         return
-    _LAST_FILL_CARD[batch] = built
+    _LAST_FILL_CARD[(chat_id, batch)] = built
     await send_interactive_card(chat_id, built)
 
 

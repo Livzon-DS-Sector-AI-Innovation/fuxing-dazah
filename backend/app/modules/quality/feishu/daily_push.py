@@ -96,7 +96,10 @@ async def _push_today_tasks() -> None:
         blocks.append(f"⏰ 明日出报预告（{tomorrow}）：\n" + "\n".join(tomorrow_lines))
     text = "\n\n".join(blocks)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
-        await send_chat_text(chat_id, text)
+        try:
+            await send_chat_text(chat_id, text)
+        except Exception:
+            logger.exception("飞书早报发送失败: %s", chat_id)
     # 填报中的任务：与「出报日期=今天」的即时推送一致，下发提醒+填报卡片
     from app.modules.quality.feishu.fill_service import push_task_reminder
 
@@ -144,6 +147,9 @@ async def _push_afternoon_reminder() -> None:
         return
     text = f"⏰ 出报催办（{today}）：以下任务尚未完成，请抓紧处理\n" + "\n".join(lines)
     for chat_id in QUALITY_FEISHU_CHAT_IDS:
-        await send_chat_text(chat_id, text)
+        try:
+            await send_chat_text(chat_id, text)
+        except Exception:
+            logger.exception("飞书催办发送失败: %s", chat_id)
 
 

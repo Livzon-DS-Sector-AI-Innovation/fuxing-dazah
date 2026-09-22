@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _handlers: dict[str, list] = {}
 _stop: asyncio.Event | None = None
 _ws_task: asyncio.Task | None = None
+_dispatch_tasks: set[asyncio.Task] = set()
 
 FEISHU_DOMAIN = "https://open.feishu.cn"
 WS_ENDPOINT_URL = f"{FEISHU_DOMAIN}/callback/ws/endpoint"
@@ -145,8 +146,11 @@ async def _handle_binary_message(ws, message: bytes) -> None:
                     resp = {"code": 200}
                 frame.payload = json.dumps(resp, ensure_ascii=False).encode("utf-8")
             else:
-                # 其他事件异步分发，立即 ACK（飞书要求 3 秒内回复）
-                asyncio.create_task(_dispatch(event_type, event))
+                # 其他事件异步分发，立即 ACK（飞书要求 3 秒内回复）；
+                # 持引用防 GC 回收，异常只记日志
+                _dt = asyncio.create_task(_dispatch(event_type, event))
+                _dispatch_tasks.add(_dt)
+                _dt.add_done_callback(lambda t: (_dispatch_tasks.discard(t), t.exception() if not t.cancelled() else None))
                 frame.payload = json.dumps({"code": 200}, ensure_ascii=False).encode("utf-8")
             # 回复 ACK：biz_rt 为本地处理耗时（照 safety 实现，不读入站帧 header）
             end_ms = int(round(time.time() * 1000))
