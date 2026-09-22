@@ -134,3 +134,65 @@ async def test_splits_require_template(db_session):
 
     with pytest.raises(AppException):
         await TestTaskService.build_task_report_splits(db_session, task.id)
+
+
+async def test_splits_skip_doc_without_rows(db_session):
+    """空行标准文件不生成 COA（此前会产出「全合格」空报告单），跳过并列名。"""
+
+
+    doc_a = await _make_doc(db_session, "HAF", "tpl-a.docx")  # 主文档
+    doc_b = await _make_doc(db_session, "HAF", "tpl-b.docx")
+    item_a = await create_standard_item(db_session, doc_a.id, {
+        "seq": 1, "item_name": "水分", "sop_no": "SOP.03.1111",
+        "standard_text": "≤3.0%", "operator": "≤", "limit_max": 3.0,
+    })
+    item_b = await create_standard_item(db_session, doc_b.id, {
+        "seq": 1, "item_name": "酸度", "sop_no": "SOP.03.2222",
+        "standard_text": "3.5~4.5", "operator": "范围", "limit_min": 3.5, "limit_max": 4.5,
+    })
+    task = await _make_task(db_session, doc_a)
+    rows = await create_test_results(db_session, task.id, [
+        {"standard_item_id": item_a.id, "item_name": "水分", "sop_no": "SOP.03.1111",
+         "standard_text": "≤3.0%", "operator": "≤", "limit_max": 3.0,
+         "judge_mode": "auto", "source": "manual"},
+        {"standard_item_id": item_b.id, "item_name": "酸度", "sop_no": "SOP.03.2222",
+         "standard_text": "3.5~4.5", "operator": "范围", "limit_min": 3.5, "limit_max": 4.5,
+         "judge_mode": "auto", "source": "manual"},
+    ])
+    for r in rows:
+        r.is_pass = True
+        r.result_value = 1.0
+    # 主文档 doc_a 的行全部软删 → doc_a 空行；doc_b 正常
+    for r in rows:
+        if r.standard_item_id == item_a.id:
+            r.is_deleted = True
+    await db_session.flush()
+
+    splits = await TestTaskService.build_task_report_splits(db_session, task.id)
+    assert len(splits) == 1
+    assert splits[0]["doc"].id == doc_b.id
+    assert splits[0]["skipped_file_nos"] == [doc_a.file_no]
+
+
+async def test_splits_all_docs_empty_rejected(db_session):
+    """全部标准文件都无结果行时直接报错，不产出空 COA。"""
+    import pytest
+
+    from app.core.exceptions import AppException
+
+    doc = await _make_doc(db_session, "HAF", "tpl-a.docx")
+    task = await _make_task(db_session, doc)
+    rows = await create_test_results(db_session, task.id, [{
+        "item_name": "水分", "sop_no": "SOP.03.1111", "standard_text": "≤3.0%",
+        "operator": "≤", "limit_max": 3.0, "judge_mode": "auto", "source": "manual",
+    }])
+    for r in rows:
+        r.is_pass = True
+        r.result_value = 1.0
+        r.is_deleted = True
+    await db_session.flush()
+
+    with pytest.raises(AppException) as exc_info:
+        await TestTaskService.build_task_report_splits(db_session, task.id)
+    assert exc_info.value.status_code == 400
+    assert "无结果行" in exc_info.value.detail

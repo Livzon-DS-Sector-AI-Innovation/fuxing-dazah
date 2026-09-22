@@ -28,7 +28,7 @@ from app.core.database import get_db
 from app.core.response import paginated_response, success_response
 from app.core.time import APP_TZ, today
 from app.modules.quality import storage as quality_storage
-from app.modules.quality.models import QualityStandardDocument
+from app.modules.quality.models import QualityStandardDocument, QualityStandardItem
 from app.modules.quality.report_generator import (
     extract_template_placeholders,
     format_value,
@@ -1094,14 +1094,18 @@ async def confirm_standard_doc(
         await update_standard_document(
             db, existing.id, **{k: v for k, v in doc_data.model_dump().items() if v is not None}
         )
-        for it in await list_standard_items(db, existing.id):
-            it.is_deleted = True
-        await db.flush()
         doc = existing
         overwritten = True
     else:
         doc = await create_standard_document(db, doc_data.model_dump())
+    # 覆盖导入时按 (sop_no, item_name) 复用旧行 ID：历史任务的 standard_item_id
+    # 引用不断裂（此前整批软删+重建，旧任务逐份 COA 归属静默错乱）
+    reused_items: dict[tuple[str, str], QualityStandardItem] = {}
+    if overwritten:
+        for it in await list_standard_items(db, doc.id):
+            reused_items[(it.sop_no or "", it.item_name)] = it
     created = 0
+    reused = 0
     skipped = 0
     seen: set[tuple[str, str]] = set()
     for it in payload.items:
@@ -1113,6 +1117,15 @@ async def confirm_standard_doc(
         data = it.model_dump()
         if not data.get("standard_text"):
             data["standard_text"] = ""
+        old = reused_items.get(key)
+        if old is not None:
+            try:
+                async with db.begin_nested():
+                    await update_standard_item(db, old.id, **data)
+                reused += 1
+            except Exception:
+                skipped += 1
+            continue
         try:
             # 每条独立保存点：单条失败不污染整个事务
             async with db.begin_nested():
@@ -1120,15 +1133,20 @@ async def confirm_standard_doc(
             created += 1
         except Exception:
             skipped += 1
+    if overwritten:
+        # 新版中已删除的项目行软删（保留 ID 不复用，历史快照仍可追溯）
+        for key, it in reused_items.items():
+            if key not in seen:
+                it.is_deleted = True
+        await db.flush()
     verb = "覆盖更新完成" if overwritten else "确认导入完成"
-    msg = f"{verb}：{created}/{len(payload.items)} 条标准行"
-    if skipped:
-        msg += f"，{skipped} 条重复或异常跳过"
+    msg = f"{verb}：新增 {created} 条、复用 {reused} 条" + (f"，{skipped} 条重复或异常跳过" if skipped else "")
     return success_response(
         data={
             "id": str(doc.id),
             "file_no": doc.file_no,
             "created_items": created,
+            "reused_items": reused,
             "skipped_items": skipped,
             "overwritten": overwritten,
         },
