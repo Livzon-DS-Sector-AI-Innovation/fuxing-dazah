@@ -220,6 +220,18 @@ function StageDurationEditor({ stages, setStages }: {
 
 // ── Shared Form Fields ──
 
+function formatPlanDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60000)
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const mins = minutes % 60
+  const parts: string[] = []
+  if (days) parts.push(`${days}天`)
+  if (hours) parts.push(`${hours}小时`)
+  if (mins) parts.push(`${mins}分钟`)
+  return parts.join('') || '不足1分钟'
+}
+
 function PlanItemFormFields({
   products,
   routes,
@@ -243,6 +255,16 @@ function PlanItemFormFields({
   equipmentSearchLoading: boolean
   onEquipmentSearch: (kw: string) => void
 }) {
+  // 起止时间齐了就给出时长提示（弹窗内 Form 上下文，无需传 form 实例）
+  const plannedStart = Form.useWatch('planned_start')
+  const plannedEnd = Form.useWatch('planned_end')
+  let durationHint: { text: string; invalid: boolean } | null = null
+  if (plannedStart && plannedEnd) {
+    const ms = plannedEnd.valueOf() - plannedStart.valueOf()
+    durationHint = ms > 0
+      ? { text: `预计耗时 ${formatPlanDuration(ms)}`, invalid: false }
+      : { text: '结束时间需晚于开始时间', invalid: true }
+  }
   return (
     <>
       {/* 产品 & 路线 */}
@@ -292,6 +314,11 @@ function PlanItemFormFields({
           <DatePicker showTime format="YYYY-MM-DD HH:mm" defaultPickerValue={dayjs().add(1, 'month')} style={{ width: '100%' }} />
         </Form.Item>
       </div>
+      {durationHint && (
+        <div style={{ marginTop: -6, marginBottom: 12, fontSize: 12, color: durationHint.invalid ? 'var(--color-error)' : 'var(--color-stone)' }}>
+          {durationHint.text}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
         <Form.Item name="equipment_id" label="设备" style={{ marginBottom: 12 }}>
           <Select
@@ -475,6 +502,27 @@ export function PlanItemTable({ planOrderId, planOrderStatus, planOrderProductId
     }
     return list
   }, [equipmentData, editEquipment])
+
+  // 打开编辑弹窗时显式灌值：remount 的 initialValues 合并会让 form store 里
+  // 上一个计划项的残留值优先（保存 A 后开 B 显示 A 的内容），且 StrictMode 下
+  // mount 期初值不可靠。以 setFieldsValue 为准，覆盖一切残留。
+  useEffect(() => {
+    if (editItem) {
+      editForm.setFieldsValue({
+        product_id: editItem.product_id,
+        product_name: editItem.product_name,
+        route_id: editItem.route_id,
+        equipment_id: editItem.equipment_id,
+        planned_quantity: editItem.planned_quantity,
+        unit: editItem.unit,
+        batch_no: editItem.batch_no,
+        planned_start: editItem.planned_start ? dayjs(editItem.planned_start) : undefined,
+        planned_end: editItem.planned_end ? dayjs(editItem.planned_end) : undefined,
+        priority: editItem.priority,
+        remark: editItem.remark,
+      })
+    }
+  }, [editItem, editForm])
 
   // 详情返回后重设字段值，让 Select 用设备名渲染已选的 UUID（WorkOrderDrawer 同款模式）
   // 用户已改选（当前值≠初始值）时不覆盖，防止回显请求竞态吞掉新选择

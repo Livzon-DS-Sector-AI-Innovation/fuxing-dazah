@@ -510,6 +510,36 @@ class TestPlanOrder:
         with pytest.raises(NotFoundException):
             await planning_service.get_plan_order_detail(db_session, order.id)
 
+    async def test_delete_cascades_items_and_releases_demand(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """删除计划单级联软删计划项：批次号释放、需求分配解除并重算履约状态。"""
+        demand = await _make_demand(db_session, published_route, test_user)
+        await planning_service.confirm_demand(db_session, demand.id, test_user)
+        order = await _make_order(db_session, published_route, test_user)
+        item = (
+            await _make_items(db_session, order, published_route, ["CASC-001"], test_user)
+        )[0]
+        await _schedule_item(db_session, item, test_user)
+        await planning_service.create_demand_allocation(
+            db_session, demand.id,
+            DemandAllocationCreate(plan_item_id=item.id, allocated_quantity=60),
+            test_user,
+        )
+
+        await planning_service.delete_plan_order(db_session, order.id, test_user)
+
+        # 计划项级联软删：批次号不再被幽灵占用
+        assert await repo.get_plan_item(db_session, item.id) is None
+        assert await repo.get_plan_item_by_batch_no(db_session, "CASC-001") is None
+        # 需求分配解除，履约量与状态回退
+        assert await repo.get_demand_allocations(db_session, demand.id) == []
+        refreshed = await repo.get_demand(db_session, demand.id)
+        assert refreshed is not None
+        assert refreshed.allocated_quantity == 0
+        assert refreshed.status == "confirmed"
+
 
 # ═══════════════════════════════════════════
 # PlanItem
@@ -842,6 +872,33 @@ class TestPlanItem:
         assert result["shifted"] == [
             {"item_id": str(items[2].id), "batch_no": "TS-2"},
             {"item_id": str(items[3].id), "batch_no": "TS-3"},
+        ]
+        assert result["skipped"] == []
+
+    async def test_decrement_batch_no_decrements_full_segment(self) -> None:
+        """递减作用于最后一个完整数字段：末位 0 正确借位，≤1 与无数字原样返回。"""
+        assert planning_service._decrement_batch_no("XHA26190") == "XHA26189"
+        assert planning_service._decrement_batch_no("PO-20260824-010") == "PO-20260824-009"
+        assert planning_service._decrement_batch_no("XHA26189") == "XHA26188"
+        assert planning_service._decrement_batch_no("PO-20260824-001") == "PO-20260824-001"
+        assert planning_service._decrement_batch_no("ABC") == "ABC"
+
+    async def test_delete_with_shift_borrows_across_trailing_zero(
+        self, db_session: AsyncSession, published_route: dict[str, Any],
+        test_user: User,
+    ) -> None:
+        """补位对末位 0 的批号正确借位：XHA26190 前移为 XHA26189 而非原地不动。"""
+        order = await _make_order(db_session, published_route, test_user)
+        items = await _make_items(
+            db_session, order, published_route, ["XHA26189", "XHA26190"], test_user,
+        )
+        result = await planning_service.delete_plan_item(
+            db_session, items[0].id, test_user, shift=True,
+        )
+        remaining = await repo.list_plan_items(db_session, order.id)
+        assert [i.batch_no for i in remaining] == ["XHA26189"]
+        assert result["shifted"] == [
+            {"item_id": str(items[1].id), "batch_no": "XHA26189"},
         ]
         assert result["skipped"] == []
 

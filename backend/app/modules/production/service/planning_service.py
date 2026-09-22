@@ -154,10 +154,11 @@ async def _ensure_unique_batch_no(db: AsyncSession, base_no: str) -> str:
 def _decrement_batch_no(batch_no: str) -> str:
     """批号末段数字减 1（补位）；无数字段或数字 ≤1 时返回原值。与前端 decrementBatchNo 对齐。
 
-    贪婪首组匹配最后一个数字段（如 ``PO-20260824-001`` 减的是 ``001`` 而不是日期），
+    惰性前缀 + 非数字尾段，捕获最后一个完整数字段（如 ``PO-20260824-010`` 减的是
+    ``010`` 而非末位 ``0``，末位 0 才能正确借位到 ``009``），
     与前端 BATCH_NO_RE（frontend/src/lib/utils.ts）保持同语义。
     """
-    m = re.match(r"^(.*)(\d+)(.*)$", batch_no)
+    m = re.match(r"^(.*?)(\d+)(\D*)$", batch_no)
     if not m:
         return batch_no
     n = int(m.group(2))
@@ -823,13 +824,41 @@ async def change_plan_order(
 
 
 async def delete_plan_order(db: AsyncSession, order_id: uuid.UUID, user: User | None) -> None:
-    """软删除计划单，不做状态限制。"""
+    """软删除计划单（不做状态限制），级联软删计划项与指向这些项的需求分配。
+
+    不级联的话计划项仍以 is_deleted=false 存活：批次号被幽灵占用、设备冲突检测
+    误报，且计划单已 404、UI 无法触达这些项去单独释放。真实批次及其
+    plan_allocations（溯源映射）不删——已投产数据保留追溯。
+    """
     order = await repo.get_plan_order(db, order_id)
     if not order:
         raise NotFoundException("计划单", str(order_id))
     order.is_deleted = True
     order.updated_by = user.id if user else None
+
+    items = await repo.list_plan_items(db, order_id)
+    for item in items:
+        item.is_deleted = True
+        item.updated_by = user.id if user else None
+
+    demand_ids: set[uuid.UUID] = set()
+    item_ids = [i.id for i in items]
+    if item_ids:
+        das = await repo.get_demand_allocations_by_items(db, item_ids)
+        demand_ids = {da.demand_id for da in das}
+        for da in das:
+            da.is_deleted = True
+            da.updated_by = user.id if user else None
+
     await db.flush()
+    # flush 后残留分配查询已排除软删行，再重算受影响需求的履约量与状态
+    for demand_id in demand_ids:
+        demand = await repo.get_demand(db, demand_id)
+        if not demand:
+            continue
+        remaining = await repo.get_demand_allocations(db, demand_id)
+        _recalc_demand_fulfillment(demand, remaining)
+        _update_demand_status(demand)
 
 
 async def get_plan_order_detail(db: AsyncSession, order_id: uuid.UUID) -> PlanOrderDetailOut:

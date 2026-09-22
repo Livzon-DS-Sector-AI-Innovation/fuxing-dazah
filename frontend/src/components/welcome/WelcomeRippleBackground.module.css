@@ -1,0 +1,38 @@
+.root {
+  --welcome-background: #f3f0fc;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+  background: var(--welcome-background);
+}
+
+.image {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1956 / 804;
+  transform: translate(-50%, -50%);
+  background-image: url('/images/welcome/apsaras-lavender.png');
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  z-index: 1;
+}
+
+.mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+}
+
+@media (hover: none), (prefers-reduced-motion: reduce) {
+  .mask {
+    display: none;
+  }
+}
