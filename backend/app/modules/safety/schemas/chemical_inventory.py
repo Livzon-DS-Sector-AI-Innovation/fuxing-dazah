@@ -162,7 +162,8 @@ class ChemicalInventoryRecordResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX，central/cert 同口径放宽）
+    id: uuid.UUID | str
     department: str
     storage_location: str | None = None
     material_name: str

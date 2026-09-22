@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select, update
@@ -23,6 +21,58 @@ from sqlalchemy import select, update
 from app.core.database import async_session_factory
 from app.core.redis import redis_client
 from app.modules.safety.bitable_config.store import ConnectionView, store
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _ALERT_TYPE_ENUM_TO_LABEL as _ALERT_TYPE_ENUM_TO_LABEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _ALERT_TYPE_LABEL_TO_ENUM as _ALERT_TYPE_LABEL_TO_ENUM,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _DEPT_ENUM_TO_LABEL as _DEPT_ENUM_TO_LABEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _DEPT_LABEL_TO_ENUM as _DEPT_LABEL_TO_ENUM,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _HAZARD_ENUM_TO_LABEL as _HAZARD_ENUM_TO_LABEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _HAZARD_LABEL_TO_ENUM as _HAZARD_LABEL_TO_ENUM,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _RISK_FLAG_ENUM_TO_LABEL as _RISK_FLAG_ENUM_TO_LABEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _RISK_FLAG_LABEL_TO_ENUM as _RISK_FLAG_LABEL_TO_ENUM,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _UNIT_ENUM_TO_LABEL as _UNIT_ENUM_TO_LABEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _UNIT_LABEL_TO_ENUM as _UNIT_LABEL_TO_ENUM,
+)
+
+# 总表 Bitable 中文字段 → DB 列 + 标签↔枚举映射 + 值解析：
+# 已抽到 chemical_inventory/enum_maps.py（feishu handler 与直读 reader 共用单一来源），
+# 此处显式 re-export（`as` 同名形式，mypy 认可）保持既有引用方零改动。
+from app.modules.safety.chemical_inventory.enum_maps import (  # noqa: F401
+    INVENTORY_BITABLE_TO_MODEL as INVENTORY_BITABLE_TO_MODEL,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _datetime_from_raw as _datetime_from_raw,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _map_inventory_fields as _map_inventory_fields,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _multi_select as _multi_select,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _num as _num,
+)
+from app.modules.safety.chemical_inventory.enum_maps import (
+    _text as _text,
+)
 from app.modules.safety.feishu.bitable_client import SafetyBitableClient
 from app.modules.safety.feishu.event_client import on_event
 from app.modules.safety.models import ChemicalInventoryRecord
@@ -47,179 +97,6 @@ def _get_inventory_app_token() -> str:
 
 def _enabled() -> bool:
     return store.is_enabled("chemical_inventory", "inventory")
-
-
-# 总表 Bitable 中文字段 → DB 列
-INVENTORY_BITABLE_TO_MODEL: dict[str, str] = {
-    "部门": "department",
-    "存放部位": "storage_location",
-    "物料名称": "material_name",
-    "包装规格": "package_spec",
-    "库存数量": "quantity",
-    "单位": "unit",
-    "现场物料总量(T)": "total_quantity_t",
-    "库存上限": "max_limit",
-    "上限单位": "max_limit_unit",
-    "危险性": "hazard_classes",
-    "品类": "category",
-    "最后更新时间": "last_updated_at",
-    "备注": "remark",
-    "风险标记": "risk_flag",
-    "风险说明": "risk_note",
-}
-
-
-# ── 中文标签 ↔ 枚举值 双向映射 ──
-
-_DEPT_LABEL_TO_ENUM: dict[str, str] = {
-    "仓储部": "warehouse",
-    "提炼一部": "extraction_1",
-    "提炼二期": "extraction_2",
-    "提炼二部": "extraction_2b",
-    "发酵一部": "fermentation_1",
-    "发酵二部": "fermentation_2",
-    "菌种中心": "strain",
-    "QC": "qc",
-    "环保": "env",
-    "精制": "purification",
-    "提炼半合成工程中心": "semi_synth",
-    "提炼技术精进中心": "tech_refine",
-    "其他": "other",
-}
-_DEPT_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _DEPT_LABEL_TO_ENUM.items()}
-
-_UNIT_LABEL_TO_ENUM: dict[str, str] = {
-    "kg": "kg", "g": "g", "T": "T", "L": "L", "ml": "ml", "瓶": "bottle",
-}
-_UNIT_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _UNIT_LABEL_TO_ENUM.items()}
-
-_HAZARD_LABEL_TO_ENUM: dict[str, str] = {
-    "易燃": "flammable",
-    "易爆": "explosive",
-    "易制毒": "precursor_drug",
-    "易制爆": "precursor_explosive",
-    "腐蚀": "corrosive",
-    "毒性": "toxic",
-    "氧化剂": "oxidizer",
-    "刺激性": "irritant",
-}
-_HAZARD_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _HAZARD_LABEL_TO_ENUM.items()}
-
-_RISK_FLAG_LABEL_TO_ENUM: dict[str, str] = {"正常": "normal", "预警": "warn"}
-_RISK_FLAG_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _RISK_FLAG_LABEL_TO_ENUM.items()}
-
-# 风险说明：正常 + 预警类型
-_ALERT_TYPE_LABEL_TO_ENUM: dict[str, str] = {
-    "正常": "normal",
-    "超量": "over_limit",
-    "临限": "near_limit",
-    "高占比": "high_ratio",
-    "未分类": "unclassified",
-    "单位异常": "unit_anomaly",
-    "专库违规": "special_storage",
-}
-_ALERT_TYPE_ENUM_TO_LABEL: dict[str, str] = {v: k for k, v in _ALERT_TYPE_LABEL_TO_ENUM.items()}
-
-
-# ── 值提取 ──
-
-
-def _text(raw: Any) -> str | None:
-    if raw is None:
-        return None
-    # 飞书文本字段读回为富文本数组 [{"text": "...", "type": "text"}]
-    if isinstance(raw, list):
-        parts: list[str] = []
-        for item in raw:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text") or ""))
-            else:
-                parts.append(str(item))
-        s = "".join(parts).strip()
-        return s or None
-    if isinstance(raw, dict):
-        return _text(raw.get("text"))
-    s = str(raw).strip()
-    return s or None
-
-
-def _num(raw: Any) -> Decimal | None:
-    if raw is None or raw == "":
-        return None
-    try:
-        return Decimal(str(raw))
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _datetime_from_raw(raw: Any) -> datetime | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        try:
-            return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            return None
-    if isinstance(raw, (int, float)):
-        try:
-            return datetime.fromtimestamp(raw / 1000, tz=UTC)
-        except (OSError, ValueError):
-            return None
-    return None
-
-
-def _multi_select(raw: Any) -> list[str] | None:
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        values = [raw]
-    elif isinstance(raw, list):
-        values = []
-        for item in raw:
-            if isinstance(item, dict):
-                if item.get("text"):
-                    values.append(str(item["text"]))
-            else:
-                values.append(str(item))
-    elif isinstance(raw, dict):
-        values = [str(raw.get("text", ""))]
-    else:
-        return None
-    values = [v.strip() for v in values if str(v).strip()]
-    return values or None
-
-
-def _map_inventory_fields(values: dict) -> dict[str, Any]:
-    mapped: dict[str, Any] = {}
-    for bitable_field, model_col in INVENTORY_BITABLE_TO_MODEL.items():
-        raw = values.get(bitable_field)
-        if model_col == "last_updated_at":
-            mapped[model_col] = _datetime_from_raw(raw)
-        elif model_col in ("quantity", "total_quantity_t", "max_limit"):
-            mapped[model_col] = _num(raw)
-        elif model_col == "hazard_classes":
-            labels = _multi_select(raw)
-            if labels:
-                mapped[model_col] = [_HAZARD_LABEL_TO_ENUM.get(v, v) for v in labels]
-        elif model_col == "risk_note":
-            labels = _multi_select(raw)
-            if labels:
-                mapped[model_col] = [_ALERT_TYPE_LABEL_TO_ENUM.get(v, v) for v in labels]
-        elif model_col == "department":
-            value = _text(raw)
-            if value:
-                mapped[model_col] = _DEPT_LABEL_TO_ENUM.get(value, value)
-        elif model_col in ("unit", "max_limit_unit"):
-            value = _text(raw)
-            if value:
-                mapped[model_col] = _UNIT_LABEL_TO_ENUM.get(value, value)
-        elif model_col == "risk_flag":
-            value = _text(raw)
-            if value:
-                mapped[model_col] = _RISK_FLAG_LABEL_TO_ENUM.get(value, value)
-        else:
-            mapped[model_col] = _text(raw)
-    return {k: v for k, v in mapped.items() if v is not None}
 
 
 # ── 防环 ──
@@ -368,10 +245,16 @@ async def _handle_deleted(event_data: dict) -> None:
 async def _on_inventory_drive_changed(event: dict) -> None:
     """文档级记录变更事件：按 app_token + table_id 过滤后逐条分派。
 
+    直读闸门：事件镜像停用（DIRECT 开 + EVENT_SYNC 关）时整体短路，不落镜像
+    也不触发逐条风险分析（cert/central 同口径）。
     action_list 每项仅含 record_id/action，_handle_* 内部回源 get_record，
     此处只构造最小 event_data；created/changed 语义不同（changed 带回声抑制），
     按 action 保持原分派。
     """
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    if not config.legacy_event_sync_active():
+        return
     if event.get("file_token", "") != _get_inventory_app_token():
         return
     table_id = event.get("table_id", "")
@@ -411,6 +294,12 @@ async def _on_inventory_drive_changed(event: dict) -> None:
 
 async def sync_inventory_records_from_bitable() -> dict[str, Any]:
     """总表全量同步 → DB（幂等 upsert，固定行，单会话批量提交）。"""
+    # 直读闸门：直读模式下镜像停更，全量同步无意义（防手工调用打破停更语义）
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    if not config.legacy_event_sync_active():
+        logger.info("危化品库存直读模式：跳过镜像全量同步")
+        return {"skipped": True, "reason": "direct_mode"}
     if not _enabled():
         logger.info("危化品库存 Bitable 未配置，跳过多维表同步")
         return {"skipped": True, "created": 0, "updated": 0, "total": 0}
@@ -450,8 +339,11 @@ async def sync_inventory_records_from_bitable() -> dict[str, Any]:
 # ── 系统回填（风险标记/风险说明 → 总表，带防环）──
 
 
-async def sync_record_flags_to_bitable(records: list[ChemicalInventoryRecord]) -> int:
-    """把规则回填的 风险标记/风险说明 批量写回飞书「总表」。返回成功条数。"""
+async def sync_record_flags_to_bitable(records: list[Any]) -> int:
+    """把规则回填的 风险标记/风险说明 批量写回飞书「总表」。返回成功条数。
+
+    duck-typing：接受 ORM 行或直读视图（feishu_record_id/risk_flag/risk_note 同名）。
+    """
     table_id = _get_inventory_table_id()
     app_token = _get_inventory_app_token()
     if not app_token or not table_id:
@@ -510,6 +402,12 @@ async def ensure_chemical_inventory_bitable_subscribed() -> bool:
 
     app_token 从配置中心 store 读取（``store.get_connection("chemical_inventory", "inventory")``）。
     """
+    # 直读闸门：事件镜像停用时不订阅（cert/central 同口径；退订由收尾票统一执行）
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    if not config.legacy_event_sync_active():
+        logger.info("危化品库存直读模式：跳过文档事件订阅")
+        return False
     conn = _inventory_conn()
     if conn is None or conn.status == "disabled" or not conn.app_token:
         logger.info("危化品库存 Bitable app_token 未配置，跳过文档事件订阅")

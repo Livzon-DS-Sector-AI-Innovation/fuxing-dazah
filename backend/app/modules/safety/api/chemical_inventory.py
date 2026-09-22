@@ -1,8 +1,12 @@
 """Safety API — chemical_inventory endpoints（危化品库存管理，单表固定行版）。
 
-响应统一 ApiResponse；api.py 只做 HTTP 层，不写 ORM/业务逻辑。
+响应统一 ApiResponse；api.py 只做 HTTP 层（接参、注入、调 service、返回），不写 ORM/业务逻辑。
+直读模式：列表/统计 meta 带 mode=direct + elapsed_ms（cert 口径）；手工补录端点明确拒绝
+（补录只写平台库镜像，直读下不可见，cert renew 同口径）。
 """
 from __future__ import annotations
+
+import time
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,14 +34,22 @@ async def get_inventory_records(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    direct = config.direct_enabled()
+    t0 = time.perf_counter()
     service = ChemicalInventoryService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_records(
         skip, page_size, department=department, material_name=material_name,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[ChemicalInventoryRecordResponse.model_validate(i).model_dump() for i in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
@@ -49,6 +61,16 @@ async def create_inventory_record(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    # 直读模式：补录只写平台库镜像（直读列表不可见），明确拒绝防止写进死数据（cert renew 口径）
+    if config.direct_enabled():
+        from app.modules.safety.service.chemical_inventory_direct.config import (
+            RECEIPT_DIRECT_DISABLED_MESSAGE,
+        )
+
+        return ApiResponse(code=400, message=RECEIPT_DIRECT_DISABLED_MESSAGE)
+
     service = ChemicalInventoryService(db)
     item = await service.create_record(data.model_dump(exclude_none=True))
     return ApiResponse(data=ChemicalInventoryRecordResponse.model_validate(item).model_dump())
@@ -73,6 +95,13 @@ async def get_inventory_stats(
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    direct = config.direct_enabled()
+    t0 = time.perf_counter()
     service = ChemicalInventoryService(db)
     stats = await service.get_stats()
-    return ApiResponse(data=stats)
+    meta: dict[str, object] | None = None
+    if direct:
+        meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    return ApiResponse(data=stats, meta=meta)

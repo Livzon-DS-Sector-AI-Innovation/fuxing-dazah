@@ -136,6 +136,77 @@ async def _apply_one(path: str, file_name: str | None = None) -> dict[str, Any]:
     return await apply_daily_workbook(path, _inventory_app_token(), file_name=file_name)
 
 
+def _direct_enabled() -> bool:
+    """直读总开关（惰性导入，避免日常模块加载即拉起直读包）。"""
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    return config.direct_enabled()
+
+
+def _writeback_risk_enabled() -> bool:
+    """直读重算的风险列回写开关（惰性导入）。"""
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    return config.writeback_risk_enabled()
+
+
+async def _fetch_views_with_retry(reader: Any, attempts: int = 2) -> list[Any]:
+    """「写完再读」的再读：读失败重试 1 次（写后可见性兜底；探针实测 t≈0 一致）。"""
+    import asyncio
+
+    for attempt in range(attempts):
+        try:
+            views: list[Any] = await reader.fetch_all(strict=True)
+            return views
+        except Exception:  # noqa: BLE001
+            if attempt == attempts - 1:
+                raise
+            logger.warning("危化品库存直读重读失败，1s 后重试 1 次", exc_info=True)
+            await asyncio.sleep(1.0)
+    raise RuntimeError("unreachable")  # pragma: no cover
+
+
+async def _finish_direct(file_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """直读收尾：不回拉镜像，直读全量 → 内存重算（回写按开关）→ 再读 → 分析+快照。
+
+    Excel→Bitable 写入路径（apply_daily_workbook）在调用方已零改动执行；
+    本函数取代 legacy 的 sync_inventory_records_from_bitable + run_full_scan。
+    """
+    from app.modules.safety.service.chemical_inventory_direct.reader import open_reader
+    from app.modules.safety.service.chemical_inventory_direct.risk import (
+        scan_inventory_views,
+    )
+
+    reader = open_reader()
+    views = await reader.fetch_all(strict=True)
+    scan = await scan_inventory_views(views)
+    if _writeback_risk_enabled():
+        # 回写过：再直读一次取回写后值做日报（读失败重试 1 次）
+        views_final = await _fetch_views_with_retry(reader)
+    else:
+        # WRITEBACK 关（灰度观察组合）：内存重算值即最终值（spec §4.4），不重读
+        views_final = views
+
+    async with async_session_factory() as db:
+        today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间
+        prev_snapshot = await load_prev_daily_snapshot(db, today)
+        analysis = compute_daily_analysis(views_final, prev_snapshot)
+        await take_snapshot(db, today, kind=KIND_DAILY, records=views_final)
+        await db.commit()
+
+    warnings = [v for v in views_final if v.risk_flag == "warn"]
+    return {
+        "files": file_results,
+        "sync": {"skipped": True, "reason": "direct_mode"},
+        "scan": scan,
+        "warnings": warnings,
+        "analysis": analysis,
+        "total_updated": sum(r.get("updated", 0) for r in file_results),
+        "total_created": sum(r.get("created", 0) for r in file_results),
+        "total_parsed": sum(r.get("parsed", 0) for r in file_results),
+    }
+
+
 async def run_scheduled_daily_update() -> dict[str, Any]:
     """执行每日定时更新：拉取 → 下载 → 更新 → 同步 → 重算 → 返回结果。"""
     if not _inventory_app_token():
@@ -165,6 +236,10 @@ async def run_scheduled_daily_update() -> dict[str, Any]:
         finally:
             if os.path.exists(path):
                 os.remove(path)
+
+    # 直读模式：不回拉镜像，直读重算 + 风险回写（按开关）+ 再读 + 分析快照
+    if _direct_enabled():
+        return await _finish_direct(file_results)
 
     async with async_session_factory() as db:
         sync = await sync_inventory_records_from_bitable()

@@ -40,7 +40,21 @@ class ChemicalInventoryService:
         *,
         department: str | None = None,
         material_name: str | None = None,
-    ) -> tuple[list[ChemicalInventoryRecord], int]:
+    ) -> tuple[list[Any], int]:
+        from app.modules.safety.service.chemical_inventory_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.chemical_inventory_direct.query import (
+                list_records,
+            )
+            from app.modules.safety.service.chemical_inventory_direct.reader import (
+                open_reader,
+            )
+
+            return await list_records(
+                open_reader(), skip, limit,
+                department=department, material_name=material_name,
+            )
         return await self.repo.list_inventory_records(
             skip, limit, department=department, material_name=material_name,
         )
@@ -77,7 +91,19 @@ class ChemicalInventoryService:
         return await self.analyze_records([record])
 
     async def run_full_scan(self) -> dict[str, Any]:
-        """手动全量兜底：分析当前全部记录。"""
+        """手动全量兜底：分析当前全部记录（直读模式：直读重算 + 风险列回写按开关）。"""
+        from app.modules.safety.service.chemical_inventory_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.chemical_inventory_direct.reader import (
+                open_reader,
+            )
+            from app.modules.safety.service.chemical_inventory_direct.risk import (
+                scan_inventory_views,
+            )
+
+            views = await open_reader().fetch_all(strict=True)
+            return await scan_inventory_views(views)
         records = await self.repo.list_all_inventory_records()
         return await self.analyze_records(records)
 
@@ -138,6 +164,17 @@ class ChemicalInventoryService:
 
     async def get_stats(self) -> dict[str, Any]:
         """当前库存风险统计。"""
+        from app.modules.safety.service.chemical_inventory_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.chemical_inventory_direct.query import (
+                compute_stats,
+            )
+            from app.modules.safety.service.chemical_inventory_direct.reader import (
+                open_reader,
+            )
+
+            return compute_stats(await open_reader().fetch_all())
         records = await self.repo.list_all_inventory_records()
         by_flag = await self.repo.count_inventory_records_by_flag()
 
@@ -171,6 +208,17 @@ class ChemicalInventoryService:
 
     async def analyze_risk(self, department: str | None = None) -> dict[str, Any]:
         """只读分析当前库存风险（不落库），供 Agent 工具使用。"""
+        from app.modules.safety.service.chemical_inventory_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.chemical_inventory_direct.query import (
+                analyze_risk_views,
+            )
+            from app.modules.safety.service.chemical_inventory_direct.reader import (
+                open_reader,
+            )
+
+            return analyze_risk_views(await open_reader().fetch_all(), department=department)
         records = await self.repo.list_all_inventory_records()
         if department:
             records = [r for r in records if r.department == department]

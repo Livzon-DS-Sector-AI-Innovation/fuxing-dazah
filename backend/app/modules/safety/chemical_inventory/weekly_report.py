@@ -35,9 +35,18 @@ def _dept_label(dept: str) -> str:
     return CHEMICAL_DEPARTMENT_LABELS.get(dept, dept)
 
 
-async def build_weekly_report(db: AsyncSession, snapshot_date: date) -> dict[str, Any]:
-    """环比上一份快照，产出部门/物料/预警变化 + Top 增减。"""
-    cur_count = await take_snapshot(db, snapshot_date, kind=KIND_WEEKLY)
+async def build_weekly_report(
+    db: AsyncSession,
+    snapshot_date: date,
+    *,
+    current_rows: list[Any] | None = None,
+) -> dict[str, Any]:
+    """环比上一份快照，产出部门/物料/预警变化 + Top 增减。
+
+    current_rows：直读编排注入的当前行（InventoryView，字段与 ORM 同名）；
+    None（默认）时快照自取 ORM 镜像——legacy 行为零变化。
+    """
+    cur_count = await take_snapshot(db, snapshot_date, kind=KIND_WEEKLY, records=current_rows)
     prev_date = await prev_snapshot_date(db, snapshot_date, kind=KIND_WEEKLY)
     if prev_date is None:
         return {"snapshot_date": snapshot_date.isoformat(), "records": cur_count, "first": True}
@@ -165,8 +174,18 @@ async def run_weekly_job(chat_id: str | None = None) -> dict[str, Any]:
     from app.core.database import async_session_factory
 
     today = (datetime.now(UTC) + timedelta(hours=8)).date()  # 北京时间今天
+    # 直读模式：当前行来自 Bitable 直读（镜像停更，拍 ORM 会拍到旧数据）
+    current_rows: list[Any] | None = None
+    from app.modules.safety.service.chemical_inventory_direct import config
+
+    if config.direct_enabled():
+        from app.modules.safety.service.chemical_inventory_direct.reader import (
+            open_reader,
+        )
+
+        current_rows = await open_reader().fetch_all(strict=True)
     async with async_session_factory() as db:
-        report = await build_weekly_report(db, today)
+        report = await build_weekly_report(db, today, current_rows=current_rows)
         ai_summary = await generate_ai_summary(report)
         report["ai_summary"] = ai_summary
         await db.commit()

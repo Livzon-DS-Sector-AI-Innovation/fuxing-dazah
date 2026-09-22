@@ -148,6 +148,16 @@ def compute_risk(alert_types: list[str]) -> tuple[str, list[str]]:
     return "warn", ordered
 
 
+def hits_by_record_id(alerts: list[RuleAlert]) -> dict[Any, list[str]]:
+    """规则命中 → 记录 id 的预警类型列表（镜像/直读两路径共用的归并纯函数）。"""
+    hits: dict[Any, list[str]] = {}
+    for alert in alerts:
+        for rid in alert.record_ids:
+            if rid is not None:
+                hits.setdefault(rid, []).append(alert.alert_type)
+    return hits
+
+
 class ChemicalRiskRuleEngine:
     """危化品库存风险规则引擎（确定性、每日全量跑）。
 

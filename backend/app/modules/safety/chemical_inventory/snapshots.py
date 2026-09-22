@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,14 +18,25 @@ KIND_WEEKLY = "weekly"
 
 
 async def take_snapshot(
-    db: AsyncSession, snapshot_date: date, kind: str = KIND_WEEKLY
+    db: AsyncSession,
+    snapshot_date: date,
+    kind: str = KIND_WEEKLY,
+    records: list[Any] | None = None,
 ) -> int:
-    """把当前总表全量落一份快照（幂等：同类同日重复落则先软删）。"""
-    rows = list((await db.scalars(
-        select(ChemicalInventoryRecord).where(
-            ChemicalInventoryRecord.is_deleted == False,  # noqa: E712
-        )
-    )).all())
+    """把当前总表全量落一份快照（幂等：同类同日重复落则先软删）。
+
+    records：直读编排注入的当前行（InventoryView/ORM duck-typing，字段名同名）；
+    None（默认）时查 ORM 镜像——legacy 行为零变化。直读模式下镜像停更，
+    daily/weekly 编排必须传 records，否则快照拍到的是停更前的旧数据。
+    """
+    if records is None:
+        rows = list((await db.scalars(
+            select(ChemicalInventoryRecord).where(
+                ChemicalInventoryRecord.is_deleted == False,  # noqa: E712
+            )
+        )).all())
+    else:
+        rows = list(records)
     old = list((await db.scalars(
         select(ChemicalInventorySnapshot).where(
             ChemicalInventorySnapshot.snapshot_date == snapshot_date,
