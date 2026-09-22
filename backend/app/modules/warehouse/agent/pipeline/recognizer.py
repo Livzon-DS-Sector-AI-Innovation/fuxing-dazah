@@ -75,7 +75,9 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
 ## 必提字段（4 个，每个都必须出现在输出中）
 - product_name：产品名称（别名：品名、产品；如 达托霉素、硫酸黏菌素）
 - product_batch_no：产品批号（别名：批号、生产批号；逐字辨认）
-- quantity：入库数量（别名：数量、入库量；只给数字，不要带单位）
+- quantity：入库数量（别名：数量、入库量；只给数字，不要带单位；
+  可用「包装规格 × 件数」交叉校验——如 1.10kg/听 × 1听 = 1.10，
+  小数点务必仔细辨认，不要把 1.10 误读成 1110）
 - unit：单位（如 kg、十亿、g）
 
 ## 选提字段（6 个，识别不到就填 null）
@@ -485,6 +487,31 @@ def build_finished_receipt(payload: dict[str, Any]) -> RecognizedFinishedReceipt
             if all(str(row.get(k) or "").strip() for k in FINISHED_REQUIRED_FIELDS):
                 parsed_rows.append(row)
     kwargs["rows"] = parsed_rows
+    if parsed_rows:
+        # 标量 quantity 提升为**主行（首个批号组）的归组总和**——卡片展示与
+        # 提交归组口径一致，避免同批多行时卡片只显示首行数量（2026-09-22
+        # 用户实测缺陷）；提交侧 normalize 对 rows 再次归组，两处口径相同。
+        group_sums: dict[tuple[str, str, str], float] = {}
+        primary_key: tuple[str, str, str] | None = None
+        for row in parsed_rows:
+            try:
+                num = float(str(row.get("quantity")).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            key = (
+                str(row.get("product_name", "")),
+                str(row.get("product_batch_no", "")),
+                str(row.get("unit", "")),
+            )
+            if primary_key is None:
+                primary_key = key
+            group_sums[key] = group_sums.get(key, 0.0) + num
+        if primary_key is not None and primary_key in group_sums:
+            total = group_sums[primary_key]
+            if isinstance(total, float) and total.is_integer():
+                total = int(total)
+            original = kwargs.get("quantity") or _to_field(None)
+            kwargs["quantity"] = RecognizedField(value=total, confidence=original.confidence)
     return RecognizedFinishedReceipt(**kwargs)
 
 

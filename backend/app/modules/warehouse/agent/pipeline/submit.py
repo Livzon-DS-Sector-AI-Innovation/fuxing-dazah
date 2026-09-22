@@ -1421,13 +1421,12 @@ def normalize_finished_receipt_rows(
     if not rows:
         return []
 
-    # aligned 标量覆盖 → 主行（第一行；用户回复「数量改成 55」等）
+    # aligned 标量覆盖 → 主行（第一行；spec/批号等行级字段）
     for key, value in aligned.items():
         if value is None or not str(value).strip() or not rows:
             continue
-        if key in ("product_name", "product_batch_no", "quantity", "unit",
-                   "spec", "produced_at", "expiry", "workshop",
-                   "storage_location", "remark"):
+        if key in ("product_name", "product_batch_no", "spec",
+                   "produced_at", "expiry", "remark"):
             rows[0][key] = str(value).strip()
 
     # 文档级字段（车间/库区位置/入库日期）应用到每一行：
@@ -1483,6 +1482,16 @@ def normalize_finished_receipt_rows(
             remarks.append(f"共{len(members)}行合并")
             group["remark"] = "；".join(remarks)
         result.append(group)
+
+    # quantity 覆盖语义 = **第一组总量**（识别 rows 存在时用户改的是总数；
+    # 对话单行路径此处重设同值，无副作用）
+    override_qty = aligned.get("quantity")
+    if result and override_qty is not None and str(override_qty).strip():
+        num = _to_number(override_qty)
+        if num is not None:
+            if isinstance(num, float) and num.is_integer():
+                num = int(num)
+            result[0]["quantity"] = num
     return result
 
 

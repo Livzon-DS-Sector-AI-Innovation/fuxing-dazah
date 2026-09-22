@@ -179,7 +179,7 @@ def _build_image_processing_card() -> dict[str, Any]:
     return _build_card(
         title="🖼 正在识别，请稍候…",
         template="blue",
-        markdown="已收到图片，正在识别送货单信息，完成后会发送确认卡片。",
+        markdown="已收到图片，正在识别解析图片信息，完成后会发送确认卡片。",
     )
 
 

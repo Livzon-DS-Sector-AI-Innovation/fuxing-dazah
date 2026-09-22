@@ -101,6 +101,23 @@ class TestBuildFinishedReceiptRows:
         }
         assert len(build_finished_receipt(payload).rows) == 1
 
+    def test_scalar_quantity_promoted_to_group_sum(self) -> None:
+        """同批多行：标量 quantity 解析时提升为归组总和（卡片展示=提交口径）。"""
+        payload = {
+            "product_name": {"value": "盐酸万古霉素沉淀物", "confidence": 0.9},
+            "product_batch_no": {"value": "HAP2609003E3", "confidence": 0.9},
+            "quantity": {"value": "40", "confidence": 0.9},
+            "unit": {"value": "kg", "confidence": 0.95},
+            "rows": [
+                {"product_name": "盐酸万古霉素沉淀物", "product_batch_no": "HAP2609003E3",
+                 "quantity": 40, "unit": "kg"},
+                {"product_name": "盐酸万古霉素沉淀物", "product_batch_no": "HAP2609003E3",
+                 "quantity": 1.1, "unit": "kg"},
+            ],
+        }
+        r = build_finished_receipt(payload)
+        assert r.quantity.value == 41.1
+
 
 class TestNormalizeRows:
     def test_same_batch_grouped_and_summed(self) -> None:
