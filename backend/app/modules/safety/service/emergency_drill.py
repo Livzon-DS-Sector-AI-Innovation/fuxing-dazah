@@ -19,8 +19,19 @@ from app.modules.safety.models import (
     EmergencyDrillRecord,
 )
 from app.modules.safety.schemas.emergency_drills import DrillStatsResponse
+from app.modules.safety.service.emergency_drill_direct.views import (
+    EmergencyDrillRecordView,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    """字符串宽松解析 UUID（非法串返回 None，调用方走 feishu_record_id 分支）。"""
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 # ── AI Prompt ──
 
@@ -208,13 +219,41 @@ class EmergencyDrillService:
         status: str | None = None,
         keyword: str | None = None,
         stage: str | None = None,
-    ) -> tuple[list[EmergencyDrillRecord], int]:
+    ) -> tuple[list[EmergencyDrillRecord | EmergencyDrillRecordView], int]:
         """分页查询演练记录。
 
         stage 可选值：plan（计划阶段：无实施时间）、execution（实施阶段：有实施时间）、
         review（复核阶段：有复核状态）。execution 不再排除 status 非空的记录，
         已复核（status 非空）但已执行的演练也能被查（execution 只看有没有执行时间）。
+
+        直读模式（SAFETY_EMERGENCY_DRILL_DIRECT_ENABLED）：Bitable 主表全量直读 +
+        应用侧过滤/排序/分页；默认排序 plan_time_ref desc NULLS LAST（spec D3，
+        探针实证无创建日期公式列）。
         """
+        from app.modules.safety.service.emergency_drill_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.emergency_drill_direct import (
+                query as direct_query,
+            )
+            from app.modules.safety.service.emergency_drill_direct.reader import (
+                open_reader,
+            )
+
+            views = await open_reader().fetch_all(strict=False)
+            filtered = direct_query.filter_views(
+                views,
+                department=department,
+                drill_type=drill_type,
+                status=status,
+                keyword=keyword,
+                stage=stage,
+            )
+            ordered = direct_query.sort_views(filtered)
+            return direct_query.paginate(ordered, skip, limit)
+
         base = select(EmergencyDrillRecord).where(~EmergencyDrillRecord.is_deleted)
         count_base = select(func.count(EmergencyDrillRecord.id)).where(
             ~EmergencyDrillRecord.is_deleted
@@ -272,6 +311,48 @@ class EmergencyDrillService:
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    async def resolve_record(
+        self, record_id: str
+    ) -> EmergencyDrillRecord | EmergencyDrillRecordView | None:
+        """详情双态解析（id 参数从 UUID 放宽为 UUID|recXXX，spec §4.1）。
+
+        - UUID → 镜像行（旧链接兼容，两态一致）；
+        - recXXX → 直读开：Bitable 直读视图；直读关：镜像行按 feishu_record_id
+          （事件链路持续维护，镜像新鲜）。
+        找不到返回 None（API 层 404）。
+        """
+        record_uuid = _parse_uuid(record_id)
+        if record_uuid is not None:
+            return await self.get_record(record_uuid)
+
+        from app.modules.safety.service.emergency_drill_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.emergency_drill_direct.query import (
+                find_view,
+            )
+            from app.modules.safety.service.emergency_drill_direct.reader import (
+                open_reader,
+            )
+
+            views = await open_reader().fetch_all(strict=False)
+            return find_view(views, record_id)
+        return await self.get_record_by_feishu_id(record_id)
+
+    async def resolve_pg_record(self, record_id: str) -> EmergencyDrillRecord | None:
+        """写流程专用双态解析：UUID→按 id；recXXX→按 feishu_record_id。
+
+        评估/方案/隐患/自动完成四条流转都以平台 UUID 行为载体（本地附件路径、
+        EmergencyDrillDocument 版本化），事件镜像持续维护（本域事件不关，
+        spec §0 结论二），PG 行新鲜；找不到返回 None。
+        """
+        record_uuid = _parse_uuid(record_id)
+        if record_uuid is not None:
+            return await self.get_record(record_uuid)
+        return await self.get_record_by_feishu_id(record_id)
 
     # ══════════════════════════════════════════════════════
     # AI 方案生成
@@ -691,6 +772,21 @@ class EmergencyDrillService:
     # ══════════════════════════════════════════════════════
 
     async def get_stats(self) -> DrillStatsResponse:
+        from app.modules.safety.service.emergency_drill_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.emergency_drill_direct import (
+                query as direct_query,
+            )
+            from app.modules.safety.service.emergency_drill_direct.reader import (
+                open_reader,
+            )
+
+            views = await open_reader().fetch_all(strict=False)
+            return DrillStatsResponse.model_validate(direct_query.stats_of(views))
+
         no_del = ~EmergencyDrillRecord.is_deleted
 
         total_q = select(func.count(EmergencyDrillRecord.id)).where(no_del)

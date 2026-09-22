@@ -36,16 +36,18 @@ async def generate_drill_plan(
     生成符合 AQ/T 9007-2019 标准的应急演练方案。
 
     参数：
-    - plan_id: 演练计划的 UUID（必填）
+    - plan_id: 演练计划 ID（平台 UUID 或 Bitable recXXX，双态；必填）
 
     返回生成的方案文档信息，包含文档 ID 和标题。
     注意：此操作需要用户确认后才执行。
     """
     from app.modules.safety.service.emergency_drill import EmergencyDrillService
 
-    doc = await EmergencyDrillService(ctx.deps.db).generate_drill_plan(
-        __import__("uuid").UUID(plan_id),
-    )
+    service = EmergencyDrillService(ctx.deps.db)
+    record = await service.resolve_pg_record(plan_id)
+    if record is None:
+        return {"error": "演练计划不存在，请确认 plan_id（UUID 或 recXXX）后重试"}
+    doc = await service.generate_drill_plan(record.id)
     if doc is None:
         return {"error": "演练方案生成失败，请确认计划存在且 AI 服务可用"}
     return {

@@ -27,9 +27,13 @@ STATUS_OPTIONS = [
 
 
 class DrillRecordResponse(BaseModel):
-    """演练记录响应 — 映射 Bitable 单行数据。"""
+    """演练记录响应 — 映射 Bitable 单行数据。
 
-    id: uuid.UUID
+    id 双态：legacy 镜像 = 平台 UUID；直读模式 = Bitable recXXX
+    （contractor_admission 同款，spec §4.1）。
+    """
+
+    id: uuid.UUID | str
     feishu_record_id: str | None = None
 
     # 计划阶段
