@@ -653,6 +653,40 @@ def _month_bounds_dates(now_cn: datetime, offset_months: int) -> tuple[date, dat
     return month_bounds(year, month)
 
 
+def _parse_month_sales_targets(raw: str | None) -> dict[str, dict[str, float]]:
+    """解析 sales_target_monthly 运行参数（P1-2）。
+
+    期望 JSON：``{"YYYY-MM": {"客户名称": 目标数量}}``；解析失败/类型不符
+    返回空 dict（fail-safe，不阻断发货分析）。数字字符串宽容转 float，
+    非正数目标丢弃。
+    """
+    import json
+
+    if not raw or not str(raw).strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: dict[str, dict[str, float]] = {}
+    for month, per_customer in data.items():
+        if not isinstance(per_customer, dict):
+            continue
+        month_targets: dict[str, float] = {}
+        for customer, target in per_customer.items():
+            try:
+                value = float(target)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                month_targets[str(customer)] = value
+        if month_targets:
+            result[str(month)] = month_targets
+    return result
+
+
 async def _generate_shipment_analysis(db: AsyncSession, now_cn: datetime) -> dict[str, Any]:
     """发货去向月度分析卡（§4.8⑤）：上月客户排名/环比/品名分布 + LLM 解读。
 
@@ -679,6 +713,19 @@ async def _generate_shipment_analysis(db: AsyncSession, now_cn: datetime) -> dic
         for c in summarize_shipments(rows, start=prev_start, end=prev_end)
     }
 
+    # 预设销量对比（P1-2）：sales_target_monthly 配置了上月目标时输出
+    # 目标/达成率/差异；未配置则提示配置入口（总文档成品⑤）
+    from app.modules.warehouse.ops_config.runtime_store import runtime_store
+
+    try:
+        targets_raw = str(runtime_store.get_value("sales_target_monthly") or "")
+    except Exception:  # noqa: BLE001 — 参数读取失败按未配置处理
+        logger.warning("sales_target_monthly 读取失败，按未配置处理")
+        targets_raw = ""
+    month_targets = _parse_month_sales_targets(targets_raw).get(
+        start.strftime("%Y-%m"), {}
+    )
+
     elements: list[dict[str, Any]] = [
         _md(f"**{start.strftime('%Y-%m')} 销售发货客户数** {len(current)}"),
     ]
@@ -694,10 +741,40 @@ async def _generate_shipment_analysis(db: AsyncSession, now_cn: datetime) -> dic
                 if prev_qty
                 else "环比 新客户/上月无数据"
             )
+            target = month_targets.get(c.customer)
+            target_part = ""
+            if target is not None:
+                ratio = c.total_qty / target * 100
+                gap = c.total_qty - target
+                target_part = (
+                    f"｜目标 {fmt_qty(target)} 达成 {ratio:.0f}%"
+                    f"（{'+' if gap >= 0 else ''}{fmt_qty(gap)}）"
+                )
             lines.append(
                 f"{i}. {c.customer}：{fmt_qty(c.total_qty)}（{c.order_count} 笔，{delta}）"
+                f"{target_part}"
             )
         elements.append(_md(f"**客户排名 Top{len(top)}**\n" + "\n".join(lines)))
+        if month_targets:
+            covered = [c for c in current if c.customer in month_targets]
+            covered_qty = sum(c.total_qty for c in covered)
+            target_total = sum(month_targets[c.customer] for c in covered)
+            if target_total > 0:
+                overall = covered_qty / target_total * 100
+                elements.append(
+                    _md(
+                        f"**目标对比（已配置 {len(covered)}/{len(month_targets)} 客户）** "
+                        f"实际 {fmt_qty(covered_qty)} / 目标 {fmt_qty(target_total)}，"
+                        f"达成率 {overall:.0f}%"
+                    )
+                )
+        else:
+            elements.append(
+                _md(
+                    "**目标销量**：本月未配置（配置中心 → 运行参数 "
+                    "sales_target_monthly，格式 {\"YYYY-MM\": {\"客户\": 数量}}）"
+                )
+            )
         lead = top[0]
         if lead.product_totals:
             product_lines = "\n".join(
@@ -709,9 +786,20 @@ async def _generate_shipment_analysis(db: AsyncSession, now_cn: datetime) -> dic
         desc = "；".join(
             f"{c.customer}{fmt_qty(c.total_qty)}" for c in current[:3]
         )
+        target_desc = ""
+        month_key = start.strftime("%Y-%m")
+        if month_targets:
+            actual_by_customer = {c.customer: c.total_qty for c in current}
+            parts = [
+                f"{customer} 目标{fmt_qty(target)}实际{fmt_qty(actual_by_customer.get(customer, 0.0))}"
+                for customer, target in list(month_targets.items())[:5]
+            ]
+            target_desc = f"；预设销量对比：{'，'.join(parts)}"
         raw = await _llm_summarize(
-            f"以下是 {start.strftime('%Y-%m')} 成品销售发货分析："
-            f"{desc or '无发货记录'}。请用不超过 80 字的中文概括发货结构并给出一句话建议。"
+            f"以下是 {month_key} 成品销售发货分析："
+            f"{desc or '无发货记录'}{target_desc}。"
+            f"请用不超过 80 字的中文概括发货结构并给出一句话建议"
+            f"（有目标数据时点出达成情况）。"
         )
         summary_text = raw.strip()[:300]
     except Exception:  # noqa: BLE001 — LLM 故障降级（宁夏模式）
@@ -788,3 +876,87 @@ async def _generate_workshop_weekly_usage(
 
 
 register_push_generator("workshop_weekly_usage", _generate_workshop_weekly_usage)
+
+
+# ── V3.0 二期 P1（总文档缺口补齐，2026-09-22）──
+
+
+async def collect_low_stock_rows(db: AsyncSession) -> list[dict[str, Any]]:
+    """低于安全库存物料清单（本地镜像口径，与晨报低库存同源聚合）。
+
+    返回按缺口（安全库存-总量）降序的列表：缺口最大（最紧缺）在前；
+    material.safety_stock 空值/0 视为未设安全库存不参与。
+    """
+    from app.modules.warehouse.models import WarehouseMaterial
+
+    stock_rows = (
+        await db.execute(
+            select(WarehouseStock).where(
+                WarehouseStock.is_deleted == False,  # noqa: E712
+                WarehouseStock.quantity > 0,
+            )
+        )
+    ).scalars().all()
+    totals: dict[object, float] = {}
+    for s in stock_rows:
+        totals[s.material_id] = totals.get(s.material_id, 0.0) + float(s.quantity)
+
+    low: list[dict[str, Any]] = []
+    for material_id, total_qty in totals.items():
+        material = await db.get(WarehouseMaterial, material_id)
+        if material is None or material.safety_stock is None:
+            continue
+        safety = float(material.safety_stock)
+        if safety <= 0 or total_qty >= safety:
+            continue
+        low.append(
+            {
+                "material_code": material.code,
+                "material_name": material.name,
+                "total_quantity": total_qty,
+                "safety_stock": safety,
+                "gap": safety - total_qty,
+            }
+        )
+    low.sort(key=lambda x: x["gap"], reverse=True)
+    return low
+
+
+async def _generate_low_stock_alert(
+    db: AsyncSession, now_cn: datetime
+) -> dict[str, Any]:
+    """低库存预警卡（P1-3，总文档原辅料⑤「低于安全库存自动提醒」）。
+
+    本地镜像口径（与晨报低库存 Top5 同源但列全量清单，不再截 Top5）；
+    纯数据卡不接 LLM（车间周用量同款 grilling 决策）。全部正常出绿色卡。
+    """
+    low = await collect_low_stock_rows(db)
+    if not low:
+        return build_card(
+            title=f"低库存预警 · {now_cn.date().isoformat()}",
+            template="green",
+            elements=[_md("所有物料库存均高于安全库存，无缺料风险")],
+        )
+
+    elements: list[dict[str, Any]] = [
+        _md(f"**{len(low)} 个物料低于安全库存**（按缺口从大到小）"),
+    ]
+    lines = []
+    for i, row in enumerate(low[:10], start=1):
+        lines.append(
+            f"{i}. {row['material_name']}（{row['material_code']}）："
+            f"在库 {fmt_qty(row['total_quantity'])}"
+            f" / 安全库存 {fmt_qty(row['safety_stock'])}，"
+            f"缺口 {fmt_qty(row['gap'])}"
+        )
+    elements.append(_md("\n".join(lines)))
+    if len(low) > 10:
+        elements.append(_md(f"（其余 {len(low) - 10} 项见 Web 智能中心低库存预警）"))
+    return build_card(
+        title=f"低库存预警 · {now_cn.date().isoformat()}",
+        template="orange",
+        elements=elements,
+    )
+
+
+register_push_generator("low_stock_alert", _generate_low_stock_alert)

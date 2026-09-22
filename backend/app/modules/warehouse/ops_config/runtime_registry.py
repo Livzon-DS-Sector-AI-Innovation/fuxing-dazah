@@ -196,6 +196,23 @@ _RUNTIME_KEYS: tuple[RuntimeKeyInfo, ...] = (
             "切 prod 前置：双跑比对零差异 + 零回写探针（.scratch 探针脚本）"
         ),
     ),
+    RuntimeKeyInfo(
+        key="sales_target_monthly",
+        label="月度目标销量配置（JSON）",
+        group="报表",
+        value_type="str",
+        default="",
+        env_var="",
+        min_value=None,
+        max_value=None,
+        max_length=8000,
+        description=(
+            "发货去向分析的预设销量对比数据源（二期 P1-2，总文档成品⑤）。"
+            'JSON 格式：{"YYYY-MM": {"客户名称": 目标数量}}，客户名称须与'
+            "成品出库台账销售客户列一致；配置后 shipment_analysis 月度卡对"
+            "已配置客户展示 目标/达成率/差异。空=无目标（卡显示未配置提示）"
+        ),
+    ),
 )
 
 RUNTIME_REGISTRY: dict[str, RuntimeKeyInfo] = {k.key: k for k in _RUNTIME_KEYS}

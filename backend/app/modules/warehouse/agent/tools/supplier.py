@@ -157,6 +157,28 @@ async def fetch_directory_materials(supplier_name: str) -> str | None:
     return "；".join(parts)
 
 
+async def _ai_check_hint(supplier_name: str, materials: str, remark: str) -> str:
+    """AI 辅助核对提示（§4.3 定案口径：只提示不判定，附在 QA 确认卡）。
+
+    指出命名/信息矛盾或缺失疑点；LLM 失败返回空串（卡上省略该行，
+    不阻断准入流）。
+    """
+    try:
+        from app.modules.warehouse.intelligence import _llm_summarize
+
+        raw = await _llm_summarize(
+            f"以下是制药厂供应商准入申请信息：供应商名称「{supplier_name}」，"
+            f"授权物料「{materials or '未填'}」，申请备注「{remark or '无'}」。"
+            "请用不超过 60 字指出其中命名不规范、信息矛盾或缺失的疑点；"
+            "无明显疑点时回答「无明显疑点」。只输出提示正文，不要解释。"
+        )
+        text = raw.strip()
+        return text[:120]
+    except Exception:  # noqa: BLE001 — 提示性信息，失败静默省略
+        logger.info("准入 AI 核对提示生成失败（省略）: supplier=%r", supplier_name)
+        return ""
+
+
 async def create_supplier_admission(
     fields: dict[str, Any], _ctx: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -237,6 +259,16 @@ async def create_supplier_admission(
         qc_writeback_allowed,
     )
 
+    # AI 核对提示（P1-4，§4.3 只提示不判定）：附在确认卡摘要，失败省略
+    ai_hint = ""
+    if qc_writeback_allowed(SUPPLIER_ADMIT_BIZ):
+        ai_hint = await _ai_check_hint(
+            name, material_names or material_codes, remark
+        )
+    hint_line = (
+        f"\n**AI 核对提示** {ai_hint}（仅供参考，不作为判定）" if ai_hint else ""
+    )
+
     gate_created = False
     gate_deduped = False
     if qc_writeback_allowed(SUPPLIER_ADMIT_BIZ):
@@ -252,7 +284,8 @@ async def create_supplier_admission(
                         summary=(
                             f"**供应商** {name}\n"
                             f"**授权物料** {material_names or material_codes or '-'}\n"
-                            f"**申请备注** {remark or '-'}\n\n"
+                            f"**申请备注** {remark or '-'}"
+                            f"{hint_line}\n\n"
                             "采购已申请该供应商准入，名录表已生成待准入记录。"
                             "点击「确认」将回写台账：审计状态=准入、准入日期=今天；"
                             "如需拒绝/暂停，请直接在多维表格操作（本卡可忽略）。"

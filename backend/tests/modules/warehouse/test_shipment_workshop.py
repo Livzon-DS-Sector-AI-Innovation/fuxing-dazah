@@ -139,6 +139,19 @@ class TestWorkshopUsage:
         assert "**精制工程一部** 1 笔 / 100" in text
 
 
+class TestParseMonthSalesTargets:
+    def test_valid_json_with_coercion(self) -> None:
+        raw = '{"2026-09": {"REIG": 100, "Hikma": "2.5", "坏客户": -1, "非数字": "x"}}'
+        targets = generators._parse_month_sales_targets(raw)
+        assert targets == {"2026-09": {"REIG": 100.0, "Hikma": 2.5}}
+
+    @pytest.mark.parametrize(
+        "raw", [None, "", "   ", "not json", "[]", '{"2026-09": [1, 2]}']
+    )
+    def test_invalid_inputs_return_empty(self, raw: Any) -> None:
+        assert generators._parse_month_sales_targets(raw) == {}
+
+
 class TestShipmentAnalysisGenerator:
     async def test_card_with_ranking_and_delta(
         self, db_session, monkeypatch: pytest.MonkeyPatch
@@ -202,6 +215,139 @@ class TestShipmentAnalysisGenerator:
         assert "REIG：30" in text
         assert "Hikma Jordan：10（1 笔，环比 -50%）" in text
         assert "桩解读" in text
+
+    async def test_sales_target_comparison(
+        self, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """预设销量对比（P1-2）：配置目标后输出达成率/差异与汇总段。"""
+        rows = [
+            _outbound_row("b1", day=date(2026, 9, 5), customer="REIG", qty=30.0),
+            _outbound_row("b2", day=date(2026, 9, 6), customer="Hikma Jordan", qty=10.0),
+        ]
+
+        class _Adapter:
+            async def search_records_page(self, *a: Any, **k: Any) -> dict[str, Any]:
+                return {
+                    "records": [
+                        {
+                            "record_id": r.record_id,
+                            "fields": {
+                                "出库日期": int(
+                                    datetime(
+                                        r.outbound_date.year,
+                                        r.outbound_date.month,
+                                        r.outbound_date.day,
+                                        tzinfo=CN_TZ,
+                                    ).timestamp()
+                                    * 1000
+                                ),
+                                "产品名称": r.product_name,
+                                "品规": "DT高规",
+                                "产品批号": "DA2609001",
+                                "出库量": r.qty,
+                                "单位": "kg",
+                                "销售客户": r.customer,
+                                "用途": r.purpose,
+                            },
+                        }
+                        for r in rows
+                    ],
+                    "total": len(rows),
+                    "page_token": None,
+                }
+
+        class _StubRuntime:
+            def get_value(self, key: str) -> str:
+                assert key == "sales_target_monthly"
+                return '{"2026-09": {"REIG": 50, "未发货客户": 10}}'
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.bitable_adapter.WarehouseBitableAdapter",
+            _Adapter,
+        )
+        monkeypatch.setattr(
+            "app.modules.warehouse.ops_config.runtime_store.runtime_store",
+            _StubRuntime(),
+        )
+
+        captured: dict[str, str] = {}
+
+        async def _fake_llm(prompt: str) -> str:
+            captured["prompt"] = prompt
+            return "桩解读：目标达成六成。"
+
+        monkeypatch.setattr(generators, "_llm_summarize", _fake_llm)
+        card = await generators._generate_shipment_analysis(db_session, NOW)
+        text = "\n".join(
+            str(el.get("content") or "") for el in card["body"]["elements"]
+        )
+        # 客户行带目标/达成/差异；REIG 30/50=60%，差 -20
+        assert "REIG：30（1 笔，环比 新客户/上月无数据）｜目标 50 达成 60%（-20）" in text
+        # 汇总段：仅已配置且有发货的客户计入（1/2）
+        assert "目标对比（已配置 1/2 客户）** 实际 30 / 目标 50，达成率 60%" in text
+        # LLM 提示词注入目标上下文
+        assert "预设销量对比" in captured["prompt"] and "REIG 目标50实际30" in captured["prompt"]
+        assert "未配置" not in text
+
+    async def test_no_target_configured_shows_hint(
+        self, db_session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rows = [_outbound_row("c1", day=date(2026, 9, 5), customer="REIG", qty=30.0)]
+
+        class _Adapter:
+            async def search_records_page(self, *a: Any, **k: Any) -> dict[str, Any]:
+                return {
+                    "records": [
+                        {
+                            "record_id": r.record_id,
+                            "fields": {
+                                "出库日期": int(
+                                    datetime(
+                                        r.outbound_date.year,
+                                        r.outbound_date.month,
+                                        r.outbound_date.day,
+                                        tzinfo=CN_TZ,
+                                    ).timestamp()
+                                    * 1000
+                                ),
+                                "产品名称": r.product_name,
+                                "品规": "DT高规",
+                                "产品批号": "DA2609001",
+                                "出库量": r.qty,
+                                "单位": "kg",
+                                "销售客户": r.customer,
+                                "用途": r.purpose,
+                            },
+                        }
+                        for r in rows
+                    ],
+                    "total": len(rows),
+                    "page_token": None,
+                }
+
+        class _StubRuntime:
+            def get_value(self, key: str) -> str:
+                return ""
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.bitable_adapter.WarehouseBitableAdapter",
+            _Adapter,
+        )
+        monkeypatch.setattr(
+            "app.modules.warehouse.ops_config.runtime_store.runtime_store",
+            _StubRuntime(),
+        )
+
+        async def _fake_llm(_prompt: str) -> str:
+            return "桩解读。"
+
+        monkeypatch.setattr(generators, "_llm_summarize", _fake_llm)
+        card = await generators._generate_shipment_analysis(db_session, NOW)
+        text = "\n".join(
+            str(el.get("content") or "") for el in card["body"]["elements"]
+        )
+        assert "目标销量**：本月未配置" in text
+        assert "sales_target_monthly" in text
 
     async def test_empty_month_shows_first_period_hint(
         self, db_session, monkeypatch: pytest.MonkeyPatch

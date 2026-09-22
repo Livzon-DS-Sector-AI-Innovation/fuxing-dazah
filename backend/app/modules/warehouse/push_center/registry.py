@@ -181,6 +181,16 @@ _TASKS: tuple[PushTaskInfo, ...] = (
         default_schedule={"type": "yearly", "month": 1, "day": 1, "time": "08:30"},
         target_env_var="WAREHOUSE_TEST_CHAT_ID",
     ),
+    # ── V3.0 二期 P1（总文档缺口补齐，2026-09-22）──
+    PushTaskInfo(
+        task_name="low_stock_alert",
+        scene="low_stock_alert",
+        label="低库存预警推送",
+        description="每日 08:10 推送低于安全库存物料清单（本地镜像口径，与晨报低库存同源；总文档原辅料⑤）",
+        trigger="scheduled",
+        default_schedule={"type": "daily", "time": "08:10"},
+        target_env_var="WAREHOUSE_TEST_CHAT_ID",
+    ),
 )
 
 PUSH_REGISTRY: dict[str, PushTaskInfo] = {t.task_name: t for t in _TASKS}

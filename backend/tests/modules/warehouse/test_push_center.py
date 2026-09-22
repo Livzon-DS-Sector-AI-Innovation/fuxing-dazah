@@ -174,6 +174,8 @@ class TestPushRegistry:
             "material_usage_compare",
             "workshop_weekly_usage",
             "annual_report",
+            # V3.0 二期 P1（缺口补齐，1 个定时型）
+            "low_stock_alert",
         }
 
     def test_scheduled_vs_event(self) -> None:
@@ -193,6 +195,7 @@ class TestPushRegistry:
             "material_usage_compare",
             "workshop_weekly_usage",
             "annual_report",
+            "low_stock_alert",
         ):
             assert by_name[name].trigger == "scheduled"
             assert by_name[name].default_schedule is not None
@@ -730,3 +733,84 @@ class TestStaleListsGenerator:
         card = await generator(db_session, WED_0830)
         joined = "".join(str(e) for e in card["body"]["elements"])
         assert "无待处理项" in joined
+
+
+# ═══════════════════════════════════════════════════════════════
+# 低库存预警生成器（二期 P1-3）
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestLowStockAlertGenerator:
+    @staticmethod
+    async def _seed_stock(
+        db: AsyncSession, suffix: str, quantity: str, safety_stock: str
+    ) -> None:
+        from decimal import Decimal
+
+        from app.modules.warehouse.models import (
+            WarehouseLocation,
+            WarehouseMaterial,
+            WarehouseStock,
+        )
+
+        material = WarehouseMaterial(
+            code=f"V3P1-M-{suffix}", name=f"低库存测试物料{suffix}", category="raw",
+            unit="kg", safety_stock=Decimal(safety_stock),
+        )
+        location = WarehouseLocation(code=f"V3P1-L-{suffix}", name="低库存测试库位")
+        db.add_all([material, location])
+        await db.flush()
+        db.add(
+            WarehouseStock(
+                material_id=material.id,
+                material_code=material.code,
+                material_name=material.name,
+                batch_no=f"V3P1B{suffix}",
+                location_id=location.id,
+                location_code=location.code,
+                location_name=location.name,
+                quantity=Decimal(quantity),
+                status="normal",
+            )
+        )
+        await db.flush()
+
+    async def test_green_when_no_low_stock(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 共享库无法保证真实数据无低库存项——聚合置空走绿色卡分支（聚合本体
+        # 由 test_lists_low_stock_sorted_by_gap 覆盖）
+        async def _empty(_db: AsyncSession) -> list[dict[str, Any]]:
+            return []
+
+        monkeypatch.setattr(generators, "collect_low_stock_rows", _empty)
+        generator = generators.get_push_generator("low_stock_alert")
+        assert generator is not None
+        card = await generator(db_session, WED_0830)
+        assert card["header"]["template"] == "green"
+        joined = "".join(str(e) for e in card["body"]["elements"])
+        assert "无缺料风险" in joined
+
+    async def test_lists_low_stock_sorted_by_gap(
+        self, db_session: AsyncSession
+    ) -> None:
+        # 安全库存 100：A 在库 10（缺口 90）、B 在库 80（缺口 20）、C 在库 120（不缺）
+        await self._seed_stock(db_session, "A", "10", "100")
+        await self._seed_stock(db_session, "B", "80", "100")
+        await self._seed_stock(db_session, "C", "120", "100")
+        # D 未设安全库存（0）不参与
+        await self._seed_stock(db_session, "D", "1", "0")
+
+        generator = generators.get_push_generator("low_stock_alert")
+        card = await generator(db_session, WED_0830)
+        assert card["header"]["template"] == "orange"
+        joined = "".join(str(e) for e in card["body"]["elements"])
+        assert "个物料低于安全库存" in joined
+        assert "低库存测试物料A（V3P1-M-A）：在库 10 / 安全库存 100，缺口 90" in joined
+        assert "低库存测试物料B（V3P1-M-B）：在库 80 / 安全库存 100，缺口 20" in joined
+        # 缺口大的排前（共享库可能有其他低库存项，只约束两条测试数据相对序）
+        assert joined.index("低库存测试物料A（V3P1-M-A）") < joined.index(
+            "低库存测试物料B（V3P1-M-B）"
+        )
+        assert "低库存测试物料C" not in joined
+        assert "低库存测试物料D" not in joined

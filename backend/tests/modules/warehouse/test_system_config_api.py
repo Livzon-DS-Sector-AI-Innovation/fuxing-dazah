@@ -178,7 +178,7 @@ async def test_runtime_list_and_update(
     resp = await client.get(RUNTIME)
     assert resp.status_code == 200
     configs = resp.json()["data"]["configs"]
-    assert len(configs) == 12  # 既有 11 键 + bitable_env_mode（V3D 环境模式）
+    assert len(configs) == 13  # 既有 12 键 + sales_target_monthly（P1 销量对比）
     assert {c["source"] for c in configs} <= {"db", "env", "default"}
     # 回写开关/环境模式：共享库 live 值随验收期翻转（C 期交互式验收会把
     # qc_writeback_enabled 临时置 1），API 测试只断言键存在且取值合法；

@@ -943,6 +943,14 @@ async def supplier_unit_env(
     )
     await db_session.flush()
 
+    # AI 核对提示（P1-4）默认桩化为空（省略行）；提示用例单独覆盖
+    async def _no_hint(*args: Any, **kwargs: Any) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        "app.modules.warehouse.intelligence._llm_summarize", _no_hint
+    )
+
     sent: list[dict[str, str]] = []
 
     async def fake_send(payload: dict[str, str]) -> str | None:
@@ -1076,6 +1084,95 @@ class TestSupplierAdmissionTool:
             .one()
         )
         assert "授权物料" in gate.summary and "硫脲" in gate.summary
+
+    async def test_ai_check_hint_on_gate_summary(
+        self,
+        supplier_unit_env: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AI 核对提示（P1-4）：LLM 返回文本 → 摘要附提示行（仅供参考）。"""
+        from sqlalchemy import select
+
+        from app.modules.warehouse.agent.tools import supplier
+        from app.modules.warehouse.models import WarehouseConfirmRequest
+
+        db: AsyncSession = supplier_unit_env["db"]
+        adapter = FakeSupplierAdapter()
+        monkeypatch.setattr(supplier, "get_adapter", lambda: adapter)
+        monkeypatch.setattr(
+            "app.modules.warehouse.qc_flow.qc_writeback_enabled", lambda: True
+        )
+
+        async def _hint(prompt: str) -> str:
+            assert "测试供应商H" in prompt and "授权物料" in prompt
+            return "供应商名称含缩写，建议核对营业执照全称"
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.intelligence._llm_summarize", _hint
+        )
+
+        result = await supplier.create_supplier_admission(
+            {"供应商名称": "测试供应商H", "授权物料名称": "硫脲"},
+            _ctx={"open_id": "ou_sh", "chat_id": "oc_sh"},
+        )
+        assert "error" not in result, result
+        gate = (
+            (
+                await db.execute(
+                    select(WarehouseConfirmRequest).where(
+                        WarehouseConfirmRequest.business_type == "supplier_admission"
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert "AI 核对提示** 供应商名称含缩写" in gate.summary
+        assert "仅供参考，不作为判定" in gate.summary
+
+    async def test_ai_check_hint_failure_omitted(
+        self,
+        supplier_unit_env: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """LLM 异常 → 提示行省略，准入门照常创建。"""
+        from sqlalchemy import select
+
+        from app.modules.warehouse.agent.tools import supplier
+        from app.modules.warehouse.models import WarehouseConfirmRequest
+
+        db: AsyncSession = supplier_unit_env["db"]
+        adapter = FakeSupplierAdapter()
+        monkeypatch.setattr(supplier, "get_adapter", lambda: adapter)
+        monkeypatch.setattr(
+            "app.modules.warehouse.qc_flow.qc_writeback_enabled", lambda: True
+        )
+
+        async def _boom(_prompt: str) -> str:
+            raise RuntimeError("LLM down")
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.intelligence._llm_summarize", _boom
+        )
+
+        result = await supplier.create_supplier_admission(
+            {"供应商名称": "测试供应商X"},
+            _ctx={"open_id": "ou_sx", "chat_id": "oc_sx"},
+        )
+        assert "error" not in result, result
+        assert result["gate_created"] is True
+        gate = (
+            (
+                await db.execute(
+                    select(WarehouseConfirmRequest).where(
+                        WarehouseConfirmRequest.business_type == "supplier_admission"
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert "AI 核对提示" not in gate.summary
 
     async def test_switch_off_creates_row_without_gate(
         self,
