@@ -362,15 +362,16 @@ class TestCreateFinishedReceiptDraft:
     ) -> None:
         result = await fr_module.create_finished_receipt_draft(
             {"product_name": "达托霉素", "product_batch_no": "DA2609001"},
-            _ctx={"open_id": "ou_1", "chat_id": "oc_1"},
+            _ctx={"open_id": "ou_test_missing_fr", "chat_id": "oc_1"},
         )
         assert result["status"] == "incomplete"
         assert set(result["missing"]) == {"入库数量", "单位"}
-        # 未落草稿
+        # 未落草稿（按本测试 open_id 圈定——共享库存在真机/验收产生的真实草稿）
         rows = (
             await agent_db.execute(
                 select(WarehouseAgentDraft).where(
-                    WarehouseAgentDraft.scene == FINISHED_RECEIPT_SCENE
+                    WarehouseAgentDraft.scene == FINISHED_RECEIPT_SCENE,
+                    WarehouseAgentDraft.created_by_open_id == "ou_test_missing_fr",
                 )
             )
         ).scalars().all()
