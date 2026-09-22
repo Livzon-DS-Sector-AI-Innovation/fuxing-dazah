@@ -661,7 +661,8 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
     ),
     # V3.0 §4.6 成品入库（识别+对话双入口）：必收四件套；入库车间为 lookup
     # 只读（车间收集后写备注前缀）、件数/库存数量公式列拒写、包装规格多选
-    # 无写入先例——均不在可写集；质量状态提交侧恒写「待检」（submit 组装）。
+    # 无写入先例——均不在可写集；质量状态提交侧默认「待检」、退货入库联动
+    # 「退货」（2026-09-22 P0 补齐，submit 组装）。
     FINISHED_RECEIPT_SCENE: SceneConfig(
         name_cn="成品入库登记",
         required_fields=(
@@ -677,6 +678,7 @@ SCENE_CONFIG: dict[str, SceneConfig] = {
             "品规",
             "入库数量",
             "单位",
+            "入库类型",
             "库区位置",
             "质量状态",
             "生产日期",

@@ -179,6 +179,10 @@ def render_supplier_mismatch_alert_card(payload: dict[str, Any]) -> dict[str, An
     ]
     if master:
         lines.append(f"**主数据供应商** {master}")
+    # 名录授权物料（2026-09-22 P0 补列；查询失败/未配置时 payload 无此键）
+    directory_materials = _payload_text(payload, "directory_materials")
+    if directory_materials:
+        lines.append(f"**名录授权物料** {directory_materials}")
     lines.append("识别供应商与主数据记录不一致，请人工核实（AI 辅助核对，系统不做判定）。")
     if _payload_text(payload, "record_url"):
         lines.append(

@@ -1,11 +1,18 @@
-"""推送场景确认门接入（V3.0 分期A Ticket 07，验收②）。
+"""推送场景确认门接入（V3.0 分期A Ticket 07，验收②；P0 扩双门）。
 
-stale_lists（超6月/不合格清单）推送发送成功后，自动为「待跟进不合格物料」
-（处理日期为空）创建整单确认单并随清单卡送达（质询 Round 1 定案）：
-- 确认 → 逐条回写 unqualified_stock.处理日期=今天（毫秒时间戳，Base 日期
-  字段写入契约）；处理方式留 Base 人工填（1C 二值定案）；
+stale_lists（超6月/不合格清单）推送发送成功后，自动创建两张整单确认卡随
+清单送达（发送失败不挂卡）：
+- **不合格物料处理门**（分期A）：待跟进（处理日期为空）不合格物料整单确认
+  → 逐条回写 unqualified_stock.处理日期=今天（毫秒时间戳，Base 日期字段
+  写入契约）；处理方式留 Base 人工填（1C 二值定案）；
+- **超6月呆滞批次处理门**（2026-09-22 P0 补齐，总文档原辅料⑤「超6月清单
+  推送并跟进处理方案审批」）：呆料判断=是 且 呆滞处理确认日期为空的入库
+  总账批次（与 agent/tools/query.py dead 口径同构）→ 整单确认 → 逐条回写
+  material_receipt.呆滞处理确认日期=今天；处理方式留 Base 人工填。
+
 - 目标 = 推送任务首个目标（整单确认语义：一次业务事件一张确认单）；
-- 无待跟进条目不创建；清单卡发送失败不挂确认卡。
+- 单门失败不影响另一门（各自 try 包裹，engine 亦有兜底）；
+- 无待跟进条目不创建。
 
 注册方式仿 draft_flow SCENE_CONFIG：engine 模块尾部 import 本模块即注册
 post-send 钩子（见 engine.SCENE_POST_SEND_HOOKS）。
@@ -34,14 +41,23 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 # 不合格清单回写业务类型（确认单 business_type）
 UNQUALIFIED_DISPOSITION = "unqualified_disposition"
+# 超6月呆滞批次回写业务类型（2026-09-22 P0；非 QC 链路，受总开关管辖）
+DEAD_DISPOSITION = "dead_stock_disposition"
 
 # 拉取字段（确认卡摘要 + 待跟进判定用）
 _UNQUALIFIED_FIELDS = ["物料名称", "不合格项目", "处理方式", "处理日期"]
+_DEAD_FIELDS = ["物料名称", "物料批号", "入库数量", "呆滞处理确认日期"]
 
+# 呆滞批次口径（服务端过滤；与 tools/query.py DEAD_RECEIPT_FILTER 同构）
+_DEAD_RECEIPT_FILTER: dict[str, Any] = {
+    "conjunction": "and",
+    "conditions": [{"field_name": "呆料判断", "operator": "is", "value": ["是"]}],
+}
 
 # 回写映射：处理日期=确认执行当天（@today 哨兵由 confirm_request 在确认时
 # 解析为当天毫秒时间戳，Base date 字段写入契约）
 UNQUALIFIED_WRITEBACK = {"处理日期": "@today"}
+DEAD_WRITEBACK = {"呆滞处理确认日期": "@today"}
 
 
 def _display(value: Any) -> str:
@@ -60,27 +76,28 @@ async def fetch_unqualified_records(adapter: Any) -> list[dict[str, Any]]:
     return await fetch_all_records(adapter, "unqualified_stock", _UNQUALIFIED_FIELDS)
 
 
-async def stale_lists_confirm_hook(
+async def fetch_dead_records(adapter: Any) -> list[dict[str, Any]]:
+    """分页拉取呆滞批次清单（入库总账「呆料判断=是」，呆料汇总表无处理列）。
+
+    P0 语义：呆料判断=是 且 呆滞处理确认日期为空 = 待跟进（过滤在钩子侧做，
+    与不合格门「处理日期为空」同模式）。
+    """
+    from app.modules.warehouse.finished_data import fetch_all_records
+
+    return await fetch_all_records(
+        adapter, "material_receipt", _DEAD_FIELDS, filter_json=_DEAD_RECEIPT_FILTER
+    )
+
+
+async def _unqualified_gate(
     db: AsyncSession,
     view: PushTaskView,
-    now: datetime,
     *,
     dry_run: bool | None = None,
 ) -> WarehouseConfirmRequest | None:
-    """stale_lists 推送后置钩子：为待跟进不合格物料创建并投递整单确认卡。
-
-    钩子失败不影响清单推送本身（engine 已捕获）；返回创建的确认单
-    （未创建返回 None）。
-    """
+    """不合格物料处理门（分期A 原逻辑抽函数，语义不变）。"""
     from app.modules.warehouse import confirm_request as cr
-    from app.modules.warehouse.base_mirror import bitable_writeback_enabled
 
-    if not view.targets:
-        return None
-    # 回写总开关（默认关）：确认门的存在意义是回写 Base，停用期间不建单
-    if not bitable_writeback_enabled():
-        logger.info("清单确认门跳过：多维表格回写开关关闭")
-        return None
     records = await fetch_unqualified_records(WarehouseBitableAdapter())
     # 待跟进 = 处理日期为空（None/空串/空数组/空类型包装，规范解析后为空）
     pending = [
@@ -133,6 +150,109 @@ async def stale_lists_confirm_hook(
             request.request_no, len(pending),
         )
     return request
+
+
+async def _dead_gate(
+    db: AsyncSession,
+    view: PushTaskView,
+    *,
+    dry_run: bool | None = None,
+) -> WarehouseConfirmRequest | None:
+    """超6月呆滞批次处理门（2026-09-22 P0 补齐，回写入库总账新列）。"""
+    from app.modules.warehouse import confirm_request as cr
+
+    records = await fetch_dead_records(WarehouseBitableAdapter())
+    pending = [
+        r
+        for r in records
+        if not cell_text((r.get("fields") or {}).get("呆滞处理确认日期"))
+    ]
+    if not pending:
+        logger.info("呆滞确认门跳过：无待跟进（呆滞处理确认日期为空）批次")
+        return None
+
+    def _qty(r: dict[str, Any]) -> str:
+        text = _display((r.get("fields") or {}).get("入库数量"))
+        return text
+
+    record_ids = [str(r["record_id"]) for r in pending]
+    top_lines = "\n".join(
+        f"{i}. {_display((r.get('fields') or {}).get('物料名称'))}"
+        f" 批 {_display((r.get('fields') or {}).get('物料批号'))}"
+        f"（{_qty(r)}）"
+        for i, r in enumerate(pending[:5], start=1)
+    )
+    request = await cr.create_request(
+        db,
+        business_type=DEAD_DISPOSITION,
+        title="超6月呆滞批次处理确认",
+        summary=(
+            f"今日清单中有 **{len(pending)}** 条超6月呆滞批次待跟进处理"
+            f"（呆滞处理确认日期为空）：\n{top_lines}"
+            f"\n\n点击「确认」表示以上批次的处理方案已跟进，将回写台账"
+            f"「呆滞处理确认日期=今天」；处理方式请在多维表格中人工填写。"
+        ),
+        ref_table="material_receipt",
+        ref_record_ids=record_ids,
+        target=view.targets[0],
+        payload={
+            "task": view.task_name,
+            "total": len(pending),
+            "items": [
+                {
+                    "物料名称": _display((r.get("fields") or {}).get("物料名称")),
+                    "物料批号": _display((r.get("fields") or {}).get("物料批号")),
+                }
+                for r in pending[:10]
+            ],
+        },
+        writeback=dict(DEAD_WRITEBACK),
+    )
+    sent = await cr.send_request_card(request, dry_run=dry_run)
+    if not sent:
+        logger.error(
+            "呆滞确认卡发送失败: request_no=%s target=%s",
+            request.request_no, request.target,
+        )
+    else:
+        logger.info(
+            "呆滞确认卡已送达: request_no=%s 待跟进=%d 条",
+            request.request_no, len(pending),
+        )
+    return request
+
+
+async def stale_lists_confirm_hook(
+    db: AsyncSession,
+    view: PushTaskView,
+    now: datetime,
+    *,
+    dry_run: bool | None = None,
+) -> list[WarehouseConfirmRequest]:
+    """stale_lists 推送后置钩子：不合格门 + 超6月呆滞门（P0 双门）。
+
+    钩子失败不影响清单推送本身（engine 已捕获）；单门失败不阻断另一门。
+    返回创建的确认单列表（无创建返回空列表）。
+    """
+    from app.modules.warehouse.base_mirror import bitable_writeback_enabled
+
+    if not view.targets:
+        return []
+    # 回写总开关（默认关）：确认门的存在意义是回写 Base，停用期间不建单
+    if not bitable_writeback_enabled():
+        logger.info("清单确认门跳过：多维表格回写开关关闭")
+        return []
+
+    created: list[WarehouseConfirmRequest] = []
+    for gate, name in ((_unqualified_gate, "不合格门"), (_dead_gate, "呆滞门")):
+        try:
+            request = await gate(db, view, dry_run=dry_run)
+        except Exception:  # noqa: BLE001 — 单门失败不阻断另一门
+            logger.exception("%s创建失败（清单推送不受影响）", name)
+            continue
+        if request is not None:
+            created.append(request)
+    return created
 
 
 register_post_send_hook("stale_lists", stale_lists_confirm_hook)
@@ -236,8 +356,10 @@ register_post_send_hook(
 
 __all__ = [
     "UNQUALIFIED_DISPOSITION",
+    "DEAD_DISPOSITION",
     "FINISHED_DISPOSITION_BIZ",
     "fetch_unqualified_records",
+    "fetch_dead_records",
     "stale_lists_confirm_hook",
     "finished_disposition_confirm_hook",
 ]

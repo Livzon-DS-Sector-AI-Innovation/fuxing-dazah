@@ -127,6 +127,9 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '全检提醒': FieldMeta(type=20),
         '请验单': FieldMeta(type=17),
         '呆料产生库存': FieldMeta(type=19),
+        # 2026-09-22 P0 API 建列（create_p0_columns.py）：呆滞处理方案确认门
+        # 回写列（stale_lists 双门；与 unqualified_stock.处理日期同语义）
+        '呆滞处理确认日期': FieldMeta(type=5),
         '是否加急检测': FieldMeta(type=3, options=('🔥🔥加急检测🔥🔥',)),
         '上一状态': FieldMeta(type=3, options=('待检', '合格', '🔴不合格', '不合格',)),
         '不合格判断': FieldMeta(type=3, options=('是',)),
@@ -442,6 +445,10 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '准入日期': FieldMeta(type=5),
         '申请日期': FieldMeta(type=5),
         '备注': FieldMeta(type=1),
+        # 2026-09-22 P0 API 建列（create_p0_columns.py）：授权物料主数据
+        # （多行文本、顿号分隔；总文档原辅料④「物料编码、物料信息」）
+        '授权物料编码': FieldMeta(type=1),
+        '授权物料名称': FieldMeta(type=1),
     },
 
     # ── V3.0 分期D 成品侧（§4.5/§4.8，只读聚合 + 处理确认回写；字段来自
@@ -474,6 +481,11 @@ _TABLE_FIELDS: dict[str, dict[str, FieldMeta]] = {
         '各品种库存表': FieldMeta(type=19),
         '库区位置': FieldMeta(type=1),
         '质量状态': FieldMeta(type=3, options=('合格', '待检', '待处理', '退货')),
+        # 2026-09-22 P0 API 建列（create_p0_columns.py）：返工/退货入库单
+        # 识别与登记的类型列（总文档成品①「含返工、退货等」）
+        '入库类型': FieldMeta(
+            type=3, options=('正常入库', '返工入库', '退货入库')
+        ),
         '备注': FieldMeta(type=1),
         '库存数量': FieldMeta(type=20),
         '退货原因': FieldMeta(type=1),

@@ -632,7 +632,18 @@ class TestWeeklyMonthlyGenerators:
         assert "呆滞批次** 3 条" in joined
         assert "不合格物料** 2 条" in joined
 
-    async def test_monthly_card_reuses_monthly_report(self, db_session: AsyncSession) -> None:
+    async def test_monthly_card_reuses_monthly_report(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 成品段（P0）走 Base 直读，测试假件化
+        from app.modules.warehouse.finished_data import FinishedMonthIO
+
+        async def _fake_io(adapter: Any, *, year: int, month: int) -> FinishedMonthIO:
+            return FinishedMonthIO(
+                inbound_count=2, inbound_qty=13.5, outbound_count=4, outbound_qty=225
+            )
+
+        monkeypatch.setattr(generators, "fetch_month_finished_io", _fake_io)
         await _seed_movement(
             db_session, direction="inbound", quantity=30,
             occurred_at=datetime(2019, 12, 15, 9, 0, tzinfo=CN_TZ), suffix="M1",
@@ -644,6 +655,9 @@ class TestWeeklyMonthlyGenerators:
         joined = "".join(str(e) for e in card["body"]["elements"])
         assert "入库** 1 笔 / 30" in joined
         assert "出库** 0 笔 / 0" in joined
+        # 成品段（P0-4）：月度成品出入库合计
+        assert "成品** 入库 2 笔 / 13.5" in joined
+        assert "出库 4 笔 / 225" in joined
 
 
 class TestStaleListsGenerator:

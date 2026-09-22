@@ -50,6 +50,8 @@ PENDING_STATUS = "待准入"
 SUPPLIER_FIELD_LABELS: dict[str, str] = {
     "supplier_name": "供应商名称",
     "supplier": "供应商",
+    "material_codes": "授权物料编码",
+    "material_names": "授权物料名称",
     "remark": "备注",
 }
 
@@ -114,6 +116,47 @@ async def _pending_admission_exists(
 # ── 工具壳（注册表入口；_ctx 由 execute_tool 注入）──
 
 
+async def fetch_directory_materials(supplier_name: str) -> str | None:
+    """名录表按供应商名称查授权物料（2026-09-22 P0 补列；提示用，不判定）。
+
+    返回「授权物料名称；授权物料编码」短文本（拼进不一致提醒卡，AI 辅助
+    核对口径）；名录未配置/无行/异常一律返回 None，不影响调用方链路。
+    """
+    if not supplier_name:
+        return None
+    from app.modules.warehouse.bitable_cells import cell_text
+
+    try:
+        page = await get_adapter().search_records_page(
+            SUPPLIER_DIRECTORY_TABLE,
+            filter_json={
+                "conjunction": "and",
+                "conditions": [
+                    {
+                        "field_name": "供应商名称",
+                        "operator": "is",
+                        "value": [supplier_name],
+                    }
+                ],
+            },
+            field_names=["授权物料编码", "授权物料名称"],
+            limit=1,
+        )
+    except Exception:  # noqa: BLE001 — 查询失败静默降级（提示性信息）
+        logger.info("名录授权物料查询失败: supplier=%r", supplier_name, exc_info=True)
+        return None
+    records = page.get("records") or []
+    if not records:
+        return None
+    fields = records[0].get("fields") or {}
+    names = cell_text(fields.get("授权物料名称"))
+    codes = cell_text(fields.get("授权物料编码"))
+    parts = [p for p in (names, codes) if p]
+    if not parts:
+        return None
+    return "；".join(parts)
+
+
 async def create_supplier_admission(
     fields: dict[str, Any], _ctx: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -148,6 +191,8 @@ async def create_supplier_admission(
             "hint": "请补充：供应商名称（向用户追问后再调用本工具，不要猜测）",
         }
     remark = str(mapped.get("remark") or "").strip()
+    material_codes = str(mapped.get("material_codes") or "").strip()
+    material_names = str(mapped.get("material_names") or "").strip()
 
     row_fields: dict[str, Any] = {
         "供应商名称": name,
@@ -156,6 +201,11 @@ async def create_supplier_admission(
     }
     if remark:
         row_fields["备注"] = remark
+    # 授权物料主数据（2026-09-22 P0 补列；多行文本，顿号/逗号分隔原样写）
+    if material_codes:
+        row_fields["授权物料编码"] = material_codes
+    if material_names:
+        row_fields["授权物料名称"] = material_names
 
     adapter = get_adapter()
     try:
@@ -201,6 +251,7 @@ async def create_supplier_admission(
                         title="供应商准入确认",
                         summary=(
                             f"**供应商** {name}\n"
+                            f"**授权物料** {material_names or material_codes or '-'}\n"
                             f"**申请备注** {remark or '-'}\n\n"
                             "采购已申请该供应商准入，名录表已生成待准入记录。"
                             "点击「确认」将回写台账：审计状态=准入、准入日期=今天；"
@@ -281,7 +332,8 @@ SUPPLIER_TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "type": "object",
                         "description": (
                             "字段名 → 值。供应商名称 为必收（逐字使用用户"
-                            "提供的名称）；备注 选填"
+                            "提供的名称）；授权物料编码/授权物料名称（多个用"
+                            "顿号分隔）、备注 选填"
                         ),
                     },
                 },

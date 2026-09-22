@@ -1227,6 +1227,14 @@ async def _fire_supplier_mismatch(
     payload = _mismatch_payload(draft, fields, record_id, meta)
     if payload is None:
         return False
+    # 名录授权物料（2026-09-22 P0 补列）：提示用不判定，查询失败静默省略
+    from app.modules.warehouse.agent.tools.supplier import fetch_directory_materials
+
+    directory_materials = await fetch_directory_materials(
+        str(payload.get("supplier") or "")
+    )
+    if directory_materials:
+        payload["directory_materials"] = directory_materials
     from app.modules.warehouse.push_center.events import fire_push_event
 
     try:
@@ -1241,10 +1249,11 @@ async def _fire_supplier_mismatch(
 # scene=finished_receipt 确认回调真身（draft_flow._finished_receipt_submit_callback
 # 薄包装）：aligned（对话收集/修改，识别值经 value_of 回落 recognized）→ 组装
 # finished_receipt 写入字段 → validate（运行时选项集注入）→ create_record →
-# 读回核对（产品/批号/数量/单位）→ submitted + 回执。口径（grilling 拍板）：
-# 质量状态恒写「待检」；入库日期识别值缺失默认今天（毫秒时间戳）；生产日期/
-# 有效期为该表文本列（type 1）原样写；「入库车间」lookup 只读——车间写备注
-# 前缀「入库车间：X」；件数/库存数量/包装规格不写。
+# 读回核对（产品/批号/数量/单位）→ submitted + 回执。口径（grilling 拍板 +
+# 2026-09-22 P0 补齐）：质量状态默认「待检」、退货入库联动「退货」；入库日期
+# 识别值缺失默认今天（毫秒时间戳）；生产日期/有效期为该表文本列（type 1）原样
+# 写；「入库车间」lookup 只读——车间写备注前缀「入库车间：X」；件数/库存数量/
+# 包装规格不写。
 
 FINISHED_RECEIPT_TABLE = "finished_receipt"
 
@@ -1254,9 +1263,15 @@ FINISHED_RECEIPT_CHECK_FIELDS: tuple[str, ...] = ("产品名称", "产品批号"
 # 质量状态默认（成品入库必经 QC；须在选项集内——快照含 待检）
 FINISHED_RECEIPT_QUALITY_DEFAULT = "待检"
 
+# 入库类型联动（2026-09-22 P0 补齐，总文档成品①「含返工、退货等」）：
+# 退货入库 → 质量状态写「退货」（快照选项含）；正常/返工入库保持默认待检
+FINISHED_RECEIPT_TYPE_RETURNED = "退货入库"
+FINISHED_RECEIPT_QUALITY_RETURNED = "退货"
+
 # canonical 键 → (Base 字段名, 是否单选)；quantity 数字化与入库日期（毫秒
 # 时间戳、默认今天）单独分支；workshop 写备注前缀单独处理；生产日期/有效期
-# 该表为文本列（type 1）原样写（不复用原辅料毫秒时间戳转换）
+# 该表为文本列（type 1）原样写（不复用原辅料毫秒时间戳转换）；
+# receipt_type（入库类型，2026-09-22 P0 补齐）驱动质量状态联动（见下）
 _FINISHED_RECEIPT_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
     ("product_name", "产品名称", True),
     ("product_batch_no", "产品批号", False),
@@ -1266,6 +1281,7 @@ _FINISHED_RECEIPT_FIELD_MAP: tuple[tuple[str, str, bool], ...] = (
     ("storage_location", "库区位置", False),
     ("produced_at", "生产日期", False),
     ("expiry", "有效期", False),
+    ("receipt_type", "入库类型", True),
 )
 
 
@@ -1342,8 +1358,14 @@ def build_finished_receipt_fields(
             degraded.append("入库日期")
     fields["入库日期"] = receipt_ms if receipt_ms is not None else _today_ms(today)
 
-    # 质量状态恒写「待检」（成品入库必经 QC；grilling 拍板 2）
-    fields["质量状态"] = FINISHED_RECEIPT_QUALITY_DEFAULT
+    # 质量状态：默认「待检」（成品入库必经 QC；grilling 拍板 2）；退货入库
+    # 联动「退货」（P0 补齐——退货台账语义；返工入库仍待检，检验口径不变）
+    receipt_type = str(fields.get("入库类型") or "").strip()
+    fields["质量状态"] = (
+        FINISHED_RECEIPT_QUALITY_RETURNED
+        if receipt_type == FINISHED_RECEIPT_TYPE_RETURNED
+        else FINISHED_RECEIPT_QUALITY_DEFAULT
+    )
 
     # 备注 = 车间前缀 + remark 拼接（「入库车间」列 lookup 只读，grilling 拍板 1）
     workshop = str(value_of("workshop") or "").strip()
@@ -1429,44 +1451,44 @@ def normalize_finished_receipt_rows(
                    "produced_at", "expiry", "remark"):
             rows[0][key] = str(value).strip()
 
-    # 文档级字段（车间/库区位置/入库日期）应用到每一行：
+    # 文档级字段（车间/库区位置/入库日期/入库类型）应用到每一行：
     # aligned 覆盖优先，回落识别顶层标量（{value, confidence} 形态）
-    for key in ("workshop", "storage_location", "receipt_date"):
-        value: Any = aligned.get(key)
-        if value is None or not str(value).strip():
+    for key in ("workshop", "storage_location", "receipt_date", "receipt_type"):
+        doc_value: Any = aligned.get(key)
+        if doc_value is None or not str(doc_value).strip():
             item = recognized.get(key)
             if isinstance(item, dict):
                 inner = item.get("value")
                 if inner is not None and str(inner).strip():
-                    value = inner
-        if value is not None and str(value).strip():
+                    doc_value = inner
+        if doc_value is not None and str(doc_value).strip():
             for row in rows:
-                row.setdefault(key, str(value).strip())
+                row.setdefault(key, str(doc_value).strip())
 
     # 归组求和：同批号一条（组内其余字段取首个非空，remark 合并注明）
     groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     order: list[tuple[str, str, str]] = []
     for row in rows:
-        key = (
+        group_key = (
             row.get("product_name", ""),
             row.get("product_batch_no", ""),
             row.get("unit", ""),
         )
-        if key not in groups:
-            groups[key] = dict(row)
-            groups[key]["_members"] = [row]
-            order.append(key)
+        if group_key not in groups:
+            groups[group_key] = dict(row)
+            groups[group_key]["_members"] = [row]
+            order.append(group_key)
         else:
-            groups[key]["_members"].append(row)
+            groups[group_key]["_members"].append(row)
             for src_key, value in row.items():
                 if src_key in ("quantity", "_members"):
                     continue
-                if not groups[key].get(src_key):
-                    groups[key][src_key] = value
+                if not groups[group_key].get(src_key):
+                    groups[group_key][src_key] = value
 
     result: list[dict[str, Any]] = []
-    for key in order:
-        group = groups.pop(key)
+    for group_key in order:
+        group = groups.pop(group_key)
         members: list[dict[str, Any]] = group.pop("_members")
         total: int | float | None = None
         for member in members:
@@ -1478,9 +1500,9 @@ def normalize_finished_receipt_rows(
                 total = int(total)  # 整值去 .0（12.0 → 12，卡片/台账展示干净）
             group["quantity"] = total
         if len(members) > 1:
-            remarks = [m.get("remark") for m in members if m.get("remark")]
-            remarks.append(f"共{len(members)}行合并")
-            group["remark"] = "；".join(remarks)
+            remark_texts = [str(m.get("remark")) for m in members if m.get("remark")]
+            remark_texts.append(f"共{len(members)}行合并")
+            group["remark"] = "；".join(remark_texts)
         result.append(group)
 
     # quantity 覆盖语义 = **第一组总量**（识别 rows 存在时用户改的是总数；
@@ -1538,7 +1560,13 @@ def build_finished_receipt_row_fields(
         if receipt_ms is None:
             degraded.append("入库日期")
     fields["入库日期"] = receipt_ms if receipt_ms is not None else _today_ms(today)
-    fields["质量状态"] = FINISHED_RECEIPT_QUALITY_DEFAULT
+    # 质量状态联动与单行路径同口径（退货入库 → 退货，其余默认待检）
+    receipt_type = str(fields.get("入库类型") or "").strip()
+    fields["质量状态"] = (
+        FINISHED_RECEIPT_QUALITY_RETURNED
+        if receipt_type == FINISHED_RECEIPT_TYPE_RETURNED
+        else FINISHED_RECEIPT_QUALITY_DEFAULT
+    )
 
     workshop = str(value_of("workshop") or "").strip()
     remark = str(value_of("remark") or "").strip()

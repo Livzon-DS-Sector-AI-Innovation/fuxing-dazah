@@ -24,6 +24,7 @@ from app.modules.warehouse.finished_data import (
     classify_invoice_state,
     fetch_all_records,
     fetch_day_movements,
+    fetch_month_finished_io,
     fetch_quality_distribution,
     month_bounds,
     summarize_invoice_states,
@@ -283,6 +284,62 @@ class TestFetchQualityDistribution:
         assert quality.get("待处理") == 2
         assert quality.get("待检") == 1
         assert quality.get("退货") == 0
+
+
+class TestFetchMonthFinishedIo:
+    async def test_month_window_all_purposes(self) -> None:
+        """月度合计：含头不含尾窗口 + 全用途口径（月报是出入库信息）。"""
+        adapter = FakeFinishedAdapter(
+            {
+                "finished_receipt": [
+                    _receipt_row("in1", day=date(2026, 9, 3), qty=5.0),
+                    _receipt_row("in2", day=date(2026, 9, 30), qty=7.5),
+                    _receipt_row("prev", day=date(2026, 8, 31), qty=99.0),  # 上月
+                    _receipt_row("next", day=date(2026, 10, 1), qty=50.0),  # 下月
+                    _receipt_row("nodate", day=None, qty=1.0),  # 无日期跳过
+                ],
+                "finished_outbound": [
+                    {
+                        "record_id": "out1",
+                        "fields": {
+                            "出库日期": "2026-09-10",
+                            "产品名称": "替考拉宁",
+                            "出库量": 3.0,
+                            "用途": "销售",
+                        },
+                    },
+                    {
+                        "record_id": "out2",
+                        "fields": {
+                            "出库日期": "2026-09-21",
+                            "产品名称": "替考拉宁",
+                            "出库量": "2.5kg",
+                            "用途": "车间领用",  # 全用途：非销售也计
+                        },
+                    },
+                    {
+                        "record_id": "out3",
+                        "fields": {
+                            "出库日期": "2026-10-01",
+                            "产品名称": "替考拉宁",
+                            "出库量": 8.0,
+                            "用途": "销售",
+                        },
+                    },
+                ],
+            }
+        )
+        io = await fetch_month_finished_io(adapter, year=2026, month=9)
+        assert io.inbound_count == 2
+        assert io.inbound_qty == 12.5
+        assert io.outbound_count == 2
+        assert io.outbound_qty == 5.5
+
+    async def test_empty_month(self) -> None:
+        adapter = FakeFinishedAdapter({})
+        io = await fetch_month_finished_io(adapter, year=2026, month=9)
+        assert io.inbound_count == 0 and io.inbound_qty == 0.0
+        assert io.outbound_count == 0 and io.outbound_qty == 0.0
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -109,6 +109,9 @@ def _fr_fields_for_test() -> dict[str, FieldMeta]:
         ),
         "入库数量": FieldMeta(type=2),
         "单位": FieldMeta(type=FIELD_TYPE_SELECT, options=("kg", "十亿", "g")),
+        "入库类型": FieldMeta(
+            type=FIELD_TYPE_SELECT, options=("正常入库", "返工入库", "退货入库")
+        ),
         "库区位置": FieldMeta(type=1),
         "质量状态": FieldMeta(
             type=FIELD_TYPE_SELECT, options=("合格", "待检", "待处理", "退货")
@@ -348,6 +351,124 @@ class TestBuildFinishedReceiptFields:
         assert set(degraded) == {"产品名称", "单位"}
         assert "产品名称" not in fields and "单位" not in fields
         assert fields["质量状态"] == "待检"  # 恒写不受降级影响
+
+
+class TestReceiptTypeLinkage:
+    """入库类型（P0-1）：写入 + 质量状态联动（退货入库→退货，其余待检）。"""
+
+    def test_returned_type_links_quality(
+        self, fr_unit_env: dict[str, FieldMeta]
+    ) -> None:
+        draft = _fr_draft_row(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "DA2609001",
+                "quantity": "100",
+                "unit": "kg",
+                "receipt_type": "退货入库",
+            }
+        )
+        fields, degraded = build_finished_receipt_fields(
+            draft, table_fields=fr_unit_env, today=datetime(2026, 9, 21)
+        )
+        assert degraded == []
+        assert fields["入库类型"] == "退货入库"
+        assert fields["质量状态"] == "退货"
+
+    def test_rework_type_keeps_default_quality(
+        self, fr_unit_env: dict[str, FieldMeta]
+    ) -> None:
+        draft = _fr_draft_row(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "DA2609001",
+                "quantity": "100",
+                "unit": "kg",
+                "receipt_type": "返工入库",
+            }
+        )
+        fields, _ = build_finished_receipt_fields(
+            draft, table_fields=fr_unit_env, today=datetime(2026, 9, 21)
+        )
+        assert fields["入库类型"] == "返工入库"
+        assert fields["质量状态"] == "待检"  # 返工仍走检验口径
+
+    def test_recognized_value_fallback(
+        self, fr_unit_env: dict[str, FieldMeta]
+    ) -> None:
+        """识别路径：receipt_type 落 recognized（带置信度），无 aligned 覆盖。"""
+        draft = _fr_draft_row(
+            aligned={
+                "product_name": "达托霉素",
+                "product_batch_no": "DA2609001",
+                "quantity": "100",
+                "unit": "kg",
+            },
+            recognized={
+                "product_name": {"value": "达托霉素", "confidence": 0.9},
+                "product_batch_no": {"value": "DA2609001", "confidence": 0.9},
+                "quantity": {"value": "100", "confidence": 0.9},
+                "unit": {"value": "kg", "confidence": 0.9},
+                "receipt_type": {"value": "退货入库", "confidence": 0.85},
+            },
+        )
+        fields, _ = build_finished_receipt_fields(
+            draft, table_fields=fr_unit_env, today=datetime(2026, 9, 21)
+        )
+        assert fields["入库类型"] == "退货入库"
+        assert fields["质量状态"] == "退货"
+
+    def test_bad_type_degrades_quality_stays_default(
+        self, fr_unit_env: dict[str, FieldMeta]
+    ) -> None:
+        draft = _fr_draft_row(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "B",
+                "quantity": "1",
+                "unit": "kg",
+                "receipt_type": "不是类型",
+            }
+        )
+        fields, degraded = build_finished_receipt_fields(
+            draft, table_fields=fr_unit_env, today=datetime(2026, 9, 21)
+        )
+        assert "入库类型" in degraded
+        assert "入库类型" not in fields
+        assert fields["质量状态"] == "待检"  # 未命中退货入库 → 默认
+
+    def test_confirm_card_shows_type_and_linked_quality(
+        self, fr_unit_env: dict[str, FieldMeta]
+    ) -> None:
+        """确认卡：入库类型字段行展示 + 质量状态行联动退货。"""
+        from app.modules.warehouse.agent import cards as cards_module
+
+        draft = _fr_draft_row(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "DA2609001",
+                "quantity": "100",
+                "unit": "kg",
+                "receipt_type": "退货入库",
+            },
+            status="aligned",
+        )
+        card = cards_module._render_finished_receipt_confirm_card(draft)
+        content = _card_content(card)
+        assert "入库类型" in content
+        assert "质量状态**：退货" in content
+
+        draft_default = _fr_draft_row(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "DA2609002",
+                "quantity": "1",
+                "unit": "kg",
+            },
+            status="aligned",
+        )
+        card_default = cards_module._render_finished_receipt_confirm_card(draft_default)
+        assert "质量状态**：待检" in _card_content(card_default)
 
 
 # ═══════════════════════════════════════════════════════════════

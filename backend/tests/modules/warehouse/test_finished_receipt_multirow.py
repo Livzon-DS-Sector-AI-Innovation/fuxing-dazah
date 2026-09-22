@@ -40,6 +40,9 @@ def _fr_fields() -> dict[str, FieldMeta]:
         "品规": FieldMeta(type=FIELD_TYPE_SELECT, options=("DA低规",)),
         "入库数量": FieldMeta(type=2),
         "单位": FieldMeta(type=FIELD_TYPE_SELECT, options=("kg", "十亿")),
+        "入库类型": FieldMeta(
+            type=FIELD_TYPE_SELECT, options=("正常入库", "返工入库", "退货入库")
+        ),
         "库区位置": FieldMeta(type=1),
         "质量状态": FieldMeta(
             type=FIELD_TYPE_SELECT, options=("合格", "待检", "待处理", "退货")
@@ -201,6 +204,23 @@ class TestNormalizeRows:
         assert len(rows) == 1
         assert rows[0]["workshop"] == "提炼工程一部"
 
+    def test_receipt_type_applies_to_every_row(self) -> None:
+        """入库类型为文档级字段（P0-1）：应用到每一行。"""
+        draft = _draft(
+            {
+                "receipt_type": {"value": "退货入库", "confidence": 0.85},
+                "rows": [
+                    {"product_name": "达托霉素", "product_batch_no": "B1",
+                     "quantity": "1", "unit": "kg"},
+                    {"product_name": "达托霉素", "product_batch_no": "B2",
+                     "quantity": "2", "unit": "kg"},
+                ],
+            }
+        )
+        rows = normalize_finished_receipt_rows(draft)
+        for row in rows:
+            assert row["receipt_type"] == "退货入库"
+
 
 class TestRowFieldsBuilder:
     def test_row_defaults_and_mapping(self) -> None:
@@ -237,6 +257,23 @@ class TestRowFieldsBuilder:
             today=NOW,
         )
         assert fields["备注"] == "共2行合并"
+
+    def test_receipt_type_links_quality_per_row(self) -> None:
+        """行级组装：入库类型写入 + 质量状态联动（退货入库→退货）。"""
+        fields, degraded = build_finished_receipt_row_fields(
+            {
+                "product_name": "达托霉素",
+                "product_batch_no": "B1",
+                "quantity": "1",
+                "unit": "kg",
+                "receipt_type": "退货入库",
+            },
+            table_fields=_fr_fields(),
+            today=NOW,
+        )
+        assert degraded == []
+        assert fields["入库类型"] == "退货入库"
+        assert fields["质量状态"] == "退货"
 
 
 class TestMultiRowSubmit:

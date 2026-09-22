@@ -914,7 +914,7 @@ class FakeSupplierAdapter:
 
 
 @pytest.fixture
-def supplier_unit_env(
+async def supplier_unit_env(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> dict[str, Any]:
     """supplier 工具环境：_db_session 注入 + 确认卡发送捕获。"""
@@ -929,6 +929,19 @@ def supplier_unit_env(
         yield db_session
 
     monkeypatch.setattr(supplier_module, "_db_session", _patched)
+
+    # 封闭性：清共享库中真机/验收留下的 supplier_admission 确认单
+    # （绝对计数断言用；事务内删除随回滚撤销）
+    from sqlalchemy import delete
+
+    from app.modules.warehouse.models import WarehouseConfirmRequest
+
+    await db_session.execute(
+        delete(WarehouseConfirmRequest).where(
+            WarehouseConfirmRequest.business_type == "supplier_admission"
+        )
+    )
+    await db_session.flush()
 
     sent: list[dict[str, str]] = []
 
@@ -1019,6 +1032,50 @@ class TestSupplierAdmissionTool:
         assert gate.status == "pending"
         # 确认卡已发送（dry-run 捕获）
         assert supplier_unit_env["sends"], "确认卡应已发送"
+
+    async def test_admission_with_material_fields(
+        self,
+        supplier_unit_env: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """授权物料主数据（P0-3）：写入名录行 + 确认卡摘要展示。"""
+        from sqlalchemy import select
+
+        from app.modules.warehouse.agent.tools import supplier
+        from app.modules.warehouse.models import WarehouseConfirmRequest
+
+        db: AsyncSession = supplier_unit_env["db"]
+        adapter = FakeSupplierAdapter()
+        monkeypatch.setattr(supplier, "get_adapter", lambda: adapter)
+        monkeypatch.setattr(
+            "app.modules.warehouse.qc_flow.qc_writeback_enabled", lambda: True
+        )
+
+        result = await supplier.create_supplier_admission(
+            {
+                "供应商名称": "测试供应商M",
+                "授权物料编码": "M001、M002",
+                "授权物料名称": "硫脲、鱼蛋白胨",
+            },
+            _ctx={"open_id": "ou_sm", "chat_id": "oc_sm"},
+        )
+        assert "error" not in result, result
+        table_key, fields = adapter.created[0]
+        assert table_key == "supplier_directory"
+        assert fields["授权物料编码"] == "M001、M002"
+        assert fields["授权物料名称"] == "硫脲、鱼蛋白胨"
+        gate = (
+            (
+                await db.execute(
+                    select(WarehouseConfirmRequest).where(
+                        WarehouseConfirmRequest.business_type == "supplier_admission"
+                    )
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert "授权物料" in gate.summary and "硫脲" in gate.summary
 
     async def test_switch_off_creates_row_without_gate(
         self,
@@ -1245,6 +1302,18 @@ def _supplier_mismatch_draft(
 
 
 class TestSupplierMismatchHook:
+    @staticmethod
+    def _no_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+        """名录授权物料查询默认假件为 None（零网络；P0 增强单独测）。"""
+
+        async def _none(supplier_name: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.agent.tools.supplier.fetch_directory_materials",
+            _none,
+        )
+
     async def test_fires_on_mismatch(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1253,6 +1322,7 @@ class TestSupplierMismatchHook:
         from app.modules.warehouse.push_center import events
         from app.modules.warehouse.push_center.engine import PushRunResult
 
+        self._no_directory(monkeypatch)
         captured: dict[str, Any] = {}
 
         async def _fake_fire(db: Any, scene: str, payload: dict, **kw: Any):
@@ -1274,6 +1344,41 @@ class TestSupplierMismatchHook:
         assert captured["payload"]["material_name"] == "硫酸"
         assert captured["payload"]["batch_no"] == "10307-251201"
         assert captured["payload"]["record_url"].endswith("record=recM1")
+        assert "directory_materials" not in captured["payload"]  # 查询 None → 省略
+
+    async def test_directory_materials_added_to_payload(
+        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """名录有授权物料（P0-3）→ 注入 payload，随提醒卡展示。"""
+        from app.modules.warehouse.agent.pipeline import submit as submit_module
+        from app.modules.warehouse.push_center import events
+        from app.modules.warehouse.push_center.engine import PushRunResult
+
+        captured: dict[str, Any] = {}
+
+        async def _fake_dm(supplier_name: str) -> str | None:
+            assert supplier_name == "可疑供方"
+            return "硫脲；鱼蛋白胨"
+
+        monkeypatch.setattr(
+            "app.modules.warehouse.agent.tools.supplier.fetch_directory_materials",
+            _fake_dm,
+        )
+
+        async def _fake_fire(db: Any, scene: str, payload: dict, **kw: Any):
+            captured["payload"] = payload
+            return [PushRunResult("supplier_mismatch_alert", scene, "executed", None, 1)]
+
+        monkeypatch.setattr(events, "fire_push_event", _fake_fire)
+        fired = await submit_module._fire_supplier_mismatch(
+            db_session,
+            _supplier_mismatch_draft(supplier_matched=False),
+            {"物料名称(API)": "硫酸"},
+            "recM2",
+            {"base_token": "bt", "table_id": "tbl1"},
+        )
+        assert fired is True
+        assert captured["payload"]["directory_materials"] == "硫脲；鱼蛋白胨"
 
     async def test_skips_when_matched_or_no_supplier(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -1281,6 +1386,8 @@ class TestSupplierMismatchHook:
         """一致 / 识别供应商为空 / 字段缺失 → 不触发。"""
         from app.modules.warehouse.agent.pipeline import submit as submit_module
         from app.modules.warehouse.push_center import events
+
+        self._no_directory(monkeypatch)
 
         async def _boom(*args: Any, **kwargs: Any) -> None:
             raise AssertionError("不应触发推送")
@@ -1315,6 +1422,8 @@ class TestSupplierMismatchHook:
         """推送通道异常吞掉返回 False（不影响登记）。"""
         from app.modules.warehouse.agent.pipeline import submit as submit_module
         from app.modules.warehouse.push_center import events
+
+        self._no_directory(monkeypatch)
 
         async def _boom(*args: Any, **kwargs: Any) -> None:
             raise RuntimeError("推送通道异常")
@@ -1369,3 +1478,29 @@ class TestSupplierMismatchRegistry:
         renderer = get_event_renderer("supplier_mismatch_alert")
         card = renderer({"supplier": "X"})
         assert card["header"]["title"]["content"]
+
+    def test_renderer_shows_directory_materials(self) -> None:
+        """授权物料行（P0-3）：payload 有则展示，无则不出现。"""
+        from app.modules.warehouse.push_center.events import get_event_renderer
+
+        renderer = get_event_renderer("supplier_mismatch_alert")
+        card = renderer(
+            {
+                "supplier": "可疑供方",
+                "directory_materials": "硫脲；鱼蛋白胨",
+            }
+        )
+        text = "\n".join(
+            element.get("content") or ""
+            for element in card.get("body", {}).get("elements", [])
+            if isinstance(element, dict)
+        )
+        assert "名录授权物料" in text and "硫脲" in text
+
+        plain = renderer({"supplier": "X"})
+        plain_text = "\n".join(
+            element.get("content") or ""
+            for element in plain.get("body", {}).get("elements", [])
+            if isinstance(element, dict)
+        )
+        assert "名录授权物料" not in plain_text

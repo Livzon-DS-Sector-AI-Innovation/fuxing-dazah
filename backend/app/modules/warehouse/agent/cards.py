@@ -813,9 +813,11 @@ FINISHED_RECEIPT_REQUIRED_FIELDS: tuple[tuple[str, str], ...] = (
     ("单位", "unit"),
 )
 
-# 成品入库选填字段（入库日期缺省提交日；车间写备注前缀——入库车间列只读）
+# 成品入库选填字段（入库日期缺省提交日；车间写备注前缀——入库车间列只读；
+# 入库类型 2026-09-22 P0 补齐——识别/对话收集，缺省正常入库）
 FINISHED_RECEIPT_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
     ("入库日期", "receipt_date"),
+    ("入库类型", "receipt_type"),
     ("品规", "spec"),
     ("生产日期", "produced_at"),
     ("有效期", "expiry"),
@@ -826,7 +828,7 @@ FINISHED_RECEIPT_OPTIONAL_FIELDS: tuple[tuple[str, str], ...] = (
 
 FINISHED_RECEIPT_MODIFY_HINT = (
     "💡 确认前请核对以上信息；要修改可直接回复消息（如「数量改成 100」）。"
-    "入库质量状态默认「待检」，QC 判定后在台账改判。"
+    "入库质量状态默认「待检」，退货入库联动「退货」，QC 判定后在台账改判。"
 )
 
 # 领料必收 4 字段（展示名, aligned 键；顺序即卡片展示顺序）
@@ -948,6 +950,24 @@ def _render_gmp_confirm_card(draft: Any) -> dict[str, Any]:
     )
 
 
+def _finished_receipt_quality_line(aligned: dict[str, Any], recognized: dict[str, Any], *, per_row: bool) -> str:
+    """成品入库质量状态静态行（退货入库联动「退货」，其余默认待检）。"""
+    value: Any = aligned.get("receipt_type")
+    if value is None or not str(value).strip():
+        item = recognized.get("receipt_type")
+        if isinstance(item, dict):
+            inner = item.get("value")
+            if inner is not None and str(inner).strip():
+                value = inner
+    status = (
+        "退货"
+        if str(value or "").strip() == "退货入库"
+        else "待检"
+    )
+    scope = "每行默认" if per_row else "入库默认"
+    return f"**质量状态**：{status}（{scope}，QC 判定后在台账改判）"
+
+
 def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     """成品入库登记确认卡片（scene=finished_receipt 分支，V3.0 §4.6）。
 
@@ -990,7 +1010,9 @@ def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
             lines.append(
                 _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
             )
-        lines.extend(["", "**质量状态**：待检（每行默认，QC 判定后在台账改判）"])
+        lines.extend(
+            ["", _finished_receipt_quality_line(aligned, recognized, per_row=True)]
+        )
         lines.extend([
             "",
             "💡 确认后**按行写入台账**；回复修改（如「数量改成 55」）仅调整"
@@ -1021,7 +1043,9 @@ def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
         lines.append(
             _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
         )
-    lines.extend(["", "**质量状态**：待检（入库默认，QC 判定后在台账改判）"])
+    lines.extend(
+        ["", _finished_receipt_quality_line(aligned, recognized, per_row=False)]
+    )
     lines.extend(["", FINISHED_RECEIPT_MODIFY_HINT])
 
     value_base = {"scene": scene, "draft_id": draft_id}

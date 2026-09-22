@@ -48,6 +48,7 @@ FINISHED_RECEIPT_FIELD_LABELS: dict[str, str] = {
     "quantity": "入库数量",
     "unit": "单位",
     "receipt_date": "入库日期",
+    "receipt_type": "入库类型",
     "spec": "品规",
     "produced_at": "生产日期",
     "expiry": "有效期",
@@ -116,7 +117,8 @@ async def create_finished_receipt_draft(
                 f"传 {{字段名: 值}}，必收字段：{FINISHED_RECEIPT_FIELD_LABELS['product_name']}、"
                 f"{FINISHED_RECEIPT_FIELD_LABELS['product_batch_no']}、"
                 f"{FINISHED_RECEIPT_FIELD_LABELS['quantity']}、"
-                f"{FINISHED_RECEIPT_FIELD_LABELS['unit']}"
+                f"{FINISHED_RECEIPT_FIELD_LABELS['unit']}（入库类型选填："
+                "正常入库/返工入库/退货入库，缺省正常入库）"
             ),
         }
 
@@ -224,9 +226,10 @@ FINISHED_RECEIPT_TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "如「成品入库 达托霉素 批号 DA2609001 100kg」）。必收字段："
                 "产品名称、产品批号（逐字使用用户提供值）、入库数量（纯数字）、"
                 "单位（kg/十亿/g）；缺失时返回 missing，请向用户追问后再调用。"
-                "选填：入库日期（缺省今天）、品规、生产日期、有效期、生产车间"
-                "（写入备注）、库区位置、备注。创建成功后系统发送确认卡片，"
-                "用户点「确认入库」才写入台账。"
+                "选填：入库日期（缺省今天）、入库类型（正常入库/返工入库/退货"
+                "入库，用户说退货/返工入库时传入）、品规、生产日期、有效期、"
+                "生产车间（写入备注）、库区位置、备注。创建成功后系统发送确认"
+                "卡片，用户点「确认入库」才写入台账。"
             ),
             "parameters": {
                 "type": "object",
@@ -235,8 +238,10 @@ FINISHED_RECEIPT_TOOLS_SCHEMA: list[dict[str, Any]] = [
                         "type": "object",
                         "description": (
                             "字段名 → 值。产品名称、产品批号、入库数量（纯数字）、"
-                            "单位 为必收；入库日期/品规/生产日期/有效期/生产车间/"
-                            "库区位置/备注 选填。质量状态无需提供（系统默认待检）"
+                            "单位 为必收；入库日期/入库类型（正常入库/返工入库/"
+                            "退货入库）/品规/生产日期/有效期/生产车间/"
+                            "库区位置/备注 选填。质量状态无需提供（系统默认待检，"
+                            "退货入库自动联动退货）"
                         ),
                     },
                 },

@@ -1,8 +1,8 @@
-"""不合格清单确认门接入测试（V3.0 分期A Ticket 07，验收②端到端）。
+"""清单确认门接入测试（V3.0 分期A Ticket 07 + P0 双门，验收②端到端）。
 
-链路：stale_lists 到期推送（dry_run）→ 后置钩子为待跟进不合格物料创建
-确认单并投递 → handle_action 确认 → 按映射逐条回写 Base 处理日期。
-Base 交互全部经 monkeypatch 假件（零网络）。
+链路：stale_lists 到期推送（dry_run）→ 后置钩子创建 不合格处理门 + 超6月
+呆滞批次处理门（P0-2）→ handle_action 确认 → 按映射逐条回写 Base 处理
+日期/呆滞处理确认日期。Base 交互全部经 monkeypatch 假件（零网络）。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from app.modules.warehouse.models import (
 )
 from app.modules.warehouse.push_center import engine, generators
 from app.modules.warehouse.push_center.confirm_integrations import (
+    DEAD_DISPOSITION,
     UNQUALIFIED_DISPOSITION,
     stale_lists_confirm_hook,
 )
@@ -47,9 +48,12 @@ class StubPushRow:
 
 
 class FakeUnqualifiedAdapter:
-    """unqualified_stock 假件：2 条待跟进（处理日期空）+ 1 条已处理。
+    """unqualified_stock + material_receipt（呆滞）假件。
 
-    物料名称用富文本分段形态（真机实测），回归验证卡片摘要不出现字典 repr。
+    - unqualified：2 条待跟进（处理日期空）+ 1 条已处理；物料名称用富文本
+      分段形态（真机实测），回归验证卡片摘要不出现字典 repr；
+    - dead（P0-2）：默认空（既有用例仅不合格门）；呆滞用例注入 2 待跟进 +
+      1 已确认（呆滞处理确认日期非空）。
     """
 
     def __init__(self) -> None:
@@ -58,11 +62,19 @@ class FakeUnqualifiedAdapter:
             {"record_id": "rec_u2", "fields": {"物料名称": [{"text": "不合格物料B", "type": "text"}], "不合格项目": "包装破损", "处理方式": None, "处理日期": None}},
             {"record_id": "rec_u3", "fields": {"物料名称": "不合格物料C", "不合格项目": "过期", "处理方式": "退货", "处理日期": 1760000000000}},
         ]
+        self.dead_records: list[dict[str, Any]] = []
         self.update_calls: list[tuple[str, str, dict[str, Any]]] = []
 
     async def search_records_page(self, table_key: str, **kwargs: Any) -> dict[str, Any]:
-        assert table_key == "unqualified_stock"
-        return {"records": self.records, "total": len(self.records), "page_token": None}
+        if table_key == "unqualified_stock":
+            return {"records": self.records, "total": len(self.records), "page_token": None}
+        if table_key == "material_receipt":
+            return {
+                "records": self.dead_records,
+                "total": len(self.dead_records),
+                "page_token": None,
+            }
+        raise AssertionError(f"未预期的表: {table_key}")
 
     async def update_record(self, table_key: str, record_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         self.update_calls.append((table_key, record_id, dict(fields)))
@@ -95,10 +107,12 @@ async def stale_env(
     from app.modules.warehouse import base_mirror
     from app.modules.warehouse.models import WarehouseConfirmRequest
 
-    # 封闭性：清该业务类型既有确认单（真机验证留有真实记录；事务内删除随回滚撤销）
+    # 封闭性：清两类业务既有确认单（真机验证留有真实记录；事务内删除随回滚撤销）
     await db_session.execute(
         delete(WarehouseConfirmRequest).where(
-            WarehouseConfirmRequest.business_type == UNQUALIFIED_DISPOSITION
+            WarehouseConfirmRequest.business_type.in_(
+                [UNQUALIFIED_DISPOSITION, DEAD_DISPOSITION]
+            )
         )
     )
     # 回写开关默认开（生产默认关；建单路径依赖回写）
@@ -125,11 +139,13 @@ async def stale_env(
     return adapter
 
 
-async def _confirm_requests(db: AsyncSession) -> list[WarehouseConfirmRequest]:
+async def _confirm_requests(
+    db: AsyncSession, business_type: str = UNQUALIFIED_DISPOSITION
+) -> list[WarehouseConfirmRequest]:
     rows = (
         await db.execute(
             select(WarehouseConfirmRequest).where(
-                WarehouseConfirmRequest.business_type == UNQUALIFIED_DISPOSITION
+                WarehouseConfirmRequest.business_type == business_type
             )
         )
     ).scalars().all()
@@ -249,4 +265,89 @@ class TestStaleListsConfirmHook:
             task_name="stale_lists", scene="stale_lists", label="清单", description="",
             trigger="scheduled", enabled=True, schedule=None, targets=(), source="db",
         )
-        assert await stale_lists_confirm_hook(db_session, view, AT_0930, dry_run=True) is None
+        assert await stale_lists_confirm_hook(db_session, view, AT_0930, dry_run=True) == []
+
+
+class TestDeadStockConfirmGate:
+    """超6月呆滞批次处理门（P0-2）：呆料判断=是 且 呆滞处理确认日期为空。"""
+
+    @staticmethod
+    def _dead_rows() -> list[dict[str, Any]]:
+        return [
+            {"record_id": "rec_d1", "fields": {"物料名称": "呆滞物料A", "物料批号": "PC260301", "入库数量": 12.5, "呆滞处理确认日期": None}},
+            {"record_id": "rec_d2", "fields": {"物料名称": "呆滞物料B", "物料批号": "PC260401", "入库数量": 3, "呆滞处理确认日期": None}},
+            {"record_id": "rec_d3", "fields": {"物料名称": "呆滞物料C", "物料批号": "PC260501", "入库数量": 8, "呆滞处理确认日期": 1760000000000}},
+        ]
+
+    async def test_dead_gate_created_with_pending_batches(
+        self, db_session: AsyncSession, stale_env: FakeUnqualifiedAdapter
+    ) -> None:
+        stale_env.dead_records = self._dead_rows()
+        results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
+        assert [r.status for r in results] == ["executed"]
+
+        dead_requests = await _confirm_requests(db_session, DEAD_DISPOSITION)
+        assert len(dead_requests) == 1
+        request = dead_requests[0]
+        # 只覆盖待跟进（呆滞处理确认日期为空）的 2 批；已确认的 rec_d3 不入单
+        assert request.ref_record_ids == ["rec_d1", "rec_d2"]
+        assert request.ref_table == "material_receipt"
+        assert request.target == "oc_test"
+        assert request.status == "pending"
+        assert request.writeback == {"呆滞处理确认日期": "@today"}
+        assert "超6月呆滞批次" in request.summary
+        assert "呆滞物料A" in request.summary and "PC260301" in request.summary
+        # 双门并存：不合格门（fixture 默认 2 条待跟进）也建了
+        assert len(await _confirm_requests(db_session)) == 1
+
+    async def test_no_dead_batches_no_dead_gate(
+        self, db_session: AsyncSession, stale_env: FakeUnqualifiedAdapter
+    ) -> None:
+        stale_env.dead_records = []
+        results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
+        assert [r.status for r in results] == ["executed"]
+        assert await _confirm_requests(db_session, DEAD_DISPOSITION) == []
+
+    async def test_end_to_end_dead_confirm_writes_back(
+        self, db_session: AsyncSession, stale_env: FakeUnqualifiedAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """呆滞门全链路：推送 → 确认卡 → 确认 → 逐条回写呆滞处理确认日期。"""
+        stale_env.dead_records = self._dead_rows()
+        update_mock = AsyncMock(return_value={"record_id": "r", "fields": {}})
+        monkeypatch.setattr(WarehouseBitableAdapter, "update_record", update_mock)
+
+        results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
+        assert [r.status for r in results] == ["executed"]
+        request = (await _confirm_requests(db_session, DEAD_DISPOSITION))[0]
+
+        outcome = await cr.handle_action(
+            db_session,
+            value={"scene": cr.CONFIRM_GATE_SCENE, "request_id": str(request.id), "action": "confirm"},
+            operator_open_id="ou_worker_dead",
+        )
+        assert outcome.ok is True
+        assert request.status == "confirmed"
+
+        # 逐条回写 material_receipt（2 条，呆滞处理确认日期=当天时间戳）
+        assert update_mock.await_count == 2
+        calls = [c.args for c in update_mock.await_args_list]
+        assert {c[1] for c in calls} == {"rec_d1", "rec_d2"}
+        assert all(c[0] == "material_receipt" for c in calls)
+        assert all(isinstance(c[2]["呆滞处理确认日期"], int) for c in calls)
+
+    async def test_one_gate_failure_does_not_block_other(
+        self, db_session: AsyncSession, stale_env: FakeUnqualifiedAdapter, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """不合格门拉取异常 → 呆滞门仍创建（单门失败不阻断另一门）。"""
+        import app.modules.warehouse.push_center.confirm_integrations as ci
+
+        stale_env.dead_records = self._dead_rows()
+
+        async def _boom(adapter: Any) -> list[dict[str, Any]]:
+            raise RuntimeError("不合格清单拉取失败")
+
+        monkeypatch.setattr(ci, "fetch_unqualified_records", _boom)
+        results = await engine.run_due_tasks(db_session, AT_0930, dry_run=True)
+        assert [r.status for r in results] == ["executed"]
+        assert await _confirm_requests(db_session) == []  # 不合格门失败
+        assert len(await _confirm_requests(db_session, DEAD_DISPOSITION)) == 1  # 呆滞门照建

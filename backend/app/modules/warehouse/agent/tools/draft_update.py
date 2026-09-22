@@ -121,9 +121,13 @@ FIELD_ALIASES: dict[str, str] = {
     "指定批次": "designated_batch",
     "designated_batch": "designated_batch",
     "建议批号": "designated_batch",
-    # ── 供应商准入（V3.0 分期C）──
+    # ── 供应商准入（V3.0 分期C；授权物料 2026-09-22 P0 补列）──
     "供应商名称": "supplier_name",
     "supplier_name": "supplier_name",
+    "授权物料编码": "material_codes",
+    "material_codes": "material_codes",
+    "授权物料名称": "material_names",
+    "material_names": "material_names",
     # ── 成品入库（V3.0 §4.6）；数量/单位/备注/生产日期与上面场景同义共用 ──
     # 注意「批号」仍指原辅料厂家批号——产品批号请说「产品批号」（提示词约束，
     # 沿 GMP「物料批号」先例）；「品名」指原辅料物料名称——成品请说「产品名称」
@@ -131,6 +135,8 @@ FIELD_ALIASES: dict[str, str] = {
     "spec": "spec",
     "有效期": "expiry",
     "expiry": "expiry",
+    "入库类型": "receipt_type",
+    "receipt_type": "receipt_type",
     "生产车间": "workshop",
     "车间": "workshop",
     "workshop": "workshop",

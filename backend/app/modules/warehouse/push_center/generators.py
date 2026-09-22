@@ -27,6 +27,7 @@ from app.modules.warehouse.finished_data import (
     fetch_daily_sales,
     fetch_day_movements,
     fetch_finished_outbound_rows,
+    fetch_month_finished_io,
     fetch_pending_dispositions,
     fetch_quality_distribution,
     month_bounds,
@@ -192,7 +193,7 @@ async def _generate_weekly(db: AsyncSession, now_cn: datetime) -> dict[str, Any]
 
 
 async def _generate_monthly(db: AsyncSession, now_cn: datetime) -> dict[str, Any]:
-    """月报推送卡：复用既有月报聚合（上月口径），纯模板摘要。"""
+    """月报推送卡：复用既有月报聚合（上月口径）+ 成品段（P0 补齐），纯模板摘要。"""
     year, month = (now_cn.year, now_cn.month - 1) if now_cn.month > 1 else (now_cn.year - 1, 12)
     report = await get_monthly_report(db, year, month)
     summary = report["summary"]
@@ -213,6 +214,23 @@ async def _generate_monthly(db: AsyncSession, now_cn: datetime) -> dict[str, Any
         elements.append(_md(f"**出库 Top{len(top)}**\n{lines}"))
     else:
         elements.append(_md("本月无出入库记录"))
+
+    # 成品段（2026-09-22 P0 补齐，总文档成品③「每月出入库信息推送」）：
+    # Base 直读成品入库/出库台账月度合计，失败降级标注不阻断月报
+    from app.modules.warehouse.bitable_adapter import WarehouseBitableAdapter
+
+    try:
+        io = await fetch_month_finished_io(
+            WarehouseBitableAdapter(), year=year, month=month
+        )
+        finished_line = (
+            f"**成品** 入库 {io.inbound_count} 笔 / {fmt_qty(io.inbound_qty)}"
+            f"　出库 {io.outbound_count} 笔 / {fmt_qty(io.outbound_qty)}"
+        )
+    except Exception:  # noqa: BLE001 — 成品拉取失败不影响原辅料月报
+        logger.exception("月报成品段 Base 拉取失败，降级标注")
+        finished_line = "**成品**：台账暂不可读（拉取失败）"
+    elements.append(_md(finished_line))
 
     return build_card(
         title=f"仓储月报 · {year}-{month:02d}",

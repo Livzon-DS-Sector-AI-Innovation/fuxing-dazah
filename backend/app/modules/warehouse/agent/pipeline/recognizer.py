@@ -80,7 +80,7 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
   小数点务必仔细辨认，不要把 1.10 误读成 1110）
 - unit：单位（如 kg、十亿、g）
 
-## 选提字段（6 个，识别不到就填 null）
+## 选提字段（7 个，识别不到就填 null）
 - spec：品规（产品等级/注册规格标注，如「DA低规」「DT高规二期（AB线）」「高规」；
   **不要**把包装规格（如 3kg/听、5kg/桶）填进本字段——包装规格属于包装信息）
 - produced_at：生产日期（文本原样，如 2026-09-01）
@@ -88,9 +88,12 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
 - workshop：生产车间（别名：入库车间、车间；如 提炼工程一部）
 - storage_location：库区位置（别名：货位、库位）
 - receipt_date：入库日期（别名：进仓时间、日期；如 2026-09-21）
+- receipt_type：入库类型（按单据性质三选一输出「正常入库/返工入库/退货入库」：
+  单据标题或类型栏含「返工」→ 返工入库；标题含「退货」或带退货原因/退货客户栏
+  → 退货入库；普通成品进仓单 → 正常入库。判断不了输出 null，不要猜）
 
 ## 多行明细处理（进仓单常有同一表格多行，必须逐行看完再输出）
-- 除 10 个字段外，**必须输出 rows 数组**：表格明细每一行一个元素，禁止合并或丢弃任何行；
+- 除 11 个字段外，**必须输出 rows 数组**：表格明细每一行一个元素，禁止合并或丢弃任何行；
 - 每个元素结构（6 键）：
   {"product_name": "达托霉素", "product_batch_no": "DA2609011", "quantity": 12, "unit": "kg", "spec": null, "produced_at": "2026.09.14", "expiry": "2028.09.13"}
   （quantity 为该行数字；spec/produced_at/expiry 该行没有就 null）
@@ -99,7 +102,7 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
 
 ## 输出要求（严格遵守）
 1. 只输出一个 JSON 对象，禁止输出任何解释文字或 markdown 代码块。
-2. JSON 结构（10 个标量字段 + rows 数组，全部出现）：
+2. JSON 结构（11 个标量字段 + rows 数组，全部出现）：
    {"product_name": {"value": "达托霉素", "confidence": 0.95}, "product_batch_no": {"value": "DA2609001", "confidence": 0.9}, ..., "rows": [{"product_name": "达托霉素", "product_batch_no": "DA2609011", "quantity": 12, "unit": "kg", "spec": null, "produced_at": "2026.09.14", "expiry": "2028.09.13"}]}
    标量字段取数量最大的主行填写；单行单据 rows 也必须有该一行。
 3. 每个字段的 confidence 是 0 到 1 的小数：清晰可辨 ≥0.8，模糊但可推断 0.4-0.8，猜测 <0.4。
@@ -108,7 +111,8 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
 6. 图片可能是手写单据：逐字仔细辨认，禁止把图中没有的信息编造为高置信度——辨认不清就给低 confidence。
 """
 
-# 成品入库必提 4 / 选提 6 字段（RecognizedFinishedReceipt 契约）
+# 成品入库必提 4 / 选提 7 字段（RecognizedFinishedReceipt 契约；receipt_type
+# 为 2026-09-22 P0 补齐——总文档成品①「含返工、退货等」单据类型）
 FINISHED_REQUIRED_FIELDS: tuple[str, ...] = (
     "product_name",
     "product_batch_no",
@@ -122,6 +126,7 @@ FINISHED_OPTIONAL_FIELDS: tuple[str, ...] = (
     "workshop",
     "storage_location",
     "receipt_date",
+    "receipt_type",
 )
 
 # 单据分类轻量预判（V3.0 §4.6 图片路由）：detect_rotation 同款缩略图轻量
@@ -134,7 +139,7 @@ CLASSIFY_PROMPT = (
     f"- {DOC_TYPE_RAW}：原辅料送货单/请验单/厂家报告单（常见字段：物料名称、"
     "厂家批号、供应商、生产商、车牌、合同号）\n"
     f"- {DOC_TYPE_FINISHED}：成品入库单（常见字段：产品名称、产品批号、品规、"
-    "生产车间、入库数量、有效期）\n"
+    "生产车间、入库数量、有效期；含返工入库单、退货入库单等变体）\n"
     "按单据标题与字段栏名判断。只输出一个 JSON："
     '{"doc_type": "' + DOC_TYPE_RAW + '"} 或 {"doc_type": "' + DOC_TYPE_FINISHED + '"}；'
     '无法判断时输出 {"doc_type": "unknown"}。'
@@ -232,6 +237,7 @@ class RecognizedFinishedReceipt(BaseModel):
     workshop: RecognizedField | None = None
     storage_location: RecognizedField | None = None
     receipt_date: RecognizedField | None = None
+    receipt_type: RecognizedField | None = None  # 入库类型（P0 补齐，文档级）
 
     rows: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)

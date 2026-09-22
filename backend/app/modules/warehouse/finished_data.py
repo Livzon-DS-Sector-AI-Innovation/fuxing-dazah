@@ -97,17 +97,21 @@ async def fetch_all_records(
     adapter: Any,
     table_key: str,
     field_names: list[str],
+    filter_json: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """分页全量拉取（每页 500 × 10 页防御，超出截断并告警）。
 
     返回原始 records（{"record_id", "fields"}）；解析由各读取函数按需做。
+    filter_json 透传 adapter（服务端过滤，2026-09-22 P0 呆滞门接入——
+    入库总账「呆料判断=是」口径，与 agent/tools/query.py DEAD_RECEIPT_FILTER
+    同构）。
     """
     records: list[dict[str, Any]] = []
     page_token: str | None = None
     for _ in range(_MAX_PAGES):
         page = await adapter.search_records_page(
             table_key,
-            filter_json=None,
+            filter_json=filter_json,
             field_names=field_names,
             limit=_PAGE_LIMIT,
             page_token=page_token,
@@ -474,3 +478,58 @@ async def fetch_pending_dispositions(adapter: Any) -> list[FinishedPendingRow]:
             )
         )
     return pending
+
+
+# ── 月度成品出入库合计（2026-09-22 P0：月报卡成品段，总文档成品③）──
+
+
+@dataclass(frozen=True)
+class FinishedMonthIO:
+    """某自然月成品入库/出库合计（笔数 + 数量；全用途口径）。"""
+
+    inbound_count: int = 0
+    inbound_qty: float = 0.0
+    outbound_count: int = 0
+    outbound_qty: float = 0.0
+
+
+async def fetch_month_finished_io(
+    adapter: Any, *, year: int, month: int
+) -> FinishedMonthIO:
+    """按自然月聚合成品入库台账与出库台账（Base 直读，2B 口径）。
+
+    入库读 finished_receipt（入库日期/入库数量），出库读 finished_outbound
+    行级（出库日期/出库量，全用途——月报是出入库信息而非销售口径）；月份
+    过滤本地做（month_bounds 含头不含尾），与既有读取层同约束。
+    """
+    start, end = month_bounds(year, month)
+    inbound_count = 0
+    inbound_qty = 0.0
+    outbound_count = 0
+    outbound_qty = 0.0
+
+    for raw in await fetch_all_records(
+        adapter, "finished_receipt", ["入库日期", "入库数量"]
+    ):
+        fields = raw.get("fields") or {}
+        d = cell_date(fields.get("入库日期"))
+        if d is None or not (start <= d < end):
+            continue
+        qty = cell_qty(fields.get("入库数量"))
+        inbound_count += 1
+        if qty is not None:
+            inbound_qty += qty
+
+    for row in await fetch_finished_outbound_rows(adapter):
+        if row.outbound_date is None or not (start <= row.outbound_date < end):
+            continue
+        outbound_count += 1
+        if row.qty is not None:
+            outbound_qty += row.qty
+
+    return FinishedMonthIO(
+        inbound_count=inbound_count,
+        inbound_qty=inbound_qty,
+        outbound_count=outbound_count,
+        outbound_qty=outbound_qty,
+    )
