@@ -617,7 +617,7 @@ async def handle_fill_command(event: dict) -> None:
                     await update_test_results_fill(db, updates)
                 await db.commit()
             _LAST_BATCH[chat_id] = batch
-            await send_chat_text(chat_id, f"✅ 批号 {batch} 修正：\n" + "\n".join(done) if done else "未识别到可修正的项目")
+            await send_chat_text(chat_id, f"✅ 批号 {batch} 修正：\n" + ("\n".join(done) if done else "未识别到可修正的项目"))
             return
 
         # 「进度 批号 XXX」/「批号 X 还差什么」：进度查询（五态：未创建/待分配/填报中/待复核/已出报）

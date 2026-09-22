@@ -433,12 +433,20 @@ async def list_standard_documents(
 async def get_standard_document_by_file_no(
     db: AsyncSession, file_no: str
 ) -> QualityStandardDocument | None:
-    """按文件编号查标准文档（表号↔标准文档映射用）。"""
-    stmt = select(QualityStandardDocument).where(
-        QualityStandardDocument.file_no == file_no,
-        QualityStandardDocument.is_deleted == False,  # noqa: E712
+    """按文件编号查标准文档（表号↔标准文档映射用）。
+
+    取最近创建的一条（软删后重建的历史数据可能多行，scalar_one_or_none 会 500）。
+    """
+    stmt = (
+        select(QualityStandardDocument)
+        .where(
+            QualityStandardDocument.file_no == file_no,
+            QualityStandardDocument.is_deleted == False,  # noqa: E712
+        )
+        .order_by(QualityStandardDocument.created_at.desc())
+        .limit(1)
     )
-    return (await db.execute(stmt)).scalar_one_or_none()
+    return (await db.execute(stmt)).scalars().first()
 
 
 async def get_standard_document(
@@ -735,14 +743,22 @@ async def list_test_tasks_by_report_date(
 async def get_test_task_by_batch(
     db: AsyncSession, product_name: str, batch_number: str
 ) -> QualityTestTask | None:
-    """按产品+批号查未删除任务（建任务重复检查；产品名忽略空白差异）。"""
+    """按产品+批号查未删除任务（建任务重复检查；产品名忽略空白差异）。
+
+    取最近创建的一条（历史脏数据可能存在多行，scalar_one_or_none 会 500）。
+    """
     norm = re.sub(r"\s+", "", product_name)
-    stmt = select(QualityTestTask).where(
-        func.regexp_replace(QualityTestTask.product_name, r"\s", "", "g") == norm,
-        QualityTestTask.batch_number == batch_number,
-        QualityTestTask.is_deleted == False,  # noqa: E712
+    stmt = (
+        select(QualityTestTask)
+        .where(
+            func.regexp_replace(QualityTestTask.product_name, r"\s", "", "g") == norm,
+            QualityTestTask.batch_number == batch_number,
+            QualityTestTask.is_deleted == False,  # noqa: E712
+        )
+        .order_by(QualityTestTask.created_at.desc())
+        .limit(1)
     )
-    return (await db.execute(stmt)).scalar_one_or_none()
+    return (await db.execute(stmt)).scalars().first()
 
 
 async def list_test_tasks(

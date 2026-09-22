@@ -37,7 +37,7 @@ export default function SummaryView() {
   const [trendReloadKey, setTrendReloadKey] = useState(0)
 
   useEffect(() => {
-    fetchSummaryProducts().then(setProducts).catch(() => {})
+    fetchSummaryProducts().then(setProducts).catch(() => message.warning('产品列表加载失败，请刷新重试'))
   }, [])
 
   const load = useCallback(async () => {

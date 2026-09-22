@@ -8,7 +8,7 @@ import {
 import {
   ArrowLeftOutlined, SaveOutlined, CheckCircleOutlined, StopOutlined,
   PlusOutlined, DeleteOutlined, RedoOutlined, UploadOutlined, FileTextOutlined,
-  HistoryOutlined,
+  HistoryOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { useRouter } from 'next/navigation'
 import { usePermission } from '@/hooks/usePermission'
@@ -68,6 +68,8 @@ export default function TaskDetail({ id }: { id: string }) {
   const [addForm] = Form.useForm()
 
   const [generatingCoa, setGeneratingCoa] = useState(false)
+  // 多份 COA 生成后的逐份下载弹窗（连续自动下载会被浏览器拦截）
+  const [coaFiles, setCoaFiles] = useState<{ report_id: string; filename: string; file_no: string }[]>([])
 
   const [attachments, setAttachments] = useState<TaskAttachment[]>([])
   const [reviews, setReviews] = useState<TaskReviewRecord[]>([])
@@ -225,20 +227,27 @@ export default function TaskDetail({ id }: { id: string }) {
     return false
   }
 
-  // 生成 COA：按标准文件逐份生成（一个批号多份标准 → 多份报告单），逐份下载
+  // 生成 COA：按标准文件逐份生成（一个批号多份标准 → 多份报告单）。
+  // 单份直接下载；多份弹窗列出逐份下载（连续 a.click 会被浏览器拦截）
+  const downloadCoaOne = async (f: { report_id: string; filename: string }) => {
+    const blob = await downloadReportFile(f.report_id)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = f.filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const handleGenerateCoa = async () => {
     setGeneratingCoa(true)
     try {
       const res = await generateTaskReports(id)
       const files = res.data || []
-      for (const f of files) {
-        const blob = await downloadReportFile(f.report_id)
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = f.filename
-        a.click()
-        URL.revokeObjectURL(url)
+      if (files.length === 1) {
+        await downloadCoaOne(files[0])
+      } else if (files.length > 1) {
+        setCoaFiles(files)
       }
       message.success(files.length
         ? `已按标准文件逐份生成 ${files.length} 份 COA：${files.map((f) => f.file_no).join('、')}`
@@ -281,7 +290,11 @@ export default function TaskDetail({ id }: { id: string }) {
   const handleAttPreview = async (att: TaskAttachment) => {
     try {
       const blob = await downloadTaskAttachment(id, att.id)
-      setAttPreview({ filename: att.filename, url: URL.createObjectURL(blob), type: att.content_type })
+      // 释放上一个预览的 ObjectURL（此前只在关闭弹窗时释放，连续预览会泄漏）
+      setAttPreview((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url)
+        return { filename: att.filename, url: URL.createObjectURL(blob), type: att.content_type }
+      })
     } catch (err: any) {
       message.error(err.message || '预览失败')
     }
@@ -602,6 +615,30 @@ export default function TaskDetail({ id }: { id: string }) {
           <iframe src={attPreview.url} title={attPreview.filename}
             style={{ width: '100%', height: '70vh', border: 'none' }} />
         )}
+      </Modal>
+
+      <Modal
+        title={`已生成 ${coaFiles.length} 份 COA，请逐份下载`}
+        open={coaFiles.length > 0}
+        footer={null}
+        onCancel={() => setCoaFiles([])}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {coaFiles.map((f) => (
+            <Space key={f.report_id} style={{ justifyContent: 'space-between', width: '100%' }}>
+              <Typography.Text ellipsis style={{ maxWidth: 360 }}>
+                {f.file_no}（{f.filename}）
+              </Typography.Text>
+              <Button
+                size="small"
+                icon={<DownloadOutlined />}
+                onClick={() => downloadCoaOne(f)}
+              >
+                下载
+              </Button>
+            </Space>
+          ))}
+        </Space>
       </Modal>
 
     </div>

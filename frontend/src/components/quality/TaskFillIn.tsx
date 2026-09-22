@@ -86,7 +86,7 @@ export default function TaskFillIn() {
     try {
       const res = await fetchStandardDocuments()
       setProductDocs(res.data || [])
-    } catch { /* 产品选项加载失败不阻塞建任务弹窗 */ }
+    } catch { message.warning('标准文档加载失败，建任务时可能无法选择项目') }
   }
 
   // 产品名归一化（忽略空白差异，与后端匹配规则一致）

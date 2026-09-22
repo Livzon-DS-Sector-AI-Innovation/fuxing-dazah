@@ -164,11 +164,14 @@ def read_products_from_minio() -> bytes | None:
 
 
 def sync_templates_from_minio() -> None:
-    """首次访问时把 MinIO 模板对象全量下载到本地工作副本（幂等，仅执行一次）。"""
+    """首次访问时把 MinIO 模板对象全量下载到本地工作副本（幂等，仅执行一次）。
+
+    注意：_synced 只能在同步成功（或无异常）后置位——此前在 try 之前置位，
+    首次同步失败后永不重试，本地模板永久缺失。
+    """
     global _synced
     if _synced or not s3.is_enabled():
         return
-    _synced = True
     try:
         for key in s3.list_objects("quality", TEMPLATE_PREFIX):
             rel = key[len(TEMPLATE_PREFIX):]
@@ -184,3 +187,5 @@ def sync_templates_from_minio() -> None:
                 logger.info("模板已从 MinIO 同步到本地: %s", rel)
     except Exception:
         logger.exception("模板 MinIO 同步失败（降级本地工作副本）")
+        return
+    _synced = True

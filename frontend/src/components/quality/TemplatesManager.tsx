@@ -87,7 +87,7 @@ export default function TemplatesManager() {
     try {
       const res = await fetchStandardDocuments()
       setDocOptions((res.data || []).map((d) => ({ label: `${d.product_code || '-'} ${d.file_no}（${d.product_name.slice(0, 12)}）`, value: d.id })))
-    } catch { /* 选项加载失败不阻塞 */ }
+    } catch { message.warning('标准文档选项加载失败') }
   }
 
   const handleBind = async () => {

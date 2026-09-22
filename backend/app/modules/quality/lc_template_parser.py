@@ -151,8 +151,11 @@ def _apply_merges(
         if not matched:
             continue
         if op == "sum":
-            first = sum(c.first for c in matched if c.first is not None) or None
-            second = sum(c.second for c in matched if c.second is not None) or None
+            # 0.0 是合法和值，不能用 `or None` 判缺失（会丢掉真实为 0 的结果）
+            first_vals = [c.first for c in matched if c.first is not None]
+            second_vals = [c.second for c in matched if c.second is not None]
+            first = sum(first_vals) if first_vals else None
+            second = sum(second_vals) if second_vals else None
             vals = [c.report_value for c in matched if c.report_value is not None]
             report = round(sum(vals), 4) if vals else None
         else:

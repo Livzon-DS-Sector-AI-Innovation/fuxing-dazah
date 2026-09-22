@@ -1099,7 +1099,8 @@ class TestTaskService:
         elif task.status == target:
             raise AppException(status_code=400, detail=f"任务已处于 {target} 状态")
         elif task.status == "in_progress" and target == "pending_review":
-            # 手动转待复核：必须全部判定完成（正常路径为填报后自动流转）
+            # 手动转待复核：必须全部判定完成（正常路径为填报后自动流转）；
+            # 与自动流转一致，清空上一轮复核记录（新一轮双人复核重新计数）
             rows = await list_test_results(db, task_id)
             unfilled = [r.item_name for r in rows if r.is_pass is None]
             if unfilled:
@@ -1107,6 +1108,7 @@ class TestTaskService:
                     status_code=400,
                     detail=f"存在 {len(unfilled)} 项未判定，无法进入待复核：{'、'.join(unfilled[:5])}",
                 )
+            await soft_delete_task_reviews(db, task_id)
         elif task.status == "pending_review" and target == "completed":
             # 双人复核：完成只能经复核接口（add_review）达成，禁止直接改状态
             raise AppException(
