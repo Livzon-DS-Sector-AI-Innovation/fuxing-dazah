@@ -1,6 +1,12 @@
-"""Safety API — contractor_admission endpoints."""
+"""Safety API — contractor_admission endpoints.
 
-import uuid
+直读模式（SAFETY_CONTRACTOR_ADMISSION_DIRECT_ENABLED）：列表/统计 meta 带
+mode=direct + elapsed_ms；详情/审核路径参数接受 recXXX 或 UUID 双态。
+非法串处置：详情 404（原 FastAPI 422，受控偏差照 key_risk_op 落档）；
+审核 400（沿用本端点既有「仅支持飞书来源」契约）。
+"""
+
+import time
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +53,12 @@ async def get_contractor_admissions(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取相关方准入列表，支持多条件筛选"""
+    from app.modules.safety.service.contractor_admission_direct import (
+        config as direct_config,
+    )
+
+    direct = direct_config.direct_enabled()
+    t0 = time.perf_counter()
     service = ContractorAdmissionService(db)
     items, total = await service.get_list(
         filters={
@@ -61,9 +73,13 @@ async def get_contractor_admissions(
         page=page,
         page_size=page_size,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[ContractorAdmissionListItem.model_validate(i) for i in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
@@ -77,9 +93,18 @@ async def get_contractor_admission_stats(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """相关方准入统计（KPI 卡）：total + 按 AI 审核状态/相关方类型/提交状态分组计数"""
+    from app.modules.safety.service.contractor_admission_direct import (
+        config as direct_config,
+    )
+
+    direct = direct_config.direct_enabled()
+    t0 = time.perf_counter()
     service = ContractorAdmissionService(db)
     data = await service.get_stats()
-    return ApiResponse(data=ContractorAdmissionStats.model_validate(data))
+    meta: dict[str, object] | None = None
+    if direct:
+        meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    return ApiResponse(data=ContractorAdmissionStats.model_validate(data), meta=meta)
 
 
 @contractor_admission_router.get(
@@ -88,13 +113,13 @@ async def get_contractor_admission_stats(
     summary="获取相关方准入详情",
 )
 async def get_contractor_admission(
-    admission_id: uuid.UUID,
+    admission_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """获取相关方准入详情"""
+    """获取相关方准入详情（id 双态：recXXX 直读视图 / UUID 平台行，非法串 404）"""
     service = ContractorAdmissionService(db)
-    item = await service.get_by_id(admission_id)
+    item = await service.resolve_detail(admission_id)
     if not item:
         return ApiResponse(code=404, message="相关方准入记录不存在")
     return ApiResponse(data=ContractorAdmissionResponse.model_validate(item))
@@ -106,16 +131,17 @@ async def get_contractor_admission(
     summary="触发相关方准入AI审核",
 )
 async def run_contractor_admission_ai_audit(
-    admission_id: uuid.UUID,
+    admission_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """手动触发单条相关方准入 AI 三维度审核，结果回填飞书多维表格并更新平台。
+    """手动触发单条相关方准入 AI 审核，结果回填飞书多维表格并更新平台。
 
+    id 双态：recXXX（直读新鲜数据审核）/ UUID（平台行定位）。
     仅支持飞书来源（source='bitable'）且有 feishu_record_id 的记录。
     """
     service = ContractorAdmissionService(db)
-    item = await service.run_admission_review(admission_id, channel="web")
+    item = await service.run_admission_audit_dual(admission_id, channel="web")
     if item is None:
         return ApiResponse(code=400, message="仅支持飞书来源的相关方准入记录触发AI审核")
     return ApiResponse(data=ContractorAdmissionResponse.model_validate(item))

@@ -35,7 +35,19 @@ logger = logging.getLogger(__name__)
 
 @on_event("drive.file.bitable_record_changed_v1")
 async def _on_drive_record_changed(event: dict) -> None:
-    """文档级记录变更事件：按 file_token + table_id 过滤后逐条处理 action_list。"""
+    """文档级记录变更事件：按 file_token + table_id 过滤后逐条处理 action_list。
+
+    直读模式（DIRECT 开且 EVENT_SYNC 关）闸门短路：镜像同步与事件自动审核
+    一并停止，自动审核由 contractor_admission_direct.trigger 变更检测替代。
+    """
+    from app.modules.safety.service.contractor_admission_direct import (
+        config as direct_config,
+    )
+
+    if not direct_config.legacy_event_sync_active():
+        logger.debug("相关方准入直读模式，事件镜像闸门短路")
+        return
+
     file_token = event.get("file_token", "")
     table_id = event.get("table_id", "")
     if not _match_table(file_token, table_id):
@@ -174,10 +186,19 @@ async def ensure_contractor_admission_bitable_subscribed() -> bool:
     飞书要求：接收文档级 Bitable 事件前，须先调用 /drive/v1/files/:file_token/subscribe。
     订阅持久存在于飞书侧，每次启动重试无害（改表后重订阅天然携带新值）。
     订阅成功与否不影响 handler 注册；失败时由重启/变更重试兜底。
+    直读模式（DIRECT 开且 EVENT_SYNC 关）跳过订阅（退订由收尾票统一执行，
+    此处只是不再续订）。
     """
     import httpx
 
     from app.core.config import get_settings
+    from app.modules.safety.service.contractor_admission_direct import (
+        config as direct_config,
+    )
+
+    if not direct_config.legacy_event_sync_active():
+        logger.info("相关方准入直读模式，跳过文档事件订阅")
+        return False
 
     file_token = admission_app_token()
     if not file_token:

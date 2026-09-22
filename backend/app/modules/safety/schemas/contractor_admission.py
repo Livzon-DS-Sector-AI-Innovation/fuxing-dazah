@@ -112,7 +112,7 @@ class AdmissionReviewResultResponse(BaseModel):
 class ContractorAdmissionResponse(ContractorAdmissionBase):
     """相关方准入详情响应"""
 
-    id: uuid.UUID
+    id: uuid.UUID | str  # 直读视图为 recXXX（Bitable 记录 ID）
     admission_no: str | None = None
     source: str = Field("bitable", description="数据来源: bitable(飞书同步)/manual(手动)")
     feishu_record_id: str | None = None
@@ -126,8 +126,8 @@ class ContractorAdmissionResponse(ContractorAdmissionBase):
     )
     ai_error_message: str | None = Field(None, description="AI审核失败信息")
     ai_reviewed_at: datetime | None = Field(None, description="最近一次 AI 审核完成时间")
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None  # 直读=Bitable 创建日期；updated_at 直读恒 None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -136,7 +136,7 @@ class ContractorAdmissionResponse(ContractorAdmissionBase):
 class ContractorAdmissionListItem(BaseModel):
     """列表项（轻量，不含大 JSON；overall_conclusion 从 ai_review_result 平铺）"""
 
-    id: uuid.UUID
+    id: uuid.UUID | str  # 直读视图为 recXXX（Bitable 记录 ID）
     admission_no: str | None = None
     company_name: str | None = None
     related_party_type: str | None = None
@@ -150,7 +150,7 @@ class ContractorAdmissionListItem(BaseModel):
     ai_review_result: AdmissionReviewResultResponse | None = Field(
         default=None, exclude=True, description="（内部使用）AI 审核结果投影"
     )
-    created_at: datetime
+    created_at: datetime | None = None  # 直读=Bitable 创建日期（可能为 None）
 
     @computed_field  # type: ignore[prop-decorator]
     @property

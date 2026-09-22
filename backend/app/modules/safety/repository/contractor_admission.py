@@ -94,6 +94,19 @@ class ContractorAdmissionRepository(SafetyRepository):
         result = await self.session.execute(query.offset(skip).limit(limit))
         return list(result.scalars().all()), total
 
+    async def get_contractor_admission_rows_by_feishu_ids(
+        self, record_ids: list[str]
+    ) -> list[ContractorAdmission]:
+        """按 feishu_record_id 批量取未删除行（直读变更检测触发器的平台行基线）。"""
+        if not record_ids:
+            return []
+        query = select(ContractorAdmission).where(
+            ContractorAdmission.feishu_record_id.in_(record_ids),
+            ContractorAdmission.is_deleted.is_(False),
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
     async def get_contractor_admission_stats(self) -> dict[str, Any]:
         """相关方准入统计（精确计数，不做全表拉取估算）。"""
         base = ContractorAdmission.is_deleted.is_(False)

@@ -13,7 +13,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +22,26 @@ from app.modules.safety.ai_contractor_review.schemas import AdmissionReviewOutpu
 from app.modules.safety.models import ContractorAdmission
 from app.modules.safety.repository import ContractorAdmissionRepository
 
+if TYPE_CHECKING:
+    from app.modules.safety.service.contractor_admission_direct.views import (
+        ContractorAdmissionView,
+    )
+
 logger = logging.getLogger(__name__)
 
 # 图片附件扩展名（跳过文本提取，仅送视觉）
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 # 可文本提取的扩展名
 _TEXT_EXTS = {".pdf", ".docx", ".doc", ".txt"}
+
+
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    """宽松 UUID 解析（详情/审核 id 双态的 legacy 半边）；非法串返回 None。"""
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
 
 # 各维度视觉分析提示词与期望键（公章/签字/骑缝章等签章要素）
 _VISION_PROMPTS: dict[str, str] = {
@@ -118,8 +132,12 @@ class ContractorAdmissionService:
         *,
         page: int = 1,
         page_size: int = 20,
-    ) -> tuple[list[ContractorAdmission], int]:
+    ) -> tuple[list[ContractorAdmission | ContractorAdmissionView], int]:
         """相关方准入列表（分页 + 筛选），返回 (items, total)。
+
+        直读模式（SAFETY_CONTRACTOR_ADMISSION_DIRECT_ENABLED）：Bitable 全量直读 +
+        内存过滤/排序/分页（query 纯函数复刻 repo 口径），并顺带执行变更检测触发
+        （D1：新记录/字段编辑 → 自动 AI 审核）；legacy 读平台库镜像。
 
         filters 支持键：
           - related_party_type / submit_status / ai_review_status / ai_conclusion（精确匹配）
@@ -128,6 +146,12 @@ class ContractorAdmissionService:
           - sort_order（asc / desc，默认 desc）
         """
         f = dict(filters or {})
+        from app.modules.safety.service.contractor_admission_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled():
+            return await self._get_list_direct(f, page=page, page_size=page_size)
         return await self.repo.get_contractor_admission_list(
             skip=(page - 1) * page_size,
             limit=page_size,
@@ -140,6 +164,139 @@ class ContractorAdmissionService:
             sort_order=f.get("sort_order", "desc"),
         )
 
+    async def _fetch_direct_views(self) -> list[ContractorAdmissionView]:
+        """直读全量视图（strict=False：查询路径容错，分页中断返回已拉部分）。"""
+        from app.modules.safety.service.contractor_admission_direct.reader import (
+            open_reader,
+        )
+
+        return await open_reader().fetch_all(strict=False)
+
+    async def _maybe_trigger_direct_reviews(
+        self, views: list[ContractorAdmissionView]
+    ) -> None:
+        """变更检测触发（D1）：平台行基线 diff → fire-and-forget 审核。
+
+        检测/触发任何异常只记日志，不影响查询主流程。
+        """
+        try:
+            from app.modules.safety.service.contractor_admission_direct.trigger import (
+                detect_candidates,
+                fire_and_forget,
+            )
+
+            rows = await self.repo.get_contractor_admission_rows_by_feishu_ids(
+                [v.id for v in views]
+            )
+            rows_by_record_id = {r.feishu_record_id: r for r in rows if r.feishu_record_id}
+            fire_and_forget(detect_candidates(views, rows_by_record_id))
+        except Exception:
+            logger.warning("相关方准入直读触发检测失败（不影响查询）", exc_info=True)
+
+    async def _get_list_direct(
+        self, f: dict[str, Any], *, page: int, page_size: int
+    ) -> tuple[list[ContractorAdmissionView], int]:
+        from app.modules.safety.service.contractor_admission_direct import (
+            query as direct_query,
+        )
+
+        views = await self._fetch_direct_views()
+        await self._maybe_trigger_direct_reviews(views)
+        filtered = direct_query.filter_views(
+            views,
+            related_party_type=f.get("related_party_type"),
+            submit_status=f.get("submit_status"),
+            ai_review_status=f.get("ai_review_status"),
+            ai_conclusion=f.get("ai_conclusion"),
+            keyword=f.get("keyword"),
+        )
+        ordered = direct_query.sort_views(
+            filtered, f.get("sort_by"), f.get("sort_order", "desc")
+        )
+        return direct_query.paginate(ordered, (page - 1) * page_size, page_size)
+
+    async def resolve_detail(
+        self, admission_id: str
+    ) -> ContractorAdmission | ContractorAdmissionView | None:
+        """详情 id 双态解析（API GET 详情，Ticket 07）。
+
+        直读模式：recXXX 查直读视图；UUID 经平台行 feishu_record_id 查视图
+        （视图无 = Bitable 已删 → None→404）。
+        legacy/直读关：按 UUID 查镜像；非法串 None→404（原 FastAPI 422，受控偏差照
+        key_risk_op 落档）。
+        """
+        from app.modules.safety.service.contractor_admission_direct import (
+            config as direct_config,
+        )
+
+        parsed_uuid = _parse_uuid(admission_id)
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.contractor_admission_direct.query import (
+                find_view,
+            )
+            from app.modules.safety.service.contractor_admission_direct.reader import (
+                open_reader,
+            )
+
+            views = await open_reader().fetch_all(strict=False)
+            if not admission_id.startswith("rec") and parsed_uuid is not None:
+                row = await self.repo.get_contractor_admission_by_id(parsed_uuid)
+                record_id = row.feishu_record_id if row else None
+                return find_view(views, record_id) if record_id else None
+            return find_view(views, admission_id)
+        if parsed_uuid is None:
+            return None
+        return await self.repo.get_contractor_admission_by_id(parsed_uuid)
+
+    async def run_admission_audit_dual(
+        self, admission_id: str, channel: str = "web"
+    ) -> ContractorAdmission | None:
+        """手动触发 AI 审核（API POST，Ticket 05），id 双态，返回平台行。
+
+        直读模式：id 解析到直读视图 → 从视图 upsert 新鲜平台行（AI 输入吃直读
+        新鲜数据）→ 跑既有 run_admission_review（回写受 WRITEBACK_AI 开关控制）。
+        legacy：按 UUID 直接跑既有流程。解析不到 → None → 400。
+        """
+        from app.modules.safety.service.contractor_admission_direct import (
+            config as direct_config,
+        )
+
+        if not direct_config.direct_enabled():
+            parsed_uuid = _parse_uuid(admission_id)
+            if parsed_uuid is None:
+                return None
+            return await self.run_admission_review(parsed_uuid, channel=channel)
+
+        from app.modules.safety.service.contractor_admission_direct.query import (
+            find_view,
+        )
+        from app.modules.safety.service.contractor_admission_direct.reader import (
+            open_reader,
+        )
+        from app.modules.safety.service.contractor_admission_direct.views import (
+            mapped_field_keys,
+        )
+
+        views = await open_reader().fetch_all(strict=True)
+        view: ContractorAdmissionView | None
+        if admission_id.startswith("rec"):
+            view = find_view(views, admission_id)
+        else:
+            parsed_uuid = _parse_uuid(admission_id)
+            if parsed_uuid is None:
+                return None
+            row = await self.repo.get_contractor_admission_by_id(parsed_uuid)
+            record_id = row.feishu_record_id if row else None
+            view = find_view(views, record_id) if record_id else None
+        if view is None:
+            return None
+        values = {k: getattr(view, k) for k in mapped_field_keys()}
+        fresh = await self.upsert_from_bitable(values, view.id, "admission")
+        if fresh is None:
+            return None
+        return await self.run_admission_review(fresh.id, channel=channel)
+
     async def get_by_id(self, admission_id: uuid.UUID) -> ContractorAdmission | None:
         """按主键查询未删除记录（详情）。"""
         return await self.repo.get_contractor_admission_by_id(admission_id)
@@ -147,8 +304,22 @@ class ContractorAdmissionService:
     async def get_stats(self) -> dict[str, Any]:
         """相关方准入统计（精确计数，不估算）。
 
+        直读模式：全量视图内存统计（口径照 repo 三分组；by_ai_review_status 只会
+        出 none/completed——派生态不可表达 processing/failed，spec §4.2）。
         返回 {total, by_ai_review_status, by_related_party_type, by_submit_status}。
         """
+        from app.modules.safety.service.contractor_admission_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled():
+            from app.modules.safety.service.contractor_admission_direct import (
+                query as direct_query,
+            )
+
+            views = await self._fetch_direct_views()
+            await self._maybe_trigger_direct_reviews(views)
+            return direct_query.stats_of(views)
         return await self.repo.get_contractor_admission_stats()
 
     # ── AI 审核编排 ──
@@ -343,7 +514,22 @@ class ContractorAdmissionService:
     async def _writeback_review(
         self, admission: ContractorAdmission, output: AdmissionReviewOutput
     ) -> bool:
-        """回填 Bitable 3 字段（AI审核结论/报告/不符合项），写前 _set_sync_ignore 防回环。"""
+        """回填 Bitable 3 字段（AI审核结论/报告/不符合项），写前 _set_sync_ignore 防回环。
+
+        WRITEBACK_AI 开关只罩直读模式（DIRECT 开）：关=跳过 Bitable 写（平台行照常
+        更新，重复触发收敛靠行 diff 归零）；DIRECT 关（legacy）回写无条件执行——
+        开关全关=改造前行为。
+        """
+        from app.modules.safety.service.contractor_admission_direct import (
+            config as direct_config,
+        )
+
+        if direct_config.direct_enabled() and not direct_config.writeback_ai_enabled():
+            logger.info(
+                "相关方准入直读模式 WRITEBACK_AI 关闭，跳过 Bitable 回写 record_id=%s",
+                admission.feishu_record_id,
+            )
+            return True
         assert admission.feishu_record_id, "仅支持 Bitable 来源记录的回填"
         from app.modules.safety.feishu import bitable_handler as bh
         from app.modules.safety.feishu.bitable_client import SafetyBitableClient
