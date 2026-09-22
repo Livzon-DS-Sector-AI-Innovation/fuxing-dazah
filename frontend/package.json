@@ -23,6 +23,7 @@
     "echarts-for-react": "^3.0.6",
     "gsap": "^3.15.0",
     "lucide-react": "^1.24.0",
+    "mammoth": "^1.12.3",
     "motion": "^12.42.2",
     "next": "16.2.6",
     "ogl": "^1.0.11",

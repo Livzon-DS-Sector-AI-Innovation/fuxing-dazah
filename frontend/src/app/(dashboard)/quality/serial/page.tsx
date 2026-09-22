@@ -2,11 +2,12 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { Typography, Card, Table, DatePicker, Space, Button, App } from 'antd'
-import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined } from '@ant-design/icons'
+import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, EyeOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
 import type { DailyReportItem } from '@/types/quality'
 import { fetchDailyReports, downloadReportFile } from '@/actions/quality'
+import { CoaPreviewModal } from '@/components/quality'
 
 const { Title, Paragraph } = Typography
 
@@ -15,6 +16,9 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8
 export default function SerialRegistryPage() {
   const { message } = App.useApp()
   const [date, setDate] = useState(dayjs())
+  // 在线预览
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [previewTitle, setPreviewTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<DailyReportItem[]>([])
 
@@ -70,9 +74,15 @@ export default function SerialRegistryPage() {
     { title: '模板', dataIndex: 'template_path', key: 'template_path', width: 140, ellipsis: true },
     { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 90 },
     {
-      title: '操作', key: 'actions', width: 100,
+      title: '操作', key: 'actions', width: 160,
       render: (_: unknown, r: DailyReportItem) => (
-        <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(r)}>下载</Button>
+        <Space size={4}>
+          <Button size="small" icon={<EyeOutlined />}
+            onClick={() => { setPreviewId(r.report_id); setPreviewTitle(`报告单预览（${r.serial_no}｜批号 ${r.batch_number}）`) }}>
+            预览
+          </Button>
+          <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(r)}>下载</Button>
+        </Space>
       ),
     },
   ]
@@ -136,6 +146,13 @@ export default function SerialRegistryPage() {
           pagination={false}
         />
       </Card>
+
+      <CoaPreviewModal
+        open={!!previewId}
+        reportId={previewId}
+        title={previewTitle}
+        onClose={() => setPreviewId(null)}
+      />
     </div>
   )
 }

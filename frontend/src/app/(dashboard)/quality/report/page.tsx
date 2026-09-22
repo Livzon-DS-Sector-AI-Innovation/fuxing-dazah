@@ -3,9 +3,10 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Typography, Table, Input, Space, App, Button, Modal, Select, Skeleton } from 'antd'
-import { FileTextOutlined, DownloadOutlined, SearchOutlined } from '@ant-design/icons'
+import { FileTextOutlined, DownloadOutlined, SearchOutlined, EyeOutlined } from '@ant-design/icons'
 import type { ReportRecord } from '@/types/quality'
 import { fetchReportRecords, downloadReportFile, generateReport, fetchTemplates } from '@/actions/quality'
+import { CoaPreviewModal } from '@/components/quality'
 
 const { Title, Paragraph } = Typography
 
@@ -36,6 +37,10 @@ function ReportPageInner() {
   const [genTemplates, setGenTemplates] = useState<{ label: string; value: string }[]>([])
   const [genTemplate, setGenTemplate] = useState<string>()
   const [generating, setGenerating] = useState(false)
+
+  // 在线预览
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [previewTitle, setPreviewTitle] = useState('')
 
   const load = useCallback(async (p: number) => {
     setLoading(true)
@@ -125,9 +130,14 @@ function ReportPageInner() {
       render: (v: number) => v ? `${(v / 1024).toFixed(1)} KB` : '-' },
     { title: '生成时间', dataIndex: 'created_at', key: 'created_at', width: 170,
       render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
-    { title: '操作', key: 'actions', width: 180,
+    { title: '操作', key: 'actions', width: 210,
       render: (_: any, r: ReportRecord) => (
         <Space size={4}>
+          <Button size="small" icon={<EyeOutlined />}
+            onClick={() => { setPreviewId(r.id); setPreviewTitle(`报告单预览（批号 ${r.batch_number}）`) }}
+            disabled={!r.file_path}>
+            预览
+          </Button>
           <Button size="small" icon={<DownloadOutlined />}
             onClick={() => handleDownload(r)} disabled={!r.file_path}>
             下载
@@ -183,6 +193,13 @@ function ReportPageInner() {
           optionFilterProp="label"
         />
       </Modal>
+
+      <CoaPreviewModal
+        open={!!previewId}
+        reportId={previewId}
+        title={previewTitle}
+        onClose={() => setPreviewId(null)}
+      />
     </div>
   )
 }
