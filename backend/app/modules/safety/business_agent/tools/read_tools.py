@@ -1288,6 +1288,25 @@ async def query_cert_warnings(
 
     示例：本月有哪些人证到期？查 overdue 和 urgent 两个等级的；生产部 30 天内到期的证。
     """
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+
+    if cert_direct_config.direct_enabled():
+        from app.modules.safety.service.cert_direct.query import get_warnings_direct
+        from app.modules.safety.service.cert_direct.reader import open_reader
+
+        items, total = await get_warnings_direct(
+            open_reader(),
+            limit=limit,
+            department=department,
+            cert_category=cert_category,
+            status_level=status_level,
+            days_within=days_within,
+        )
+        return {
+            "items": [i.model_dump(mode="json") for i in items],
+            "total": total,
+        }
+
     from app.modules.safety.service.cert_warning import CertWarningService
 
     items, total = await CertWarningService(ctx.deps.db).get_warnings(

@@ -206,7 +206,15 @@ async def _on_cert_record_changed(event_data: dict) -> None:
     v2 payload 顶层含 file_token/table_id，record_id 与 action 在 action_list 项内；
     兼容旧 flat 格式（record_id/action 顶层）兜底。按 table_kind_by_id 二次过滤分发，
     与 oh / hazard 互不干扰。
+
+    直读闸门：SAFETY_CERT_DIRECT_ENABLED 开（且未显式开 EVENT_SYNC）时事件入口
+    短路 return——镜像停写，改回开关 + 重启即恢复旧链路。
     """
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+
+    if not cert_direct_config.legacy_event_sync_active():
+        return
+
     table_id = event_data.get("table_id", "")
     if table_kind_by_id(table_id) is None:
         return  # 非本 handler 关心的表

@@ -67,7 +67,8 @@ class CertWarningDetail(BaseModel):
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
-    id: uuid.UUID
+    # 直读形态 id 为飞书记录 ID 字符串、镜像形态为 UUID（central_alarm 同口径放宽）
+    id: uuid.UUID | str
     cert_category: CertCategory
     person_name: str
     department: str | None = None

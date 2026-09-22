@@ -695,6 +695,8 @@ async def _run_cert_warning_notification() -> None:
     流程：
       1. 独立 session（async_session_factory，避免污染调度器主 session）
       2. 拉全量候选 + CertWarningEngine 派生，过滤 active_levels（>90 normal 不打扰）
+         - SAFETY_CERT_DIRECT_ENABLED 开：直读 3 表全量（strict，单表失败聚合上抛走补发）
+         - 关（默认）：ORM 镜像路径（repo.get_all_active），与改造前行为一致
       3. 本人收个人卡片（IdentityResolver.resolve_by_name，按 person_name + department_hint）
       4. 部门负责人收汇总卡片（IdentityResolver.resolve_department_leader）
       5. 安管人员（许康福，复用 ALERT_NOTIFY_OPEN_ID）收全量汇总卡片
@@ -705,6 +707,7 @@ async def _run_cert_warning_notification() -> None:
     from app.core.database import async_session_factory
     from app.modules.safety.feishu import IdentityResolver
     from app.modules.safety.feishu.notification import send_user_card
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
     from app.modules.safety.service.cert_warning import (
         CertWarningEngine,
         CertWarningService,
@@ -714,17 +717,33 @@ async def _run_cert_warning_notification() -> None:
     active_levels = {"early_notice", "to_schedule", "key_warning", "urgent", "overdue"}
 
     async with async_session_factory() as session:
-        service = CertWarningService(session)
         resolver = IdentityResolver(session)
-
-        # 拉全量候选 + 引擎派生（定时任务需全量，不分页）
-        rows = await service.repo.get_all_active()
         today = date.today()
         warnings: list[tuple[Any, Any]] = []
-        for r in rows:
-            res = CertWarningEngine.calculate(r, today)
-            if res.status in active_levels:
-                warnings.append((r, res))
+
+        if cert_direct_config.direct_enabled():
+            # 直读：3 表全量（strict=True，任一表失败聚合上抛 → 调度器标 failed 补发）
+            from app.modules.safety.service.cert_direct.query import (
+                derive_warnings_direct,
+            )
+            from app.modules.safety.service.cert_direct.reader import open_reader
+
+            pairs = await derive_warnings_direct(
+                open_reader(), strict=True, today=today,
+            )
+            warnings = [
+                (d.view, d.result)
+                for d in pairs
+                if d.result.status in active_levels
+            ]
+        else:
+            # 镜像路径（默认，与改造前行为一致）
+            service = CertWarningService(session)
+            rows = await service.repo.get_all_active()
+            for r in rows:
+                res = CertWarningEngine.calculate(r, today)
+                if res.status in active_levels:
+                    warnings.append((r, res))
 
         # ① 本人个人卡片
         for r, res in warnings:

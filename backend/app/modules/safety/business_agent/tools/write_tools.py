@@ -777,6 +777,12 @@ async def renew_person_certificate(
 
     示例：把特种作业证 xxx 的复审时间更新为 2027-08-20；监护人 A 证 xxx 已换证，日期 2026-08-20。
     """
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+
+    # 直读模式：renew 只写平台 DB（直读不可见），明确拒绝防止无效回填（spec US-6）
+    if cert_direct_config.direct_enabled():
+        return {"error": cert_direct_config.RENEW_DIRECT_DISABLED_MESSAGE}
+
     from datetime import date as _date
 
     from app.modules.safety.schemas.cert_warnings import RenewRequest

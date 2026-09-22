@@ -43,6 +43,32 @@ async def get_cert_warnings(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """到期明细列表：状态/部门/类别筛选 + 分页（预警等级由引擎派生）"""
+    import time
+
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+    from app.modules.safety.service.cert_direct.query import get_warnings_direct
+    from app.modules.safety.service.cert_direct.reader import open_reader
+
+    if cert_direct_config.direct_enabled():
+        t0 = time.perf_counter()
+        items, total = await get_warnings_direct(
+            open_reader(),
+            skip=(page - 1) * page_size,
+            limit=page_size,
+            status_level=status_level.value if status_level else None,
+            department=department,
+            cert_category=cert_category.value if cert_category else None,
+            days_within=days_within,
+        )
+        return ApiResponse(
+            data=items,
+            meta={
+                "page": page, "page_size": page_size, "total": total,
+                "mode": "direct",
+                "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+            },
+        )
+
     service = CertWarningService(db)
     skip = (page - 1) * page_size
     items, total = await service.get_warnings(
@@ -69,6 +95,25 @@ async def get_cert_warnings_summary(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """汇总：6 档人数 + by_category + by_event"""
+    import time
+
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+    from app.modules.safety.service.cert_direct.query import get_summary_direct
+    from app.modules.safety.service.cert_direct.reader import open_reader
+
+    if cert_direct_config.direct_enabled():
+        t0 = time.perf_counter()
+        summary = await get_summary_direct(
+            open_reader(),
+            department=department,
+            cert_category=cert_category.value if cert_category else None,
+        )
+        return ApiResponse(
+            data=summary,
+            meta={"mode": "direct",
+                  "elapsed_ms": int((time.perf_counter() - t0) * 1000)},
+        )
+
     service = CertWarningService(db)
     summary = await service.get_summary(
         department=department,
@@ -89,6 +134,14 @@ async def renew_cert_warning(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """回填闭环：特种作业证→next_review_date；监护人证→renewed_date"""
+    from app.modules.safety.service.cert_direct import config as cert_direct_config
+
+    # 直读模式：renew 只写平台 DB（直读不可见），明确拒绝防止无效回填（spec US-6）
+    if cert_direct_config.direct_enabled():
+        return ApiResponse(
+            code=400, message=cert_direct_config.RENEW_DIRECT_DISABLED_MESSAGE,
+        )
+
     service = CertWarningService(db)
     try:
         item = await service.renew(

@@ -273,12 +273,17 @@ class CertWarningService:
             department=department, cert_category=cert_category,
         )
         today = date.today()
+        pairs = [(r, CertWarningEngine.calculate(r, today)) for r in rows]
+        return self.build_summary(pairs)
+
+    @staticmethod
+    def build_summary(pairs: list[tuple[Any, Any]]) -> CertWarningSummary:
+        """计数口径单一来源：镜像 ORM 路径与 cert_direct 直读路径共用。"""
         s = CertWarningSummary()
-        for r in rows:
-            res = CertWarningEngine.calculate(r, today)
+        for r, res in pairs:
             s.total += 1
             s.by_category[r.cert_category] = s.by_category.get(r.cert_category, 0) + 1
-            event_key = self._event_key(r.cert_category, res.current_node)
+            event_key = CertWarningService._event_key(r.cert_category, res.current_node)
             s.by_event[event_key] = s.by_event.get(event_key, 0) + 1
             match res.status:
                 case "overdue":

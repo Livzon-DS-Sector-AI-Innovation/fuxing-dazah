@@ -135,11 +135,18 @@ handler 收到 record 事件后执行 advance_record（判定 + AI 执行 + 回�
 
 ### 4.2 cert 持证到期（批次一-2）
 
-- **现状链路**：3 表事件 → PersonCertificate 镜像 → 预警任务 08:00 全量扫描（repo.get_all_active）→ CertWarningEngine 纯规则计算 → 本人/部门负责人/安管人员三级卡片推送；回写证件编号/预警状态。
-- **改造后**：任务执行时全量直读 3 表（证件是全生命周期在册数据，无日期窗口可用）→ 视图对象（字段与 PersonCertificate 同名）→ CertWarningEngine **零改动**（纯函数）→ 三级推送不变；编号/预警状态回写保留（_is_sync_ignored 防回环已就位）。Agent query_cert_warnings 与**持证列表 API** 切直读。
-- **新增开关**：SAFETY_CERT_DIRECT_ENABLED / _EVENT_SYNC_ENABLED / _WRITEBACK_WARNING_ENABLED。
-- **触点文件**：service/cert_warning.py（编排改直读 + 注入 reader）、feishu/cert_bitable_handler.py（闸门）、scheduler.py 入口、read_tools.py、api（持证预警页端点）。
-- **特别注意**：①特种作业证表挂在 **wiki 文档**下，直读需 wiki→base token 解析（现有 handler 已有该逻辑，抽纯函数复用）；②全量拉取前先探针确认行数量级（人×证 ≈ 千行内则单轮分页可承受）；③监护人 A/B 证同 Base 不同 table_id，cert_category 由 table_id 决定的映射要保持。
+> **2026-09-22 实施修正**（源码核实 + 探针后拍板，见 .scratch/cert-direct/spec.md）：
+> 本节原「回写证件编号/预警状态保留」与源码不符——cert 现状对 Bitable **零写入**
+> （handler 纯镜像、renew 只写平台 DB）。拍板改纯只读口径：renew 直读模式下禁用
+> （API 400 / Agent error，提示改在飞书表格更新），无 WRITEBACK 开关、不建列。
+> 注意①勘误：Bitable **读** API 直接接受 wiki token，直读路径无需 wiki→base 解析
+> （该解析仅 drive 订阅需要）；探针实证 cert 连接配置存的已是底层 Base token。
+
+- **现状链路**：3 表事件 → PersonCertificate 镜像 → 预警任务 08:00 全量扫描（repo.get_all_active）→ CertWarningEngine 纯规则计算 → 本人/部门负责人/安管人员三级卡片推送；renew 回填闭环只写平台 DB。
+- **改造后（按修正口径已实施）**：任务执行时全量直读 3 表（探针 559 行、并发 ~1.4s，Q6=A 全量）→ 视图对象（字段与 PersonCertificate 同名）→ CertWarningEngine **零改动**（纯函数）→ 三级推送不变；renew 直读下禁用。Agent query_cert_warnings 与**持证列表/汇总 API** 切直读（renew 端点直读短路）。
+- **新增开关**：SAFETY_CERT_DIRECT_ENABLED / _EVENT_SYNC_ENABLED（两开关，纯只读域）。
+- **触点文件**：service/cert_direct/（新增包：config/reader/query + tests）、scheduler.py 入口、feishu/cert_bitable_handler.py（闸门）、read_tools.py + write_tools.py、api/cert_warnings.py、schemas/cert_warnings.py（Detail.id 放宽 UUID|str）、bitable_direct/gates.py（DOMAIN_CERT）、.env.example。
+- **特别注意（保留给后续域参考）**：①原 wiki 解析需求勘误见上；②全量行数量级探针已做（559 行 << 3000，Q6=A）；③监护人 A/B 证同 Base 不同 table_id，cert_category 由 table_id 决定的映射要保持（已保持）；④guardian_b 表无「已换证日期」列（镜像该字段恒 None，直读同口径；若未来恢复 renew 回写 Bitable 需先建列）。
 
 ### 4.3 chemical_inventory 危化品库存（批次一-3）
 
@@ -251,7 +258,7 @@ handler 收到 record 事件后执行 advance_record（判定 + AI 执行 + 回�
 | Q2 | ehs_change 时机 | A) **URS 合并后第一期只切 Agent 查询** B) 并入当前 URS 开发 C) 现在整域直读 | **A**（批次三） |
 | Q3 | 停用域的 drive 订阅 | A) 保留订阅、闸门短路 B) **统一退订省事件量** | **B**。收尾票统一执行（4.12 节）；退订前置铁律：逐域确认事件只喂镜像；knowledge / msds / oh / ehs_change / hazard_id 不退 |
 | Q4 | 生产切换节奏 | A) **每域独立开 DIRECT + 观察 1 天** B) 全部完成后统一开 | **A** |
-| Q6 | cert 全量拉取量级 | 盘点后若 >3000 行：A) 仍全量（每日一次可承受） B) 增量窗口 + 到期月份预筛 | **待盘点**（倾向 A） |
+| Q6 | cert 全量拉取量级 | 盘点后若 >3000 行：A) 仍全量（每日一次可承受） B) 增量窗口 + 到期月份预筛 | **A**（2026-09-22 探针：3 表 559 行、并发 ~1.4s，远低于阈值）；同日拍板 cert 纯只读（renew 直读下禁用，见 §4.2 修正） |
 
 ## 9. 风险与对策（增量，通用风险见 09-17 清单第 9 节）
 
