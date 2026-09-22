@@ -1726,31 +1726,49 @@ async def query_key_risk_ops(
     from app.modules.safety.models import KeyRiskOperationReport
 
     try:
-        conds = [KeyRiskOperationReport.is_deleted.is_(False)]
-        if department:
-            conds.append(KeyRiskOperationReport.department.ilike(f"%{department}%"))
         start, end_exclusive = _date_bounds(date_from, date_to)
-        if start:
-            conds.append(KeyRiskOperationReport.start_time >= start)
-        if end_exclusive:
-            conds.append(KeyRiskOperationReport.start_time < end_exclusive)
-        if apply_status:
-            conds.append(KeyRiskOperationReport.apply_status == apply_status.strip())
-        if keyword:
-            conds.append(or_(
-                KeyRiskOperationReport.operation_content.ilike(f"%{keyword}%"),
-                KeyRiskOperationReport.area.ilike(f"%{keyword}%"),
-            ))
 
-        db = ctx.deps.db
-        total = (await db.execute(
-            select(func.count()).select_from(KeyRiskOperationReport).where(*conds)
-        )).scalar() or 0
-        rows = (await db.execute(
-            select(KeyRiskOperationReport).where(*conds)
-            .order_by(KeyRiskOperationReport.start_time.desc())
-            .offset((max(page, 1) - 1) * page_size).limit(min(page_size, 100))
-        )).scalars().all()
+        # 直读模式：Bitable 全量 + 内存过滤/分页（Agent 口径：department 模糊、
+        # keyword 两字段、无 source 过滤，与 legacy ORM 查询逐项一致）
+        from app.modules.safety.service.key_risk_op_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.key_risk_op_direct.query import (
+                query_ops_for_agent,
+            )
+            from app.modules.safety.service.key_risk_op_direct.reader import open_reader
+
+            rows, total = await query_ops_for_agent(
+                await open_reader().fetch_all(),
+                department=department, start=start, end_exclusive=end_exclusive,
+                apply_status=apply_status, keyword=keyword,
+                page=page, page_size=page_size,
+            )
+        else:
+            conds = [KeyRiskOperationReport.is_deleted.is_(False)]
+            if department:
+                conds.append(KeyRiskOperationReport.department.ilike(f"%{department}%"))
+            if start:
+                conds.append(KeyRiskOperationReport.start_time >= start)
+            if end_exclusive:
+                conds.append(KeyRiskOperationReport.start_time < end_exclusive)
+            if apply_status:
+                conds.append(KeyRiskOperationReport.apply_status == apply_status.strip())
+            if keyword:
+                conds.append(or_(
+                    KeyRiskOperationReport.operation_content.ilike(f"%{keyword}%"),
+                    KeyRiskOperationReport.area.ilike(f"%{keyword}%"),
+                ))
+
+            db = ctx.deps.db
+            total = (await db.execute(
+                select(func.count()).select_from(KeyRiskOperationReport).where(*conds)
+            )).scalar() or 0
+            rows = (await db.execute(
+                select(KeyRiskOperationReport).where(*conds)
+                .order_by(KeyRiskOperationReport.start_time.desc())
+                .offset((max(page, 1) - 1) * page_size).limit(min(page_size, 100))
+            )).scalars().all()
         items = [{
             "report_no": r.report_no,
             "department": r.department,

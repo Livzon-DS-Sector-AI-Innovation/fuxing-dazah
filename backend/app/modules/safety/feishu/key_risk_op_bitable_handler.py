@@ -24,7 +24,15 @@ logger = logging.getLogger(__name__)
 
 @on_event("drive.file.bitable_record_changed_v1")
 async def handle_key_risk_op_record_changed(event: dict) -> None:
-    """处理关键风险作业 Bitable 记录变更事件（仅同步数据，不触发审批/通知）。"""
+    """处理关键风险作业 Bitable 记录变更事件（仅同步数据，不触发审批/通知）。
+
+    直读闸门：事件镜像停用（DIRECT 开 + EVENT_SYNC 关）时整体短路
+    （cert/central/chemical 同口径）。
+    """
+    from app.modules.safety.service.key_risk_op_direct import config
+
+    if not config.legacy_event_sync_active():
+        return
     header = event.get("header", {})
     event_type = header.get("event_type", "")
 
@@ -126,9 +134,15 @@ async def _handle_delete(record_id: str) -> None:
 async def ensure_key_risk_op_bitable_subscribed() -> bool:
     """订阅关键风险作业多维表格云文档事件（飞书要求先订阅才能收到 Bitable 事件）。
 
+    直读闸门：事件镜像停用时不订阅（cert/central/chemical 同口径；退订由收尾票统一执行）。
     实时同步前置条件：WebSocket 长连接只会推送「已订阅文档」的变更事件，
     未订阅的文档（app_token）不会推送 drive.file.bitable_record_changed_v1。
     """
+    from app.modules.safety.service.key_risk_op_direct import config
+
+    if not config.legacy_event_sync_active():
+        logger.info("关键风险作业直读模式：跳过文档事件订阅")
+        return False
     try:
         import httpx
 

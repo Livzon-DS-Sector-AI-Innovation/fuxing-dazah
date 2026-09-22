@@ -1,6 +1,10 @@
-"""Safety API — key_risk_operation_reports endpoints（只读，Bitable 同步）."""
+"""Safety API — key_risk_operation_reports endpoints（只读，Bitable 同步）.
 
-import uuid
+直读模式：列表/统计 meta 带 mode=direct + elapsed_ms；详情路径参数接受 recXXX
+（DIRECT 开查直读视图，关解析 UUID 走镜像，非法串 404——原先由 FastAPI 422 校验）。
+"""
+
+import time
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
@@ -38,6 +42,10 @@ async def get_key_risk_operation_reports(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取关键风险作业报备列表（只读）"""
+    from app.modules.safety.service.key_risk_op_direct import config
+
+    direct = config.direct_enabled()
+    t0 = time.perf_counter()
     service = KeyRiskOperationReportService(db)
     skip = (page - 1) * page_size
     parsed_from = date.fromisoformat(date_from) if date_from else None
@@ -46,9 +54,13 @@ async def get_key_risk_operation_reports(
         skip, page_size, department, area, operation_content,
         apply_status, parsed_from, parsed_to, keyword,
     )
+    meta: dict[str, object] = {"page": page, "page_size": page_size, "total": total}
+    if direct:
+        meta["mode"] = "direct"
+        meta["elapsed_ms"] = int((time.perf_counter() - t0) * 1000)
     return ApiResponse(
         data=[KeyRiskOperationReportResponse.model_validate(i) for i in items],
-        meta={"page": page, "page_size": page_size, "total": total},
+        meta=meta,
     )
 
 
@@ -62,9 +74,16 @@ async def get_key_risk_operation_stats(
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
     """获取关键风险作业 KPI 统计（今日/审批中/本月/累计）"""
+    from app.modules.safety.service.key_risk_op_direct import config
+
+    direct = config.direct_enabled()
+    t0 = time.perf_counter()
     service = KeyRiskOperationReportService(db)
     stats = await service.get_stats()
-    return ApiResponse(data=KeyRiskOperationLedgerStats(**stats))
+    meta: dict[str, object] | None = None
+    if direct:
+        meta = {"mode": "direct", "elapsed_ms": int((time.perf_counter() - t0) * 1000)}
+    return ApiResponse(data=KeyRiskOperationLedgerStats(**stats), meta=meta)
 
 
 @key_risk_operation_reports_router.post(
@@ -122,11 +141,11 @@ async def export_key_risk_operation_reports(
     summary="获取关键风险作业报备详情",
 )
 async def get_key_risk_operation_report(
-    report_id: uuid.UUID,
+    report_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser | None = Depends(get_current_user),
 ):
-    """获取关键风险作业报备详情"""
+    """获取关键风险作业报备详情（直读模式接受 recXXX；legacy 接受 UUID）"""
     service = KeyRiskOperationReportService(db)
     item = await service.get_report(report_id)
     if not item:

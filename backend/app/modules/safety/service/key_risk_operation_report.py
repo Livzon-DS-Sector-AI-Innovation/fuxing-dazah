@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from sqlalchemy import select
@@ -22,6 +22,9 @@ from app.modules.safety.models import KeyRiskOperationReport
 from app.modules.safety.repository import SafetyRepository
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.modules.safety.service.key_risk_op_direct.views import KeyRiskOpView
 
 # ═══════════════════════════════════════════════════════════
 # Bitable 配置（配置中心 store；未启用/缺失时降级为空串）
@@ -221,7 +224,13 @@ class KeyRiskOperationReportService:
         """从飞书 Bitable 全量同步（GET /records 分页，upsert + 软删除）。
 
         以 feishu_record_id 为唯一键；申请状态为「已删除」的记录按删除处理。
+        直读模式下短路（防手工调用把停更镜像当最新，chemical 全量同步闸门同口径）。
         """
+        from app.modules.safety.service.key_risk_op_direct import config
+
+        if not config.legacy_event_sync_active():
+            logger.info("关键风险作业直读模式：跳过镜像全量同步")
+            return {"skipped": True, "reason": "direct_mode"}
         records: list[dict] = []
         page_token = None
         max_pages = 10
@@ -311,8 +320,23 @@ class KeyRiskOperationReportService:
         date_from: date | None = None,
         date_to: date | None = None,
         keyword: str | None = None,
-    ) -> tuple[list[KeyRiskOperationReport], int]:
-        """获取关键风险作业报备列表（只读）。date_from/date_to 为北京时间日期。"""
+    ) -> tuple[list[Any], int]:
+        """获取关键风险作业报备列表（只读）。date_from/date_to 为北京时间日期。
+
+        直读模式：Bitable 全量 + 内存过滤/分页（排序/口径与镜像一致，列表/导出同切）。
+        """
+        from app.modules.safety.service.key_risk_op_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.key_risk_op_direct.query import list_reports
+            from app.modules.safety.service.key_risk_op_direct.reader import open_reader
+
+            return await list_reports(
+                await open_reader().fetch_all(), skip, limit,
+                department=department, area=area,
+                operation_content=operation_content, apply_status=apply_status,
+                date_from=date_from, date_to=date_to, keyword=keyword,
+            )
         from_dt = _day_bounds_utc(date_from)[0] if date_from else None
         to_dt = _day_bounds_utc(date_to)[1] if date_to else None
         return await self.repo.get_key_risk_operation_reports(
@@ -320,15 +344,43 @@ class KeyRiskOperationReportService:
             apply_status, from_dt, to_dt, keyword,
         )
 
-    async def get_report(self, report_id: uuid.UUID) -> KeyRiskOperationReport | None:
-        """获取报备详情"""
+    async def get_report(
+        self, report_id: uuid.UUID | str
+    ) -> KeyRiskOperationReport | KeyRiskOpView | None:
+        """获取报备详情（直读模式：recXXX record_id 查直读视图；legacy 按 UUID 查镜像）。"""
+        from app.modules.safety.service.key_risk_op_direct import config
+
+        if config.direct_enabled() and isinstance(report_id, str):
+            from app.modules.safety.service.key_risk_op_direct.query import (
+                find_by_record_id,
+            )
+            from app.modules.safety.service.key_risk_op_direct.reader import open_reader
+
+            return find_by_record_id(await open_reader().fetch_all(), report_id)
+        if isinstance(report_id, str):
+            try:
+                report_id = uuid.UUID(report_id)
+            except ValueError:
+                return None
         return await self.repo.get_key_risk_operation_report_by_id(report_id)
 
     async def get_stats(self) -> dict:
-        """KPI 统计（北京时间口径）。"""
+        """KPI 统计（北京时间口径；直读模式：内存统计，口径与镜像一致）。"""
         today = date.today()
         today_start, today_end = _day_bounds_utc(today)
         month_start, month_end = _month_bounds_utc(today)
+        from app.modules.safety.service.key_risk_op_direct import config
+
+        if config.direct_enabled():
+            from app.modules.safety.service.key_risk_op_direct.query import (
+                compute_stats,
+            )
+            from app.modules.safety.service.key_risk_op_direct.reader import open_reader
+
+            return await compute_stats(
+                await open_reader().fetch_all(),
+                today_start, today_end, month_start, month_end,
+            )
         return await self.repo.get_key_risk_operation_stats(
             today_start, today_end, month_start, month_end,
         )

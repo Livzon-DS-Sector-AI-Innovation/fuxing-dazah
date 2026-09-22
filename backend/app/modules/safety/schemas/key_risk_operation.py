@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 class KeyRiskOperationReportResponse(BaseModel):
     """关键风险作业报备响应（只读）"""
 
-    id: uuid.UUID
+    # 直读模式 id 为飞书记录 ID（recXXX），created_at/updated_at 恒 None（Bitable 无自动时间字段）
+    id: uuid.UUID | str
     report_no: str
     approval_no_url: str | None = None
     source: str | None = None
@@ -50,8 +51,8 @@ class KeyRiskOperationReportResponse(BaseModel):
     phase_after: dict | None = None
 
     source_id: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         from_attributes = True
