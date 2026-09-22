@@ -88,19 +88,21 @@ FINISHED_RECEIPT_PROMPT = """你是制药厂仓库的成品入库单识别助手
 - receipt_date：入库日期（别名：进仓时间、日期；如 2026-09-21）
 
 ## 多行明细处理（进仓单常有同一表格多行，必须逐行看完再输出）
-- 多行「产品名称+产品批号」**相同**（如同批分装）：quantity 取各行数量**之和**
-  （如 12+2.62=14.62），并在 remark 写「共2行明细：3kg/听×4听(12kg)、2.62kg/听×1听(2.62kg)」；
-- 多行**批号不同**：取数量最大的一行作为主行提取必提字段，其余行完整写入 remark
-  （格式「其他行：批号X 数量Y单位Z 复验期W」），供人工在台账拆行登记，禁止丢弃任何一行；
-- 表格中的空行（值为 — 或空白）跳过。
+- 除 10 个字段外，**必须输出 rows 数组**：表格明细每一行一个元素，禁止合并或丢弃任何行；
+- 每个元素结构（6 键）：
+  {"product_name": "达托霉素", "product_batch_no": "DA2609011", "quantity": 12, "unit": "kg", "spec": null, "produced_at": "2026.09.14", "expiry": "2028.09.13"}
+  （quantity 为该行数字；spec/produced_at/expiry 该行没有就 null）
+- **同批号多行也必须分行列出，禁止自行求和**——系统会按批号归组求和；不同批号同样逐行列出；
+- 空行（值为 — 或空白）跳过；行数可能较多，务必逐行数清、行行列对。
 
 ## 输出要求（严格遵守）
 1. 只输出一个 JSON 对象，禁止输出任何解释文字或 markdown 代码块。
-2. JSON 结构（10 个字段全部出现，格式统一）：
-   {"product_name": {"value": "达托霉素", "confidence": 0.95}, "product_batch_no": {"value": "DA2609001", "confidence": 0.9}, ...}
+2. JSON 结构（10 个标量字段 + rows 数组，全部出现）：
+   {"product_name": {"value": "达托霉素", "confidence": 0.95}, "product_batch_no": {"value": "DA2609001", "confidence": 0.9}, ..., "rows": [{"product_name": "达托霉素", "product_batch_no": "DA2609011", "quantity": 12, "unit": "kg", "spec": null, "produced_at": "2026.09.14", "expiry": "2028.09.13"}]}
+   标量字段取数量最大的主行填写；单行单据 rows 也必须有该一行。
 3. 每个字段的 confidence 是 0 到 1 的小数：清晰可辨 ≥0.8，模糊但可推断 0.4-0.8，猜测 <0.4。
 4. 无法辨认时 value 填 null 并给低 confidence，但必提字段必须基于图片给出最佳猜测，不要轻易填 null。
-5. quantity 的 value 必须是数字或数字字符串，不要带单位；多行同批求和后可给小数。
+5. quantity 的 value 必须是数字或数字字符串，不要带单位。
 6. 图片可能是手写单据：逐字仔细辨认，禁止把图中没有的信息编造为高置信度——辨认不清就给低 confidence。
 """
 
@@ -212,8 +214,9 @@ class RecognizedReceipt(BaseModel):
 class RecognizedFinishedReceipt(BaseModel):
     """一张成品入库单的完整识别结果（V3.0 §4.6）。
 
-    必提 4 字段恒存在（无法辨认时 value=None、confidence=0）；选提 6 字段
-    识别不到时字段本身为 None；raw 保留 LLM 原始识别 JSON。
+    必提 4 字段恒存在（无法辨认时 value=None、confidence=0，取主行）；选提 6
+    字段识别不到时字段本身为 None；**rows 为表格逐行明细**（多行登记的提交
+    集合来源，系统按批号归组求和）；raw 保留 LLM 原始识别 JSON。
     """
 
     product_name: RecognizedField
@@ -228,6 +231,7 @@ class RecognizedFinishedReceipt(BaseModel):
     storage_location: RecognizedField | None = None
     receipt_date: RecognizedField | None = None
 
+    rows: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -446,6 +450,18 @@ async def recognize_receipt(
     return build_receipt(payload)
 
 
+# 成品入库行级明细键（rows 数组元素契约；quantity 行内数字）
+FINISHED_ROW_KEYS: tuple[str, ...] = (
+    "product_name",
+    "product_batch_no",
+    "quantity",
+    "unit",
+    "spec",
+    "produced_at",
+    "expiry",
+)
+
+
 def build_finished_receipt(payload: dict[str, Any]) -> RecognizedFinishedReceipt:
     """把成品入库识别 JSON dict 构造为 RecognizedFinishedReceipt（缺省容错）。"""
     kwargs: dict[str, Any] = {"raw": payload}
@@ -454,6 +470,21 @@ def build_finished_receipt(payload: dict[str, Any]) -> RecognizedFinishedReceipt
     for name in FINISHED_OPTIONAL_FIELDS:
         if payload.get(name) is not None:
             kwargs[name] = _to_field(payload[name])
+    parsed_rows: list[dict[str, Any]] = []
+    raw_rows = payload.get("rows")
+    if isinstance(raw_rows, list):
+        for item in raw_rows:
+            if not isinstance(item, dict):
+                continue
+            row = {
+                key: item.get(key)
+                for key in FINISHED_ROW_KEYS
+                if item.get(key) is not None and str(item.get(key)).strip()
+            }
+            # 行级必填四键齐全才收（残行丢弃，标量主行仍兜底）
+            if all(str(row.get(k) or "").strip() for k in FINISHED_REQUIRED_FIELDS):
+                parsed_rows.append(row)
+    kwargs["rows"] = parsed_rows
     return RecognizedFinishedReceipt(**kwargs)
 
 

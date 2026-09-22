@@ -954,13 +954,62 @@ def _render_finished_receipt_confirm_card(draft: Any) -> dict[str, Any]:
     识别/对话双入口共用：识别路径 recognized 携带置信度（⚠ 规则生效）、
     对话路径 aligned 即收集值（无置信度语义，⚠ 仅缺字段提醒）——_field_line
     的 aligned 覆盖优先机制天然兼容两形态。质量状态恒写「待检」以静态行
-    提示（不占字段行）。渲染防御同主入口：字段缺失降级，不抛错。
+    提示（不占字段行）。多行登记（识别 rows 归组 >1 行）时按行展示提交集
+    合（每行一条台账），标量字段以第一行为主。渲染防御同主入口，不抛错。
     """
     aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
     recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
     draft_no = _clean(getattr(draft, "draft_no", ""), 30)
     scene = str(getattr(draft, "scene", "") or FINISHED_RECEIPT_SCENE)
     draft_id = str(getattr(draft, "id", ""))
+
+    from app.modules.warehouse.agent.pipeline.submit import (
+        normalize_finished_receipt_rows,
+    )
+
+    try:
+        rows = normalize_finished_receipt_rows(draft)
+    except Exception:  # noqa: BLE001 — 归组失败按单行渲染降级
+        rows = []
+    multi = len(rows) > 1
+
+    if multi:
+        lines = [
+            f"**草稿**：{draft_no or '-'}",
+            "",
+            f"**登记信息（共 {len(rows)} 行，按批号归组，每行一条台账）**",
+        ]
+        for index, row in enumerate(rows, start=1):
+            lines.append(
+                f"{index}. {row.get('product_name') or '-'}"
+                f"　批 **{row.get('product_batch_no') or '-'}**："
+                f"{row.get('quantity', '-')} {row.get('unit', '')}"
+            )
+        lines.extend(["", "**补充信息（以第一行为主）**"])
+        for index, (label, key) in enumerate(FINISHED_RECEIPT_OPTIONAL_FIELDS, 1):
+            lines.append(
+                _field_line(index, label, key, recognized, aligned, warn_on_missing=False)
+            )
+        lines.extend(["", "**质量状态**：待检（每行默认，QC 判定后在台账改判）"])
+        lines.extend([
+            "",
+            "💡 确认后**按行写入台账**；回复修改（如「数量改成 55」）仅调整"
+            "第一行，其余行确认后请在台账调整。",
+        ])
+        value_base = {"scene": scene, "draft_id": draft_id}
+        return build_card(
+            title=FINISHED_RECEIPT_CONFIRM_CARD_TITLE,
+            template="orange",
+            elements=[
+                _md("\n".join(lines)),
+                {"tag": "hr"},
+                _confirm_cancel_buttons(
+                    value_base,
+                    confirm_label=CONFIRM_FINISHED_RECEIPT_BUTTON_LABEL,
+                    cancel_label=CANCEL_FINISHED_RECEIPT_BUTTON_LABEL,
+                ),
+            ],
+        )
 
     lines = [f"**草稿**：{draft_no or '-'}", "", "**登记信息**"]
     for index, (label, key) in enumerate(FINISHED_RECEIPT_REQUIRED_FIELDS, 1):

@@ -186,13 +186,18 @@ async def _drain_gateway_tasks() -> None:
 
 
 class FakeAdapter:
-    """submit_finished_receipt 最小 adapter 面（create 自回显 + get 读回）。"""
+    """submit_finished_receipt 最小 adapter 面（create 自回显 + get 读回）。
+
+    多行提交按序返回 rec_fake_fr_001… 并逐行记录 created_rows（按 record_id 读回）。
+    """
 
     record_id = "rec_fake_fr_001"
 
     def __init__(self, read_override: dict[str, Any] | None = None) -> None:
         self.created: dict[str, Any] | None = None
+        self.created_rows: list[dict[str, Any]] = []
         self.read_override = read_override or {}
+        self._seq = 0
 
     async def refresh_table_fields(self, table_key: str) -> dict[str, Any]:
         return {}
@@ -200,11 +205,20 @@ class FakeAdapter:
     async def create_record(
         self, table_key: str, fields: dict[str, Any]
     ) -> dict[str, Any]:
+        self._seq += 1
+        rid = f"rec_fake_fr_{self._seq:03d}"
+        self.created_rows.append({"record_id": rid, "fields": dict(fields)})
         self.created = dict(fields)
-        return {"record_id": self.record_id, "fields": {}}
+        return {"record_id": rid, "fields": {}}
 
     async def get_record(self, table_key: str, record_id: str) -> dict[str, Any]:
-        fields = dict(self.created or {})
+        fields: dict[str, Any] = {}
+        for row in self.created_rows:
+            if row["record_id"] == record_id:
+                fields = dict(row["fields"])
+                break
+        else:
+            fields = dict(self.created or {})
         for name, value in self.read_override.items():
             fields[name] = value
         return {"record_id": record_id, "fields": fields}

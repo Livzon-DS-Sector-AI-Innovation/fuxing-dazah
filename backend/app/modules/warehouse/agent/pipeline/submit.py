@@ -1372,6 +1372,177 @@ async def _build_and_validate_finished_receipt(
     return fields, degraded
 
 
+# ── 多行登记（§4.6 追加，2026-09-22 用户实测一单多批号）──
+# 识别 rows 数组（表格逐行）→ 按批号归组求和（同批一条，库存按批号一本账）
+# → 确认卡按行展示 → 确认后逐行 create_record 写 N 条台账。
+# aligned 标量覆盖应用主行（第一行）；对话路径无 rows 走既有单行路径不动。
+
+
+def normalize_finished_receipt_rows(
+    draft: WarehouseAgentDraft,
+) -> list[dict[str, Any]]:
+    """draft → 归组后的台账行集合（canonical 键；≥1 行）。
+
+    来源优先级：recognized.rows（识别逐行）→ aligned 标量（对话收集单行）。
+    归组键 = (产品名称, 产品批号, 单位)，组内 quantity 求和、其余字段取首个
+    非空、remark 合并并注明合并行数。aligned 标量覆盖应用主行（第一行）。
+    """
+    recognized = draft.recognized if isinstance(draft.recognized, dict) else {}
+    aligned = draft.aligned if isinstance(draft.aligned, dict) else {}
+
+    rows: list[dict[str, Any]] = []
+    raw_rows = recognized.get("rows")
+    if isinstance(raw_rows, list):
+        for item in raw_rows:
+            if not isinstance(item, dict):
+                continue
+            row = {
+                key: str(item[key]).strip()
+                for key in (
+                    "product_name", "product_batch_no", "quantity", "unit",
+                    "spec", "produced_at", "expiry", "remark",
+                )
+                if item.get(key) is not None and str(item.get(key)).strip()
+            }
+            if all(row.get(k) for k in ("product_name", "product_batch_no", "quantity", "unit")):
+                rows.append(row)
+    if not rows:
+        single = {
+            key: str(aligned[key]).strip()
+            for key in (
+                "product_name", "product_batch_no", "quantity", "unit",
+                "spec", "produced_at", "expiry", "workshop",
+                "storage_location", "remark",
+            )
+            if aligned.get(key) is not None and str(aligned[key]).strip()
+        }
+        if single.get("product_name") and single.get("quantity"):
+            rows.append(single)
+    if not rows:
+        return []
+
+    # aligned 标量覆盖 → 主行（第一行；用户回复「数量改成 55」等）
+    for key, value in aligned.items():
+        if value is None or not str(value).strip() or not rows:
+            continue
+        if key in ("product_name", "product_batch_no", "quantity", "unit",
+                   "spec", "produced_at", "expiry", "workshop",
+                   "storage_location", "remark"):
+            rows[0][key] = str(value).strip()
+
+    # 文档级字段（车间/库区位置/入库日期）应用到每一行：
+    # aligned 覆盖优先，回落识别顶层标量（{value, confidence} 形态）
+    for key in ("workshop", "storage_location", "receipt_date"):
+        value: Any = aligned.get(key)
+        if value is None or not str(value).strip():
+            item = recognized.get(key)
+            if isinstance(item, dict):
+                inner = item.get("value")
+                if inner is not None and str(inner).strip():
+                    value = inner
+        if value is not None and str(value).strip():
+            for row in rows:
+                row.setdefault(key, str(value).strip())
+
+    # 归组求和：同批号一条（组内其余字段取首个非空，remark 合并注明）
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str, str]] = []
+    for row in rows:
+        key = (
+            row.get("product_name", ""),
+            row.get("product_batch_no", ""),
+            row.get("unit", ""),
+        )
+        if key not in groups:
+            groups[key] = dict(row)
+            groups[key]["_members"] = [row]
+            order.append(key)
+        else:
+            groups[key]["_members"].append(row)
+            for src_key, value in row.items():
+                if src_key in ("quantity", "_members"):
+                    continue
+                if not groups[key].get(src_key):
+                    groups[key][src_key] = value
+
+    result: list[dict[str, Any]] = []
+    for key in order:
+        group = groups.pop(key)
+        members: list[dict[str, Any]] = group.pop("_members")
+        total: int | float | None = None
+        for member in members:
+            num = _to_number(member.get("quantity"))
+            if num is not None:
+                total = num if total is None else total + num
+        if total is not None:
+            if isinstance(total, float) and total.is_integer():
+                total = int(total)  # 整值去 .0（12.0 → 12，卡片/台账展示干净）
+            group["quantity"] = total
+        if len(members) > 1:
+            remarks = [m.get("remark") for m in members if m.get("remark")]
+            remarks.append(f"共{len(members)}行合并")
+            group["remark"] = "；".join(remarks)
+        result.append(group)
+    return result
+
+
+def build_finished_receipt_row_fields(
+    row: dict[str, Any],
+    *,
+    table_fields: dict[str, FieldMeta],
+    today: date | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """归组行（canonical 键）→ 单条台账写入字段（口径与单行路径完全一致）：
+    quantity 数字化、单选适配、入库日期缺省今天、质量状态恒待检、车间写备注前缀。"""
+    fields: dict[str, Any] = {}
+    degraded: list[str] = []
+
+    def value_of(key: str) -> Any:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return value
+        return None
+
+    for key, field_name, is_select in _FINISHED_RECEIPT_FIELD_MAP:
+        value = value_of(key)
+        if value is None:
+            continue
+        if key == "quantity":
+            num = _to_number(value)
+            if num is None:
+                degraded.append(field_name)
+                continue
+            fields[field_name] = num
+            continue
+        text = str(value).strip()
+        if is_select:
+            adapted = _select_or_skip(table_fields, field_name, text, degraded)
+            if not adapted:
+                continue
+            text = adapted
+        fields[field_name] = text
+
+    receipt_date = value_of("receipt_date")
+    receipt_ms: int | None = None
+    if receipt_date is not None:
+        receipt_ms = _parse_date_ms(str(receipt_date))
+        if receipt_ms is None:
+            degraded.append("入库日期")
+    fields["入库日期"] = receipt_ms if receipt_ms is not None else _today_ms(today)
+    fields["质量状态"] = FINISHED_RECEIPT_QUALITY_DEFAULT
+
+    workshop = str(value_of("workshop") or "").strip()
+    remark = str(value_of("remark") or "").strip()
+    remark_parts = []
+    if workshop:
+        remark_parts.append(f"入库车间：{workshop}")
+    if remark:
+        remark_parts.append(remark)
+    if remark_parts:
+        fields["备注"] = "；".join(remark_parts)
+    return fields, degraded
+
+
 async def submit_finished_receipt(db: AsyncSession, draft: WarehouseAgentDraft) -> str | None:
     """成品入库提交：写契约 → create_record → 读回核对 → submitted + 回执。
 
@@ -1386,6 +1557,103 @@ async def submit_finished_receipt(db: AsyncSession, draft: WarehouseAgentDraft) 
         )
 
     adapter = get_adapter()
+
+    # ── 多行路径（识别 rows 归组 >1 行）：逐行 build→validate→create→verify ──
+    rows = normalize_finished_receipt_rows(draft)
+    if len(rows) > 1:
+        table_fields = await _finished_receipt_table_fields()
+        created_ids: list[str] = []
+        all_degraded: list[str] = []
+        mismatches: list[dict[str, Any]] = []
+        written_summary: dict[str, Any] = {}
+        consistent = True
+        for index, row in enumerate(rows, start=1):
+            fields, degraded = build_finished_receipt_row_fields(
+                row, table_fields=table_fields
+            )
+            validate_write_fields(
+                FINISHED_RECEIPT_TABLE, fields, table_fields=table_fields
+            )
+            created = await adapter.create_record(FINISHED_RECEIPT_TABLE, fields)
+            record_id = str(created.get("record_id") or "")
+            if not record_id:
+                raise WarehouseBitableError(
+                    "create_record 未返回 record_id", code="no_record_id"
+                )
+            check = await _verify_record(
+                adapter,
+                record_id,
+                fields,
+                table_key=FINISHED_RECEIPT_TABLE,
+                check_fields=FINISHED_RECEIPT_CHECK_FIELDS,
+            )
+            consistent = consistent and bool(check["consistent"])
+            for item in check.get("mismatches") or []:
+                if isinstance(item, dict):
+                    mismatches.append({**item, "field": f"行{index} {item.get('field')}"})
+            created_ids.append(record_id)
+            all_degraded.extend(degraded)
+            written_summary[f"行{index} {fields.get('产品批号', '?')}"] = (
+                f"{fields.get('入库数量', '-')}{fields.get('单位', '')}"
+                f"（{fields.get('质量状态', '')}）"
+            )
+
+        from_status = draft.status
+        draft.status = "submitted"
+        meta = get_table_meta(FINISHED_RECEIPT_TABLE)
+        draft.target_base = meta["base_token"]
+        draft.target_table = meta["table_id"]
+        draft.target_record_id = created_ids[0]  # 主记录（其余在 audit/回执）
+        await db.flush()
+
+        await repository.insert_agent_audit(
+            db,
+            tool_name="submit_finished_receipt",
+            args_summary={
+                "draft_no": draft.draft_no,
+                "row_count": len(rows),
+                "record_ids": created_ids,
+                "degraded": all_degraded,
+                "from": from_status,
+                "to": "submitted",
+            },
+            result_status="ok",
+            error_code=None if consistent else "mismatch",
+            duration_ms=_elapsed_ms(started),
+            draft_id=draft.id,
+        )
+
+        from app.modules.warehouse.agent.cards import render_receipt_result_card
+
+        card = render_receipt_result_card(
+            draft,
+            {
+                "consistent": consistent,
+                "mismatches": mismatches,
+                "written": written_summary,
+                "record_id": created_ids[0],
+                "degraded": all_degraded,
+                "row_count": len(rows),
+            },
+        )
+        await _send_result_card(draft, card)
+
+        logger.info(
+            "成品入库多行提交完成: draft_no=%s rows=%d record_ids=%s consistent=%s",
+            draft.draft_no, len(rows), created_ids, consistent,
+        )
+        if consistent:
+            note = (
+                f"✅ 成品入库已登记：{draft.draft_no}"
+                f"（共 {len(rows)} 行，首条记录 {created_ids[0]}）"
+            )
+        else:
+            note = (
+                f"⚠ 成品入库已登记：{draft.draft_no}（共 {len(rows)} 行），"
+                f"部分字段读回不一致，请到 Base 核对"
+            )
+        return note
+
     fields, degraded = await _build_and_validate_finished_receipt(draft)
 
     created = await adapter.create_record(FINISHED_RECEIPT_TABLE, fields)
