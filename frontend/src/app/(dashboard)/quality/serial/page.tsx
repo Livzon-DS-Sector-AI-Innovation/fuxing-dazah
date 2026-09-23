@@ -1,40 +1,55 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Typography, Card, Table, DatePicker, Space, Button, App } from 'antd'
+import { Typography, Card, Table, DatePicker, Space, Button, App, Segmented } from 'antd'
 import { PrinterOutlined, SearchOutlined, DownloadOutlined, FileExcelOutlined, EyeOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import * as XLSX from 'xlsx'
-import type { DailyReportItem } from '@/types/quality'
-import { fetchDailyReports, downloadReportFile } from '@/actions/quality'
+import type { DailyReportItem, MonthlyReportSummary } from '@/types/quality'
+import { fetchDailyReports, fetchMonthlyReports, downloadReportFile } from '@/actions/quality'
 import { CoaPreviewModal } from '@/components/quality'
 
 const { Title, Paragraph } = Typography
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
+type ViewMode = 'day' | 'month'
+
 export default function SerialRegistryPage() {
   const { message } = App.useApp()
+  const [viewMode, setViewMode] = useState<ViewMode>('day')
   const [date, setDate] = useState(dayjs())
+  const [month, setMonth] = useState(dayjs())
   // 在线预览
   const [previewId, setPreviewId] = useState<string | null>(null)
   const [previewTitle, setPreviewTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState<DailyReportItem[]>([])
+  const [monthly, setMonthly] = useState<MonthlyReportSummary | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchDailyReports(date.format('YYYY-MM-DD'))
-      setData(res.data || [])
+      if (viewMode === 'day') {
+        const res = await fetchDailyReports(date.format('YYYY-MM-DD'))
+        setData(res.data || [])
+      } else {
+        const res = await fetchMonthlyReports(month.format('YYYY-MM'))
+        setMonthly(res.data)
+      }
     } catch (err: any) {
       message.error(err.message || '查询失败')
     } finally {
       setLoading(false)
     }
-  }, [date, message])
+  }, [viewMode, date, month, message])
 
   useEffect(() => { load() }, [load])
+
+  const openPreview = (r: DailyReportItem) => {
+    setPreviewId(r.report_id)
+    setPreviewTitle(`报告单预览（${r.serial_no}｜批号 ${r.batch_number}）`)
+  }
 
   const handleDownload = async (r: DailyReportItem) => {
     try {
@@ -67,7 +82,27 @@ export default function SerialRegistryPage() {
     XLSX.writeFile(wb, `报告单流水-${date.format('YYYYMMDD')}.xlsx`)
   }
 
-  const columns = [
+  const handleExportMonth = () => {
+    if (!monthly || !monthly.total) {
+      message.warning('当月暂无流水记录可导出')
+      return
+    }
+    const wb = XLSX.utils.book_new()
+    const rows = monthly.days.flatMap((d) =>
+      d.items.map((r) => ({
+        '日期': d.date,
+        '流水号': r.serial_no,
+        '产品名称': r.product_name,
+        '批号': r.batch_number,
+        '模板': r.template_path,
+        '时间': r.created_at,
+      })),
+    )
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), '月度流水')
+    XLSX.writeFile(wb, `报告单流水-${monthly.month}.xlsx`)
+  }
+
+  const itemColumns = [
     { title: '流水号', dataIndex: 'serial_no', key: 'serial_no', width: 120 },
     { title: '产品名称', dataIndex: 'product_name', key: 'product_name', ellipsis: true },
     { title: '批号', dataIndex: 'batch_number', key: 'batch_number', width: 140 },
@@ -77,13 +112,24 @@ export default function SerialRegistryPage() {
       title: '操作', key: 'actions', width: 160,
       render: (_: unknown, r: DailyReportItem) => (
         <Space size={4}>
-          <Button size="small" icon={<EyeOutlined />}
-            onClick={() => { setPreviewId(r.report_id); setPreviewTitle(`报告单预览（${r.serial_no}｜批号 ${r.batch_number}）`) }}>
-            预览
-          </Button>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => openPreview(r)}>预览</Button>
           <Button size="small" icon={<DownloadOutlined />} onClick={() => handleDownload(r)}>下载</Button>
         </Space>
       ),
+    },
+  ]
+
+  const monthColumns = [
+    { title: '日期', dataIndex: 'date', key: 'date', width: 130 },
+    { title: '份数', dataIndex: 'count', key: 'count', width: 80 },
+    {
+      title: '流水号范围', key: 'serial_range', ellipsis: true,
+      render: (_: unknown, d: MonthlyReportSummary['days'][number]) => {
+        const serials = d.items.map((i) => i.serial_no).filter((s) => s !== '-')
+        if (!serials.length) return '-'
+        const sorted = [...serials].sort()
+        return sorted.length === 1 ? sorted[0] : `${sorted[0]} ~ ${sorted[sorted.length - 1]}`
+      },
     },
   ]
 
@@ -102,15 +148,35 @@ export default function SerialRegistryPage() {
       <div>
         <Title level={3} style={{ marginBottom: 4 }}>📇 报告单流水</Title>
         <Paragraph type="secondary" style={{ marginBottom: 16 }}>
-          按日期查询报告单流水号（流水号｜产品｜批号），支持打印存档。打印模板接入后可按正式版式出单。
+          按日或按月查询报告单流水号（流水号｜产品｜批号），支持打印存档与 Excel 导出。打印模板接入后可按正式版式出单。
         </Paragraph>
       </div>
 
       <Space style={{ marginBottom: 16 }} wrap>
-        <DatePicker value={date} onChange={(d) => d && setDate(d)} allowClear={false} />
+        <Segmented
+          value={viewMode}
+          onChange={(v) => setViewMode(v as ViewMode)}
+          options={[{ label: '按日', value: 'day' }, { label: '按月', value: 'month' }]}
+        />
+        {viewMode === 'day' ? (
+          <DatePicker value={date} onChange={(d) => d && setDate(d)} allowClear={false} />
+        ) : (
+          <DatePicker
+            picker="month"
+            value={month}
+            onChange={(d) => d && setMonth(d)}
+            allowClear={false}
+          />
+        )}
         <Button type="primary" icon={<SearchOutlined />} onClick={load}>查询</Button>
-        <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出 Excel</Button>
-        <Button icon={<PrinterOutlined />} onClick={() => window.print()}>打印</Button>
+        {viewMode === 'day' ? (
+          <>
+            <Button icon={<FileExcelOutlined />} onClick={handleExport}>导出 Excel</Button>
+            <Button icon={<PrinterOutlined />} onClick={() => window.print()}>打印</Button>
+          </>
+        ) : (
+          <Button icon={<FileExcelOutlined />} onClick={handleExportMonth}>导出当月 Excel</Button>
+        )}
       </Space>
 
       {/* 打印区：纯表格版式（打印模板接入后替换为模板样式）。
@@ -136,16 +202,40 @@ export default function SerialRegistryPage() {
         </table>
       </div>
 
-      <Card size="small" title={`${date.format('YYYY-MM-DD')} 报告单流水（${data.length} 份）`}>
-        <Table
-          rowKey="report_id"
-          columns={columns}
-          dataSource={data}
-          loading={loading}
-          size="small"
-          pagination={false}
-        />
-      </Card>
+      {viewMode === 'day' ? (
+        <Card size="small" title={`${date.format('YYYY-MM-DD')} 报告单流水（${data.length} 份）`}>
+          <Table
+            rowKey="report_id"
+            columns={itemColumns}
+            dataSource={data}
+            loading={loading}
+            size="small"
+            pagination={false}
+          />
+        </Card>
+      ) : (
+        <Card size="small" title={`${monthly?.month || month.format('YYYY-MM')} 月度流水汇总（共 ${monthly?.total ?? 0} 份，${monthly?.days.length ?? 0} 个出报日）`}>
+          <Table
+            rowKey="date"
+            columns={monthColumns}
+            dataSource={monthly?.days || []}
+            loading={loading}
+            size="small"
+            pagination={false}
+            expandable={{
+              expandedRowRender: (d) => (
+                <Table
+                  rowKey="report_id"
+                  columns={itemColumns}
+                  dataSource={d.items}
+                  size="small"
+                  pagination={false}
+                />
+              ),
+            }}
+          />
+        </Card>
+      )}
 
       <CoaPreviewModal
         open={!!previewId}

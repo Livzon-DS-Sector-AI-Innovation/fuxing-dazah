@@ -19,6 +19,7 @@ import type {
   SummaryTrend,
   QualityDashboard,
   DailyReportItem,
+  MonthlyReportSummary,
 } from '@/types/quality'
 
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000'
@@ -747,5 +748,15 @@ export async function fetchDailyReports(date?: string): Promise<{ data: DailyRep
     headers: await _authHeaders(), cache: 'no-store',
   })
   if (!res.ok) throw new Error('获取报告单汇总失败')
+  return res.json()
+}
+
+/** 按月汇总报告单流水（月末归档对账）。 */
+export async function fetchMonthlyReports(month?: string): Promise<{ data: MonthlyReportSummary }> {
+  const qs = month ? `?month=${month}` : ''
+  const res = await fetch(`${API_BASE_URL}/api/v1/quality/summary/monthly-reports${qs}`, {
+    headers: await _authHeaders(), cache: 'no-store',
+  })
+  if (!res.ok) throw new Error('获取月度汇总失败')
   return res.json()
 }

@@ -215,6 +215,18 @@ async def create_report_record(
     return report
 
 
+async def list_report_records_between(
+    db: AsyncSession, start: datetime, end: datetime
+) -> list[ReportRecord]:
+    """时间段内的报告单（月度汇总用），按创建时间升序。"""
+    stmt = select(ReportRecord).where(
+        ReportRecord.created_at >= start,
+        ReportRecord.created_at < end,
+        ReportRecord.is_deleted == False,  # noqa: E712
+    ).order_by(ReportRecord.created_at)
+    return list((await db.execute(stmt)).scalars())
+
+
 async def count_report_records_since(
     db: AsyncSession, since: datetime
 ) -> int:

@@ -57,6 +57,7 @@ from app.modules.quality.repository import (
     list_coa_bindings,
     list_inspection_records,
     list_report_records,
+    list_report_records_between,
     list_report_records_by_date,
     list_standard_documents,
     list_standard_items,
@@ -897,6 +898,44 @@ async def daily_reports(
         }
         for it in items
     ])
+
+
+@router.get("/summary/monthly-reports", summary="按月汇总报告单流水（月末归档对账）")
+async def monthly_reports(
+    month: str | None = Query(default=None, description="月份 YYYY-MM，默认当月"),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    m = month or today().strftime("%Y-%m")
+    start = datetime.fromisoformat(f"{m}-01").replace(tzinfo=APP_TZ)
+    end = (start.replace(month=start.month + 1) if start.month < 12
+           else start.replace(year=start.year + 1, month=1))
+    items = await list_report_records_between(db, start, end)
+    by_day: dict[str, list] = {}
+    for it in items:
+        d = it.created_at.astimezone(APP_TZ).strftime("%Y-%m-%d")
+        by_day.setdefault(d, []).append(it)
+    return success_response(data={
+        "month": m,
+        "total": len(items),
+        "days": [
+            {
+                "date": d,
+                "count": len(lst),
+                "items": [
+                    {
+                        "serial_no": it.serial_no or "-",
+                        "product_name": it.product_name,
+                        "batch_number": it.batch_number,
+                        "template_path": it.template_path,
+                        "report_id": str(it.id),
+                        "created_at": it.created_at.astimezone(APP_TZ).strftime("%H:%M") if it.created_at else None,
+                    }
+                    for it in lst
+                ],
+            }
+            for d, lst in sorted(by_day.items())
+        ],
+    })
 
 
 @router.get("/dashboard/summary", summary="质量总览看板数据")

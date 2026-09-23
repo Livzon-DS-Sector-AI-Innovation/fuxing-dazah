@@ -11,6 +11,28 @@ from app.core.time import today as _app_today
 
 logger = logging.getLogger(__name__)
 
+# Redis 不可用时的进程内降级标记：key → 当天日期（重启可能重复推，可接受）
+_PUSHED_IN_PROCESS: dict[str, str] = {}
+
+
+async def _mark_pushed(key: str) -> bool:
+    """防重复推送：SET NX 标记「key 今天已推」。
+
+    返回 True=本次应推送；False=已推过（调度重复触发/重启/多副本时跳过）。
+    标记 TTL 24 小时，次日自动失效重新推送。
+    """
+    try:
+        from app.core.redis import acquire_lock
+
+        return await acquire_lock(f"quality:push:{key}", timeout=24 * 3600)
+    except Exception:
+        logger.exception("Redis 推送幂等标记不可用，降级进程内标记")
+        today = _app_today().isoformat()
+        if _PUSHED_IN_PROCESS.get(key) == today:
+            return False
+        _PUSHED_IN_PROCESS[key] = today
+        return True
+
 
 def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
     """解析 HH:MM 配置（如 08:05），非法/为空回退默认值。"""
@@ -39,6 +61,9 @@ async def _push_today_tasks() -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     today = _app_today().isoformat()
+    if not await _mark_pushed(f"morning:{today}"):
+        logger.info("早报今日已推送，跳过（幂等标记）")
+        return
     from app.modules.quality.feishu.fill_service import (
         _frontend_task_link,
         _task_doc_file_nos,
@@ -123,6 +148,9 @@ async def _push_afternoon_reminder() -> None:
     if not feishu_configured() or not QUALITY_FEISHU_CHAT_IDS:
         return
     today = _app_today().isoformat()
+    if not await _mark_pushed(f"afternoon:{today}"):
+        logger.info("午后催办今日已推送，跳过（幂等标记）")
+        return
     from app.modules.quality.feishu.fill_service import (
         _frontend_task_link,
         _task_doc_file_nos,

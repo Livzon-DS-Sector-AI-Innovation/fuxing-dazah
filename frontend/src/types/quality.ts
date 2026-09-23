@@ -320,3 +320,17 @@ export interface DailyReportItem {
   report_id: string
   created_at: string | null
 }
+
+// ─── 报告单流水月度汇总 ───
+
+export interface MonthlyReportDay {
+  date: string
+  count: number
+  items: DailyReportItem[]
+}
+
+export interface MonthlyReportSummary {
+  month: string
+  total: number
+  days: MonthlyReportDay[]
+}
